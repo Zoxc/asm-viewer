@@ -1,0 +1,9 @@
+[package]
+name = "viewer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+object = "0.32.1"
+floem = { git = "https://github.com/lapce/floem.git" }
+rfd = "0.12"
