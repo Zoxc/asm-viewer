@@ -10,3 +10,4 @@ floem = { git = "https://github.com/lapce/floem.git" }
 rfd = "0.12"
 symbolic-demangle = "12.4.1"
 symbolic-common = "12.4.1"
+iced-x86 = "1.20.0"

@@ -1,6 +1,6 @@
 #![feature(strict_provenance)]
 
-use std::{fmt::Display, fs, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, fmt::Display, fs, path::PathBuf, sync::Arc};
 
 use floem::{
     event::Event,
@@ -12,7 +12,11 @@ use floem::{
         virtual_list, Decorators, Label, VirtualListDirection, VirtualListItemSize,
     },
 };
-use object::{read::archive::ArchiveFile, BinaryFormat, Object as _, ObjectSymbol, SymbolKind};
+use iced_x86::Formatter;
+use object::{
+    read::archive::ArchiveFile, BinaryFormat, Object as _, ObjectSection, ObjectSymbol,
+    SectionIndex, SymbolKind,
+};
 use symbolic_demangle::{Demangle, DemangleOptions};
 
 struct Object {
@@ -20,12 +24,107 @@ struct Object {
     name: String,
     format: BinaryFormat,
     symbols: Vec<Arc<Symbol>>,
+    sections: Vec<Arc<Section>>,
+}
+
+#[derive(Debug)]
+struct Section {
+    name: String,
+    data: Vec<u8>,
+    address: u64,
+
+    // A sorted list of symbol positions
+    symbols: Vec<u64>,
 }
 
 #[derive(Debug)]
 struct Symbol {
     name: String,
     demangled: Option<String>,
+    address: u64,
+    section: Option<Arc<Section>>,
+    size: u64,
+}
+
+impl Symbol {
+    fn estimate_size(&self) -> Option<u64> {
+        let section = self.section.as_ref()?;
+        let i = section.symbols.binary_search(&self.address).ok()?;
+        if i + 1 == section.symbols.len() {
+            section
+                .address
+                .checked_add(section.data.len().try_into().ok()?)?
+                .checked_sub(self.address)
+        } else {
+            section.symbols[i + 1].checked_sub(self.address)
+        }
+    }
+
+    fn data(&self) -> Option<&[u8]> {
+        let section = self.section.as_ref()?;
+        let size: usize = self.estimate_size()?.try_into().ok()?;
+        let offset: usize = self.address.checked_sub(section.address)?.try_into().ok()?;
+        let end = offset.checked_add(size)?;
+        section.data.get(offset..end)
+    }
+
+    fn assembly(&self) -> Option<Arc<Assembly>> {
+        let bytes = self.data()?;
+        let mut decoder =
+            iced_x86::Decoder::with_ip(64, bytes, self.address, iced_x86::DecoderOptions::NONE);
+
+        let mut formatter = iced_x86::NasmFormatter::new();
+
+        formatter.options_mut().set_digit_separator("`");
+        formatter.options_mut().set_first_operand_char_index(10);
+
+        let mut output = String::new();
+
+        let mut instruction = iced_x86::Instruction::default();
+
+        let mut assembly = Assembly {
+            instructions: Vec::new(),
+        };
+
+        while decoder.can_decode() {
+            decoder.decode_out(&mut instruction);
+
+            output.clear();
+            formatter.format(&instruction, &mut output);
+
+            let start_index = (instruction.ip() - self.address) as usize;
+
+            assembly.instructions.push(Instruction {
+                address: instruction.ip(),
+                bytes: bytes[start_index..start_index + instruction.len()].to_vec(),
+                format: output.clone(),
+            });
+
+            // Eg. "00007FFAC46ACDB2 488DAC2400FFFFFF     lea       rbp,[rsp-100h]"
+            let instr_bytes = &bytes[start_index..start_index + instruction.len()];
+            /*for b in instr_bytes.iter() {
+                print!("{:02X}", b);
+            }
+            if instr_bytes.len() < HEXBYTES_COLUMN_BYTE_LENGTH {
+                for _ in 0..HEXBYTES_COLUMN_BYTE_LENGTH - instr_bytes.len() {
+                    print!("  ");
+                }
+            }*/
+        }
+
+        Some(Arc::new(assembly))
+    }
+}
+
+#[derive(Clone)]
+struct Instruction {
+    address: u64,
+    bytes: Vec<u8>,
+    format: String,
+}
+
+struct Assembly {
+    instructions: Vec<Instruction>,
 }
 
 #[derive(Clone)]
@@ -42,6 +141,46 @@ struct ObjectList {
 fn open_object(objects: &RwSignal<ObjectList>, data: &[u8], name: String, path: PathBuf) {
     object::File::parse(data)
         .map(|file| {
+            let mut sections: HashMap<SectionIndex, Section> = file
+                .sections()
+                .filter_map(|section| {
+                    let name = String::from_utf8_lossy(section.name_bytes().ok()?).into_owned();
+                    let data = section.uncompressed_data().ok()?.into_owned();
+                    Some((
+                        section.index(),
+                        Section {
+                            name,
+                            address: section.address(),
+                            data,
+                            symbols: Vec::new(),
+                        },
+                    ))
+                })
+                .collect();
+
+            // Insert symbol addresses into sections
+            file.symbols().for_each(|symbol| {
+                if symbol.kind() != SymbolKind::Text {
+                    return;
+                }
+
+                symbol
+                    .section()
+                    .index()
+                    .and_then(|index| sections.get_mut(&index))
+                    .map(|section| section.symbols.push(symbol.address()));
+            });
+
+            let section_map: HashMap<SectionIndex, Arc<Section>> = sections
+                .into_iter()
+                .map(|(index, mut section)| {
+                    section.symbols.sort_unstable();
+                    (index, Arc::new(section))
+                })
+                .collect();
+
+            let sections = section_map.values().cloned().collect();
+
             let symbols = file
                 .symbols()
                 .filter_map(|symbol| {
@@ -52,7 +191,18 @@ fn open_object(objects: &RwSignal<ObjectList>, data: &[u8], name: String, path: 
                     let demangled =
                         symbolic_common::Name::from(&name).demangle(DemangleOptions::complete());
 
-                    Some(Arc::new(Symbol { name, demangled }))
+                    let section = symbol
+                        .section()
+                        .index()
+                        .and_then(|index| section_map.get(&index).cloned());
+
+                    Some(Arc::new(Symbol {
+                        name,
+                        demangled,
+                        section,
+                        address: symbol.address(),
+                        size: symbol.size(),
+                    }))
                 })
                 .collect();
 
@@ -62,6 +212,7 @@ fn open_object(objects: &RwSignal<ObjectList>, data: &[u8], name: String, path: 
                     path,
                     format: file.format(),
                     symbols,
+                    sections,
                 }))
             });
         })
@@ -135,6 +286,37 @@ fn header(label: impl Display) -> Label {
     })
 }
 
+fn assembly(symbol: Arc<Symbol>) -> Box<dyn View> {
+    if let Some(assembly) = symbol.assembly() {
+        let instr = virtual_list(
+            VirtualListDirection::Vertical,
+            VirtualListItemSize::Fixed(Box::new(|| 26.0)),
+            move || {
+                assembly
+                    .instructions
+                    .iter()
+                    .cloned()
+                    .collect::<im::Vector<_>>()
+            },
+            |i| i.address,
+            move |o| {
+                text(o.format).style(|s| s.font_family("Consolas".to_string()).font_size(16.0))
+            },
+        )
+        .style(|s| {
+            s.flex_col()
+                .background(Color::LIGHT_SLATE_GRAY)
+                .width_full()
+        });
+
+        let instr = scroll(instr).style(|s| s.width_full().height_full());
+
+        Box::new(instr)
+    } else {
+        Box::new(text("Assembly unavailable"))
+    }
+}
+
 fn main_container(selection: Selection) -> Box<dyn View> {
     match selection {
         Selection::None => Box::new(text("Nothing selected").style(|s| s.padding(5.0))),
@@ -158,11 +340,22 @@ fn main_container(selection: Selection) -> Box<dyn View> {
                         )
                     })
                     .unwrap_or_else(|| container_box(empty())),
+                text(format!("Size: {} bytes", o.size)).style(|s| s.padding(5.0)),
+                text(format!(
+                    "Data Length: `{:?}`",
+                    o.data().map(|d| d.len()).unwrap_or_default()
+                ))
+                .style(|s| s.padding(5.0)),
             ))
             .style(|s| s.flex_col());
 
-            let data =
-                stack((header("Symbol Info"), scroll(info))).style(|s| s.flex_col().width_full());
+            let data = stack((
+                header("Symbol Info"),
+                scroll(info),
+                header("Assembly"),
+                assembly(o),
+            ))
+            .style(|s| s.flex_col().width_full().height_full());
             Box::new(data)
         }
     }
