@@ -1,15 +1,16 @@
 #![feature(strict_provenance)]
 
-use std::{collections::HashMap, fmt::Display, fs, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, fmt::Display, fs, ops::Range, path::PathBuf, sync::Arc};
 
 use floem::{
+    cosmic_text::{Attrs, AttrsList, FamilyOwned, Style, TextLayout, Weight},
     event::Event,
     peniko::Color,
     reactive::{create_rw_signal, RwSignal},
     view::View,
     views::{
-        container, container_box, dyn_container, empty, label, list, scroll, stack, text,
-        virtual_list, Decorators, Label, VirtualListDirection, VirtualListItemSize,
+        container, container_box, dyn_container, empty, label, list, rich_text, scroll, stack,
+        text, virtual_list, Decorators, Label, VirtualListDirection, VirtualListItemSize,
     },
 };
 use iced_x86::Formatter;
@@ -73,12 +74,12 @@ impl Symbol {
         let mut decoder =
             iced_x86::Decoder::with_ip(64, bytes, self.address, iced_x86::DecoderOptions::NONE);
 
-        let mut formatter = iced_x86::NasmFormatter::new();
+        let mut formatter = iced_x86::IntelFormatter::new();
 
-        formatter.options_mut().set_digit_separator("`");
         formatter.options_mut().set_first_operand_char_index(10);
-
-        let mut output = String::new();
+        formatter
+            .options_mut()
+            .set_space_after_operand_separator(true);
 
         let mut instruction = iced_x86::Instruction::default();
 
@@ -89,27 +90,16 @@ impl Symbol {
         while decoder.can_decode() {
             decoder.decode_out(&mut instruction);
 
-            output.clear();
-            formatter.format(&instruction, &mut output);
-
             let start_index = (instruction.ip() - self.address) as usize;
 
-            assembly.instructions.push(Instruction {
+            let mut inst = Instruction {
                 address: instruction.ip(),
                 bytes: bytes[start_index..start_index + instruction.len()].to_vec(),
-                format: output.clone(),
-            });
+                format: Vec::new(),
+            };
+            formatter.format(&instruction, &mut inst);
 
-            // Eg. "00007FFAC46ACDB2 488DAC2400FFFFFF     lea       rbp,[rsp-100h]"
-            let instr_bytes = &bytes[start_index..start_index + instruction.len()];
-            /*for b in instr_bytes.iter() {
-                print!("{:02X}", b);
-            }
-            if instr_bytes.len() < HEXBYTES_COLUMN_BYTE_LENGTH {
-                for _ in 0..HEXBYTES_COLUMN_BYTE_LENGTH - instr_bytes.len() {
-                    print!("  ");
-                }
-            }*/
+            assembly.instructions.push(inst);
         }
 
         Some(Arc::new(assembly))
@@ -120,7 +110,13 @@ impl Symbol {
 struct Instruction {
     address: u64,
     bytes: Vec<u8>,
-    format: String,
+    format: Vec<(String, iced_x86::FormatterTextKind)>,
+}
+
+impl iced_x86::FormatterOutput for Instruction {
+    fn write(&mut self, text: &str, kind: iced_x86::FormatterTextKind) {
+        self.format.push((text.to_owned(), kind));
+    }
 }
 
 struct Assembly {
@@ -299,21 +295,72 @@ fn assembly(symbol: Arc<Symbol>) -> Box<dyn View> {
                     .collect::<im::Vector<_>>()
             },
             |i| i.address,
-            move |o| {
-                text(o.format).style(|s| s.font_family("Consolas".to_string()).font_size(16.0))
+            move |i| {
+                let address = text(format!("{:016X} ", i.address))
+                    .style(|s| s.width(200).color(Color::rgb8(118, 141, 169)));
+
+                let format: Vec<_> = i.format.iter().map(|(s, _)| &**s).collect();
+                let format: String = format.join("");
+
+                let family: Vec<FamilyOwned> = FamilyOwned::parse_list("Consolas").collect();
+                let attrs = Attrs::new()
+                    .color(Color::BLACK)
+                    .font_size(14.0)
+                    .family(&family);
+                let mut attrs_list = AttrsList::new(attrs);
+                let mut offset = 0;
+                for (string, kind) in i.format {
+                    let color = match kind {
+                        iced_x86::FormatterTextKind::Mnemonic
+                        | iced_x86::FormatterTextKind::Prefix => Color::rgb8(116, 94, 147),
+                        iced_x86::FormatterTextKind::Register => Color::rgb8(87, 103, 65),
+                        iced_x86::FormatterTextKind::Number => Color::rgb8(80, 107, 135),
+                        _ => Color::rgb8(102, 102, 102),
+                    };
+                    attrs_list.add_span(
+                        Range {
+                            start: offset,
+                            end: offset + string.len(),
+                        },
+                        Attrs::new()
+                            .color(color)
+                            .family(&family)
+                            .font_size(14.0)
+                            .weight(if kind == iced_x86::FormatterTextKind::Mnemonic {
+                                Weight::BOLD
+                            } else {
+                                Weight::NORMAL
+                            }),
+                    );
+                    offset += string.len();
+                }
+                let mut text_layout = TextLayout::new();
+                text_layout.set_text(&format, attrs_list);
+
+                let format = rich_text(move || text_layout.clone());
+
+                //let bytes: Vec<String> = i.bytes.iter().map(|b| format!("{:02X} ", b)).collect();
+                //let bytes = text(bytes.join(" ")).style(|s| s.width(200).color(Color::GRAY));
+                stack((address, format))
+                    .style(|s| {
+                        s.font_family("Consolas".to_string())
+                            .font_size(14.0)
+                            .padding(3)
+                    })
+                    .hover_style(|s| s.background(Color::rgb8(228, 237, 216)))
             },
         )
-        .style(|s| {
-            s.flex_col()
-                .background(Color::LIGHT_SLATE_GRAY)
-                .width_full()
-        });
+        .style(|s| s.flex_col().padding(5).width_full());
 
-        let instr = scroll(instr).style(|s| s.width_full().height_full());
+        let instr = scroll(instr).style(|s| {
+            s.width_full()
+                .height_full()
+                .background(Color::rgb8(248, 248, 248))
+        });
 
         Box::new(instr)
     } else {
-        Box::new(text("Assembly unavailable"))
+        Box::new(text("Assembly unavailable").style(|s| s.padding(5.0)))
     }
 }
 
@@ -325,6 +372,7 @@ fn main_container(selection: Selection) -> Box<dyn View> {
                 header("Object Info"),
                 text(format!("Object: `{}`", o.name)).style(|s| s.padding(5.0)),
                 text(format!("Format: {:?}", o.format)).style(|s| s.padding(5.0)),
+                text(format!("Symbols: {:?}", o.symbols.len())).style(|s| s.padding(5.0)),
             ))
             .style(|s| s.flex_col().width_full());
             Box::new(data)
@@ -337,6 +385,14 @@ fn main_container(selection: Selection) -> Box<dyn View> {
                     .map(|demangled| {
                         container_box(
                             text(format!("Demangled: `{}`", demangled)).style(|s| s.padding(5.0)),
+                        )
+                    })
+                    .unwrap_or_else(|| container_box(empty())),
+                o.section
+                    .as_ref()
+                    .map(|section| {
+                        container_box(
+                            text(format!("Section: `{}`", section.name)).style(|s| s.padding(5.0)),
                         )
                     })
                     .unwrap_or_else(|| container_box(empty())),
@@ -424,7 +480,7 @@ fn app_view() -> impl View {
                     }
                     s.padding(5).width_full().height_full()
                 })
-                .hover_style(|s| s.background(Color::LIGHT_GREEN))
+                .hover_style(|s| s.background(Color::rgb8(226, 226, 205)))
                 .on_click(move |_| {
                     selection.set(Selection::Symbol(o.clone()));
                     true
@@ -433,7 +489,7 @@ fn app_view() -> impl View {
     )
     .style(|s| {
         s.flex_col()
-            .background(Color::LIGHT_GOLDENROD_YELLOW)
+            .background(Color::rgb8(243, 243, 228))
             .width_full()
     });
 
@@ -482,5 +538,6 @@ fn app_view() -> impl View {
 }
 
 fn main() {
+    env_logger::init();
     floem::launch(app_view);
 }
