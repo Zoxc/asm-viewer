@@ -7,7 +7,8 @@ edition = "2021"
 object = "0.32.1"
 im = "15.1.0"
 #floem = { git = "https://github.com/lapce/floem.git" }
-floem = { path = "../floem", features = ["profile"] }
+#floem = { path = "../floem", features = ["profile"] }
+floem = { path = "../floem" }
 rfd = "0.12"
 symbolic-demangle = "12.4.1"
 symbolic-common = "12.4.1"
@@ -18,5 +19,8 @@ env_logger = "0.10.0"
 debug = true
 
 [patch.crates-io]
-winit = { path = "../winit" }
-puffin = { path = "../puffin/puffin" }
+#winit = { path = "../winit" }
+#puffin = { path = "../puffin/puffin" }
+
+#[patch.'https://github.com/lapce/vger-rs']
+#vger = { path = "B:/Programmering/xilem/vger-rs" }

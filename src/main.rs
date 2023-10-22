@@ -7,6 +7,7 @@ use floem::{
     event::Event,
     peniko::Color,
     reactive::{create_rw_signal, RwSignal},
+    style::TextOverflow,
     view::View,
     views::{
         container, container_box, dyn_container, empty, label, list, rich_text, scroll, stack,
@@ -346,6 +347,7 @@ fn assembly(symbol: Arc<Symbol>) -> Box<dyn View> {
                         s.font_family("Consolas".to_string())
                             .font_size(14.0)
                             .padding(3)
+                            .height(26.0)
                     })
                     .hover_style(|s| s.background(Color::rgb8(228, 237, 216)))
             },
@@ -442,6 +444,9 @@ fn app_view() -> impl View {
                         |s| s.background(Color::LIGHT_GRAY),
                     )
                     .padding(5)
+                    .width_full()
+                    .height(26.0)
+                    .text_overflow(TextOverflow::Clip)
                 })
                 .hover_style(|s| s.background(Color::LIGHT_GREEN))
                 .on_click(move |_| {
@@ -478,7 +483,10 @@ fn app_view() -> impl View {
                     }) {
                         s = s.background(Color::LIGHT_GRAY);
                     }
-                    s.padding(5).width_full().height_full()
+                    s.padding(5)
+                        .width_full()
+                        .height(26.0)
+                        .text_overflow(TextOverflow::Clip)
                 })
                 .hover_style(|s| s.background(Color::rgb8(226, 226, 205)))
                 .on_click(move |_| {
@@ -533,7 +541,15 @@ fn app_view() -> impl View {
     });
 
     stack((bar, lower))
-        .style(|s| s.flex_col().width_full().height_full().font_size(12.0))
+        .style(|s| {
+            s.flex_col()
+                .width_full()
+                .height_full()
+                .font_size(12.0)
+                .scroll_bar_thickness(20.0)
+                .scroll_bar_rounded(false)
+                .scroll_bar_color(Color::rgb8(205, 205, 205))
+        })
         .window_title(|| "Assembly Viewer".to_string())
 }
 
