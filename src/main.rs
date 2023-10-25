@@ -548,7 +548,10 @@ fn app_view() -> impl View {
                 .font_size(12.0)
                 .scroll_bar_thickness(20.0)
                 .scroll_bar_rounded(false)
-                .scroll_bar_color(Color::rgb8(205, 205, 205))
+                .scroll_bar_color(Color::rgba8(166, 166, 166, 140))
+                .scroll_bar_drag_color(Color::rgb8(166, 166, 166))
+                .scroll_bar_hover_color(Color::rgb8(184, 184, 184))
+                .scroll_bar_bg_active_color(Color::rgba8(166, 166, 166, 40))
         })
         .window_title(|| "Assembly Viewer".to_string())
 }

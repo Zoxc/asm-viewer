@@ -1525,9 +1525,9 @@ dependencies = [
 
 [[package]]
 name = "glow"
-version = "0.12.3"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca0fe580e4b60a8ab24a868bc08e2f03cbcb20d3d676601fa909386713333728"
+checksum = "886c2a30b160c4c6fec8f987430c26b526b7988ca71f664e6a699ddf6f9601e4"
 dependencies = [
  "js-sys",
  "slotmap",
@@ -1537,9 +1537,9 @@ dependencies = [
 
 [[package]]
 name = "glutin_wgl_sys"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef89398e90033fc6bc65e9bd42fd29bbbfd483bda5b56dc5562f455550618165"
+checksum = "6c8098adac955faa2d31079b65dc48841251f69efd3ac25477903fc424362ead"
 dependencies = [
  "gl_generator",
 ]
@@ -4034,7 +4034,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.17.0"
-source = "git+https://github.com/gfx-rs/wgpu.git#3cc6a563ca06bbe69709661bc746a4a181cc24fc"
+source = "git+https://github.com/gfx-rs/wgpu.git#3abf81efd2900191c73dec2189c3b0ebfe099b99"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -4058,7 +4058,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.17.0"
-source = "git+https://github.com/gfx-rs/wgpu.git#3cc6a563ca06bbe69709661bc746a4a181cc24fc"
+source = "git+https://github.com/gfx-rs/wgpu.git#3abf81efd2900191c73dec2189c3b0ebfe099b99"
 dependencies = [
  "arrayvec",
  "bit-vec",
@@ -4080,7 +4080,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.17.0"
-source = "git+https://github.com/gfx-rs/wgpu.git#3cc6a563ca06bbe69709661bc746a4a181cc24fc"
+source = "git+https://github.com/gfx-rs/wgpu.git#3abf81efd2900191c73dec2189c3b0ebfe099b99"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -4122,7 +4122,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.17.0"
-source = "git+https://github.com/gfx-rs/wgpu.git#3cc6a563ca06bbe69709661bc746a4a181cc24fc"
+source = "git+https://github.com/gfx-rs/wgpu.git#3abf81efd2900191c73dec2189c3b0ebfe099b99"
 dependencies = [
  "bitflags 2.4.0",
  "js-sys",
