@@ -10,8 +10,9 @@ use floem::{
     style::TextOverflow,
     view::View,
     views::{
-        container, container_box, dyn_container, empty, label, list, rich_text, scroll, stack,
-        text, virtual_list, Decorators, Label, VirtualListDirection, VirtualListItemSize,
+        bg_active_color, container, container_box, dyn_container, empty, label, list, rich_text,
+        scroll, stack, text, virtual_list, Decorators, Label, VirtualListDirection,
+        VirtualListItemSize,
     },
 };
 use iced_x86::Formatter;
@@ -551,7 +552,7 @@ fn app_view() -> impl View {
                 .scroll_bar_color(Color::rgba8(166, 166, 166, 140))
                 .scroll_bar_drag_color(Color::rgb8(166, 166, 166))
                 .scroll_bar_hover_color(Color::rgb8(184, 184, 184))
-                .scroll_bar_bg_active_color(Color::rgba8(166, 166, 166, 40))
+                .set(bg_active_color, Color::rgba8(166, 166, 166, 40))
         })
         .window_title(|| "Assembly Viewer".to_string())
 }
