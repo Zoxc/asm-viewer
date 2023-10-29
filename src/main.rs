@@ -7,7 +7,7 @@ use floem::{
     event::Event,
     peniko::Color,
     reactive::{create_rw_signal, RwSignal},
-    style::TextOverflow,
+    style::{CursorStyle, TextOverflow},
     view::View,
     views::{
         bg_active_color, container, container_box, dyn_container, empty, label, list, rich_text,
@@ -17,8 +17,8 @@ use floem::{
 };
 use iced_x86::Formatter;
 use object::{
-    read::archive::ArchiveFile, BinaryFormat, Object as _, ObjectSection, ObjectSymbol,
-    SectionIndex, SymbolKind,
+    read::archive::ArchiveFile, BinaryFormat, Object as _, ObjectSection, ObjectSymbol, Relocation,
+    RelocationTarget, SectionIndex, SymbolIndex, SymbolKind,
 };
 use symbolic_demangle::{Demangle, DemangleOptions};
 
@@ -26,7 +26,8 @@ struct Object {
     path: PathBuf,
     name: String,
     format: BinaryFormat,
-    symbols: Vec<Arc<Symbol>>,
+    symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
+    symbols_sorted: Vec<Arc<SymbolData>>,
     sections: Vec<Arc<Section>>,
 }
 
@@ -36,12 +37,14 @@ struct Section {
     data: Vec<u8>,
     address: u64,
 
+    relocations: HashMap<u64, Relocation>,
+
     // A sorted list of symbol positions
     symbols: Vec<u64>,
 }
 
 #[derive(Debug)]
-struct Symbol {
+struct SymbolData {
     name: String,
     demangled: Option<String>,
     address: u64,
@@ -49,7 +52,7 @@ struct Symbol {
     size: u64,
 }
 
-impl Symbol {
+impl SymbolData {
     fn estimate_size(&self) -> Option<u64> {
         let section = self.section.as_ref()?;
         let i = section.symbols.binary_search(&self.address).ok()?;
@@ -71,7 +74,7 @@ impl Symbol {
         section.data.get(offset..end)
     }
 
-    fn assembly(&self) -> Option<Arc<Assembly>> {
+    fn assembly(&self, object: &Object) -> Option<Arc<Assembly>> {
         let bytes = self.data()?;
         let mut decoder =
             iced_x86::Decoder::with_ip(64, bytes, self.address, iced_x86::DecoderOptions::NONE);
@@ -94,10 +97,29 @@ impl Symbol {
 
             let start_index = (instruction.ip() - self.address) as usize;
 
+            let mut relocation = None;
+
+            self.section.as_ref().map(|section| {
+                for i in 0..instruction.len() {
+                    section
+                        .relocations
+                        .get(&(instruction.ip() + i as u64))
+                        .map(|r| {
+                            relocation = Some(r.target().clone());
+                        });
+                }
+            });
+
+            let relocation = relocation.and_then(|r| match r {
+                RelocationTarget::Symbol(i) => object.symbols.get(&i).cloned(),
+                _ => None,
+            });
+
             let mut inst = Instruction {
                 address: instruction.ip(),
                 bytes: bytes[start_index..start_index + instruction.len()].to_vec(),
                 format: Vec::new(),
+                relocation,
             };
             formatter.format(&instruction, &mut inst);
 
@@ -109,15 +131,37 @@ impl Symbol {
 }
 
 #[derive(Clone)]
+struct Symbol {
+    object: Arc<Object>,
+    data: Arc<SymbolData>,
+}
+
+#[derive(Clone)]
 struct Instruction {
     address: u64,
     bytes: Vec<u8>,
     format: Vec<(String, iced_x86::FormatterTextKind)>,
+    relocation: Option<Arc<SymbolData>>,
 }
 
 impl iced_x86::FormatterOutput for Instruction {
     fn write(&mut self, text: &str, kind: iced_x86::FormatterTextKind) {
         self.format.push((text.to_owned(), kind));
+    }
+
+    fn write_number(
+        &mut self,
+        _instruction: &iced_x86::Instruction,
+        _operand: u32,
+        _instruction_operand: Option<u32>,
+        text: &str,
+        _value: u64,
+        _number_kind: iced_x86::NumberKind,
+        kind: iced_x86::FormatterTextKind,
+    ) {
+        if self.relocation.is_none() {
+            self.write(text, kind);
+        }
     }
 }
 
@@ -129,7 +173,7 @@ struct Assembly {
 enum Selection {
     None,
     Object(Arc<Object>),
-    Symbol(Arc<Symbol>),
+    Symbol(Symbol),
 }
 
 struct ObjectList {
@@ -144,6 +188,7 @@ fn open_object(objects: &RwSignal<ObjectList>, data: &[u8], name: String, path: 
                 .filter_map(|section| {
                     let name = String::from_utf8_lossy(section.name_bytes().ok()?).into_owned();
                     let data = section.uncompressed_data().ok()?.into_owned();
+                    let relocations = section.relocations().collect();
                     Some((
                         section.index(),
                         Section {
@@ -151,6 +196,7 @@ fn open_object(objects: &RwSignal<ObjectList>, data: &[u8], name: String, path: 
                             address: section.address(),
                             data,
                             symbols: Vec::new(),
+                            relocations,
                         },
                     ))
                 })
@@ -179,7 +225,7 @@ fn open_object(objects: &RwSignal<ObjectList>, data: &[u8], name: String, path: 
 
             let sections = section_map.values().cloned().collect();
 
-            let symbols = file
+            let symbols: HashMap<_, _> = file
                 .symbols()
                 .filter_map(|symbol| {
                     // Filter out non-text symbols
@@ -194,15 +240,21 @@ fn open_object(objects: &RwSignal<ObjectList>, data: &[u8], name: String, path: 
                         .index()
                         .and_then(|index| section_map.get(&index).cloned());
 
-                    Some(Arc::new(Symbol {
-                        name,
-                        demangled,
-                        section,
-                        address: symbol.address(),
-                        size: symbol.size(),
-                    }))
+                    Some((
+                        symbol.index(),
+                        Arc::new(SymbolData {
+                            name,
+                            demangled,
+                            section,
+                            address: symbol.address(),
+                            size: symbol.size(),
+                        }),
+                    ))
                 })
                 .collect();
+
+            let mut symbols_sorted: Vec<_> = symbols.values().cloned().collect();
+            symbols_sorted.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
             objects.update(|list| {
                 list.objects.push(Arc::new(Object {
@@ -210,6 +262,7 @@ fn open_object(objects: &RwSignal<ObjectList>, data: &[u8], name: String, path: 
                     path,
                     format: file.format(),
                     symbols,
+                    symbols_sorted,
                     sections,
                 }))
             });
@@ -284,8 +337,8 @@ fn header(label: impl Display) -> Label {
     })
 }
 
-fn assembly(symbol: Arc<Symbol>) -> Box<dyn View> {
-    if let Some(assembly) = symbol.assembly() {
+fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> Box<dyn View> {
+    if let Some(assembly) = symbol.data.assembly(&symbol.object) {
         let instr = virtual_list(
             VirtualListDirection::Vertical,
             VirtualListItemSize::Fixed(Box::new(|| 26.0)),
@@ -340,10 +393,33 @@ fn assembly(symbol: Arc<Symbol>) -> Box<dyn View> {
                 text_layout.set_text(&format, attrs_list);
 
                 let format = rich_text(move || text_layout.clone());
+                let reloc = i
+                    .relocation
+                    .map(|s| {
+                        let symbol = Symbol {
+                            object: symbol.object.clone(),
+                            data: s.clone(),
+                        };
+                        text(s.demangled.as_ref().unwrap_or(&s.name).clone()).on_click(move |_| {
+                            selection.set(Selection::Symbol(symbol.clone()));
+                            true
+                        })
+                    })
+                    .unwrap_or_else(|| text(""));
+
+                let reloc = reloc
+                    .style(|s| s.cursor(CursorStyle::Pointer))
+                    .hover_style(|s| {
+                        s.color(Color::rgb8(105, 89, 132))
+                            .border_radius(6)
+                            .border_bottom(2)
+                            .border_color(Color::rgb8(105, 89, 132))
+                            .background(Color::WHITE.with_alpha_factor(0.8))
+                    });
 
                 //let bytes: Vec<String> = i.bytes.iter().map(|b| format!("{:02X} ", b)).collect();
                 //let bytes = text(bytes.join(" ")).style(|s| s.width(200).color(Color::GRAY));
-                stack((address, format))
+                stack((address, format, reloc))
                     .style(|s| {
                         s.font_family("Consolas".to_string())
                             .font_size(14.0)
@@ -367,8 +443,8 @@ fn assembly(symbol: Arc<Symbol>) -> Box<dyn View> {
     }
 }
 
-fn main_container(selection: Selection) -> Box<dyn View> {
-    match selection {
+fn main_container(current: Selection, selection: RwSignal<Selection>) -> Box<dyn View> {
+    match current {
         Selection::None => Box::new(text("Nothing selected").style(|s| s.padding(5.0))),
         Selection::Object(o) => {
             let data = stack((
@@ -380,7 +456,8 @@ fn main_container(selection: Selection) -> Box<dyn View> {
             .style(|s| s.flex_col().width_full());
             Box::new(data)
         }
-        Selection::Symbol(o) => {
+        Selection::Symbol(symbol) => {
+            let o = &symbol.data;
             let info = stack((
                 text(format!("Symbol: `{}`", o.name)).style(|s| s.padding(5.0)),
                 o.demangled
@@ -412,7 +489,7 @@ fn main_container(selection: Selection) -> Box<dyn View> {
                 header("Symbol Info"),
                 scroll(info),
                 header("Assembly"),
-                assembly(o),
+                assembly(symbol, selection),
             ))
             .style(|s| s.flex_col().width_full().height_full());
             Box::new(data)
@@ -466,18 +543,23 @@ fn app_view() -> impl View {
                 objects
                     .objects
                     .iter()
-                    .flat_map(|o| o.symbols.iter().cloned())
+                    .flat_map(|o| {
+                        o.symbols_sorted.iter().cloned().map(|s| Symbol {
+                            object: o.clone(),
+                            data: s,
+                        })
+                    })
                     .collect::<im::Vector<_>>()
             })
         },
-        |o| Arc::as_ptr(o).addr(),
+        |o| Arc::as_ptr(&o.data).addr(),
         move |o| {
             let o_ = o.clone();
-            text(o.demangled.as_ref().unwrap_or(&o.name).clone())
+            text(o.data.demangled.as_ref().unwrap_or(&o.data.name).clone())
                 .style(move |mut s| {
                     if selection.with(|s| {
                         if let Selection::Symbol(so) = s {
-                            Arc::ptr_eq(so, &o_)
+                            Arc::ptr_eq(&so.data, &o_.data)
                         } else {
                             false
                         }
@@ -518,8 +600,11 @@ fn app_view() -> impl View {
             .border_color(Color::LIGHT_GRAY)
     });
 
-    let content = dyn_container(move || selection.with(|s| s.clone()), main_container)
-        .style(|s| s.width_full().height_full().background(Color::WHITE));
+    let content = dyn_container(
+        move || selection.with(|s| s.clone()),
+        move |current| main_container(current, selection),
+    )
+    .style(|s| s.width_full().height_full().background(Color::WHITE));
 
     let lower = stack((object_list, content)).style(|s| {
         s.flex_row()
