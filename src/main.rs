@@ -408,13 +408,16 @@ fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> Box<dyn View> {
                     .unwrap_or_else(|| text(""));
 
                 let reloc = reloc
-                    .style(|s| s.cursor(CursorStyle::Pointer))
+                    .style(|s| {
+                        s.cursor(CursorStyle::Pointer)
+                            .color(Color::rgb8(50, 50, 50))
+                    })
                     .hover_style(|s| {
                         s.color(Color::rgb8(105, 89, 132))
                             .border_radius(6)
                             .border_bottom(2)
                             .border_color(Color::rgb8(105, 89, 132))
-                            .background(Color::WHITE.with_alpha_factor(0.8))
+                            .background(Color::WHITE.with_alpha_factor(0.6))
                     });
 
                 //let bytes: Vec<String> = i.bytes.iter().map(|b| format!("{:02X} ", b)).collect();
@@ -426,7 +429,7 @@ fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> Box<dyn View> {
                             .padding(3)
                             .height(26.0)
                     })
-                    .hover_style(|s| s.background(Color::rgb8(228, 237, 216)))
+                    .hover_style(|s| s.background(Color::rgba8(228, 237, 216, 160)))
             },
         )
         .style(|s| s.flex_col().padding(5).width_full());
