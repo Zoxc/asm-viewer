@@ -3,16 +3,16 @@
 use std::{collections::HashMap, fmt::Display, fs, ops::Range, path::PathBuf, sync::Arc};
 
 use floem::{
-    cosmic_text::{Attrs, AttrsList, FamilyOwned, Style, TextLayout, Weight},
-    event::Event,
+    cosmic_text::{Attrs, AttrsList, FamilyOwned, TextLayout, Weight},
+    event::{Event, EventListener},
+    keyboard::{Key, ModifiersState, NamedKey},
     peniko::Color,
     reactive::{create_rw_signal, RwSignal},
     style::{CursorStyle, TextOverflow},
     view::View,
     views::{
-        bg_active_color, container, container_box, dyn_container, empty, label, list, rich_text,
-        scroll, stack, text, virtual_list, Decorators, Label, VirtualListDirection,
-        VirtualListItemSize,
+        container, container_box, dyn_container, empty, label, list, rich_text, scroll, stack,
+        text, virtual_list, Decorators, Label, VirtualListDirection, VirtualListItemSize,
     },
 };
 use iced_x86::Formatter;
@@ -314,17 +314,14 @@ fn button(label: impl Display, click: impl Fn(&Event) -> bool + 'static) -> Labe
             s.border_radius(3.0)
                 .padding(6.0)
                 .background(Color::WHITE)
-                // .box_shadow_blur(1.0)
-                // .box_shadow_color(Color::GRAY)
                 .border_color(Color::GRAY)
                 .border(0.5)
                 .margin(4)
+                .hover(|s| s.background(Color::LIGHT_GREEN))
+                .active(|s| s.color(Color::WHITE).background(Color::DARK_GREEN))
         })
         .on_click(click)
-        .hover_style(|s| s.background(Color::LIGHT_GREEN))
-        .active_style(|s| s.color(Color::WHITE).background(Color::DARK_GREEN))
         .keyboard_navigatable()
-        .focus_visible_style(|s| s.border_color(Color::BLUE).border(2.))
 }
 
 fn header(label: impl Display) -> Label {
@@ -407,29 +404,27 @@ fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> Box<dyn View> {
                     })
                     .unwrap_or_else(|| text(""));
 
-                let reloc = reloc
-                    .style(|s| {
-                        s.cursor(CursorStyle::Pointer)
-                            .color(Color::rgb8(50, 50, 50))
-                    })
-                    .hover_style(|s| {
-                        s.color(Color::rgb8(105, 89, 132))
-                            .border_radius(6)
-                            .border_bottom(2)
-                            .border_color(Color::rgb8(105, 89, 132))
-                            .background(Color::WHITE.with_alpha_factor(0.6))
-                    });
+                let reloc = reloc.style(|s| {
+                    s.cursor(CursorStyle::Pointer)
+                        .color(Color::rgb8(50, 50, 50))
+                        .hover(|s| {
+                            s.color(Color::rgb8(105, 89, 132))
+                                .border_radius(6)
+                                .border_bottom(2)
+                                .border_color(Color::rgb8(105, 89, 132))
+                                .background(Color::WHITE.with_alpha_factor(0.6))
+                        })
+                });
 
                 //let bytes: Vec<String> = i.bytes.iter().map(|b| format!("{:02X} ", b)).collect();
                 //let bytes = text(bytes.join(" ")).style(|s| s.width(200).color(Color::GRAY));
-                stack((address, format, reloc))
-                    .style(|s| {
-                        s.font_family("Consolas".to_string())
-                            .font_size(14.0)
-                            .padding(3)
-                            .height(26.0)
-                    })
-                    .hover_style(|s| s.background(Color::rgba8(228, 237, 216, 160)))
+                stack((address, format, reloc)).style(|s| {
+                    s.font_family("Consolas".to_string())
+                        .font_size(14.0)
+                        .padding(3)
+                        .height(26.0)
+                        .hover(|s| s.background(Color::rgba8(228, 237, 216, 160)))
+                })
             },
         )
         .style(|s| s.flex_col().padding(5).width_full());
@@ -528,8 +523,8 @@ fn app_view() -> impl View {
                     .width_full()
                     .height(26.0)
                     .text_overflow(TextOverflow::Clip)
+                    .hover(|s| s.background(Color::LIGHT_GREEN))
                 })
-                .hover_style(|s| s.background(Color::LIGHT_GREEN))
                 .on_click(move |_| {
                     selection.set(Selection::Object(o.clone()));
                     true
@@ -573,8 +568,8 @@ fn app_view() -> impl View {
                         .width_full()
                         .height(26.0)
                         .text_overflow(TextOverflow::Clip)
+                        .hover(|s| s.background(Color::rgb8(226, 226, 205)))
                 })
-                .hover_style(|s| s.background(Color::rgb8(226, 226, 205)))
                 .on_click(move |_| {
                     selection.set(Selection::Symbol(o.clone()));
                     true
@@ -629,20 +624,36 @@ fn app_view() -> impl View {
             .border_color(Color::LIGHT_GRAY)
     });
 
+    let id = bar.id();
+
     stack((bar, lower))
         .style(|s| {
             s.flex_col()
                 .width_full()
                 .height_full()
                 .font_size(12.0)
-                .scroll_bar_thickness(20.0)
-                .scroll_bar_rounded(false)
-                .scroll_bar_color(Color::rgba8(166, 166, 166, 140))
-                .scroll_bar_drag_color(Color::rgb8(166, 166, 166))
-                .scroll_bar_hover_color(Color::rgb8(184, 184, 184))
-                .set(bg_active_color, Color::rgba8(166, 166, 166, 40))
+                .background(Color::WHITE)
+                .class(scroll::Handle, |s| {
+                    s.background(Color::rgba8(166, 166, 166, 140))
+                        .active(|s| s.background(Color::rgb8(166, 166, 166)))
+                        .hover(|s| s.background(Color::rgb8(184, 184, 184)))
+                        .set(scroll::Thickness, 20.0)
+                        .set(scroll::Rounded, false)
+                })
+                .class(scroll::Track, |s| {
+                    s.hover(|s| s.background(Color::rgba8(166, 166, 166, 40)))
+                })
         })
         .window_title(|| "Assembly Viewer".to_string())
+        .on_event(EventListener::KeyUp, move |e| {
+            if let Event::KeyUp(e) = e {
+                if e.key.logical_key == Key::Named(NamedKey::F11) && e.modifiers.shift_key() {
+                    id.inspect();
+                    return true;
+                }
+            }
+            false
+        })
 }
 
 fn main() {

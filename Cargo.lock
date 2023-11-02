@@ -1137,6 +1137,9 @@ dependencies = [
 [[package]]
 name = "floem_reactive"
 version = "0.1.0"
+dependencies = [
+ "smallvec",
+]
 
 [[package]]
 name = "floem_renderer"
