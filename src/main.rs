@@ -1,25 +1,24 @@
 #![feature(strict_provenance)]
 
-use std::{collections::HashMap, fmt::Display, fs, ops::Range, path::PathBuf, sync::Arc};
-
 use floem::{
     cosmic_text::{Attrs, AttrsList, FamilyOwned, TextLayout, Weight},
-    event::{Event, EventListener},
     keyboard::{Key, ModifiersState, NamedKey},
     peniko::Color,
     reactive::{create_rw_signal, RwSignal},
     style::{CursorStyle, TextOverflow},
-    view::View,
+    view::{AnyView, View},
     views::{
-        container, container_box, dyn_container, empty, label, list, rich_text, scroll, stack,
-        text, virtual_list, Decorators, Label, VirtualListDirection, VirtualListItemSize,
+        container, dyn_container, dyn_stack, empty, rich_text, scroll, stack, static_label, text,
+        virtual_list, virtual_stack, Decorators, Label, VirtualDirection, VirtualItemSize,
     },
+    widgets::{button, tooltip},
 };
 use iced_x86::Formatter;
 use object::{
     read::archive::ArchiveFile, BinaryFormat, Object as _, ObjectSection, ObjectSymbol, Relocation,
     RelocationTarget, SectionIndex, SymbolIndex, SymbolKind,
 };
+use std::{collections::HashMap, fmt::Display, fs, ops::Range, path::PathBuf, sync::Arc};
 use symbolic_demangle::{Demangle, DemangleOptions};
 
 struct Object {
@@ -308,22 +307,6 @@ fn open_file(objects: RwSignal<ObjectList>) {
     });
 }
 
-fn button(label: impl Display, click: impl Fn(&Event) -> bool + 'static) -> Label {
-    text(label)
-        .style(|s| {
-            s.border_radius(3.0)
-                .padding(6.0)
-                .background(Color::WHITE)
-                .border_color(Color::GRAY)
-                .border(0.5)
-                .margin(4)
-                .hover(|s| s.background(Color::LIGHT_GREEN))
-                .active(|s| s.color(Color::WHITE).background(Color::DARK_GREEN))
-        })
-        .on_click(click)
-        .keyboard_navigatable()
-}
-
 fn header(label: impl Display) -> Label {
     text(label).style(|s| {
         s.padding(5.0)
@@ -334,11 +317,11 @@ fn header(label: impl Display) -> Label {
     })
 }
 
-fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> Box<dyn View> {
+fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> AnyView {
     if let Some(assembly) = symbol.data.assembly(&symbol.object) {
         let instr = virtual_list(
-            VirtualListDirection::Vertical,
-            VirtualListItemSize::Fixed(Box::new(|| 26.0)),
+            VirtualDirection::Vertical,
+            VirtualItemSize::Fixed(Box::new(|| 26.0)),
             move || {
                 assembly
                     .instructions
@@ -349,7 +332,7 @@ fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> Box<dyn View> {
             |i| i.address,
             move |i| {
                 let address = text(format!("{:016X} ", i.address))
-                    .style(|s| s.width(200).color(Color::rgb8(118, 141, 169)));
+                    .style(|s| s.min_width(200).color(Color::rgb8(118, 141, 169)));
 
                 let format: Vec<_> = i.format.iter().map(|(s, _)| &**s).collect();
                 let format: String = format.join("");
@@ -397,10 +380,11 @@ fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> Box<dyn View> {
                             object: symbol.object.clone(),
                             data: s.clone(),
                         };
-                        text(s.demangled.as_ref().unwrap_or(&s.name).clone()).on_click(move |_| {
-                            selection.set(Selection::Symbol(symbol.clone()));
-                            true
-                        })
+                        text(s.demangled.as_ref().unwrap_or(&s.name).clone()).on_click_stop(
+                            move |_| {
+                                selection.set(Selection::Symbol(symbol.clone()));
+                            },
+                        )
                     })
                     .unwrap_or_else(|| text(""));
 
@@ -427,33 +411,33 @@ fn assembly(symbol: Symbol, selection: RwSignal<Selection>) -> Box<dyn View> {
                 })
             },
         )
-        .style(|s| s.flex_col().padding(5).width_full());
+        .style(|s| s.flex_col().padding(5).min_width_full().flex_shrink(0.0));
 
-        let instr = scroll(instr).style(|s| {
-            s.width_full()
-                .height_full()
-                .background(Color::rgb8(248, 248, 248))
-        });
-
-        Box::new(instr)
+        scroll(instr)
+            .style(|s| {
+                s.width_full()
+                    .flex_basis(0)
+                    .min_height(0)
+                    .flex_grow(1.0)
+                    .background(Color::rgb8(248, 248, 248))
+            })
+            .any()
     } else {
-        Box::new(text("Assembly unavailable").style(|s| s.padding(5.0)))
+        text("Assembly unavailable").style(|s| s.padding(5.0)).any()
     }
 }
 
-fn main_container(current: Selection, selection: RwSignal<Selection>) -> Box<dyn View> {
+fn main_container(current: Selection, selection: RwSignal<Selection>) -> AnyView {
     match current {
-        Selection::None => Box::new(text("Nothing selected").style(|s| s.padding(5.0))),
-        Selection::Object(o) => {
-            let data = stack((
-                header("Object Info"),
-                text(format!("Object: `{}`", o.name)).style(|s| s.padding(5.0)),
-                text(format!("Format: {:?}", o.format)).style(|s| s.padding(5.0)),
-                text(format!("Symbols: {:?}", o.symbols.len())).style(|s| s.padding(5.0)),
-            ))
-            .style(|s| s.flex_col().width_full());
-            Box::new(data)
-        }
+        Selection::None => text("Nothing selected").style(|s| s.padding(5.0)).any(),
+        Selection::Object(o) => stack((
+            header("Object Info"),
+            text(format!("Object: `{}`", o.name)).style(|s| s.padding(5.0)),
+            text(format!("Format: {:?}", o.format)).style(|s| s.padding(5.0)),
+            text(format!("Symbols: {:?}", o.symbols.len())).style(|s| s.padding(5.0)),
+        ))
+        .style(|s| s.flex_col().width_full())
+        .any(),
         Selection::Symbol(symbol) => {
             let o = &symbol.data;
             let info = stack((
@@ -461,19 +445,19 @@ fn main_container(current: Selection, selection: RwSignal<Selection>) -> Box<dyn
                 o.demangled
                     .as_ref()
                     .map(|demangled| {
-                        container_box(
+                        container(
                             text(format!("Demangled: `{}`", demangled)).style(|s| s.padding(5.0)),
                         )
                     })
-                    .unwrap_or_else(|| container_box(empty())),
+                    .unwrap_or_else(|| container(empty())),
                 o.section
                     .as_ref()
                     .map(|section| {
-                        container_box(
+                        container(
                             text(format!("Section: `{}`", section.name)).style(|s| s.padding(5.0)),
                         )
                     })
-                    .unwrap_or_else(|| container_box(empty())),
+                    .unwrap_or_else(|| container(empty())),
                 text(format!("Size: {} bytes", o.size)).style(|s| s.padding(5.0)),
                 text(format!(
                     "Data Length: `{:?}`",
@@ -483,14 +467,14 @@ fn main_container(current: Selection, selection: RwSignal<Selection>) -> Box<dyn
             ))
             .style(|s| s.flex_col());
 
-            let data = stack((
+            stack((
                 header("Symbol Info"),
                 scroll(info),
                 header("Assembly"),
                 assembly(symbol, selection),
             ))
-            .style(|s| s.flex_col().width_full().height_full());
-            Box::new(data)
+            .style(|s| s.flex_col().height_full().width_full())
+            .any()
         }
     }
 }
@@ -502,7 +486,7 @@ fn app_view() -> impl View {
 
     let selection = create_rw_signal(Selection::None);
 
-    let object_list = list(
+    let object_list = dyn_stack(
         move || objects.with(|objects| objects.objects.clone()),
         |o| Arc::as_ptr(o).addr(),
         move |o| {
@@ -525,17 +509,16 @@ fn app_view() -> impl View {
                     .text_overflow(TextOverflow::Clip)
                     .hover(|s| s.background(Color::LIGHT_GREEN))
                 })
-                .on_click(move |_| {
+                .on_click_stop(move |_| {
                     selection.set(Selection::Object(o.clone()));
-                    true
                 })
         },
     )
-    .style(|s| s.flex_col().height_full());
+    .style(|s| s.flex_col());
 
-    let symbol_list = virtual_list(
-        VirtualListDirection::Vertical,
-        VirtualListItemSize::Fixed(Box::new(|| 26.0)),
+    let symbol_list = virtual_stack(
+        VirtualDirection::Vertical,
+        VirtualItemSize::Fixed(Box::new(|| 26.0)),
         move || {
             objects.with(|objects| {
                 objects
@@ -553,36 +536,41 @@ fn app_view() -> impl View {
         |o| Arc::as_ptr(&o.data).addr(),
         move |o| {
             let o_ = o.clone();
-            text(o.data.demangled.as_ref().unwrap_or(&o.data.name).clone())
-                .style(move |mut s| {
-                    if selection.with(|s| {
-                        if let Selection::Symbol(so) = s {
-                            Arc::ptr_eq(&so.data, &o_.data)
-                        } else {
-                            false
+            let label = o.data.demangled.as_ref().unwrap_or(&o.data.name).clone();
+            tooltip(
+                text(label.clone())
+                    .style(move |mut s| {
+                        if selection.with(|s| {
+                            if let Selection::Symbol(so) = s {
+                                Arc::ptr_eq(&so.data, &o_.data)
+                            } else {
+                                false
+                            }
+                        }) {
+                            s = s.background(Color::LIGHT_GRAY);
                         }
-                    }) {
-                        s = s.background(Color::LIGHT_GRAY);
-                    }
-                    s.padding(5)
-                        .width_full()
-                        .height(26.0)
-                        .text_overflow(TextOverflow::Clip)
-                        .hover(|s| s.background(Color::rgb8(226, 226, 205)))
-                })
-                .on_click(move |_| {
-                    selection.set(Selection::Symbol(o.clone()));
-                    true
-                })
+                        s.padding(5)
+                            .width_full()
+                            .height(26.0)
+                            .text_overflow(TextOverflow::Clip)
+                            .hover(|s| s.background(Color::rgb8(226, 226, 205)))
+                    })
+                    .on_click_stop(move |_| {
+                        selection.set(Selection::Symbol(o.clone()));
+                    }),
+                move || static_label(label.clone()),
+            )
         },
     )
-    .style(|s| {
-        s.flex_col()
-            .background(Color::rgb8(243, 243, 228))
-            .width_full()
-    });
+    .style(|s| s.flex_col());
 
-    let symbol_list = scroll(symbol_list).style(|s| s.width_full().height_full());
+    let symbol_list = scroll(symbol_list).style(|s| {
+        s.width_full()
+            .flex_grow(1.0)
+            .min_height(0)
+            .flex_basis(0)
+            .background(Color::rgb8(243, 243, 228))
+    });
 
     let object_list = stack((
         header("Objects"),
@@ -593,7 +581,7 @@ fn app_view() -> impl View {
     .style(|s| {
         s.flex_col()
             .width(300)
-            .height_full()
+            .background(Color::WHITE)
             .border_right(0.5)
             .border_color(Color::LIGHT_GRAY)
     });
@@ -602,20 +590,28 @@ fn app_view() -> impl View {
         move || selection.with(|s| s.clone()),
         move |current| main_container(current, selection),
     )
-    .style(|s| s.width_full().height_full().background(Color::WHITE));
+    .style(|s| {
+        s.background(Color::WHITE)
+            .flex_grow(1.0)
+            .min_width(0)
+            .flex_basis(0)
+    });
 
     let lower = stack((object_list, content)).style(|s| {
         s.flex_row()
-            .items_start()
-            .justify_start()
+            //     .items_start()
+            //     .justify_start()
             .width_full()
-            .height_full()
+            .flex_grow(1.0)
+            .min_height(0)
+            .flex_basis(0)
     });
 
-    let bar = stack((button("Open", move |_| {
-        open_file(objects);
-        true
-    }),))
+    let bar = stack((button(|| "Open")
+        .style(|s| s.margin(4.0))
+        .on_click_stop(move |_| {
+            open_file(objects);
+        }),))
     .style(|s| {
         s.flex_row()
             .items_start()
@@ -628,32 +624,25 @@ fn app_view() -> impl View {
 
     stack((bar, lower))
         .style(|s| {
-            s.flex_col()
-                .width_full()
-                .height_full()
-                .font_size(12.0)
-                .background(Color::WHITE)
-                .class(scroll::Handle, |s| {
-                    s.background(Color::rgba8(166, 166, 166, 140))
-                        .active(|s| s.background(Color::rgb8(166, 166, 166)))
-                        .hover(|s| s.background(Color::rgb8(184, 184, 184)))
-                        .set(scroll::Thickness, 20.0)
-                        .set(scroll::Rounded, false)
-                })
-                .class(scroll::Track, |s| {
-                    s.hover(|s| s.background(Color::rgba8(166, 166, 166, 40)))
-                })
+            s.flex_col().width_full().height_full().font_size(12.0)
+            /*     .class(scroll::Handle, |s| {
+                s.transition(Background, Transition::linear(0.3))
+                    .background(Color::rgba8(166, 166, 166, 140))
+                    .active(|s| s.background(Color::rgb8(166, 166, 166)))
+                    .hover(|s| s.background(Color::rgb8(184, 184, 184)))
+                    .set(scroll::Thickness, 20.0)
+                    .set(scroll::Rounded, false)
+            })
+            .class(scroll::Track, |s| {
+                s.hover(|s| s.background(Color::rgba8(166, 166, 166, 40)))
+            })*/
         })
         .window_title(|| "Assembly Viewer".to_string())
-        .on_event(EventListener::KeyUp, move |e| {
-            if let Event::KeyUp(e) = e {
-                if e.key.logical_key == Key::Named(NamedKey::F11) && e.modifiers.shift_key() {
-                    id.inspect();
-                    return true;
-                }
-            }
-            false
-        })
+        .on_key_up(
+            Key::Named(NamedKey::F11),
+            ModifiersState::SHIFT,
+            move |_| id.inspect(),
+        )
 }
 
 fn main() {
