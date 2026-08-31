@@ -192,7 +192,10 @@ pub struct Assembly {
     pub instructions: Vec<Instruction>,
 }
 
-fn open_object(out: &mut Vec<Arc<Object>>, data: &[u8], name: String, path: PathBuf) {
+/// Parse `data` as a single object file. `name` is the display name (an archive member
+/// name or the file name) and `path` the file it came from. Anything that fails to
+/// parse yields [`None`].
+pub fn parse_object(data: &[u8], name: String, path: PathBuf) -> Option<Arc<Object>> {
     object::File::parse(data)
         .map(|file| {
             let mut sections: HashMap<SectionIndex, Section> = file
@@ -268,16 +271,20 @@ fn open_object(out: &mut Vec<Arc<Object>>, data: &[u8], name: String, path: Path
             let mut symbols_sorted: Vec<_> = symbols.values().cloned().collect();
             symbols_sorted.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
-            out.push(Arc::new(Object {
+            Arc::new(Object {
                 name,
                 path,
                 format: file.format(),
                 symbols,
                 symbols_sorted,
                 sections,
-            }));
+            })
         })
-        .ok();
+        .ok()
+}
+
+fn open_object(out: &mut Vec<Arc<Object>>, data: &[u8], name: String, path: PathBuf) {
+    out.extend(parse_object(data, name, path));
 }
 
 /// Parse each path as an archive (contributing one [`Object`] per member) *and* as a
