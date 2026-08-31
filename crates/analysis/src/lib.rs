@@ -248,6 +248,13 @@ impl SymbolData {
                 .as_ref()
                 .map(|target| target.display().to_owned());
 
+            // Keep the `rip+` visible when — and only when — the name that is about to
+            // replace the displacement is one the user can navigate to. See
+            // `rip_relative`.
+            formatter
+                .options_mut()
+                .set_rip_relative_addresses(inst.relocation.is_some() && rip_relative(&instruction));
+
             formatter.format(&instruction, &mut inst);
 
             assembly.instructions.push(inst);
@@ -369,6 +376,29 @@ impl iced_x86::FormatterOutput for Instruction {
             self.relocation_span = Some(start);
         }
     }
+}
+
+/// Whether this instruction's memory operand is addressed relative to the instruction
+/// pointer, i.e. whether printing it as `[rip+…]` is the truth about the encoding.
+///
+/// iced-x86 hides that form by default: `rip_relative_addresses` is off, so
+/// `IntelFormatter` drops the base register and prints the absolute address the
+/// displacement resolves to (`[6]`). That is the more useful answer for an operand whose
+/// displacement is real, and it is what an *unrelocated* rip-relative operand keeps. It
+/// is the wrong answer when the displacement is a relocation placeholder that we replace
+/// with a symbol name, because then `[name]` claims an absolute address the encoding does
+/// not have; `[rip+name]` is both true and the form every disassembler prints.
+///
+/// `memory_base` is [`Register::None`](iced_x86::Register::None) for an instruction with
+/// no memory operand at all, so this answers `false` for a direct `call rel32` or a
+/// `mov eax, imm32` and their rendering is untouched. `EIP` is included because 64-bit
+/// code can address relative to it with a `67h` address-size override, and the formatter
+/// treats the two the same.
+fn rip_relative(instruction: &iced_x86::Instruction) -> bool {
+    matches!(
+        instruction.memory_base(),
+        iced_x86::Register::RIP | iced_x86::Register::EIP
+    )
 }
 
 /// Hands the formatter the relocation target's name in place of a relocated operand's

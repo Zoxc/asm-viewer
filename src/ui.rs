@@ -444,7 +444,9 @@ impl Component for InstructionRow {
         // operand and says which span it landed in, so the row is three children rather
         // than one: the text before that span, the name as a clickable link, and the
         // text after it. That keeps the link in the operand's own position — inside the
-        // brackets of a memory operand, where anything else leaves them empty.
+        // brackets of a memory operand, where anything else leaves them empty, and after
+        // the `rip+` of a rip-relative one, which is text on the link's left rather than
+        // only on its right.
         //
         // A relocated instruction with no such span (the formatter offered no operand to
         // substitute into) has an empty tail, and the link is appended after the whole

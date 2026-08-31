@@ -5,7 +5,8 @@ mod common;
 
 use analysis::{parse_object, Object, SpanKind, SymbolData};
 use common::{
-    caller_and_target, elf_x86_64, indirect_caller_and_target, TextRelocation, TextSymbol,
+    caller_and_target, elf_x86_64, indirect_caller_and_target, rip_relative_store_to_data,
+    TextRelocation, TextSymbol,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -311,6 +312,11 @@ fn a_relocated_indirect_call_names_its_target_inside_the_brackets() {
     // The regression: the relocation applies to a *memory* operand, so the number it
     // replaces sits inside brackets the formatter has already opened. Dropping it left
     // `call qword ptr []`; the target's name has to take its place instead.
+    //
+    // The operand is rip-relative, and naming it does not make it any less so: the `rip+`
+    // stays, because `[target]` would claim an absolute address the encoding does not
+    // have. (The control above, which has no name to show, keeps iced-x86's default and
+    // prints the absolute address the displacement resolves to.)
     let object = parse(&indirect_caller_and_target(true));
     let caller = symbol(&object, "caller");
     let target = symbol(&object, "target");
@@ -321,7 +327,7 @@ fn a_relocated_indirect_call_names_its_target_inside_the_brackets() {
     let resolved = call.relocation.as_ref().expect("the call has a relocation");
     assert!(Arc::ptr_eq(resolved, &target));
 
-    assert_eq!(text(call).trim_end(), "call      qword ptr [target]");
+    assert_eq!(text(call).trim_end(), "call      qword ptr [rip+target]");
     // The placeholder displacement is gone, not merely hidden ...
     assert!(
         spans_of(call, SpanKind::Number).is_empty(),
@@ -363,9 +369,114 @@ fn the_relocation_span_is_the_only_one_replaced() {
     let assembly = storer.assembly(&object).expect("storer disassembles");
     let mov = &assembly.instructions[0];
 
-    assert_eq!(text(mov).trim_end(), "mov       dword ptr [target], 7");
+    assert_eq!(text(mov).trim_end(), "mov       dword ptr [rip+target], 7");
     assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
+    // The `rip+` is *not* part of the link: `relocation_span` still isolates the name.
     assert_eq!(relocation_span(mov), Some(("target", SpanKind::Address)));
+    assert_eq!(
+        mov.format[mov.relocation_span.unwrap() - 1].0,
+        "+",
+        "the name should follow the rip and its operator: {:?}",
+        mov.format
+    );
+}
+
+#[test]
+fn an_unresolvable_relocation_keeps_the_plain_displacement() {
+    // The same `mov dword ptr [rip+0x0], 7`, but relocated against a *data* symbol, which
+    // parsing drops along with everything else that is not a text symbol. There is a
+    // relocation on the instruction and nothing to navigate to, so there must be no link
+    // — and with no name to put after it, no `rip+` either: the operand prints exactly
+    // what an unrelocated one prints, the absolute address the displacement resolves to.
+    let object = parse(&rip_relative_store_to_data());
+    let storer = symbol(&object, "storer");
+    assert_eq!(names(&object), ["storer"]);
+
+    let assembly = storer.assembly(&object).expect("storer disassembles");
+    let mov = &assembly.instructions[0];
+
+    assert!(mov.relocation.is_none());
+    assert_eq!(mov.relocation_span, None);
+    assert_eq!(text(mov).trim_end(), "mov       dword ptr [0Ah], 7");
+    assert_eq!(spans_of(mov, SpanKind::Number), ["0Ah", "7"]);
+}
+
+#[test]
+fn the_rip_form_is_per_instruction() {
+    // Two identical `call qword ptr [rip+0x0]`, only the first relocated. The rip-relative
+    // form is turned on for the instruction being named and must not leak into the next
+    // one, which still prints its own absolute address (it starts at 6 and is 6 long).
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "caller",
+                bytes: &[
+                    0xFF, 0x15, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x15, 0x00, 0x00, 0x00, 0x00, 0xC3,
+                ],
+            },
+            TextSymbol {
+                name: "target",
+                bytes: &[0xC3],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 0,
+            offset: 2,
+            target: 1,
+        }],
+    );
+    let object = parse(&data);
+    let caller = symbol(&object, "caller");
+
+    let assembly = caller.assembly(&object).expect("caller disassembles");
+
+    assert_eq!(
+        text(&assembly.instructions[0]).trim_end(),
+        "call      qword ptr [rip+target]"
+    );
+    assert_eq!(
+        text(&assembly.instructions[1]).trim_end(),
+        "call      qword ptr [0Ch]"
+    );
+}
+
+#[test]
+fn a_direct_relocated_operand_never_gains_a_rip() {
+    // The two direct forms, neither of which has a memory operand at all: the rip-relative
+    // rule keys off `memory_base`, so both must read exactly as they did before it.
+    let object = parse(&caller_and_target());
+    let call = symbol(&object, "caller")
+        .assembly(&object)
+        .expect("disassembles")
+        .instructions[0]
+        .clone();
+    assert_eq!(text(&call).trim_end(), "call      target");
+    assert_eq!(relocation_span(&call), Some(("target", SpanKind::Address)));
+
+    let object = parse(&elf_x86_64(
+        &[
+            TextSymbol {
+                name: "loader",
+                bytes: &[0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3],
+            },
+            TextSymbol {
+                name: "target",
+                bytes: &[0xC3],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 0,
+            offset: 1,
+            target: 1,
+        }],
+    ));
+    let mov = symbol(&object, "loader")
+        .assembly(&object)
+        .expect("disassembles")
+        .instructions[0]
+        .clone();
+    assert_eq!(text(&mov).trim_end(), "mov       eax, target");
+    assert_eq!(relocation_span(&mov), Some(("target", SpanKind::Address)));
 }
 
 /// The span [`analysis::Instruction::relocation_span`] points at, with its kind.

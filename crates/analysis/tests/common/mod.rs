@@ -406,3 +406,62 @@ impl gimli::write::Writer for RelocWriter {
         }
     }
 }
+
+/// `storer` = `mov dword ptr [rip+0x0], 7; ret`, with the relocation at offset 2 pointing
+/// at a **data** symbol in `.data` — a global variable, which is what a rip-relative store
+/// like this one actually writes to.
+///
+/// Parsing keeps only `SymbolKind::Text` symbols, so the relocation is present on the
+/// instruction and yet resolves to nothing the viewer can navigate to. That is the case
+/// where the operand has to keep its plain displacement rather than gain a link that goes
+/// nowhere.
+pub fn rip_relative_store_to_data() -> Vec<u8> {
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+
+    let text = obj.section_id(write::StandardSection::Text);
+    let offset = obj.append_section_data(
+        text,
+        &[
+            0xC7, 0x05, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0xC3,
+        ],
+        1,
+    );
+    obj.add_symbol(write::Symbol {
+        name: b"storer".to_vec(),
+        value: offset,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+
+    let data = obj.section_id(write::StandardSection::Data);
+    let value = obj.append_section_data(data, &[0; 4], 4);
+    let counter = obj.add_symbol(write::Symbol {
+        name: b"counter".to_vec(),
+        value,
+        size: 4,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(data),
+        flags: SymbolFlags::None,
+    });
+
+    obj.add_relocation(
+        text,
+        write::Relocation {
+            offset: offset + 2,
+            size: 32,
+            kind: RelocationKind::Relative,
+            encoding: RelocationEncoding::Generic,
+            symbol: counter,
+            addend: -4,
+        },
+    )
+    .expect("adding a relocation to .text");
+
+    obj.write().expect("writing the fixture object")
+}
