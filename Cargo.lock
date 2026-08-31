@@ -175,6 +175,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "analysis"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "object",
+ "symbolic-common",
+ "symbolic-demangle",
+]
+
+[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4240,14 +4250,12 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "viewer"
 version = "0.1.0"
 dependencies = [
+ "analysis",
  "async-channel",
  "env_logger",
  "freya",
  "iced-x86",
- "object",
  "rfd",
- "symbolic-common",
- "symbolic-demangle",
 ]
 
 [[package]]

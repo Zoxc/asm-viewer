@@ -3,10 +3,9 @@ use std::{path::PathBuf, sync::Arc};
 use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
-use crate::{
-    fonts::{fonts, Font},
-    object::{open_files, Assembly, Object, Symbol, SymbolData},
-};
+use analysis::{open_files, Assembly, Object, Symbol, SymbolData};
+
+use crate::fonts::{fonts, Font};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
 /// equal to the `item_size` given to each `VirtualScrollView`.

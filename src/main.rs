@@ -1,5 +1,4 @@
 mod fonts;
-mod object;
 mod ui;
 
 use freya::prelude::*;
