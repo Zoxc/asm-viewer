@@ -4313,6 +4313,7 @@ version = "0.1.0"
 dependencies = [
  "analysis",
  "async-channel",
+ "async-io",
  "dirs",
  "env_logger",
  "freya",

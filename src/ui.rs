@@ -1,5 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
+use async_io::Timer;
 use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
@@ -7,7 +8,7 @@ use analysis::{open_files, Assembly, Object, SpanKind, Symbol, SymbolData};
 
 use crate::fonts::{fonts, Font};
 use crate::history::History;
-use crate::project::{Project, Selection};
+use crate::project::{self, Project, Selection};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
 /// equal to the `item_size` given to each `VirtualScrollView`.
@@ -1015,37 +1016,59 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
         )
 }
 
-/// Write the session out whenever it changes.
+/// Tell the save policy what the session looks like, whenever it changes.
 ///
 /// `use_side_effect` re-runs its callback whenever a `State` that was `read()` inside
-/// it changes (`freya-core/src/lifecycle/effect.rs`), so reading the two state
+/// it changes (`freya-core/src/lifecycle/effect.rs`), so reading the three state
 /// contexts here makes this one observer the single choke point every mutation flows
-/// through: the three `selection.set(..)` sites and the toolbar's `objects.write()`
-/// know nothing about persistence, and neither will any future one. The history's
-/// `use_record_history` below is the same trick applied to `Sel` alone.
-fn use_save_on_change(objects: State<Vec<Arc<Object>>>, selection: State<Selection>) {
-    // What this session has already written. It starts as the empty project the app
-    // starts with -- deliberately *not* as the project `use_restore_on_startup` loaded.
-    // The empty baseline means the state the app boots into (no objects, no selection)
-    // is never written, so a run in which nothing is opened, or one whose restore finds
-    // no readable binary, or one closed while parsing is still in flight, all leave the
-    // file on disk untouched. Seeding the baseline from the loaded project instead would
-    // invert that: the effect's first run would see the still-empty state differ from
-    // the baseline and write an *empty* project over a good one. The cost of the empty
-    // baseline is a single redundant, idempotent save once a restore lands.
-    let mut last_saved = use_state(Project::default);
-
+/// through: the three `selection.set(..)` sites, the toolbar's `objects.write()` and
+/// `use_record_history`'s push know nothing about persistence, and neither will any
+/// future one.
+///
+/// Whether a change reaches the disk now or at the next `use_periodic_save` tick is
+/// `project::record`'s decision, not this one's: opening a binary is written at once,
+/// a selection or a history entry is left pending. That policy is framework-free and
+/// unit-tested in `project.rs`; all this hook owns is *when to look*.
+///
+/// A selection change wakes this twice -- once for `Sel`, and again when
+/// `use_record_history` pushes the entry that follows from it -- which costs two
+/// derivations and two comparisons and, since neither is a binaries change, no write
+/// at all.
+fn use_save_on_change(
+    objects: State<Vec<Arc<Object>>>,
+    selection: State<Selection>,
+    history: State<History>,
+) {
     use_side_effect(move || {
         // Reading these subscribes the effect to them: any change re-runs it.
-        let project = Project::from_state(&objects.read(), &selection.read());
+        project::record(Project::from_state(
+            &objects.read(),
+            &selection.read(),
+            &history.read(),
+        ));
+    });
+}
 
-        // `peek`, not `read`: the effect must not subscribe to the state it writes.
-        if project != *last_saved.peek() {
-            // A small JSON write that swallows its own errors, so this neither panics
-            // nor meaningfully blocks the UI.
-            project.save();
-            last_saved.set(project);
-        }
+/// Write out a pending change every `AUTOSAVE_INTERVAL`.
+///
+/// `use_hook` runs its initializer on mount and never again, so exactly one of these
+/// loops exists; `spawn` is freya's own task spawner, and `async_io::Timer` is what
+/// freya itself waits on inside spawned tasks (`freya-animation`'s hook and
+/// `freya-sdk`'s timeout both do), so this adds no runtime -- async-io's reactor is
+/// already in the process.
+///
+/// A tick that finds nothing pending does no IO at all, which is what makes the empty
+/// baseline in `Saves` matter here: a tick during the startup parse, before anything
+/// has been restored, has nothing to write and so cannot put an empty project over a
+/// good file.
+fn use_periodic_save() {
+    use_hook(|| {
+        spawn(async move {
+            loop {
+                Timer::after(project::AUTOSAVE_INTERVAL).await;
+                project::flush();
+            }
+        });
     });
 }
 
@@ -1153,9 +1176,15 @@ fn navigate(mut history: State<History>, mut selection: State<Selection>, nav: N
 ///
 /// Every step degrades silently: no state file or a corrupt one is `None`, a path that
 /// no longer exists or no longer parses just contributes no `Object` (`open_files`
-/// swallows its own failures), and `Project::resolve` falls back from a vanished symbol
-/// to its object and from a vanished object to nothing.
-fn use_restore_on_startup(objects: State<Vec<Arc<Object>>>, selection: State<Selection>) {
+/// swallows its own failures), `Project::resolve` falls back from a vanished symbol to
+/// its object and from a vanished object to nothing, and `Project::resolve_history`
+/// drops the entries that no longer point anywhere while keeping the cursor on the
+/// right one.
+fn use_restore_on_startup(
+    objects: State<Vec<Arc<Object>>>,
+    selection: State<Selection>,
+    history: State<History>,
+) {
     use_hook(move || {
         let Some(project) = Project::load() else {
             return;
@@ -1180,12 +1209,27 @@ fn use_restore_on_startup(objects: State<Vec<Arc<Object>>>, selection: State<Sel
                 return;
             }
 
-            let (mut objects, mut selection) = (objects, selection);
+            let (mut objects, mut selection, mut history) = (objects, selection, history);
             objects.write().extend(parsed);
+
             // Resolved against everything now loaded rather than just `parsed`, so
-            // this stays correct if the user managed to open something first.
-            let restored = project.resolve(&objects.read());
-            selection.set(restored);
+            // this stays correct if the user managed to open something first. Both
+            // are computed before either is set so the read guard is long gone by
+            // the time anything is notified.
+            let (restored_history, restored_selection) = {
+                let loaded = objects.read();
+                (project.resolve_history(&loaded), project.resolve(&loaded))
+            };
+
+            // The history first, so that when `use_record_history` observes the
+            // selection there is already a cursor to dedup against. The saved cursor
+            // entry is the saved selection -- that is what put it there -- and the two
+            // resolve through the same lookup to the same `Arc`s, so `would_push` is
+            // false and the restored session costs no duplicate entry. It is only when
+            // the cursor entry was dropped, or the selection degraded, that the two
+            // differ, and then a push is exactly right: the app is somewhere new.
+            history.set(restored_history);
+            selection.set(restored_selection);
         });
     });
 }
@@ -1214,12 +1258,13 @@ pub fn app() -> impl IntoElement {
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
-    use_save_on_change(objects, selection);
+    use_save_on_change(objects, selection, history);
     use_record_history(selection, history);
-    // After the save effect on purpose: the effect is in place, with its empty
-    // baseline, before the restore can put anything into either state, so the
-    // restored session is seen by it as an ordinary change.
-    use_restore_on_startup(objects, selection);
+    use_periodic_save();
+    // After the save effect on purpose: the effect is in place, with the save policy's
+    // empty baseline, before the restore can put anything into any of the three states,
+    // so the restored session is seen by it as an ordinary change.
+    use_restore_on_startup(objects, selection, history);
 
     // Rebuilt only when the object list changes, not on every selection change.
     let symbols = use_memo(move || {

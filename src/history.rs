@@ -12,8 +12,11 @@
 //! objects are only ever added, so that only comes up if the user reopens a file that
 //! is already open.
 //!
-//! Nothing here is persisted: the history is per-session state, and `project.json`
-//! keeps only the binaries and the selection.
+//! The history *is* persisted, as [`crate::project::SavedHistory`] inside `project.json`:
+//! [`History::entries`] and [`History::cursor`] are what goes out and
+//! [`History::restored`] is what comes back. Entries whose object or symbol no longer
+//! resolves are dropped on the way in, which is why `restored` takes an already-built
+//! list rather than replaying pushes.
 
 use crate::project::Selection;
 
@@ -31,6 +34,23 @@ pub struct History {
 }
 
 impl History {
+    /// A history rebuilt from a saved session: `entries` oldest first, with the cursor on
+    /// `entries[cursor]`.
+    ///
+    /// The cursor is clamped into range, so neither a hand-edited `project.json` nor a
+    /// restore that dropped entries can leave it past the end. An empty `entries` gives
+    /// back the empty history, cursor and all.
+    pub fn restored(entries: Vec<Selection>, cursor: usize) -> History {
+        let cursor = cursor.min(entries.len().saturating_sub(1));
+        History { entries, cursor }
+    }
+
+    /// Every entry, oldest first — what persistence saves. The history panel wants
+    /// [`History::recent`] instead, which numbers them and hands them back newest first.
+    pub fn entries(&self) -> &[Selection] {
+        &self.entries
+    }
+
     /// The entry the cursor is on, or `None` before anything has been recorded.
     pub fn current(&self) -> Option<&Selection> {
         self.entries.get(self.cursor)

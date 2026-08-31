@@ -11,6 +11,10 @@ analysis = { path = "crates/analysis" }
 freya = { version = "0.4" }
 rfd = "0.17"
 async-channel = "2"
+# The timer for the periodic save. Not a new async runtime: freya already depends on
+# async-io (freya-animation and freya-sdk both wait on `Timer` inside spawned tasks),
+# so this only names what is already linked in and running.
+async-io = "2"
 env_logger = "0.10.0"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
