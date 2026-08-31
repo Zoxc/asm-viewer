@@ -23,6 +23,7 @@ one item per part, so the unfinished half stays visible.
 - [ ] Clicking on functions in source should navigate to them.
 - [ ] Navigating in assembly should also navigate source.
 - [x] Mouse buttons can navigate history so you can go back and forth.
+- [ ] Add `<`, `>` navigation buttons to the top bar.
 
 ## Assembly viewer
 
