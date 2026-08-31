@@ -10,15 +10,28 @@
 //! before a re-parse never compare equal to the ones made after it, and they keep the
 //! superseded `Object` alive for as long as the history holds them. Within a session
 //! objects are only ever added, so that only comes up if the user reopens a file that
-//! is already open.
+//! is already open. That, together with the whole list going out to disk on every
+//! flush, is why the history is capped at [`MAX_ENTRIES`] rather than growing for the
+//! life of the session.
 //!
-//! The history *is* persisted, as [`crate::project::SavedHistory`] inside `project.json`:
+//! The history *is* persisted, as [`crate::project::SavedHistory`] inside `project.toml`:
 //! [`History::entries`] and [`History::cursor`] are what goes out and
 //! [`History::restored`] is what comes back. Entries whose object or symbol no longer
 //! resolves are dropped on the way in, which is why `restored` takes an already-built
 //! list rather than replaying pushes.
 
 use crate::project::Selection;
+
+/// The most entries a history ever holds. A push that would take it past this drops the
+/// oldest ones off the front, and [`History::restored`] keeps the newest this many.
+///
+/// The cap exists because an entry is not free. Each one holds an `Arc<Object>` or an
+/// `Arc<SymbolData>`, so an uncapped history pins every object the user has visited —
+/// including the superseded parse of a file that was reopened, which nothing else keeps
+/// alive — for the rest of the session, and the entries are all serialized out again on
+/// every flush. 200 is far more back/forward reach than a session ever uses while
+/// bounding both.
+const MAX_ENTRIES: usize = 200;
 
 /// A list of visited selections plus a cursor into it.
 ///
@@ -41,12 +54,12 @@ impl History {
     /// A history rebuilt from a saved session: `entries` oldest first, with the cursor on
     /// `entries[cursor]`.
     ///
-    /// The cursor is clamped into range, so neither a hand-edited `project.json` nor a
+    /// The cursor is clamped into range, so neither a hand-edited `project.toml` nor a
     /// restore that dropped entries can leave it past the end. An empty `entries` gives
     /// back the empty history, cursor and all.
     ///
     /// The no-duplicates invariant [`History::push`] keeps is *enforced* here rather than
-    /// assumed, because the entries come from outside: a `project.json` written before
+    /// assumed, because the entries come from outside: a `project.toml` written before
     /// entries were bumped rather than appended can name the same destination twice, two
     /// saved entries can resolve to the same `Arc`, and the file can be hand-edited.
     /// Duplicates are collapsed the way `push` would have left them — the newest
@@ -54,6 +67,18 @@ impl History {
     /// on to wherever the collapse put it, rather than staying on an index that now names
     /// something else. That is what keeps the restore's property that the cursor entry is
     /// the restored selection true even when collapsing moved it.
+    ///
+    /// [`MAX_ENTRIES`] is enforced here too, after the collapse, so an older or
+    /// hand-edited file cannot load a history longer than one the app would build. The
+    /// window kept is the *newest* `MAX_ENTRIES` entries rather than the ones around the
+    /// cursor: that is exactly what a session of pushes would have left, so a restore can
+    /// only produce a history `push` could have, and it keeps the destinations the user
+    /// visited most recently instead of trimming them to preserve a deep back stack. The
+    /// cursor is almost always at or near the newest entry — it is where the user was, and
+    /// every push puts it last — so its entry survives the trim in every ordinary case and
+    /// the cursor follows it down; in the pathological one, a saved cursor with more than
+    /// `MAX_ENTRIES` entries in front of it, its entry goes and the cursor lands on the
+    /// oldest survivor.
     pub fn restored(entries: Vec<Selection>, cursor: usize) -> History {
         let current = entries
             .get(cursor.min(entries.len().saturating_sub(1)))
@@ -69,15 +94,18 @@ impl History {
 
         // `unwrap_or(0)` is only ever the empty history: the entry the cursor was on is
         // still in the list, since collapsing moves an occurrence rather than dropping
-        // the destination.
+        // the destination. Trimming to `MAX_ENTRIES` can drop it, but that happens after
+        // this, in `cap`, which carries the cursor with it.
         let cursor = current
             .and_then(|current| deduplicated.iter().position(|entry| *entry == current))
             .unwrap_or(0);
 
-        History {
+        let mut history = History {
             entries: deduplicated,
             cursor,
-        }
+        };
+        history.cap();
+        history
     }
 
     /// Every entry, oldest first — what persistence saves. The history panel wants
@@ -117,6 +145,10 @@ impl History {
     /// front of it and `would_push` has already ruled out the one under it — and removing
     /// one shifts the rest down, which is why the cursor is taken from the final length
     /// rather than stepped.
+    ///
+    /// A push that takes the list past [`MAX_ENTRIES`] then drops the oldest entries, so
+    /// the newest destination is always recorded and it is the far end of the back stack
+    /// that is forgotten.
     pub fn push(&mut self, selection: Selection) {
         if !self.would_push(&selection) {
             return;
@@ -126,6 +158,27 @@ impl History {
         self.entries.retain(|entry| *entry != selection);
         self.entries.push(selection);
         self.cursor = self.entries.len() - 1;
+        self.cap();
+    }
+
+    /// Drop entries off the front until at most [`MAX_ENTRIES`] are left, keeping the
+    /// cursor on the entry it was on.
+    ///
+    /// Dropping `excess` entries shifts every index that survives down by that much, so
+    /// the cursor moves with them. `saturating_sub` is what keeps it in range when the
+    /// entry it was on is itself one of the dropped ones: it lands on the oldest
+    /// survivor, which is the same place [`crate::project::Project::resolve_history`]
+    /// puts it when nothing older than the saved cursor survived. That case cannot arise
+    /// from [`History::push`], which caps with the cursor on the entry it has just
+    /// appended, only from [`History::restored`].
+    fn cap(&mut self) {
+        let excess = self.entries.len().saturating_sub(MAX_ENTRIES);
+        if excess == 0 {
+            return;
+        }
+
+        self.entries.drain(..excess);
+        self.cursor = self.cursor.saturating_sub(excess);
     }
 
     /// The index of the entry the cursor is on, or `None` before anything has been
@@ -480,7 +533,7 @@ mod tests {
     fn restoring_collapses_duplicates_onto_the_newest_occurrence() {
         let (a, b) = (selection("a"), selection("b"));
 
-        // What a `project.json` written before entries were bumped can hold. The cursor
+        // What a `project.toml` written before entries were bumped can hold. The cursor
         // is on the newest `a`, the usual case.
         let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 2);
 
@@ -530,6 +583,147 @@ mod tests {
         assert!(history.entries() == [a, b.clone()]);
         assert!(history.current() == Some(&b));
         assert!(history.cursor() == Some(1));
+    }
+
+    /// `count` distinct selections, oldest first, pushed onto a fresh history — the
+    /// caller keeps them to say which ones the cap should have dropped.
+    fn filled(count: usize) -> (History, Vec<Selection>) {
+        let entries: Vec<Selection> = (0..count).map(|i| selection(&format!("e{i}"))).collect();
+        let mut history = History::default();
+        for entry in &entries {
+            history.push(entry.clone());
+        }
+        (history, entries)
+    }
+
+    #[test]
+    fn pushing_past_the_cap_drops_the_oldest_entries() {
+        let over = MAX_ENTRIES + 50;
+        let (history, entries) = filled(over);
+
+        // The length holds at the cap, and it is the front that went.
+        assert!(history.entries().len() == MAX_ENTRIES);
+        assert!(history.entries()[0] == entries[over - MAX_ENTRIES]);
+        assert!(history.entries().last() == entries.last());
+
+        // The cursor is still on the entry the last push appended, at its new index.
+        assert!(history.cursor() == Some(MAX_ENTRIES - 1));
+        assert!(history.current() == entries.last());
+        assert!(!history.can_forward());
+
+        // And walking all the way back reaches the oldest survivor rather than running
+        // off an index the drop left naming nothing.
+        let mut history = history;
+        let mut steps = 0;
+        while let Some(entry) = history.back() {
+            assert!(entries.contains(&entry));
+            steps += 1;
+        }
+        assert!(steps == MAX_ENTRIES - 1);
+        assert!(history.cursor() == Some(0));
+        assert!(history.current() == Some(&entries[over - MAX_ENTRIES]));
+    }
+
+    #[test]
+    fn the_cursor_follows_its_entry_across_a_drop() {
+        let over = MAX_ENTRIES + 50;
+        let entries: Vec<Selection> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
+
+        // A cursor part-way back through an over-long history: what the cap moves it to
+        // is wherever its *entry* ended up, not the index that entry used to have.
+        let cursor = over - 25;
+        let history = History::restored(entries.clone(), cursor);
+        let landed = history.cursor().expect("an entry");
+        assert!(landed != cursor);
+        assert!(history.entries()[landed] == entries[cursor]);
+        // Which is to say it kept its distance from the newest end.
+        assert!(history.entries().len() - landed == over - cursor);
+        assert!(history.can_back());
+        assert!(history.can_forward());
+
+        // A push that trips the cap likewise leaves the cursor on the entry it appended,
+        // at the index the drop moved that entry to rather than the count of pushes.
+        let (history, entries) = filled(over);
+        assert!(history.cursor() == Some(MAX_ENTRIES - 1));
+        assert!(history.entries()[MAX_ENTRIES - 1] == entries[over - 1]);
+    }
+
+    #[test]
+    fn pushing_past_the_cap_after_going_back_truncates_first() {
+        let over = MAX_ENTRIES + 50;
+        let (mut history, entries) = filled(over);
+
+        // Back five, so a push has forward entries to truncate as well as a cap to
+        // enforce. The truncation takes the list under the cap again...
+        for _ in 0..5 {
+            history.back();
+        }
+        let fresh: Vec<Selection> = (0..10).map(|i| selection(&format!("n{i}"))).collect();
+        history.push(fresh[0].clone());
+        assert!(history.entries().len() == MAX_ENTRIES - 4);
+        assert!(!history.can_forward());
+
+        // ...and the pushes after it fill it back up and start dropping the front again.
+        for entry in &fresh[1..] {
+            history.push(entry.clone());
+        }
+        assert!(history.entries().len() == MAX_ENTRIES);
+        assert!(history.cursor() == Some(MAX_ENTRIES - 1));
+        assert!(history.current() == fresh.last());
+        assert!(!history.can_forward());
+
+        // Ten pushes onto a list the truncation left five short of the cap, so five more
+        // entries went off the front on top of the fifty the fill had already dropped.
+        assert!(history.entries()[0] == entries[over - MAX_ENTRIES + 5]);
+        // The abandoned branch is gone rather than merely capped away.
+        for abandoned in &entries[over - 5..] {
+            assert!(!history.entries().contains(abandoned));
+        }
+    }
+
+    #[test]
+    fn restoring_keeps_the_newest_entries_and_carries_the_cursor() {
+        let over = MAX_ENTRIES + 50;
+        let entries: Vec<Selection> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
+
+        // A cursor near the newest entry, the ordinary case: its entry survives the trim
+        // and the cursor comes down with it by however many entries were dropped.
+        let cursor = over - 10;
+        let history = History::restored(entries.clone(), cursor);
+        assert!(history.entries().len() == MAX_ENTRIES);
+        assert!(history.entries()[0] == entries[over - MAX_ENTRIES]);
+        assert!(history.current() == Some(&entries[cursor]));
+        assert!(history.cursor() == Some(cursor - (over - MAX_ENTRIES)));
+        assert!(history.can_forward());
+        assert!(!history.would_push(&entries[cursor]));
+
+        // A cursor so deep in the back stack that the trim drops its entry: it lands on
+        // the oldest survivor rather than out of range.
+        let history = History::restored(entries.clone(), 10);
+        assert!(history.entries().len() == MAX_ENTRIES);
+        assert!(history.cursor() == Some(0));
+        assert!(history.current() == Some(&entries[over - MAX_ENTRIES]));
+        assert!(!history.can_back());
+        assert!(history.can_forward());
+
+        // A cursor past the end is still clamped before any of that happens.
+        let history = History::restored(entries.clone(), over + 100);
+        assert!(history.cursor() == Some(MAX_ENTRIES - 1));
+        assert!(history.current() == entries.last());
+    }
+
+    #[test]
+    fn restoring_collapses_duplicates_before_capping() {
+        // Every entry saved twice: 380 saved entries, 190 destinations. The collapse runs
+        // first, so all 190 fit and the cap drops nothing — capping first would have
+        // thrown away half of them to keep 200 saved *entries*.
+        let unique: Vec<Selection> = (0..190).map(|i| selection(&format!("e{i}"))).collect();
+        let saved: Vec<Selection> = unique.iter().flat_map(|e| [e.clone(), e.clone()]).collect();
+
+        let history = History::restored(saved, 379);
+        assert!(history.entries().len() == 190);
+        assert!(history.entries() == unique);
+        assert!(history.cursor() == Some(189));
     }
 
     #[test]
