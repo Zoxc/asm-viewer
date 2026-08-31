@@ -6,6 +6,7 @@ use rfd::AsyncFileDialog;
 use analysis::{open_files, Assembly, Object, SpanKind, Symbol, SymbolData};
 
 use crate::fonts::{fonts, Font};
+use crate::project::Selection;
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
 /// equal to the `item_size` given to each `VirtualScrollView`.
@@ -53,24 +54,6 @@ trait FontExt: TextStyleExt + Sized {
 }
 
 impl<T: TextStyleExt + Sized> FontExt for T {}
-
-#[derive(Clone)]
-pub enum Selection {
-    None,
-    Object(Arc<Object>),
-    Symbol(Symbol),
-}
-
-impl PartialEq for Selection {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Selection::None, Selection::None) => true,
-            (Selection::Object(a), Selection::Object(b)) => Arc::ptr_eq(a, b),
-            (Selection::Symbol(a), Selection::Symbol(b)) => a == b,
-            _ => false,
-        }
-    }
-}
 
 /// The loaded objects, shared through context.
 #[derive(Clone, Copy)]
