@@ -129,14 +129,21 @@ one item per part, so the unfinished half stays visible.
   should not light three of them. What is left is freya's own 150ms fade-in, which is
   inside the component and not reachable from outside — measured, not guessed: at 200ms
   the tooltip is up, at 48ms it is not.
-- [ ] Context menu on a file in the objects panel to close it — the app can open a binary
-  but not let go of one, so a mistyped path stays in the session until `project.toml` is
-  edited by hand. Closing drops the file's objects (an archive's members with it), and has
-  to answer for what pointed at them: the selection, the open tabs, the history entries, and
-  the saved project, which per *Projects* should be written immediately since it is a change
-  the user made. freya has a `ContextMenu` (`freya-components/src/context_menu.rs`,
-  `open_from_event`), so the menu itself is not the work — deciding what "close" leaves
-  behind is.
+- [x] Context menu on a file in the objects panel to close it. Right-clicking a file row —
+  an archive, or a file that contributed the one object it is named after — offers "Close
+  file", and closing drops every object of that path, an archive's members with it. What
+  pointed at them: the open tabs in it are closed and the selection moves to the
+  neighbouring tab the way closing one tab by hand does (`Selection::None` only when that
+  was the last), the history entries are *dropped* rather than degraded, through the same
+  walk a restore uses for binaries that have changed, and `Project::binaries` follows the
+  objects and is written to disk at once. A member row offers nothing: the file is the unit
+  that closes, so the row above it is the one that closes it.
+- [ ] Bookmarks panel for pinned symbols / functions — a list the reader adds to deliberately
+  and that outlives the session, unlike the history, which records everywhere they went and
+  drops the oldest. A sidebar panel beside Objects / Symbols / History, saved with the
+  project. Note the name clash before implementing: `Pinned` in `ui.rs` already means the
+  source position a click fixed the two panes on (a transient, one-at-a-time gesture), which
+  is a different thing from a bookmark — one of the two wants renaming.
 - [ ] Left panel to explore project directory / files.
 - [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
   by substring, whole word or regex, on the demangled name the row shows.
@@ -149,6 +156,19 @@ one item per part, so the unfinished half stays visible.
   last one goes back to the placeholder. They are chips rather than dock tabs deliberately
   — the dock tree is the layout, and a layout must survive documents opening and closing
   (`notes/Plan.md`, 6c). Not persisted yet: that is *Projects*' "saves with tabs".
+- [ ] Two kinds of tab, assembly-driven and source-driven, told apart by an icon. The
+  left-most pane is the one the tab is *about*, and it drives what the right-hand pane
+  shows: an assembly-driven tab has the function on the left and the source it came from on
+  the right, a source-driven tab has the file on the left and the assembly for the line on
+  the right. Reading of the request, to confirm before building: this replaces the two
+  independent strips 6c produced (one for functions, one for files, each with its own
+  notion of what is open) with one strip whose chips each say which side is in charge — so
+  opening a file from a directory panel and opening a function from the symbol list produce
+  the same kind of thing, differing only in which way the mapping runs.
+- [ ] A larger close icon on a tab, with a highlight under the pointer. The × on a chip is
+  small enough to be a target you aim at rather than one you hit, and nothing distinguishes
+  the pointer being over the × from being over the chip — so the only feedback that you are
+  about to close a tab rather than switch to it arrives after the tab is gone.
 
 ## Projects
 
@@ -171,7 +191,11 @@ one item per part, so the unfinished half stays visible.
 - [ ] Split project storage into toml? for user given settings and another file for opened tabs / cached binary inspection data
 - [x] Save the navigation history.
 - [x] Opening binary files saves immediately.
-- [ ] User project changes should save immediately.
+- [x] User project changes should save immediately. `project::record` writes at once when
+  `binaries` differs and leaves everything else pending, so both changes the user can
+  currently make to a project — opening a binary and closing one — are on disk before the
+  next click. Anything Step 8's project model adds (a directory, a name, binary hashes) has
+  to go through the same comparison to keep this true.
 - [x] Periodically save if anything has changed. History, open files and view positions do not
   need to save immediately.
 
