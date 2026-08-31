@@ -129,6 +129,7 @@ fn kind_color(kind: SpanKind) -> Color {
         SpanKind::Mnemonic | SpanKind::Prefix => MNEMONIC_FG,
         SpanKind::Register => REGISTER_FG,
         SpanKind::Number => NUMBER_FG,
+        SpanKind::Address => ADDRESS_FG,
         SpanKind::Other => OTHER_FG,
     }
 }

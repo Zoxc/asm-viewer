@@ -160,10 +160,46 @@ fn an_unrelocated_branch_keeps_its_target() {
     let call = &assembly.instructions[0];
 
     assert!(call.relocation.is_none());
-    // The branch target is a `FunctionAddress`, i.e. `SpanKind::Other` — not a number
+    // The branch target is a `FunctionAddress`, i.e. `SpanKind::Address` — not a number
     // span — so it is `write_number` being suppressed that removes it above, and the
     // text is what has to be asserted on.
     assert_eq!(text(call).trim_end(), "call      5");
+    assert_eq!(
+        spans_of(call, SpanKind::Address),
+        ["5"],
+        "the call target should be an address span: {:?}",
+        call.format
+    );
+}
+
+#[test]
+fn jump_targets_are_address_spans_too() {
+    // The same rule for a plain jump, whose target iced-x86 emits as a `LabelAddress`
+    // rather than the `FunctionAddress` a call gets: a short `EB xx` and a near
+    // `E9 xx xx xx xx`, both unrelocated so the encoded displacement is printed.
+    let data = elf_x86_64(
+        &[TextSymbol {
+            name: "jumper",
+            bytes: &[0xEB, 0x00, 0xE9, 0x00, 0x00, 0x00, 0x00, 0xC3],
+        }],
+        &[],
+    );
+    let object = parse(&data);
+    let jumper = symbol(&object, "jumper");
+
+    let assembly = jumper.assembly(&object).expect("jumper disassembles");
+    assert_eq!(assembly.instructions.len(), 3);
+
+    let short = &assembly.instructions[0];
+    assert_eq!(text(short).trim_end(), "jmp       short 2");
+    assert_eq!(spans_of(short, SpanKind::Address), ["2"]);
+
+    let near = &assembly.instructions[1];
+    assert_eq!(text(near).trim_end(), "jmp       7");
+    assert_eq!(spans_of(near, SpanKind::Address), ["7"]);
+
+    // The `ret` that follows has no operand at all, so nothing else is coloured as one.
+    assert!(spans_of(&assembly.instructions[2], SpanKind::Address).is_empty());
 }
 
 #[test]
@@ -246,6 +282,16 @@ fn a_relocation_anywhere_in_the_instruction_counts() {
         .as_ref()
         .expect("the call has a relocation");
     assert!(Arc::ptr_eq(resolved, &target));
+}
+
+/// The text of every span in `instruction` that carries `kind`.
+fn spans_of(instruction: &analysis::Instruction, kind: SpanKind) -> Vec<&str> {
+    instruction
+        .format
+        .iter()
+        .filter(|(_, span)| *span == kind)
+        .map(|(text, _)| text.as_str())
+        .collect()
 }
 
 fn text(instruction: &analysis::Instruction) -> String {

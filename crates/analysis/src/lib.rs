@@ -142,6 +142,8 @@ pub enum SpanKind {
     Prefix,
     Register,
     Number,
+    /// A branch target: the address operand of a `call`, `jmp` or `jcc`.
+    Address,
     Other,
 }
 
@@ -152,6 +154,11 @@ impl From<iced_x86::FormatterTextKind> for SpanKind {
             iced_x86::FormatterTextKind::Prefix => SpanKind::Prefix,
             iced_x86::FormatterTextKind::Register => SpanKind::Register,
             iced_x86::FormatterTextKind::Number => SpanKind::Number,
+            // A near-branch target comes through `write_number` as one of these two:
+            // `FunctionAddress` when the branch is a call, `LabelAddress` for a plain
+            // jump or a conditional one. iced-x86 has no `BranchTarget` kind.
+            iced_x86::FormatterTextKind::LabelAddress
+            | iced_x86::FormatterTextKind::FunctionAddress => SpanKind::Address,
             _ => SpanKind::Other,
         }
     }
