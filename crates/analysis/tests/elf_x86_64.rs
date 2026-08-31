@@ -208,6 +208,29 @@ fn jump_targets_are_address_spans_too() {
 }
 
 #[test]
+fn a_branch_target_is_not_zero_padded() {
+    // The two jumps above target addresses 2 and 7, which iced-x86 writes in decimal
+    // because they are below ten -- so they say nothing about padding. This one lands on
+    // 0x22, which is written as hex and was padded to the width of a 64-bit address
+    // (`jmp short 0000000000000022h`) until `assembly` turned `branch_leading_zeros` off.
+    let data = elf_x86_64(
+        &[TextSymbol {
+            name: "jumper",
+            bytes: &[0xEB, 0x20, 0xC3],
+        }],
+        &[],
+    );
+    let object = parse(&data);
+    let jumper = symbol(&object, "jumper");
+
+    let assembly = jumper.assembly(&object).expect("jumper disassembles");
+    let jump = &assembly.instructions[0];
+
+    assert_eq!(text(jump).trim_end(), "jmp       short 22h");
+    assert_eq!(spans_of(jump, SpanKind::Address), ["22h"]);
+}
+
+#[test]
 fn a_relocation_drops_an_immediate_number_span() {
     // `mov eax, imm32` does produce a `SpanKind::Number` operand, so this is where the
     // dropped-placeholder rule is visible as a missing number span.

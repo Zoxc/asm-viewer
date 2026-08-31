@@ -202,6 +202,14 @@ impl SymbolData {
         formatter
             .options_mut()
             .set_space_after_operand_separator(true);
+        // A branch target is padded to sixteen digits by default -- `jle short
+        // 000000000000004Bh` for a jump a few bytes up the same function -- which is the
+        // width of a 64-bit address spent on a number that is nowhere near one. The
+        // leading zeros carry nothing a reader wants: the target is read for *where* it
+        // is relative to the instructions around it, and the addresses in the column to
+        // the left are already padded to a fixed width for exactly that comparison.
+        // Displacements and immediates are a separate option and are left alone.
+        formatter.options_mut().set_branch_leading_zeros(false);
 
         let mut instruction = iced_x86::Instruction::default();
 
