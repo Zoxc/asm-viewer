@@ -42,6 +42,8 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 
 ## Projects
 
+- [ ] Minimal project support: the previous session's binaries and selected symbol reopen when
+  the app is rerun, for easier testing.
 - [ ] Have a project concept.
 - [ ] Each project can have multiple binaries loaded.
 - [ ] Has an associated directory.
@@ -51,6 +53,7 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [ ] A main view where you can see all project info.
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
+- [ ] Split project storage into toml? for user given settings and another file for opened tabs / cached binary inspection data
 
 ## Startup
 
@@ -66,6 +69,7 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 
 - [ ] A scratchpad function which allows creating single file rust projects where you can build with cargo and view assembly output.
 - [ ] Allow `#[crates(version = "3.4.6") extern crate dfsh;` to use specific versions from crates.io (require a specific version).
+- [ ] Allow these files to run with output viewable
 
 ## Binary inspection design
 
