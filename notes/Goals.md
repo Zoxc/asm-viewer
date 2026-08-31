@@ -10,12 +10,18 @@ one item per part, so the unfinished half stays visible.
 
 ## Source / assembly split view
 
-- [ ] Have a source view and an assembly view, mapping between them. This is the default split view that should generally be used.
+- [x] Have a source view and an assembly view side by side. This is the default layout of the
+  content area: the source a symbol was compiled from beside its assembly.
+- [ ] Map between the two views — an instruction knows its source line, but nothing on either
+  side shows it yet.
 - [ ] Selecting one side (or hovering) highlights the other side.
 - [ ] Have a function to find all source / assembly locations that match, producing a list on the other side.
 - [ ] A function to pick the generic instance of a source function.
 - [ ] An active navigation function where selection on one side navigates to the relevant section on the other side, preferring recent history on duplicates.
-- [ ] Syntax highlighting for both sides.
+- [x] Syntax highlighting for both sides. Assembly is coloured by span kind; source is
+  tree-sitter, through the highlighter `freya-code-editor` exposes publicly.
+- [ ] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
+  each language is a `tree-sitter-<lang>` dependency and an arm in `language()`.
 
 ## Navigation
 
@@ -34,7 +40,9 @@ one item per part, so the unfinished half stays visible.
   tab.
 - [x] Keep the `rip+` visible in a relocated rip-relative operand — `mov dword ptr [rip+<target>], 7`
   rather than `mov dword ptr [<target>], 7` — when you can navigate to the target.
-- [ ] Allow selection.
+- [ ] Allow selection. Neither side has it: the source pane is hand-rolled rows rather than
+  freya's `CodeEditor` (which does have selection, but can only highlight the cursor's own line
+  and cannot be scrolled from outside — see `notes/Plan.md`, 5a).
 - [ ] Have arrows for jumps.
 
 ## UI
