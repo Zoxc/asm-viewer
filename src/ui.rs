@@ -36,43 +36,216 @@ const TOGGLE_SIZE: f32 = 22.0;
 /// the function is it", which is half of why the two panes are side by side at all.
 const CONTEXT_ROWS: f32 = 3.0;
 
-// Palette, carried over from the original floem styling.
-const HEADER_BG: Color = Color::from_rgb(245, 245, 245); // WHITE_SMOKE
-const HAIRLINE: Color = Color::from_rgb(211, 211, 211); // LIGHT_GRAY
-const SELECTED_BG: Color = Color::from_rgb(211, 211, 211);
-const OBJECT_HOVER_BG: Color = Color::from_rgb(144, 238, 144); // LIGHT_GREEN
-const SYMBOL_PANE_BG: Color = Color::from_rgb(243, 243, 228);
-const SYMBOL_HOVER_BG: Color = Color::from_rgb(226, 226, 205);
-const ASM_PANE_BG: Color = Color::from_rgb(248, 248, 248);
-/// The pointer's own hover, on an instruction row and on a source line alike: both panes
-/// show code, and one colour for "the pointer is here" reads across them as one gesture.
-const CODE_ROW_HOVER_BG: Color = Color::from_argb(160, 228, 237, 216);
-/// The cross-view highlight: this row is what the row the pointer is on maps to on the
-/// other side. Weaker than the hover, and translucent like it, so a row carrying both
-/// comes out as the hover *over* this rather than as one or the other -- see `blend`.
-const LINE_FOCUS_BG: Color = Color::from_argb(70, 120, 160, 220);
-/// The same highlight, made to stay by a click. The one colour in two strengths rather
-/// than two colours, because it is the one relationship: a pin is the position the reader
-/// asked to keep, and the pointer wandering off to a second one must not make the two
-/// indistinguishable.
-const LINE_PIN_BG: Color = Color::from_argb(120, 120, 160, 220);
-const ADDRESS_FG: Color = Color::from_rgb(118, 141, 169);
-const MNEMONIC_FG: Color = Color::from_rgb(116, 94, 147);
-const REGISTER_FG: Color = Color::from_rgb(87, 103, 65);
-const NUMBER_FG: Color = Color::from_rgb(80, 107, 135);
-const OTHER_FG: Color = Color::from_rgb(102, 102, 102);
-const RELOC_FG: Color = Color::from_rgb(50, 50, 50);
-const RELOC_HOVER_FG: Color = Color::from_rgb(105, 89, 132);
-/// The wash over the half of a panel a dragged tab would land in.
-const DROP_PREVIEW_BG: Color = Color::from_argb(60, 105, 89, 132);
-/// A filter toggle that is on, and one the pointer is over. Two shades of the header's
-/// own grey rather than a colour of their own: a 22px square is small enough that "this
-/// one is pressed" has to be read from how dark it is, and against `HEADER_BG` these are
-/// the two steps that are legible without looking like a third kind of thing.
-const TOGGLE_ON_BG: Color = Color::from_rgb(196, 196, 196);
-const TOGGLE_HOVER_BG: Color = Color::from_rgb(225, 225, 225);
-/// What a pattern that will not compile, and the reason it will not, are written in.
-const INVALID_FG: Color = Color::from_rgb(176, 0, 32);
+// ---------------------------------------------------------------------------
+// Palette
+// ---------------------------------------------------------------------------
+
+/// Every colour the app draws, in one place.
+///
+/// There is one instance, [`Palette::LIGHT`], and [`palette`] is how anything reaches it.
+/// The indirection is more of the point than the struct is: a dark mode is asked for in
+/// *this* palette rather than as a second design (`Goals.md`, *UI*), so it is one more
+/// `const` beside this one and a `palette()` that picks between them, instead of an edit
+/// to every call site that names a colour. What it deliberately is not yet is reactive --
+/// see the note on `palette`.
+///
+/// It is also not freya's own theming (`Theme` / `ColorsSheet` / `define_theme!`).
+/// `ColorsSheet` has a fixed set of fields naming none of these roles, a `define_theme!`
+/// per row component would be styling machinery for elements nothing outside this file
+/// ever styles, and -- the part that settles it -- the half of the palette this step is
+/// about cannot be read from the element tree at all: the source pane's colours are baked
+/// into a `SyntaxBlocks` by a highlighter that runs when a file is *loaded*, so they have
+/// to be plain values available outside any component. See [`Palette::syntax`].
+struct Palette {
+    // Surfaces and chrome, carried over from the original floem styling.
+    /// A pane's own body, and the tab header above the active one, which is white so
+    /// that it reads as the top edge of that body rather than as part of the tab bar.
+    pane_bg: Color,
+    header_bg: Color,
+    hairline: Color,
+    selected_bg: Color,
+    object_hover_bg: Color,
+    symbol_pane_bg: Color,
+    symbol_hover_bg: Color,
+    asm_pane_bg: Color,
+    /// The pointer's own hover, on an instruction row and on a source line alike: both
+    /// panes show code, and one colour for "the pointer is here" reads across them as one
+    /// gesture.
+    code_row_hover_bg: Color,
+    /// The cross-view highlight: this row is what the row the pointer is on maps to on the
+    /// other side. Weaker than the hover, and translucent like it, so a row carrying both
+    /// comes out as the hover *over* this rather than as one or the other -- see `blend`.
+    line_focus_bg: Color,
+    /// The same highlight, made to stay by a click. The one colour in two strengths rather
+    /// than two colours, because it is the one relationship: a pin is the position the
+    /// reader asked to keep, and the pointer wandering off to a second one must not make
+    /// the two indistinguishable.
+    line_pin_bg: Color,
+    /// The wash over the half of a panel a dragged tab would land in.
+    drop_preview_bg: Color,
+    /// A filter toggle that is on, and one the pointer is over. Two shades of the header's
+    /// own grey rather than a colour of their own: a 22px square is small enough that "this
+    /// one is pressed" has to be read from how dark it is, and against `header_bg` these are
+    /// the two steps that are legible without looking like a third kind of thing.
+    toggle_on_bg: Color,
+    toggle_hover_bg: Color,
+    /// The wash behind a relocation link the pointer is over, lightening whatever row
+    /// background is under it.
+    link_hover_bg: Color,
+
+    // The code colours, shared by both panes. Which syntactic category takes which of
+    // them is [`Palette::syntax`]; these names are the category rather than either pane's
+    // own vocabulary, because they answer for both.
+    /// Where a thing is: the instruction addresses, and the source line-number gutter.
+    address_fg: Color,
+    /// What is being done: mnemonics and prefixes, source keywords, operators and types.
+    keyword_fg: Color,
+    /// What it is being done to: registers, and source variables, parameters and fields.
+    operand_fg: Color,
+    /// A value written out: immediates, and source numbers, booleans and constants.
+    literal_fg: Color,
+    /// A string literal. Source-only, and one of the two colours the assembly side has no
+    /// equivalent for at all.
+    string_fg: Color,
+    /// A comment. Source-only, and the other one.
+    comment_fg: Color,
+    /// The glue between the operands: brackets, commas, and on the assembly side the
+    /// operand-size keywords (`qword ptr`) that are glue in exactly the same way.
+    punctuation_fg: Color,
+    /// A name that names one thing: a relocation target in the assembly, a function,
+    /// method or module in the source. Also the source pane's plain text, which is what
+    /// most of a line is.
+    name_fg: Color,
+    /// A relocation link under the pointer, and the underline drawn beneath it.
+    name_hover_fg: Color,
+
+    /// What a pattern that will not compile, and the reason it will not, are written in.
+    invalid_fg: Color,
+}
+
+impl Palette {
+    const LIGHT: Palette = Palette {
+        pane_bg: Color::WHITE,
+        header_bg: Color::from_rgb(245, 245, 245), // WHITE_SMOKE
+        hairline: Color::from_rgb(211, 211, 211),  // LIGHT_GRAY
+        selected_bg: Color::from_rgb(211, 211, 211),
+        object_hover_bg: Color::from_rgb(144, 238, 144), // LIGHT_GREEN
+        symbol_pane_bg: Color::from_rgb(243, 243, 228),
+        symbol_hover_bg: Color::from_rgb(226, 226, 205),
+        asm_pane_bg: Color::from_rgb(248, 248, 248),
+        code_row_hover_bg: Color::from_argb(160, 228, 237, 216),
+        line_focus_bg: Color::from_argb(70, 120, 160, 220),
+        line_pin_bg: Color::from_argb(120, 120, 160, 220),
+        drop_preview_bg: Color::from_argb(60, 105, 89, 132),
+        toggle_on_bg: Color::from_rgb(196, 196, 196),
+        toggle_hover_bg: Color::from_rgb(225, 225, 225),
+        link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
+
+        address_fg: Color::from_rgb(118, 141, 169),
+        keyword_fg: Color::from_rgb(116, 94, 147),
+        operand_fg: Color::from_rgb(87, 103, 65),
+        literal_fg: Color::from_rgb(80, 107, 135),
+        // The two source-only ones, picked to sit at the same lightness and the same low
+        // saturation as the five above rather than at a highlighter's usual brightness:
+        // a terracotta, which is the one warm hue nothing else here uses, and a sage
+        // grey-green well clear of the operand olive.
+        string_fg: Color::from_rgb(148, 98, 74),
+        comment_fg: Color::from_rgb(128, 148, 128),
+        punctuation_fg: Color::from_rgb(102, 102, 102),
+        name_fg: Color::from_rgb(50, 50, 50),
+        name_hover_fg: Color::from_rgb(105, 89, 132),
+
+        invalid_fg: Color::from_rgb(176, 0, 32),
+    };
+
+    /// This palette in the shape `freya-code-editor`'s highlighter wants, so that the
+    /// source pane is coloured from here rather than by `EditorSyntaxTheme::light()` --
+    /// a GitHub-ish theme with no relationship to the colours the assembly pane beside it
+    /// is drawn in.
+    ///
+    /// Thirty-four capture fields onto seven colours. The buckets are the assembly side's
+    /// own meanings, which four of its five turn out to have a source equivalent for --
+    /// `address_fg` is the fifth, and it is shared already, being the instruction addresses
+    /// and the source line-number gutter rather than anything a capture names:
+    ///
+    /// - `keyword_fg`, the mnemonic's purple, takes keywords and operators, and types
+    ///   with them: in C a type name *is* a keyword, and in Rust a builtin one reads like
+    ///   one. Attributes and labels are language directives and go here too.
+    /// - `operand_fg`, the register's olive, takes variables, parameters and fields,
+    ///   because a register is the assembly's variable. This is the bucket that does the
+    ///   most for the two panes reading as one: an instruction is mostly registers and a
+    ///   statement is mostly identifiers, so both sides end up with olive at the same
+    ///   density, in the same place in the line.
+    /// - `literal_fg`, the immediate's blue, takes numbers, booleans and constants -- and
+    ///   the escapes inside a string, which are a character written another way.
+    /// - `name_fg`, the relocation target's near-black, takes functions, methods, macros,
+    ///   modules and constructors. That colour already *is* a function's name on the
+    ///   assembly side, so `call helper` and `helper(x)` name it identically. It is also
+    ///   the colour of text no capture claims, which is most of a line.
+    /// - `punctuation_fg`, the `Other` span's grey, takes brackets and delimiters.
+    ///
+    /// One trap in how this is read back: `syntax.rs`'s `resolve_capture_color` decides a
+    /// capture is unmapped by comparing its colour to `text` and then walks up the dotted
+    /// name looking for a segment whose colour differs, so a child field set to the same
+    /// colour as `text` inherits its *parent's* colour instead of the text colour.
+    /// Nothing below is caught by it -- every field equal to `name_fg`, which is `text`
+    /// here, has a parent equal to it as well, so the walk ends where it started -- but
+    /// giving, say, `punctuation_bracket` the text colour while `punctuation` keeps the
+    /// grey would silently paint brackets grey.
+    fn syntax(&self) -> EditorSyntaxTheme {
+        EditorSyntaxTheme {
+            text: self.name_fg,
+            // A run of leading indentation, which the highlighter colours rather than
+            // leaving to the text: `SourceRow` draws it as plain spaces, so this is the
+            // one field here that is never actually seen.
+            whitespace: self.punctuation_fg,
+            attribute: self.keyword_fg,
+            boolean: self.literal_fg,
+            comment: self.comment_fg,
+            constant: self.literal_fg,
+            constructor: self.name_fg,
+            escape: self.literal_fg,
+            function: self.name_fg,
+            function_macro: self.name_fg,
+            function_method: self.name_fg,
+            keyword: self.keyword_fg,
+            label: self.keyword_fg,
+            module: self.name_fg,
+            number: self.literal_fg,
+            operator: self.keyword_fg,
+            property: self.operand_fg,
+            punctuation: self.punctuation_fg,
+            punctuation_bracket: self.punctuation_fg,
+            punctuation_delimiter: self.punctuation_fg,
+            punctuation_special: self.keyword_fg,
+            string: self.string_fg,
+            string_escape: self.literal_fg,
+            string_special: self.string_fg,
+            tag: self.keyword_fg,
+            text_literal: self.string_fg,
+            text_reference: self.name_fg,
+            text_title: self.keyword_fg,
+            text_uri: self.string_fg,
+            text_emphasis: self.name_fg,
+            type_: self.keyword_fg,
+            variable: self.operand_fg,
+            variable_builtin: self.keyword_fg,
+            variable_parameter: self.operand_fg,
+        }
+    }
+}
+
+/// The colours to draw with.
+///
+/// A `&'static` rather than anything a component subscribes to, which is what keeps this
+/// step to the palette itself. Step 9's dark mode is a second `const` and a `palette()`
+/// that chooses, plus the two things a *switch* needs that this does not have: something
+/// that re-renders the tree when the choice changes -- freya re-renders a scope when the
+/// state it read changes, and nothing reads anything here -- and a clear of `HIGHLIGHTED`,
+/// where the source colours are already baked into the cached spans.
+fn palette() -> &'static Palette {
+    &Palette::LIGHT
+}
 
 /// Applying one of the two fonts. freya takes font families one at a time, pushing
 /// each onto the element's own list and appending the parent's behind it, so the
@@ -389,7 +562,7 @@ impl AsmRows {
 }
 
 fn bottom_hairline() -> Border {
-    Border::new().fill(HAIRLINE).width(BorderWidth {
+    Border::new().fill(palette().hairline).width(BorderWidth {
         top: 0.0,
         right: 0.0,
         bottom: 0.5,
@@ -398,7 +571,7 @@ fn bottom_hairline() -> Border {
 }
 
 fn right_hairline() -> Border {
-    Border::new().fill(HAIRLINE).width(BorderWidth {
+    Border::new().fill(palette().hairline).width(BorderWidth {
         top: 0.0,
         right: 0.5,
         bottom: 0.0,
@@ -413,7 +586,7 @@ fn placeholder(text: impl Into<String>) -> Element {
     rect()
         .expanded()
         .padding(5.0)
-        .background(Color::WHITE)
+        .background(palette().pane_bg)
         .child(label().text(text))
         .into()
 }
@@ -455,15 +628,15 @@ fn blend(top: Color, bottom: Color) -> Color {
 /// saying everything the weaker would.
 fn row_background(hovering: bool, focused: bool, pinned: bool) -> Color {
     let cross = match (pinned, focused) {
-        (true, _) => LINE_PIN_BG,
-        (false, true) => LINE_FOCUS_BG,
+        (true, _) => palette().line_pin_bg,
+        (false, true) => palette().line_focus_bg,
         (false, false) => Color::TRANSPARENT,
     };
 
     // `blend` over a transparent bottom is the top colour unchanged, so an unlit hovered
     // row comes out as the hover alone without a case of its own.
     if hovering {
-        blend(CODE_ROW_HOVER_BG, cross)
+        blend(palette().code_row_hover_bg, cross)
     } else {
         cross
     }
@@ -471,11 +644,11 @@ fn row_background(hovering: bool, focused: bool, pinned: bool) -> Color {
 
 fn kind_color(kind: SpanKind) -> Color {
     match kind {
-        SpanKind::Mnemonic | SpanKind::Prefix => MNEMONIC_FG,
-        SpanKind::Register => REGISTER_FG,
-        SpanKind::Number => NUMBER_FG,
-        SpanKind::Address => ADDRESS_FG,
-        SpanKind::Other => OTHER_FG,
+        SpanKind::Mnemonic | SpanKind::Prefix => palette().keyword_fg,
+        SpanKind::Register => palette().operand_fg,
+        SpanKind::Number => palette().literal_fg,
+        SpanKind::Address => palette().address_fg,
+        SpanKind::Other => palette().punctuation_fg,
     }
 }
 
@@ -507,7 +680,7 @@ impl Highlighted {
     /// file is loaded and never while a row is being drawn.
     fn new(file: Arc<SourceFile>) -> Highlighted {
         let rope = Rope::from_str(file.text());
-        let theme = EditorSyntaxTheme::light();
+        let theme = palette().syntax();
 
         let mut highlighter = SyntaxHighlighter::new();
         // A language of `None` -- an extension no grammar here parses -- is not a
@@ -559,6 +732,14 @@ fn language(path: &Path) -> Option<EditorLanguage> {
 /// A second cache behind `source`'s, and a `static` for the same reason: parsing a file
 /// is the expensive half of showing it, the pane asks again on every render, and a
 /// failure needs no entry here because `source::load` already remembers its own.
+///
+/// What is cached is not just the parse: `SyntaxBlocks` holds a `Color` per span, resolved
+/// against `palette().syntax()` when the file was loaded, so an entry here is spans in the
+/// palette that was current at the time. That is free while there is one palette. When
+/// Step 9 adds a second, switching it has to `clear()` this map -- the entries are not
+/// stale, they are the wrong theme, and nothing else in the app would repaint them.
+/// Re-highlighting every open file is what a switch costs, which is why the parse belongs
+/// where it is rather than in `source::load`: `source`'s cache of the *text* survives it.
 static HIGHLIGHTED: LazyLock<Mutex<HashMap<PathBuf, Arc<Highlighted>>>> =
     LazyLock::new(Mutex::default);
 
@@ -660,9 +841,9 @@ impl Component for FilterToggle {
         let toggle = self.toggle;
 
         let background = if self.on {
-            TOGGLE_ON_BG
+            palette().toggle_on_bg
         } else if hovering() {
-            TOGGLE_HOVER_BG
+            palette().toggle_hover_bg
         } else {
             Color::TRANSPARENT
         };
@@ -718,7 +899,7 @@ impl Component for FilterBar {
 
         rect()
             .width(Size::fill())
-            .background(HEADER_BG)
+            .background(palette().header_bg)
             .border(bottom_hairline())
             .child(
                 rect()
@@ -747,7 +928,9 @@ impl Component for FilterBar {
                         .compact()
                         .width(Size::flex(1.0))
                         .maybe(error.is_some(), |input| {
-                            input.color(INVALID_FG).focus_border_fill(INVALID_FG)
+                            input
+                                .color(palette().invalid_fg)
+                                .focus_border_fill(palette().invalid_fg)
                         }),
                     )
                     .children(Toggle::ALL.map(|toggle| {
@@ -769,7 +952,7 @@ impl Component for FilterBar {
                     .width(Size::fill())
                     .padding(Gaps::new(0.0, 6.0, 5.0, 6.0))
                     .overflow(Overflow::Clip)
-                    .child(label().text(error).color(INVALID_FG).max_lines(1))
+                    .child(label().text(error).color(palette().invalid_fg).max_lines(1))
             }))
     }
 }
@@ -881,9 +1064,9 @@ impl Component for ObjectRow {
         let object = self.object.clone();
 
         let background = if self.selected {
-            SELECTED_BG
+            palette().selected_bg
         } else if hovering() {
-            OBJECT_HOVER_BG
+            palette().object_hover_bg
         } else {
             Color::TRANSPARENT
         };
@@ -943,9 +1126,9 @@ impl Component for SymbolRow {
             .clone();
 
         let background = if self.selected {
-            SELECTED_BG
+            palette().selected_bg
         } else if hovering() {
-            SYMBOL_HOVER_BG
+            palette().symbol_hover_bg
         } else {
             Color::TRANSPARENT
         };
@@ -1039,9 +1222,9 @@ impl Component for HistoryRow {
         let text = entry_text(&self.entry);
 
         let background = if self.current {
-            SELECTED_BG
+            palette().selected_bg
         } else if hovering() {
-            SYMBOL_HOVER_BG
+            palette().symbol_hover_bg
         } else {
             Color::TRANSPARENT
         };
@@ -1094,14 +1277,18 @@ impl Component for RelocationLabel {
         CursorArea::new().child(
             rect()
                 .maybe(hovering(), |rect| {
-                    rect.background(Color::from_af32rgb(0.6, 255, 255, 255))
+                    rect.background(palette().link_hover_bg)
                         .corner_radius(6.0)
-                        .border(Border::new().fill(RELOC_HOVER_FG).width(BorderWidth {
-                            top: 0.0,
-                            right: 0.0,
-                            bottom: 2.0,
-                            left: 0.0,
-                        }))
+                        .border(
+                            Border::new()
+                                .fill(palette().name_hover_fg)
+                                .width(BorderWidth {
+                                    top: 0.0,
+                                    right: 0.0,
+                                    bottom: 2.0,
+                                    left: 0.0,
+                                }),
+                        )
                 })
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
@@ -1115,9 +1302,9 @@ impl Component for RelocationLabel {
                     selection.set(Selection::Symbol(symbol.clone()));
                 })
                 .child(label().text(text).max_lines(1).color(if hovering() {
-                    RELOC_HOVER_FG
+                    palette().name_hover_fg
                 } else {
-                    RELOC_FG
+                    palette().name_fg
                 })),
         )
     }
@@ -1262,7 +1449,7 @@ impl Component for InstructionRow {
                 label()
                     .text(format!("{:016X} ", instruction.address))
                     .min_width(Size::px(200.0))
-                    .color(ADDRESS_FG)
+                    .color(palette().address_fg)
                     .max_lines(1),
             )
             .child(head)
@@ -1388,7 +1575,7 @@ impl Component for SourceRow {
                     .text(format!("{}\u{a0}", self.index + 1))
                     .width(Size::px(60.0))
                     .text_align(TextAlign::Right)
-                    .color(ADDRESS_FG)
+                    .color(palette().address_fg)
                     .max_lines(1),
             )
             .child(paragraph().max_lines(1).spans_iter(spans.into_iter()))
@@ -1422,7 +1609,7 @@ impl Component for AssemblyView {
             .width(Size::fill())
             .height(Size::fill())
             .padding(5.0)
-            .background(ASM_PANE_BG)
+            .background(palette().asm_pane_bg)
             .child(InstructionList {
                 assembly,
                 object: self.symbol.object.clone(),
@@ -1574,7 +1761,7 @@ impl Component for SourceView {
             // The header takes its own height and the list is given the rest, which
             // torin only works out for a `flex` child of a `Content::Flex` parent.
             .content(Content::Flex)
-            .background(Color::WHITE)
+            .background(palette().pane_bg)
             .child(
                 rect()
                     .width(Size::fill())
@@ -1582,7 +1769,7 @@ impl Component for SourceView {
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .padding(Gaps::new_symmetric(0.0, 8.0))
-                    .background(HEADER_BG)
+                    .background(palette().header_bg)
                     .border(bottom_hairline())
                     .overflow(Overflow::Clip)
                     .child(label().text(path).max_lines(1)),
@@ -1790,7 +1977,7 @@ impl Component for ObjectsTab {
         // a height of its own, so it scrolls instead of being clipped.
         filter_pane(
             filter,
-            Color::WHITE,
+            palette().pane_bg,
             ScrollView::new().child(rect().width(Size::fill()).children(rows).into_element()),
         )
     }
@@ -1819,7 +2006,7 @@ impl Component for SymbolsTab {
 
         filter_pane(
             filter,
-            SYMBOL_PANE_BG,
+            palette().symbol_pane_bg,
             VirtualScrollView::new_with_data(
                 (filtered, selected),
                 |row, (filtered, selected): &(Filtered, Option<Symbol>)| {
@@ -1855,14 +2042,14 @@ impl Component for InfoTab {
             Selection::None => placeholder("Nothing selected"),
             Selection::Object(object) => rect()
                 .expanded()
-                .background(Color::WHITE)
+                .background(palette().pane_bg)
                 .child(info_line(format!("Object: `{}`", object.name)))
                 .child(info_line(format!("Format: {:?}", object.format)))
                 .child(info_line(format!("Symbols: {:?}", object.symbols.len())))
                 .into(),
             Selection::Symbol(symbol) => rect()
                 .expanded()
-                .background(Color::WHITE)
+                .background(palette().pane_bg)
                 .child(ScrollView::new().child(symbol_info(symbol).into_element()))
                 .into(),
         }
@@ -1913,7 +2100,7 @@ impl Component for HistoryTab {
         // through `new_with_data`. The same shape the objects list uses.
         filter_pane(
             filter,
-            SYMBOL_PANE_BG,
+            palette().symbol_pane_bg,
             match (visited, rows.is_empty()) {
                 (false, _) => placeholder("Nothing visited yet"),
                 (true, true) => placeholder("No matches"),
@@ -2117,7 +2304,7 @@ impl DockingModel for DockArea {
 }
 
 /// One tab header. The same shape the pane headers used to have, so a bar of them
-/// reads like the old `HEADER_BG` strip.
+/// reads like the old header strip.
 fn tab_label(tab: Tab, background: Color) -> impl IntoElement {
     rect()
         .height(Size::px(ROW_HEIGHT))
@@ -2132,9 +2319,9 @@ fn tab_label(tab: Tab, background: Color) -> impl IntoElement {
 
 fn tab_header(ctx: TabContext<Tab>, area: State<DockArea>) -> Element {
     let background = if ctx.is_drop_target {
-        SELECTED_BG
+        palette().selected_bg
     } else if area.read().is_active(ctx.tab_id) {
-        Color::WHITE
+        palette().pane_bg
     } else {
         Color::TRANSPARENT
     };
@@ -2147,7 +2334,7 @@ fn tab_drag(tab: Tab) -> Element {
     rect()
         .interactive(false)
         .border(right_hairline())
-        .child(tab_label(tab, SELECTED_BG))
+        .child(tab_label(tab, palette().selected_bg))
         .into_element()
 }
 
@@ -2156,7 +2343,7 @@ fn tab_bar(ctx: TabBarContext<PanelId>) -> Element {
         .width(Size::fill())
         .height(Size::px(ROW_HEIGHT))
         .horizontal()
-        .background(HEADER_BG)
+        .background(palette().header_bg)
         .border(bottom_hairline())
         .children(ctx.tab_children)
         .into_element()
@@ -2181,7 +2368,7 @@ fn docking_area(area: State<DockArea>) -> impl IntoElement {
         rect()
             .interactive(false)
             .expanded()
-            .background(DROP_PREVIEW_BG),
+            .background(palette().drop_preview_bg),
     )
 }
 
@@ -2596,7 +2783,7 @@ pub fn app() -> impl IntoElement {
         .expanded()
         .content(Content::Flex)
         .interface_font()
-        .background(Color::WHITE)
+        .background(palette().pane_bg)
         // The mouse's own back and forward buttons drive the history. freya does
         // deliver them: winit turns X11 buttons 8 and 9, and Wayland's BTN_BACK/
         // BTN_SIDE and BTN_FORWARD/BTN_EXTRA, into `MouseButton::Back`/`Forward`,
