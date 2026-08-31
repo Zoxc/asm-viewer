@@ -25,6 +25,10 @@ use crate::project::Selection;
 /// The cursor is the entry currently on screen. [`History::push`] records a new entry
 /// after it and drops whatever was in front; [`History::back`] and
 /// [`History::forward`] only move the cursor.
+///
+/// No two entries are ever equal: pushing somewhere that is already in the list bumps
+/// that entry to the newest position instead of appending a copy. [`History::push`] and
+/// [`History::restored`] are the only two ways entries get in, and both enforce it.
 #[derive(Clone, Default)]
 pub struct History {
     entries: Vec<Selection>,
@@ -40,9 +44,40 @@ impl History {
     /// The cursor is clamped into range, so neither a hand-edited `project.json` nor a
     /// restore that dropped entries can leave it past the end. An empty `entries` gives
     /// back the empty history, cursor and all.
+    ///
+    /// The no-duplicates invariant [`History::push`] keeps is *enforced* here rather than
+    /// assumed, because the entries come from outside: a `project.json` written before
+    /// entries were bumped rather than appended can name the same destination twice, two
+    /// saved entries can resolve to the same `Arc`, and the file can be hand-edited.
+    /// Duplicates are collapsed the way `push` would have left them — the newest
+    /// occurrence is the one that survives — and the cursor follows the *entry* it was
+    /// on to wherever the collapse put it, rather than staying on an index that now names
+    /// something else. That is what keeps the restore's property that the cursor entry is
+    /// the restored selection true even when collapsing moved it.
     pub fn restored(entries: Vec<Selection>, cursor: usize) -> History {
-        let cursor = cursor.min(entries.len().saturating_sub(1));
-        History { entries, cursor }
+        let current = entries
+            .get(cursor.min(entries.len().saturating_sub(1)))
+            .cloned();
+
+        let mut deduplicated: Vec<Selection> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if let Some(position) = deduplicated.iter().position(|existing| *existing == entry) {
+                deduplicated.remove(position);
+            }
+            deduplicated.push(entry);
+        }
+
+        // `unwrap_or(0)` is only ever the empty history: the entry the cursor was on is
+        // still in the list, since collapsing moves an occurrence rather than dropping
+        // the destination.
+        let cursor = current
+            .and_then(|current| deduplicated.iter().position(|entry| *entry == current))
+            .unwrap_or(0);
+
+        History {
+            entries: deduplicated,
+            cursor,
+        }
     }
 
     /// Every entry, oldest first — what persistence saves. The history panel wants
@@ -71,13 +106,24 @@ impl History {
     /// [`History::would_push`] is false.
     ///
     /// Anything in front of the cursor is discarded first, so going back and then
-    /// somewhere new forgets the abandoned branch, exactly as a browser does.
+    /// somewhere new forgets the abandoned branch, exactly as a browser does. An entry
+    /// equal to `selection` that is still there afterwards is then *bumped* rather than
+    /// duplicated: it is removed from where it was and appended, so revisiting somewhere
+    /// moves it to the newest position instead of adding a second copy. No two entries
+    /// are ever equal, and the list reads as each destination once, in the order it was
+    /// last visited.
+    ///
+    /// Only entries *behind* the cursor can match — the truncation dropped everything in
+    /// front of it and `would_push` has already ruled out the one under it — and removing
+    /// one shifts the rest down, which is why the cursor is taken from the final length
+    /// rather than stepped.
     pub fn push(&mut self, selection: Selection) {
         if !self.would_push(&selection) {
             return;
         }
 
         self.entries.truncate(self.cursor + 1);
+        self.entries.retain(|entry| *entry != selection);
         self.entries.push(selection);
         self.cursor = self.entries.len() - 1;
     }
@@ -329,6 +375,161 @@ mod tests {
         assert!(!history.can_jump(0));
         assert!(history.jump(0).is_none());
         assert!(history.recent().len() == 0);
+    }
+
+    /// The entries newest first, which is the order the history panel shows and the one
+    /// bumping is about.
+    fn newest_first(history: &History) -> Vec<Selection> {
+        history.recent().map(|(_, entry)| entry.clone()).collect()
+    }
+
+    #[test]
+    fn revisiting_bumps_an_entry_out_of_the_middle() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+
+        history.push(b.clone());
+
+        // One copy of `b`, now the newest, and everything else in the order it was.
+        assert!(newest_first(&history) == vec![b.clone(), c.clone(), a.clone()]);
+        assert!(history.current() == Some(&b));
+        assert!(history.cursor() == Some(2));
+        assert!(!history.can_forward());
+
+        // And the entries behind it closed up rather than leaving a hole.
+        assert!(history.back() == Some(c));
+        assert!(history.back() == Some(a));
+        assert!(!history.can_back());
+    }
+
+    #[test]
+    fn revisiting_bumps_the_oldest_entry() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+
+        history.push(a.clone());
+
+        assert!(newest_first(&history) == vec![a.clone(), c, b]);
+        assert!(history.current() == Some(&a));
+        assert!(history.cursor() == Some(2));
+    }
+
+    #[test]
+    fn a_bump_leaves_the_cursor_on_the_last_entry() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c, &a, &b] {
+            history.push(entry.clone());
+        }
+
+        // Every push either appended or bumped, so the cursor is the last index and
+        // there is never anything to go forward to.
+        assert!(history.cursor() == Some(history.recent().len() - 1));
+        assert!(!history.can_forward());
+        assert!(newest_first(&history) == vec![b, a, c]);
+    }
+
+    #[test]
+    fn pushing_the_entry_under_the_cursor_is_still_a_no_op() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+
+        // The rule that stops back/forward from re-recording comes first: pushing what
+        // the cursor is already on must not bump it to the newest position, which would
+        // drop the forward entry with it.
+        history.back();
+        history.push(b.clone());
+
+        assert!(newest_first(&history) == vec![c, b.clone(), a]);
+        assert!(history.current() == Some(&b));
+        assert!(history.cursor() == Some(1));
+        assert!(history.can_forward());
+    }
+
+    #[test]
+    fn a_bump_after_going_back_still_drops_the_forward_entries() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+
+        // Back to `b`, then away to `a`: `c` is abandoned as it always was, and the
+        // `a` behind the cursor is bumped rather than copied.
+        history.back();
+        history.push(a.clone());
+
+        assert!(newest_first(&history) == vec![a.clone(), b.clone()]);
+        assert!(history.current() == Some(&a));
+        assert!(history.cursor() == Some(1));
+        assert!(!history.can_forward());
+        assert!(history.back() == Some(b));
+        assert!(!history.can_back());
+    }
+
+    #[test]
+    fn restoring_collapses_duplicates_onto_the_newest_occurrence() {
+        let (a, b) = (selection("a"), selection("b"));
+
+        // What a `project.json` written before entries were bumped can hold. The cursor
+        // is on the newest `a`, the usual case.
+        let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 2);
+
+        assert!(history.entries() == [b.clone(), a.clone()]);
+        assert!(history.current() == Some(&a));
+        assert!(history.cursor() == Some(1));
+        assert!(!history.can_forward());
+        // And the effect that observes the restored selection finds nothing to record.
+        assert!(!history.would_push(&a));
+
+        // Every occurrence collapses, not just the last pair.
+        let history = History::restored(vec![a.clone(), b.clone(), a.clone(), b.clone()], 3);
+        assert!(history.entries() == [a, b]);
+        assert!(history.cursor() == Some(1));
+    }
+
+    #[test]
+    fn a_restored_cursor_follows_the_entry_it_was_on() {
+        let (a, b) = (selection("a"), selection("b"));
+
+        // The cursor is on the middle entry, which the collapse leaves at index 0.
+        let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 1);
+        assert!(history.entries() == [b.clone(), a.clone()]);
+        assert!(history.current() == Some(&b));
+        assert!(history.cursor() == Some(0));
+        assert!(history.can_forward());
+        assert!(!history.can_back());
+
+        // And on the *first* of two equal entries, where the collapse moves the entry
+        // itself to the end: the cursor goes with it rather than staying on an index
+        // that now names something else.
+        let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 0);
+        assert!(history.entries() == [b, a.clone()]);
+        assert!(history.current() == Some(&a));
+        assert!(history.cursor() == Some(1));
+        assert!(!history.can_forward());
+    }
+
+    #[test]
+    fn a_restored_history_holds_the_no_duplicates_invariant() {
+        let (a, b) = (selection("a"), selection("b"));
+        let mut history = History::restored(vec![a.clone(), b.clone(), a.clone()], 2);
+
+        // Pushing on top of a restored history behaves as on a built one: `b` is bumped
+        // out of the list rather than copied.
+        history.push(b.clone());
+        assert!(history.entries() == [a, b.clone()]);
+        assert!(history.current() == Some(&b));
+        assert!(history.cursor() == Some(1));
     }
 
     #[test]

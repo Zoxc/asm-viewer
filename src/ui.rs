@@ -279,8 +279,13 @@ fn entry_text(entry: &Selection) -> String {
 }
 
 /// The pointer identity of what a history entry points at, for keying its row. Paired
-/// with the entry's index, because the same symbol can be visited twice and the entry at
-/// an index can be replaced when a push truncates the forward entries.
+/// with the entry's index because a row's identity is its place in the list: the entry at
+/// an index changes when a push truncates the forward entries, and again when a push
+/// bumps an existing entry to the newest position and shifts the ones behind it down. The
+/// pointer alone would be identity enough now that no two entries are equal, but then a
+/// bumped row would keep the hover state of the one that used to sit where it now does;
+/// with the index in the key the moved rows are simply rebuilt, which for a list this
+/// short costs nothing.
 fn entry_addr(entry: &Selection) -> usize {
     match entry {
         Selection::None => 0,

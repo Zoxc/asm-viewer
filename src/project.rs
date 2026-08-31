@@ -255,6 +255,13 @@ impl Project {
     /// cursor, it is left on the last one that survived. So it stays on the saved entry
     /// when that entry survived, falls back to the nearest older survivor when it did
     /// not, and to the oldest surviving entry when nothing older survived either.
+    ///
+    /// Duplicates are [`History::restored`]'s business, not this loop's: two saved
+    /// entries naming the same destination resolve to the same `Arc` and so to equal
+    /// entries, which a `project.json` written before entries were bumped rather than
+    /// appended is full of. `restored` collapses them onto the newest occurrence and
+    /// carries the cursor to wherever the entry it names ends up, so the cursor computed
+    /// here is an index into the list *before* the collapse and need not anticipate it.
     pub fn resolve_history(&self, objects: &[Arc<Object>]) -> History {
         let mut entries = Vec::new();
         let mut cursor = 0;
@@ -727,6 +734,130 @@ mod tests {
         // at its new index, and not on the entry that moved into its old one.
         assert_eq!(restored.cursor(), Some(1));
         assert!(!restored.can_forward());
+    }
+
+    #[test]
+    fn a_saved_history_with_duplicates_restores_without_them() {
+        let objects = objects();
+        // What every `project.json` written before entries were bumped rather than
+        // appended looks like: the same destination visited twice, saved twice.
+        let project = saved_history(
+            &[
+                saved_object("a.o"),
+                saved_object("b.o"),
+                saved_object("a.o"),
+            ],
+            2,
+        );
+
+        let restored = project.resolve_history(&objects);
+        assert!(
+            restored.entries()
+                == [
+                    Selection::Object(objects[1].clone()),
+                    Selection::Object(objects[0].clone()),
+                ]
+        );
+        // The cursor was on the newest `a.o`, which is where the collapse left it.
+        assert_eq!(restored.cursor(), Some(1));
+        assert!(!restored.can_forward());
+    }
+
+    #[test]
+    fn duplicates_collapse_around_the_entries_that_were_dropped() {
+        let objects = objects();
+        let project = saved_history(
+            &[
+                saved_object("a.o"),
+                // Gone, so it is dropped before anything is collapsed.
+                saved_object("c.o"),
+                saved_object("b.o"),
+                saved_object("a.o"),
+            ],
+            3,
+        );
+
+        let restored = project.resolve_history(&objects);
+        assert!(
+            restored.entries()
+                == [
+                    Selection::Object(objects[1].clone()),
+                    Selection::Object(objects[0].clone()),
+                ]
+        );
+        assert_eq!(restored.cursor(), Some(1));
+    }
+
+    #[test]
+    fn the_restored_cursor_follows_its_entry_through_the_collapse() {
+        let objects = objects();
+        // The cursor is on `b.o`, in the middle, and the collapse of the two `a.o`s
+        // moves it to the front of the list.
+        let project = saved_history(
+            &[
+                saved_object("a.o"),
+                saved_object("b.o"),
+                saved_object("a.o"),
+            ],
+            1,
+        );
+
+        let restored = project.resolve_history(&objects);
+        assert!(restored.current() == Some(&Selection::Object(objects[1].clone())));
+        assert_eq!(restored.cursor(), Some(0));
+        // The newest `a.o` is still in front of it to go forward to.
+        assert!(restored.can_forward());
+        assert!(!restored.can_back());
+    }
+
+    #[test]
+    fn two_saved_symbols_naming_the_same_one_restore_as_one_entry() {
+        let objects = objects();
+        let symbol = || SavedSelection::Symbol {
+            path: PathBuf::from("/tmp/lib.a"),
+            object_name: "a.o".into(),
+            symbol_name: "target".into(),
+            address: 6,
+        };
+        let project = saved_history(&[symbol(), saved_object("b.o"), symbol()], 2);
+
+        // Both resolve through the same lookup to the same `Arc`, so they are equal
+        // entries however far apart they were saved.
+        let restored = project.resolve_history(&objects);
+        assert!(
+            restored.entries()
+                == [
+                    Selection::Object(objects[1].clone()),
+                    Selection::Symbol(Symbol {
+                        object: objects[0].clone(),
+                        data: objects[0].symbols_sorted[1].clone(),
+                    }),
+                ]
+        );
+        assert_eq!(restored.cursor(), Some(1));
+    }
+
+    #[test]
+    fn a_collapsed_cursor_entry_is_still_the_restored_selection() {
+        let objects = objects();
+        // Every cursor position over a saved history that holds a duplicate.
+        for cursor in 0..3 {
+            let mut project = saved_history(
+                &[
+                    saved_object("a.o"),
+                    saved_object("b.o"),
+                    saved_object("a.o"),
+                ],
+                cursor,
+            );
+            project.selection = Some(project.history.entries[cursor].clone());
+
+            let restored_history = project.resolve_history(&objects);
+            let restored_selection = project.resolve(&objects);
+
+            assert!(restored_history.current() == Some(&restored_selection));
+            assert!(!restored_history.would_push(&restored_selection));
+        }
     }
 
     #[test]
