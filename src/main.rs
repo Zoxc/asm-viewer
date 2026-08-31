@@ -1,3 +1,4 @@
+mod fonts;
 mod object;
 mod ui;
 

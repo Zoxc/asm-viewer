@@ -3,13 +3,14 @@ use std::{path::PathBuf, sync::Arc};
 use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
-use crate::object::{open_files, Assembly, Object, Symbol, SymbolData};
+use crate::{
+    fonts::fonts,
+    object::{open_files, Assembly, Object, Symbol, SymbolData},
+};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
 /// equal to the `item_size` given to each `VirtualScrollView`.
 const ROW_HEIGHT: f32 = 26.0;
-const ASM_FONT: &str = "Consolas";
-const ASM_FONT_SIZE: f32 = 14.0;
 
 // Palette, carried over from the original floem styling.
 const HEADER_BG: Color = Color::from_rgb(245, 245, 245); // WHITE_SMOKE
@@ -340,8 +341,8 @@ impl Component for InstructionRow {
 
                 Span::new(text)
                     .color(kind_color(*kind))
-                    .font_family(ASM_FONT)
-                    .font_size(ASM_FONT_SIZE)
+                    .font_family(fonts().mono_family.as_str())
+                    .font_size(fonts().mono_size)
                     .font_weight(if *kind == iced_x86::FormatterTextKind::Mnemonic {
                         FontWeight::BOLD
                     } else {
@@ -363,8 +364,8 @@ impl Component for InstructionRow {
             .width(Size::fill())
             .height(Size::px(ROW_HEIGHT))
             .padding(3.0)
-            .font_family(ASM_FONT)
-            .font_size(ASM_FONT_SIZE)
+            .font_family(fonts().mono_family.as_str())
+            .font_size(fonts().mono_size)
             .background(if hovering() {
                 ASM_ROW_HOVER_BG
             } else {
@@ -612,7 +613,8 @@ pub fn app() -> impl IntoElement {
     rect()
         .expanded()
         .content(Content::Flex)
-        .font_size(12.0)
+        .font_family(fonts().ui_family.as_str())
+        .font_size(fonts().ui_size)
         .background(Color::WHITE)
         .child(toolbar(objects))
         .child(
