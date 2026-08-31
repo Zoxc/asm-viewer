@@ -92,11 +92,28 @@ one item per part, so the unfinished half stays visible.
 - [x] History panel on the bottom left with recent functions.
 - [ ] The history panel also lists recent source files.
 - [x] Don't insert duplicate history entries, bump existing ones instead.
-- [ ] Tree view for objects, with icon indicators for processing / file type.
+- [x] Tree view for objects, with an indicator per row for the file type. A file that
+  contributed one object is one row; an archive is a parent row its members fold under,
+  and the type is a short tag (`ELF`, `PE`, `COFF`, `MACH`, `AR`) rather than a picture —
+  freya's icon set is a dependency behind a feature and has no notion of an object format.
+- [ ] An indicator for an object still being processed. Nothing can be in that state yet:
+  `open_files` parses every object on its worker thread before the UI hears about any of
+  them, so this waits for "Can explore while binary is processed" under *Binary inspection
+  design*.
 - [x] Filter bar under objects / symbols / history, with icons for caps / full word / regex.
   One `FilterBar` in three places, each list keeping its own filter; the toggles are written
   as the regex they turn on (`Aa`, `\b`, `.*`) and a pattern that will not compile says so.
-- [ ] Tooltip for items in panels — missing from objects now.
+- [x] Tooltip for items in panels. The objects, symbols and history rows all show their
+  own text in full, which is what a name cut off at the pane's edge needs; the assembly
+  and source rows deliberately have none, being code the pointer sweeps across rather than
+  a name that could not fit.
+- [x] Instant tooltip delay for list items. A truncated name in a list is read by sweeping
+  the pointer down it, and freya's 500ms default made that useless, so every list row
+  passes `TooltipContainer::delay` a zero. The filter toggles keep the default: theirs
+  explains what `\b` means rather than finishing a word, and a pointer crossing the bar
+  should not light three of them. What is left is freya's own 150ms fade-in, which is
+  inside the component and not reachable from outside — measured, not guessed: at 200ms
+  the tooltip is up, at 48ms it is not.
 - [ ] Left panel to explore project directory / files.
 - [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
   by substring, whole word or regex, on the demangled name the row shows.
