@@ -50,6 +50,8 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 - [x] Minimal project support: the previous session's binaries and selected symbol reopen when
   the app is rerun, for easier testing.
 - [ ] Have a project concept.
+- [ ] Anonymous projects — opening files without an explicit project — should be saved too, next
+  to the user / global settings. There can be multiple such anonymous projects.
 - [ ] Each project can have multiple binaries loaded.
 - [ ] Has an associated directory.
 - [ ] Can have multiple tabs with different function assemblies / source files open.
