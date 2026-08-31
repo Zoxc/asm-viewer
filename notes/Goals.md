@@ -16,11 +16,21 @@ one item per part, so the unfinished half stays visible.
   it: hovering either side lights up what it maps to on the other.
 - [x] Hovering one side highlights the other side. One source line is many instructions and
   every one of them lights up, not just the first.
-- [ ] Selecting one side highlights the other side. Hovering does; there is nothing to
-  select on either side yet — a click navigates nowhere within a symbol until 5c.
-- [ ] Have a function to find all source / assembly locations that match, producing a list on the other side.
-- [ ] A function to pick the generic instance of a source function.
-- [ ] An active navigation function where selection on one side navigates to the relevant section on the other side, preferring recent history on duplicates.
+- [x] Selecting one side highlights the other side. A click pins the position it points at
+  and both panes keep it lit, in a stronger shade than the hover, until another click or
+  another symbol.
+- [ ] Have a function to find all source / assembly locations that match, producing a list on the
+  other side. Needs cross-symbol search and a panel to put the result in, which is Step 6's
+  tabs and left panels.
+- [ ] A function to pick the generic instance of a source function. Same prerequisite: one
+  source function is many symbols, and nothing yet lists them.
+- [x] An active navigation function where selection on one side moves the other side to the
+  matching place — within one symbol. Clicking a source line scrolls the assembly to the
+  first instruction it produced, clicking an instruction scrolls the source to its line, and
+  neither is a navigation: the selection does not change and nothing is pushed onto the
+  history.
+- [ ] The same across symbols, preferring recent history when a source line maps into several.
+  Needs the cross-symbol search above.
 - [x] Syntax highlighting for both sides. Assembly is coloured by span kind; source is
   tree-sitter, through the highlighter `freya-code-editor` exposes publicly.
 - [ ] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
@@ -29,8 +39,13 @@ one item per part, so the unfinished half stays visible.
 ## Navigation
 
 - [x] Clicking on functions in assembly should navigate to them.
-- [ ] Clicking on functions in source should navigate to them.
-- [ ] Navigating in assembly should also navigate source.
+- [ ] Clicking on functions in source should navigate to them. A click on a source line moves
+  the assembly pane to that line's instructions; a click on a *call* in the source still does
+  nothing, since nothing maps a source identifier to the symbol it names.
+- [x] Navigating in assembly should also navigate source, within a symbol: clicking an
+  instruction scrolls the source pane to the line it was compiled from.
+- [ ] Selecting another symbol should put the source pane on that symbol's own lines. It opens
+  the right file, but keeps whatever scroll position the symbol before it left behind.
 - [x] Mouse buttons can navigate history so you can go back and forth.
 - [ ] Add `<`, `>` navigation buttons to the top bar.
 
