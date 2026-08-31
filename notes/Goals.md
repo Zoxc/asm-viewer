@@ -12,9 +12,12 @@ one item per part, so the unfinished half stays visible.
 
 - [x] Have a source view and an assembly view side by side. This is the default layout of the
   content area: the source a symbol was compiled from beside its assembly.
-- [ ] Map between the two views — an instruction knows its source line, but nothing on either
-  side shows it yet.
-- [ ] Selecting one side (or hovering) highlights the other side.
+- [x] Map between the two views — an instruction knows its source line and both panes show
+  it: hovering either side lights up what it maps to on the other.
+- [x] Hovering one side highlights the other side. One source line is many instructions and
+  every one of them lights up, not just the first.
+- [ ] Selecting one side highlights the other side. Hovering does; there is nothing to
+  select on either side yet — a click navigates nowhere within a symbol until 5c.
 - [ ] Have a function to find all source / assembly locations that match, producing a list on the other side.
 - [ ] A function to pick the generic instance of a source function.
 - [ ] An active navigation function where selection on one side navigates to the relevant section on the other side, preferring recent history on duplicates.
