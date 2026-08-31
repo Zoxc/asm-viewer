@@ -100,6 +100,7 @@ one item per part, so the unfinished half stays visible.
 
 - [ ] Can explore while binary is processed to find all functions.
 - [ ] Rely on debug info and declared functions in binaries. Don't assume things can be code.
+- [ ] Find unwind targets.
 - [ ] Binary inspection should be light weight and multi threaded. Result saves in project info.
 - [ ] Binary inspection should be designed to be portable, allowing different disassembly libraries to be used.
 - [ ] Should never panic on any file input. Errors doing analysis should allow inspecting functions without errors.
