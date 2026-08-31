@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// Parse, then walk everything a parsed object exposes, so a panic in size estimation or
 /// disassembly is caught too and not just one in `parse_object`.
 fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
-    let object = parse_object(data, "fuzz".into(), PathBuf::from("/fuzz"))?;
+    let object = parse_object(data.into(), "fuzz".into(), PathBuf::from("/fuzz"))?;
 
     for symbol in &object.symbols_sorted {
         let _ = symbol.estimate_size();
@@ -265,7 +265,8 @@ fn assembly_of_data_ending_mid_instruction_is_partial_not_a_panic() {
         }],
     );
 
-    let object = parse_object(&data, "trunc.o".into(), PathBuf::from("/trunc.o")).expect("parses");
+    let object =
+        parse_object(data[..].into(), "trunc.o".into(), PathBuf::from("/trunc.o")).expect("parses");
     let caller = object
         .symbols_sorted
         .iter()
@@ -340,7 +341,8 @@ fn a_symbol_outside_any_section_yields_no_data() {
     });
     let data = obj.write().expect("writing the fixture object");
 
-    let object = parse_object(&data, "abs.o".into(), PathBuf::from("/abs.o")).expect("parses");
+    let object =
+        parse_object(data[..].into(), "abs.o".into(), PathBuf::from("/abs.o")).expect("parses");
     let symbol = object
         .symbols_sorted
         .iter()

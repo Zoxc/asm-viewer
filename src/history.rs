@@ -247,7 +247,7 @@ impl History {
 mod tests {
     use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-    use analysis::{BinaryFormat, Object};
+    use analysis::{BinaryFormat, Object, ObjectData};
 
     use super::*;
 
@@ -262,6 +262,7 @@ mod tests {
             symbols: HashMap::new(),
             symbols_sorted: Vec::new(),
             sections: Vec::new(),
+            data: ObjectData::from(&b""[..]),
         }))
     }
 

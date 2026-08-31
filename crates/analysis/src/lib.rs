@@ -3,7 +3,7 @@ use object::{
     read::archive::ArchiveFile, CompressionFormat, Object as _, ObjectSection, ObjectSymbol,
     Relocation, RelocationTarget, SectionIndex, SymbolIndex, SymbolKind,
 };
-use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, fs, ops::Range, path::PathBuf, sync::Arc};
 use symbolic_demangle::{Demangle, DemangleOptions};
 
 pub use object::BinaryFormat;
@@ -15,6 +15,95 @@ pub struct Object {
     pub symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
     pub symbols_sorted: Vec<Arc<SymbolData>>,
     pub sections: Vec<Arc<Section>>,
+    /// The bytes this object was parsed from. See [`ObjectData`].
+    pub data: ObjectData,
+}
+
+/// The bytes an [`Object`] was parsed from, held for as long as the object lives.
+///
+/// Parsing keeps decompressed bytes only for the sections that hold text symbols, so an
+/// `Object` on its own cannot be asked anything about, say, its `.debug_*` sections after
+/// the fact. Keeping the input around lets a later, lazy pass (line info) build what it
+/// needs without re-reading the file — and it keeps an archive *member* addressable, which
+/// re-reading could not do cheaply: a member is a slice of the archive, so finding it
+/// again would mean reading and re-scanning the whole archive.
+///
+/// The bytes are **shared, not copied**: `open_files` reads each file once and every
+/// `Object` it yields from that file — one per archive member *plus* one for the file
+/// itself — holds a clone of the same `Arc<[u8]>` and differs only in `range`, which is
+/// the extent of *its* object file within it (the whole file for a plain object, the
+/// member's slice for an archive member). Copying each member's bytes instead would hold
+/// an archive's contents roughly twice over, since the archive file is parsed as a plain
+/// object as well.
+///
+/// **Memory cost:** these are exactly the bytes `open_files` already reads; the only
+/// change is that they are now retained for the object's lifetime instead of being dropped
+/// when parsing returns. A file costs its own size once however many objects come out of
+/// it — 3.5 MiB for the sample `librustc_data_structures-*.rlib`, 137 MiB for the sample
+/// `LLVM-24-rust-dev.dll` — and `fs::read` yields a `Vec`, so the conversion to `Arc<[u8]>`
+/// copies it once and the peak while opening is briefly twice the file's size. The flip
+/// side of sharing is that one live archive member keeps the whole archive's bytes alive,
+/// which is the right trade for a viewer that lists every member anyway.
+///
+/// This allocation is exactly what the `[?]` "Prefer memory mapped files and minimal
+/// memory footprint" goal in `notes/Goals.md` would replace: mapping the file instead of
+/// reading it turns this into an `Arc` of a mapping, at which point the resident cost is
+/// the kernel's page cache and the transient copy disappears too.
+#[derive(Clone)]
+pub struct ObjectData {
+    file: Arc<[u8]>,
+    range: Range<usize>,
+}
+
+impl ObjectData {
+    /// The whole file: a plain object file, or the archive file itself.
+    pub fn whole_file(file: Arc<[u8]>) -> Self {
+        let range = 0..file.len();
+        Self { file, range }
+    }
+
+    /// One archive member, as the `(offset, size)` its header declares. [`None`] when
+    /// that range does not lie inside the file, which is the same bounds check
+    /// `ArchiveMember::data` does — such a member is skipped, exactly as before.
+    pub fn member(file: &Arc<[u8]>, offset: u64, size: u64) -> Option<Self> {
+        let start: usize = offset.try_into().ok()?;
+        let end = start.checked_add(size.try_into().ok()?)?;
+        file.get(start..end)?;
+        Some(Self {
+            file: file.clone(),
+            range: start..end,
+        })
+    }
+
+    /// The object file's own bytes.
+    pub fn bytes(&self) -> &[u8] {
+        // The range was bounds-checked when it was built.
+        &self.file[self.range.clone()]
+    }
+}
+
+impl std::fmt::Debug for ObjectData {
+    /// Never the bytes themselves: an object file is megabytes of them.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ObjectData")
+            .field("range", &self.range)
+            .field("file_len", &self.file.len())
+            .finish()
+    }
+}
+
+/// Copies the bytes into an allocation of their own. Convenient for callers that only
+/// have a slice (the tests); [`open_files`] shares one allocation per file instead.
+impl From<&[u8]> for ObjectData {
+    fn from(data: &[u8]) -> Self {
+        Self::whole_file(Arc::from(data))
+    }
+}
+
+impl From<Vec<u8>> for ObjectData {
+    fn from(data: Vec<u8>) -> Self {
+        Self::whole_file(Arc::from(data))
+    }
 }
 
 #[derive(Debug)]
@@ -251,8 +340,12 @@ fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Option<Vec<u8>> 
 /// Parse `data` as a single object file. `name` is the display name (an archive member
 /// name or the file name) and `path` the file it came from. Anything that fails to
 /// parse yields [`None`].
-pub fn parse_object(data: &[u8], name: String, path: PathBuf) -> Option<Arc<Object>> {
-    object::File::parse(data)
+///
+/// `data` is kept in the returned [`Object`]; see [`ObjectData`]. A caller with nothing
+/// but bytes (the tests) can pass `bytes.into()`, which gives them an allocation of their
+/// own; [`open_files`] shares one per file.
+pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc<Object>> {
+    let object = object::File::parse(data.bytes())
         .map(|file| {
             let mut sections: HashMap<SectionIndex, Section> = file
                 .sections()
@@ -327,19 +420,39 @@ pub fn parse_object(data: &[u8], name: String, path: PathBuf) -> Option<Arc<Obje
             let mut symbols_sorted: Vec<_> = symbols.values().cloned().collect();
             symbols_sorted.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
-            Arc::new(Object {
-                name,
-                path,
+            ParsedObject {
                 format: file.format(),
                 symbols,
                 symbols_sorted,
                 sections,
-            })
+            }
         })
-        .ok()
+        .ok()?;
+
+    // Nothing above borrows the file any more -- sections own decompressed copies of
+    // their bytes and relocations are owned values -- so the input can be moved in.
+    Some(Arc::new(Object {
+        name,
+        path,
+        format: object.format,
+        symbols: object.symbols,
+        symbols_sorted: object.symbols_sorted,
+        sections: object.sections,
+        data,
+    }))
 }
 
-fn open_object(out: &mut Vec<Arc<Object>>, data: &[u8], name: String, path: PathBuf) {
+/// Everything [`parse_object`] reads out of the file, i.e. an [`Object`] minus the fields
+/// that do not come from parsing. It exists only so the borrow of `data` ends before
+/// `data` itself is moved into the object.
+struct ParsedObject {
+    format: BinaryFormat,
+    symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
+    symbols_sorted: Vec<Arc<SymbolData>>,
+    sections: Vec<Arc<Section>>,
+}
+
+fn open_object(out: &mut Vec<Arc<Object>>, data: ObjectData, name: String, path: PathBuf) {
     out.extend(parse_object(data, name, path));
 }
 
@@ -353,17 +466,23 @@ pub fn open_files(paths: Vec<PathBuf>) -> Vec<Arc<Object>> {
             continue;
         };
 
-        if let Ok(archive) = ArchiveFile::parse(file.as_slice()) {
+        // One allocation per file, shared by every object parsed out of it and held for
+        // as long as they live; see `ObjectData`. `fs::read` gives a `Vec`, so this
+        // copies the bytes once more before dropping the original.
+        let file: Arc<[u8]> = Arc::from(file);
+
+        if let Ok(archive) = ArchiveFile::parse(&*file) {
             for member in archive.members() {
                 member
                     .map(|member| {
                         let name = String::from_utf8_lossy(member.name()).into_owned();
-                        member
-                            .data(file.as_slice())
-                            .map(|data| {
-                                open_object(&mut objects, data, name, path.clone());
-                            })
-                            .ok();
+                        // The same bytes `member.data(..)` would return, addressed as a
+                        // range into the archive so the member stays reachable from the
+                        // object without the archive having to be scanned again.
+                        let (offset, size) = member.file_range();
+                        if let Some(data) = ObjectData::member(&file, offset, size) {
+                            open_object(&mut objects, data, name, path.clone());
+                        }
                     })
                     .ok();
             }
@@ -371,7 +490,7 @@ pub fn open_files(paths: Vec<PathBuf>) -> Vec<Arc<Object>> {
 
         open_object(
             &mut objects,
-            file.as_slice(),
+            ObjectData::whole_file(file),
             path.file_name()
                 .map(|name| name.to_string_lossy())
                 .unwrap_or_default()

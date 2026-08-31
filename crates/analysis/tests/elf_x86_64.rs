@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn parse(data: &[u8]) -> Arc<Object> {
-    parse_object(data, "fixture.o".into(), PathBuf::from("/fixture.o")).expect("fixture parses")
+    parse_object(data.into(), "fixture.o".into(), PathBuf::from("/fixture.o"))
+        .expect("fixture parses")
 }
 
 fn symbol(object: &Object, name: &str) -> Arc<SymbolData> {

@@ -461,7 +461,7 @@ pub fn flush() {
 mod tests {
     use std::collections::HashMap;
 
-    use analysis::{BinaryFormat, Section, SymbolData};
+    use analysis::{BinaryFormat, ObjectData, Section, SymbolData};
 
     use super::*;
 
@@ -497,6 +497,9 @@ mod tests {
             symbols: HashMap::new(),
             symbols_sorted,
             sections: vec![section],
+            // The mapping never looks at the bytes; these objects were never parsed
+            // from any.
+            data: ObjectData::from(&b""[..]),
         })
     }
 
