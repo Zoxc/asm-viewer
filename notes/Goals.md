@@ -13,6 +13,7 @@ one item per part, so the unfinished half stays visible.
 - [ ] Have a source view and an assembly view, mapping between them. This is the default split view that should generally be used.
 - [ ] Selecting one side (or hovering) highlights the other side.
 - [ ] Have a function to find all source / assembly locations that match, producing a list on the other side.
+- [ ] A function to pick the generic instance of a source function.
 - [ ] An active navigation function where selection on one side navigates to the relevant section on the other side, preferring recent history on duplicates.
 - [ ] Syntax highlighting for both sides.
 
