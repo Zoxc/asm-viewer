@@ -66,9 +66,10 @@ one item per part, so the unfinished half stays visible.
 - [ ] A main view where you can see all project info.
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
 - [ ] Split project storage into toml? for user given settings and another file for opened tabs / cached binary inspection data
-- [ ] Save the navigation history.
-- [ ] Major things like opening binary files and user project changes should save immediately.
-- [ ] Periodically save if anything has changed. History, open files and view positions do not
+- [x] Save the navigation history.
+- [x] Opening binary files saves immediately.
+- [ ] User project changes should save immediately.
+- [x] Periodically save if anything has changed. History, open files and view positions do not
   need to save immediately.
 
 ## Startup
