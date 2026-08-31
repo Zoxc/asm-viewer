@@ -9,10 +9,6 @@
 //! mapping lives in exactly two places: [`SavedSelection::from_selection`] going out and
 //! [`Project::resolve`] coming back.
 
-// Nothing outside the tests calls into here yet: Step 2b wires the saving up to the
-// state mutations and Step 2c the loading up to startup. Drop this once they do.
-#![allow(dead_code)]
-
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -127,6 +123,8 @@ impl Project {
     /// Turn the saved selection back into a live one against the objects that are now
     /// loaded. Binaries change between runs, so this degrades silently: a symbol that
     /// is gone falls back to its object, and an object that is gone to nothing at all.
+    // Saving (Step 2b) only goes the other way; this direction is Step 2c's.
+    #[allow(dead_code)]
     pub fn resolve(&self, objects: &[Arc<Object>]) -> Selection {
         let Some(saved) = &self.selection else {
             return Selection::None;
@@ -168,6 +166,8 @@ impl Project {
 
     /// Read the saved session. A missing, unreadable or corrupt file is simply `None`:
     /// this must never surface as an error to the user.
+    // Only the tests read a session back so far; Step 2c is what restores one at startup.
+    #[allow(dead_code)]
     pub fn load() -> Option<Project> {
         Project::load_from(&Project::path()?)
     }

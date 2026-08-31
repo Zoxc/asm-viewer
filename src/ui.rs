@@ -6,7 +6,7 @@ use rfd::AsyncFileDialog;
 use analysis::{open_files, Assembly, Object, SpanKind, Symbol, SymbolData};
 
 use crate::fonts::{fonts, Font};
-use crate::project::Selection;
+use crate::project::{Project, Selection};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
 /// equal to the `item_size` given to each `VirtualScrollView`.
@@ -868,6 +868,34 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
         )
 }
 
+/// Write the session out whenever it changes.
+///
+/// `use_side_effect` re-runs its callback whenever a `State` that was `read()` inside
+/// it changes (`freya-core/src/lifecycle/effect.rs`), so reading the two state
+/// contexts here makes this one observer the single choke point every mutation flows
+/// through: the three `selection.set(..)` sites and the toolbar's `objects.write()`
+/// know nothing about persistence, and neither will any future one. Step 3's history
+/// push hangs off the same place -- it is the one spot that sees every selection.
+fn use_save_on_change(objects: State<Vec<Arc<Object>>>, selection: State<Selection>) {
+    // What this session has already written. It starts as the empty project the app
+    // starts with, so a run in which nothing is ever opened does not rewrite the file
+    // -- which is what keeps the previous session on disk until Step 2c restores it.
+    let mut last_saved = use_state(Project::default);
+
+    use_side_effect(move || {
+        // Reading these subscribes the effect to them: any change re-runs it.
+        let project = Project::from_state(&objects.read(), &selection.read());
+
+        // `peek`, not `read`: the effect must not subscribe to the state it writes.
+        if project != *last_saved.peek() {
+            // A small JSON write that swallows its own errors, so this neither panics
+            // nor meaningfully blocks the UI.
+            project.save();
+            last_saved.set(project);
+        }
+    });
+}
+
 pub fn app() -> impl IntoElement {
     // The tooltip is a freya component whose theme hardcodes a 14px font, and the
     // theme is the only way in: its `theme` override field is private. floem's
@@ -890,7 +918,8 @@ pub fn app() -> impl IntoElement {
     });
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
-    use_provide_context(|| Sel(State::create(Selection::None)));
+    let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
+    use_save_on_change(objects, selection);
 
     // Rebuilt only when the object list changes, not on every selection change.
     let symbols = use_memo(move || {
