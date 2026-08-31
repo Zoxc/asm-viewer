@@ -104,7 +104,11 @@ one item per part, so the unfinished half stays visible.
 ## Binary inspection design
 
 - [ ] Can explore while binary is processed to find all functions.
-- [ ] Rely on debug info and declared functions in binaries. Don't assume things can be code.
+- [x] Rely on declared functions in binaries. Don't assume things can be code — only declared
+  text symbols are disassembled, nothing is scanned for.
+- [x] Rely on debug info: DWARF line info is read (lazily, per section).
+- [ ] Rely on debug info for function extents too, rather than estimating from the next symbol's
+  address (`estimate_size`), since declared sizes are often 0 in COFF/ELF.
 - [ ] Find unwind targets.
 - [?] PDB / CodeView line info. DWARF is read today; the PE sample has no debug sections at all
   and a rustc `.rlib` member is COFF with CodeView (`.debug$S`/`.debug$T`), so on Windows output
