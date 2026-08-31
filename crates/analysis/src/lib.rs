@@ -1,10 +1,12 @@
 use iced_x86::Formatter;
 use object::{
-    read::archive::ArchiveFile, BinaryFormat, Object as _, ObjectSection, ObjectSymbol, Relocation,
+    read::archive::ArchiveFile, Object as _, ObjectSection, ObjectSymbol, Relocation,
     RelocationTarget, SectionIndex, SymbolIndex, SymbolKind,
 };
 use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 use symbolic_demangle::{Demangle, DemangleOptions};
+
+pub use object::BinaryFormat;
 
 pub struct Object {
     pub path: PathBuf,
@@ -130,17 +132,42 @@ impl PartialEq for Symbol {
     }
 }
 
+/// The kind of a formatted assembly text span, as far as the UI is concerned.
+///
+/// This is the disassembler-independent stand-in for `iced_x86::FormatterTextKind`,
+/// so that nothing outside this crate has to depend on a particular backend.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpanKind {
+    Mnemonic,
+    Prefix,
+    Register,
+    Number,
+    Other,
+}
+
+impl From<iced_x86::FormatterTextKind> for SpanKind {
+    fn from(kind: iced_x86::FormatterTextKind) -> Self {
+        match kind {
+            iced_x86::FormatterTextKind::Mnemonic => SpanKind::Mnemonic,
+            iced_x86::FormatterTextKind::Prefix => SpanKind::Prefix,
+            iced_x86::FormatterTextKind::Register => SpanKind::Register,
+            iced_x86::FormatterTextKind::Number => SpanKind::Number,
+            _ => SpanKind::Other,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Instruction {
     pub address: u64,
     pub bytes: Vec<u8>,
-    pub format: Vec<(String, iced_x86::FormatterTextKind)>,
+    pub format: Vec<(String, SpanKind)>,
     pub relocation: Option<Arc<SymbolData>>,
 }
 
 impl iced_x86::FormatterOutput for Instruction {
     fn write(&mut self, text: &str, kind: iced_x86::FormatterTextKind) {
-        self.format.push((text.to_owned(), kind));
+        self.format.push((text.to_owned(), kind.into()));
     }
 
     fn write_number(

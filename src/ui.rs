@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
-use analysis::{open_files, Assembly, Object, Symbol, SymbolData};
+use analysis::{open_files, Assembly, Object, SpanKind, Symbol, SymbolData};
 
 use crate::fonts::{fonts, Font};
 
@@ -141,12 +141,12 @@ fn info_line(text: String) -> impl IntoElement {
     rect().padding(5.0).child(label().text(text))
 }
 
-fn kind_color(kind: iced_x86::FormatterTextKind) -> Color {
+fn kind_color(kind: SpanKind) -> Color {
     match kind {
-        iced_x86::FormatterTextKind::Mnemonic | iced_x86::FormatterTextKind::Prefix => MNEMONIC_FG,
-        iced_x86::FormatterTextKind::Register => REGISTER_FG,
-        iced_x86::FormatterTextKind::Number => NUMBER_FG,
-        _ => OTHER_FG,
+        SpanKind::Mnemonic | SpanKind::Prefix => MNEMONIC_FG,
+        SpanKind::Register => REGISTER_FG,
+        SpanKind::Number => NUMBER_FG,
+        SpanKind::Other => OTHER_FG,
     }
 }
 
@@ -373,7 +373,7 @@ impl Component for InstructionRow {
                 Span::new(text)
                     .color(kind_color(*kind))
                     .assembly_font()
-                    .font_weight(if *kind == iced_x86::FormatterTextKind::Mnemonic {
+                    .font_weight(if *kind == SpanKind::Mnemonic {
                         FontWeight::BOLD
                     } else {
                         FontWeight::NORMAL

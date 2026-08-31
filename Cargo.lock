@@ -4254,7 +4254,6 @@ dependencies = [
  "async-channel",
  "env_logger",
  "freya",
- "iced-x86",
  "rfd",
 ]
 

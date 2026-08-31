@@ -11,8 +11,6 @@ analysis = { path = "crates/analysis" }
 freya = { version = "0.4" }
 rfd = "0.17"
 async-channel = "2"
-# Still needed by `ui.rs` (`kind_color`); removed in step 1b.
-iced-x86 = "1.20.0"
 env_logger = "0.10.0"
 
 [features]
