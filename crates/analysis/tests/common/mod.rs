@@ -88,6 +88,37 @@ pub fn caller_and_target() -> Vec<u8> {
     )
 }
 
+/// `caller` = `call qword ptr [rip+0x0]; ret` — an *indirect* call, where the operand the
+/// relocation applies to is a rip-relative **memory** operand rather than the whole branch
+/// target. `FF 15` is the opcode and the four displacement bytes start at offset 2, which
+/// is where a linker puts the relocation. `target` = `ret`, as in [`caller_and_target`].
+///
+/// With `relocated` unset the same bytes carry no relocation at all, which is the control
+/// for what the relocated form should print.
+pub fn indirect_caller_and_target(relocated: bool) -> Vec<u8> {
+    elf_x86_64(
+        &[
+            TextSymbol {
+                name: "caller",
+                bytes: &[0xFF, 0x15, 0x00, 0x00, 0x00, 0x00, 0xC3],
+            },
+            TextSymbol {
+                name: "target",
+                bytes: &[0xC3],
+            },
+        ],
+        if relocated {
+            &[TextRelocation {
+                in_symbol: 0,
+                offset: 2,
+                target: 1,
+            }]
+        } else {
+            &[]
+        },
+    )
+}
+
 /// Deterministic pseudo-random bytes (xorshift64*), so a failure is always reproducible.
 pub fn garbage(seed: u64, len: usize) -> Vec<u8> {
     let mut state = seed | 1;

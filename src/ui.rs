@@ -377,12 +377,9 @@ impl Component for RelocationLabel {
             object: self.object.clone(),
             data: self.target.clone(),
         };
-        let text = self
-            .target
-            .demangled
-            .as_ref()
-            .unwrap_or(&self.target.name)
-            .clone();
+        // The same name the disassembler substituted into the instruction text, so the
+        // link reads as the operand it stands in for.
+        let text = self.target.display().to_owned();
 
         CursorArea::new().child(
             rect()
@@ -435,35 +432,6 @@ impl Component for InstructionRow {
         let mut hovering = use_state(|| false);
         let instruction = &self.data.assembly.instructions[self.index];
 
-        // When an operand is dropped for a relocation the formatter's padding to the
-        // operand column is left as a trailing run of spaces, and Skia trims trailing
-        // whitespace when it measures a paragraph — which butts the target name right
-        // up against the mnemonic. Make that padding non-breaking to keep the column.
-        let pad_tail = instruction.relocation.is_some();
-        let last = instruction.format.len().saturating_sub(1);
-
-        let spans = instruction
-            .format
-            .iter()
-            .enumerate()
-            .map(move |(i, (text, kind))| {
-                let text = if pad_tail && i == last {
-                    let kept = text.trim_end_matches(' ');
-                    format!("{kept}{}", "\u{a0}".repeat(text.len() - kept.len()))
-                } else {
-                    text.clone()
-                };
-
-                Span::new(text)
-                    .color(kind_color(*kind))
-                    .assembly_font()
-                    .font_weight(if *kind == SpanKind::Mnemonic {
-                        FontWeight::BOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-            });
-
         let relocation = instruction
             .relocation
             .as_ref()
@@ -471,6 +439,59 @@ impl Component for InstructionRow {
                 object: self.data.object.clone(),
                 target: target.clone(),
             });
+
+        // The disassembler substitutes the relocation target's name for the placeholder
+        // operand and says which span it landed in, so the row is three children rather
+        // than one: the text before that span, the name as a clickable link, and the
+        // text after it. That keeps the link in the operand's own position — inside the
+        // brackets of a memory operand, where anything else leaves them empty.
+        //
+        // A relocated instruction with no such span (the formatter offered no operand to
+        // substitute into) has an empty tail, and the link is appended after the whole
+        // instruction the way it always was.
+        let (head, tail) = match instruction.relocation_span {
+            Some(i) if relocation.is_some() && i < instruction.format.len() => {
+                (&instruction.format[..i], &instruction.format[i + 1..])
+            }
+            _ => (&instruction.format[..], &[][..]),
+        };
+
+        // Whatever text runs up to the link ends in the formatter's padding to the
+        // operand column, and Skia trims trailing whitespace when it measures a
+        // paragraph — which would butt the name right up against the mnemonic. Make
+        // that padding non-breaking to keep the column.
+        let spans = |run: &[(String, SpanKind)], pad_end: bool| {
+            let last = run.len().saturating_sub(1);
+            run.iter()
+                .enumerate()
+                .map(|(i, (text, kind))| {
+                    let text = if pad_end && i == last {
+                        let kept = text.trim_end_matches(' ');
+                        format!("{kept}{}", "\u{a0}".repeat(text.len() - kept.len()))
+                    } else {
+                        text.clone()
+                    };
+
+                    Span::new(text)
+                        .color(kind_color(*kind))
+                        .assembly_font()
+                        .font_weight(if *kind == SpanKind::Mnemonic {
+                            FontWeight::BOLD
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let head = paragraph()
+            .max_lines(1)
+            .spans_iter(spans(head, relocation.is_some()).into_iter());
+        let tail = (!tail.is_empty()).then(|| {
+            paragraph()
+                .max_lines(1)
+                .spans_iter(spans(tail, false).into_iter())
+        });
 
         rect()
             .horizontal()
@@ -493,8 +514,9 @@ impl Component for InstructionRow {
                     .color(ADDRESS_FG)
                     .max_lines(1),
             )
-            .child(paragraph().max_lines(1).spans_iter(spans))
+            .child(head)
             .maybe_child(relocation)
+            .maybe_child(tail)
     }
 
     fn render_key(&self) -> DiffKey {

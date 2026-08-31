@@ -3,7 +3,7 @@ use object::{
     read::archive::ArchiveFile, CompressionFormat, Object as _, ObjectSection, ObjectSymbol,
     Relocation, RelocationTarget, SectionIndex, SymbolIndex, SymbolKind,
 };
-use std::{collections::HashMap, fs, ops::Range, path::PathBuf, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, fs, ops::Range, path::PathBuf, rc::Rc, sync::Arc};
 use symbolic_demangle::{Demangle, DemangleOptions};
 
 mod line;
@@ -144,6 +144,14 @@ pub struct SymbolData {
 }
 
 impl SymbolData {
+    /// What to call this symbol on screen: its demangled name where there is one, and
+    /// the raw name otherwise. The disassembler substitutes this for a relocated
+    /// operand, so anything rendering a relocation target has to use the same rule or
+    /// the instruction text and the link over it would disagree.
+    pub fn display(&self) -> &str {
+        self.demangled.as_deref().unwrap_or(&self.name)
+    }
+
     /// Object files frequently report a size of 0, so derive the extent from the next
     /// symbol in the section (or the section end).
     pub fn estimate_size(&self) -> Option<u64> {
@@ -172,7 +180,16 @@ impl SymbolData {
         let mut decoder =
             iced_x86::Decoder::with_ip(64, bytes, self.address, iced_x86::DecoderOptions::NONE);
 
-        let mut formatter = iced_x86::IntelFormatter::new();
+        // The name the next `format` call should substitute for the placeholder operand,
+        // handed to the formatter's symbol resolver through a cell the loop below writes.
+        // See `RelocationResolver`.
+        let pending = Rc::new(RefCell::new(None));
+        let mut formatter = iced_x86::IntelFormatter::with_options(
+            Some(Box::new(RelocationResolver {
+                pending: pending.clone(),
+            })),
+            None,
+        );
 
         formatter.options_mut().set_first_operand_char_index(10);
         formatter
@@ -213,7 +230,17 @@ impl SymbolData {
                 bytes: bytes[start_index..start_index + instruction.len()].to_vec(),
                 format: Vec::new(),
                 relocation,
+                relocation_span: None,
             };
+
+            // Arm the resolver for exactly this instruction. It takes the name, so at
+            // most one operand is substituted however many the formatter asks about,
+            // and anything left over is cleared before the next instruction.
+            *pending.borrow_mut() = inst
+                .relocation
+                .as_ref()
+                .map(|target| target.display().to_owned());
+
             formatter.format(&instruction, &mut inst);
 
             assembly.instructions.push(inst);
@@ -275,6 +302,17 @@ pub struct Instruction {
     pub bytes: Vec<u8>,
     pub format: Vec<(String, SpanKind)>,
     pub relocation: Option<Arc<SymbolData>>,
+
+    /// Where in [`format`](Self::format) the relocation target's name was substituted
+    /// for the operand's placeholder value, when it was. That is one whole span, so a
+    /// renderer can lift it out and draw it as a link to `relocation` without having to
+    /// find it in the text.
+    ///
+    /// [`None`] with a `relocation` present means the formatter never offered an operand
+    /// to substitute into — the relocation covers a byte of this instruction but none of
+    /// its operands is an address or an immediate — and the target can only be named
+    /// beside the instruction rather than inside it.
+    pub relocation_span: Option<usize>,
 }
 
 impl iced_x86::FormatterOutput for Instruction {
@@ -282,21 +320,86 @@ impl iced_x86::FormatterOutput for Instruction {
         self.format.push((text.to_owned(), kind.into()));
     }
 
-    fn write_number(
+    /// The formatter asked [`RelocationResolver`] about an operand and got the
+    /// relocation target's name back, so this is the placeholder's replacement. Record
+    /// where it lands: it is the span the UI makes clickable.
+    fn write_symbol(
         &mut self,
         _instruction: &iced_x86::Instruction,
         _operand: u32,
         _instruction_operand: Option<u32>,
-        text: &str,
-        _value: u64,
-        _number_kind: iced_x86::NumberKind,
-        kind: iced_x86::FormatterTextKind,
+        _address: u64,
+        symbol: &iced_x86::SymbolResult<'_>,
     ) {
-        // The placeholder value in the encoding is meaningless when a relocation
-        // applies; the target symbol name is rendered instead.
-        if self.relocation.is_none() {
-            self.write(text, kind);
+        fn part<'a>(
+            part: &'a iced_x86::SymResTextPart<'a>,
+        ) -> (&'a str, iced_x86::FormatterTextKind) {
+            let text = match &part.text {
+                iced_x86::SymResString::Str(text) => text,
+                iced_x86::SymResString::String(text) => text.as_str(),
+            };
+            (text, part.color)
         }
+
+        let start = self.format.len();
+        match &symbol.text {
+            iced_x86::SymResTextInfo::Text(one) => {
+                let (text, kind) = part(one);
+                self.write(text, kind);
+            }
+            // Our resolver never builds one of these, but the trait allows it.
+            iced_x86::SymResTextInfo::TextVec(many) => {
+                for one in *many {
+                    let (text, kind) = part(one);
+                    self.write(text, kind);
+                }
+            }
+        }
+
+        // Only point at a name that is a single span; anything else has no one span to
+        // make clickable and falls back to being named beside the instruction.
+        if self.format.len() == start + 1 {
+            self.relocation_span = Some(start);
+        }
+    }
+}
+
+/// Hands the formatter the relocation target's name in place of a relocated operand's
+/// value.
+///
+/// The value encoded in a relocated operand is a placeholder — a zero, or an addend — so
+/// printing it is worse than useless. iced-x86's [`SymbolResolver`](iced_x86::SymbolResolver)
+/// is the hook for replacing it, and it is asked at the point the operand is being
+/// written, so the name lands *inside* whatever syntax surrounds it: a memory operand
+/// reads `[name]` rather than the `[]` that dropping the number outright left behind.
+///
+/// The relocation itself is found by byte range, not by operand — a relocation records
+/// where in the instruction it applies, and nothing maps that back to an operand number —
+/// so `pending` is armed with the name once per instruction and *taken* by the first
+/// operand the formatter asks about. An instruction with a second numeric operand
+/// therefore keeps that operand's real value instead of losing it too.
+struct RelocationResolver {
+    pending: Rc<RefCell<Option<String>>>,
+}
+
+impl iced_x86::SymbolResolver for RelocationResolver {
+    fn symbol(
+        &mut self,
+        _instruction: &iced_x86::Instruction,
+        _operand: u32,
+        _instruction_operand: Option<u32>,
+        address: u64,
+        _address_size: u32,
+    ) -> Option<iced_x86::SymbolResult<'_>> {
+        let name = self.pending.borrow_mut().take()?;
+        // The symbol's address has to be the one asked about: the formatter prints the
+        // difference between the two after the name, and any other value would append a
+        // meaningless displacement to it.
+        Some(iced_x86::SymbolResult::with_string_kind(
+            address,
+            name,
+            iced_x86::FormatterTextKind::FunctionAddress,
+        ))
     }
 }
 

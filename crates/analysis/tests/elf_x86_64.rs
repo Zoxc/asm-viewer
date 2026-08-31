@@ -4,7 +4,9 @@
 mod common;
 
 use analysis::{parse_object, Object, SpanKind, SymbolData};
-use common::{caller_and_target, elf_x86_64, TextRelocation, TextSymbol};
+use common::{
+    caller_and_target, elf_x86_64, indirect_caller_and_target, TextRelocation, TextSymbol,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -117,15 +119,15 @@ fn the_call_resolves_to_the_target_symbol() {
 }
 
 #[test]
-fn the_placeholder_operand_is_dropped_when_a_relocation_applies() {
+fn the_placeholder_operand_is_replaced_when_a_relocation_applies() {
     let object = parse(&caller_and_target());
     let caller = symbol(&object, "caller");
 
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let call = &assembly.instructions[0];
 
-    // The encoded displacement is a meaningless placeholder (0), so the UI renders the
-    // target's name instead and the formatter must emit no number span at all.
+    // The encoded displacement is a meaningless placeholder (0), so it must never be
+    // printed: the target's name stands in its place, in the operand's own position.
     assert!(
         !call
             .format
@@ -134,7 +136,8 @@ fn the_placeholder_operand_is_dropped_when_a_relocation_applies() {
         "the relocated call kept a number span: {:?}",
         call.format
     );
-    assert_eq!(text(call).trim_end(), "call");
+    assert_eq!(text(call).trim_end(), "call      target");
+    assert_eq!(relocation_span(call), Some(("target", SpanKind::Address)));
 }
 
 #[test]
@@ -250,7 +253,8 @@ fn a_relocation_drops_an_immediate_number_span() {
         "the relocated immediate kept a number span: {:?}",
         mov.format
     );
-    assert_eq!(text(&mov).trim_end(), "mov       eax,");
+    assert_eq!(text(&mov).trim_end(), "mov       eax, target");
+    assert_eq!(relocation_span(&mov), Some(("target", SpanKind::Address)));
 }
 
 #[test]
@@ -283,6 +287,92 @@ fn a_relocation_anywhere_in_the_instruction_counts() {
         .as_ref()
         .expect("the call has a relocation");
     assert!(Arc::ptr_eq(resolved, &target));
+}
+
+#[test]
+fn an_unrelocated_indirect_call_keeps_its_displacement() {
+    // The control for the test below: the same `call qword ptr [rip+0x0]` with nothing
+    // relocating it prints the encoded displacement, which iced-x86 resolves to the
+    // absolute address it points at (the instruction is 6 bytes long and starts at 0).
+    let object = parse(&indirect_caller_and_target(false));
+    let caller = symbol(&object, "caller");
+
+    let assembly = caller.assembly(&object).expect("caller disassembles");
+    let call = &assembly.instructions[0];
+
+    assert!(call.relocation.is_none());
+    assert_eq!(call.relocation_span, None);
+    assert_eq!(text(call).trim_end(), "call      qword ptr [6]");
+    assert_eq!(spans_of(call, SpanKind::Number), ["6"]);
+}
+
+#[test]
+fn a_relocated_indirect_call_names_its_target_inside_the_brackets() {
+    // The regression: the relocation applies to a *memory* operand, so the number it
+    // replaces sits inside brackets the formatter has already opened. Dropping it left
+    // `call qword ptr []`; the target's name has to take its place instead.
+    let object = parse(&indirect_caller_and_target(true));
+    let caller = symbol(&object, "caller");
+    let target = symbol(&object, "target");
+
+    let assembly = caller.assembly(&object).expect("caller disassembles");
+    let call = &assembly.instructions[0];
+
+    let resolved = call.relocation.as_ref().expect("the call has a relocation");
+    assert!(Arc::ptr_eq(resolved, &target));
+
+    assert_eq!(text(call).trim_end(), "call      qword ptr [target]");
+    // The placeholder displacement is gone, not merely hidden ...
+    assert!(
+        spans_of(call, SpanKind::Number).is_empty(),
+        "the relocated displacement kept a number span: {:?}",
+        call.format
+    );
+    // ... and the name is one span of its own, which is what the UI turns into the
+    // clickable link.
+    assert_eq!(relocation_span(call), Some(("target", SpanKind::Address)));
+}
+
+#[test]
+fn the_relocation_span_is_the_only_one_replaced() {
+    // An instruction with a relocated memory operand *and* an unrelated immediate:
+    // `mov dword ptr [rip+0x0], 7`, relocated at offset 2. Only the memory operand is
+    // named; the immediate is a real value and must survive.
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "storer",
+                bytes: &[
+                    0xC7, 0x05, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0xC3,
+                ],
+            },
+            TextSymbol {
+                name: "target",
+                bytes: &[0xC3],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 0,
+            offset: 2,
+            target: 1,
+        }],
+    );
+    let object = parse(&data);
+    let storer = symbol(&object, "storer");
+
+    let assembly = storer.assembly(&object).expect("storer disassembles");
+    let mov = &assembly.instructions[0];
+
+    assert_eq!(text(mov).trim_end(), "mov       dword ptr [target], 7");
+    assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
+    assert_eq!(relocation_span(mov), Some(("target", SpanKind::Address)));
+}
+
+/// The span [`analysis::Instruction::relocation_span`] points at, with its kind.
+fn relocation_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
+    let index = instruction.relocation_span?;
+    let (text, kind) = instruction.format.get(index)?;
+    Some((text.as_str(), *kind))
 }
 
 /// The text of every span in `instruction` that carries `kind`.
