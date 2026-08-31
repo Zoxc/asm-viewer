@@ -1,7 +1,7 @@
 use iced_x86::Formatter;
 use object::{
-    read::archive::ArchiveFile, Object as _, ObjectSection, ObjectSymbol, Relocation,
-    RelocationTarget, SectionIndex, SymbolIndex, SymbolKind,
+    read::archive::ArchiveFile, CompressionFormat, Object as _, ObjectSection, ObjectSymbol,
+    Relocation, RelocationTarget, SectionIndex, SymbolIndex, SymbolKind,
 };
 use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 use symbolic_demangle::{Demangle, DemangleOptions};
@@ -192,6 +192,55 @@ pub struct Assembly {
     pub instructions: Vec<Instruction>,
 }
 
+/// A hard ceiling on how large a single section's decompressed bytes may be, whatever
+/// its header claims. See [`section_data`].
+const MAX_SECTION_DATA: u64 = 1 << 30;
+
+/// Read a section's bytes, decompressing it if it says it is compressed, but only after
+/// checking that the size it declares is believable.
+///
+/// `uncompressed_data()` trusts the size in the compression header and reserves that much
+/// *before* it looks at a single compressed byte, so a corrupt or hostile header — one
+/// flipped `SHF_COMPRESSED` bit in a 608-byte file is enough — turns into a multi-gigabyte
+/// allocation and an OOM abort on a small machine. `compressed_data()` hands us the same
+/// information without allocating: the declared `uncompressed_size` plus the compressed
+/// bytes themselves, which are a slice of the file and so are already bounded by it.
+///
+/// Two independent bounds have to hold, and a section failing either is dropped exactly
+/// like one whose name or data will not read — no panic, no error, it simply has no data:
+///
+/// * A ratio bound, which is provable rather than a guess. DEFLATE cannot expand data by
+///   more than 1032:1, and a zstd frame not by more than 32768:1 (a 128 KiB block stored
+///   as a 4-byte RLE block), so a declared size past that is a lie about *these* bytes no
+///   matter what they decode to. As the compressed bytes come from the file, this also
+///   caps the allocation at a multiple of the file's own length.
+/// * An absolute bound, because the ratio bound alone still scales with the input: a
+///   100 MB object could honestly claim 100 GB. 1 GiB is far more than anything this
+///   viewer can show — it keeps only sections holding text symbols, and it already holds
+///   the whole file in memory besides.
+///
+/// Both are orders of magnitude above real files: compressed debug sections run at
+/// roughly 2:1 to 10:1, so nothing legitimate comes anywhere near either limit.
+fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Option<Vec<u8>> {
+    let compressed = section.compressed_data().ok()?;
+
+    let max_ratio: u64 = match compressed.format {
+        // Not compressed at all: the bytes are already there, nothing to bound.
+        CompressionFormat::None => return Some(compressed.data.to_vec()),
+        CompressionFormat::Zlib => 1032,
+        CompressionFormat::Zstandard => 32768,
+        // Any other format is one `decompress()` does not implement; it would fail.
+        _ => return None,
+    };
+
+    let ratio_bound = (compressed.data.len() as u64).saturating_mul(max_ratio);
+    if compressed.uncompressed_size > ratio_bound.min(MAX_SECTION_DATA) {
+        return None;
+    }
+
+    Some(compressed.decompress().ok()?.into_owned())
+}
+
 /// Parse `data` as a single object file. `name` is the display name (an archive member
 /// name or the file name) and `path` the file it came from. Anything that fails to
 /// parse yields [`None`].
@@ -202,7 +251,7 @@ pub fn parse_object(data: &[u8], name: String, path: PathBuf) -> Option<Arc<Obje
                 .sections()
                 .filter_map(|section| {
                     let name = String::from_utf8_lossy(section.name_bytes().ok()?).into_owned();
-                    let data = section.uncompressed_data().ok()?.into_owned();
+                    let data = section_data(&section)?;
                     let relocations = section.relocations().collect();
                     Some((
                         section.index(),

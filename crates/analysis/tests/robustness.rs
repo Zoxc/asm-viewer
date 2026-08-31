@@ -90,7 +90,7 @@ fn truncated_objects_do_not_panic() {
 
 /// Byte 9 of an ELF64 section header is the second byte of `sh_flags`, which holds
 /// `SHF_COMPRESSED` (0x800). Setting it sends the parse down the decompression path with
-/// a bogus `ch_size`; see `compressed_flag_makes_the_parse_allocate_gigabytes` below.
+/// a bogus `ch_size`; see `a_lying_compressed_size_in_a_section_header_costs_nothing`.
 fn section_flag_bytes(elf: &[u8]) -> Vec<usize> {
     let shoff = u64::from_le_bytes(elf[0x28..0x30].try_into().unwrap()) as usize;
     let shentsize = u16::from_le_bytes(elf[0x3A..0x3C].try_into().unwrap()) as usize;
@@ -101,15 +101,9 @@ fn section_flag_bytes(elf: &[u8]) -> Vec<usize> {
 #[test]
 fn corrupted_objects_do_not_panic() {
     let valid = caller_and_target();
-    let skip = section_flag_bytes(&valid);
 
     let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
     for offset in 0..valid.len() {
-        // Excluded only because it is slow and enormous, not because it is safe --
-        // see `compressed_flag_makes_the_parse_allocate_gigabytes`.
-        if skip.contains(&offset) {
-            continue;
-        }
         for mask in [0xFFu8, 0x01, 0x80] {
             let mut data = valid.clone();
             data[offset] ^= mask;
@@ -121,23 +115,132 @@ fn corrupted_objects_do_not_panic() {
     assert!(failures.is_empty(), "panicked on: {failures:?}");
 }
 
-/// A single flipped bit in a section header costs seconds of CPU and roughly 8 GB of
-/// resident memory: `SHF_COMPRESSED` makes `object`'s `uncompressed_data()` read a
-/// `ch_size` out of whatever bytes follow and reserve that much up front, before any of
-/// it is validated against the size of the file.
+/// A single flipped bit in a section header used to cost seconds of CPU and roughly 8 GB
+/// of resident memory. Byte 9 of `.rela.text`'s header turns on `SHF_COMPRESSED`, and the
+/// relocation bytes that follow read as an `Elf64_Chdr` announcing a zlib stream that
+/// unpacks to 8.6 GB; `uncompressed_data()` reserved all of it before looking at a single
+/// compressed byte. Never a panic, so the sweep above stayed green, but an OOM abort on a
+/// machine with less RAM, which defeats "should never fall over on any file input".
 ///
-/// Not a panic, so the no-panic sweep above stays green, but it does defeat "should never
-/// fall over on any file input" on a machine with less RAM than that. Ignored by default
-/// precisely because running it allocates those gigabytes; run with
-/// `cargo test -p analysis -- --ignored --exact compressed_flag_makes_the_parse_allocate_gigabytes`.
+/// `analysis` now weighs the declared size against the compressed bytes before
+/// decompressing, so the section is dropped the way any unreadable section is: the parse
+/// still succeeds, `.rela.text` simply is not among the sections, and nothing ever
+/// allocates more than the file itself holds.
 #[test]
-#[ignore = "allocates several GB and takes seconds; documents an open robustness issue"]
-fn compressed_flag_makes_the_parse_allocate_gigabytes() {
-    let mut data = caller_and_target();
-    let offset = section_flag_bytes(&data)[2];
+fn a_lying_compressed_size_in_a_section_header_costs_nothing() {
+    let valid = caller_and_target();
+    let baseline = parse_and_walk(&valid).expect("the fixture parses");
+    assert!(section_names(&baseline).contains(&".rela.text".to_owned()));
+
+    let offset = section_flag_bytes(&valid)[2];
+    let mut data = valid.clone();
     data[offset] ^= 0xFF;
 
-    assert!(parse_and_walk(&data).is_some());
+    let object = parse_and_walk(&data).expect("the object still parses");
+
+    // The section that claimed 8.6 GB is gone, not decompressed.
+    assert!(!section_names(&object).contains(&".rela.text".to_owned()));
+
+    // Nothing else grew: no section holds more bytes than the whole file has.
+    for section in &object.sections {
+        assert!(
+            section.data.len() <= data.len(),
+            "section {} holds {} bytes of a {}-byte file",
+            section.name,
+            section.data.len(),
+            data.len()
+        );
+    }
+
+    // And the rest of the object is untouched: `.text` and its symbols still decode.
+    assert_eq!(
+        section_names(&object).len(),
+        section_names(&baseline).len() - 1
+    );
+    for symbol in &object.symbols_sorted {
+        assert!(symbol.data().is_some(), "{} lost its data", symbol.name);
+    }
+}
+
+/// The guard has to fire on the declared size alone, before any decompression: a section
+/// whose zlib stream is perfectly valid but whose header lies about how much it unpacks to
+/// is dropped rather than believed. Both bounds are exercised — a size past the 1 GiB cap,
+/// and a smaller one that is still past what DEFLATE could possibly produce from these
+/// bytes — while the same section with an honest size decompresses as it always did.
+#[test]
+fn a_valid_zlib_stream_is_only_decompressed_when_its_declared_size_is_believable() {
+    let payload = b"decompressed section contents";
+
+    let honest = parse_and_walk(&elf_with_compressed_section(payload, payload.len() as u64))
+        .expect("parses");
+    let section = honest
+        .sections
+        .iter()
+        .find(|section| section.name == ".debug_info")
+        .expect("an honestly sized compressed section is kept");
+    assert_eq!(section.data, payload);
+
+    for declared in [
+        1u64 << 33, // past the absolute cap.
+        1 << 20,    // under the cap, but ~36000:1 from 29 bytes: past what DEFLATE can do.
+    ] {
+        let data = elf_with_compressed_section(payload, declared);
+        let object = parse_and_walk(&data).expect("the object still parses");
+        assert!(
+            !section_names(&object).contains(&".debug_info".to_owned()),
+            "a section declaring {declared} bytes was decompressed anyway"
+        );
+    }
+}
+
+fn section_names(object: &Object) -> Vec<String> {
+    object
+        .sections
+        .iter()
+        .map(|section| section.name.clone())
+        .collect()
+}
+
+/// An ELF holding one `SHF_COMPRESSED` `.debug_info` whose zlib stream really does decode
+/// to `payload`, but whose compression header declares `declared_size` bytes of output.
+fn elf_with_compressed_section(payload: &[u8], declared_size: u64) -> Vec<u8> {
+    use object::{write, Architecture, BinaryFormat, Endianness, SectionFlags, SectionKind};
+
+    let mut contents = Vec::new();
+    // Elf64_Chdr: ch_type = ELFCOMPRESS_ZLIB, ch_reserved, ch_size, ch_addralign.
+    contents.extend_from_slice(&1u32.to_le_bytes());
+    contents.extend_from_slice(&0u32.to_le_bytes());
+    contents.extend_from_slice(&declared_size.to_le_bytes());
+    contents.extend_from_slice(&1u64.to_le_bytes());
+    contents.extend_from_slice(&zlib_stored(payload));
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let id = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
+    obj.append_section_data(id, &contents, 1);
+    obj.section_mut(id).flags = SectionFlags::Elf {
+        sh_flags: object::elf::SHF_COMPRESSED.into(),
+    };
+    obj.write().expect("writing the fixture object")
+}
+
+/// `payload` as a valid zlib stream: one final DEFLATE block, stored rather than
+/// compressed, so no compressor is needed to build the fixture.
+fn zlib_stored(payload: &[u8]) -> Vec<u8> {
+    let len: u16 = payload.len().try_into().expect("a small payload");
+
+    let mut out = vec![0x78, 0x01]; // CMF/FLG for a 32 KiB window, no dictionary.
+    out.push(0x01); // BFINAL = 1, BTYPE = 00 (stored).
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&(!len).to_le_bytes());
+    out.extend_from_slice(payload);
+
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in payload {
+        a = (a + u32::from(*byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    out.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    out
 }
 
 #[test]
