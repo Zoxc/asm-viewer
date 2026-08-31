@@ -44,6 +44,24 @@ pub enum Selection {
     Symbol(Symbol),
 }
 
+impl Selection {
+    /// Whether this points into the file at `path` — the whole of what closing a file
+    /// has to ask of a selection, of an open tab and of a history entry, which is why it
+    /// lives on [`Selection`] rather than three times over at the sites that ask it.
+    ///
+    /// A symbol answers for the file its *object* came out of, so a file takes the
+    /// symbols in it with it. `path` is [`Object::path`] and never an object's name: an
+    /// archive member is not something the reader opened, so the unit that closes is the
+    /// file, members and all (`notes/Plan.md`, 6d).
+    pub fn in_file(&self, path: &Path) -> bool {
+        match self {
+            Selection::None => false,
+            Selection::Object(object) => object.path == path,
+            Selection::Symbol(symbol) => symbol.object.path == path,
+        }
+    }
+}
+
 impl PartialEq for Selection {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -266,32 +284,25 @@ impl Project {
     /// have changed comes back with the entries that still mean something rather than
     /// with none at all.
     ///
-    /// The cursor follows the drops: walking the entries up to and including the saved
-    /// cursor, it is left on the last one that survived. So it stays on the saved entry
-    /// when that entry survived, falls back to the nearest older survivor when it did
-    /// not, and to the oldest surviving entry when nothing older survived either.
+    /// The cursor follows the drops, and *how* is [`History::rebuilt`]'s business rather
+    /// than this function's: all that happens here is the resolving, one saved entry at a
+    /// time, with `None` where an entry no longer points anywhere. Closing a file in a
+    /// running session loses entries for the same reason and goes through the same walk
+    /// ([`History::retaining`]), which is what makes the two behave identically rather
+    /// than merely alike.
     ///
-    /// Duplicates are [`History::restored`]'s business, not this loop's: two saved
-    /// entries naming the same destination resolve to the same `Arc` and so to equal
-    /// entries, which a saved history written before entries were bumped rather than
-    /// appended is full of. `restored` collapses them onto the newest occurrence and
-    /// carries the cursor to wherever the entry it names ends up, so the cursor computed
-    /// here is an index into the list *before* the collapse and need not anticipate it.
+    /// Duplicates are [`History::restored`]'s business, and neither this function's nor
+    /// `rebuilt`'s: two saved entries naming the same destination resolve to the same
+    /// `Arc` and so to equal entries, which a saved history written before entries were
+    /// bumped rather than appended is full of.
     pub fn resolve_history(&self, objects: &[Arc<Object>]) -> History {
-        let mut entries = Vec::new();
-        let mut cursor = 0;
-
-        for (index, saved) in self.history.entries.iter().enumerate() {
-            let Some(entry) = saved.resolve(objects) else {
-                continue;
-            };
-            if index <= self.history.cursor {
-                cursor = entries.len();
-            }
-            entries.push(entry);
-        }
-
-        History::restored(entries, cursor)
+        History::rebuilt(
+            self.history
+                .entries
+                .iter()
+                .map(|saved| saved.resolve(objects)),
+            self.history.cursor,
+        )
     }
 
     /// The file the session is stored in, or `None` on a system with no state or local
@@ -511,6 +522,30 @@ mod tests {
             // Same path, different member: `path` alone cannot tell these apart.
             object("/tmp/lib.a", "b.o", &[("caller", 0)]),
         ]
+    }
+
+    /// The one question closing a file asks. A member is not a file, so both members of
+    /// `/tmp/lib.a` answer for it and a symbol answers for the file its object came out
+    /// of — closing the archive takes every one of them.
+    #[test]
+    fn everything_in_a_file_says_so() {
+        let objects = objects();
+        let lib = Path::new("/tmp/lib.a");
+        let other = Path::new("/tmp/some.dll");
+
+        let member = Selection::Object(objects[1].clone());
+        assert!(member.in_file(lib));
+        assert!(!member.in_file(other));
+
+        let symbol = Selection::Symbol(Symbol {
+            object: objects[0].clone(),
+            data: objects[0].symbols_sorted[0].clone(),
+        });
+        assert!(symbol.in_file(lib));
+        assert!(!symbol.in_file(other));
+
+        // Nothing selected is in no file, so a close never has to special-case it.
+        assert!(!Selection::None.in_file(lib));
     }
 
     #[test]
@@ -1093,6 +1128,33 @@ mod tests {
 
         assert_eq!(saves.record(project.clone()), Some(project));
         // And is not written a second time by the next flush.
+        assert_eq!(saves.flush(), None);
+    }
+
+    /// Closing one takes the same path opening one does, which is the whole of what
+    /// makes 6d's "the save is immediate" true: `binaries` is what `record` looks at,
+    /// and it does not care in which direction the list changed.
+    #[test]
+    fn closing_a_binary_is_written_at_once() {
+        let mut saves = Saves::new();
+        saves.record(project_with(&["/tmp/lib.a", "/tmp/some.dll"], Some("a.o")));
+
+        // The selection is still pending from the open above; closing writes the lot,
+        // so the file on disk never names a binary the app no longer has open.
+        let project = project_with(&["/tmp/lib.a"], Some("a.o"));
+        assert_eq!(saves.record(project.clone()), Some(project));
+        assert_eq!(saves.flush(), None);
+    }
+
+    /// Closing the last one is not "nothing changed": the empty project is a project,
+    /// and it has to reach the disk or the next run reopens what was just closed.
+    #[test]
+    fn closing_the_only_binary_is_written_too() {
+        let mut saves = Saves::new();
+        saves.record(project_with(&["/tmp/lib.a"], Some("a.o")));
+
+        let project = Project::new();
+        assert_eq!(saves.record(project.clone()), Some(project));
         assert_eq!(saves.flush(), None);
     }
 

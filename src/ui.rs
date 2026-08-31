@@ -1234,6 +1234,98 @@ fn close_file(
     }
 }
 
+/// Let go of the binary at `path`: drop every [`Object`] it contributed and answer for
+/// everything that was pointing at them.
+///
+/// The fifth of the functions that hold the app's invariants, beside [`activate`],
+/// [`close_tab`], [`open_file`] and [`close_file`], and the only one that ever *removes*
+/// an object -- until now the app could open a binary and never let go of one. The unit
+/// is the **file** and never the object: an archive member is not something the reader
+/// opened, closing one member of 196 would leave a file half-present with no row able to
+/// say so, and `Project::binaries` is a list of paths, so half a file is not a thing the
+/// session could even record. One path opened twice is therefore also one close: the
+/// objects list holds both copies, `Object::path` cannot tell them apart, and neither
+/// could the file it would be written to.
+///
+/// What each of the four things pointing at those objects does with the news:
+///
+/// - The **tabs** whose selection was in the file are closed, all of them at once
+///   ([`Tabs::close_all`]), which is what closing the one tab the reader was on would
+///   have done had its neighbours not gone with it.
+/// - The **selection** follows the tabs rather than degrading the way a restore's does.
+///   Degrading has nothing to fall back *to* here: a file takes its objects and their
+///   symbols together, so `resolve_or_degrade`'s symbol-to-object step would land on an
+///   object that is going away in the same breath. What is left is the tab rule -- the
+///   neighbouring tab, or [`Selection::None`] when the close emptied the strip -- and
+///   that is also the only answer that keeps "the selection is the active tab" true,
+///   since the placeholder with tabs still open would be a fourth state.
+/// - The **history** drops its entries rather than degrading them ([`History::retaining`]),
+///   which is the same walk and the same reasoning as a restore whose binaries have
+///   changed: a list of places the reader cannot get back to is worse than a short list.
+/// - **`Project::binaries`** needs nothing here at all. It is derived from the objects by
+///   `Project::from_state`, so removing them removes the path, and `project::record` sees
+///   a *binaries* change and writes it to disk at once rather than marking it pending --
+///   which is what `Goals.md` asks of a change the user made, and the first thing since
+///   opening a file to take that path.
+///
+/// All four writes happen here, in one event handler, before anything can render: the
+/// save observer therefore wakes once, with all of it settled, so the file that reaches
+/// the disk never names a binary the app has already let go of.
+///
+/// The Source pane's open files are deliberately left alone. A file chip is a path on
+/// disk that some symbol's line info named, nothing records which object opened it, and
+/// the text stands perfectly well on its own -- the same reason a selection with no line
+/// info neither opens nor closes one.
+fn close_binary(
+    mut objects: State<Vec<Arc<Object>>>,
+    mut open: State<Tabs<Selection>>,
+    selection: State<Selection>,
+    mut history: State<History>,
+    path: &Path,
+) {
+    // Every guard below is taken out of its own statement, so none of them is still
+    // alive when the next write -- or `activate` at the end -- is reached.
+    let showing = selection.peek().clone();
+    let next = open.write().close_all(&showing, |tab| tab.in_file(path));
+
+    let remaining = history.peek().retaining(|entry| !entry.in_file(path));
+    history.set(remaining);
+
+    objects.write().retain(|object| object.path != path);
+
+    if showing.in_file(path) {
+        // Through `activate` like every other selection change, even though the tab it
+        // lands on is by construction already open. Landing there is an ordinary move,
+        // so `use_record_history` records it exactly as it records closing one tab.
+        activate(open, selection, next.unwrap_or(Selection::None));
+    }
+}
+
+/// The menu a file row opens on a right-click: the one thing that can be done to a file
+/// once it is open.
+///
+/// Built per press rather than once, because it closes over the path of the row it was
+/// opened on -- freya's `ContextMenu` takes a whole `Menu` and places it at the pointer
+/// (`freya-components/src/context_menu.rs`), so there is nothing to keep. The four states
+/// come in as arguments for the reason every row's do: this is called from an event
+/// handler, where no hook may run.
+fn close_menu(
+    objects: State<Vec<Arc<Object>>>,
+    open: State<Tabs<Selection>>,
+    selection: State<Selection>,
+    history: State<History>,
+    path: PathBuf,
+) -> Menu {
+    Menu::new().child(
+        MenuButton::new()
+            .on_press(move |_| close_binary(objects, open, selection, history, &path))
+            // "file" and not "object", because the row a reader right-clicks may be one
+            // object of one file or the archive above 196 of them, and the same word has
+            // to be true of both.
+            .child("Close file"),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------
@@ -1321,6 +1413,13 @@ impl Component for ArchiveRow {
         let mut expanded = self.expanded;
         let group = self.group;
         let expansion = self.expansion;
+        // The four states closing a file has to answer for. Consumed here, in the
+        // render, because the handler that uses them may not run a hook.
+        let objects = use_consume::<Objects>().0;
+        let selection = use_consume::<Sel>().0;
+        let open = use_consume::<Open>().0;
+        let history = use_consume::<Hist>().0;
+        let path = self.path.clone();
 
         let background = if hovering() {
             palette().object_hover_bg
@@ -1360,6 +1459,14 @@ impl Component for ArchiveRow {
                     if !expanded.remove(&group) {
                         expanded.insert(group);
                     }
+                })
+                // The archive is a file the reader opened, so it is one they can close,
+                // even though it selects nothing and has no `Object` behind it.
+                .on_secondary_down(move |e: Event<PressEventData>| {
+                    ContextMenu::open_from_event(
+                        &e,
+                        close_menu(objects, open, selection, history, path.clone()),
+                    );
                 })
                 .child(
                     label()
@@ -1419,9 +1526,12 @@ impl KeyExt for ObjectRow {
 impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
+        let objects = use_consume::<Objects>().0;
         let selection = use_consume::<Sel>().0;
         let open = use_consume::<Open>().0;
+        let history = use_consume::<Hist>().0;
         let object = self.object.clone();
+        let path = self.object.path.clone();
 
         let background = if self.selected {
             palette().selected_bg
@@ -1452,6 +1562,19 @@ impl Component for ObjectRow {
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
                     activate(open, selection, Selection::Object(object.clone()));
+                })
+                // A lone object *is* the file it came out of, so it closes like one. A
+                // member is not: it was never opened on its own, and the row that can
+                // close the file it belongs to is the one above it. Right-clicking a
+                // member therefore does nothing rather than quietly taking 195 rows the
+                // reader was not pointing at with it.
+                .maybe(!self.member, move |row| {
+                    row.on_secondary_down(move |e: Event<PressEventData>| {
+                        ContextMenu::open_from_event(
+                            &e,
+                            close_menu(objects, open, selection, history, path.clone()),
+                        );
+                    })
                 })
                 // The column a file row's triangle sits in, kept empty here so that the
                 // tags of a file and of a lone object line up; a member is indented past
@@ -3534,6 +3657,13 @@ pub fn app() -> impl IntoElement {
             Some(MouseButton::Forward) => navigate(open, history, selection, Nav::Forward),
             _ => {}
         })
+        // The context menu the objects tree opens on a file row. It is the *viewer* that
+        // has to be here: it provides the root state `ContextMenu::open_from_event` looks
+        // up -- opening a menu without one in an ancestor scope panics -- and it draws
+        // the menu itself, at the pointer, on the overlay layer. At the root so the menu
+        // inherits the interface font, as freya's own documentation asks, and it lays out
+        // as nothing at all until a menu is open.
+        .child(ContextMenuViewer::new())
         .child(toolbar(objects))
         // `ResizableContainer` renders itself `.expanded()`, so it needs a parent
         // that has already been given the leftover height under the toolbar.

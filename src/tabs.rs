@@ -61,12 +61,47 @@ impl<T: Clone + PartialEq> Tabs<T> {
     /// the caller's business rather than this list's — it does not know which that is.
     /// Closing something that is not open is a no-op and answers `None`.
     pub fn close(&mut self, item: &T) -> Option<T> {
-        let position = self.open.iter().position(|open| open == item)?;
-        self.open.remove(position);
-        self.open
-            .get(position)
-            .or_else(|| self.open.last())
-            .cloned()
+        self.close_all(item, |open| open == item)
+    }
+
+    /// Close every open tab `closing` answers true for, and hand back the tab to show in
+    /// place of `showing`: the one that moves into its place, else the one before it,
+    /// else `None`.
+    ///
+    /// The bulk form of [`Tabs::close`], which is written in terms of it because the two
+    /// have to land the reader in the same place. Closing a file closes every tab that
+    /// pointed into it at once — that is the point of it, and of the file being the unit
+    /// rather than the object — and the reader is entitled to end up exactly where
+    /// closing the one tab they were on by hand would have put them, whether the tabs
+    /// around it went with it or not.
+    ///
+    /// `showing` need not be open, and the tab that survives in its place is `showing`
+    /// itself when it was not one of the ones closed. Both are answers the caller throws
+    /// away: only it knows whether what is on screen was closed, which is the same
+    /// division of labour [`Tabs::close`] already has. `None` therefore means either
+    /// "nothing left open" or "nothing was closed", and neither is a case the caller
+    /// reaches without having asked first.
+    pub fn close_all(&mut self, showing: &T, closing: impl Fn(&T) -> bool) -> Option<T> {
+        // Where the tab that moves into `showing`'s place will be once the closed ones
+        // are gone: how many of the tabs before it survive. A tab that is not open at
+        // all counts as being past the end, which lands on the last survivor.
+        let position = self
+            .open
+            .iter()
+            .position(|open| open == showing)
+            .unwrap_or(self.open.len());
+        let landing = self.open[..position]
+            .iter()
+            .filter(|open| !closing(open))
+            .count();
+
+        let before = self.open.len();
+        self.open.retain(|open| !closing(open));
+        if self.open.len() == before {
+            return None;
+        }
+
+        self.open.get(landing).or_else(|| self.open.last()).cloned()
     }
 }
 
@@ -135,5 +170,58 @@ mod tests {
         let mut tabs = tabs(&["a", "b"]);
         assert_eq!(tabs.close(&"c".to_owned()), None);
         assert_eq!(tabs.tabs(), ["a", "b"]);
+    }
+
+    /// Closing several tabs at once lands where closing the shown one alone would have:
+    /// on the tab that moves into its place. The ones closed around it change what that
+    /// tab is, and nothing else.
+    #[test]
+    fn closing_several_lands_on_the_first_survivor_after_the_shown_one() {
+        let mut tabs = tabs(&["a", "b", "c", "d"]);
+        assert_eq!(
+            tabs.close_all(&"b".to_owned(), |open| open == "b" || open == "c"),
+            Some("d".to_owned())
+        );
+        assert_eq!(tabs.tabs(), ["a", "d"]);
+    }
+
+    /// Nothing survives after the shown one, so it is the tab before it — the same
+    /// fallback closing the last tab by hand takes.
+    #[test]
+    fn closing_the_newest_several_moves_left() {
+        let mut tabs = tabs(&["a", "b", "c"]);
+        assert_eq!(
+            tabs.close_all(&"c".to_owned(), |open| open != "a"),
+            Some("a".to_owned())
+        );
+        assert_eq!(tabs.tabs(), ["a"]);
+    }
+
+    #[test]
+    fn closing_every_tab_leaves_nothing_to_show() {
+        let mut tabs = tabs(&["a", "b"]);
+        assert_eq!(tabs.close_all(&"a".to_owned(), |_| true), None);
+        assert!(tabs.tabs().is_empty());
+    }
+
+    /// A file nothing was open from closes no tabs, and `None` says so — the caller has
+    /// asked whether what is on screen went with it before it ever looks at this.
+    #[test]
+    fn closing_nothing_answers_nothing() {
+        let mut tabs = tabs(&["a", "b"]);
+        assert_eq!(tabs.close_all(&"a".to_owned(), |_| false), None);
+        assert_eq!(tabs.tabs(), ["a", "b"]);
+    }
+
+    /// The tab on screen was not one of the closed ones, so it is its own answer: the
+    /// caller keeps showing it and never reads this.
+    #[test]
+    fn a_shown_tab_that_survives_is_its_own_answer() {
+        let mut tabs = tabs(&["a", "b", "c"]);
+        assert_eq!(
+            tabs.close_all(&"b".to_owned(), |open| open == "a"),
+            Some("b".to_owned())
+        );
+        assert_eq!(tabs.tabs(), ["b", "c"]);
     }
 }

@@ -108,6 +108,60 @@ impl History {
         history
     }
 
+    /// A history rebuilt from entries that may no longer point anywhere: one [`Option`]
+    /// per entry of the list it came from, oldest first and `None` where the entry is
+    /// gone, with `cursor` an index into *that* list rather than into what survives.
+    ///
+    /// The one walk both ways of losing entries go through — a restore whose binaries
+    /// have changed ([`crate::project::Project::resolve_history`]) and a file the reader
+    /// closed ([`History::retaining`]) — because the rule is the same in both, and it is
+    /// the *cursor* that makes it worth having in one place. Walking the entries up to
+    /// and including `cursor`, it is left on the last one that survived: so it stays on
+    /// the entry it was on when that entry survived, falls back to the nearest older
+    /// survivor when it did not, and to the oldest surviving entry when nothing older
+    /// survived either.
+    ///
+    /// Dropping rather than degrading is the decision this encodes, and it is the same
+    /// one in both callers: a history entry is one of many, and a list of places the
+    /// reader cannot get back to is worse than a short list. The *selection* is the one
+    /// thing that degrades instead, having to be somewhere.
+    ///
+    /// Duplicates are [`History::restored`]'s business rather than this loop's, which is
+    /// why the survivors go out through it.
+    pub fn rebuilt(entries: impl IntoIterator<Item = Option<Selection>>, cursor: usize) -> History {
+        let mut kept = Vec::new();
+        let mut moved = 0;
+
+        for (index, entry) in entries.into_iter().enumerate() {
+            let Some(entry) = entry else {
+                continue;
+            };
+            if index <= cursor {
+                moved = kept.len();
+            }
+            kept.push(entry);
+        }
+
+        History::restored(kept, moved)
+    }
+
+    /// The same history with only the entries `keep` accepts, the cursor carried the way
+    /// [`History::rebuilt`] carries it.
+    ///
+    /// This is what closing a file does to the history: every entry pointing into an
+    /// object that is going away is dropped, and the reader is left on the nearest place
+    /// they can still reach. The predicate is over the whole [`Selection`] rather than
+    /// over an object, because an entry names a symbol as often as an object and both
+    /// answer for the file they came out of.
+    pub fn retaining(&self, keep: impl Fn(&Selection) -> bool) -> History {
+        History::rebuilt(
+            self.entries
+                .iter()
+                .map(|entry| keep(entry).then(|| entry.clone())),
+            self.cursor,
+        )
+    }
+
     /// Every entry, oldest first — what persistence saves. The history panel wants
     /// [`History::recent`] instead, which numbers them and hands them back newest first.
     pub fn entries(&self) -> &[Selection] {
@@ -726,6 +780,99 @@ mod tests {
         assert!(history.entries().len() == 190);
         assert!(history.entries() == unique);
         assert!(history.cursor() == Some(189));
+    }
+
+    /// What an entry is called, so that the retaining tests below can name the file
+    /// that is closing without [`Selection::in_file`], which is `project.rs`'s to test.
+    fn named(entry: &Selection) -> &str {
+        match entry {
+            Selection::Object(object) => &object.name,
+            _ => unreachable!("the entries here are all objects"),
+        }
+    }
+
+    /// Closing a file drops the entries that pointed into it, and the cursor stays on
+    /// the entry it was on when that entry was not one of them.
+    #[test]
+    fn retaining_drops_what_it_rejects_and_leaves_the_cursor_where_it_was() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+
+        let mut history = history.retaining(|entry| named(entry) != "b");
+        assert!(history.entries() == [a.clone(), c.clone()]);
+        assert!(history.current() == Some(&c));
+        assert!(history.back() == Some(a));
+        assert!(!history.can_back());
+    }
+
+    /// The entry the cursor was on is one of the dropped ones, so the reader is left on
+    /// the nearest older place they can still reach — the same answer a restore gives.
+    #[test]
+    fn retaining_falls_back_to_the_nearest_older_survivor() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+        history.back();
+
+        let history = history.retaining(|entry| named(entry) != "b");
+        assert!(history.current() == Some(&a));
+        assert!(!history.can_back());
+        assert!(history.can_forward());
+    }
+
+    /// Nothing older than the cursor survived either, so it lands on the oldest entry
+    /// left rather than out of range.
+    #[test]
+    fn retaining_with_no_older_survivor_lands_on_the_oldest_left() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+        history.back();
+        history.back();
+
+        let history = history.retaining(|entry| named(entry) != "a");
+        assert!(history.current() == Some(&b));
+        assert!(!history.can_back());
+        assert!(history.can_forward());
+    }
+
+    /// Closing a file nothing in the history points at leaves it exactly as it was,
+    /// cursor included.
+    #[test]
+    fn retaining_everything_changes_nothing() {
+        let (a, b) = (selection("a"), selection("b"));
+        let mut history = History::default();
+        for entry in [&a, &b] {
+            history.push(entry.clone());
+        }
+        history.back();
+
+        let history = history.retaining(|_| true);
+        assert!(history.entries() == [a.clone(), b]);
+        assert!(history.current() == Some(&a));
+        assert!(history.can_forward());
+    }
+
+    /// Closing the only file open: the history goes with it rather than keeping a list
+    /// of places nothing can reach.
+    #[test]
+    fn retaining_nothing_is_the_empty_history() {
+        let mut history = History::default();
+        history.push(selection("a"));
+        history.push(selection("b"));
+
+        let history = history.retaining(|_| false);
+        assert!(history.entries().is_empty());
+        assert!(history.current().is_none());
+        assert!(!history.can_back());
+        assert!(!history.can_forward());
     }
 
     #[test]
