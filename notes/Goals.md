@@ -64,6 +64,9 @@ one item per part, so the unfinished half stays visible.
   tab.
 - [x] Keep the `rip+` visible in a relocated rip-relative operand — `mov dword ptr [rip+<target>], 7`
   rather than `mov dword ptr [<target>], 7` — when you can navigate to the target.
+- [x] Don't zero-pad the target of a jump or a call. `jle short 000000000000004Bh` spent the
+  width of a 64-bit address on a number nowhere near one; it now reads `jle short 4Bh`.
+  Displacements and immediates are a separate `iced-x86` option and are left as they were.
 - [ ] Allow selection. Neither side has it: the source pane is hand-rolled rows rather than
   freya's `CodeEditor` (which does have selection, but can only highlight the cursor's own line
   and cannot be scrolled from outside — see `notes/Plan.md`, 5a).
