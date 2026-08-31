@@ -33,10 +33,12 @@ one item per part, so the unfinished half stays visible.
   Needs the cross-symbol search above.
 - [x] Syntax highlighting for both sides. Assembly is coloured by span kind; source is
   tree-sitter, through the highlighter `freya-code-editor` exposes publicly.
-- [ ] Use the assembly colour palette for the source side's syntax highlighting, so the two
-  panes read as one view rather than as two themes. The source colours are
-  `freya-code-editor`'s `EditorSyntaxTheme::light()` today; the assembly ones are the `*_FG`
-  constants in `ui.rs`.
+- [x] Use the assembly colour palette for the source side's syntax highlighting, so the two
+  panes read as one view rather than as two themes. `EditorSyntaxTheme` is built from the
+  app's own `Palette` now: keywords and types take the mnemonic's purple, variables and
+  fields the register's olive, literals the immediate's blue, function and module names the
+  relocation target's near-black, punctuation the rest's grey, and comments and strings are
+  two new entries of the palette's own.
 - [ ] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
   each language is a `tree-sitter-<lang>` dependency and an arm in `language()`.
 
@@ -76,9 +78,9 @@ one item per part, so the unfinished half stays visible.
   tabs, or split further.
 - [ ] A dark mode, in the same palette rather than a second one — the light colours carried
   over at dark-mode lightness (inverted?), so the two themes are recognisably one design.
-  Every colour is a hardcoded `const` in `ui.rs` today, so this and the shared syntax palette
-  want the same groundwork: one place that answers "what colour is a register / a keyword / a
-  hovered row", asked for the current theme.
+  The groundwork is in: every colour is a field of one `Palette` in `ui.rs` and every call
+  site reads it through `palette()`, so what is left is a second `const`, something that
+  re-renders when the choice changes, and clearing the highlighted-source cache on a switch.
 - [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
   sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
