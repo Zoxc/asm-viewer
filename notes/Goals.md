@@ -86,7 +86,7 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 - [ ] Don't run by default, make that opt-in as needed.
 - [?] Prefer memory mapped files and minimal memory footprint, store locations into the mapped file?
 - [?] How to design an index to allow source files / assembly to map, without large memory footprint.
-- [ ] Have this in its own crate. Use it for test cases.
+- [x] Have this in its own crate. Use it for test cases.
 - [ ] Add a minimal test case every time we find something wrong with binary inspection.
 
 ---
