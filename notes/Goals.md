@@ -33,6 +33,10 @@ one item per part, so the unfinished half stays visible.
   Needs the cross-symbol search above.
 - [x] Syntax highlighting for both sides. Assembly is coloured by span kind; source is
   tree-sitter, through the highlighter `freya-code-editor` exposes publicly.
+- [ ] Use the assembly colour palette for the source side's syntax highlighting, so the two
+  panes read as one view rather than as two themes. The source colours are
+  `freya-code-editor`'s `EditorSyntaxTheme::light()` today; the assembly ones are the `*_FG`
+  constants in `ui.rs`.
 - [ ] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
   each language is a `tree-sitter-<lang>` dependency and an arm in `language()`.
 
@@ -70,6 +74,11 @@ one item per part, so the unfinished half stays visible.
 - [x] Docking panels: a `DockingArea` inside each half of the split, with Objects, Symbols, Info
   and Assembly as tabs that can be dragged between the two areas, stacked into one panel as real
   tabs, or split further.
+- [ ] A dark mode, in the same palette rather than a second one — the light colours carried
+  over at dark-mode lightness (inverted?), so the two themes are recognisably one design.
+  Every colour is a hardcoded `const` in `ui.rs` today, so this and the shared syntax palette
+  want the same groundwork: one place that answers "what colour is a register / a keyword / a
+  hovered row", asked for the current theme.
 - [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
   sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
@@ -82,10 +91,15 @@ one item per part, so the unfinished half stays visible.
 - [ ] The history panel also lists recent source files.
 - [x] Don't insert duplicate history entries, bump existing ones instead.
 - [ ] Tree view for objects, with icon indicators for processing / file type.
-- [ ] Filter bar under objects / symbols / history, with icons for caps / full word / regex.
+- [x] Filter bar under objects / symbols / history, with icons for caps / full word / regex.
+  One `FilterBar` in three places, each list keeping its own filter; the toggles are written
+  as the regex they turn on (`Aa`, `\b`, `.*`) and a pattern that will not compile says so.
 - [ ] Tooltip for items in panels — missing from objects now.
 - [ ] Left panel to explore project directory / files.
-- [ ] Left panel for symbol search.
+- [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
+  by substring, whole word or regex, on the demangled name the row shows.
+- [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter
+  box, and matches come back in the list's own name order rather than by how well they match.
 - [ ] Left panel for project directory / source search.
 - [ ] Tabs for assembly functions / source files.
 
