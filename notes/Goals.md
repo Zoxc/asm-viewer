@@ -73,7 +73,11 @@ one item per part, so the unfinished half stays visible.
 - [ ] Allow selection. Neither side has it: the source pane is hand-rolled rows rather than
   freya's `CodeEditor` (which does have selection, but can only highlight the cursor's own line
   and cannot be scrolled from outside — see `notes/Plan.md`, 5a).
-- [ ] Have arrows for jumps.
+- [x] Have arrows for jumps. A gutter left of the addresses draws every branch that stays
+  inside the symbol as a line from its row to its target's, with an arrowhead where it lands
+  and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
+  as the symbol needs; past five, the outermost lane is shared. Hovering a row draws its own
+  branches darker, all the way to where they go.
 
 ## UI
 
@@ -223,6 +227,15 @@ one item per part, so the unfinished half stays visible.
 - [x] Rely on debug info: DWARF line info is read (lazily, per section).
 - [ ] Rely on debug info for function extents too, rather than estimating from the next symbol's
   address (`estimate_size`), since declared sizes are often 0 in COFF/ELF.
+- [ ] Take entry points and exported DLL / dylib functions as symbols too. Only the symbol
+  table's `SymbolKind::Text` entries are kept today, so a stripped shared library is a file
+  with nothing in it — `LLVM-24-rust-dev.dll` has no COFF symbol table at all and lists zero
+  functions, which is a whole sample the app cannot open in any useful sense. The image
+  declares its code in two other places the `object` crate already reads: the entry point
+  (`Object::entry`) and the export table (`Object::exports`, plus `dynamic_symbols` for an
+  ELF `.so`), and both are *declared* functions in the sense the goal above means — nothing
+  is being guessed at or scanned for. Both need a size, which they do not carry, so
+  `estimate_size` has to derive it the way it does for a declared size of 0.
 - [ ] Find unwind targets.
 - [?] PDB / CodeView line info. DWARF is read today; the PE sample has no debug sections at all
   and a rustc `.rlib` member is COFF with CodeView (`.debug$S`/`.debug$T`), so on Windows output
