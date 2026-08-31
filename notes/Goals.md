@@ -15,9 +15,9 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 
 ## Navigation
 
-- [ ] Clicking on functions in assembly should navigate to them (same in source).
+- [x] Clicking on functions in assembly should navigate to them (same in source).
 - [ ] Navigating in assembly should also navigate source.
-- [ ] Mouse buttons can navigate history so you can go back and forth.
+- [x] Mouse buttons can navigate history so you can go back and forth.
 
 ## Assembly viewer
 
@@ -39,7 +39,7 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 
 ## Panels and tabs
 
-- [ ] History panel on the bottom left with recent functions / source files.
+- [x] History panel on the bottom left with recent functions / source files.
 - [ ] Left panel to explore project directory / files.
 - [ ] Left panel for symbol search.
 - [ ] Left panel for project directory / source search.
