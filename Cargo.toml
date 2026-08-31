@@ -8,7 +8,16 @@ members = ["crates/analysis"]
 
 [dependencies]
 analysis = { path = "crates/analysis" }
-freya = { version = "0.4" }
+# `code-editor` is on not for its editor component -- the source pane is hand-rolled --
+# but for the tree-sitter syntax highlighter that crate exposes on its own
+# (`SyntaxHighlighter`, `SyntaxBlocks`, `EditorSyntaxTheme`). See `notes/Plan.md`, 5a.
+freya = { version = "0.4", features = ["code-editor"] }
+# The grammars the highlighter parses with; that crate deliberately ships none. Their
+# `tree-sitter-language` must be the one `freya-code-editor`'s `tree-sitter` 0.26 uses,
+# or the `Language` handed over is a different type.
+tree-sitter-rust = "0.24"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
 rfd = "0.17"
 async-channel = "2"
 # The timer for the periodic save. Not a new async runtime: freya already depends on

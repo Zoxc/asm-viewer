@@ -1,14 +1,22 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
+};
 
 use async_io::Timer;
+use freya::code_editor::{
+    EditorLanguage, EditorSyntaxTheme, Rope, SyntaxBlocks, SyntaxHighlighter, TextNode,
+};
 use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
-use analysis::{open_files, Assembly, Object, SpanKind, Symbol, SymbolData};
+use analysis::{open_files, Assembly, LineInfo, Object, SpanKind, Symbol, SymbolData};
 
 use crate::fonts::{fonts, Font};
 use crate::history::History;
 use crate::project::{self, Project, Selection};
+use crate::source::{self, SourceFile};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
 /// equal to the `item_size` given to each `VirtualScrollView`.
@@ -86,6 +94,40 @@ impl PartialEq for SymbolList {
     }
 }
 
+/// The selected symbol's line info, shared through context so every pane that maps
+/// between source and assembly reads the same rows.
+#[derive(Clone, Copy)]
+struct Lines(Memo<SymbolLines>);
+
+/// What DWARF says about the selected symbol's instructions, or `None` when it says
+/// nothing. Compared by pointer, like every other `Arc` the UI passes around.
+///
+/// Worked out once for all its readers rather than once per pane: `Object::line_info`
+/// walks the line program of every unit covering the symbol again on each call, even
+/// though the DWARF context itself is built only once.
+#[derive(Clone)]
+struct SymbolLines(Option<Arc<LineInfo>>);
+
+impl PartialEq for SymbolLines {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+/// A loaded, highlighted source file, compared by pointer.
+#[derive(Clone)]
+struct SourceText(Arc<Highlighted>);
+
+impl PartialEq for SourceText {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// A disassembled symbol, compared by pointer.
 #[derive(Clone)]
 struct AsmData {
@@ -117,8 +159,10 @@ fn right_hairline() -> Border {
     })
 }
 
-/// The body of a tab that has nothing to show.
-fn placeholder(text: &'static str) -> Element {
+/// The body of a tab that has nothing to show. Takes an owned string as well as a
+/// literal, because one of these messages names the file it could not find.
+fn placeholder(text: impl Into<String>) -> Element {
+    let text: String = text.into();
     rect()
         .expanded()
         .padding(5.0)
@@ -139,6 +183,113 @@ fn kind_color(kind: SpanKind) -> Color {
         SpanKind::Address => ADDRESS_FG,
         SpanKind::Other => OTHER_FG,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Source files
+// ---------------------------------------------------------------------------
+
+/// A source file ready to be drawn: its text as a rope, and the coloured spans
+/// tree-sitter produced for each of its lines.
+///
+/// The highlighter comes from `freya-code-editor`, which is a dependency for this and
+/// not for its editor component: `CodeEditor` paints a line background only for the
+/// cursor's own row and keeps its scroll state private, so it can neither highlight the
+/// set of lines an instruction maps to (5b) nor be scrolled to one (5c). Its
+/// `SyntaxHighlighter` is public on its own and is exactly the shape these rows want.
+struct Highlighted {
+    file: Arc<SourceFile>,
+    rope: Rope,
+    blocks: SyntaxBlocks,
+    /// How many rows the pane draws, which is *not* `blocks.len()`: a rope counts a
+    /// phantom empty line after a trailing newline and the highlighter pushes a block
+    /// for it, and no editor shows that line.
+    lines: usize,
+}
+
+impl Highlighted {
+    /// Parse and colour a whole file, once. The highlighter is stateful across lines --
+    /// that is what makes it a parser rather than a regex -- so this happens when the
+    /// file is loaded and never while a row is being drawn.
+    fn new(file: Arc<SourceFile>) -> Highlighted {
+        let rope = Rope::from_str(file.text());
+        let theme = EditorSyntaxTheme::light();
+
+        let mut highlighter = SyntaxHighlighter::new();
+        // A language of `None` -- an extension no grammar here parses -- is not a
+        // failure: the highlighter then hands back one plain span per line, in the
+        // theme's text colour, and the pane renders exactly as it would without any of
+        // this. A highlights query that will not compile lands in the same place.
+        highlighter.set_language(language(file.path()).as_ref(), &theme);
+
+        let mut blocks = SyntaxBlocks::default();
+        highlighter.parse(&rope, &mut blocks, None, &theme);
+
+        let lines = blocks
+            .len()
+            .saturating_sub(usize::from(file.text().ends_with('\n')));
+
+        Highlighted {
+            file,
+            rope,
+            blocks,
+            lines,
+        }
+    }
+}
+
+/// The tree-sitter grammar to parse a file with, chosen by extension.
+///
+/// `freya-code-editor` ships no grammars on purpose, so these are the app's own
+/// dependencies, pinned against the `tree-sitter` its highlighter is built on. `.h` goes
+/// to C rather than C++ because that is what it is more often; a header the C grammar
+/// misparses is coloured oddly, never dropped.
+fn language(path: &Path) -> Option<EditorLanguage> {
+    let (language, query) = match path.extension()?.to_str()? {
+        "rs" => (
+            tree_sitter_rust::LANGUAGE,
+            tree_sitter_rust::HIGHLIGHTS_QUERY,
+        ),
+        "c" | "h" => (tree_sitter_c::LANGUAGE, tree_sitter_c::HIGHLIGHT_QUERY),
+        "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hxx" | "hh" => {
+            (tree_sitter_cpp::LANGUAGE, tree_sitter_cpp::HIGHLIGHT_QUERY)
+        }
+        _ => return None,
+    };
+
+    Some(EditorLanguage::new(language, query))
+}
+
+/// Every file highlighted so far.
+///
+/// A second cache behind `source`'s, and a `static` for the same reason: parsing a file
+/// is the expensive half of showing it, the pane asks again on every render, and a
+/// failure needs no entry here because `source::load` already remembers its own.
+static HIGHLIGHTED: LazyLock<Mutex<HashMap<PathBuf, Arc<Highlighted>>>> =
+    LazyLock::new(Mutex::default);
+
+fn highlighted() -> MutexGuard<'static, HashMap<PathBuf, Arc<Highlighted>>> {
+    HIGHLIGHTED
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// The file at `path`, read and highlighted, or `None` when it cannot be shown at all.
+fn source_text(path: &Path) -> Option<SourceText> {
+    if let Some(cached) = highlighted().get(path) {
+        return Some(SourceText(cached.clone()));
+    }
+
+    // Read and parsed outside the lock, for the reason `source::load` does the same: this
+    // is the slow step, and a racing caller's copy costs an allocation rather than a wait.
+    let file = Arc::new(Highlighted::new(source::load(path)?));
+
+    Some(SourceText(
+        highlighted()
+            .entry(path.to_path_buf())
+            .or_insert(file)
+            .clone(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +677,86 @@ impl Component for InstructionRow {
     }
 }
 
+/// One line of a source file: its number in a gutter, then its text.
+///
+/// No hover state of its own yet -- nothing here is clickable until 5b/5c make a line
+/// point at the instructions it produced.
+#[derive(Clone)]
+struct SourceRow {
+    source: SourceText,
+    index: usize,
+    key: DiffKey,
+}
+
+impl PartialEq for SourceRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source && self.index == other.index
+    }
+}
+
+impl KeyExt for SourceRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for SourceRow {
+    fn render(&self) -> impl IntoElement {
+        let source = &self.source.0;
+
+        // In range because the list's length is this file's own `lines`, which is at most
+        // `blocks.len()` -- and `SyntaxBlocks::get_line` unwraps rather than answering
+        // `None`, so being in range is this row's responsibility.
+        let spans = source
+            .blocks
+            .get_line(self.index)
+            .iter()
+            .map(|(color, node)| {
+                let text = match node {
+                    TextNode::Range(range) => source.rope.slice(range.clone()).to_string(),
+                    // A run of leading indentation, which the highlighter hands over as a
+                    // length rather than as text so an editor can draw it as dots. Here it
+                    // is plain spaces, since this pane shows a file rather than edits one.
+                    TextNode::LineOfChars { len, .. } => " ".repeat(*len),
+                };
+                Span::new(text).color(*color).assembly_font()
+            })
+            .collect::<Vec<_>>();
+
+        rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .width(Size::fill())
+            .height(Size::px(ROW_HEIGHT))
+            .padding(3.0)
+            .assembly_font()
+            .child(
+                label()
+                    // Line numbers are 1-based, as DWARF's are, so the gutter reads the
+                    // way an editor's does. Right-aligned in a column of its own so the
+                    // text of every line starts at the same x whatever the number's
+                    // width -- and the width is fixed rather than a minimum, because
+                    // skia lays a paragraph out to the width it is given and aligns
+                    // within *that*: a label free to be wider puts its number at the far
+                    // right of the row, on top of the source text.
+                    //
+                    // The gap after the number is a non-breaking space for the reason
+                    // `InstructionRow` uses one: skia trims trailing whitespace when it
+                    // measures, which would butt the number against the text.
+                    .text(format!("{}\u{a0}", self.index + 1))
+                    .width(Size::px(60.0))
+                    .text_align(TextAlign::Right)
+                    .color(ADDRESS_FG)
+                    .max_lines(1),
+            )
+            .child(paragraph().max_lines(1).spans_iter(spans.into_iter()))
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Panes
 // ---------------------------------------------------------------------------
@@ -572,6 +803,89 @@ impl Component for AssemblyView {
     }
 }
 
+/// The source the selected symbol was compiled from, as far as the debug info and this
+/// machine's filesystem can say between them.
+#[derive(Clone, PartialEq)]
+struct SourceView {
+    symbol: Symbol,
+    lines: SymbolLines,
+}
+
+impl Component for SourceView {
+    fn render(&self) -> impl IntoElement {
+        let Some(lines) = &self.lines.0 else {
+            return placeholder("No line info");
+        };
+
+        // Which of the files a symbol touches to open on: the one its first instruction
+        // was compiled from, which is the function's own file rather than one of the
+        // headers it inlined further in. A symbol whose entry instructions belong to no
+        // row at all -- a compiler-generated prologue is enough for that -- falls back to
+        // the first file the rows name.
+        let file = lines
+            .row_at(self.symbol.data.address)
+            .and_then(|row| lines.file_of(row))
+            .or_else(|| lines.files().first().map(|file| &**file));
+
+        // There are always rows, since `LineInfo` is `None` rather than empty, but every
+        // one of them may name no file -- which tells the reader as little as no line
+        // info at all does, so it says the same thing.
+        let Some(file) = file else {
+            return placeholder("No line info");
+        };
+
+        // Named in the message because the path is the only clue to *why*: source built
+        // on another machine, moved, or deleted since all look alike from here.
+        let Some(source) = source_text(Path::new(file)) else {
+            return placeholder(format!("Source file not found: {file}"));
+        };
+
+        let length = source.0.lines;
+        // Which file is on screen is not otherwise visible anywhere: the tab is called
+        // "Source" whatever it is showing, and a symbol's rows can name several files.
+        let path = source.0.file.path().display().to_string();
+
+        rect()
+            .expanded()
+            // The header takes its own height and the list is given the rest, which
+            // torin only works out for a `flex` child of a `Content::Flex` parent.
+            .content(Content::Flex)
+            .background(Color::WHITE)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(ROW_HEIGHT))
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .padding(Gaps::new_symmetric(0.0, 8.0))
+                    .background(HEADER_BG)
+                    .border(bottom_hairline())
+                    .overflow(Overflow::Clip)
+                    .child(label().text(path).max_lines(1)),
+            )
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.0))
+                    .padding(5.0)
+                    .child(
+                        VirtualScrollView::new_with_data(source, |i, source: &SourceText| {
+                            SourceRow {
+                                source: source.clone(),
+                                index: i,
+                                key: DiffKey::None,
+                            }
+                            .key(i)
+                            .into()
+                        })
+                        .length(length)
+                        .item_size(ROW_HEIGHT),
+                    ),
+            )
+            .into()
+    }
+}
+
 fn symbol_info(symbol: &Symbol) -> impl IntoElement {
     let data = &symbol.data;
 
@@ -599,7 +913,7 @@ fn symbol_info(symbol: &Symbol) -> impl IntoElement {
 // Tabs
 // ---------------------------------------------------------------------------
 
-/// One of the five dockable views. A tab is a persistent view rather than a slot
+/// One of the six dockable views. A tab is a persistent view rather than a slot
 /// the selection drives, so each one renders itself off the current `Selection`
 /// and subscribes to the state it needs on its own -- which also keeps a
 /// selection change from re-rendering the whole tree.
@@ -610,6 +924,7 @@ enum Tab {
     Info,
     History,
     Assembly,
+    Source,
 }
 
 impl Tab {
@@ -621,6 +936,7 @@ impl Tab {
             Tab::Info => "Info",
             Tab::History => "History",
             Tab::Assembly => "Assembly",
+            Tab::Source => "Source",
         }
     }
 
@@ -631,6 +947,7 @@ impl Tab {
             Tab::Info => InfoTab.into_element(),
             Tab::History => HistoryTab.into_element(),
             Tab::Assembly => AssemblyTab.into_element(),
+            Tab::Source => SourceTab.into_element(),
         }
     }
 }
@@ -785,6 +1102,27 @@ impl Component for AssemblyTab {
     }
 }
 
+#[derive(PartialEq)]
+struct SourceTab;
+
+impl Component for SourceTab {
+    fn render(&self) -> impl IntoElement {
+        let current = use_consume::<Sel>().0.read().clone();
+        // Reading the memo subscribes this tab to it, so the pane fills in when the line
+        // info for a newly selected symbol is worked out, without the root re-rendering.
+        let lines = use_consume::<Lines>().0.read().clone();
+
+        match &current {
+            Selection::Symbol(symbol) => SourceView {
+                symbol: symbol.clone(),
+                lines,
+            }
+            .into_element(),
+            _ => placeholder("No symbol selected"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Docking
 // ---------------------------------------------------------------------------
@@ -794,7 +1132,7 @@ impl Component for AssemblyTab {
 type PanelId = u32;
 
 /// One docking area: the tree of splits and tabbed panels filling one of the two
-/// resizable panes. The four tabs are shared between the two areas, so a drop
+/// resizable panes. The six tabs are shared between the two areas, so a drop
 /// here has to take the tab out of `other` -- which is safe to write from
 /// `on_drop` only because the two areas are separate `State`s, and freya's
 /// docking holds a mutable borrow of just the one being dropped into.
@@ -807,15 +1145,14 @@ struct DockArea {
 }
 
 impl DockArea {
-    /// An area split top to bottom into one tabbed panel per group, which is what
-    /// the sidebar looks like. Every split freya's docking builds gets an equal
-    /// share, so the groups start at equal heights and the handles between them
-    /// are the only way to change that.
-    fn column(groups: Vec<Vec<Tab>>) -> Self {
+    /// An area split into one tabbed panel per group. Every split freya's docking
+    /// builds gets an equal share, so the groups start at equal sizes and the
+    /// handles between them are the only way to change that.
+    fn split(direction: Direction, groups: Vec<Vec<Tab>>) -> Self {
         Self {
             next_panel_id: groups.len() as PanelId,
             tree: DockNode::Split {
-                direction: Direction::Vertical,
+                direction,
                 children: groups
                     .into_iter()
                     .enumerate()
@@ -828,13 +1165,14 @@ impl DockArea {
         }
     }
 
-    /// An area of one panel holding a single tab.
-    fn single(tab: Tab) -> Self {
-        Self {
-            tree: DockNode::Panel(DockPanel::new(0, vec![tab])),
-            next_panel_id: 1,
-            other: None,
-        }
+    /// The groups stacked top to bottom, which is what the sidebar looks like.
+    fn column(groups: Vec<Vec<Tab>>) -> Self {
+        Self::split(Direction::Vertical, groups)
+    }
+
+    /// The groups side by side, which is what the content area looks like.
+    fn row(groups: Vec<Vec<Tab>>) -> Self {
+        Self::split(Direction::Horizontal, groups)
     }
 
     fn take_panel_id(&mut self) -> PanelId {
@@ -1312,15 +1650,36 @@ pub fn app() -> impl IntoElement {
     });
     use_provide_context(move || Symbols(symbols));
 
+    // The selected symbol's line info, worked out once for every pane that wants it.
+    // `use_memo` re-runs on a change to anything read inside it, so this follows the
+    // selection whether or not the Source tab is on screen -- which costs nothing in the
+    // default layout, where it is. The query itself is the expensive part and runs here,
+    // on the UI thread, against `line.rs`'s own note that it is worker-thread work: the
+    // first one against a big binary builds the whole DWARF context (267 MB for
+    // `viewer-sample`) and will visibly stall the frame. Moving it off is Step 11's item,
+    // and it should move `assembly()` with it rather than one of the two alone.
+    let lines = use_memo(move || {
+        // Cloned out rather than held: the read guard would otherwise be alive for the
+        // whole of a query that can take a second.
+        let selection = selection.read().clone();
+        SymbolLines(match &selection {
+            Selection::Symbol(symbol) => symbol.data.line_info(&symbol.object),
+            _ => None,
+        })
+    });
+    use_provide_context(move || Lines(lines));
+
     // One docking area per resizable pane: the left one a column of Objects, then
     // Symbols with Info tabbed beside it, then History at the bottom -- which is
     // where the goal asks for it, and where it is visible without a click. The
     // cost is that the three groups start at equal heights, so the symbol list is
     // shorter than it was; the handles between them, and dragging History onto the
-    // middle panel, are both one gesture away. Assembly is alone on the right. All
-    // five tabs share one `DockDrag<Tab>`, which `use_drag` keeps at the root, so a
-    // tab can be dragged from either area into the other; each area is told about
-    // the other so the one taking a tab can evict it from the one losing it.
+    // middle panel, are both one gesture away. The right one is the split view the
+    // goals ask to be the default: the source a symbol was compiled from beside its
+    // assembly, at equal widths. All six tabs share one `DockDrag<Tab>`, which
+    // `use_drag` keeps at the root, so a tab can be dragged from either area into
+    // the other; each area is told about the other so the one taking a tab can evict
+    // it from the one losing it.
     let sidebar_dock = use_state(|| {
         DockArea::column(vec![
             vec![Tab::Objects],
@@ -1328,7 +1687,7 @@ pub fn app() -> impl IntoElement {
             vec![Tab::History],
         ])
     });
-    let content_dock = use_state(|| DockArea::single(Tab::Assembly));
+    let content_dock = use_state(|| DockArea::row(vec![vec![Tab::Assembly], vec![Tab::Source]]));
     use_hook(move || {
         let (mut sidebar_dock, mut content_dock) = (sidebar_dock, content_dock);
         sidebar_dock.write().other = Some(content_dock);
