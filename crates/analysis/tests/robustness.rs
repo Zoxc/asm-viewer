@@ -6,7 +6,7 @@ mod common;
 use analysis::{parse_object, Object};
 use common::{
     caller_and_target, elf_x86_64, elf_x86_64_with_dwarf, garbage, DwarfFixture, DwarfRow,
-    TextRelocation, TextSymbol,
+    DwarfSection, TextRelocation, TextSymbol,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -28,20 +28,30 @@ fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
         // The DWARF path, on every input the sweeps below produce. Reading the rows back
         // matters as much as building them: `LineInfo`'s own invariants (ascending,
         // non-overlapping, in-range file indices) are what `row_at` and `file_of` rely on.
+        // Non-overlapping holds for *any* input, however corrupt — the rows are clipped
+        // to make it hold — so `previous` is the last row's **end**, not its start.
         if let Some(info) = symbol.line_info(&object) {
             let mut previous = 0;
             for row in info.rows() {
                 assert!(row.range.start >= previous && row.range.start < row.range.end);
                 previous = row.range.end;
+                // Which is exactly what makes `row_at` well defined: an address inside a
+                // row is answered by that row and no other.
+                assert_eq!(
+                    info.row_at(row.range.start).map(|found| found.range.clone()),
+                    Some(row.range.clone())
+                );
                 let _ = info.file_of(row);
                 let _ = info.location(row.range.start);
             }
             let _ = info.location(u64::MAX);
         }
     }
-    // Also ask about a range no symbol covers, so the context is built even for an
-    // object whose symbols were all dropped.
-    let _ = object.line_info(0..u64::MAX);
+    // Also ask each section about a range no symbol covers, so the context is built even
+    // for an object whose symbols were all dropped.
+    for section in &object.sections {
+        let _ = object.line_info(section, 0..u64::MAX);
+    }
 
     Some(object)
 }
@@ -378,40 +388,43 @@ fn a_symbol_outside_any_section_yields_no_data() {
 /// The DWARF fixture the line-info tests read, for the sweeps below to corrupt.
 fn dwarf_fixture() -> Vec<u8> {
     elf_x86_64_with_dwarf(DwarfFixture {
-        symbols: &[
-            TextSymbol {
-                name: "first",
-                bytes: &[0x90, 0x90, 0x90, 0x90, 0x90, 0xC3],
-            },
-            TextSymbol {
-                name: "second",
-                bytes: &[0x90, 0xC3],
-            },
-        ],
         comp_dir: "/src",
         files: &["main.c", "other.c"],
-        rows: &[
-            DwarfRow {
-                address: 0,
-                file: 0,
-                line: 10,
-                column: 3,
-            },
-            DwarfRow {
-                address: 3,
-                file: 0,
-                line: 11,
-                column: 0,
-            },
-            DwarfRow {
-                address: 6,
-                file: 1,
-                line: 42,
-                column: 7,
-            },
-        ],
-        length: 8,
-        base_symbol: Some(1),
+        sections: &[DwarfSection {
+            name: None,
+            symbols: &[
+                TextSymbol {
+                    name: "first",
+                    bytes: &[0x90, 0x90, 0x90, 0x90, 0x90, 0xC3],
+                },
+                TextSymbol {
+                    name: "second",
+                    bytes: &[0x90, 0xC3],
+                },
+            ],
+            rows: &[
+                DwarfRow {
+                    address: 0,
+                    file: 0,
+                    line: 10,
+                    column: 3,
+                },
+                DwarfRow {
+                    address: 3,
+                    file: 0,
+                    line: 11,
+                    column: 0,
+                },
+                DwarfRow {
+                    address: 6,
+                    file: 1,
+                    line: 42,
+                    column: 7,
+                },
+            ],
+            length: 8,
+            base_symbol: Some(1),
+        }],
     })
 }
 
@@ -510,7 +523,9 @@ fn a_lying_compressed_debug_section_costs_nothing() {
             !section_names(&object).contains(&".debug_info".to_owned()),
             "a .debug_info declaring {declared} bytes was decompressed anyway"
         );
-        assert!(object.line_info(0..u64::MAX).is_none());
+        for section in &object.sections {
+            assert!(object.line_info(section, 0..u64::MAX).is_none());
+        }
     }
 }
 
@@ -532,7 +547,9 @@ fn a_line_program_that_runs_backwards_does_not_panic() {
         .expect("a backwards line program is caught, not propagated")
         .expect("the object still parses");
 
-    assert!(object.line_info(0..0x400).is_none());
+    for section in &object.sections {
+        assert!(object.line_info(section, 0..0x400).is_none());
+    }
     for symbol in &object.symbols_sorted {
         assert!(symbol.line_info(&object).is_none());
     }

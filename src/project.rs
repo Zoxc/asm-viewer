@@ -461,7 +461,7 @@ pub fn flush() {
 mod tests {
     use std::collections::HashMap;
 
-    use analysis::{BinaryFormat, ObjectData, Section, SymbolData};
+    use analysis::{BinaryFormat, ObjectData, Section, SectionIndex, SymbolData};
 
     use super::*;
 
@@ -470,6 +470,7 @@ mod tests {
     /// every one of them is public, so the objects are built directly.
     fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
         let section = Arc::new(Section {
+            index: SectionIndex(0),
             name: ".text".into(),
             data: vec![0xC3; symbols.len()],
             address: 0,

@@ -1,7 +1,7 @@
 use iced_x86::Formatter;
 use object::{
     read::archive::ArchiveFile, CompressionFormat, Object as _, ObjectSection, ObjectSymbol,
-    Relocation, RelocationTarget, SectionIndex, SymbolIndex, SymbolKind,
+    Relocation, RelocationTarget, SymbolIndex, SymbolKind,
 };
 use std::{cell::RefCell, collections::HashMap, fs, ops::Range, path::PathBuf, rc::Rc, sync::Arc};
 use symbolic_demangle::{Demangle, DemangleOptions};
@@ -9,7 +9,9 @@ use symbolic_demangle::{Demangle, DemangleOptions};
 mod line;
 
 pub use line::{DwarfCache, LineInfo, LineRow, Location};
-pub use object::BinaryFormat;
+// `Section::index` is one of these, so anything building or reading a `Section` needs the
+// type; the viewer does not depend on `object` itself.
+pub use object::{BinaryFormat, SectionIndex};
 
 /// `Object` is handed around as an `Arc` and read from worker threads, so everything it
 /// holds — the lazily built DWARF context above all, whose `addr2line::Context` is `Send`
@@ -124,6 +126,11 @@ impl From<Vec<u8>> for ObjectData {
 
 #[derive(Debug)]
 pub struct Section {
+    /// The section's index in the file it was parsed from, which is what identifies it
+    /// to a later pass that re-reads that file — line info does (see
+    /// [`Object::line_info`]), because an address on its own is not a key in a
+    /// relocatable object where every section starts at 0.
+    pub index: SectionIndex,
     pub name: String,
     pub data: Vec<u8>,
     pub address: u64,
@@ -475,6 +482,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                     Some((
                         section.index(),
                         Section {
+                            index: section.index(),
                             name,
                             address: section.address(),
                             data,

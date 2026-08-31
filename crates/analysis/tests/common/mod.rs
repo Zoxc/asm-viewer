@@ -132,8 +132,8 @@ pub fn garbage(seed: u64, len: usize) -> Vec<u8> {
         .collect()
 }
 
-/// One row of a fixture's line program: an offset from the start of the generated
-/// `.text`, and the source position at it.
+/// One row of a fixture's line program: an offset from the start of the section it
+/// belongs to, and the source position at it.
 pub struct DwarfRow {
     pub address: u64,
     /// An index into [`DwarfFixture::files`].
@@ -144,48 +144,89 @@ pub struct DwarfRow {
     pub column: u64,
 }
 
-pub struct DwarfFixture<'a> {
+/// One code section of a fixture, its symbols laid out back to back, and the one line
+/// program sequence describing them.
+///
+/// A fixture with several of these is the shape rustc emits: one `.text.<name>` section
+/// per function, **every one of them at address 0**, because a section in a relocatable
+/// object has no address until it is linked. That is the case an address alone cannot
+/// key, and the one the single-`.text` fixtures cannot show.
+pub struct DwarfSection<'a> {
+    /// [`None`] for the standard `.text`; [`Some`] for a section of its own, named the
+    /// way a compiler names them (`.text.first`).
+    pub name: Option<&'a str>,
     pub symbols: &'a [TextSymbol<'a>],
-    pub comp_dir: &'a str,
-    /// The source files the line program can name; `DwarfRow::file` indexes this.
-    pub files: &'a [&'a str],
+    /// Rows of this section's sequence, addressed from the section's own start.
     pub rows: &'a [DwarfRow],
-    /// Where the one sequence ends, as an offset into `.text`.
+    /// Where this section's sequence ends, as an offset into the section.
     pub length: u64,
-    /// When set, the sequence's `DW_LNE_set_address` operand is written as zero with an
-    /// absolute relocation against this symbol, exactly the way a compiler emits it for a
-    /// relocatable object. When unset, the address is a constant, as in a linked binary.
+    /// When set, an index into this section's `symbols`: the sequence's
+    /// `DW_LNE_set_address` (and the unit's range entry, where there is one) is written
+    /// as zero with an absolute relocation against that symbol, exactly the way a
+    /// compiler emits it for a relocatable object. When unset, the address is a
+    /// constant, as in a linked binary.
     pub base_symbol: Option<usize>,
 }
 
+pub struct DwarfFixture<'a> {
+    pub comp_dir: &'a str,
+    /// The source files the line programs can name; `DwarfRow::file` indexes this.
+    pub files: &'a [&'a str],
+    /// One or more code sections. One keeps the linked shape — a unit with
+    /// `DW_AT_low_pc`/`DW_AT_high_pc`; several give the unit a `DW_AT_ranges` list with
+    /// one relocated entry apiece, which is what a discontiguous unit looks like.
+    pub sections: &'a [DwarfSection<'a>],
+}
+
 /// Build an x86-64 ELF like [`elf_x86_64`], with a DWARF compilation unit and line
-/// program describing its `.text`.
+/// program describing its code sections.
 ///
 /// This is real DWARF written by `gimli::write`, not bytes copied out of a compiler, so
 /// the test that reads it back is a round trip through the same formats a compiler emits
-/// without needing one installed.
+/// without needing one installed. Addresses that a compiler would relocate are written
+/// through [`RelocWriter`], which records where each one landed, so the ELF carries the
+/// same relocations against the same symbols — no byte pattern is searched for.
 pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     use gimli::write::{
-        Address, AttributeValue, DwarfUnit, EndianVec, LineProgram, LineString, Sections,
+        Address, AttributeValue, DwarfUnit, LineProgram, LineString, Range, RangeList, Sections,
     };
 
     let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
-    let text = obj.section_id(write::StandardSection::Text);
 
-    let mut ids = Vec::new();
-    for symbol in fixture.symbols {
-        let offset = obj.append_section_data(text, symbol.bytes, 1);
-        ids.push(obj.add_symbol(write::Symbol {
-            name: symbol.name.as_bytes().to_vec(),
-            value: offset,
-            size: 0,
-            kind: SymbolKind::Text,
-            scope: SymbolScope::Linkage,
-            weak: false,
-            section: write::SymbolSection::Section(text),
-            flags: SymbolFlags::None,
-        }));
+    // One symbol table for the whole fixture: `Address::Symbol` indexes into this, and so
+    // does the relocation pass at the bottom.
+    let mut symbols: Vec<write::SymbolId> = Vec::new();
+    // The flat index of each section's base symbol, where it has one.
+    let mut bases: Vec<Option<usize>> = Vec::new();
+
+    for section in fixture.sections {
+        let id = match section.name {
+            None => obj.section_id(write::StandardSection::Text),
+            Some(name) => obj.add_section(Vec::new(), name.as_bytes().to_vec(), SectionKind::Text),
+        };
+        let first = symbols.len();
+        for symbol in section.symbols {
+            let offset = obj.append_section_data(id, symbol.bytes, 1);
+            symbols.push(obj.add_symbol(write::Symbol {
+                name: symbol.name.as_bytes().to_vec(),
+                value: offset,
+                size: 0,
+                kind: SymbolKind::Text,
+                scope: SymbolScope::Linkage,
+                weak: false,
+                section: write::SymbolSection::Section(id),
+                flags: SymbolFlags::None,
+            }));
+        }
+        bases.push(section.base_symbol.map(|index| first + index));
     }
+
+    // The address a section's line program starts at: a relocation against one of its
+    // symbols, or a literal 0 the way a linked image has it.
+    let address = |section: usize| match bases[section] {
+        Some(symbol) => Address::Symbol { symbol, addend: 0 },
+        None => Address::Constant(0),
+    };
 
     let encoding = gimli::Encoding {
         format: gimli::Format::Dwarf32,
@@ -208,19 +249,29 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
         .map(|file| program.add_file(LineString::String(file.as_bytes().to_vec()), directory, None))
         .collect();
 
-    program.begin_sequence(Some(Address::Constant(0)));
-    for row in fixture.rows {
-        let current = program.row();
-        current.address_offset = row.address;
-        current.file = files[row.file];
-        current.line = row.line;
-        current.column = row.column;
-        program.generate_row();
+    let mut ranges = Vec::new();
+    for (index, section) in fixture.sections.iter().enumerate() {
+        program.begin_sequence(Some(address(index)));
+        for row in section.rows {
+            let current = program.row();
+            current.address_offset = row.address;
+            current.file = files[row.file];
+            current.line = row.line;
+            current.column = row.column;
+            program.generate_row();
+        }
+        program.end_sequence(section.length);
+        ranges.push(Range::StartLength {
+            begin: address(index),
+            length: section.length,
+        });
     }
-    program.end_sequence(fixture.length);
     dwarf.unit.line_program = program;
 
     let root = dwarf.unit.root();
+    // Without a range on the unit, nothing will look inside it for an address.
+    let unit_ranges = (fixture.sections.len() > 1)
+        .then(|| dwarf.unit.ranges.add(RangeList(ranges)));
     let entry = dwarf.unit.get_mut(root);
     entry.set(
         gimli::DW_AT_comp_dir,
@@ -230,37 +281,45 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
         gimli::DW_AT_name,
         AttributeValue::String(fixture.files[0].as_bytes().to_vec()),
     );
-    // Without a range on the unit, nothing will look inside it for an address.
-    entry.set(gimli::DW_AT_low_pc, AttributeValue::Address(Address::Constant(0)));
-    entry.set(gimli::DW_AT_high_pc, AttributeValue::Udata(fixture.length));
+    match unit_ranges {
+        // A DWARF 4 range list holds offsets from the unit's base address, so the unit
+        // must not also declare a `DW_AT_low_pc`: the entries are the absolute addresses
+        // already, each one relocated on its own.
+        Some(list) => entry.set(gimli::DW_AT_ranges, AttributeValue::RangeListRef(list)),
+        None => {
+            entry.set(gimli::DW_AT_low_pc, AttributeValue::Address(address(0)));
+            entry.set(
+                gimli::DW_AT_high_pc,
+                AttributeValue::Udata(fixture.sections[0].length),
+            );
+        }
+    }
 
-    let mut sections = Sections::new(EndianVec::new(gimli::LittleEndian));
+    let mut sections = Sections::new(RelocWriter::default());
     dwarf.write(&mut sections).expect("writing the DWARF");
 
     sections
-        .for_each(|id, data| {
-            if data.slice().is_empty() {
+        .for_each(|id, writer| {
+            if writer.slice().is_empty() {
                 return Ok::<_, ()>(());
             }
             let section =
                 obj.add_section(Vec::new(), id.name().as_bytes().to_vec(), SectionKind::Debug);
-            obj.append_section_data(section, data.slice(), 1);
+            obj.append_section_data(section, writer.slice(), 1);
 
-            if id == gimli::SectionId::DebugLine {
-                if let Some(base) = fixture.base_symbol {
-                    obj.add_relocation(
-                        section,
-                        write::Relocation {
-                            offset: set_address_operand(data.slice()),
-                            size: 64,
-                            kind: RelocationKind::Absolute,
-                            encoding: RelocationEncoding::Generic,
-                            symbol: ids[base],
-                            addend: 0,
-                        },
-                    )
-                    .expect("adding a relocation to .debug_line");
-                }
+            for relocation in &writer.relocations {
+                obj.add_relocation(
+                    section,
+                    write::Relocation {
+                        offset: relocation.offset,
+                        size: relocation.size * 8,
+                        kind: RelocationKind::Absolute,
+                        encoding: RelocationEncoding::Generic,
+                        symbol: symbols[relocation.symbol],
+                        addend: relocation.addend,
+                    },
+                )
+                .expect("adding a relocation to a debug section");
             }
             Ok(())
         })
@@ -269,16 +328,81 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     obj.write().expect("writing the fixture object")
 }
 
-/// The offset of the 8-byte operand of the one `DW_LNE_set_address` in a `.debug_line`
-/// section: the extended-opcode escape `00`, a length of 9, then `DW_LNE_set_address`
-/// (`0x02`). A compiler puts a relocation exactly here.
-fn set_address_operand(debug_line: &[u8]) -> u64 {
-    let pattern = [0x00u8, 0x09, 0x02];
-    let mut found = debug_line
-        .windows(pattern.len())
-        .enumerate()
-        .filter(|(_, window)| *window == pattern);
-    let (offset, _) = found.next().expect("a DW_LNE_set_address in .debug_line");
-    assert!(found.next().is_none(), "more than one DW_LNE_set_address");
-    (offset + pattern.len()) as u64
+/// Where one address in a debug section is, and what it is relative to.
+#[derive(Clone)]
+pub struct DebugRelocation {
+    offset: u64,
+    /// An index into the fixture's symbol table.
+    symbol: usize,
+    addend: i64,
+    /// In bytes, as `gimli` writes it; ELF wants bits.
+    size: u8,
+}
+
+/// A `gimli::write::Writer` that records relocations instead of refusing them.
+///
+/// `EndianVec` alone answers `Address::Symbol` with `Error::InvalidAddress`, which is
+/// exactly the address form a compiler emits into a relocatable object's `.debug_line`
+/// and `.debug_ranges`. Recording each one — where it landed, which symbol it is against
+/// and with what addend — is what lets the fixture carry real relocations without
+/// searching the written bytes for the opcode that produced them.
+#[derive(Clone)]
+pub struct RelocWriter {
+    inner: gimli::write::EndianVec<gimli::LittleEndian>,
+    relocations: Vec<DebugRelocation>,
+}
+
+impl Default for RelocWriter {
+    fn default() -> Self {
+        Self {
+            inner: gimli::write::EndianVec::new(gimli::LittleEndian),
+            relocations: Vec::new(),
+        }
+    }
+}
+
+impl RelocWriter {
+    fn slice(&self) -> &[u8] {
+        self.inner.slice()
+    }
+}
+
+impl gimli::write::Writer for RelocWriter {
+    type Endian = gimli::LittleEndian;
+
+    fn endian(&self) -> Self::Endian {
+        gimli::LittleEndian
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> gimli::write::Result<()> {
+        self.inner.write(bytes)
+    }
+
+    fn write_at(&mut self, offset: usize, bytes: &[u8]) -> gimli::write::Result<()> {
+        self.inner.write_at(offset, bytes)
+    }
+
+    fn write_address(
+        &mut self,
+        address: gimli::write::Address,
+        size: u8,
+    ) -> gimli::write::Result<()> {
+        match address {
+            gimli::write::Address::Constant(value) => self.write_udata(value, size),
+            gimli::write::Address::Symbol { symbol, addend } => {
+                self.relocations.push(DebugRelocation {
+                    offset: self.len() as u64,
+                    symbol,
+                    addend,
+                    size,
+                });
+                // The placeholder the relocation replaces, as a compiler writes it.
+                self.write_udata(0, size)
+            }
+        }
+    }
 }
