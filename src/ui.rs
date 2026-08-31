@@ -30,7 +30,13 @@ const OBJECT_HOVER_BG: Color = Color::from_rgb(144, 238, 144); // LIGHT_GREEN
 const SYMBOL_PANE_BG: Color = Color::from_rgb(243, 243, 228);
 const SYMBOL_HOVER_BG: Color = Color::from_rgb(226, 226, 205);
 const ASM_PANE_BG: Color = Color::from_rgb(248, 248, 248);
-const ASM_ROW_HOVER_BG: Color = Color::from_argb(160, 228, 237, 216);
+/// The pointer's own hover, on an instruction row and on a source line alike: both panes
+/// show code, and one colour for "the pointer is here" reads across them as one gesture.
+const CODE_ROW_HOVER_BG: Color = Color::from_argb(160, 228, 237, 216);
+/// The cross-view highlight: this row is what the row the pointer is on maps to on the
+/// other side. Weaker than the hover, and translucent like it, so a row carrying both
+/// comes out as the hover *over* this rather than as one or the other -- see `blend`.
+const LINE_FOCUS_BG: Color = Color::from_argb(70, 120, 160, 220);
 const ADDRESS_FG: Color = Color::from_rgb(118, 141, 169);
 const MNEMONIC_FG: Color = Color::from_rgb(116, 94, 147);
 const REGISTER_FG: Color = Color::from_rgb(87, 103, 65);
@@ -118,6 +124,63 @@ impl PartialEq for SymbolLines {
     }
 }
 
+/// A source position the two panes point at together.
+///
+/// The file is half the identity rather than decoration: a symbol's rows can name several
+/// files -- an inlined header's line 42 is not line 42 of the file the source pane has
+/// open -- so a line number alone would light up the wrong row. Compared by its text and
+/// not by pointer, unlike every other `Arc` the UI passes around: this is a position and
+/// not an object, and two `LineInfo`s naming one file hold two `Arc<str>`s of its path.
+#[derive(Clone, PartialEq)]
+struct LinePos {
+    file: Arc<str>,
+    line: u32,
+}
+
+/// Which row put the focus where it is.
+///
+/// Paired with the position in `LineFocus`, and it is the pair a row compares against
+/// before giving the focus up again (`release_focus`): two instructions compiled from one
+/// source line share a position but not an address, so the origin is what tells them
+/// apart, and two source rows differ in the position already.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FocusOrigin {
+    /// The assembly row for the instruction at this address.
+    Instruction(u64),
+    /// The source row for the focused line itself.
+    Source,
+}
+
+/// The source position the pointer is pointing at, and which side it points from.
+#[derive(Clone, PartialEq)]
+struct LineFocus {
+    at: LinePos,
+    from: FocusOrigin,
+}
+
+/// The cross-view focus, shared through context: hovering an instruction puts the position
+/// it was compiled from here, hovering a source line puts that line here, and both panes
+/// light up whatever matches. `None` while the pointer is on neither.
+#[derive(Clone, Copy)]
+struct Focused(State<Option<LineFocus>>);
+
+/// Give up the focus a row set when the pointer leaves it, unless another row has taken it
+/// over since.
+///
+/// A row cannot simply clear the focus. `pointerout` on the row being left and
+/// `pointerover` on the one being entered are sorted against each other by an
+/// `EventName::cmp` (freya-core `events/name.rs`) that answers `Less` for both of them, so
+/// which of the two runs first is not something to lean on. Clearing only what this row
+/// itself put there is right in either order -- and comparing the whole focus, origin as
+/// well as position, is what keeps two instructions of one source line apart: they set the
+/// same position, so the row being left would otherwise blank the highlight the row being
+/// entered had just set.
+fn release_focus(mut focused: State<Option<LineFocus>>, mine: Option<&LineFocus>) {
+    if mine.is_some() && focused.peek().as_ref() == mine {
+        focused.set(None);
+    }
+}
+
 /// A loaded, highlighted source file, compared by pointer.
 #[derive(Clone)]
 struct SourceText(Arc<Highlighted>);
@@ -128,16 +191,52 @@ impl PartialEq for SourceText {
     }
 }
 
-/// A disassembled symbol, compared by pointer.
+/// A disassembled symbol and what says where its instructions came from, compared by
+/// pointer.
 #[derive(Clone)]
 struct AsmData {
     assembly: Arc<Assembly>,
     object: Arc<Object>,
+    lines: SymbolLines,
 }
 
 impl PartialEq for AsmData {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.assembly, &other.assembly) && Arc::ptr_eq(&self.object, &other.object)
+        Arc::ptr_eq(&self.assembly, &other.assembly)
+            && Arc::ptr_eq(&self.object, &other.object)
+            && self.lines == other.lines
+    }
+}
+
+impl AsmData {
+    /// The source position the instruction at `index` was compiled from, or `None` where
+    /// the debug info gives it none: no line info at all, an address no row covers, or a
+    /// row naming no file or sitting on DWARF's line 0.
+    fn position(&self, index: usize) -> Option<LinePos> {
+        let lines = self.lines.0.as_ref()?;
+        let row = lines.row_at(self.assembly.instructions[index].address)?;
+        Some(LinePos {
+            file: lines.files().get(row.file?)?.clone(),
+            line: row.line?,
+        })
+    }
+}
+
+/// What the source rows are built from: the file's text and highlighting, which file it
+/// is -- a row hovered points the assembly pane at a position, and a line number is not
+/// one on its own -- and which of its lines the assembly pane is pointing at.
+#[derive(Clone)]
+struct SourceData {
+    source: SourceText,
+    file: Arc<str>,
+    focus: Option<u32>,
+}
+
+impl PartialEq for SourceData {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && Arc::ptr_eq(&self.file, &other.file)
+            && self.focus == other.focus
     }
 }
 
@@ -173,6 +272,43 @@ fn placeholder(text: impl Into<String>) -> Element {
 
 fn info_line(text: String) -> impl IntoElement {
     rect().padding(5.0).child(label().text(text))
+}
+
+/// `top` composited over `bottom`, both of them translucent.
+///
+/// An element has one background, so a row that is both hovered and pointed at from the
+/// other pane would need a second rect inside it purely to carry the second colour.
+/// Compositing the two here paints the pixels those two rects would have, since what lies
+/// under both is the pane's own background either way.
+fn blend(top: Color, bottom: Color) -> Color {
+    let (top_alpha, bottom_alpha) = (top.a() as f32 / 255.0, bottom.a() as f32 / 255.0);
+    let alpha = top_alpha + bottom_alpha * (1.0 - top_alpha);
+    if alpha == 0.0 {
+        return Color::TRANSPARENT;
+    }
+
+    let channel = |top: u8, bottom: u8| {
+        ((top as f32 * top_alpha + bottom as f32 * bottom_alpha * (1.0 - top_alpha)) / alpha)
+            .round() as u8
+    };
+
+    Color::from_argb(
+        (alpha * 255.0).round() as u8,
+        channel(top.r(), bottom.r()),
+        channel(top.g(), bottom.g()),
+        channel(top.b(), bottom.b()),
+    )
+}
+
+/// The background of a code row: the pointer's own hover, the cross-view highlight it got
+/// from the other pane, or both at once.
+fn row_background(hovering: bool, focused: bool) -> Color {
+    match (hovering, focused) {
+        (true, true) => blend(CODE_ROW_HOVER_BG, LINE_FOCUS_BG),
+        (true, false) => CODE_ROW_HOVER_BG,
+        (false, true) => LINE_FOCUS_BG,
+        (false, false) => Color::TRANSPARENT,
+    }
 }
 
 fn kind_color(kind: SpanKind) -> Color {
@@ -563,12 +699,16 @@ impl Component for RelocationLabel {
 struct InstructionRow {
     data: AsmData,
     index: usize,
+    /// Whether the source line the pointer is on is the one this instruction was compiled
+    /// from. Worked out by the list rather than read from the focus here, so that a focus
+    /// moving between two instructions of one line leaves every row untouched.
+    focused: bool,
     key: DiffKey,
 }
 
 impl PartialEq for InstructionRow {
     fn eq(&self, other: &Self) -> bool {
-        self.data == other.data && self.index == other.index
+        self.data == other.data && self.index == other.index && self.focused == other.focused
     }
 }
 
@@ -581,7 +721,16 @@ impl KeyExt for InstructionRow {
 impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
+        let mut focused = use_consume::<Focused>().0;
         let instruction = &self.data.assembly.instructions[self.index];
+
+        // Where this row points on the source side while the pointer is on it. Worked out
+        // once here rather than in each of the two handlers, which need the same answer.
+        let focus = self.data.position(self.index).map(|at| LineFocus {
+            at,
+            from: FocusOrigin::Instruction(instruction.address),
+        });
+        let taken = focus.clone();
 
         let relocation = instruction
             .relocation
@@ -653,13 +802,15 @@ impl Component for InstructionRow {
             .height(Size::px(ROW_HEIGHT))
             .padding(3.0)
             .assembly_font()
-            .background(if hovering() {
-                ASM_ROW_HOVER_BG
-            } else {
-                Color::TRANSPARENT
+            .background(row_background(hovering(), self.focused))
+            .on_pointer_over(move |_| {
+                hovering.set_if_modified(true);
+                focused.set_if_modified(taken.clone());
             })
-            .on_pointer_over(move |_| hovering.set_if_modified(true))
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
+            .on_pointer_out(move |_| {
+                hovering.set_if_modified(false);
+                release_focus(focused, focus.as_ref());
+            })
             .child(
                 label()
                     .text(format!("{:016X} ", instruction.address))
@@ -679,18 +830,25 @@ impl Component for InstructionRow {
 
 /// One line of a source file: its number in a gutter, then its text.
 ///
-/// No hover state of its own yet -- nothing here is clickable until 5b/5c make a line
-/// point at the instructions it produced.
+/// `file` is carried to be pointed at rather than to be drawn: hovering the row tells the
+/// assembly pane which position to light up, and a line number without the file it is a
+/// line of is not one.
 #[derive(Clone)]
 struct SourceRow {
     source: SourceText,
+    file: Arc<str>,
     index: usize,
+    /// Whether the instruction the pointer is on was compiled from this line.
+    focused: bool,
     key: DiffKey,
 }
 
 impl PartialEq for SourceRow {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source && self.index == other.index
+        self.source == other.source
+            && Arc::ptr_eq(&self.file, &other.file)
+            && self.index == other.index
+            && self.focused == other.focused
     }
 }
 
@@ -702,7 +860,21 @@ impl KeyExt for SourceRow {
 
 impl Component for SourceRow {
     fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let mut focused = use_consume::<Focused>().0;
         let source = &self.source.0;
+
+        // The position this row is, and so the one it points the assembly pane at: the
+        // file the pane opened, at this row's own line -- its index plus one, for the same
+        // reason the gutter below draws that number.
+        let focus = Some(LineFocus {
+            at: LinePos {
+                file: self.file.clone(),
+                line: self.index as u32 + 1,
+            },
+            from: FocusOrigin::Source,
+        });
+        let taken = focus.clone();
 
         // In range because the list's length is this file's own `lines`, which is at most
         // `blocks.len()` -- and `SyntaxBlocks::get_line` unwraps rather than answering
@@ -730,6 +902,15 @@ impl Component for SourceRow {
             .height(Size::px(ROW_HEIGHT))
             .padding(3.0)
             .assembly_font()
+            .background(row_background(hovering(), self.focused))
+            .on_pointer_over(move |_| {
+                hovering.set_if_modified(true);
+                focused.set_if_modified(taken.clone());
+            })
+            .on_pointer_out(move |_| {
+                hovering.set_if_modified(false);
+                release_focus(focused, focus.as_ref());
+            })
             .child(
                 label()
                     // Line numbers are 1-based, as DWARF's are, so the gutter reads the
@@ -776,30 +957,75 @@ impl Component for AssemblyView {
                 .child(label().text("Assembly unavailable"));
         };
 
-        let data = AsmData {
-            assembly,
-            object: self.symbol.object.clone(),
-        };
-        let length = data.assembly.instructions.len();
-
         rect()
             .width(Size::fill())
             .height(Size::fill())
             .padding(5.0)
             .background(ASM_PANE_BG)
-            .child(
-                VirtualScrollView::new_with_data(data, |i, data: &AsmData| {
-                    InstructionRow {
-                        data: data.clone(),
-                        index: i,
-                        key: DiffKey::None,
-                    }
-                    .key(data.assembly.instructions[i].address)
-                    .into()
-                })
-                .length(length)
-                .item_size(ROW_HEIGHT),
-            )
+            .child(InstructionList {
+                assembly,
+                object: self.symbol.object.clone(),
+            })
+    }
+}
+
+/// The instruction rows themselves, a component of their own rather than part of
+/// `AssemblyView` because they follow two things the disassembly must not follow.
+///
+/// `SymbolData::assembly` decodes and formats the whole symbol on every call, so whatever
+/// reads the cross-view focus has to be something that does not disassemble, or every
+/// pointer move across a row boundary would decode the function again. The line info is
+/// read here for a second reason: freya's `Memo` recomputes in a spawned task, so the
+/// `Lines` context updates a beat after the selection it follows, and a pane taking it as
+/// a prop renders twice per selection change rather than once.
+#[derive(Clone)]
+struct InstructionList {
+    assembly: Arc<Assembly>,
+    object: Arc<Object>,
+}
+
+impl PartialEq for InstructionList {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.assembly, &other.assembly) && Arc::ptr_eq(&self.object, &other.object)
+    }
+}
+
+impl Component for InstructionList {
+    fn render(&self) -> impl IntoElement {
+        let lines = use_consume::<Lines>().0.read().clone();
+        // Only the position, not the origin the focus also carries: the rows are told
+        // whether they match it, so a focus that moves from one instruction to another
+        // compiled from the same line leaves this data equal and the whole list untouched.
+        let focus = use_consume::<Focused>()
+            .0
+            .read()
+            .as_ref()
+            .map(|focus| focus.at.clone());
+
+        let data = AsmData {
+            assembly: self.assembly.clone(),
+            object: self.object.clone(),
+            lines,
+        };
+        let length = data.assembly.instructions.len();
+
+        VirtualScrollView::new_with_data(
+            (data, focus),
+            |i, (data, focus): &(AsmData, Option<LinePos>)| {
+                InstructionRow {
+                    data: data.clone(),
+                    index: i,
+                    // One source line is many instructions, and every one of them lights
+                    // up: this asks each row's own position, rather than the first match.
+                    focused: focus.is_some() && data.position(i).as_ref() == focus.as_ref(),
+                    key: DiffKey::None,
+                }
+                .key(data.assembly.instructions[i].address)
+                .into()
+            },
+        )
+        .length(length)
+        .item_size(ROW_HEIGHT)
     }
 }
 
@@ -813,6 +1039,10 @@ struct SourceView {
 
 impl Component for SourceView {
     fn render(&self) -> impl IntoElement {
+        // Consumed before the early returns below, because a hook has to run on every
+        // render whichever placeholder the pane ends up showing.
+        let focused = use_consume::<Focused>().0;
+
         let Some(lines) = &self.lines.0 else {
             return placeholder("No line info");
         };
@@ -824,8 +1054,10 @@ impl Component for SourceView {
         // the first file the rows name.
         let file = lines
             .row_at(self.symbol.data.address)
-            .and_then(|row| lines.file_of(row))
-            .or_else(|| lines.files().first().map(|file| &**file));
+            .and_then(|row| row.file)
+            .and_then(|file| lines.files().get(file))
+            .or_else(|| lines.files().first())
+            .cloned();
 
         // There are always rows, since `LineInfo` is `None` rather than empty, but every
         // one of them may name no file -- which tells the reader as little as no line
@@ -836,9 +1068,18 @@ impl Component for SourceView {
 
         // Named in the message because the path is the only clue to *why*: source built
         // on another machine, moved, or deleted since all look alike from here.
-        let Some(source) = source_text(Path::new(file)) else {
+        let Some(source) = source_text(Path::new(&*file)) else {
             return placeholder(format!("Source file not found: {file}"));
         };
+
+        // Which line the instruction the pointer is on was compiled from, when it was
+        // compiled from *this* file: the focus names a file because a symbol's rows can
+        // name several, and the pane has only one of them open.
+        let focus = focused
+            .read()
+            .as_ref()
+            .filter(|focus| focus.at.file == file)
+            .map(|focus| focus.at.line);
 
         let length = source.0.lines;
         // Which file is on screen is not otherwise visible anywhere: the tab is called
@@ -869,15 +1110,24 @@ impl Component for SourceView {
                     .height(Size::flex(1.0))
                     .padding(5.0)
                     .child(
-                        VirtualScrollView::new_with_data(source, |i, source: &SourceText| {
-                            SourceRow {
-                                source: source.clone(),
-                                index: i,
-                                key: DiffKey::None,
-                            }
-                            .key(i)
-                            .into()
-                        })
+                        VirtualScrollView::new_with_data(
+                            SourceData {
+                                source,
+                                file,
+                                focus,
+                            },
+                            |i, data: &SourceData| {
+                                SourceRow {
+                                    source: data.source.clone(),
+                                    file: data.file.clone(),
+                                    index: i,
+                                    focused: data.focus == Some(i as u32 + 1),
+                                    key: DiffKey::None,
+                                }
+                                .key(i)
+                                .into()
+                            },
+                        )
                         .length(length)
                         .item_size(ROW_HEIGHT),
                     ),
@@ -1474,6 +1724,28 @@ fn use_record_history(selection: State<Selection>, history: State<History>) {
     });
 }
 
+/// Forget the cross-view focus whenever the selection changes.
+///
+/// The focus is a position inside the selected symbol's line info, so it means nothing
+/// once that symbol is gone -- and the ordinary way it goes away, the pointer leaving the
+/// row that set it, need never happen: clicking a relocation label navigates from an
+/// assembly row the pointer is still sitting on, and the symbol it lands in was very often
+/// compiled from the same file, so a line of that file would stay lit for a position in a
+/// function no longer on screen until the pointer moved.
+///
+/// Its own effect for the reason `use_record_history` is: it has no business subscribing
+/// to anything but `Sel`, and the two concerns stay separable.
+fn use_clear_focus(selection: State<Selection>, focused: State<Option<LineFocus>>) {
+    use_side_effect(move || {
+        // Reading subscribes the effect to the selection, which is the whole of what it
+        // wants from it -- the focus is `None` again whatever the new selection is.
+        let _ = selection.read();
+
+        let mut focused = focused;
+        focused.set_if_modified(None);
+    });
+}
+
 /// A step through the navigation history.
 ///
 /// Back and forward are what the mouse buttons ask for; `To` is the history panel
@@ -1625,8 +1897,13 @@ pub fn app() -> impl IntoElement {
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
+    // Where the pointer is pointing, which the assembly and source panes answer for each
+    // other. A plain state like the three above rather than something derived from them:
+    // it is an input, written by whichever row the pointer is on.
+    let focused = use_provide_context(|| Focused(State::create(None))).0;
     use_save_on_change(objects, selection, history);
     use_record_history(selection, history);
+    use_clear_focus(selection, focused);
     use_periodic_save();
     // After the save effect on purpose: the effect is in place, with the save policy's
     // empty baseline, before the restore can put anything into any of the three states,
@@ -1744,3 +2021,4 @@ pub fn app() -> impl IntoElement {
                 .child(split),
         )
 }
+
