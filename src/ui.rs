@@ -943,6 +943,60 @@ fn use_record_history(selection: State<Selection>, history: State<History>) {
     });
 }
 
+/// A step through the navigation history.
+///
+/// Back and forward are the only two the input has for now; a jump straight to an
+/// arbitrary entry (what the history panel will want) belongs here as a third variant
+/// over a matching `History` method, so that everything which moves the cursor keeps
+/// going through `navigate`.
+#[derive(Clone, Copy)]
+enum Nav {
+    Back,
+    Forward,
+}
+
+impl Nav {
+    /// Whether there is an entry to step to.
+    fn possible(self, history: &History) -> bool {
+        match self {
+            Self::Back => history.can_back(),
+            Self::Forward => history.can_forward(),
+        }
+    }
+
+    /// Move the cursor and hand back the entry it landed on.
+    fn step(self, history: &mut History) -> Option<Selection> {
+        match self {
+            Self::Back => history.back(),
+            Self::Forward => history.forward(),
+        }
+    }
+}
+
+/// Move the selection one entry back or forward through the history.
+///
+/// The one place navigation happens, so the input handler below and the history panel
+/// to come share the same two steps: move the cursor, then set the selection to the
+/// entry it landed on. Nothing is pushed -- `use_record_history` sees the selection
+/// change like any other and `would_push` is false for it, because that entry is
+/// exactly what the cursor now sits on.
+fn navigate(mut history: State<History>, mut selection: State<Selection>, nav: Nav) {
+    // Ask before writing. `State::write` notifies its subscribers whether or not the
+    // value it hands over changes, so back at the oldest entry -- or forward at the
+    // newest -- must not reach for it at all: a no-op has to leave the history alone,
+    // leave the selection on screen alone, and wake nothing.
+    if !nav.possible(&history.peek()) {
+        return;
+    }
+
+    // The guard is released at the end of this statement, before the selection is set
+    // and `use_record_history` peeks the history back.
+    let entry = nav.step(&mut history.write());
+    if let Some(entry) = entry {
+        selection.set(entry);
+    }
+}
+
 /// Reopen the previous session's binaries and selection, once, at startup.
 ///
 /// `use_hook` runs its initializer on mount and never again, which is what makes this
@@ -1078,6 +1132,21 @@ pub fn app() -> impl IntoElement {
         .content(Content::Flex)
         .interface_font()
         .background(Color::WHITE)
+        // The mouse's own back and forward buttons drive the history. freya does
+        // deliver them: winit turns X11 buttons 8 and 9, and Wayland's BTN_BACK/
+        // BTN_SIDE and BTN_FORWARD/BTN_EXTRA, into `MouseButton::Back`/`Forward`,
+        // freya-winit maps those one for one and puts them in the `PlatformEvent`,
+        // and nothing between there and the handler filters on which button it is.
+        // `on_global_pointer_down` rather than `on_pointer_down`: a global event is
+        // emitted to its listeners with no hit test at all, so this fires wherever
+        // in the window the cursor happens to be and no child can swallow it by
+        // stopping propagation. The rows are unaffected -- `on_press` is left-button
+        // only -- and so is `on_secondary_down`, which asks for the right button.
+        .on_global_pointer_down(move |e: Event<PointerEventData>| match e.button() {
+            Some(MouseButton::Back) => navigate(history, selection, Nav::Back),
+            Some(MouseButton::Forward) => navigate(history, selection, Nav::Forward),
+            _ => {}
+        })
         .child(toolbar(objects))
         // `ResizableContainer` renders itself `.expanded()`, so it needs a parent
         // that has already been given the leftover height under the toolbar.

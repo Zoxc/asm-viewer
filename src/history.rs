@@ -63,13 +63,11 @@ impl History {
     }
 
     /// Whether there is an older entry to go back to.
-    #[allow(dead_code, reason = "the navigation slice is next; the tests use it")]
     pub fn can_back(&self) -> bool {
         self.cursor > 0
     }
 
     /// Whether there is a newer entry to go forward to.
-    #[allow(dead_code, reason = "the navigation slice is next; the tests use it")]
     pub fn can_forward(&self) -> bool {
         self.cursor + 1 < self.entries.len()
     }
@@ -78,7 +76,6 @@ impl History {
     /// the oldest entry. Nothing is recorded: the caller sets the selection to what
     /// comes back, and the push that observes that change dedups against the entry the
     /// cursor has just landed on.
-    #[allow(dead_code, reason = "the navigation slice is next; the tests use it")]
     pub fn back(&mut self) -> Option<Selection> {
         self.can_back().then(|| {
             self.cursor -= 1;
@@ -88,7 +85,6 @@ impl History {
 
     /// Step the cursor forward one entry, or `None` at the newest one. The mirror of
     /// [`History::back`], and equally not a push.
-    #[allow(dead_code, reason = "the navigation slice is next; the tests use it")]
     pub fn forward(&mut self) -> Option<Selection> {
         self.can_forward().then(|| {
             self.cursor += 1;
