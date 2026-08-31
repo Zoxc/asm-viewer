@@ -19,6 +19,7 @@ use crate::fonts::{fonts, Font};
 use crate::history::History;
 use crate::project::{self, Project, Selection};
 use crate::source::{self, SourceFile};
+use crate::tabs::Tabs;
 use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
@@ -65,6 +66,18 @@ const TAG_FONT_SIZE: f32 = 10.0;
 /// `\b` means rather than finishing a word the row could not fit, and a pointer crossing
 /// the bar on its way somewhere else should not light up three of them.
 const TOOLTIP_DELAY: Duration = Duration::ZERO;
+
+/// How many characters of a tab chip's name are drawn before the rest is elided. A Rust
+/// symbol's demangled name runs to hundreds of them, and a strip is only useful while
+/// every tab in it is still a tab.
+///
+/// A character count and not a width, which is what every other truncation in this file
+/// is. Bounding the width would be the better answer and torin will not have it: a
+/// `maximum_width` anywhere in the chip makes the chip shrinkable, and a horizontal
+/// scroll view measures its children against the space *left* in it, so with more chips
+/// than fit the ones past the edge are handed no width at all and drawn as a bare ×.
+/// Seen in the headless renders at twelve open tabs, not reasoned about.
+const CHIP_NAME_CHARS: usize = 40;
 
 /// How many rows above a row scrolled into view from the other pane are kept on screen.
 /// A line landing against the top edge answers "what is this" without answering "where in
@@ -311,8 +324,37 @@ impl<T: TextStyleExt + Sized> FontExt for T {}
 struct Objects(State<Vec<Arc<Object>>>);
 
 /// The current selection, shared through context.
+///
+/// Since 6c this *is* the active tab: everything that is on screen in the content area is
+/// the one entry of [`Open`] that this names. Nothing beside it says which tab is active,
+/// which is why `Selection` is still the single thing the history records and the session
+/// saves — it did not become a second state, it grew a list around it.
 #[derive(Clone, Copy)]
 struct Sel(State<Selection>);
+
+/// The tabs open in the content area, shared through context.
+///
+/// The list only; the active one is `Sel`. Every entry is an `Object` or a `Symbol` —
+/// [`Selection::None`] is never a tab, it is what the app is in when the list is empty,
+/// which is the placeholder state.
+///
+/// Objects are in here alongside functions on purpose. A tab is a place the reader has
+/// open, the sidebar's object rows have always *been* a selection, and giving them a tab
+/// is what keeps `Sel` equal to the active tab without a second "selected but not open"
+/// state beside it. The chip for an object is named after the object and the Assembly and
+/// Source panes show the same placeholders they always did for one.
+#[derive(Clone, Copy)]
+struct Open(State<Tabs<Selection>>);
+
+/// The source files open in the Source pane, shared through context. The list only; which
+/// of them is on screen is [`Shown`], for the reason [`Open`] keeps that out too.
+#[derive(Clone, Copy)]
+struct Files(State<Tabs<Arc<str>>>);
+
+/// Which of the open source files the Source pane is showing. `Some` exactly when
+/// [`Files`] is non-empty, which [`open_file`] and [`close_file`] are what keep true.
+#[derive(Clone, Copy)]
+struct Shown(State<Option<Arc<str>>>);
 
 /// Where the selection has been, shared through context. Named `Hist` because
 /// `History` is the type it holds, the same way `Sel` holds a `Selection`.
@@ -341,21 +383,63 @@ impl PartialEq for SymbolList {
 struct Lines(Memo<SymbolLines>);
 
 /// What DWARF says about the selected symbol's instructions, or `None` when it says
-/// nothing. Compared by pointer, like every other `Arc` the UI passes around.
+/// nothing, and which of the files it names the Source pane should open on.
 ///
 /// Worked out once for all its readers rather than once per pane: `Object::line_info`
 /// walks the line program of every unit covering the symbol again on each call, even
 /// though the DWARF context itself is built only once.
+///
+/// The file is worked out *here*, beside the info it comes from, rather than by whoever
+/// wants it. A `Memo` recomputes in a spawned task, so anything reading `Sel` and this
+/// together sees them disagree for one beat after a selection change — and asking the
+/// previous symbol's `LineInfo` where the new symbol starts answers with the previous
+/// symbol's file, which would open a tab for a file that has nothing to do with what was
+/// clicked. Inside the memo the two cannot disagree.
 #[derive(Clone)]
-struct SymbolLines(Option<Arc<LineInfo>>);
+struct SymbolLines {
+    info: Option<Arc<LineInfo>>,
+    /// Which of the files the symbol touches the Source pane opens on: the one its first
+    /// instruction was compiled from, which is the function's own file rather than one of
+    /// the headers it inlined further in. A symbol whose entry instructions belong to no
+    /// row at all -- a compiler-generated prologue is enough for that -- falls back to the
+    /// first file the rows name, and one whose rows name no file at all has none.
+    file: Option<Arc<str>>,
+}
 
 impl PartialEq for SymbolLines {
     fn eq(&self, other: &Self) -> bool {
-        match (&self.0, &other.0) {
+        let same_info = match (&self.info, &other.info) {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
-        }
+        };
+
+        // The file is compared by its text, not by pointer, for the reason `LinePos` is:
+        // a path is a value. Two `LineInfo`s naming one file hold two `Arc<str>`s of it.
+        same_info && self.file == other.file
+    }
+}
+
+impl SymbolLines {
+    /// The line info for `selection`, with the file the Source pane should open on.
+    fn new(selection: &Selection) -> SymbolLines {
+        let Selection::Symbol(symbol) = selection else {
+            return SymbolLines {
+                info: None,
+                file: None,
+            };
+        };
+
+        let info = symbol.data.line_info(&symbol.object);
+        let file = info.as_ref().and_then(|info| {
+            info.row_at(symbol.data.address)
+                .and_then(|row| row.file)
+                .and_then(|file| info.files().get(file))
+                .or_else(|| info.files().first())
+                .cloned()
+        });
+
+        SymbolLines { info, file }
     }
 }
 
@@ -533,7 +617,7 @@ impl AsmData {
     /// the debug info gives it none: no line info at all, an address no row covers, or a
     /// row naming no file or sitting on DWARF's line 0.
     fn position(&self, index: usize) -> Option<LinePos> {
-        let lines = self.lines.0.as_ref()?;
+        let lines = self.lines.info.as_ref()?;
         let row = lines.row_at(self.assembly.instructions[index].address)?;
         Some(LinePos {
             file: lines.files().get(row.file?)?.clone(),
@@ -700,7 +784,6 @@ fn kind_color(kind: SpanKind) -> Color {
 /// set of lines an instruction maps to (5b) nor be scrolled to one (5c). Its
 /// `SyntaxHighlighter` is public on its own and is exactly the shape these rows want.
 struct Highlighted {
-    file: Arc<SourceFile>,
     rope: Rope,
     blocks: SyntaxBlocks,
     /// How many rows the pane draws, which is *not* `blocks.len()`: a rope counts a
@@ -713,7 +796,7 @@ impl Highlighted {
     /// Parse and colour a whole file, once. The highlighter is stateful across lines --
     /// that is what makes it a parser rather than a regex -- so this happens when the
     /// file is loaded and never while a row is being drawn.
-    fn new(file: Arc<SourceFile>) -> Highlighted {
+    fn new(file: &SourceFile) -> Highlighted {
         let rope = Rope::from_str(file.text());
         let theme = palette().syntax();
 
@@ -732,7 +815,6 @@ impl Highlighted {
             .saturating_sub(usize::from(file.text().ends_with('\n')));
 
         Highlighted {
-            file,
             rope,
             blocks,
             lines,
@@ -792,7 +874,10 @@ fn source_text(path: &Path) -> Option<SourceText> {
 
     // Read and parsed outside the lock, for the reason `source::load` does the same: this
     // is the slow step, and a racing caller's copy costs an allocation rather than a wait.
-    let file = Arc::new(Highlighted::new(source::load(path)?));
+    // The `SourceFile` itself is not kept: the rope holds the text and the chip above the
+    // pane holds the path, and `source`'s own cache is what keeps a second read from
+    // touching the disk.
+    let file = Arc::new(Highlighted::new(&*source::load(path)?));
 
     Some(SourceText(
         highlighted()
@@ -1070,13 +1155,93 @@ impl Filtered {
 }
 
 // ---------------------------------------------------------------------------
+// Open tabs
+// ---------------------------------------------------------------------------
+
+/// Make `target` what the content area is showing, opening a tab for it if it has none.
+///
+/// The one path by which `Sel` ever changes, which is what makes "the selection is the
+/// active tab" an invariant rather than a convention: the sidebar's object and symbol
+/// rows, an assembly relocation link, the history panel and the back/forward buttons
+/// (both through [`navigate`]) and the startup restore all come through here, so none of
+/// them has to know that tabs exist. [`Selection::None`] opens nothing and is how the
+/// content area goes back to its placeholder.
+///
+/// Re-focusing a tab that is already open writes nothing: `State::write` notifies its
+/// subscribers whether or not the value changes, so both the list and the selection are
+/// asked before they are touched.
+fn activate(mut open: State<Tabs<Selection>>, mut selection: State<Selection>, target: Selection) {
+    // The guard from `peek` has to be gone before `write` is reached, so the answer is
+    // taken out of it first rather than tested inline.
+    let already_open = matches!(target, Selection::None) || open.peek().find(&target).is_some();
+    if !already_open {
+        open.write().open(target.clone());
+    }
+
+    selection.set_if_modified(target);
+}
+
+/// Close the tab showing `entry`, moving to a neighbouring one when it was the tab on
+/// screen and to the placeholder when it was the last one open.
+///
+/// Landing on the neighbour is an ordinary selection change, so it is recorded in the
+/// history like any other: the reader is now somewhere else, and the way back to it is
+/// the way back to anywhere else.
+fn close_tab(mut open: State<Tabs<Selection>>, selection: State<Selection>, entry: &Selection) {
+    let was_showing = *selection.peek() == *entry;
+    let next = open.write().close(entry);
+
+    if was_showing {
+        // Through `activate` like everything else, even though the neighbour is by
+        // construction already open: this is a selection change and there is one way to
+        // make one. The write guard above is released before it is reached.
+        activate(open, selection, next.unwrap_or(Selection::None));
+    }
+}
+
+/// Open a tab for `file` in the Source pane and put the pane on it.
+///
+/// The file the pane is put on is the copy already in the list where there is one, so the
+/// `Arc` the rows are keyed by does not change identity when the same file is reached
+/// again through a different symbol's `LineInfo`.
+fn open_file(mut files: State<Tabs<Arc<str>>>, mut shown: State<Option<Arc<str>>>, file: Arc<str>) {
+    let existing = files.peek().find(&file).cloned();
+    let file = match existing {
+        Some(file) => file,
+        None => {
+            files.write().open(file.clone());
+            file
+        }
+    };
+
+    shown.set_if_modified(Some(file));
+}
+
+/// Close the tab showing `file`, moving to a neighbouring one when it was the file on
+/// screen. The Source pane's own half of [`close_tab`], and the mirror of it: nothing
+/// here touches the selection, because which file is on screen is a view of the symbol
+/// rather than a place the reader has been.
+fn close_file(
+    mut files: State<Tabs<Arc<str>>>,
+    mut shown: State<Option<Arc<str>>>,
+    file: &Arc<str>,
+) {
+    let was_showing = shown.peek().as_ref() == Some(file);
+    let next = files.write().close(file);
+
+    if was_showing {
+        shown.set(next);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------
 
-/// A list row's own text, shown in full where the row could only show part of it.
+/// A row's or a chip's own text, shown in full where it could only show part of it.
 ///
-/// Every panel list uses this rather than `TooltipContainer` directly, so that the one
-/// thing they must agree on -- how long the pointer has to sit still, see
+/// Every panel list and both tab strips use this rather than `TooltipContainer` directly,
+/// so that the one thing they must agree on -- how long the pointer has to sit still, see
 /// [`TOOLTIP_DELAY`] -- is decided once.
 fn row_tooltip(text: String, row: impl IntoElement) -> TooltipContainer {
     TooltipContainer::new(Tooltip::new(text))
@@ -1255,6 +1420,7 @@ impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let selection = use_consume::<Sel>().0;
+        let open = use_consume::<Open>().0;
         let object = self.object.clone();
 
         let background = if self.selected {
@@ -1285,8 +1451,7 @@ impl Component for ObjectRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
-                    let mut selection = selection;
-                    selection.set(Selection::Object(object.clone()));
+                    activate(open, selection, Selection::Object(object.clone()));
                 })
                 // The column a file row's triangle sits in, kept empty here so that the
                 // tags of a file and of a lone object line up; a member is indented past
@@ -1332,6 +1497,7 @@ impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let selection = use_consume::<Sel>().0;
+        let open = use_consume::<Open>().0;
         let symbol = self.symbols.0[self.index].clone();
         let text = symbol
             .data
@@ -1359,8 +1525,7 @@ impl Component for SymbolRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
-                    let mut selection = selection;
-                    selection.set(Selection::Symbol(symbol.clone()));
+                    activate(open, selection, Selection::Symbol(symbol.clone()));
                 })
                 .child(label().text(text).max_lines(1)),
         )
@@ -1371,9 +1536,11 @@ impl Component for SymbolRow {
     }
 }
 
-/// What a history entry is called: the same demangled name the symbol list shows, or
-/// the object's name for an object entry. `Selection::None` never reaches the history
-/// -- `History::push` refuses it -- so its arm is unreachable in practice.
+/// What a selection is called where it is named in a list: the same demangled name the
+/// symbol list shows, or the object's name for an object. The history rows and the tab
+/// chips both draw this, which is what makes a place read the same wherever it is named.
+/// `Selection::None` reaches neither list -- `History::push` refuses it and it is never a
+/// tab -- so its arm is unreachable in practice.
 fn entry_text(entry: &Selection) -> String {
     match entry {
         Selection::None => String::new(),
@@ -1387,7 +1554,8 @@ fn entry_text(entry: &Selection) -> String {
     }
 }
 
-/// The pointer identity of what a history entry points at, for keying its row. Paired
+/// The pointer identity of what a selection points at, for keying the row or chip that
+/// names it. A tab chip keys by this alone, its place in the strip being stable. Paired
 /// with the entry's index because a row's identity is its place in the list: the entry at
 /// an index changes when a push truncates the forward entries, and again when a push
 /// bumps an existing entry to the newest position and shifts the ones behind it down. The
@@ -1431,6 +1599,7 @@ impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let selection = use_consume::<Sel>().0;
+        let open = use_consume::<Open>().0;
         // Consuming does not subscribe -- only reading would, and this row never reads
         // the history; it only hands an index back to `navigate`.
         let history = use_consume::<Hist>().0;
@@ -1455,7 +1624,7 @@ impl Component for HistoryRow {
                 .overflow(Overflow::Clip)
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |_| navigate(history, selection, Nav::To(index)))
+                .on_press(move |_| navigate(open, history, selection, Nav::To(index)))
                 .child(label().text(text).max_lines(1)),
         )
     }
@@ -1483,6 +1652,7 @@ impl Component for RelocationLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let selection = use_consume::<Sel>().0;
+        let open = use_consume::<Open>().0;
         let symbol = Symbol {
             object: self.object.clone(),
             data: self.target.clone(),
@@ -1515,8 +1685,7 @@ impl Component for RelocationLabel {
                     // also pin the line I am leaving", so the row never sees it.
                     e.stop_propagation();
 
-                    let mut selection = selection;
-                    selection.set(Selection::Symbol(symbol.clone()));
+                    activate(open, selection, Selection::Symbol(symbol.clone()));
                 })
                 .child(label().text(text).max_lines(1).color(if hovering() {
                     palette().name_hover_fg
@@ -1804,6 +1973,260 @@ impl Component for SourceRow {
 }
 
 // ---------------------------------------------------------------------------
+// Tab strips
+// ---------------------------------------------------------------------------
+
+/// One tab in a strip: what it is called, an × that closes it, and the pane's own white
+/// when it is the one on screen -- the same thing a dock tab header does, so the two bars
+/// read as bars of the same kind.
+///
+/// A stateless helper rather than a component: the two kinds of chip differ only in what
+/// they name and in what their two presses do, and the hover state belongs to the
+/// component that called this, so no hook runs here.
+fn chip(
+    text: String,
+    tooltip: String,
+    active: bool,
+    mut hovering: State<bool>,
+    on_activate: impl FnMut(Event<PressEventData>) + 'static,
+    mut on_close: impl FnMut(Event<PressEventData>) + 'static,
+) -> impl IntoElement {
+    // White for the active one, the way a dock tab header is: it reads as the top edge of
+    // the pane below it rather than as part of the bar. The hover is the header's own grey
+    // one step darker -- `selected_bg`, which is what a dock tab uses for a drop target,
+    // would make a hovered chip darker than the active one and so more prominent than it.
+    let background = if active {
+        palette().pane_bg
+    } else if hovering() {
+        palette().toggle_hover_bg
+    } else {
+        Color::TRANSPARENT
+    };
+
+    row_tooltip(
+        tooltip,
+        rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .height(Size::px(ROW_HEIGHT))
+            .padding(Gaps::new_symmetric(0.0, 8.0))
+            .spacing(6.0)
+            .background(background)
+            .border(right_hairline())
+            .on_pointer_over(move |_| hovering.set_if_modified(true))
+            .on_pointer_out(move |_| hovering.set_if_modified(false))
+            .on_press(on_activate)
+            .child(label().text(elide(&text)).max_lines(1))
+            .child(
+                rect()
+                    // The press bubbles, and the chip under this one activates the tab.
+                    // Closing a tab is not a way of first switching to it.
+                    .on_press(move |e: Event<PressEventData>| {
+                        e.stop_propagation();
+                        on_close(e);
+                    })
+                    .child(
+                        label()
+                            .text("\u{00d7}")
+                            .color(palette().address_fg)
+                            .max_lines(1),
+                    ),
+            ),
+    )
+}
+
+/// The bar a row of chips sits in. Shaped like `tab_bar`, which is the dock's own, since
+/// both of them are a strip of tabs over a pane.
+///
+/// Horizontally scrollable, because unlike the dock's tabs these are opened by the dozen
+/// and a chip that has fallen off the right-hand edge would be unreachable. The scrollbar
+/// itself is off: it would eat a third of a `ROW_HEIGHT` bar, and the wheel and a drag
+/// both still move it.
+fn chip_strip(chips: Vec<Element>) -> Element {
+    rect()
+        .width(Size::fill())
+        .height(Size::px(ROW_HEIGHT))
+        .background(palette().header_bg)
+        .border(bottom_hairline())
+        .child(
+            ScrollView::new()
+                .direction(Direction::Horizontal)
+                .show_scrollbar(false)
+                // The chips sit in a box of their own, whose width is `Inner`. The
+                // scroll view's own content box is `fill`, and a child of one is measured
+                // against the space *left* in it, so a strip with more chips than fit
+                // would hand the ones past the edge no width at all and draw them as a
+                // bare ×. Inside an `Inner` box every chip is measured from its own
+                // content, the box comes out wider than the view, and that overflow is
+                // exactly what there is to scroll.
+                .child(
+                    rect()
+                        .horizontal()
+                        .height(Size::fill())
+                        .children(chips)
+                        .into_element(),
+                ),
+        )
+        .into_element()
+}
+
+/// One open function or object, in the content area's strip.
+#[derive(Clone)]
+struct TabChip {
+    entry: Selection,
+    /// Whether this is the tab the content area is showing, i.e. whether it is `Sel`.
+    active: bool,
+    key: DiffKey,
+}
+
+impl PartialEq for TabChip {
+    fn eq(&self, other: &Self) -> bool {
+        // `Selection`'s own `PartialEq` is written in terms of `Arc::ptr_eq`.
+        self.entry == other.entry && self.active == other.active
+    }
+}
+
+impl KeyExt for TabChip {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for TabChip {
+    fn render(&self) -> impl IntoElement {
+        let hovering = use_state(|| false);
+        let selection = use_consume::<Sel>().0;
+        let open = use_consume::<Open>().0;
+        let text = entry_text(&self.entry);
+        let (activated, closed) = (self.entry.clone(), self.entry.clone());
+
+        chip(
+            text.clone(),
+            text,
+            self.active,
+            hovering,
+            move |_| activate(open, selection, activated.clone()),
+            move |_| close_tab(open, selection, &closed),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// The strip of open tabs over the content area.
+///
+/// Over the whole content area rather than inside the Assembly pane, which is where the
+/// plan's sketch put it. The tab decides what *both* panes show -- the assembly of a
+/// function and the source it was compiled from are two views of the one place -- and a
+/// strip inside one of them would go wherever that pane was dragged, taking the only way
+/// of switching functions into a 300px sidebar with it. In the default layout the two are
+/// the same thing: the strip is the bar directly above the assembly.
+///
+/// Nothing at all when no tab is open, so an app with nothing loaded looks exactly as it
+/// did before there were tabs.
+#[derive(PartialEq)]
+struct TabStrip;
+
+impl Component for TabStrip {
+    fn render(&self) -> impl IntoElement {
+        let open = use_consume::<Open>().0;
+        // Reading both subscribes the strip to them, so a tab opened or closed and a
+        // change of which one is active each re-render this bar and nothing else.
+        let active = use_consume::<Sel>().0.read().clone();
+        let entries = open.read().tabs().to_vec();
+
+        if entries.is_empty() {
+            return rect().into_element();
+        }
+
+        chip_strip(
+            entries
+                .iter()
+                .map(|entry| {
+                    TabChip {
+                        entry: entry.clone(),
+                        active: *entry == active,
+                        key: DiffKey::None,
+                    }
+                    .key(entry_addr(entry))
+                    .into()
+                })
+                .collect(),
+        )
+    }
+}
+
+/// One open source file, in the Source pane's strip.
+#[derive(Clone)]
+struct FileChip {
+    file: Arc<str>,
+    active: bool,
+    key: DiffKey,
+}
+
+impl PartialEq for FileChip {
+    fn eq(&self, other: &Self) -> bool {
+        // By its text and not by pointer, for the reason `LinePos` compares that way: a
+        // path is a value, and two `LineInfo`s naming one file hold two `Arc<str>`s of it.
+        self.file == other.file && self.active == other.active
+    }
+}
+
+impl KeyExt for FileChip {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for FileChip {
+    fn render(&self) -> impl IntoElement {
+        let hovering = use_state(|| false);
+        let files = use_consume::<Files>().0;
+        let shown = use_consume::<Shown>().0;
+        let (activated, closed) = (self.file.clone(), self.file.clone());
+
+        chip(
+            // The file's own name; the strip is narrow and every one of these paths shares
+            // most of its directory with the others. The whole path is in the tooltip,
+            // which is what the pane's header used to say.
+            file_name(&self.file),
+            self.file.to_string(),
+            self.active,
+            hovering,
+            move |_| open_file(files, shown, activated.clone()),
+            move |_| close_file(files, shown, &closed),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// `text` cut down to [`CHIP_NAME_CHARS`], with an ellipsis where the rest was.
+///
+/// On a character boundary, so a multi-byte name cannot panic here, and only when there is
+/// something to cut: a name that fits keeps its own last character rather than gaining a …
+/// for nothing.
+fn elide(text: &str) -> String {
+    match text.char_indices().nth(CHIP_NAME_CHARS) {
+        Some((end, _)) => format!("{}\u{2026}", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
+/// What a source file is called in its chip: the last component of its path, or the whole
+/// of it when there is nothing else to call it.
+fn file_name(file: &str) -> String {
+    Path::new(file)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file.to_owned())
+}
+
+// ---------------------------------------------------------------------------
 // Panes
 // ---------------------------------------------------------------------------
 
@@ -1930,73 +2353,7 @@ impl Component for InstructionList {
     }
 }
 
-/// The source the selected symbol was compiled from, as far as the debug info and this
-/// machine's filesystem can say between them.
-#[derive(Clone, PartialEq)]
-struct SourceView {
-    symbol: Symbol,
-    lines: SymbolLines,
-}
-
-impl Component for SourceView {
-    fn render(&self) -> impl IntoElement {
-        let Some(lines) = &self.lines.0 else {
-            return placeholder("No line info");
-        };
-
-        // Which of the files a symbol touches to open on: the one its first instruction
-        // was compiled from, which is the function's own file rather than one of the
-        // headers it inlined further in. A symbol whose entry instructions belong to no
-        // row at all -- a compiler-generated prologue is enough for that -- falls back to
-        // the first file the rows name.
-        let file = lines
-            .row_at(self.symbol.data.address)
-            .and_then(|row| row.file)
-            .and_then(|file| lines.files().get(file))
-            .or_else(|| lines.files().first())
-            .cloned();
-
-        // There are always rows, since `LineInfo` is `None` rather than empty, but every
-        // one of them may name no file -- which tells the reader as little as no line
-        // info at all does, so it says the same thing.
-        let Some(file) = file else {
-            return placeholder("No line info");
-        };
-
-        // Named in the message because the path is the only clue to *why*: source built
-        // on another machine, moved, or deleted since all look alike from here.
-        let Some(source) = source_text(Path::new(&*file)) else {
-            return placeholder(format!("Source file not found: {file}"));
-        };
-
-        // Which file is on screen is not otherwise visible anywhere: the tab is called
-        // "Source" whatever it is showing, and a symbol's rows can name several files.
-        let path = source.0.file.path().display().to_string();
-
-        rect()
-            .expanded()
-            // The header takes its own height and the list is given the rest, which
-            // torin only works out for a `flex` child of a `Content::Flex` parent.
-            .content(Content::Flex)
-            .background(palette().pane_bg)
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::px(ROW_HEIGHT))
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .padding(Gaps::new_symmetric(0.0, 8.0))
-                    .background(palette().header_bg)
-                    .border(bottom_hairline())
-                    .overflow(Overflow::Clip)
-                    .child(label().text(path).max_lines(1)),
-            )
-            .child(SourceList { source, file })
-            .into()
-    }
-}
-
-/// The source rows themselves, split out of `SourceView` the way `InstructionList` is out
+/// The source rows themselves, split out of `SourceTab` the way `InstructionList` is out
 /// of `AssemblyView` -- here not because the pane above is expensive to render, which it is
 /// not, but because it has three early returns before it knows which file it is showing.
 /// Hooks have to run on every render, and the scroll controller these rows are driven by
@@ -2392,19 +2749,61 @@ struct SourceTab;
 
 impl Component for SourceTab {
     fn render(&self) -> impl IntoElement {
-        let current = use_consume::<Sel>().0.read().clone();
-        // Reading the memo subscribes this tab to it, so the pane fills in when the line
+        let files = use_consume::<Files>().0;
+        let shown = use_consume::<Shown>().0;
+        // Consumed unconditionally, hooks having to run on every render, but only read in
+        // the branch that needs them: which of the three reasons nothing is open comes
+        // from the selection, since the strip has nothing to say about it. Reading the
+        // memo there also subscribes this tab to it, so the pane fills in when the line
         // info for a newly selected symbol is worked out, without the root re-rendering.
-        let lines = use_consume::<Lines>().0.read().clone();
+        let selection = use_consume::<Sel>().0;
+        let lines = use_consume::<Lines>().0;
 
-        match &current {
-            Selection::Symbol(symbol) => SourceView {
-                symbol: symbol.clone(),
-                lines,
-            }
-            .into_element(),
-            _ => placeholder("No symbol selected"),
-        }
+        let open: Vec<Arc<str>> = files.read().tabs().to_vec();
+        let file = shown.read().clone();
+
+        let Some(file) = file else {
+            let current = selection.read().clone();
+            let lines = lines.read().clone();
+            return match (&current, &lines.info) {
+                (Selection::Symbol(_), Some(_)) => placeholder("No source file open"),
+                (Selection::Symbol(_), None) => placeholder("No line info"),
+                _ => placeholder("No symbol selected"),
+            };
+        };
+
+        rect()
+            .expanded()
+            // The strip takes its own height and the list is given the rest, which torin
+            // only works out for a `flex` child of a `Content::Flex` parent.
+            .content(Content::Flex)
+            .background(palette().pane_bg)
+            .child(chip_strip(
+                open.iter()
+                    .map(|open| {
+                        FileChip {
+                            file: open.clone(),
+                            active: *open == file,
+                            key: DiffKey::None,
+                        }
+                        .key(&**open)
+                        .into()
+                    })
+                    .collect(),
+            ))
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.0))
+                    // Named in the message because the path is the only clue to *why*:
+                    // source built on another machine, moved, or deleted since all look
+                    // alike from here.
+                    .child(match source_text(Path::new(&*file)) {
+                        Some(source) => SourceList { source, file }.into_element(),
+                        None => placeholder(format!("Source file not found: {file}")),
+                    }),
+            )
+            .into()
     }
 }
 
@@ -2788,6 +3187,43 @@ fn use_clear_focus(
     });
 }
 
+/// Open a tab for the file the active symbol was compiled from, and put the Source pane
+/// on it.
+///
+/// This is what keeps the source side following the selection now that it has tabs of its
+/// own: selecting a function always shows that function's source, whichever file the
+/// reader had switched to by hand, and the file is added to the strip if it was not there
+/// already. Selecting one whose file *is* already open costs nothing but the focus moving
+/// to its chip.
+///
+/// Only the symbol's own file is opened, never the rest of `LineInfo::files`. A Rust
+/// function inlines dozens of them, and a strip that grew by dozens per click would stop
+/// being a strip; reaching an inlined header's source is a list of the files a symbol
+/// touches, which is a thing to build when there is somewhere to put it.
+///
+/// A selection with no line info opens nothing and closes nothing -- the pane keeps
+/// showing whatever was open, which is what tabs mean, and the assembly side already says
+/// that nothing is mapped by lighting no rows.
+///
+/// It reads only [`Lines`], not the selection, and that is load-bearing: a `Memo`
+/// recomputes in a spawned task, so an effect reading both would see the new symbol beside
+/// the previous symbol's `LineInfo` for one beat and open a tab for a file belonging to
+/// neither. `SymbolLines` carries the file for exactly this reason.
+fn use_open_source_file(
+    lines: Memo<SymbolLines>,
+    files: State<Tabs<Arc<str>>>,
+    shown: State<Option<Arc<str>>>,
+) {
+    use_side_effect(move || {
+        // Reading subscribes the effect to the line info; the two states it writes are
+        // never read here, so it cannot wake itself.
+        let file = lines.read().file.clone();
+        if let Some(file) = file {
+            open_file(files, shown, file);
+        }
+    });
+}
+
 /// A step through the navigation history.
 ///
 /// Back and forward are what the mouse buttons ask for; `To` is the history panel
@@ -2824,11 +3260,21 @@ impl Nav {
 /// Move the selection one entry back or forward through the history.
 ///
 /// The one place navigation happens, so the input handler below and the history panel
-/// to come share the same two steps: move the cursor, then set the selection to the
-/// entry it landed on. Nothing is pushed -- `use_record_history` sees the selection
-/// change like any other and `would_push` is false for it, because that entry is
-/// exactly what the cursor now sits on.
-fn navigate(mut history: State<History>, mut selection: State<Selection>, nav: Nav) {
+/// share the same two steps: move the cursor, then make the entry it landed on the active
+/// tab. Nothing is pushed -- `use_record_history` sees the selection change like any other
+/// and `would_push` is false for it, because that entry is exactly what the cursor now
+/// sits on.
+///
+/// It goes through [`activate`] rather than setting the selection itself because the
+/// history and the open tabs are two different lists: the history is everywhere the reader
+/// has been and keeps entries long after their tab was closed, so going back to one has to
+/// be able to open a tab for it again.
+fn navigate(
+    open: State<Tabs<Selection>>,
+    mut history: State<History>,
+    selection: State<Selection>,
+    nav: Nav,
+) {
     // Ask before writing. `State::write` notifies its subscribers whether or not the
     // value it hands over changes, so back at the oldest entry -- or forward at the
     // newest -- must not reach for it at all: a no-op has to leave the history alone,
@@ -2841,7 +3287,7 @@ fn navigate(mut history: State<History>, mut selection: State<Selection>, nav: N
     // and `use_record_history` peeks the history back.
     let entry = nav.step(&mut history.write());
     if let Some(entry) = entry {
-        selection.set(entry);
+        activate(open, selection, entry);
     }
 }
 
@@ -2861,7 +3307,13 @@ fn navigate(mut history: State<History>, mut selection: State<Selection>, nav: N
 /// its object and from a vanished object to nothing, and `Project::resolve_history`
 /// drops the entries that no longer point anywhere while keeping the cursor on the
 /// right one.
+///
+/// The tab list is deliberately *not* restored -- it is not saved, that being Step 8's
+/// "saves with tabs / open tabs and viewing positions". Going through [`activate`] rather
+/// than setting the selection is what gives the restored session its one tab, so the app
+/// comes back with exactly the place it was left on open and no others.
 fn use_restore_on_startup(
+    open: State<Tabs<Selection>>,
     objects: State<Vec<Arc<Object>>>,
     selection: State<Selection>,
     history: State<History>,
@@ -2890,7 +3342,7 @@ fn use_restore_on_startup(
                 return;
             }
 
-            let (mut objects, mut selection, mut history) = (objects, selection, history);
+            let (mut objects, mut history) = (objects, history);
             objects.write().extend(parsed);
 
             // Resolved against everything now loaded rather than just `parsed`, so
@@ -2910,7 +3362,7 @@ fn use_restore_on_startup(
             // the cursor entry was dropped, or the selection degraded, that the two
             // differ, and then a push is exactly right: the app is somewhere new.
             history.set(restored_history);
-            selection.set(restored_selection);
+            activate(open, selection, restored_selection);
         });
     });
 }
@@ -2938,6 +3390,15 @@ pub fn app() -> impl IntoElement {
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
+    // The places open in the content area, of which `selection` is the active one, and the
+    // source files open in the Source pane, of which `shown` is. Both lists are opened and
+    // closed only through `activate`/`close_tab` and `open_file`/`close_file`, which is
+    // what keeps "the selection is the active tab" and "a file is shown exactly when one
+    // is open" invariants rather than conventions. Neither list is persisted: that is Step
+    // 8's "saves with tabs / open tabs and viewing positions".
+    let open = use_provide_context(|| Open(State::create(Tabs::default()))).0;
+    let files = use_provide_context(|| Files(State::create(Tabs::default()))).0;
+    let shown = use_provide_context(|| Shown(State::create(None))).0;
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     // Where the pointer is pointing, which the assembly and source panes answer for each
     // other. A plain state like the three above rather than something derived from them:
@@ -2954,7 +3415,7 @@ pub fn app() -> impl IntoElement {
     // After the save effect on purpose: the effect is in place, with the save policy's
     // empty baseline, before the restore can put anything into any of the three states,
     // so the restored session is seen by it as an ordinary change.
-    use_restore_on_startup(objects, selection, history);
+    use_restore_on_startup(open, objects, selection, history);
 
     // Rebuilt only when the object list changes, not on every selection change.
     let symbols = use_memo(move || {
@@ -2985,12 +3446,12 @@ pub fn app() -> impl IntoElement {
         // Cloned out rather than held: the read guard would otherwise be alive for the
         // whole of a query that can take a second.
         let selection = selection.read().clone();
-        SymbolLines(match &selection {
-            Selection::Symbol(symbol) => symbol.data.line_info(&symbol.object),
-            _ => None,
-        })
+        SymbolLines::new(&selection)
     });
     use_provide_context(move || Lines(lines));
+    // Reads that memo and nothing else, so it cannot see a symbol beside another symbol's
+    // line info. Registered after the memo it follows, for the obvious reason.
+    use_open_source_file(lines, files, shown);
 
     // One docking area per resizable pane: the left one a column of Objects, then
     // Symbols with Info tabbed beside it, then History at the bottom -- which is
@@ -3034,7 +3495,23 @@ pub fn app() -> impl IntoElement {
         .panel(
             ResizablePanel::new(PanelSize::percent(100.0))
                 .min_size(10.0)
-                .child(docking_area(content_dock)),
+                // The open-tab strip sits over the whole content area rather than inside
+                // the Assembly pane: the active tab is what *both* panes show, and a bar
+                // inside one of them would follow that pane wherever it was docked. The
+                // docking area below it needs a parent that has been given the leftover
+                // height, `DockingArea` rendering itself `.expanded()`.
+                .child(
+                    rect()
+                        .expanded()
+                        .content(Content::Flex)
+                        .child(TabStrip)
+                        .child(
+                            rect()
+                                .width(Size::fill())
+                                .height(Size::flex(1.0))
+                                .child(docking_area(content_dock)),
+                        ),
+                ),
         );
 
     rect()
@@ -3053,8 +3530,8 @@ pub fn app() -> impl IntoElement {
         // stopping propagation. The rows are unaffected -- `on_press` is left-button
         // only -- and so is `on_secondary_down`, which asks for the right button.
         .on_global_pointer_down(move |e: Event<PointerEventData>| match e.button() {
-            Some(MouseButton::Back) => navigate(history, selection, Nav::Back),
-            Some(MouseButton::Forward) => navigate(history, selection, Nav::Forward),
+            Some(MouseButton::Back) => navigate(open, history, selection, Nav::Back),
+            Some(MouseButton::Forward) => navigate(open, history, selection, Nav::Forward),
             _ => {}
         })
         .child(toolbar(objects))
@@ -3067,3 +3544,4 @@ pub fn app() -> impl IntoElement {
                 .child(split),
         )
 }
+

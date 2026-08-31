@@ -3,6 +3,7 @@ mod fonts;
 mod history;
 mod project;
 mod source;
+mod tabs;
 mod tree;
 mod ui;
 
