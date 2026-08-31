@@ -26,6 +26,8 @@ one item per part, so the unfinished half stays visible.
 ## Assembly viewer
 
 - [ ] Bar under the Assembly tab with the full demangled + mangled symbol name.
+- [ ] Name the Assembly tab after the function — just `namespace/module::fn_name`, without the
+  extra generics, mangling, etc. (for Rust / C++).
 - [ ] Allow selection.
 - [ ] Have arrows for jumps.
 
