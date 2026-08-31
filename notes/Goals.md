@@ -2,7 +2,8 @@
 
 Inspecting and comparing binaries.
 
-`- [ ]` is a goal that is not done yet, `- [x]` one that is, and `- [?]` one that is only a maybe — not decided on yet.
+`- [ ]` is a goal that is not done yet, `- [x]` one that is, `- [?]` one that is only a maybe —
+not decided on yet — and `- [D]` one that is deferred, with the reason why on the item.
 
 ## Source / assembly split view
 
@@ -22,6 +23,14 @@ Inspecting and comparing binaries.
 
 - [ ] Allow selection.
 - [ ] Have arrows for jumps.
+
+## UI
+
+- [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
+  sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /
+  `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
+  way is vendoring the whole scrollview module (~1350 lines) out of `freya-components` — too much to
+  carry for a cosmetic change. Revisit if freya makes it themeable.
 
 ## Panels and tabs
 
