@@ -46,7 +46,7 @@ one item per part, so the unfinished half stays visible.
 
 - [x] History panel on the bottom left with recent functions.
 - [ ] The history panel also lists recent source files.
-- [ ] Don't insert duplicate history entries, bump existing ones instead.
+- [x] Don't insert duplicate history entries, bump existing ones instead.
 - [ ] Tree view for objects, with icon indicators for processing / file type.
 - [ ] Left panel to explore project directory / files.
 - [ ] Left panel for symbol search.
