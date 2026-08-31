@@ -8,3 +8,7 @@ object = "0.32.1"
 symbolic-demangle = "12.4.1"
 symbolic-common = "12.4.1"
 iced-x86 = "1.20.0"
+
+[dev-dependencies]
+# Test fixtures are built in memory with the writer rather than committed as blobs.
+object = { version = "0.32", features = ["write"] }
