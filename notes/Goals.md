@@ -25,6 +25,7 @@ one item per part, so the unfinished half stays visible.
 
 ## Assembly viewer
 
+- [ ] Bar under the Assembly tab with the full demangled + mangled symbol name.
 - [ ] Allow selection.
 - [ ] Have arrows for jumps.
 
