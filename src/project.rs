@@ -1,5 +1,5 @@
 //! Session persistence: the binaries that were open, the symbol that was selected and
-//! where the selection has been, written to a single JSON file so a rerun of the app
+//! where the selection has been, written to a single TOML file so a rerun of the app
 //! comes back where it left off.
 //!
 //! This module is deliberately **framework-free** — no freya types appear here — so it
@@ -31,7 +31,7 @@ use crate::history::History;
 /// The directory this app keeps its state in, under the platform's state directory
 /// (falling back to its local data directory).
 const APP_DIR: &str = "assembly-viewer";
-const FILE_NAME: &str = "project.json";
+const FILE_NAME: &str = "project.toml";
 
 /// What is currently selected in the UI.
 ///
@@ -56,33 +56,48 @@ impl PartialEq for Selection {
 }
 
 /// The persisted session.
+///
+/// **The field order is load-bearing.** TOML has no way to reopen a table once a later
+/// one has begun, so a serializer must emit every plain value of a table before the
+/// first sub-table of it; a `Vec<PathBuf>` written after `selection` fails at runtime
+/// with "values must be emitted before tables". `binaries` is the only plain value here
+/// — an array of strings — so it comes first, and the two table-valued fields follow.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     /// The paths that were opened, deduplicated, in the order they were opened.
     pub binaries: Vec<PathBuf>,
+    /// `skip_serializing_if` because the `toml` crate cannot write a bare `None` at all
+    /// — there is no null in TOML — so an unselected session has to leave the key out,
+    /// and `default` to read that file back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<SavedSelection>,
-    /// `serde(default)` because this arrived after the first `project.json` files did:
-    /// a file written before it exists loads with an empty history rather than failing
-    /// and taking the binaries and the selection down with it.
+    /// `serde(default)` so a partial file — one written by hand, or trimmed — loads with
+    /// an empty history rather than failing and taking the binaries and the selection
+    /// down with it.
     #[serde(default)]
     pub history: SavedHistory,
 }
 
-/// The navigation history in saved form: every visited selection, oldest first, and the
-/// index of the one that was on screen.
+/// The navigation history in saved form: the index of the entry that was on screen, and
+/// every visited selection, oldest first.
+///
+/// The field order is load-bearing for the same reason [`Project`]'s is: `entries` is a
+/// `Vec` of externally tagged enums, so TOML writes it as an array of tables, and the
+/// plain `cursor` has to be emitted before it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedHistory {
-    pub entries: Vec<SavedSelection>,
     /// An index into `entries`, and `0` — meaning nothing — while it is empty.
     pub cursor: usize,
+    #[serde(default)]
+    pub entries: Vec<SavedSelection>,
 }
 
 impl SavedHistory {
     /// The empty history, as a `const fn` so [`Saves`] can be a `static`.
     pub const fn new() -> SavedHistory {
         SavedHistory {
-            entries: Vec::new(),
             cursor: 0,
+            entries: Vec::new(),
         }
     }
 
@@ -93,12 +108,12 @@ impl SavedHistory {
     /// dropped here and the cursor stays pointing at the same entry.
     fn from_history(history: &History) -> SavedHistory {
         SavedHistory {
+            cursor: history.cursor().unwrap_or(0),
             entries: history
                 .entries()
                 .iter()
                 .filter_map(SavedSelection::from_selection)
                 .collect(),
-            cursor: history.cursor().unwrap_or(0),
         }
     }
 }
@@ -258,7 +273,7 @@ impl Project {
     ///
     /// Duplicates are [`History::restored`]'s business, not this loop's: two saved
     /// entries naming the same destination resolve to the same `Arc` and so to equal
-    /// entries, which a `project.json` written before entries were bumped rather than
+    /// entries, which a saved history written before entries were bumped rather than
     /// appended is full of. `restored` collapses them onto the newest occurrence and
     /// carries the cursor to wherever the entry it names ends up, so the cursor computed
     /// here is an index into the list *before* the collapse and need not anticipate it.
@@ -308,8 +323,8 @@ impl Project {
     }
 
     fn load_from(path: &Path) -> Option<Project> {
-        let data = fs::read(path).ok()?;
-        serde_json::from_slice(&data).ok()
+        let data = fs::read_to_string(path).ok()?;
+        toml::from_str(&data).ok()
     }
 
     /// Write `path` by writing `path.tmp` first and renaming it over the top, so an
@@ -323,7 +338,13 @@ impl Project {
         temporary.push(".tmp");
         let temporary = PathBuf::from(temporary);
 
-        let data = serde_json::to_vec_pretty(self)?;
+        // TOML has no way to spell a path that is not UTF-8, and serde's `PathBuf`
+        // impl fails rather than mangling one, so such a project is simply not written:
+        // the error is turned into an IO error here and logged and swallowed by
+        // `save`, which leaves the previous good file in place. Nothing panics, and
+        // nothing lossy reaches the disk to be loaded back as a different path.
+        let data = toml::to_string_pretty(self)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         fs::write(&temporary, data)?;
         fs::rename(&temporary, path)
     }
@@ -331,12 +352,13 @@ impl Project {
 
 /// How often [`flush`] is worth calling.
 ///
-/// The write is a few hundred bytes of JSON, so the cost of a tick is a comparison that
-/// almost always finds nothing pending. Five seconds is far coarser than the rate a user
-/// clicks through symbols at — a burst of navigation collapses into one write — while
-/// bounding what an unclean exit can lose to five seconds of history and one selection,
-/// neither of which is expensive to redo. A clean window close flushes anyway.
-pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(5);
+/// The write is a few hundred bytes of TOML, so the cost of a tick is a comparison that
+/// almost always finds nothing pending. Thirty seconds is far coarser than the rate a
+/// user clicks through symbols at — a long burst of navigation collapses into one write
+/// — while bounding what an unclean exit can lose to half a minute of history and one
+/// selection, neither of which is expensive to redo. A clean window close flushes
+/// anyway, so this only ever covers a kill or a crash.
+pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// The save policy: what has been written, and what is waiting to be.
 ///
@@ -588,8 +610,19 @@ mod tests {
         }
     }
 
+    /// Serialize to TOML and read it straight back, which is the only way to catch the
+    /// `toml` crate's runtime failures: a bare `None`, and a value emitted after a table.
+    fn round_trip(project: &Project) -> String {
+        let text = toml::to_string_pretty(project).expect("serializing");
+        let back: Project = toml::from_str(&text).unwrap_or_else(|error| {
+            panic!("deserializing\n--- {text}--- failed: {error}");
+        });
+        assert_eq!(*project, back);
+        text
+    }
+
     #[test]
-    fn json_round_trips() {
+    fn toml_round_trips() {
         let project = Project {
             binaries: vec![PathBuf::from("/tmp/lib.a"), PathBuf::from("/tmp/some.dll")],
             selection: Some(SavedSelection::Symbol {
@@ -600,9 +633,36 @@ mod tests {
             }),
             history: SavedHistory::default(),
         };
-        let json = serde_json::to_string(&project).expect("serializing");
-        let back: Project = serde_json::from_str(&json).expect("deserializing");
-        assert_eq!(project, back);
+        let text = round_trip(&project);
+        // The externally tagged enum is a table named after its variant.
+        assert!(text.contains("[selection.Symbol]"), "{text}");
+    }
+
+    #[test]
+    fn an_empty_project_round_trips() {
+        // Nothing selected and nothing visited: the `None` the `toml` crate cannot write
+        // has to be left out of the file entirely, and read back as `None`.
+        let project = Project::new();
+        let text = round_trip(&project);
+        assert!(!text.contains("selection"), "{text}");
+    }
+
+    #[test]
+    fn a_project_with_no_selection_but_open_binaries_round_trips() {
+        let objects = objects();
+        let project = Project::from_state(&objects, &Selection::None, &History::default());
+        assert_eq!(project.selection, None);
+        let text = round_trip(&project);
+        assert!(!text.contains("selection"), "{text}");
+    }
+
+    #[test]
+    fn a_multi_entry_history_round_trips_as_an_array_of_tables() {
+        let objects = objects();
+        let project = Project::from_state(&objects, &Selection::None, &history(&objects, 1));
+        assert_eq!(project.history.entries.len(), 3);
+        let text = round_trip(&project);
+        assert!(text.contains("[[history.entries]]"), "{text}");
     }
 
     #[test]
@@ -626,7 +686,7 @@ mod tests {
 
         assert_eq!(Project::load_from(&path), Some(project));
         // The temporary was renamed, not left behind.
-        assert!(!path.with_extension("json.tmp").exists());
+        assert!(!path.with_extension("toml.tmp").exists());
 
         let _ = fs::remove_dir_all(&directory);
     }
@@ -739,8 +799,8 @@ mod tests {
     #[test]
     fn a_saved_history_with_duplicates_restores_without_them() {
         let objects = objects();
-        // What every `project.json` written before entries were bumped rather than
-        // appended looks like: the same destination visited twice, saved twice.
+        // What a saved history written before entries were bumped rather than appended
+        // looks like: the same destination visited twice, saved twice.
         let project = saved_history(
             &[
                 saved_object("a.o"),
@@ -931,31 +991,75 @@ mod tests {
     }
 
     #[test]
-    fn a_file_written_before_the_history_existed_still_loads() {
-        let json = r#"{
-            "binaries": ["/tmp/lib.a"],
-            "selection": { "Object": { "path": "/tmp/lib.a", "object_name": "a.o" } }
-        }"#;
-        let project: Project = serde_json::from_str(json).expect("deserializing");
+    fn a_file_with_no_history_still_loads() {
+        // Hand-written, or trimmed: `serde(default)` is what keeps the missing table
+        // from taking the binaries and the selection down with it.
+        let text = r#"
+            binaries = ["/tmp/lib.a"]
+
+            [selection.Object]
+            path = "/tmp/lib.a"
+            object_name = "a.o"
+        "#;
+        let project: Project = toml::from_str(text).expect("deserializing");
 
         assert_eq!(project.binaries, vec![PathBuf::from("/tmp/lib.a")]);
         assert_eq!(project.history, SavedHistory::new());
 
-        // And it restores exactly as it did before: the selection back, no history.
+        // And it restores exactly as it would have: the selection back, no history.
         let objects = objects();
         assert!(project.resolve(&objects) == Selection::Object(objects[0].clone()));
         assert!(project.resolve_history(&objects).entries().is_empty());
     }
 
     #[test]
-    fn the_history_round_trips_through_json() {
+    fn a_history_with_no_entries_still_loads() {
+        let text = r#"
+            binaries = []
+
+            [history]
+            cursor = 0
+        "#;
+        let project: Project = toml::from_str(text).expect("deserializing");
+        assert_eq!(project, Project::new());
+    }
+
+    #[test]
+    fn a_non_utf8_path_is_not_written_rather_than_mangled() {
+        // Only Unix has a `PathBuf` that can hold one at all.
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+
+            let project = Project {
+                binaries: vec![PathBuf::from(std::ffi::OsStr::from_bytes(
+                    b"/tmp/\xff\xfe.a",
+                ))],
+                selection: None,
+                history: SavedHistory::new(),
+            };
+            // An error, not a panic and not a lossy path silently written in its place.
+            assert!(toml::to_string_pretty(&project).is_err());
+
+            let directory = std::env::temp_dir().join(format!(
+                "assembly-viewer-test-{}-{}",
+                std::process::id(),
+                line!()
+            ));
+            let path = directory.join(FILE_NAME);
+            assert!(project.save_to(&path).is_err());
+            // Nothing reached the disk, so a good earlier file would still be there.
+            assert!(!path.exists());
+
+            let _ = fs::remove_dir_all(&directory);
+        }
+    }
+
+    #[test]
+    fn the_history_round_trips_through_toml() {
         let objects = objects();
         let project = Project::from_state(&objects, &Selection::None, &history(&objects, 1));
-        let json = serde_json::to_string(&project).expect("serializing");
-        assert_eq!(
-            serde_json::from_str::<Project>(&json).expect("deserializing"),
-            project
-        );
+        round_trip(&project);
     }
 
     // --- the save policy ---------------------------------------------------
@@ -1040,7 +1144,7 @@ mod tests {
         assert_eq!(Project::load_from(&path), None);
 
         fs::create_dir_all(&directory).expect("creating the test directory");
-        fs::write(&path, b"{ not json").expect("writing the corrupt file");
+        fs::write(&path, b"{ not toml").expect("writing the corrupt file");
         assert_eq!(Project::load_from(&path), None);
 
         let _ = fs::remove_dir_all(&directory);
