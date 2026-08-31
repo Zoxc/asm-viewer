@@ -62,6 +62,20 @@ impl History {
         self.cursor = self.entries.len() - 1;
     }
 
+    /// The index of the entry the cursor is on, or `None` before anything has been
+    /// recorded. Paired with [`History::recent`] this is all a list of the entries needs
+    /// to mark the one that is current, without the entries themselves being reachable.
+    pub fn cursor(&self) -> Option<usize> {
+        (self.cursor < self.entries.len()).then_some(self.cursor)
+    }
+
+    /// Every entry with its index, newest first — the order a history panel shows them
+    /// in. The index is what [`History::jump`] takes, so a row can carry the one it was
+    /// built from and hand it straight back.
+    pub fn recent(&self) -> impl ExactSizeIterator<Item = (usize, &Selection)> + '_ {
+        self.entries.iter().enumerate().rev()
+    }
+
     /// Whether there is an older entry to go back to.
     pub fn can_back(&self) -> bool {
         self.cursor > 0
@@ -89,6 +103,23 @@ impl History {
         self.can_forward().then(|| {
             self.cursor += 1;
             self.entries[self.cursor].clone()
+        })
+    }
+
+    /// Whether [`History::jump`] would move the cursor: `index` has to name an entry,
+    /// and not the one already under the cursor.
+    pub fn can_jump(&self, index: usize) -> bool {
+        index < self.entries.len() && index != self.cursor
+    }
+
+    /// Put the cursor straight on the entry at `index` and hand it back, or `None` when
+    /// [`History::can_jump`] is false. Like [`History::back`] and [`History::forward`]
+    /// this only moves the cursor: nothing is recorded and nothing in front of it is
+    /// dropped, so jumping to an older entry leaves the newer ones to come back to.
+    pub fn jump(&mut self, index: usize) -> Option<Selection> {
+        self.can_jump(index).then(|| {
+            self.cursor = index;
+            self.entries[index].clone()
         })
     }
 }
@@ -206,6 +237,78 @@ mod tests {
         assert!(history.current() == Some(&a));
         assert!(history.can_forward());
         assert!(!history.can_back());
+    }
+
+    #[test]
+    fn the_cursor_is_the_index_of_the_current_entry() {
+        let mut history = History::default();
+        assert!(history.cursor().is_none());
+
+        history.push(selection("a"));
+        history.push(selection("b"));
+        assert!(history.cursor() == Some(1));
+
+        history.back();
+        assert!(history.cursor() == Some(0));
+    }
+
+    #[test]
+    fn recent_lists_every_entry_newest_first() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+
+        let recent: Vec<_> = history
+            .recent()
+            .map(|(i, entry)| (i, entry.clone()))
+            .collect();
+        assert!(recent == vec![(2, c), (1, b), (0, a)]);
+
+        // Going back changes which entry is current, not what the list holds.
+        history.back();
+        assert!(history.recent().len() == 3);
+        assert!(history.recent().next().map(|(i, _)| i) == Some(2));
+    }
+
+    #[test]
+    fn jumping_moves_the_cursor_without_pushing() {
+        let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+        let mut history = History::default();
+        for entry in [&a, &b, &c] {
+            history.push(entry.clone());
+        }
+
+        // The entry under the cursor and one past the end are both no-ops, and must
+        // stay so: the panel's rows call this for every click, including the current
+        // row's, and a no-op has to leave the cursor where it is.
+        assert!(!history.can_jump(2));
+        assert!(history.jump(2).is_none());
+        assert!(!history.can_jump(3));
+        assert!(history.jump(3).is_none());
+        assert!(history.cursor() == Some(2));
+
+        assert!(history.can_jump(0));
+        let landed = history.jump(0).expect("the oldest entry");
+        assert!(landed == a);
+        assert!(history.current() == Some(&a));
+
+        // Nothing in front was dropped, so the newer entries are still reachable.
+        assert!(history.can_forward());
+        assert!(history.recent().len() == 3);
+
+        // And, as for back/forward, the choke point that observes the resulting
+        // selection change finds nothing left to record.
+        assert!(!history.would_push(&landed));
+    }
+
+    #[test]
+    fn an_empty_history_jumps_nowhere() {
+        let mut history = History::default();
+        assert!(!history.can_jump(0));
+        assert!(history.jump(0).is_none());
+        assert!(history.recent().len() == 0);
     }
 
     #[test]

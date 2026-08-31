@@ -261,6 +261,94 @@ impl Component for SymbolRow {
     }
 }
 
+/// What a history entry is called: the same demangled name the symbol list shows, or
+/// the object's name for an object entry. `Selection::None` never reaches the history
+/// -- `History::push` refuses it -- so its arm is unreachable in practice.
+fn entry_text(entry: &Selection) -> String {
+    match entry {
+        Selection::None => String::new(),
+        Selection::Object(object) => object.name.clone(),
+        Selection::Symbol(symbol) => symbol
+            .data
+            .demangled
+            .as_ref()
+            .unwrap_or(&symbol.data.name)
+            .clone(),
+    }
+}
+
+/// The pointer identity of what a history entry points at, for keying its row. Paired
+/// with the entry's index, because the same symbol can be visited twice and the entry at
+/// an index can be replaced when a push truncates the forward entries.
+fn entry_addr(entry: &Selection) -> usize {
+    match entry {
+        Selection::None => 0,
+        Selection::Object(object) => Arc::as_ptr(object).addr(),
+        Selection::Symbol(symbol) => Arc::as_ptr(&symbol.data).addr(),
+    }
+}
+
+/// One visited selection in the history list. Clicking it moves the history cursor to
+/// this entry rather than recording a new one, which is what `Nav::To` is for.
+#[derive(Clone)]
+struct HistoryRow {
+    entry: Selection,
+    index: usize,
+    /// Whether the cursor is on this entry, i.e. this is what is on screen.
+    current: bool,
+    key: DiffKey,
+}
+
+impl PartialEq for HistoryRow {
+    fn eq(&self, other: &Self) -> bool {
+        // `Selection`'s own `PartialEq` is written in terms of `Arc::ptr_eq`.
+        self.entry == other.entry && self.index == other.index && self.current == other.current
+    }
+}
+
+impl KeyExt for HistoryRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for HistoryRow {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let selection = use_consume::<Sel>().0;
+        // Consuming does not subscribe -- only reading would, and this row never reads
+        // the history; it only hands an index back to `navigate`.
+        let history = use_consume::<Hist>().0;
+        let index = self.index;
+        let text = entry_text(&self.entry);
+
+        let background = if self.current {
+            SELECTED_BG
+        } else if hovering() {
+            SYMBOL_HOVER_BG
+        } else {
+            Color::TRANSPARENT
+        };
+
+        TooltipContainer::new(Tooltip::new(text.clone())).child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(ROW_HEIGHT))
+                .padding(5.0)
+                .background(background)
+                .overflow(Overflow::Clip)
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| navigate(history, selection, Nav::To(index)))
+                .child(label().text(text).max_lines(1)),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
 /// The clickable name of a relocation target, rendered in place of the meaningless
 /// numeric operand.
 #[derive(Clone)]
@@ -481,7 +569,7 @@ fn symbol_info(symbol: &Symbol) -> impl IntoElement {
 // Tabs
 // ---------------------------------------------------------------------------
 
-/// One of the four dockable views. A tab is a persistent view rather than a slot
+/// One of the five dockable views. A tab is a persistent view rather than a slot
 /// the selection drives, so each one renders itself off the current `Selection`
 /// and subscribes to the state it needs on its own -- which also keeps a
 /// selection change from re-rendering the whole tree.
@@ -490,6 +578,7 @@ enum Tab {
     Objects,
     Symbols,
     Info,
+    History,
     Assembly,
 }
 
@@ -500,6 +589,7 @@ impl Tab {
             Tab::Objects => "Objects",
             Tab::Symbols => "Symbols",
             Tab::Info => "Info",
+            Tab::History => "History",
             Tab::Assembly => "Assembly",
         }
     }
@@ -509,6 +599,7 @@ impl Tab {
             Tab::Objects => ObjectsTab.into_element(),
             Tab::Symbols => SymbolsTab.into_element(),
             Tab::Info => InfoTab.into_element(),
+            Tab::History => HistoryTab.into_element(),
             Tab::Assembly => AssemblyTab.into_element(),
         }
     }
@@ -603,6 +694,51 @@ impl Component for InfoTab {
 }
 
 #[derive(PartialEq)]
+struct HistoryTab;
+
+impl Component for HistoryTab {
+    fn render(&self) -> impl IntoElement {
+        let history = use_consume::<Hist>().0;
+
+        // Reading subscribes this tab to the history, so a recorded entry or a moved
+        // cursor re-renders the list and nothing else.
+        let rows: Vec<Element> = {
+            let history = history.read();
+            let cursor = history.cursor();
+            history
+                .recent()
+                .map(|(index, entry)| {
+                    HistoryRow {
+                        entry: entry.clone(),
+                        index,
+                        current: cursor == Some(index),
+                        key: DiffKey::None,
+                    }
+                    .key((index, entry_addr(entry)))
+                    .into()
+                })
+                .collect()
+        };
+
+        if rows.is_empty() {
+            return placeholder("Nothing visited yet");
+        }
+
+        // A plain `ScrollView` rather than a `VirtualScrollView`: a session's history is
+        // a handful of entries, the rows are one label each, and this way the list is
+        // built straight from the state it read instead of having to route the entries
+        // through `new_with_data`. The same shape the objects list uses.
+        rect()
+            .expanded()
+            .background(SYMBOL_PANE_BG)
+            .child(
+                ScrollView::new().child(rect().width(Size::fill()).children(rows).into_element()),
+            )
+            .into()
+    }
+}
+
+#[derive(PartialEq)]
 struct AssemblyTab;
 
 impl Component for AssemblyTab {
@@ -641,18 +777,23 @@ struct DockArea {
 }
 
 impl DockArea {
-    /// An area split in two, one tab on top and a tabbed panel below, which is
-    /// what the panes used to look like before they were dockable.
-    fn stacked(top: Tab, bottom: Vec<Tab>) -> Self {
+    /// An area split top to bottom into one tabbed panel per group, which is what
+    /// the sidebar looks like. Every split freya's docking builds gets an equal
+    /// share, so the groups start at equal heights and the handles between them
+    /// are the only way to change that.
+    fn column(groups: Vec<Vec<Tab>>) -> Self {
         Self {
+            next_panel_id: groups.len() as PanelId,
             tree: DockNode::Split {
                 direction: Direction::Vertical,
-                children: vec![
-                    DockNode::Panel(DockPanel::new(0, vec![top])),
-                    DockNode::Panel(DockPanel::new(1, bottom)),
-                ],
+                children: groups
+                    .into_iter()
+                    .enumerate()
+                    .map(|(panel_id, tabs)| {
+                        DockNode::Panel(DockPanel::new(panel_id as PanelId, tabs))
+                    })
+                    .collect(),
             },
-            next_panel_id: 2,
             other: None,
         }
     }
@@ -945,14 +1086,15 @@ fn use_record_history(selection: State<Selection>, history: State<History>) {
 
 /// A step through the navigation history.
 ///
-/// Back and forward are the only two the input has for now; a jump straight to an
-/// arbitrary entry (what the history panel will want) belongs here as a third variant
-/// over a matching `History` method, so that everything which moves the cursor keeps
-/// going through `navigate`.
+/// Back and forward are what the mouse buttons ask for; `To` is the history panel
+/// clicking an entry. All three are a cursor move over a `History` method, so that
+/// everything which moves the cursor keeps going through `navigate`.
 #[derive(Clone, Copy)]
 enum Nav {
     Back,
     Forward,
+    /// Straight to the entry at this index, the one `History::recent` handed the row.
+    To(usize),
 }
 
 impl Nav {
@@ -961,6 +1103,7 @@ impl Nav {
         match self {
             Self::Back => history.can_back(),
             Self::Forward => history.can_forward(),
+            Self::To(index) => history.can_jump(index),
         }
     }
 
@@ -969,6 +1112,7 @@ impl Nav {
         match self {
             Self::Back => history.back(),
             Self::Forward => history.forward(),
+            Self::To(index) => history.jump(index),
         }
     }
 }
@@ -1094,12 +1238,22 @@ pub fn app() -> impl IntoElement {
     });
     use_provide_context(move || Symbols(symbols));
 
-    // One docking area per resizable pane: Objects over Symbols on the left, with
-    // Info tabbed beside Symbols, and Assembly alone on the right. All four tabs
-    // share one `DockDrag<Tab>`, which `use_drag` keeps at the root, so a tab can
-    // be dragged from either area into the other; each area is told about the
-    // other so the one taking a tab can evict it from the one losing it.
-    let sidebar_dock = use_state(|| DockArea::stacked(Tab::Objects, vec![Tab::Symbols, Tab::Info]));
+    // One docking area per resizable pane: the left one a column of Objects, then
+    // Symbols with Info tabbed beside it, then History at the bottom -- which is
+    // where the goal asks for it, and where it is visible without a click. The
+    // cost is that the three groups start at equal heights, so the symbol list is
+    // shorter than it was; the handles between them, and dragging History onto the
+    // middle panel, are both one gesture away. Assembly is alone on the right. All
+    // five tabs share one `DockDrag<Tab>`, which `use_drag` keeps at the root, so a
+    // tab can be dragged from either area into the other; each area is told about
+    // the other so the one taking a tab can evict it from the one losing it.
+    let sidebar_dock = use_state(|| {
+        DockArea::column(vec![
+            vec![Tab::Objects],
+            vec![Tab::Symbols, Tab::Info],
+            vec![Tab::History],
+        ])
+    });
     let content_dock = use_state(|| DockArea::single(Tab::Assembly));
     use_hook(move || {
         let (mut sidebar_dock, mut content_dock) = (sidebar_dock, content_dock);
