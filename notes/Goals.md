@@ -47,7 +47,7 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 
 ## Projects
 
-- [ ] Minimal project support: the previous session's binaries and selected symbol reopen when
+- [x] Minimal project support: the previous session's binaries and selected symbol reopen when
   the app is rerun, for easier testing.
 - [ ] Have a project concept.
 - [ ] Each project can have multiple binaries loaded.
