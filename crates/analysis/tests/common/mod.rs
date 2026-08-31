@@ -119,6 +119,58 @@ pub fn indirect_caller_and_target(relocated: bool) -> Vec<u8> {
     )
 }
 
+/// `jumper` = `jmp rel32; ret`, with the branch relocated against a **data** symbol.
+///
+/// Parsing keeps only `SymbolKind::Text` symbols, so the instruction's `relocation` comes
+/// out as [`None`] even though the four displacement bytes are every bit as much a
+/// placeholder as a resolvable branch's are. Read literally the jump lands on address 5,
+/// which is this symbol's own `ret`: the fixture where "did a relocation resolve?" and
+/// "is this displacement real?" give different answers.
+pub fn branch_to_data() -> Vec<u8> {
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+
+    let text = obj.section_id(write::StandardSection::Text);
+    let offset = obj.append_section_data(text, &[0xE9, 0x00, 0x00, 0x00, 0x00, 0xC3], 1);
+    obj.add_symbol(write::Symbol {
+        name: b"jumper".to_vec(),
+        value: offset,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+
+    let data = obj.section_id(write::StandardSection::Data);
+    let value = obj.append_section_data(data, &[0; 4], 4);
+    let counter = obj.add_symbol(write::Symbol {
+        name: b"counter".to_vec(),
+        value,
+        size: 4,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(data),
+        flags: SymbolFlags::None,
+    });
+
+    obj.add_relocation(
+        text,
+        write::Relocation {
+            offset: offset + 1,
+            size: 32,
+            kind: RelocationKind::Relative,
+            encoding: RelocationEncoding::X86Branch,
+            symbol: counter,
+            addend: -4,
+        },
+    )
+    .expect("adding a relocation to .text");
+
+    obj.write().expect("writing the fixture object")
+}
+
 /// Deterministic pseudo-random bytes (xorshift64*), so a failure is always reproducible.
 pub fn garbage(seed: u64, len: usize) -> Vec<u8> {
     let mut state = seed | 1;

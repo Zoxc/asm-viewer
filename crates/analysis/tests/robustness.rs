@@ -24,6 +24,19 @@ fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
             for instruction in &assembly.instructions {
                 let _: String = instruction.format.iter().map(|(t, _)| t.as_str()).collect();
             }
+            // A branch edge is a pair of row indices a renderer will index the listing
+            // with, so both ends have to be rows that exist however corrupt the bytes
+            // they were decoded from — an edge naming a row that is not there would be a
+            // panic in the gutter rather than here.
+            let mut previous = None;
+            for edge in &assembly.edges {
+                assert!(edge.from < assembly.instructions.len());
+                assert!(edge.to < assembly.instructions.len());
+                assert_ne!(edge.from, edge.to);
+                // One edge per instruction at most, in listing order.
+                assert!(previous < Some(edge.from));
+                previous = Some(edge.from);
+            }
         }
         // The DWARF path, on every input the sweeps below produce. Reading the rows back
         // matters as much as building them: `LineInfo`'s own invariants (ascending,

@@ -215,7 +215,14 @@ impl SymbolData {
 
         let mut assembly = Assembly {
             instructions: Vec::new(),
+            edges: Vec::new(),
         };
+
+        // Every branch this symbol takes that names an address of its own, as (the index
+        // of the branching instruction, the address it names). Collected while decoding
+        // and turned into [`BranchEdge`]s afterwards, because a forward branch names an
+        // address no instruction has been decoded at yet.
+        let mut branches: Vec<(usize, u64)> = Vec::new();
 
         while decoder.can_decode() {
             decoder.decode_out(&mut instruction);
@@ -235,10 +242,25 @@ impl SymbolData {
                 }
             });
 
+            // Whether *any* relocation covers these bytes, which is not the same question
+            // as whether one resolved to something navigable below: a branch relocated
+            // against a section or a data symbol resolves to `None` and its displacement
+            // is a placeholder all the same. Only the first question tells `branch_target`
+            // whether the encoded target means anything.
+            let relocated = relocation.is_some();
+
             let relocation = relocation.and_then(|r| match r {
                 RelocationTarget::Symbol(i) => object.symbols.get(&i).cloned(),
                 _ => None,
             });
+
+            // Resolved to instruction indices below, once every address in the symbol is
+            // known: a branch can point forwards as easily as backwards.
+            if !relocated {
+                if let Some(target) = branch_target(&instruction) {
+                    branches.push((assembly.instructions.len(), target));
+                }
+            }
 
             let mut inst = Instruction {
                 address: instruction.ip(),
@@ -267,6 +289,23 @@ impl SymbolData {
 
             assembly.instructions.push(inst);
         }
+
+        // The decoder walks the symbol's bytes from the front, so these are ascending and
+        // a target is one binary search away. An address that is not in the list is a
+        // branch this symbol has no row for — out of its extent, or into the middle of one
+        // of its instructions — and is dropped; see [`Assembly::edges`].
+        let addresses: Vec<u64> = assembly
+            .instructions
+            .iter()
+            .map(|instruction| instruction.address)
+            .collect();
+        assembly.edges = branches
+            .into_iter()
+            .filter_map(|(from, target)| {
+                let to = addresses.binary_search(&target).ok()?;
+                (to != from).then_some(BranchEdge { from, to })
+            })
+            .collect();
 
         Some(Arc::new(assembly))
     }
@@ -450,6 +489,111 @@ impl iced_x86::SymbolResolver for RelocationResolver {
 
 pub struct Assembly {
     pub instructions: Vec<Instruction>,
+
+    /// The branches that stay inside this symbol, for a renderer to draw as arrows down
+    /// the side of the listing.
+    ///
+    /// Both ends are indices into [`instructions`](Self::instructions) rather than
+    /// addresses, because that is what a row can be asked about: an arrow gutter is drawn
+    /// per row and has to know which edges start, end and pass through the row it is
+    /// building. `from` ascends and no instruction branches twice, so this is at most one
+    /// entry per instruction and is already in listing order.
+    ///
+    /// Three kinds of branch are deliberately *not* in here, and each of them would be a
+    /// line drawn to a place that is not where it points:
+    ///
+    /// * One that leaves the symbol. Nothing on screen is at the other end of it — the
+    ///   listing is one symbol's own bytes — and the instruction already names where it
+    ///   goes.
+    /// * One whose displacement is a relocation placeholder. The encoded value is a zero
+    ///   or an addend that a linker will overwrite, so read literally it is very often a
+    ///   plausible-looking address a few bytes away, i.e. an edge to a row of this very
+    ///   symbol that the branch has nothing to do with.
+    /// * One landing inside an instruction rather than on one. Either the bytes are not
+    ///   code, or the real instruction stream is not the one a linear decode from the
+    ///   symbol's first byte produced; either way there is no row to point an arrowhead
+    ///   at, and inventing the nearest one would be a lie about where control goes.
+    ///
+    /// Nor is a branch to itself (`jmp $`), whose two ends are the same row: it would take
+    /// a lane to draw a line of no length, and the instruction's own operand already says
+    /// it goes nowhere.
+    pub edges: Vec<BranchEdge>,
+}
+
+/// A branch from one instruction of a symbol to another instruction of the same symbol,
+/// both named by their index in [`Assembly::instructions`]. See [`Assembly::edges`] for
+/// what is and is not one of these.
+///
+/// `from` and `to` are in execution order, not in listing order: a backward branch — the
+/// bottom of a loop — has `from` greater than `to`. Anything laying edges out in a gutter
+/// wants [`first`](Self::first) and [`last`](Self::last) instead, which are the rows the
+/// line is drawn between whichever way it runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BranchEdge {
+    /// The instruction that branches.
+    pub from: usize,
+    /// The instruction it branches to.
+    pub to: usize,
+}
+
+impl BranchEdge {
+    /// The topmost of the two rows this edge spans.
+    pub fn first(&self) -> usize {
+        self.from.min(self.to)
+    }
+
+    /// The bottommost of the two rows this edge spans.
+    pub fn last(&self) -> usize {
+        self.from.max(self.to)
+    }
+
+    /// Whether this branch runs back up the listing, which is what the bottom of a loop
+    /// looks like.
+    pub fn is_backward(&self) -> bool {
+        self.to < self.from
+    }
+}
+
+/// The address `instruction` branches to, when it names one in its own encoding and that
+/// is somewhere a reader would follow it to.
+///
+/// Which flow-control kinds count is a judgement about what an arrow *means* in the
+/// gutter: it means control leaves this row and carries on at that one. So an
+/// unconditional jump and a conditional one are edges, and so are `loop`, `loopcc` and
+/// `jrcxz`, which iced-x86 already classifies as conditional branches. `xbegin` is one
+/// too — its operand is the address execution resumes at when the transaction aborts,
+/// which is a real second exit from the row and usually a handler a few instructions
+/// further down.
+///
+/// A **call** is not, even when it lands inside this same symbol — a recursive one, or the
+/// `call $+5` a position-independent thunk uses to read its own address. Control comes
+/// straight back to the row underneath, so an arrow leading the eye away from it would say
+/// the opposite of what happens; and a call is the one branch that already renders as a
+/// navigable name whenever it resolves to a symbol, which is the better answer for the
+/// question a call raises. An indirect branch or call names no address at all, so there is
+/// nothing to draw either way.
+///
+/// The operand kind is checked as well as the flow control because `near_branch_target`
+/// answers 0 for anything that is not a near branch, and 0 is a perfectly ordinary address
+/// in a relocatable object — it is the symbol's own first byte. `xabort imm8` is the
+/// instruction that makes that reachable: it shares `xbegin`'s flow-control kind, its
+/// operand is an immediate and not an address at all, and without this check every one of
+/// them would draw an arrow to the top of the function.
+fn branch_target(instruction: &iced_x86::Instruction) -> Option<u64> {
+    match instruction.flow_control() {
+        iced_x86::FlowControl::UnconditionalBranch
+        | iced_x86::FlowControl::ConditionalBranch
+        | iced_x86::FlowControl::XbeginXabortXend => {}
+        _ => return None,
+    }
+
+    matches!(
+        instruction.op0_kind(),
+        iced_x86::OpKind::NearBranch16
+            | iced_x86::OpKind::NearBranch32
+            | iced_x86::OpKind::NearBranch64
+    )
+    .then(|| instruction.near_branch_target())
 }
 
 /// A hard ceiling on how large a single section's decompressed bytes may be, whatever

@@ -7,7 +7,9 @@
 //! range list rather than a `.debug_ranges` one, `DW_AT_decl_line` disagreeing with where
 //! the line program puts a function's first row, and a line program whose rows walk *back*
 //! through the source as a loop is laid out. None of that is something a fixture builder
-//! would think to synthesize, which is the whole reason the object is committed.
+//! would think to synthesize, which is the whole reason the object is committed. The one
+//! test here that is not about line info — the branch edges of `sum_to`'s loop, at the
+//! bottom — is here for that same reason and no other.
 //!
 //! # The fixtures
 //!
@@ -374,6 +376,42 @@ fn functions_sharing_address_zero_keep_their_own_rows() {
             (0x3c, 0x3e, Some(39), Some(1)),
         ]
     );
+}
+
+/// `sum_to`'s `while` loop, as gcc lays it out: the loop is entered by jumping *over* the
+/// body to the condition at the bottom, which then branches back up into it. Both fixtures
+/// must agree — the edges are instruction indices, so the same function at address 0x30 in
+/// one build and at 0 in the other has exactly the same ones — and the `call add` between
+/// them must contribute nothing, its displacement being a relocation placeholder.
+///
+/// Branch edges are not line info, which is what the rest of this file is about, but the
+/// reason for reading a real compiler's output is the same in both cases: a fixture written
+/// by hand has whatever shape it was written to have, and a `while` loop compiled by gcc
+/// has the shape a reader will actually meet in the gutter.
+#[test]
+fn a_real_loop_is_two_edges_and_the_call_between_them_is_none() {
+    for name in [FLAT, SPLIT] {
+        let object = parse(name);
+        let symbol = symbol(&object, "sum_to");
+        let assembly = symbol.assembly(&object).expect("sum_to disassembles");
+
+        let edges: Vec<_> = assembly
+            .edges
+            .iter()
+            .map(|edge| (edge.from, edge.to))
+            .collect();
+        assert_eq!(edges, [(6, 14), (16, 7)], "{name}");
+
+        let mnemonic = |index: usize| assembly.instructions[index].format[0].0.trim().to_owned();
+        assert_eq!(mnemonic(6), "jmp", "{name}");
+        assert_eq!(mnemonic(16), "jle", "{name}");
+        assert!(!assembly.edges[0].is_backward(), "{name}");
+        assert!(assembly.edges[1].is_backward(), "{name}");
+
+        // The one branch out of the function, which is also the one relocated instruction.
+        assert_eq!(mnemonic(11), "call", "{name}");
+        assert!(assembly.instructions[11].relocation.is_some(), "{name}");
+    }
 }
 
 /// The committed object is never rebuilt, so the line numbers above can only go wrong one
