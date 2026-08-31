@@ -268,29 +268,30 @@ impl Component for RelocationLabel {
             .unwrap_or(&self.target.name)
             .clone();
 
-        rect()
-            .maybe(hovering(), |rect| {
-                rect.background(Color::from_af32rgb(0.6, 255, 255, 255))
-                    .corner_radius(6.0)
-                    .border(Border::new().fill(RELOC_HOVER_FG).width(BorderWidth {
-                        top: 0.0,
-                        right: 0.0,
-                        bottom: 2.0,
-                        left: 0.0,
-                    }))
-            })
-            .on_pointer_over(move |_| hovering.set_if_modified(true))
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
-            .on_press(move |_| {
-                let mut selection = selection;
-                selection.set(Selection::Symbol(symbol.clone()));
-            })
-            .child(
-                label()
-                    .text(text)
-                    .max_lines(1)
-                    .color(if hovering() { RELOC_HOVER_FG } else { RELOC_FG }),
-            )
+        CursorArea::new().child(
+            rect()
+                .maybe(hovering(), |rect| {
+                    rect.background(Color::from_af32rgb(0.6, 255, 255, 255))
+                        .corner_radius(6.0)
+                        .border(Border::new().fill(RELOC_HOVER_FG).width(BorderWidth {
+                            top: 0.0,
+                            right: 0.0,
+                            bottom: 2.0,
+                            left: 0.0,
+                        }))
+                })
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| {
+                    let mut selection = selection;
+                    selection.set(Selection::Symbol(symbol.clone()));
+                })
+                .child(label().text(text).max_lines(1).color(if hovering() {
+                    RELOC_HOVER_FG
+                } else {
+                    RELOC_FG
+                })),
+        )
     }
 }
 
@@ -318,17 +319,35 @@ impl Component for InstructionRow {
         let mut hovering = use_state(|| false);
         let instruction = &self.data.assembly.instructions[self.index];
 
-        let spans = instruction.format.iter().map(|(text, kind)| {
-            Span::new(text.clone())
-                .color(kind_color(*kind))
-                .font_family(ASM_FONT)
-                .font_size(ASM_FONT_SIZE)
-                .font_weight(if *kind == iced_x86::FormatterTextKind::Mnemonic {
-                    FontWeight::BOLD
+        // When an operand is dropped for a relocation the formatter's padding to the
+        // operand column is left as a trailing run of spaces, and Skia trims trailing
+        // whitespace when it measures a paragraph — which butts the target name right
+        // up against the mnemonic. Make that padding non-breaking to keep the column.
+        let pad_tail = instruction.relocation.is_some();
+        let last = instruction.format.len().saturating_sub(1);
+
+        let spans = instruction
+            .format
+            .iter()
+            .enumerate()
+            .map(move |(i, (text, kind))| {
+                let text = if pad_tail && i == last {
+                    let kept = text.trim_end_matches(' ');
+                    format!("{kept}{}", "\u{a0}".repeat(text.len() - kept.len()))
                 } else {
-                    FontWeight::NORMAL
-                })
-        });
+                    text.clone()
+                };
+
+                Span::new(text)
+                    .color(kind_color(*kind))
+                    .font_family(ASM_FONT)
+                    .font_size(ASM_FONT_SIZE)
+                    .font_weight(if *kind == iced_x86::FormatterTextKind::Mnemonic {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
+            });
 
         let relocation = instruction
             .relocation
@@ -456,9 +475,11 @@ fn main_container(selection: &Selection) -> Element {
             .height(Size::fill())
             .content(Content::Flex)
             .child(header("Symbol Info"))
-            .child(ScrollView::new().height(Size::auto()).child(
-                symbol_info(symbol).into_element(),
-            ))
+            .child(
+                ScrollView::new()
+                    .height(Size::auto())
+                    .child(symbol_info(symbol).into_element()),
+            )
             .child(header("Assembly"))
             .child(AssemblyView {
                 symbol: symbol.clone(),
