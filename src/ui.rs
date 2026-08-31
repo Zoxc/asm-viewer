@@ -6,6 +6,7 @@ use rfd::AsyncFileDialog;
 use analysis::{open_files, Assembly, Object, SpanKind, Symbol, SymbolData};
 
 use crate::fonts::{fonts, Font};
+use crate::history::History;
 use crate::project::{Project, Selection};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
@@ -62,6 +63,11 @@ struct Objects(State<Vec<Arc<Object>>>);
 /// The current selection, shared through context.
 #[derive(Clone, Copy)]
 struct Sel(State<Selection>);
+
+/// Where the selection has been, shared through context. Named `Hist` because
+/// `History` is the type it holds, the same way `Sel` holds a `Selection`.
+#[derive(Clone, Copy)]
+struct Hist(State<History>);
 
 /// The flattened symbol list, shared through context so the Symbols tab does not
 /// have to rebuild it and the root does not have to re-render to hand it over.
@@ -874,8 +880,8 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 /// it changes (`freya-core/src/lifecycle/effect.rs`), so reading the two state
 /// contexts here makes this one observer the single choke point every mutation flows
 /// through: the three `selection.set(..)` sites and the toolbar's `objects.write()`
-/// know nothing about persistence, and neither will any future one. Step 3's history
-/// push hangs off the same place -- it is the one spot that sees every selection.
+/// know nothing about persistence, and neither will any future one. The history's
+/// `use_record_history` below is the same trick applied to `Sel` alone.
 fn use_save_on_change(objects: State<Vec<Arc<Object>>>, selection: State<Selection>) {
     // What this session has already written. It starts as the empty project the app
     // starts with -- deliberately *not* as the project `use_restore_on_startup` loaded.
@@ -898,6 +904,41 @@ fn use_save_on_change(objects: State<Vec<Arc<Object>>>, selection: State<Selecti
             // nor meaningfully blocks the UI.
             project.save();
             last_saved.set(project);
+        }
+    });
+}
+
+/// Record every selection in the navigation history.
+///
+/// Deliberately its own effect rather than a second job inside `use_save_on_change`,
+/// even though both observe `Sel`: this one has no business subscribing to `Objects`,
+/// and if it did, opening a binary -- which changes the objects and nothing else --
+/// would run the history code for a selection it has already recorded. Two effects
+/// with one subscription each also keep the two concerns separable, since only one of
+/// them touches the disk. The choke-point property is untouched: this is still the
+/// single observer of `Sel`, so every `selection.set(..)` site, present and future,
+/// lands here without knowing it.
+///
+/// The history holds `Selection`s, which are `Arc`s compared by pointer, so an entry
+/// is a refcount bump and no copy of any object data.
+///
+/// Nothing here pushes on navigation: back/forward (the next slice) move the cursor and
+/// then set `Sel` to the entry they landed on, this effect runs as it does for any other
+/// change, and `would_push` is false because that entry is exactly what the cursor is
+/// now on. Navigation therefore costs no entry, and no separate "we are navigating"
+/// flag is needed to make that true.
+fn use_record_history(selection: State<Selection>, history: State<History>) {
+    use_side_effect(move || {
+        // Reading subscribes the effect to the selection; `peek` on the history does
+        // not, because the effect must not subscribe to the state it writes.
+        let selection = selection.read().clone();
+
+        // `write()` notifies its subscribers before it hands the value over, whether or
+        // not anything changes, so ask first: a push that would dedup away must not
+        // wake the history panel.
+        if history.peek().would_push(&selection) {
+            let mut history = history;
+            history.write().push(selection);
         }
     });
 }
@@ -974,7 +1015,9 @@ pub fn app() -> impl IntoElement {
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
+    let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     use_save_on_change(objects, selection);
+    use_record_history(selection, history);
     // After the save effect on purpose: the effect is in place, with its empty
     // baseline, before the restore can put anything into either state, so the
     // restored session is seen by it as an ordinary change.
