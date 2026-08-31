@@ -73,6 +73,13 @@ one item per part, so the unfinished half stays visible.
 - [ ] Allow selection. Neither side has it: the source pane is hand-rolled rows rather than
   freya's `CodeEditor` (which does have selection, but can only highlight the cursor's own line
   and cannot be scrolled from outside — see `notes/Plan.md`, 5a).
+- [ ] A gap or a line before a row something jumps to, so the listing reads as the basic
+  blocks it is rather than as one run of instructions. The targets are already known —
+  `Assembly::edges` names them, and 7b's gutter draws an arrowhead on each. Note the
+  constraint before choosing between the two: `VirtualScrollView` is given one `item_size`
+  and `ROW_HEIGHT` must equal it or scrolling misaligns, so a real *gap* means variable row
+  heights (or a spacer row of its own in the list), while a hairline drawn inside the row's
+  own top edge costs nothing and cannot desynchronise anything.
 - [x] Have arrows for jumps. A gutter left of the addresses draws every branch that stays
   inside the symbol as a line from its row to its target's, with an arrowhead where it lands
   and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
