@@ -3,6 +3,7 @@ mod fonts;
 mod history;
 mod project;
 mod source;
+mod tree;
 mod ui;
 
 use freya::prelude::*;

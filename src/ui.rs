@@ -1,7 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, MutexGuard},
+    time::Duration,
 };
 
 use async_io::Timer;
@@ -18,6 +19,7 @@ use crate::fonts::{fonts, Font};
 use crate::history::History;
 use crate::project::{self, Project, Selection};
 use crate::source::{self, SourceFile};
+use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
 /// equal to the `item_size` given to each `VirtualScrollView`.
@@ -30,6 +32,39 @@ const FILTER_HEIGHT: f32 = 32.0;
 
 /// The side of one of the three square toggle buttons.
 const TOGGLE_SIZE: f32 = 22.0;
+
+/// The column a file row's disclosure triangle sits in, and the width every row of the
+/// objects tree gives up to it so that the tags below one another line up whether or not
+/// the row has a triangle.
+const CHEVRON_WIDTH: f32 = 14.0;
+
+/// How far an archive member is indented past the file it belongs to. Past the triangle
+/// and into the tag column, so the nesting is legible in a 300px sidebar without the name
+/// starting halfway across it.
+const TREE_INDENT: f32 = 16.0;
+
+/// The column the short format tag is written in. Fixed, so the names to the right of it
+/// start at the same x whatever the tag says -- the reason `SourceRow`'s line-number
+/// gutter is a fixed width and not a minimum.
+const TAG_WIDTH: f32 = 34.0;
+
+/// The tag is written smaller than the row's own text: it is a label on the row and not
+/// what the row is called.
+const TAG_FONT_SIZE: f32 = 10.0;
+
+/// How long a list row's tooltip waits before it appears.
+///
+/// `TooltipContainer` defaults to 500ms, which is right for a button whose tooltip
+/// explains it and wrong for a row whose tooltip *is* its own text, cut off: a truncated
+/// name is read by sweeping the pointer down the list, and half a second per row makes
+/// that gesture useless. Zero rather than a small number because the component still
+/// fades the tooltip in over 150ms, so "no delay" is already not a pop -- adding a wait
+/// in front of that animation only makes the sweep lag behind the pointer.
+///
+/// The filter toggles deliberately keep the 500ms default: their tooltip explains what
+/// `\b` means rather than finishing a word the row could not fit, and a pointer crossing
+/// the bar on its way somewhere else should not light up three of them.
+const TOOLTIP_DELAY: Duration = Duration::ZERO;
 
 /// How many rows above a row scrolled into view from the other pane are kept on screen.
 /// A line landing against the top edge answers "what is this" without answering "where in
@@ -1038,16 +1073,175 @@ impl Filtered {
 // Rows
 // ---------------------------------------------------------------------------
 
+/// A list row's own text, shown in full where the row could only show part of it.
+///
+/// Every panel list uses this rather than `TooltipContainer` directly, so that the one
+/// thing they must agree on -- how long the pointer has to sit still, see
+/// [`TOOLTIP_DELAY`] -- is decided once.
+fn row_tooltip(text: String, row: impl IntoElement) -> TooltipContainer {
+    TooltipContainer::new(Tooltip::new(text))
+        .delay(TOOLTIP_DELAY)
+        .child(row.into_element())
+}
+
+/// The short tag saying what kind of file a row is, in the column every row of the
+/// objects tree keeps for it. Grey and small: it labels the row rather than naming it.
+fn tag_label(tag: &str) -> impl IntoElement {
+    label()
+        .text(tag.to_owned())
+        .width(Size::px(TAG_WIDTH))
+        .font_size(TAG_FONT_SIZE)
+        .color(palette().address_fg)
+        .max_lines(1)
+}
+
+/// What a row is called, taking whatever width the columns beside it left.
+///
+/// Ellipsised rather than simply cut, which is what the other panel lists do: those cut
+/// against the edge of the pane, where the cut is self-evident, while this one cuts
+/// against the member count beside it and a name ending flush against a number reads as
+/// though it ended there. The `…` is also what says the row's tooltip has more to show.
+///
+/// The label sits in a box of its own rather than being the `flex` child itself. A
+/// `flex` child is measured from its content first, so a label placed there directly
+/// takes the width of its whole name and pushes the count off the row.
+fn tree_name(text: String) -> impl IntoElement {
+    rect()
+        .width(Size::flex(1.0))
+        .overflow(Overflow::Clip)
+        .child(
+            label()
+                .text(text)
+                .width(Size::fill())
+                .max_lines(1)
+                .text_overflow(TextOverflow::Ellipsis),
+        )
+}
+
+/// One opened file that contributed several objects — an archive — and the row its
+/// members fold under. It has no `Object` behind it, an `.a`/`.lib` not being one, so it
+/// selects nothing: pressing it folds it open or shut, which is all a file row is for
+/// until Step 6c decides what an object *is* to the selection.
+#[derive(Clone)]
+struct ArchiveRow {
+    name: String,
+    path: PathBuf,
+    members: usize,
+    expansion: Expansion,
+    /// The group this row is, in the tab's set of the groups the reader has opened.
+    group: usize,
+    expanded: State<HashSet<usize>>,
+    key: DiffKey,
+}
+
+impl PartialEq for ArchiveRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.path == other.path
+            && self.members == other.members
+            && self.expansion == other.expansion
+            && self.group == other.group
+    }
+}
+
+impl KeyExt for ArchiveRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for ArchiveRow {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let mut expanded = self.expanded;
+        let group = self.group;
+        let expansion = self.expansion;
+
+        let background = if hovering() {
+            palette().object_hover_bg
+        } else {
+            Color::TRANSPARENT
+        };
+
+        // `Forced` draws no triangle, only the space one would have taken: while the
+        // filter is holding the file open, folding it would hide the very rows the filter
+        // put on screen, so there is nothing here to press. See `Expansion::Forced`.
+        let chevron = match expansion {
+            Expansion::Collapsed => "\u{25b8}",
+            Expansion::Expanded => "\u{25be}",
+            Expansion::Forced => "",
+        };
+
+        row_tooltip(
+            self.path.display().to_string(),
+            rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                // The name is the `flex` child that takes what the three fixed columns
+                // beside it leave, which torin only works out under `Content::Flex`.
+                .content(Content::Flex)
+                .width(Size::fill())
+                .height(Size::px(ROW_HEIGHT))
+                .padding(Gaps::new_symmetric(0.0, 5.0))
+                .background(background)
+                .overflow(Overflow::Clip)
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| {
+                    if expansion == Expansion::Forced {
+                        return;
+                    }
+                    let mut expanded = expanded.write();
+                    if !expanded.remove(&group) {
+                        expanded.insert(group);
+                    }
+                })
+                .child(
+                    label()
+                        .text(chevron)
+                        .width(Size::px(CHEVRON_WIDTH))
+                        .color(palette().address_fg)
+                        .max_lines(1),
+                )
+                .child(tag_label(ARCHIVE_TAG))
+                .child(tree_name(self.name.clone()))
+                // How many objects came out of this file, which under a filter is how
+                // many of them matched. It is the one thing about an archive that is not
+                // visible while it is folded shut.
+                .child(
+                    label()
+                        .text(self.members.to_string())
+                        .font_size(TAG_FONT_SIZE)
+                        .color(palette().address_fg)
+                        .max_lines(1),
+                ),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// One object: an archive member indented under its file, or a file that contributed
+/// exactly one object and so is a row of its own.
 #[derive(Clone)]
 struct ObjectRow {
     object: Arc<Object>,
     selected: bool,
+    /// Whether this object is one of several a file contributed. It decides the indent,
+    /// and it decides what the tooltip says: a member's own name is the thing that gets
+    /// cut off, while a lone object is named after its file and the useful extra is
+    /// where that file is.
+    member: bool,
     key: DiffKey,
 }
 
 impl PartialEq for ObjectRow {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.object, &other.object) && self.selected == other.selected
+        Arc::ptr_eq(&self.object, &other.object)
+            && self.selected == other.selected
+            && self.member == other.member
     }
 }
 
@@ -1071,19 +1265,40 @@ impl Component for ObjectRow {
             Color::TRANSPARENT
         };
 
-        rect()
-            .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
-            .padding(5.0)
-            .background(background)
-            .overflow(Overflow::Clip)
-            .on_pointer_over(move |_| hovering.set_if_modified(true))
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
-            .on_press(move |_| {
-                let mut selection = selection;
-                selection.set(Selection::Object(object.clone()));
-            })
-            .child(label().text(self.object.name.clone()).max_lines(1))
+        let tooltip = if self.member {
+            self.object.name.clone()
+        } else {
+            self.object.path.display().to_string()
+        };
+
+        row_tooltip(
+            tooltip,
+            rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .content(Content::Flex)
+                .width(Size::fill())
+                .height(Size::px(ROW_HEIGHT))
+                .padding(Gaps::new_symmetric(0.0, 5.0))
+                .background(background)
+                .overflow(Overflow::Clip)
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| {
+                    let mut selection = selection;
+                    selection.set(Selection::Object(object.clone()));
+                })
+                // The column a file row's triangle sits in, kept empty here so that the
+                // tags of a file and of a lone object line up; a member is indented past
+                // it instead.
+                .child(rect().width(Size::px(if self.member {
+                    CHEVRON_WIDTH + TREE_INDENT
+                } else {
+                    CHEVRON_WIDTH
+                })))
+                .child(tag_label(format_tag(self.object.format)))
+                .child(tree_name(self.object.name.clone())),
+        )
     }
 
     fn render_key(&self) -> DiffKey {
@@ -1133,7 +1348,8 @@ impl Component for SymbolRow {
             Color::TRANSPARENT
         };
 
-        TooltipContainer::new(Tooltip::new(text.clone())).child(
+        row_tooltip(
+            text.clone(),
             rect()
                 .width(Size::fill())
                 .height(Size::px(ROW_HEIGHT))
@@ -1229,7 +1445,8 @@ impl Component for HistoryRow {
             Color::TRANSPARENT
         };
 
-        TooltipContainer::new(Tooltip::new(text.clone())).child(
+        row_tooltip(
+            text.clone(),
             rect()
                 .width(Size::fill())
                 .height(Size::px(ROW_HEIGHT))
@@ -1951,34 +2168,75 @@ struct ObjectsTab;
 impl Component for ObjectsTab {
     fn render(&self) -> impl IntoElement {
         let objects = use_consume::<Objects>().0;
-        let current = use_consume::<Sel>().0.read().clone();
         let filter = use_state(Filter::default);
-        // Filtered where the rows are built rather than in a memo of its own: a file
-        // contributes one object and an archive one per member, so this is tens of names
-        // and not the symbol list's hundred thousand.
-        let matcher = filter.read().matcher();
+        // Which files the reader has folded open. It belongs to the tab exactly the way
+        // the filter does — a fold is a view of a list, not part of the session — so it
+        // is a `use_state` here and nothing about it reaches `project.rs`. The set holds
+        // group keys, which are `Arc` pointers (see `TreeRow::File`), so an entry left
+        // behind by a file that has since been closed is harmless: nothing looks it up
+        // again.
+        let expanded = use_state(HashSet::<usize>::new);
+        // A memo, not a walk per row: the `VirtualScrollView` has to be told how many
+        // rows there are before it builds any of them, and the answer depends on the
+        // filter *and* on which files are open. It is tens of names rather than the
+        // symbol list's hundred thousand, but the length has to come from somewhere and
+        // that somewhere is the flattened tree.
+        let tree = use_memo(move || {
+            ObjectTree::new(&objects.read(), &filter.read().matcher(), &expanded.read())
+        });
+        let tree = tree.read().clone();
+        // The selected object as the address its rows are keyed by, rather than as the
+        // `Arc` itself: everything handed to a `VirtualScrollView` has to be `PartialEq`
+        // and an `Object` is not, while pointer identity — which is the only identity the
+        // UI uses anyway — compares as a number.
+        let selected = match &*use_consume::<Sel>().0.read() {
+            Selection::Object(object) => Some(Arc::as_ptr(object).addr()),
+            _ => None,
+        };
+        let length = tree.len();
 
-        let rows: Vec<Element> = objects
-            .read()
-            .iter()
-            .filter(|object| matcher.matches(&object.name))
-            .map(|object| {
-                ObjectRow {
-                    object: object.clone(),
-                    selected: matches!(&current, Selection::Object(selected) if Arc::ptr_eq(selected, object)),
-                    key: DiffKey::None,
-                }
-                .key(Arc::as_ptr(object).addr())
-                .into()
-            })
-            .collect();
-
-        // The list used to sit in a flex column and grow without bound; a tab has
-        // a height of its own, so it scrolls instead of being clipped.
         filter_pane(
             filter,
             palette().pane_bg,
-            ScrollView::new().child(rect().width(Size::fill()).children(rows).into_element()),
+            VirtualScrollView::new_with_data(
+                (tree, selected, expanded),
+                |row,
+                 (tree, selected, expanded): &(
+                    ObjectTree,
+                    Option<usize>,
+                    State<HashSet<usize>>,
+                )| {
+                    match tree.row(row) {
+                        TreeRow::File {
+                            name,
+                            path,
+                            group,
+                            members,
+                            expansion,
+                        } => ArchiveRow {
+                            name: name.clone(),
+                            path: path.clone(),
+                            members: *members,
+                            expansion: *expansion,
+                            group: *group,
+                            expanded: *expanded,
+                            key: DiffKey::None,
+                        }
+                        .key(*group)
+                        .into(),
+                        TreeRow::Object { object, member } => ObjectRow {
+                            object: object.clone(),
+                            selected: *selected == Some(Arc::as_ptr(object).addr()),
+                            member: *member,
+                            key: DiffKey::None,
+                        }
+                        .key(Arc::as_ptr(object).addr())
+                        .into(),
+                    }
+                },
+            )
+            .length(length)
+            .item_size(ROW_HEIGHT),
         )
     }
 }
