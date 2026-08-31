@@ -8,7 +8,19 @@ object = "0.32.1"
 symbolic-demangle = "12.4.1"
 symbolic-common = "12.4.1"
 iced-x86 = "1.20.0"
+# DWARF line info. 0.21 is the `addr2line` release that pairs with `object` 0.32 and
+# `gimli` 0.28, which is what keeps one `object` and one `gimli` in the tree — check with
+# `cargo tree -p analysis -d` after touching either. `default-features = false` drops
+# `addr2line`'s own `object`, `memmap2` and demangler dependencies: sections are loaded
+# here (see `src/line.rs`), not by `Context::new`, and names are demangled by
+# `symbolic-demangle` as they already were. `gimli` is named directly for `Dwarf::load`
+# and `EndianArcSlice`, at the same version `addr2line` asks for.
+addr2line = { version = "0.21", default-features = false, features = ["std"] }
+gimli = { version = "0.28", default-features = false, features = ["read", "std", "endian-reader"] }
 
 [dev-dependencies]
-# Test fixtures are built in memory with the writer rather than committed as blobs.
+# Test fixtures are built in memory with the writers rather than committed as blobs:
+# `object` writes the container, `gimli::write` the DWARF inside it. Both are the same
+# versions the crate itself depends on, so no second copy enters the tree.
 object = { version = "0.32", features = ["write"] }
+gimli = { version = "0.28", features = ["write"] }

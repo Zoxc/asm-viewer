@@ -263,6 +263,7 @@ mod tests {
             symbols_sorted: Vec::new(),
             sections: Vec::new(),
             data: ObjectData::from(&b""[..]),
+            dwarf: Default::default(),
         }))
     }
 

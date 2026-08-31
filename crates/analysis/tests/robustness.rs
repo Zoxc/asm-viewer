@@ -4,7 +4,10 @@
 mod common;
 
 use analysis::{parse_object, Object};
-use common::{caller_and_target, elf_x86_64, garbage, TextRelocation, TextSymbol};
+use common::{
+    caller_and_target, elf_x86_64, elf_x86_64_with_dwarf, garbage, DwarfFixture, DwarfRow,
+    TextRelocation, TextSymbol,
+};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,7 +25,23 @@ fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
                 let _: String = instruction.format.iter().map(|(t, _)| t.as_str()).collect();
             }
         }
+        // The DWARF path, on every input the sweeps below produce. Reading the rows back
+        // matters as much as building them: `LineInfo`'s own invariants (ascending,
+        // non-overlapping, in-range file indices) are what `row_at` and `file_of` rely on.
+        if let Some(info) = symbol.line_info(&object) {
+            let mut previous = 0;
+            for row in info.rows() {
+                assert!(row.range.start >= previous && row.range.start < row.range.end);
+                previous = row.range.end;
+                let _ = info.file_of(row);
+                let _ = info.location(row.range.start);
+            }
+            let _ = info.location(u64::MAX);
+        }
     }
+    // Also ask about a range no symbol covers, so the context is built even for an
+    // object whose symbols were all dropped.
+    let _ = object.line_info(0..u64::MAX);
 
     Some(object)
 }
@@ -354,4 +373,263 @@ fn a_symbol_outside_any_section_yields_no_data() {
     assert_eq!(symbol.estimate_size(), None);
     assert_eq!(symbol.data(), None);
     assert!(symbol.assembly(&object).is_none());
+}
+
+/// The DWARF fixture the line-info tests read, for the sweeps below to corrupt.
+fn dwarf_fixture() -> Vec<u8> {
+    elf_x86_64_with_dwarf(DwarfFixture {
+        symbols: &[
+            TextSymbol {
+                name: "first",
+                bytes: &[0x90, 0x90, 0x90, 0x90, 0x90, 0xC3],
+            },
+            TextSymbol {
+                name: "second",
+                bytes: &[0x90, 0xC3],
+            },
+        ],
+        comp_dir: "/src",
+        files: &["main.c", "other.c"],
+        rows: &[
+            DwarfRow {
+                address: 0,
+                file: 0,
+                line: 10,
+                column: 3,
+            },
+            DwarfRow {
+                address: 3,
+                file: 0,
+                line: 11,
+                column: 0,
+            },
+            DwarfRow {
+                address: 6,
+                file: 1,
+                line: 42,
+                column: 7,
+            },
+        ],
+        length: 8,
+        base_symbol: Some(1),
+    })
+}
+
+/// The byte ranges of every `.debug_*` section in an ELF, from its section table.
+fn debug_section_ranges(elf: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let object = object::File::parse(elf).expect("the fixture parses");
+    use object::{Object as _, ObjectSection};
+    object
+        .sections()
+        .filter(|section| {
+            section
+                .name()
+                .map(|name| name.starts_with(".debug_"))
+                .unwrap_or(false)
+        })
+        .filter_map(|section| {
+            let (offset, size) = section.file_range()?;
+            let start = usize::try_from(offset).ok()?;
+            Some(start..start + usize::try_from(size).ok()?)
+        })
+        .collect()
+}
+
+/// Garbage where DWARF should be must degrade to "no line info", never abort. Every byte
+/// of every `.debug_*` section is flipped in turn, which keeps the ELF itself valid and
+/// aims the damage squarely at `gimli` — a corrupt unit header, a line program that runs
+/// off the end, a file index pointing at nothing, an abbreviation that does not exist.
+#[test]
+fn corrupted_debug_sections_do_not_panic() {
+    let valid = dwarf_fixture();
+    let ranges = debug_section_ranges(&valid);
+    assert!(!ranges.is_empty(), "the fixture has .debug_* sections");
+    assert!(
+        parse_and_walk(&valid).is_some(),
+        "the fixture itself parses and resolves"
+    );
+
+    let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
+    for range in &ranges {
+        for offset in range.clone() {
+            for mask in [0xFFu8, 0x01, 0x80] {
+                let mut data = valid.clone();
+                data[offset] ^= mask;
+                cases.push((format!("debug byte {offset} ^ {mask:#04x}"), data));
+            }
+        }
+    }
+
+    let failures = survivors(cases.iter().map(|(label, data)| (label.clone(), &data[..])));
+    assert!(failures.is_empty(), "panicked on: {failures:?}");
+}
+
+/// The same sweep with whole runs of random bytes rather than single flips, so a mutation
+/// is not limited to one field of one record.
+#[test]
+fn debug_sections_full_of_garbage_do_not_panic() {
+    let valid = dwarf_fixture();
+    let ranges = debug_section_ranges(&valid);
+
+    let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
+    for seed in 1..48u64 {
+        for range in &ranges {
+            let mut data = valid.clone();
+            let noise = garbage(seed, range.len());
+            data[range.clone()].copy_from_slice(&noise);
+            cases.push((format!("section {range:?} replaced with garbage({seed})"), data));
+        }
+
+        // And every section at once, which is the "a file that is not really DWARF at
+        // all but says it is" case.
+        let mut data = valid.clone();
+        for range in &ranges {
+            let noise = garbage(seed.wrapping_mul(31), range.len());
+            data[range.clone()].copy_from_slice(&noise);
+        }
+        cases.push((format!("every debug section garbage({seed})"), data));
+    }
+
+    let failures = survivors(cases.iter().map(|(label, data)| (label.clone(), &data[..])));
+    assert!(failures.is_empty(), "panicked on: {failures:?}");
+}
+
+/// The DWARF loader goes through the same `section_data` guard the rest of the crate
+/// does, so a `.debug_info` whose compression header lies about its size costs nothing:
+/// the section reads as absent and the object simply has no line info. Without the guard
+/// this is the compressed-section bug again, only on the path that is *expected* to meet
+/// compressed sections — `.debug_*` are the ones compilers actually compress.
+#[test]
+fn a_lying_compressed_debug_section_costs_nothing() {
+    let payload = b"not really DWARF, but it is not read either";
+
+    for declared in [1u64 << 33, 1 << 20] {
+        let data = elf_with_compressed_section(payload, declared);
+        let object = parse_and_walk(&data).expect("the object still parses");
+        assert!(
+            !section_names(&object).contains(&".debug_info".to_owned()),
+            "a .debug_info declaring {declared} bytes was decompressed anyway"
+        );
+        assert!(object.line_info(0..u64::MAX).is_none());
+    }
+}
+
+/// `addr2line` 0.21 computes a line-table row's length as `next.address - row.address`
+/// with an unchecked subtraction, and a line program may legally move its address
+/// backwards: `DW_LNE_set_address` takes any address at all. This hand-written program
+/// sets the address to 0x100, emits a row there and then ends the sequence back at 0,
+/// so the only row's "next address" is below it — a subtract-with-overflow panic on a
+/// debug build, on a file the app merely opened.
+///
+/// `analysis` catches it (see `without_panicking` in `src/line.rs`), so the object still
+/// parses and simply has no line info. Note that the panic message the run prints comes
+/// from that caught panic and is expected.
+#[test]
+fn a_line_program_that_runs_backwards_does_not_panic() {
+    let data = elf_with_backwards_line_program();
+
+    let object = catch_unwind(AssertUnwindSafe(|| parse_and_walk(&data)))
+        .expect("a backwards line program is caught, not propagated")
+        .expect("the object still parses");
+
+    assert!(object.line_info(0..0x400).is_none());
+    for symbol in &object.symbols_sorted {
+        assert!(symbol.line_info(&object).is_none());
+    }
+}
+
+/// An ELF whose DWARF is written by hand, because no writer will produce this: both
+/// `gimli::write` and every real compiler assert that a sequence's addresses ascend.
+fn elf_with_backwards_line_program() -> Vec<u8> {
+    use object::{write, Architecture, BinaryFormat, Endianness, SectionKind};
+
+    fn uleb(out: &mut Vec<u8>, mut value: u64) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                return;
+            }
+        }
+    }
+
+    // .debug_abbrev: one abbreviation, a compile unit with low_pc/high_pc/stmt_list.
+    let mut abbrev = Vec::new();
+    uleb(&mut abbrev, 1);
+    uleb(&mut abbrev, 0x11); // DW_TAG_compile_unit
+    abbrev.push(0); // no children
+    for (attribute, form) in [
+        (0x11u64, 0x01u64), // DW_AT_low_pc,    DW_FORM_addr
+        (0x12, 0x07),       // DW_AT_high_pc,   DW_FORM_data8
+        (0x10, 0x17),       // DW_AT_stmt_list, DW_FORM_sec_offset
+    ] {
+        uleb(&mut abbrev, attribute);
+        uleb(&mut abbrev, form);
+    }
+    uleb(&mut abbrev, 0);
+    uleb(&mut abbrev, 0);
+    uleb(&mut abbrev, 0); // end of the abbreviation table
+
+    // .debug_info: that one unit, covering 0..0x400 and pointing at the line program.
+    let mut die = vec![1u8];
+    die.extend_from_slice(&0u64.to_le_bytes()); // low_pc
+    die.extend_from_slice(&0x400u64.to_le_bytes()); // high_pc
+    die.extend_from_slice(&0u32.to_le_bytes()); // stmt_list
+    die.push(0); // end of children
+
+    let mut info = Vec::new();
+    info.extend_from_slice(&((2 + 4 + 1 + die.len()) as u32).to_le_bytes()); // unit_length
+    info.extend_from_slice(&4u16.to_le_bytes()); // version
+    info.extend_from_slice(&0u32.to_le_bytes()); // debug_abbrev offset
+    info.push(8); // address size
+    info.extend_from_slice(&die);
+
+    // .debug_line: a DWARF 4 header, then the sequence that walks backwards.
+    let mut header = vec![
+        1,    // minimum_instruction_length
+        1,    // maximum_operations_per_instruction
+        1,    // default_is_stmt
+        0xFB, // line_base = -5
+        14,   // line_range
+        13,   // opcode_base
+    ];
+    header.extend_from_slice(&[0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1]); // standard_opcode_lengths
+    header.push(0); // no include_directories
+    header.extend_from_slice(b"a.c\0");
+    uleb(&mut header, 0); // directory index
+    uleb(&mut header, 0); // mtime
+    uleb(&mut header, 0); // length
+    header.push(0); // end of file_names
+
+    let mut program = Vec::new();
+    program.extend_from_slice(&[0x00, 0x09, 0x02]); // DW_LNE_set_address
+    program.extend_from_slice(&0x100u64.to_le_bytes());
+    program.push(0x01); // DW_LNS_copy: a row at 0x100
+    program.extend_from_slice(&[0x00, 0x09, 0x02]); // DW_LNE_set_address, backwards
+    program.extend_from_slice(&0u64.to_le_bytes());
+    program.extend_from_slice(&[0x00, 0x01, 0x01]); // DW_LNE_end_sequence, at 0
+
+    let mut line = Vec::new();
+    line.extend_from_slice(&((2 + 4 + header.len() + program.len()) as u32).to_le_bytes());
+    line.extend_from_slice(&4u16.to_le_bytes()); // version
+    line.extend_from_slice(&(header.len() as u32).to_le_bytes()); // header_length
+    line.extend_from_slice(&header);
+    line.extend_from_slice(&program);
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let text = obj.section_id(write::StandardSection::Text);
+    obj.append_section_data(text, &[0xC3], 1);
+    for (name, contents) in [
+        (".debug_abbrev", abbrev),
+        (".debug_info", info),
+        (".debug_line", line),
+    ] {
+        let id = obj.add_section(Vec::new(), name.as_bytes().to_vec(), SectionKind::Debug);
+        obj.append_section_data(id, &contents, 1);
+    }
+    obj.write().expect("writing the fixture object")
 }

@@ -6,7 +6,19 @@ use object::{
 use std::{collections::HashMap, fs, ops::Range, path::PathBuf, sync::Arc};
 use symbolic_demangle::{Demangle, DemangleOptions};
 
+mod line;
+
+pub use line::{DwarfCache, LineInfo, LineRow, Location};
 pub use object::BinaryFormat;
+
+/// `Object` is handed around as an `Arc` and read from worker threads, so everything it
+/// holds — the lazily built DWARF context above all, whose `addr2line::Context` is `Send`
+/// but not `Sync` on its own — has to be shared-safe. Assert it here rather than find out
+/// at a call site.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Object>();
+};
 
 pub struct Object {
     pub path: PathBuf,
@@ -17,6 +29,10 @@ pub struct Object {
     pub sections: Vec<Arc<Section>>,
     /// The bytes this object was parsed from. See [`ObjectData`].
     pub data: ObjectData,
+
+    /// This object's DWARF, built on the first query and never at parse time. Nothing
+    /// constructs it: write `DwarfCache::default()`. See [`Object::line_info`].
+    pub dwarf: DwarfCache,
 }
 
 /// The bytes an [`Object`] was parsed from, held for as long as the object lives.
@@ -317,7 +333,7 @@ const MAX_SECTION_DATA: u64 = 1 << 30;
 ///
 /// Both are orders of magnitude above real files: compressed debug sections run at
 /// roughly 2:1 to 10:1, so nothing legitimate comes anywhere near either limit.
-fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Option<Vec<u8>> {
+pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Option<Vec<u8>> {
     let compressed = section.compressed_data().ok()?;
 
     let max_ratio: u64 = match compressed.format {
@@ -439,6 +455,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         symbols_sorted: object.symbols_sorted,
         sections: object.sections,
         data,
+        dwarf: DwarfCache::default(),
     }))
 }
 

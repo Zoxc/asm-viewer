@@ -500,6 +500,7 @@ mod tests {
             // The mapping never looks at the bytes; these objects were never parsed
             // from any.
             data: ObjectData::from(&b""[..]),
+            dwarf: Default::default(),
         })
     }
 
