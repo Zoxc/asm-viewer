@@ -19,6 +19,10 @@ tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 rfd = "0.17"
+# The filter bars' matching engine (`src/filter.rs`), and not a new crate in the build:
+# regex 1 is already compiled in this tree, as a dependency of both `env_logger` and the
+# `tree-sitter` under freya's syntax highlighter.
+regex = "1"
 async-channel = "2"
 # The timer for the periodic save. Not a new async runtime: freya already depends on
 # async-io (freya-animation and freya-sdk both wait on `Timer` inside spawned tasks),

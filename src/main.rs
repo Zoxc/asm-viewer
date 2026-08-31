@@ -1,3 +1,4 @@
+mod filter;
 mod fonts;
 mod history;
 mod project;

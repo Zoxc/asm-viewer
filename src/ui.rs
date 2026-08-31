@@ -13,6 +13,7 @@ use rfd::AsyncFileDialog;
 
 use analysis::{open_files, Assembly, LineInfo, Object, SpanKind, Symbol, SymbolData};
 
+use crate::filter::{Filter, Matcher};
 use crate::fonts::{fonts, Font};
 use crate::history::History;
 use crate::project::{self, Project, Selection};
@@ -21,6 +22,14 @@ use crate::source::{self, SourceFile};
 /// Height of every row in the object, symbol and instruction lists. This must stay
 /// equal to the `item_size` given to each `VirtualScrollView`.
 const ROW_HEIGHT: f32 = 26.0;
+
+/// The height of the strip a filter bar's text box sits in. Taller than `ROW_HEIGHT` by
+/// the room an `Input`'s border and its own inner margin need; it is a bar and not a row,
+/// and nothing lines up with it.
+const FILTER_HEIGHT: f32 = 32.0;
+
+/// The side of one of the three square toggle buttons.
+const TOGGLE_SIZE: f32 = 22.0;
 
 /// How many rows above a row scrolled into view from the other pane are kept on screen.
 /// A line landing against the top edge answers "what is this" without answering "where in
@@ -56,6 +65,14 @@ const RELOC_FG: Color = Color::from_rgb(50, 50, 50);
 const RELOC_HOVER_FG: Color = Color::from_rgb(105, 89, 132);
 /// The wash over the half of a panel a dragged tab would land in.
 const DROP_PREVIEW_BG: Color = Color::from_argb(60, 105, 89, 132);
+/// A filter toggle that is on, and one the pointer is over. Two shades of the header's
+/// own grey rather than a colour of their own: a 22px square is small enough that "this
+/// one is pressed" has to be read from how dark it is, and against `HEADER_BG` these are
+/// the two steps that are legible without looking like a third kind of thing.
+const TOGGLE_ON_BG: Color = Color::from_rgb(196, 196, 196);
+const TOGGLE_HOVER_BG: Color = Color::from_rgb(225, 225, 225);
+/// What a pattern that will not compile, and the reason it will not, are written in.
+const INVALID_FG: Color = Color::from_rgb(176, 0, 32);
 
 /// Applying one of the two fonts. freya takes font families one at a time, pushing
 /// each onto the element's own list and appending the parent's behind it, so the
@@ -567,6 +584,271 @@ fn source_text(path: &Path) -> Option<SourceText> {
             .or_insert(file)
             .clone(),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Filtering
+// ---------------------------------------------------------------------------
+
+/// One of the three toggles beside a filter's text box.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Toggle {
+    Case,
+    Word,
+    Regex,
+}
+
+impl Toggle {
+    /// The three of them in the order the bar draws them.
+    const ALL: [Toggle; 3] = [Toggle::Case, Toggle::Word, Toggle::Regex];
+
+    /// What the button is drawn as.
+    ///
+    /// No icon font: freya's Lucide set is behind a feature of its own and three toggles
+    /// do not earn a dependency. Two of the three have a better answer than a picture
+    /// anyway — `\b` and `.*` *are* the regex the toggle turns on, written out — and `Aa`
+    /// is what every search box writes for case. The words are in the tooltip.
+    fn glyph(self) -> &'static str {
+        match self {
+            Toggle::Case => "Aa",
+            Toggle::Word => "\\b",
+            Toggle::Regex => ".*",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Toggle::Case => "Match case",
+            Toggle::Word => "Whole word",
+            Toggle::Regex => "Regular expression",
+        }
+    }
+
+    fn is_on(self, filter: &Filter) -> bool {
+        match self {
+            Toggle::Case => filter.case_sensitive,
+            Toggle::Word => filter.whole_word,
+            Toggle::Regex => filter.regex,
+        }
+    }
+
+    fn flip(self, filter: &mut Filter) {
+        match self {
+            Toggle::Case => filter.case_sensitive = !filter.case_sensitive,
+            Toggle::Word => filter.whole_word = !filter.whole_word,
+            Toggle::Regex => filter.regex = !filter.regex,
+        }
+    }
+}
+
+/// One toggle button.
+///
+/// Whether it is on is a prop rather than something read here, so that typing a character
+/// — which changes the one `Filter` all three of them share — re-renders the bar and none
+/// of them.
+#[derive(Clone, PartialEq)]
+struct FilterToggle {
+    filter: State<Filter>,
+    toggle: Toggle,
+    on: bool,
+}
+
+impl Component for FilterToggle {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let mut filter = self.filter;
+        let toggle = self.toggle;
+
+        let background = if self.on {
+            TOGGLE_ON_BG
+        } else if hovering() {
+            TOGGLE_HOVER_BG
+        } else {
+            Color::TRANSPARENT
+        };
+
+        TooltipContainer::new(Tooltip::new(toggle.tooltip())).child(
+            rect()
+                .width(Size::px(TOGGLE_SIZE))
+                .height(Size::px(TOGGLE_SIZE))
+                .center()
+                .corner_radius(4.0)
+                .background(background)
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |e: Event<PressEventData>| {
+                    // The text box beside this one gives its keyboard focus up from
+                    // `on_global_pointer_press`, which is how an `Input` notices a click
+                    // that landed outside it. A toggle is not outside it in the way that
+                    // matters: turning "whole word" on halfway through typing a name must
+                    // not send the rest of the name nowhere. A press's cancellable events
+                    // include the global press it derives, and non-capture globals are
+                    // sorted to run last (freya-core `events/name.rs`), so preventing the
+                    // default here reaches the input before it acts on it.
+                    e.prevent_default();
+                    toggle.flip(&mut filter.write());
+                })
+                .child(label().text(toggle.glyph()).max_lines(1)),
+        )
+    }
+}
+
+/// The filter over one of the sidebar lists: a text box, and the three toggles that say
+/// how to read what is in it.
+///
+/// One component and three uses. The state it edits belongs to the tab that owns the list
+/// rather than to the root — a filter is a view of a list and not part of the session — so
+/// it arrives as a prop and never as a context, and nothing about it reaches `project.rs`.
+#[derive(Clone, PartialEq)]
+struct FilterBar {
+    filter: State<Filter>,
+}
+
+impl Component for FilterBar {
+    fn render(&self) -> impl IntoElement {
+        let filter = self.filter;
+        // Reading subscribes the bar to the filter, which is what puts a typed character
+        // back on screen and lights a toggle that was just pressed.
+        let current = filter.read().clone();
+        // Compiled here as well as wherever the list is actually filtered. A `Regex` is
+        // not something the two can share through a `State`: it is not `PartialEq`, and a
+        // compiled program is not a value to compare anyway. Compiling one costs
+        // microseconds against the milliseconds a pass over a list of names does.
+        let error = current.matcher().error().map(str::to_owned);
+
+        rect()
+            .width(Size::fill())
+            .background(HEADER_BG)
+            .border(bottom_hairline())
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(FILTER_HEIGHT))
+                    .horizontal()
+                    // The toggles take their own widths and the box takes the rest, which
+                    // torin only works out for a `flex` child of a `Content::Flex` parent.
+                    .content(Content::Flex)
+                    .cross_align(Alignment::Center)
+                    .padding(Gaps::new_symmetric(0.0, 5.0))
+                    .spacing(2.0)
+                    .child(
+                        Input::new(
+                            // The pattern is a field of the `Filter` rather than a state
+                            // of its own, so that what was typed and how it is to be read
+                            // are one value to compare and one thing to hand a memo.
+                            // `Writable::map` is what lets the `Input` write into that
+                            // field while still notifying everything watching the whole
+                            // filter.
+                            filter
+                                .into_writable()
+                                .map(|filter| &filter.pattern, |filter| &mut filter.pattern),
+                        )
+                        .placeholder("Filter")
+                        .compact()
+                        .width(Size::flex(1.0))
+                        .maybe(error.is_some(), |input| {
+                            input.color(INVALID_FG).focus_border_fill(INVALID_FG)
+                        }),
+                    )
+                    .children(Toggle::ALL.map(|toggle| {
+                        FilterToggle {
+                            filter,
+                            toggle,
+                            on: toggle.is_on(&current),
+                        }
+                        .into()
+                    })),
+            )
+            // A pattern that will not compile has to read *as* one. Matching everything
+            // would hide the half-typed `(` and matching nothing looks exactly like a
+            // list with nothing in it, so the reason is written under the box it is in —
+            // and the list below stays empty, which is now the truth rather than a
+            // coincidence.
+            .maybe_child(error.map(|error| {
+                rect()
+                    .width(Size::fill())
+                    .padding(Gaps::new(0.0, 6.0, 5.0, 6.0))
+                    .overflow(Overflow::Clip)
+                    .child(label().text(error).color(INVALID_FG).max_lines(1))
+            }))
+    }
+}
+
+/// A list under its own filter bar.
+///
+/// The bar goes above the list, which is where "filter bar under objects / symbols /
+/// history" puts it: under the tab that names the list, the same place the assembly
+/// goal's "bar under the Assembly tab" means. It takes its height off the top of the pane
+/// rather than out of the list — the list is the `flex` child of a `Content::Flex` parent,
+/// exactly as the source rows are under their path header — so a `VirtualScrollView`
+/// inside it still starts at a row boundary whatever height the bar turns out to want,
+/// which is not fixed: it grows by a line when the pattern will not compile.
+fn filter_pane(filter: State<Filter>, background: Color, list: impl IntoElement) -> Element {
+    rect()
+        .expanded()
+        .content(Content::Flex)
+        .background(background)
+        .child(FilterBar { filter })
+        .child(rect().width(Size::fill()).height(Size::flex(1.0)).child(list))
+        .into()
+}
+
+/// What a filter leaves of the symbol list: the list itself, and where in it the names
+/// that matched it are.
+///
+/// Indices rather than a second `Vec<Symbol>`, because the list is 115k entries on
+/// `viewer-sample` and a row wants to be told which entry it is rather than handed a copy
+/// of it. `None` rather than every index in order, because no filter at all is the state
+/// the list is in most of the time and that case then costs exactly what it cost before
+/// there was a filter: no pass over the names and no allocation to say "all of them".
+#[derive(Clone)]
+struct Filtered {
+    symbols: SymbolList,
+    matches: Option<Arc<Vec<usize>>>,
+}
+
+impl PartialEq for Filtered {
+    fn eq(&self, other: &Self) -> bool {
+        self.symbols == other.symbols
+            && match (&self.matches, &other.matches) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+}
+
+impl Filtered {
+    /// Filter on the name the row actually shows — the demangled one where there is one —
+    /// because a filter the user cannot see the effect of on screen is not one.
+    fn new(symbols: SymbolList, matcher: &Matcher) -> Self {
+        let matches = match matcher {
+            Matcher::Everything => None,
+            matcher => Some(Arc::new(
+                symbols
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, symbol)| matcher.matches(symbol.data.display()))
+                    .map(|(index, _)| index)
+                    .collect(),
+            )),
+        };
+
+        Filtered { symbols, matches }
+    }
+
+    /// How many rows there are, which is what the `VirtualScrollView` is given.
+    fn len(&self) -> usize {
+        self.matches
+            .as_ref()
+            .map_or(self.symbols.0.len(), |matches| matches.len())
+    }
+
+    /// Which symbol the row at `row` is.
+    fn index(&self, row: usize) -> usize {
+        self.matches.as_ref().map_or(row, |matches| matches[row])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1483,10 +1765,16 @@ impl Component for ObjectsTab {
     fn render(&self) -> impl IntoElement {
         let objects = use_consume::<Objects>().0;
         let current = use_consume::<Sel>().0.read().clone();
+        let filter = use_state(Filter::default);
+        // Filtered where the rows are built rather than in a memo of its own: a file
+        // contributes one object and an archive one per member, so this is tens of names
+        // and not the symbol list's hundred thousand.
+        let matcher = filter.read().matcher();
 
         let rows: Vec<Element> = objects
             .read()
             .iter()
+            .filter(|object| matcher.matches(&object.name))
             .map(|object| {
                 ObjectRow {
                     object: object.clone(),
@@ -1500,7 +1788,9 @@ impl Component for ObjectsTab {
 
         // The list used to sit in a flex column and grow without bound; a tab has
         // a height of its own, so it scrolls instead of being clipped.
-        rect().expanded().background(Color::WHITE).child(
+        filter_pane(
+            filter,
+            Color::WHITE,
             ScrollView::new().child(rect().width(Size::fill()).children(rows).into_element()),
         )
     }
@@ -1511,21 +1801,36 @@ struct SymbolsTab;
 
 impl Component for SymbolsTab {
     fn render(&self) -> impl IntoElement {
-        let symbols = use_consume::<Symbols>().0.read().clone();
+        let symbols = use_consume::<Symbols>().0;
+        let filter = use_state(Filter::default);
+        // The one list where the filtering has to be a memo. It is 115k names on
+        // `viewer-sample`, so the pass belongs to a change of the list or of the filter
+        // rather than to a render — and the rows cannot each test themselves either, since
+        // the `VirtualScrollView` has to be told its length before it builds any of them.
+        let filtered = use_memo(move || {
+            Filtered::new(symbols.read().clone(), &filter.read().matcher())
+        });
+        let filtered = filtered.read().clone();
         let selected = match &*use_consume::<Sel>().0.read() {
             Selection::Symbol(symbol) => Some(symbol.clone()),
             _ => None,
         };
-        let symbol_count = symbols.0.len();
+        let length = filtered.len();
 
-        rect().expanded().background(SYMBOL_PANE_BG).child(
+        filter_pane(
+            filter,
+            SYMBOL_PANE_BG,
             VirtualScrollView::new_with_data(
-                (symbols, selected),
-                |i, (symbols, selected): &(SymbolList, Option<Symbol>)| {
-                    let symbol = &symbols.0[i];
+                (filtered, selected),
+                |row, (filtered, selected): &(Filtered, Option<Symbol>)| {
+                    // The row's place in the filtered list is not the symbol's place in
+                    // the list it was filtered out of, and everything below — the key, the
+                    // selection, `SymbolRow` itself — is about the symbol.
+                    let index = filtered.index(row);
+                    let symbol = &filtered.symbols.0[index];
                     SymbolRow {
-                        symbols: symbols.clone(),
-                        index: i,
+                        symbols: filtered.symbols.clone(),
+                        index,
                         selected: selected.as_ref() == Some(symbol),
                         key: DiffKey::None,
                     }
@@ -1533,7 +1838,7 @@ impl Component for SymbolsTab {
                     .into()
                 },
             )
-            .length(symbol_count)
+            .length(length)
             .item_size(ROW_HEIGHT),
         )
     }
@@ -1570,14 +1875,23 @@ struct HistoryTab;
 impl Component for HistoryTab {
     fn render(&self) -> impl IntoElement {
         let history = use_consume::<Hist>().0;
+        let filter = use_state(Filter::default);
+        // A session's history is a handful of entries, so this is the objects list's
+        // arrangement and not the symbol list's: filtered where the rows are built.
+        let matcher = filter.read().matcher();
 
         // Reading subscribes this tab to the history, so a recorded entry or a moved
-        // cursor re-renders the list and nothing else.
-        let rows: Vec<Element> = {
+        // cursor re-renders the list and nothing else. `visited` is asked of the whole
+        // history rather than of the rows, because an empty list means two different
+        // things — nowhere has been yet, or nowhere that has been matches — and the two
+        // are worth different words.
+        let (rows, visited): (Vec<Element>, bool) = {
             let history = history.read();
             let cursor = history.cursor();
-            history
+            let visited = history.recent().len() > 0;
+            let rows = history
                 .recent()
+                .filter(|(_, entry)| matcher.matches(&entry_text(entry)))
                 .map(|(index, entry)| {
                     HistoryRow {
                         entry: entry.clone(),
@@ -1588,24 +1902,26 @@ impl Component for HistoryTab {
                     .key((index, entry_addr(entry)))
                     .into()
                 })
-                .collect()
-        };
+                .collect();
 
-        if rows.is_empty() {
-            return placeholder("Nothing visited yet");
-        }
+            (rows, visited)
+        };
 
         // A plain `ScrollView` rather than a `VirtualScrollView`: a session's history is
         // a handful of entries, the rows are one label each, and this way the list is
         // built straight from the state it read instead of having to route the entries
         // through `new_with_data`. The same shape the objects list uses.
-        rect()
-            .expanded()
-            .background(SYMBOL_PANE_BG)
-            .child(
-                ScrollView::new().child(rect().width(Size::fill()).children(rows).into_element()),
-            )
-            .into()
+        filter_pane(
+            filter,
+            SYMBOL_PANE_BG,
+            match (visited, rows.is_empty()) {
+                (false, _) => placeholder("Nothing visited yet"),
+                (true, true) => placeholder("No matches"),
+                (true, false) => ScrollView::new()
+                    .child(rect().width(Size::fill()).children(rows).into_element())
+                    .into_element(),
+            },
+        )
     }
 }
 
