@@ -32,6 +32,8 @@ one item per part, so the unfinished half stays visible.
   extra generics, mangling, etc. (for Rust / C++).
 - [ ] An expanding section under the Assembly tab to show more symbol info, replacing the Info
   tab.
+- [x] Keep the `rip+` visible in a relocated rip-relative operand — `mov dword ptr [rip+<target>], 7`
+  rather than `mov dword ptr [<target>], 7` — when you can navigate to the target.
 - [ ] Allow selection.
 - [ ] Have arrows for jumps.
 
