@@ -4,7 +4,7 @@ use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
 use crate::{
-    fonts::fonts,
+    fonts::{fonts, Font},
     object::{open_files, Assembly, Object, Symbol, SymbolData},
 };
 
@@ -28,6 +28,30 @@ const NUMBER_FG: Color = Color::from_rgb(80, 107, 135);
 const OTHER_FG: Color = Color::from_rgb(102, 102, 102);
 const RELOC_FG: Color = Color::from_rgb(50, 50, 50);
 const RELOC_HOVER_FG: Color = Color::from_rgb(105, 89, 132);
+
+/// Applying one of the two fonts. freya takes font families one at a time, pushing
+/// each onto the element's own list and appending the parent's behind it, so the
+/// chain is set by calling `font_family` in order of preference.
+trait FontExt: TextStyleExt + Sized {
+    fn font(mut self, font: &'static Font) -> Self {
+        for family in &font.families {
+            self = self.font_family(family.clone());
+        }
+        self.font_size(font.size)
+    }
+
+    /// The desktop's interface font, set on the root and inherited by everything.
+    fn interface_font(self) -> Self {
+        self.font(&fonts().ui)
+    }
+
+    /// The desktop's fixed-width font, for the assembly rows.
+    fn assembly_font(self) -> Self {
+        self.font(&fonts().mono)
+    }
+}
+
+impl<T: TextStyleExt + Sized> FontExt for T {}
 
 #[derive(Clone)]
 pub enum Selection {
@@ -341,8 +365,7 @@ impl Component for InstructionRow {
 
                 Span::new(text)
                     .color(kind_color(*kind))
-                    .font_family(fonts().mono_family.as_str())
-                    .font_size(fonts().mono_size)
+                    .assembly_font()
                     .font_weight(if *kind == iced_x86::FormatterTextKind::Mnemonic {
                         FontWeight::BOLD
                     } else {
@@ -364,8 +387,7 @@ impl Component for InstructionRow {
             .width(Size::fill())
             .height(Size::px(ROW_HEIGHT))
             .padding(3.0)
-            .font_family(fonts().mono_family.as_str())
-            .font_size(fonts().mono_size)
+            .assembly_font()
             .background(if hovering() {
                 ASM_ROW_HOVER_BG
             } else {
@@ -528,6 +550,26 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 }
 
 pub fn app() -> impl IntoElement {
+    // The tooltip is a freya component whose theme hardcodes a 14px font, and the
+    // theme is the only way in: its `theme` override field is private. floem's
+    // tooltip was a plain label that inherited the interface font, so hand the theme
+    // the interface size; the family it does inherit from the row it is attached to.
+    use_init_theme(|| {
+        let mut theme = Theme::default();
+
+        if let Some(tooltip) = theme.get::<TooltipThemePreference>("tooltip").cloned() {
+            theme.set(
+                "tooltip",
+                TooltipThemePreference {
+                    font_size: Preference::Specific(fonts().ui.size),
+                    ..tooltip
+                },
+            );
+        }
+
+        theme
+    });
+
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
 
@@ -613,8 +655,7 @@ pub fn app() -> impl IntoElement {
     rect()
         .expanded()
         .content(Content::Flex)
-        .font_family(fonts().ui_family.as_str())
-        .font_size(fonts().ui_size)
+        .interface_font()
         .background(Color::WHITE)
         .child(toolbar(objects))
         .child(
