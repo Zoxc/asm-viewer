@@ -28,6 +28,8 @@ one item per part, so the unfinished half stays visible.
 - [ ] Bar under the Assembly tab with the full demangled + mangled symbol name.
 - [ ] Name the Assembly tab after the function — just `namespace/module::fn_name`, without the
   extra generics, mangling, etc. (for Rust / C++).
+- [ ] An expanding section under the Assembly tab to show more symbol info, replacing the Info
+  tab.
 - [ ] Allow selection.
 - [ ] Have arrows for jumps.
 
