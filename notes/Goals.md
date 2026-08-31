@@ -53,6 +53,7 @@ one item per part, so the unfinished half stays visible.
 - [x] Don't insert duplicate history entries, bump existing ones instead.
 - [ ] Tree view for objects, with icon indicators for processing / file type.
 - [ ] Filter bar under objects / symbols / history, with icons for caps / full word / regex.
+- [ ] Tooltip for items in panels — missing from objects now.
 - [ ] Left panel to explore project directory / files.
 - [ ] Left panel for symbol search.
 - [ ] Left panel for project directory / source search.
