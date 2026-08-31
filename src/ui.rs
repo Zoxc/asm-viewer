@@ -878,8 +878,14 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 /// push hangs off the same place -- it is the one spot that sees every selection.
 fn use_save_on_change(objects: State<Vec<Arc<Object>>>, selection: State<Selection>) {
     // What this session has already written. It starts as the empty project the app
-    // starts with, so a run in which nothing is ever opened does not rewrite the file
-    // -- which is what keeps the previous session on disk until Step 2c restores it.
+    // starts with -- deliberately *not* as the project `use_restore_on_startup` loaded.
+    // The empty baseline means the state the app boots into (no objects, no selection)
+    // is never written, so a run in which nothing is opened, or one whose restore finds
+    // no readable binary, or one closed while parsing is still in flight, all leave the
+    // file on disk untouched. Seeding the baseline from the loaded project instead would
+    // invert that: the effect's first run would see the still-empty state differ from
+    // the baseline and write an *empty* project over a good one. The cost of the empty
+    // baseline is a single redundant, idempotent save once a restore lands.
     let mut last_saved = use_state(Project::default);
 
     use_side_effect(move || {
@@ -893,6 +899,55 @@ fn use_save_on_change(objects: State<Vec<Arc<Object>>>, selection: State<Selecti
             project.save();
             last_saved.set(project);
         }
+    });
+}
+
+/// Reopen the previous session's binaries and selection, once, at startup.
+///
+/// `use_hook` runs its initializer on mount and never again, which is what makes this
+/// happen exactly once; `spawn` is freya's own task spawner and is callable during
+/// render (`use_future` is built out of the same two calls), so the reading and
+/// parsing is off the UI thread from the first frame. Beyond that this is the
+/// toolbar's `on_open` pattern verbatim -- CPU-bound `open_files` on a `std::thread`,
+/// the result back over an `async_channel` -- so a large binary parses with the window
+/// already up and interactive.
+///
+/// Every step degrades silently: no state file or a corrupt one is `None`, a path that
+/// no longer exists or no longer parses just contributes no `Object` (`open_files`
+/// swallows its own failures), and `Project::resolve` falls back from a vanished symbol
+/// to its object and from a vanished object to nothing.
+fn use_restore_on_startup(objects: State<Vec<Arc<Object>>>, selection: State<Selection>) {
+    use_hook(move || {
+        let Some(project) = Project::load() else {
+            return;
+        };
+        if project.binaries.is_empty() {
+            return;
+        }
+
+        spawn(async move {
+            let (sender, receiver) = async_channel::bounded(1);
+            let paths = project.binaries.clone();
+            std::thread::spawn(move || {
+                let _ = sender.send_blocking(open_files(paths));
+            });
+
+            let Ok(parsed) = receiver.recv().await else {
+                return;
+            };
+            // Nothing opened: leave the app empty *and* leave the file alone, so a
+            // binary that is only temporarily missing is not forgotten.
+            if parsed.is_empty() {
+                return;
+            }
+
+            let (mut objects, mut selection) = (objects, selection);
+            objects.write().extend(parsed);
+            // Resolved against everything now loaded rather than just `parsed`, so
+            // this stays correct if the user managed to open something first.
+            let restored = project.resolve(&objects.read());
+            selection.set(restored);
+        });
     });
 }
 
@@ -920,6 +975,10 @@ pub fn app() -> impl IntoElement {
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
     use_save_on_change(objects, selection);
+    // After the save effect on purpose: the effect is in place, with its empty
+    // baseline, before the restore can put anything into either state, so the
+    // restored session is seen by it as an ordinary change.
+    use_restore_on_startup(objects, selection);
 
     // Rebuilt only when the object list changes, not on every selection change.
     let symbols = use_memo(move || {
