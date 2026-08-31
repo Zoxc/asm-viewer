@@ -5,6 +5,9 @@ Inspecting and comparing binaries.
 `- [ ]` is a goal that is not done yet, `- [x]` one that is, `- [?]` one that is only a maybe —
 not decided on yet — and `- [D]` one that is deferred, with the reason why on the item.
 
+Only check an item off when all of it is done. A goal that is only partly done gets split into
+one item per part, so the unfinished half stays visible.
+
 ## Source / assembly split view
 
 - [ ] Have a source view and an assembly view, mapping between them. This is the default split view that should generally be used.
@@ -15,7 +18,8 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 
 ## Navigation
 
-- [x] Clicking on functions in assembly should navigate to them (same in source).
+- [x] Clicking on functions in assembly should navigate to them.
+- [ ] Clicking on functions in source should navigate to them.
 - [ ] Navigating in assembly should also navigate source.
 - [x] Mouse buttons can navigate history so you can go back and forth.
 
@@ -39,7 +43,8 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 
 ## Panels and tabs
 
-- [x] History panel on the bottom left with recent functions / source files.
+- [x] History panel on the bottom left with recent functions.
+- [ ] The history panel also lists recent source files.
 - [ ] Left panel to explore project directory / files.
 - [ ] Left panel for symbol search.
 - [ ] Left panel for project directory / source search.
