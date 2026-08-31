@@ -17,6 +17,7 @@ use analysis::{open_files, Assembly, LineInfo, Object, SpanKind, Symbol, SymbolD
 use crate::filter::{Filter, Matcher};
 use crate::fonts::{fonts, Font};
 use crate::history::History;
+use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 use crate::project::{self, Project, Selection};
 use crate::source::{self, SourceFile};
 use crate::tabs::Tabs;
@@ -79,6 +80,28 @@ const TOOLTIP_DELAY: Duration = Duration::ZERO;
 /// Seen in the headless renders at twelve open tabs, not reasoned about.
 const CHIP_NAME_CHARS: usize = 40;
 
+/// The width of one lane of the assembly view's branch gutter: how far apart two branch
+/// lines running down the same rows are drawn.
+const LANE_WIDTH: f32 = 7.0;
+
+/// How thick a branch line is, horizontal run and arrowhead included. One logical pixel,
+/// which is a hairline on a scaled display and the thinnest thing skia will draw solidly
+/// on an unscaled one.
+const BRANCH_STROKE: f32 = 1.0;
+
+/// How far the horizontal run reaches past the innermost lane, which is where the
+/// arrowhead sits.
+const ARROW_WIDTH: f32 = 7.0;
+
+/// The gap between an arrowhead's tip and the first digit of the address column, so that
+/// the gutter reads as a column of its own rather than as decoration on the addresses.
+const GUTTER_PAD: f32 = 3.0;
+
+/// The length of each of the two strokes an arrowhead is made of, and how far each is
+/// turned from the horizontal. Both of them pivot on the tip, so the pair is a `>`.
+const ARROW_STROKE: f32 = 5.0;
+const ARROW_ANGLE: f32 = 30.0;
+
 /// How many rows above a row scrolled into view from the other pane are kept on screen.
 /// A line landing against the top edge answers "what is this" without answering "where in
 /// the function is it", which is half of why the two panes are side by side at all.
@@ -140,6 +163,16 @@ struct Palette {
     /// The wash behind a relocation link the pointer is over, lightening whatever row
     /// background is under it.
     link_hover_bg: Color,
+    /// A branch line in the assembly gutter, with its corner and its arrowhead. Quieter
+    /// than anything it runs beside: the gutter is a diagram of the listing and must not
+    /// compete with it for the eye.
+    branch_fg: Color,
+    /// The same line while a branch of the row under the pointer runs down it. One hue in
+    /// two strengths, the way `line_focus_bg` and `line_pin_bg` are and for the same
+    /// reason -- it is one relationship, drawn twice over -- and that hue is the address
+    /// column's own, since a branch names a place in the listing exactly as an address
+    /// does.
+    branch_hover_fg: Color,
 
     // The code colours, shared by both panes. Which syntactic category takes which of
     // them is [`Palette::syntax`]; these names are the category rather than either pane's
@@ -188,6 +221,8 @@ impl Palette {
         toggle_on_bg: Color::from_rgb(196, 196, 196),
         toggle_hover_bg: Color::from_rgb(225, 225, 225),
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
+        branch_fg: Color::from_rgb(176, 188, 202),
+        branch_hover_fg: Color::from_rgb(90, 116, 148),
 
         address_fg: Color::from_rgb(118, 141, 169),
         keyword_fg: Color::from_rgb(116, 94, 147),
@@ -595,12 +630,16 @@ impl PartialEq for SourceText {
     }
 }
 
-/// A disassembled symbol and what says where its instructions came from, compared by
-/// pointer.
+/// A disassembled symbol, where its branches are drawn and what says where its
+/// instructions came from, compared by pointer.
 #[derive(Clone)]
 struct AsmData {
     assembly: Arc<Assembly>,
     object: Arc<Object>,
+    /// The gutter layout for this symbol's branches. Derived from `assembly` and never
+    /// from anything else, so the two are always in step -- but compared on its own all
+    /// the same, since nothing in the type system says so.
+    lanes: Arc<Lanes>,
     lines: SymbolLines,
 }
 
@@ -608,6 +647,7 @@ impl PartialEq for AsmData {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.assembly, &other.assembly)
             && Arc::ptr_eq(&self.object, &other.object)
+            && Arc::ptr_eq(&self.lanes, &other.lanes)
             && self.lines == other.lines
     }
 }
@@ -651,14 +691,28 @@ impl PartialEq for SourceData {
     }
 }
 
-/// What the instruction rows are built from: the disassembly, and the two positions the
-/// source pane is pointing at. Kept apart from `AsmData` so that a hover, which changes
-/// this and not that, cannot re-run anything the disassembly drives.
+/// What the instruction rows are built from: the disassembly, the two positions the
+/// source pane is pointing at, and the branches of the row the pointer is on. Kept apart
+/// from `AsmData` so that a hover, which changes this and not that, cannot re-run anything
+/// the disassembly drives.
 #[derive(Clone, PartialEq)]
 struct AsmRows {
     data: AsmData,
     focus: Option<LinePos>,
     pin: Option<LinePos>,
+    /// The edges starting or ending at the hovered row, which every row the gutter draws
+    /// them through has to know about. Worked out once here rather than per row, and
+    /// empty while the pointer is on no row at all -- the overwhelmingly common case, in
+    /// which the gutter is drawn in one colour and this costs nothing.
+    touching: Vec<PlacedEdge>,
+}
+
+/// What one row draws in the gutter: its own lanes, and how much of it belongs to a branch
+/// of the row under the pointer.
+#[derive(Clone, Copy, PartialEq)]
+struct RowArrows {
+    lanes: RowLanes,
+    lit: Lit,
 }
 
 impl AsmRows {
@@ -677,6 +731,14 @@ impl AsmRows {
             self.focus.as_ref() == Some(&at),
             self.pin.as_ref() == Some(&at),
         )
+    }
+
+    /// What the row at `index` draws in the gutter.
+    fn arrows(&self, index: usize) -> RowArrows {
+        RowArrows {
+            lanes: self.data.lanes.row(index),
+            lit: lanes::lit(&self.touching, index),
+        }
     }
 }
 
@@ -1819,10 +1881,109 @@ impl Component for RelocationLabel {
     }
 }
 
+/// The branch gutter for one row: a vertical line for every lane running through it, the
+/// horizontal run out to the listing where a branch starts or ends here, and an arrowhead
+/// where one lands. `width` is the whole symbol's lane count and not this row's, so that
+/// the addresses start at the same x on every row of the listing.
+///
+/// Rects, and not `freya-components`' `canvas()`, which was read before this was written
+/// and is the wrong tool twice over. Its `RenderCallback` compares equal to every other
+/// one, so a canvas whose *drawing* changed while its layout did not tells the diff
+/// nothing -- and a row recycled by a `VirtualScrollView` is exactly that. And a line is a
+/// rect: reaching for skia here would put raw drawing code in a file that has none.
+///
+/// The strokes are positioned absolutely, which is what lets the lanes sit at fixed
+/// columns and the two halves of a corner meet in the middle of the row. It is also why
+/// `InstructionRow` pads horizontally rather than on all four sides: a line has to reach
+/// the row's own top and bottom edges, or the gutter would come out dashed with one gap
+/// per row.
+fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
+    let middle = ROW_HEIGHT / 2.0;
+    // Where an arrowhead points, and where a horizontal run ends. Lane 0 is the innermost,
+    // so the lanes are laid out leftwards from here.
+    let tip = width as f32 * LANE_WIDTH + ARROW_WIDTH;
+    let lane_x = move |lane: usize| (width - 1 - lane) as f32 * LANE_WIDTH + LANE_WIDTH / 2.0;
+
+    // The horizontal run and the arrowhead are the two ends of one gesture -- the row the
+    // pointer is on, and the row its branch goes to -- so both are lit exactly when a
+    // branch of the hovered row has an end in this one.
+    let lit = arrows.lit.corner;
+
+    let stroke = move |left: f32, top: f32, wide: f32, tall: f32, lit: bool| {
+        rect()
+            .position(Position::new_absolute().left(left).top(top))
+            .width(Size::px(wide))
+            .height(Size::px(tall))
+            .background(if lit {
+                palette().branch_hover_fg
+            } else {
+                palette().branch_fg
+            })
+    };
+
+    rect()
+        .width(Size::px(tip + GUTTER_PAD))
+        .height(Size::px(ROW_HEIGHT))
+        .children((0..width).filter_map(move |lane| {
+            let vertical = arrows.lanes.lanes[lane];
+            let (top, tall) = match (vertical.top, vertical.bottom) {
+                (true, true) => (0.0, ROW_HEIGHT),
+                (true, false) => (0.0, middle),
+                (false, true) => (middle, ROW_HEIGHT - middle),
+                (false, false) => return None,
+            };
+
+            Some(
+                stroke(
+                    lane_x(lane) - BRANCH_STROKE / 2.0,
+                    top,
+                    BRANCH_STROKE,
+                    tall,
+                    arrows.lit.lanes[lane],
+                )
+                .into_element(),
+            )
+        }))
+        .maybe_child(arrows.lanes.stub.map(|lane| {
+            stroke(
+                lane_x(lane),
+                middle - BRANCH_STROKE / 2.0,
+                tip - lane_x(lane),
+                BRANCH_STROKE,
+                lit,
+            )
+        }))
+        // The two strokes of the arrowhead are one stroke turned about its right end,
+        // which is the tip, once each way.
+        .maybe(arrows.lanes.arrow, |el| {
+            el.children([ARROW_ANGLE, -ARROW_ANGLE].map(|angle| {
+                stroke(
+                    tip - ARROW_STROKE,
+                    middle - BRANCH_STROKE / 2.0,
+                    ARROW_STROKE,
+                    BRANCH_STROKE,
+                    lit,
+                )
+                .rotate(angle)
+                .transform_origin(TransformOrigin::right())
+                .into_element()
+            }))
+        })
+}
+
 #[derive(Clone)]
 struct InstructionRow {
     data: AsmData,
     index: usize,
+    /// What this row draws in the gutter, worked out by the list for the same reason
+    /// `focused` is: it is an answer about *other* rows -- the lanes lit in row 40 belong
+    /// to a branch of row 12 -- and a row that read the hovered index itself would
+    /// re-render every visible row on every pointer move whether or not its own picture
+    /// changed.
+    arrows: RowArrows,
+    /// Where the pointer is, which this row writes and does not read. Kept out of the
+    /// `PartialEq` below: it is the same handle for the whole life of the list.
+    hover: State<Option<usize>>,
     /// Whether the source line the pointer is on is the one this instruction was compiled
     /// from. Worked out by the list rather than read from the focus here, so that a focus
     /// moving between two instructions of one line leaves every row untouched.
@@ -1838,6 +1999,7 @@ impl PartialEq for InstructionRow {
             && self.index == other.index
             && self.focused == other.focused
             && self.pinned == other.pinned
+            && self.arrows == other.arrows
     }
 }
 
@@ -1852,6 +2014,9 @@ impl Component for InstructionRow {
         let mut hovering = use_state(|| false);
         let mut focused = use_consume::<Focused>().0;
         let mut pinned = use_consume::<Pinned>().0;
+        let mut hover = self.hover;
+        let index = self.index;
+        let width = self.data.lanes.width();
         let instruction = &self.data.assembly.instructions[self.index];
 
         // Where this row points on the source side. Worked out once here rather than in
@@ -1931,15 +2096,32 @@ impl Component for InstructionRow {
             .cross_align(Alignment::Center)
             .width(Size::fill())
             .height(Size::px(ROW_HEIGHT))
-            .padding(3.0)
+            // Horizontally only, where it used to be on all four sides: the gutter's lines
+            // run to the row's own top and bottom edges, and three pixels of padding at
+            // each of them would break every line in the column once per row. Nothing else
+            // in the row moves, since its children are centred in it and none of them is
+            // as tall as it is.
+            .padding(Gaps::new_symmetric(0.0, 3.0))
             .assembly_font()
             .background(row_background(hovering(), self.focused, self.pinned))
             .on_pointer_over(move |_| {
                 hovering.set_if_modified(true);
+                // Two hovers, because they answer two questions. This one is local and is
+                // this row's own background; the index is shared with the whole list,
+                // because what the gutter does with it is about rows the pointer is
+                // nowhere near.
+                hover.set_if_modified(Some(index));
                 focused.set_if_modified(taken.clone());
             })
             .on_pointer_out(move |_| {
                 hovering.set_if_modified(false);
+                // Given up the way the cross-view focus is, and for the reason spelled out
+                // on `release_focus`: `pointerout` on the row being left and `pointerover`
+                // on the row being entered are not ordered against each other, so a row
+                // may only take back what is still its own.
+                if *hover.peek() == Some(index) {
+                    hover.set(None);
+                }
                 release_focus(focused, focus.as_ref());
             })
             .on_press(move |_| {
@@ -1954,6 +2136,10 @@ impl Component for InstructionRow {
                     }));
                 }
             })
+            // Left of the addresses, and nothing at all for a symbol that branches
+            // nowhere inside itself: an empty column would be a column, and most symbols
+            // are that one.
+            .maybe(width > 0, |el| el.child(gutter(width, self.arrows)))
             .child(
                 label()
                     .text(format!("{:016X} ", instruction.address))
@@ -2368,6 +2554,14 @@ impl Component for AssemblyView {
                 .child(label().text("Assembly unavailable"));
         };
 
+        // Worked out here rather than in a memo of its own, which is what "beside the
+        // disassembly" means: it is one pass over the branches of the symbol that was
+        // just decoded, in the one component that re-renders exactly when a symbol is
+        // selected. A memo would recompute it in a spawned task and so land a beat after
+        // the disassembly it belongs to, which is the second reason `InstructionList`
+        // exists at all.
+        let lanes = Arc::new(Lanes::new(&assembly.edges, assembly.instructions.len()));
+
         rect()
             .width(Size::fill())
             .height(Size::fill())
@@ -2376,6 +2570,7 @@ impl Component for AssemblyView {
             .child(InstructionList {
                 assembly,
                 object: self.symbol.object.clone(),
+                lanes,
             })
     }
 }
@@ -2393,11 +2588,14 @@ impl Component for AssemblyView {
 struct InstructionList {
     assembly: Arc<Assembly>,
     object: Arc<Object>,
+    lanes: Arc<Lanes>,
 }
 
 impl PartialEq for InstructionList {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.assembly, &other.assembly) && Arc::ptr_eq(&self.object, &other.object)
+        Arc::ptr_eq(&self.assembly, &other.assembly)
+            && Arc::ptr_eq(&self.object, &other.object)
+            && Arc::ptr_eq(&self.lanes, &other.lanes)
     }
 }
 
@@ -2422,12 +2620,22 @@ impl Component for InstructionList {
         // `Size::fill()` inside it -- is measured here instead.
         let mut viewport = use_state(|| 0.0f32);
 
+        // Which row the pointer is on, which the rows write and the gutter reads. It lives
+        // here and not in each row because it is the one thing about a row that the rows
+        // *around* it need: hovering a `jne` lights its line all the way down to where it
+        // lands, which is a row that knows nothing about the pointer.
+        let hover = use_state(|| None::<usize>);
+
         let data = AsmData {
             assembly: self.assembly.clone(),
             object: self.object.clone(),
+            lanes: self.lanes.clone(),
             lines,
         };
         let length = data.assembly.instructions.len();
+        let touching = hover()
+            .map(|row| data.lanes.touching(row))
+            .unwrap_or_default();
 
         // The deps are the disassembly and nothing the pointer touches, so this is armed
         // once per symbol; `use_side_effect`'s callback is built by a `use_hook` and would
@@ -2455,14 +2663,21 @@ impl Component for InstructionList {
             .on_sized(move |e: Event<SizedEventData>| viewport.set_if_modified(e.area.height()))
             .child(
                 VirtualScrollView::new_with_data_controlled(
-                    AsmRows { data, focus, pin },
-                    |i, rows: &AsmRows| {
+                    AsmRows {
+                        data,
+                        focus,
+                        pin,
+                        touching,
+                    },
+                    move |i, rows: &AsmRows| {
                         let (focused, pinned) = rows.lit(i);
                         InstructionRow {
                             data: rows.data.clone(),
                             index: i,
                             focused,
                             pinned,
+                            arrows: rows.arrows(i),
+                            hover,
                             key: DiffKey::None,
                         }
                         .key(rows.data.assembly.instructions[i].address)
@@ -3674,4 +3889,5 @@ pub fn app() -> impl IntoElement {
                 .child(split),
         )
 }
+
 

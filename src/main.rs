@@ -1,6 +1,7 @@
 mod filter;
 mod fonts;
 mod history;
+mod lanes;
 mod project;
 mod source;
 mod tabs;
