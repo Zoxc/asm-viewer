@@ -59,7 +59,10 @@ one item per part, so the unfinished half stays visible.
 
 - [ ] Bar under the Assembly tab with the full demangled + mangled symbol name.
 - [ ] Name the Assembly tab after the function — just `namespace/module::fn_name`, without the
-  extra generics, mangling, etc. (for Rust / C++).
+  extra generics, mangling, etc. (for Rust / C++). Half answered from the other side: the
+  content area's tab strip names every open function, so the dock tab itself stays
+  "Assembly". What is missing either way is the shortening — a chip shows the whole
+  demangled name cut at 40 characters, not `module::fn_name`.
 - [ ] An expanding section under the Assembly tab to show more symbol info, replacing the Info
   tab.
 - [x] Keep the `rip+` visible in a relocated rip-relative operand — `mov dword ptr [rip+<target>], 7`
@@ -84,6 +87,13 @@ one item per part, so the unfinished half stays visible.
   The groundwork is in: every colour is a field of one `Palette` in `ui.rs` and every call
   site reads it through `palette()`, so what is left is a second `const`, something that
   re-renders when the choice changes, and clearing the highlighted-source cache on a switch.
+- [ ] Use freya's icon libraries where they suit, panel titles at least — an icon beside
+  Objects / Symbols / Info / History / Assembly / Source in the tab bar. `freya`'s
+  `icons-lucide` feature reexports `freya_icons` with the Lucide set; nothing in the app
+  uses it yet, and the two places that wanted icons so far settled for text (the file-type
+  tags on object rows, the `Aa` / `\b` / `.*` filter toggles) because Lucide has no glyph
+  for an object format or a regex flag. A panel title is the case it does fit, so weigh
+  those two again once the dependency is in.
 - [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
   sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
@@ -93,7 +103,9 @@ one item per part, so the unfinished half stays visible.
 ## Panels and tabs
 
 - [x] History panel on the bottom left with recent functions.
-- [ ] The history panel also lists recent source files.
+- [ ] The history panel also lists recent source files. The Source pane has its own tab
+  strip now, so the open files are a list the history could draw from — but nothing records
+  when one was *visited*, only that it is open.
 - [x] Don't insert duplicate history entries, bump existing ones instead.
 - [x] Tree view for objects, with an indicator per row for the file type. A file that
   contributed one object is one row; an archive is a parent row its members fold under,
@@ -117,13 +129,26 @@ one item per part, so the unfinished half stays visible.
   should not light three of them. What is left is freya's own 150ms fade-in, which is
   inside the component and not reachable from outside — measured, not guessed: at 200ms
   the tooltip is up, at 48ms it is not.
+- [ ] Context menu on a file in the objects panel to close it — the app can open a binary
+  but not let go of one, so a mistyped path stays in the session until `project.toml` is
+  edited by hand. Closing drops the file's objects (an archive's members with it), and has
+  to answer for what pointed at them: the selection, the open tabs, the history entries, and
+  the saved project, which per *Projects* should be written immediately since it is a change
+  the user made. freya has a `ContextMenu` (`freya-components/src/context_menu.rs`,
+  `open_from_event`), so the menu itself is not the work — deciding what "close" leaves
+  behind is.
 - [ ] Left panel to explore project directory / files.
 - [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
   by substring, whole word or regex, on the demangled name the row shows.
 - [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter
   box, and matches come back in the list's own name order rather than by how well they match.
 - [ ] Left panel for project directory / source search.
-- [ ] Tabs for assembly functions / source files.
+- [x] Tabs for assembly functions / source files. A strip of chips over the content area,
+  one per open function or object, and a second strip over the Source pane, one per open
+  file. Clicking a chip switches; the × closes it and moves to the neighbour; closing the
+  last one goes back to the placeholder. They are chips rather than dock tabs deliberately
+  — the dock tree is the layout, and a layout must survive documents opening and closing
+  (`notes/Plan.md`, 6c). Not persisted yet: that is *Projects*' "saves with tabs".
 
 ## Projects
 
@@ -134,7 +159,10 @@ one item per part, so the unfinished half stays visible.
   to the user / global settings. There can be multiple such anonymous projects.
 - [ ] Each project can have multiple binaries loaded.
 - [ ] Has an associated directory.
-- [ ] Can have multiple tabs with different function assemblies / source files open.
+- [x] Can have multiple tabs with different function assemblies / source files open. Within
+  a session: the content area's strip holds the open functions and objects, the Source
+  pane's holds the open files. Carrying them across a restart is the "saves with tabs" item
+  below.
 - [ ] Saves with tabs / hashes of binaries, open tabs and viewing positions.
 - [ ] Can have an LSP server (like rust-analyzer) / cargo integration so it can build for you and find binaries.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
