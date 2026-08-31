@@ -650,3 +650,67 @@ fn elf_with_backwards_line_program() -> Vec<u8> {
     }
     obj.write().expect("writing the fixture object")
 }
+
+/// The committed, compiler-produced objects (`tests/fixtures/`, read back by
+/// `tests/real_object.rs`), for the sweeps below to corrupt as well.
+///
+/// The written fixture above is DWARF 4 with its strings inline; these are DWARF 5, with a
+/// `.debug_line_str`, a version 5 line-program header and — in the `-ffunction-sections`
+/// build — a `.debug_rnglists`. Mutating them therefore aims at `gimli` parsing paths the
+/// synthesized fixture never reaches at all.
+fn committed_fixtures() -> Vec<(&'static str, Vec<u8>)> {
+    ["line_fixture.o", "line_fixture_split.o"]
+        .into_iter()
+        .map(|name| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join(name);
+            let data = std::fs::read(&path).unwrap_or_else(|error| {
+                panic!(
+                    "{}: {error}\n\
+                     This fixture is committed to the repository, not generated. Restore it \
+                     from git, or rebuild it with the command in \
+                     tests/fixtures/line_fixture.c.",
+                    path.display()
+                )
+            });
+            (name, data)
+        })
+        .collect()
+}
+
+/// Both sweeps again — every byte flipped, then whole sections replaced with noise — over
+/// real DWARF 5 rather than the written DWARF 4 above.
+#[test]
+fn corrupted_debug_sections_of_a_real_object_do_not_panic() {
+    for (name, valid) in committed_fixtures() {
+        let ranges = debug_section_ranges(&valid);
+        assert!(!ranges.is_empty(), "{name} has .debug_* sections");
+        assert!(
+            parse_and_walk(&valid).is_some(),
+            "{name} itself parses and resolves"
+        );
+
+        let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
+        for range in &ranges {
+            for offset in range.clone() {
+                for mask in [0xFFu8, 0x01, 0x80] {
+                    let mut data = valid.clone();
+                    data[offset] ^= mask;
+                    cases.push((format!("{name}: byte {offset} ^ {mask:#04x}"), data));
+                }
+            }
+
+            for seed in 1..16u64 {
+                let mut data = valid.clone();
+                let noise = garbage(seed, range.len());
+                data[range.clone()].copy_from_slice(&noise);
+                cases.push((format!("{name}: {range:?} = garbage({seed})"), data));
+            }
+        }
+
+        let failures = survivors(cases.iter().map(|(label, data)| (label.clone(), &data[..])));
+        assert!(failures.is_empty(), "panicked on: {failures:?}");
+    }
+}
