@@ -26,6 +26,11 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 
 ## UI
 
+- [x] Migrate the app's hand-rolled panes to freya's own panel components (`ResizableContainer` /
+  `ResizablePanel` / `ResizableHandle`), which also makes the split user-resizable.
+- [x] Docking panels: a `DockingArea` inside each half of the split, with Objects, Symbols, Info
+  and Assembly as tabs that can be dragged between the two areas, stacked into one panel as real
+  tabs, or split further.
 - [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
   sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only

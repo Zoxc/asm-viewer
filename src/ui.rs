@@ -28,6 +28,8 @@ const NUMBER_FG: Color = Color::from_rgb(80, 107, 135);
 const OTHER_FG: Color = Color::from_rgb(102, 102, 102);
 const RELOC_FG: Color = Color::from_rgb(50, 50, 50);
 const RELOC_HOVER_FG: Color = Color::from_rgb(105, 89, 132);
+/// The wash over the half of a panel a dragged tab would land in.
+const DROP_PREVIEW_BG: Color = Color::from_argb(60, 105, 89, 132);
 
 /// Applying one of the two fonts. freya takes font families one at a time, pushing
 /// each onto the element's own list and appending the parent's behind it, so the
@@ -79,6 +81,11 @@ struct Objects(State<Vec<Arc<Object>>>);
 #[derive(Clone, Copy)]
 struct Sel(State<Selection>);
 
+/// The flattened symbol list, shared through context so the Symbols tab does not
+/// have to rebuild it and the root does not have to re-render to hand it over.
+#[derive(Clone, Copy)]
+struct Symbols(Memo<SymbolList>);
+
 /// Every object's text symbols flattened into one list, rebuilt only when the object
 /// list changes. Compared by pointer so passing it around stays O(1).
 #[derive(Clone)]
@@ -121,13 +128,14 @@ fn right_hairline() -> Border {
     })
 }
 
-fn header(title: &'static str) -> impl IntoElement {
+/// The body of a tab that has nothing to show.
+fn placeholder(text: &'static str) -> Element {
     rect()
-        .width(Size::fill())
+        .expanded()
         .padding(5.0)
-        .background(HEADER_BG)
-        .border(bottom_hairline())
-        .child(label().text(title))
+        .background(Color::WHITE)
+        .child(label().text(text))
+        .into()
 }
 
 fn info_line(text: String) -> impl IntoElement {
@@ -438,7 +446,7 @@ impl Component for AssemblyView {
 
         rect()
             .width(Size::fill())
-            .height(Size::flex(1.0))
+            .height(Size::fill())
             .padding(5.0)
             .background(ASM_PANE_BG)
             .child(
@@ -480,35 +488,363 @@ fn symbol_info(symbol: &Symbol) -> impl IntoElement {
         )))
 }
 
-fn main_container(selection: &Selection) -> Element {
-    match selection {
-        Selection::None => rect()
-            .padding(5.0)
-            .child(label().text("Nothing selected"))
-            .into(),
-        Selection::Object(object) => rect()
-            .width(Size::fill())
-            .child(header("Object Info"))
-            .child(info_line(format!("Object: `{}`", object.name)))
-            .child(info_line(format!("Format: {:?}", object.format)))
-            .child(info_line(format!("Symbols: {:?}", object.symbols.len())))
-            .into(),
-        Selection::Symbol(symbol) => rect()
-            .width(Size::fill())
-            .height(Size::fill())
-            .content(Content::Flex)
-            .child(header("Symbol Info"))
-            .child(
-                ScrollView::new()
-                    .height(Size::auto())
-                    .child(symbol_info(symbol).into_element()),
-            )
-            .child(header("Assembly"))
-            .child(AssemblyView {
-                symbol: symbol.clone(),
-            })
-            .into(),
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+
+/// One of the four dockable views. A tab is a persistent view rather than a slot
+/// the selection drives, so each one renders itself off the current `Selection`
+/// and subscribes to the state it needs on its own -- which also keeps a
+/// selection change from re-rendering the whole tree.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Tab {
+    Objects,
+    Symbols,
+    Info,
+    Assembly,
+}
+
+impl Tab {
+    /// The label shown in the tab bar.
+    fn title(self) -> &'static str {
+        match self {
+            Tab::Objects => "Objects",
+            Tab::Symbols => "Symbols",
+            Tab::Info => "Info",
+            Tab::Assembly => "Assembly",
+        }
     }
+
+    fn view(self) -> Element {
+        match self {
+            Tab::Objects => ObjectsTab.into_element(),
+            Tab::Symbols => SymbolsTab.into_element(),
+            Tab::Info => InfoTab.into_element(),
+            Tab::Assembly => AssemblyTab.into_element(),
+        }
+    }
+}
+
+#[derive(PartialEq)]
+struct ObjectsTab;
+
+impl Component for ObjectsTab {
+    fn render(&self) -> impl IntoElement {
+        let objects = use_consume::<Objects>().0;
+        let current = use_consume::<Sel>().0.read().clone();
+
+        let rows: Vec<Element> = objects
+            .read()
+            .iter()
+            .map(|object| {
+                ObjectRow {
+                    object: object.clone(),
+                    selected: matches!(&current, Selection::Object(selected) if Arc::ptr_eq(selected, object)),
+                    key: DiffKey::None,
+                }
+                .key(Arc::as_ptr(object).addr())
+                .into()
+            })
+            .collect();
+
+        // The list used to sit in a flex column and grow without bound; a tab has
+        // a height of its own, so it scrolls instead of being clipped.
+        rect().expanded().background(Color::WHITE).child(
+            ScrollView::new().child(rect().width(Size::fill()).children(rows).into_element()),
+        )
+    }
+}
+
+#[derive(PartialEq)]
+struct SymbolsTab;
+
+impl Component for SymbolsTab {
+    fn render(&self) -> impl IntoElement {
+        let symbols = use_consume::<Symbols>().0.read().clone();
+        let selected = match &*use_consume::<Sel>().0.read() {
+            Selection::Symbol(symbol) => Some(symbol.clone()),
+            _ => None,
+        };
+        let symbol_count = symbols.0.len();
+
+        rect().expanded().background(SYMBOL_PANE_BG).child(
+            VirtualScrollView::new_with_data(
+                (symbols, selected),
+                |i, (symbols, selected): &(SymbolList, Option<Symbol>)| {
+                    let symbol = &symbols.0[i];
+                    SymbolRow {
+                        symbols: symbols.clone(),
+                        index: i,
+                        selected: selected.as_ref() == Some(symbol),
+                        key: DiffKey::None,
+                    }
+                    .key(Arc::as_ptr(&symbol.data).addr())
+                    .into()
+                },
+            )
+            .length(symbol_count)
+            .item_size(ROW_HEIGHT),
+        )
+    }
+}
+
+#[derive(PartialEq)]
+struct InfoTab;
+
+impl Component for InfoTab {
+    fn render(&self) -> impl IntoElement {
+        let current = use_consume::<Sel>().0.read().clone();
+
+        match &current {
+            Selection::None => placeholder("Nothing selected"),
+            Selection::Object(object) => rect()
+                .expanded()
+                .background(Color::WHITE)
+                .child(info_line(format!("Object: `{}`", object.name)))
+                .child(info_line(format!("Format: {:?}", object.format)))
+                .child(info_line(format!("Symbols: {:?}", object.symbols.len())))
+                .into(),
+            Selection::Symbol(symbol) => rect()
+                .expanded()
+                .background(Color::WHITE)
+                .child(ScrollView::new().child(symbol_info(symbol).into_element()))
+                .into(),
+        }
+    }
+}
+
+#[derive(PartialEq)]
+struct AssemblyTab;
+
+impl Component for AssemblyTab {
+    fn render(&self) -> impl IntoElement {
+        let current = use_consume::<Sel>().0.read().clone();
+
+        match &current {
+            Selection::Symbol(symbol) => AssemblyView {
+                symbol: symbol.clone(),
+            }
+            .into_element(),
+            _ => placeholder("No symbol selected"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Docking
+// ---------------------------------------------------------------------------
+
+/// Panel ids are only ever looked up inside the area that handed them out, so
+/// each area numbers its own panels from zero.
+type PanelId = u32;
+
+/// One docking area: the tree of splits and tabbed panels filling one of the two
+/// resizable panes. The four tabs are shared between the two areas, so a drop
+/// here has to take the tab out of `other` -- which is safe to write from
+/// `on_drop` only because the two areas are separate `State`s, and freya's
+/// docking holds a mutable borrow of just the one being dropped into.
+///
+/// Plain data apart from that handle, so the layout can be serialized later.
+struct DockArea {
+    tree: DockNode<Tab, PanelId>,
+    next_panel_id: PanelId,
+    other: Option<State<DockArea>>,
+}
+
+impl DockArea {
+    /// An area split in two, one tab on top and a tabbed panel below, which is
+    /// what the panes used to look like before they were dockable.
+    fn stacked(top: Tab, bottom: Vec<Tab>) -> Self {
+        Self {
+            tree: DockNode::Split {
+                direction: Direction::Vertical,
+                children: vec![
+                    DockNode::Panel(DockPanel::new(0, vec![top])),
+                    DockNode::Panel(DockPanel::new(1, bottom)),
+                ],
+            },
+            next_panel_id: 2,
+            other: None,
+        }
+    }
+
+    /// An area of one panel holding a single tab.
+    fn single(tab: Tab) -> Self {
+        Self {
+            tree: DockNode::Panel(DockPanel::new(0, vec![tab])),
+            next_panel_id: 1,
+            other: None,
+        }
+    }
+
+    fn take_panel_id(&mut self) -> PanelId {
+        let panel_id = self.next_panel_id;
+        self.next_panel_id += 1;
+        panel_id
+    }
+
+    /// Whether `tab` is the one on top in whichever panel holds it.
+    fn is_active(&self, tab: Tab) -> bool {
+        let Some((panel_id, _)) = self.tree.find_tab(&tab) else {
+            return false;
+        };
+        self.tree
+            .panel(&panel_id)
+            .and_then(|panel| panel.active_tab_id)
+            == Some(tab)
+    }
+
+    /// Put `tab` into `panel_id` at `position`, or at the end when `None`, and
+    /// take it out of every other panel of this area.
+    fn place(&mut self, panel_id: PanelId, tab: Tab, position: Option<usize>) -> bool {
+        let Some(panel) = self.tree.panel_mut(&panel_id) else {
+            return false;
+        };
+        match position {
+            Some(position) => panel.insert_tab(tab, position),
+            None => panel.append_tab(tab),
+        }
+        self.tree.remove_tab_except(&tab, Some(&panel_id));
+        true
+    }
+
+    /// Drop `tab`, which has just been dropped into the other area.
+    fn evict(&mut self, tab: Tab) {
+        if self.tree.remove_tab_except(&tab, None) {
+            self.tidy();
+        }
+    }
+
+    /// Fold away the panels a move emptied. An area that loses its last tab keeps
+    /// one empty panel rather than going to `None`, so its pane stays on screen as
+    /// a drop target and tabs can be dragged back into it.
+    fn tidy(&mut self) {
+        self.tree.close_empty_panels();
+        if self.tree.is_empty() && !matches!(self.tree, DockNode::Panel(_)) {
+            let panel_id = self.take_panel_id();
+            self.tree = DockNode::Panel(DockPanel::new(panel_id, Vec::new()));
+        }
+    }
+}
+
+impl DockingModel for DockArea {
+    type TabId = Tab;
+    type PanelId = PanelId;
+    type DropValue = Tab;
+
+    fn root(&self) -> Option<&DockNode<Tab, PanelId>> {
+        Some(&self.tree)
+    }
+
+    fn on_drop(&mut self, tab: Tab, target: DropTarget<PanelId>) -> bool {
+        let dropped = match target {
+            DropTarget::Tab { panel_id, position } => self.place(panel_id, tab, Some(position)),
+            DropTarget::Center(panel_id) => self.place(panel_id, tab, None),
+            DropTarget::Split { panel_id, side } => {
+                let new_panel_id = self.next_panel_id;
+                let new_panel = DockPanel::new(new_panel_id, vec![tab]);
+                if self.tree.split_panel(&panel_id, side, &new_panel) {
+                    self.next_panel_id += 1;
+                    self.tree.remove_tab_except(&tab, Some(&new_panel_id));
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+
+        if dropped {
+            self.tidy();
+            // A drag carries only the tab, so the source area is not known -- but
+            // there are only two, and dropping the tab where it already was is a
+            // no-op for the other one.
+            if let Some(mut other) = self.other {
+                other.write().evict(tab);
+            }
+        }
+
+        dropped
+    }
+
+    fn set_active(&mut self, panel_id: PanelId, tab: Tab) -> bool {
+        let Some(panel) = self.tree.panel_mut(&panel_id) else {
+            return false;
+        };
+        if !panel.tabs.contains(&tab) {
+            return false;
+        }
+        panel.active_tab_id = Some(tab);
+        true
+    }
+}
+
+/// One tab header. The same shape the pane headers used to have, so a bar of them
+/// reads like the old `HEADER_BG` strip.
+fn tab_label(tab: Tab, background: Color) -> impl IntoElement {
+    rect()
+        .height(Size::px(ROW_HEIGHT))
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .padding(Gaps::new_symmetric(0.0, 8.0))
+        .background(background)
+        .border(right_hairline())
+        .overflow(Overflow::Clip)
+        .child(label().text(tab.title()).max_lines(1))
+}
+
+fn tab_header(ctx: TabContext<Tab>, area: State<DockArea>) -> Element {
+    let background = if ctx.is_drop_target {
+        SELECTED_BG
+    } else if area.read().is_active(ctx.tab_id) {
+        Color::WHITE
+    } else {
+        Color::TRANSPARENT
+    };
+
+    tab_label(ctx.tab_id, background).into_element()
+}
+
+/// The copy of the tab that follows the cursor while it is being dragged.
+fn tab_drag(tab: Tab) -> Element {
+    rect()
+        .interactive(false)
+        .border(right_hairline())
+        .child(tab_label(tab, SELECTED_BG))
+        .into_element()
+}
+
+fn tab_bar(ctx: TabBarContext<PanelId>) -> Element {
+    rect()
+        .width(Size::fill())
+        .height(Size::px(ROW_HEIGHT))
+        .horizontal()
+        .background(HEADER_BG)
+        .border(bottom_hairline())
+        .children(ctx.tab_children)
+        .into_element()
+}
+
+fn tab_content(tab: Option<Tab>) -> Element {
+    match tab {
+        Some(tab) => tab.view(),
+        None => placeholder("Drag a tab here"),
+    }
+}
+
+fn docking_area(area: State<DockArea>) -> impl IntoElement {
+    DockingArea::new(
+        area,
+        |ctx: ContentContext<Tab, PanelId>| tab_content(ctx.tab_id),
+        move |ctx: TabContext<Tab>| tab_header(ctx, area),
+        tab_drag,
+        tab_bar,
+    )
+    .preview_element(
+        rect()
+            .interactive(false)
+            .expanded()
+            .background(DROP_PREVIEW_BG),
+    )
 }
 
 fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
@@ -571,7 +907,7 @@ pub fn app() -> impl IntoElement {
     });
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
-    let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
+    use_provide_context(|| Sel(State::create(Selection::None)));
 
     // Rebuilt only when the object list changes, not on every selection change.
     let symbols = use_memo(move || {
@@ -588,69 +924,40 @@ pub fn app() -> impl IntoElement {
                 .collect::<Vec<_>>(),
         ))
     });
+    use_provide_context(move || Symbols(symbols));
 
-    let current = selection.read().clone();
-    let symbols = symbols.read().clone();
-    let symbol_count = symbols.0.len();
+    // One docking area per resizable pane: Objects over Symbols on the left, with
+    // Info tabbed beside Symbols, and Assembly alone on the right. All four tabs
+    // share one `DockDrag<Tab>`, which `use_drag` keeps at the root, so a tab can
+    // be dragged from either area into the other; each area is told about the
+    // other so the one taking a tab can evict it from the one losing it.
+    let sidebar_dock = use_state(|| DockArea::stacked(Tab::Objects, vec![Tab::Symbols, Tab::Info]));
+    let content_dock = use_state(|| DockArea::single(Tab::Assembly));
+    use_hook(move || {
+        let (mut sidebar_dock, mut content_dock) = (sidebar_dock, content_dock);
+        sidebar_dock.write().other = Some(content_dock);
+        content_dock.write().other = Some(sidebar_dock);
+    });
 
-    let object_rows: Vec<Element> = objects
-        .read()
-        .iter()
-        .map(|object| {
-            ObjectRow {
-                object: object.clone(),
-                selected: matches!(&current, Selection::Object(selected) if Arc::ptr_eq(selected, object)),
-                key: DiffKey::None,
-            }
-            .key(Arc::as_ptr(object).addr())
-            .into()
-        })
-        .collect();
-
-    let selected_symbol = match &current {
-        Selection::Symbol(symbol) => Some(symbol.clone()),
-        _ => None,
-    };
-
-    let sidebar = rect()
-        .width(Size::px(300.0))
-        .height(Size::fill())
-        .content(Content::Flex)
-        .background(Color::WHITE)
-        .border(right_hairline())
-        .child(header("Objects"))
-        .child(rect().width(Size::fill()).children(object_rows))
-        .child(header("Symbols"))
-        .child(
-            rect()
-                .width(Size::fill())
-                .height(Size::flex(1.0))
-                .background(SYMBOL_PANE_BG)
-                .child(
-                    VirtualScrollView::new_with_data(
-                        (symbols, selected_symbol),
-                        |i, (symbols, selected): &(SymbolList, Option<Symbol>)| {
-                            let symbol = &symbols.0[i];
-                            SymbolRow {
-                                symbols: symbols.clone(),
-                                index: i,
-                                selected: selected.as_ref() == Some(symbol),
-                                key: DiffKey::None,
-                            }
-                            .key(Arc::as_ptr(&symbol.data).addr())
-                            .into()
-                        },
-                    )
-                    .length(symbol_count)
-                    .item_size(ROW_HEIGHT),
-                ),
+    // The split is freya's own `ResizableContainer`: the sidebar panel keeps the
+    // original fixed 300px (`PanelSize::px`, so the initial width is unchanged) and
+    // the content panel is the single proportional one, which makes it take whatever
+    // is left over -- the same thing the old `Size::flex(1.0)` did. Between them
+    // freya inserts a `ResizableHandle`, a 4px draggable divider that replaces the
+    // hairline border the sidebar used to draw. Docking cannot express a pixel
+    // width, which is why this outer split is not itself a `DockingArea`.
+    let split = ResizableContainer::new()
+        .direction(Direction::Horizontal)
+        .panel(
+            ResizablePanel::new(PanelSize::px(300.0))
+                .min_size(120.0)
+                .child(docking_area(sidebar_dock)),
+        )
+        .panel(
+            ResizablePanel::new(PanelSize::percent(100.0))
+                .min_size(10.0)
+                .child(docking_area(content_dock)),
         );
-
-    let content = rect()
-        .width(Size::flex(1.0))
-        .height(Size::fill())
-        .background(Color::WHITE)
-        .child(main_container(&current));
 
     rect()
         .expanded()
@@ -658,13 +965,12 @@ pub fn app() -> impl IntoElement {
         .interface_font()
         .background(Color::WHITE)
         .child(toolbar(objects))
+        // `ResizableContainer` renders itself `.expanded()`, so it needs a parent
+        // that has already been given the leftover height under the toolbar.
         .child(
             rect()
-                .horizontal()
-                .content(Content::Flex)
                 .width(Size::fill())
                 .height(Size::flex(1.0))
-                .child(sidebar)
-                .child(content),
+                .child(split),
         )
 }
