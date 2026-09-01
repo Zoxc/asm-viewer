@@ -46,20 +46,23 @@ one item per part, so the unfinished half stays visible.
   languages nobody here is reading, while adding the one language a reader turns out to want is
   two lines and one dependency at the moment it is wanted. Undeferred by someone opening a
   binary built from something else; `notes/Plan.md` 5d says exactly what to write.
-- [ ] Weight and not only colour for the source side's keywords. Assembly mnemonics are drawn
+- [D] Weight and not only colour for the source side's keywords. Assembly mnemonics are drawn
   bold and source keywords are not, so the two panes now agree about hue and still disagree
   about emphasis. The spans `SyntaxBlocks` hands back carry a `Color` and nothing else, so a
   row cannot ask whether a span is a keyword without comparing its colour to
   `palette().keyword_fg` — a kind recovered from a colour, which is exactly backwards. It needs
   the capture kind carried through beside the colour, or the bold dropped from the assembly
-  side instead.
+  side instead. Deferred at the Goals → Steps split: either fix is real plumbing for an
+  emphasis nit, and neither is wanted yet.
 
 ## Navigation
 
 - [x] Clicking on functions in assembly should navigate to them.
 - [ ] Clicking on functions in source should navigate to them. A click on a source line moves
   the assembly pane to that line's instructions; a click on a *call* in the source still does
-  nothing, since nothing maps a source identifier to the symbol it names.
+  nothing, since nothing maps a source identifier to the symbol it names. Sequenced after
+  the LSP item under *Projects*: rust-analyzer is what should answer which symbol an
+  identifier names, rather than building name matching over demangled strings here.
 - [x] Navigating in assembly should also navigate source, within a symbol: clicking an
   instruction scrolls the source pane to the line it was compiled from.
 - [ ] Selecting another symbol should put the source pane on that symbol's own lines. Half
@@ -141,13 +144,14 @@ one item per part, so the unfinished half stays visible.
   and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
   as the symbol needs; past five, the outermost lane is shared. Hovering a row draws its own
   branches darker, all the way to where they go.
-- [ ] Follow a jump by clicking its arrow. The gutter draws every branch that stays inside the
-  symbol and puts an arrowhead where it lands, but nothing about an arrow is a target, so the
-  place a jump goes is still reached by scrolling to it. The analysis is already there —
-  `Assembly::edges` names both ends as row indices and `reveal_row` already puts a pane on a
-  row — so this is a hit region over the gutter and not new work in the crate. Like clicking
-  across the two panes, it is a scroll within one symbol rather than a navigation: the
-  selection does not change and nothing is pushed onto the history.
+- [ ] Follow a jump by clicking its target offset, the way a call's relocation target is
+  clicked. A branch's displacement (`jle 4Bh`) is drawn as plain text where a call's resolved
+  target is already a clickable label, so the place a jump goes is still reached by scrolling
+  to it. The analysis is already there — `Assembly::edges` names both ends as row indices and
+  `reveal_row` already puts a pane on a row — and the crate's half is only recording which
+  span the target landed in, `relocation_span`'s twin. Like clicking across the two panes, it
+  is a scroll within one symbol rather than a navigation: the selection does not change and
+  nothing is pushed onto the history.
 
 ## UI
 
@@ -195,7 +199,8 @@ one item per part, so the unfinished half stays visible.
 - [x] History panel on the bottom left with recent functions.
 - [ ] The history panel also lists recent source files. The Source pane has its own tab
   strip now, so the open files are a list the history could draw from — but nothing records
-  when one was *visited*, only that it is open.
+  when one was *visited*, only that it is open. Note: merely switching to an open tab is not
+  a visit and records nothing; a visit is opening a document or navigating to one.
 - [x] Don't insert duplicate history entries, bump existing ones instead.
 - [x] Tree view for objects, with an indicator per row for the file type. A file that
   contributed one object is one row; an archive is a parent row its members fold under,
@@ -257,6 +262,10 @@ one item per part, so the unfinished half stays visible.
   notion of what is open) with one strip whose chips each say which side is in charge — so
   opening a file from a directory panel and opening a function from the symbol list produce
   the same kind of thing, differing only in which way the mapping runs.
+- [ ] Selecting a symbol in a view opens a "temporal" tab when the symbol is not already open
+  in a tab: one preview tab reused by the next such selection, so walking down a list does
+  not leave a tab behind per click. What promotes it into a tab that stays is a design
+  decision for the step that builds it.
 - [ ] A larger close icon on a tab, with a highlight under the pointer. The × on a chip is
   small enough to be a target you aim at rather than one you hit, and nothing distinguishes
   the pointer being over the × from being over the chip — so the only feedback that you are
@@ -498,9 +507,12 @@ one item per part, so the unfinished half stays visible.
   3.7 MB in the worst. `estimate_size` is capped at 1 MiB to stop that costing seconds per
   redraw, but an x86-64 image carries a `RUNTIME_FUNCTION` in `.pdata` stating both ends of
   every function with unwind info, which would make the gaps the cap exists for stop existing.
-- [?] PDB / CodeView line info. DWARF is read today; the PE sample has no debug sections at all
-  and a rustc `.rlib` member is COFF with CodeView (`.debug$S`/`.debug$T`), so on Windows output
-  there is no source view without this.
+- [ ] PDB line info, through the `pdb` crate: a linked PE names its `.pdb` in the debug
+  directory's CodeView record, so an `.exe`/`.dll` built with debug info gets a source view.
+  DWARF is read today and the PE sample has no debug sections at all.
+- [?] CodeView embedded in COFF (`.debug$S`/`.debug$T`), which is what a rustc `.rlib` member
+  carries — a different container from a `.pdb` file and likely hand parsing, so it stays
+  undecided on its own.
 - [x] Binary inspection is off the UI thread. Disassembly, line info and the arrow gutter's
   lane layout moved together onto one worker for the app's lifetime, which drains its queue to
   the newest request so the clicks a reader passed are dropped before being started rather than
@@ -531,10 +543,15 @@ one item per part, so the unfinished half stays visible.
   half on the largest sample here.
   Undeferred by the open getting slower or the saving getting larger — parallel demangling above
   attacks the same cost without persisting anything, and is the thing to try first.
-- [ ] Cache inspection results in the project info. Neither `assembly()` nor `line_info()`
+- [D] Cache inspection results in the project info. Neither `assembly()` nor `line_info()`
   memoizes, so leaving a listing and coming back re-derives it — 4–8 ms on `viewer-sample`,
   which is cheap enough that a keyed cache was deliberately not added on the way past: it would
-  be an unbounded pile of `Assembly`s for listings the reader has left.
+  be an unbounded pile of `Assembly`s for listings the reader has left. Deferred at the
+  Goals → Steps split: a persisted cache would carry everything that killed the
+  demangled-names cache below — a format with a checksum, an eviction budget, a corruption
+  sweep — to save milliseconds per click where that cache saved 26–72% of open time. If
+  anything is ever cached here it is small derived metadata (a file → symbol index,
+  subprogram extents), never listings.
 - [x] Binary inspection should be designed to be portable, allowing different disassembly
   libraries to be used. `disasm.rs` holds `Assembly`/`Instruction`/`SpanKind`/`BranchEdge` and
   names no backend; `disasm/x86.rs` is the only `iced-x86` in the crate. The trait is one call
@@ -583,10 +600,13 @@ one item per part, so the unfinished half stays visible.
   rlib in release), and it only defers to the first click on that object while costing a second
   async stage feeding the symbol list. Undeferred by a future eager pass — the code-discovery
   goal above would be one.
-- [?] Prefer memory mapped files and minimal memory footprint, store locations into the mapped file?
+- [D] Prefer memory mapped files and minimal memory footprint, store locations into the mapped
+  file? Deferred: a mapped file rebuilt underneath the map is a `SIGBUS` on a page fault, and a
+  rebuild under the app is the scratchpad's ordinary cycle — the reason the digests exist — so
+  a sound design needs that answered before it saves a byte; the decompressed and relocated
+  sections cannot be mapped regardless; and nothing measured says memory is a problem yet.
 - [?] How to design an index to allow source files / assembly to map, without large memory footprint.
 - [x] Have this in its own crate. Use it for test cases.
-- [ ] Add a minimal test case every time we find something wrong with binary inspection.
 
 ---
 

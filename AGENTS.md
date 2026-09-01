@@ -12,6 +12,7 @@ Standing instructions from the user.
 - Don't reference an uncommitted file from a committed one.
 - Keep `notes/Goals.md` current. It is the checklist of planned features.
 - Prefer TOML for files, not JSON.
+- Add a minimal test case every time something is found wrong with binary inspection.
 
 ## What this is
 
@@ -286,7 +287,7 @@ seeded from a constant (never `rand`, never the clock), so which cases run is fi
 under two seconds. `tests/robustness.rs` is the **regression suite**: one named, minimal fixture
 per defect that was actually found, because a sweep that goes green tells you nothing about which
 bug it was that stopped happening. `common::parse_and_walk` is the one definition of "ask a parsed
-object everything", shared by both. The rule that goes with them is `notes/Goals.md`'s: a minimal
+object everything", shared by both. The rule that goes with them is the user rule above: a minimal
 test case every time something is found wrong, and **checked arithmetic in preference to a wider
 `catch_unwind`** — the guard is for a dependency's bug, never for ours. Note also what *cannot* be
 caught: a stack overflow aborts, so anything recursing over file-controlled input (the demanglers,
