@@ -80,9 +80,13 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/history.rs` — back/forward navigation history.
 - `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API, merged
   under the user's own; in points until one conversion at the end.
-- `src/ui.rs` — the entire freya UI (~8900 lines, in commented sections).
+- `src/ui.rs` — the entire freya UI (~8700 lines, in commented sections).
 
-Everything except `ui.rs` is framework-free and unit-tested rather than eyeballed.
+Everything except `ui.rs` is framework-free and unit-tested rather than eyeballed. **A module's tests
+are a file of their own** — `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at the
+foot of `src/<module>.rs` — so the module a reader opens is the module and not the module plus
+half again of what it is asserted to do. The path a test is named by (`project::tests::…`) is
+unchanged, which is the point: it is where the file sits and not what the module tree looks like.
 
 ## Analysis
 
@@ -1175,8 +1179,8 @@ an `Arc<T>` field would deep-compare on every parent render.
 ### Testing the UI
 
 `freya-testing` runs the whole app — components, hooks, effects, layout, events — with no window,
-no GPU and no event loop, on the test's own thread. It is a dev-dependency for the tests at the
-bottom of `ui.rs` and for nothing else, and the binary's whole suite runs in under two seconds, so
+no GPU and no event loop, on the test's own thread. It is a dev-dependency for `src/ui/tests.rs`
+and for nothing else, and the binary's whole suite runs in under two seconds, so
 a test written to settle one point costs less than a `cargo run` and a look and is worth writing
 even when it is going to be deleted again. Keep the ones that pin a mechanism — that a component
 with no props re-rendered because it read `palette()`, that a superseded answer was dropped — and
@@ -1205,7 +1209,7 @@ headless test has to be made to fail first on the *mechanism* it claims to test.
   until the end of its **body** — so `if let Some(x) = *state.peek() { state.set(..) }` compiles and
   panics the moment it runs. `let ... else` and `match` end theirs with the statement. Bind the read
   to a `let` of its own before any write. That class of bug is invisible to every other test in
-  the repo, and is what the headless tests at the bottom of `ui.rs` were first written for.
+  the repo, and is what the headless tests in `src/ui/tests.rs` were first written for.
 - There is no `.hover()` pseudo-state. A hoverable row is a `Component` with `use_state(|| false)`
   plus `on_pointer_over`/`on_pointer_out` (`over`/`out`, not `enter`/`leave`, so hovering a child
   keeps the highlight).
