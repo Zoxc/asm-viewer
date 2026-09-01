@@ -73,6 +73,11 @@ pub fn committed_fixture(name: &str) -> Vec<u8> {
     })
 }
 
+/// How many symbols of one object [`parse_and_walk`] asks a source question about. The index
+/// behind them is built once, so the rest is a binary search each — but the sweep runs this
+/// thousands of times and every symbol of every mutation is a line-info query apiece.
+const MAX_SOURCE_QUERIES: usize = 4;
+
 /// Parse, then walk everything a parsed object exposes, so a panic anywhere past
 /// `parse_object` is caught too.
 pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
@@ -121,6 +126,42 @@ pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
     for section in &object.sections {
         let _ = object.line_info(section, 0..u64::MAX);
     }
+
+    // The reverse direction, which builds a whole-object index the first time it is asked.
+    // Every symbol's own file and line, so the lookup path is walked and not only the build,
+    // plus a name no object can hold. What is asserted is only what holds for *any* input:
+    // that the answer is made of this object's own symbols. The round trip — every line a
+    // symbol names finding that symbol again — is a claim about honest DWARF and is asserted
+    // where the DWARF is honest, in `source_index.rs` and `real_object.rs`.
+    for symbol in &object.symbols_sorted {
+        let Some(info) = symbol.line_info(&object) else {
+            continue;
+        };
+        let Some((file, line)) = info.rows().iter().find_map(|row| {
+            let file = info.file_of(row)?;
+            Some((file.to_owned(), row.line?))
+        }) else {
+            continue;
+        };
+
+        for found in object.symbols_at_line(&file, line) {
+            assert!(
+                object
+                    .symbols_sorted
+                    .iter()
+                    .any(|known| Arc::ptr_eq(known, &found)),
+                "{file}:{line} answered with a symbol this object does not have"
+            );
+        }
+        // A range and the line inside it ask the same thing.
+        assert_eq!(
+            object
+                .symbols_from_source(&file, line..line.saturating_add(1))
+                .len(),
+            object.symbols_at_line(&file, line).len()
+        );
+    }
+    assert!(object.symbols_at_line("\u{0}no such file", 1).is_empty());
 
     Some(object)
 }

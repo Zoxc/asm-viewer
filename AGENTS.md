@@ -371,7 +371,7 @@ length, writes poison values (`0`, `u32::MAX`, `u64::MAX`, the file's own length
 numeric field of every header, section header, symbol and relocation, and splats pseudo-random
 runs over it, running the whole pipeline over each result. It is sampled by an even stride and
 seeded from a constant (never `rand`, never the clock), so which cases run is fixed and it stays
-under two seconds. `tests/robustness.rs` is the **regression suite**: one named, minimal fixture
+around two seconds — 2.1, of which the reverse index costs the last tenth. `tests/robustness.rs` is the **regression suite**: one named, minimal fixture
 per defect that was actually found, because a sweep that goes green tells you nothing about which
 bug it was that stopped happening. `common::parse_and_walk` is the one definition of "ask a parsed
 object everything", shared by both. The rule that goes with them is the user rule above: a minimal
