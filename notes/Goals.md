@@ -317,7 +317,15 @@ one item per part, so the unfinished half stays visible.
   there is no source view without this.
 - [ ] Binary inspection should be light weight and multi threaded. Result saves in project info.
 - [ ] Binary inspection should be designed to be portable, allowing different disassembly libraries to be used.
-- [ ] Should never panic on any file input. Errors doing analysis should allow inspecting functions without errors.
+- [x] Should never panic on any file input. Errors doing analysis should allow inspecting
+  functions without errors. Searched for rather than asserted: a seeded, bounded mutation sweep
+  (`tests/mutations.rs`) truncates every corpus file at every length, poisons every count, offset
+  and size in the ELF/PE headers and tables, and splats bytes, then asks each result everything
+  the app asks. It found a stack overflow in the demanglers that **aborted** the process — which
+  `catch_unwind` cannot catch — and one corrupt symbol address that cost its neighbour its
+  listing. Both fixed, each with a fixture of its own, since the sweep is the searcher and the
+  fixture is the regression test. Two `addr2line` arithmetic bugs found with them: one is now
+  declined before the call, one stays wrapped.
 - [ ] Don't run by default, make that opt-in as needed.
 - [?] Prefer memory mapped files and minimal memory footprint, store locations into the mapped file?
 - [?] How to design an index to allow source files / assembly to map, without large memory footprint.

@@ -3,11 +3,89 @@
 
 #![allow(dead_code)]
 
+use analysis::{parse_object, Object};
 use object::write;
 use object::{
     Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
     SymbolFlags, SymbolKind, SymbolScope,
 };
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Parse, then walk everything a parsed object exposes, so a panic in size estimation or
+/// disassembly is caught too and not just one in `parse_object`.
+pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
+    let object = parse_object(data.into(), "fuzz".into(), PathBuf::from("/fuzz"))?;
+
+    for symbol in &object.symbols_sorted {
+        let _ = symbol.estimate_size();
+        let _ = symbol.data();
+        // The debug-info extent goes down the same DWARF path `line_info` does, and it
+        // is what `assembly` slices the symbol's bytes with.
+        let _ = symbol.extent(&object);
+        let _ = symbol.data_in(&object);
+        if let Some(assembly) = symbol.assembly(&object) {
+            for instruction in &assembly.instructions {
+                let _: String = instruction.format.iter().map(|(t, _)| t.as_str()).collect();
+            }
+            // A branch edge is a pair of row indices a renderer will index the listing
+            // with, so both ends have to be rows that exist however corrupt the bytes
+            // they were decoded from — an edge naming a row that is not there would be a
+            // panic in the gutter rather than here.
+            let mut previous = None;
+            for edge in &assembly.edges {
+                assert!(edge.from < assembly.instructions.len());
+                assert!(edge.to < assembly.instructions.len());
+                assert_ne!(edge.from, edge.to);
+                // One edge per instruction at most, in listing order.
+                assert!(previous < Some(edge.from));
+                previous = Some(edge.from);
+            }
+        }
+        // The DWARF path, on every input the sweeps below produce. Reading the rows back
+        // matters as much as building them: `LineInfo`'s own invariants (ascending,
+        // non-overlapping, in-range file indices) are what `row_at` and `file_of` rely on.
+        // Non-overlapping holds for *any* input, however corrupt — the rows are clipped
+        // to make it hold — so `previous` is the last row's **end**, not its start.
+        if let Some(info) = symbol.line_info(&object) {
+            let mut previous = 0;
+            for row in info.rows() {
+                assert!(row.range.start >= previous && row.range.start < row.range.end);
+                previous = row.range.end;
+                // Which is exactly what makes `row_at` well defined: an address inside a
+                // row is answered by that row and no other.
+                assert_eq!(
+                    info.row_at(row.range.start).map(|found| found.range.clone()),
+                    Some(row.range.clone())
+                );
+                let _ = info.file_of(row);
+                let _ = info.location(row.range.start);
+            }
+            let _ = info.location(u64::MAX);
+        }
+    }
+    // Also ask each section about a range no symbol covers, so the context is built even
+    // for an object whose symbols were all dropped.
+    for section in &object.sections {
+        let _ = object.line_info(section, 0..u64::MAX);
+    }
+
+    Some(object)
+}
+
+/// Run `parse_and_walk` on every input, returning the labels of the ones that panicked.
+pub fn survivors<'a>(inputs: impl IntoIterator<Item = (String, &'a [u8])>) -> Vec<String> {
+    inputs
+        .into_iter()
+        .filter_map(|(label, data)| {
+            catch_unwind(AssertUnwindSafe(|| parse_and_walk(data)))
+                .err()
+                .map(|_| label)
+        })
+        .collect()
+}
+
 
 pub struct TextSymbol<'a> {
     pub name: &'a str,

@@ -204,15 +204,31 @@ impl SymbolData {
     pub fn estimate_size(&self) -> Option<u64> {
         let section = self.section.as_ref()?;
         let i = section.symbols.binary_search(&self.address).ok()?;
-        let size = if i + 1 == section.symbols.len() {
-            section
-                .address
-                .checked_add(section.data.len().try_into().ok()?)?
-                .checked_sub(self.address)?
-        } else {
-            section.symbols[i + 1].checked_sub(self.address)?
+
+        // Where the section's bytes stop, which every derivation is clipped to. [`None`]
+        // only for a section placed so near the end of the address space that it does not
+        // fit in it, which is a file saying something impossible rather than a file this
+        // has to have an answer for.
+        let end = section
+            .data
+            .len()
+            .try_into()
+            .ok()
+            .and_then(|length: u64| section.address.checked_add(length));
+
+        // **The next symbol bounds this one; the section bounds them both.** A symbol
+        // table is a list of numbers out of the file, and one wild address in it — a
+        // corrupt `st_value`, a symbol relocated by nothing — would otherwise be the
+        // *previous* symbol's problem: its extent would run to wherever the wild one
+        // claims to be, which is past the bytes that were read, and `bytes` would answer
+        // [`None`] for a function that is perfectly readable. One unreadable symbol is a
+        // row without a listing; it must not cost the row above it one too.
+        let next = match section.symbols.get(i + 1) {
+            Some(&next) => end.map_or(next, |end| next.min(end)),
+            None => end?,
         };
-        Some(size.min(MAX_DERIVED_SIZE))
+
+        Some(next.checked_sub(self.address)?.min(MAX_DERIVED_SIZE))
     }
 
     /// How many bytes of code this symbol is, taking DWARF's word for it where DWARF has
@@ -324,15 +340,41 @@ impl SymbolData {
         while decoder.can_decode() {
             decoder.decode_out(&mut instruction);
 
-            let start_index = (instruction.ip() - self.address) as usize;
+            // Where this instruction is within the symbol. **Every step is checked**,
+            // because the instruction pointer is the symbol's address plus what has been
+            // decoded so far and both halves are numbers out of the file: a section
+            // placed at the end of the address space, with an extent reaching past it,
+            // wraps the pointer, and the offset derived from it went straight into a
+            // slice index. No input reaches it *today* — an extent that long can only
+            // come from debug info, and `addr2line` declines a `DW_TAG_subprogram` whose
+            // `low_pc + high_pc` overflows before this crate ever sees it (see
+            // `a_function_at_the_end_of_the_address_space_does_not_panic`) — but that is
+            // four separate accidents holding the line, one of them a bug in a
+            // dependency, and `.pdata` extents (`notes/Goals.md`) would add a fifth
+            // source. The listing stops where the arithmetic does: what was decoded
+            // before the wrap is still this symbol, and nothing after it is.
+            let Some(start_index) = instruction
+                .ip()
+                .checked_sub(self.address)
+                .and_then(|offset| usize::try_from(offset).ok())
+            else {
+                break;
+            };
+            let Some(end_index) = start_index.checked_add(instruction.len()) else {
+                break;
+            };
+            let Some(encoded) = bytes.get(start_index..end_index) else {
+                break;
+            };
 
             let mut relocation = None;
 
             self.section.as_ref().map(|section| {
                 for i in 0..instruction.len() {
-                    section
-                        .relocations
-                        .get(&(instruction.ip() + i as u64))
+                    instruction
+                        .ip()
+                        .checked_add(i as u64)
+                        .and_then(|address| section.relocations.get(&address))
                         .map(|r| {
                             relocation = Some(r.target().clone());
                         });
@@ -361,7 +403,7 @@ impl SymbolData {
 
             let mut inst = Instruction {
                 address: instruction.ip(),
-                bytes: bytes[start_index..start_index + instruction.len()].to_vec(),
+                bytes: encoded.to_vec(),
                 format: Vec::new(),
                 relocation,
                 relocation_span: None,
@@ -742,6 +784,119 @@ pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Optio
     Some(compressed.decompress().ok()?.into_owned())
 }
 
+/// The longest mangled name this crate will hand to a demangler.
+///
+/// **A demangler's recursion depth is the file's to choose.** Every demangler behind
+/// `symbolic-demangle` is a recursive-descent parser over the mangled name, and two of
+/// them recurse once per *byte* of it: `msvc-demangler` 0.11 has no recursion limit at all
+/// (`read_pointee` -> `read_var_type` -> `read_pointee`, one `P` apiece), and while
+/// `cpp_demangle` 0.4 does have one, `symbolic` raises it to 160/192 and a frame of that
+/// parser is fat enough that reaching the limit is itself several megabytes of stack. A
+/// name is bytes out of a string table, so both depths are chosen by whoever wrote the
+/// file — and a stack overflow is an **abort**, which no `catch_unwind` can turn back into
+/// "this symbol has no demangled name". It has to be headed off before the call.
+///
+/// Measured in a debug build (which is how this app is run while it is developed, and
+/// the profile with the fattest frames): `?f@@YAX` + *n* × `P` + `@Z` overflows a 2 MiB
+/// stack — the default for the `std::thread` the viewer parses on — at n ≈ 200, an 8 MiB
+/// stack at n ≈ 900 and a 64 MiB stack at n ≈ 6000. So the depth costs roughly 10 KiB of
+/// stack per byte of name, and the two constants here are one bound: at most
+/// `MAX_MANGLED_NAME` bytes of name, on at least `MAX_MANGLED_NAME` × 10 KiB of stack,
+/// with room to spare for a compiler that lays out fatter frames than this one.
+///
+/// 2048 costs nothing real. The longest symbol name in any sample in the repo is 1038
+/// bytes (`LLVM-24-rust-dev.dll`, whose 21 817 MSVC-mangled exports are also the only
+/// place MSVC demangling matters here); `viewer-sample`'s longest of 115 577 is 975 and
+/// `libanalysis-sample.rlib`'s longest of 4 164 is 806. A name past the cap is not an
+/// error — it is displayed as it was written in the file, which is what
+/// [`SymbolData::display`] does for every name no demangler recognises anyway.
+const MAX_MANGLED_NAME: usize = 2048;
+
+/// The stack [`demangled`] runs on; see [`MAX_MANGLED_NAME`] for where the number comes
+/// from. It is a *reservation*: the pages are only committed as they are touched, so the
+/// thread costs what a thread costs and not 64 MiB.
+const DEMANGLE_STACK: usize = 64 << 20;
+
+/// A name short enough to demangle on the caller's own stack.
+///
+/// At the ~10 KiB per byte measured for [`MAX_MANGLED_NAME`], 64 bytes of name is under
+/// 1 MiB of stack, which is half the 2 MiB a `std::thread` gets by default and an eighth
+/// of a main thread's — and it is measured, not extrapolated: the worst-case 64-byte name
+/// (`?f@@YAX` + 55 × `P` + `@Z`, and the same shape through `cpp_demangle`) demangles on a
+/// 1 MiB stack, while the 96-byte one overflows it. Below that line the thread is pure
+/// cost — it is ~300 µs of create-and-join, and every fixture in this crate's tests names
+/// its functions `caller` and `target`.
+const SHORT_MANGLED_NAME: usize = 64;
+
+/// Demangle one object's symbol names, all of them, on a stack big enough for the
+/// deepest name among them — the caller's own where they are all short
+/// ([`SHORT_MANGLED_NAME`]), a thread of this crate's otherwise.
+///
+/// A batch rather than a call per symbol because the thread is the point: spawning one
+/// per name would cost more than the demangling does, and the names of one object are
+/// known all at once. [`None`] in means a name with nothing to demangle (the entry
+/// point's, which is this crate's own invention); [`None`] out means no demangler
+/// recognised the name, it was longer than the cap, or the demangler panicked on it.
+///
+/// The `catch_unwind` is not general defensiveness: a scoped thread that panics makes
+/// `std::thread::scope` itself panic when the scope ends, *however* the handle was
+/// joined, so without it one bad name would take out the parse instead of taking out
+/// its own demangled name. Nothing in this crate's fuzzing has found such a name — 40 000
+/// random ones through all four demanglers produced no panic — so it is a net and not a
+/// workaround for something known.
+fn demangled(names: &[Option<&str>]) -> Vec<Option<String>> {
+    let work = || -> Vec<Option<String>> {
+        names
+            .iter()
+            .map(|name| {
+                let name = (*name).filter(|name| name.len() <= MAX_MANGLED_NAME)?;
+                std::panic::catch_unwind(|| {
+                    symbolic_common::Name::from(name).demangle(DemangleOptions::complete())
+                })
+                .ok()
+                .flatten()
+            })
+            .collect()
+    };
+
+    // The deepest any of them can recurse is the longest of them. Nothing to demangle at
+    // all — an object of unnamed symbols, or one whose only symbol is the entry point —
+    // and nothing short enough to be an ordinary stack's business both answer here.
+    let deepest = names.iter().flatten().map(|name| name.len()).max();
+    match deepest {
+        None | Some(0) => return vec![None; names.len()],
+        Some(deepest) if deepest <= SHORT_MANGLED_NAME => return work(),
+        Some(_) => {}
+    }
+
+    // A thread that will not start is one more reason for a name to stay as it was
+    // written, exactly like a name the demanglers do not recognise.
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(DEMANGLE_STACK)
+            .spawn_scoped(scope, work)
+            .ok()
+            .and_then(|handle| handle.join().ok())
+    })
+    .unwrap_or_else(|| vec![None; names.len()])
+}
+
+/// One symbol as the file states it, before its name has been demangled.
+///
+/// Demangling is one batch per object ([`demangled`]), so every symbol has to be read out
+/// of the file before any of them can be finished; this is what is held in between.
+struct Pending {
+    index: SymbolIndex,
+    name: String,
+    /// Whether the name is the file's own. The entry point's is not — it is
+    /// [`ENTRY_POINT_NAME`], which this crate invented and no demangler has anything to
+    /// say about.
+    mangled: bool,
+    section: Option<Arc<Section>>,
+    address: u64,
+    size: u64,
+}
+
 /// A function the file **declares** somewhere other than its symbol table.
 ///
 /// See [`declared_code`] for where these come from and why they are not a departure from
@@ -952,31 +1107,25 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
             let sections = section_map.values().cloned().collect();
 
-            let mut symbols: HashMap<_, _> = file
+            let mut pending: Vec<Pending> = file
                 .symbols()
                 .filter_map(|symbol| {
                     // Filter out non-text symbols
                     (symbol.kind() == SymbolKind::Text).then(|| ())?;
-
-                    let name = String::from_utf8_lossy(symbol.name_bytes().ok()?).into_owned();
-                    let demangled =
-                        symbolic_common::Name::from(&name).demangle(DemangleOptions::complete());
 
                     let section = symbol
                         .section()
                         .index()
                         .and_then(|index| section_map.get(&index).cloned());
 
-                    Some((
-                        symbol.index(),
-                        Arc::new(SymbolData {
-                            name,
-                            demangled,
-                            section,
-                            address: symbol.address(),
-                            size: symbol.size(),
-                        }),
-                    ))
+                    Some(Pending {
+                        index: symbol.index(),
+                        name: String::from_utf8_lossy(symbol.name_bytes().ok()?).into_owned(),
+                        mangled: true,
+                        section,
+                        address: symbol.address(),
+                        size: symbol.size(),
+                    })
                 })
                 .collect();
 
@@ -995,29 +1144,44 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                     .max()
                     .map_or(0, |index| index + 1);
                 for (offset, code) in declared.into_iter().enumerate() {
-                    let name = code.name.unwrap_or_else(|| ENTRY_POINT_NAME.to_owned());
-                    // The entry point's name is this crate's own invention, so there is
-                    // nothing in it to demangle; an export's is the file's, and on a
-                    // Windows DLL it is very often MSVC-mangled.
-                    let demangled = (name != ENTRY_POINT_NAME)
-                        .then(|| {
-                            symbolic_common::Name::from(&name)
-                                .demangle(DemangleOptions::complete())
-                        })
-                        .flatten();
-
-                    symbols.insert(
-                        SymbolIndex(next + offset),
-                        Arc::new(SymbolData {
-                            name,
-                            demangled,
-                            section: section_map.get(&code.section).cloned(),
-                            address: code.address,
-                            size: code.size,
-                        }),
-                    );
+                    let named = code.name.is_some();
+                    pending.push(Pending {
+                        index: SymbolIndex(next + offset),
+                        name: code.name.unwrap_or_else(|| ENTRY_POINT_NAME.to_owned()),
+                        // An export's name is the file's, and on a Windows DLL it is very
+                        // often MSVC-mangled; the entry point's is ours.
+                        mangled: named,
+                        section: section_map.get(&code.section).cloned(),
+                        address: code.address,
+                        size: code.size,
+                    });
                 }
             }
+
+            // One batch for the whole object, on a stack of its own; see `demangled`.
+            let names: Vec<Option<&str>> = pending
+                .iter()
+                .map(|symbol| symbol.mangled.then_some(symbol.name.as_str()))
+                .collect();
+            let demangled = demangled(&names);
+            drop(names);
+
+            let symbols: HashMap<_, _> = pending
+                .into_iter()
+                .zip(demangled)
+                .map(|(symbol, demangled)| {
+                    (
+                        symbol.index,
+                        Arc::new(SymbolData {
+                            name: symbol.name,
+                            demangled,
+                            section: symbol.section,
+                            address: symbol.address,
+                            size: symbol.size,
+                        }),
+                    )
+                })
+                .collect();
 
             let mut symbols_sorted: Vec<_> = symbols.values().cloned().collect();
             symbols_sorted.sort_unstable_by(|a, b| a.name.cmp(&b.name));

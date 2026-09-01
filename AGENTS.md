@@ -97,8 +97,10 @@ keeps decompressed bytes only for sections holding text symbols and the lazy lin
 the rest; every object from one file shares that one allocation, so an archive costs its bytes
 once. `Section` owns decompressed bytes, relocations keyed by address, and a sorted list of its
 text symbols' addresses. `SymbolData::estimate_size` derives a symbol's extent from the *next*
-address in that list, because declared sizes are frequently 0 in ELF/COFF; the declared size is
-kept separately and only displayed. `SymbolData::extent` is the answer that is actually used, and
+address in that list — **clipped to the section's own bytes**, since that list is numbers out of
+the file and one wild `st_value` in it would otherwise cost the symbol *above* it its listing
+rather than only itself. Declared sizes are frequently 0 in ELF/COFF, which is why the
+derivation exists at all; the declared size is kept separately and only displayed. `SymbolData::extent` is the answer that is actually used, and
 prefers DWARF — a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc` — where the object has any,
 taking the **smaller** of the two: the estimate over-reaches into padding, but `high_pc` describes
 the *function*, so a second symbol inside one subprogram (an alias, an assembler label, a split
@@ -107,6 +109,19 @@ cold part) would otherwise swallow the next function. The derivation is capped a
 which it is certainly describing something else: a stripped PE's export table is sparse, so nine
 of the DLL's exports derived megabytes and one derived 3.7 MB, which is 772 302 instructions
 decoded *per render*. `.pdata`/`RUNTIME_FUNCTION` is the real fix and is its own Goals item.
+
+**Names are demangled in one batch per object, on a stack sized for them** (`demangled`). A
+mangled name is bytes out of a string table, and it is the *file* that chooses how deep the
+demangler reading it recurses: `msvc-demangler` 0.11 has no recursion limit at all (`P` → pointee
+→ type → pointee, one byte per level) and `cpp_demangle`'s is deep enough that reaching it is
+megabytes of stack, so a 209-byte name overflows the 2 MiB a `std::thread` gets — and a stack
+overflow is an **abort**, which no `catch_unwind` turns back into "this symbol has no demangled
+name". Two bounds together: a name over `MAX_MANGLED_NAME` (2048 bytes, against a longest of 1038
+across every sample in the repo) is not demangled at all, and the rest are demangled on a thread
+with `DEMANGLE_STACK` (64 MiB, a reservation and not a cost) — except where every name in the
+object is under `SHORT_MANGLED_NAME` (64), which is every fixture in the test suite and is the
+caller's own stack's business. A name no demangler will take is displayed exactly as the file
+wrote it, which is what an unrecognised name already did.
 
 **Line info** (`line.rs`) is lazy and never touched at parse time. It answers two questions under
 one set of rules — the rows covering a range, and a subprogram's extent (`Object::subprogram_extent`,
@@ -139,16 +154,26 @@ load-bearing:
   offset into another `.debug_*` section rather than an address. Hence `Object::line_info` takes a
   `&Section`: a bare range is not a question the crate can answer.
 
-`without_panicking` (a `catch_unwind`) wraps the context build and every query, for one known
-reachable bug: `addr2line` 0.21 computes a row's length unchecked, and a line program that moves
-its address backwards is a subtract-with-overflow panic on a file the user merely opened.
+`without_panicking` (a `catch_unwind`) wraps the context build and every query, for two known
+reachable bugs, both unchecked arithmetic in `addr2line` 0.21 on numbers a `.debug_*` section
+states and neither of them something this crate can validate without parsing the DWARF twice: a
+row's length is `next.address - row.address`, so a line program that moves its address backwards
+is a subtract-with-overflow panic on a file the user merely opened; and a unit's range is
+`low_pc + high_pc`, which overflows for a unit whose length runs off the end of the address space
+— that one while the context is being *built*, which is why the guard is around the build too.
+What is *not* left to the guard is the third one: `find_units` asks about `probe + 1` unchecked,
+so `subprogram_extent` declines `u64::MAX` outright rather than catching the panic afterwards.
 
 **Disassembly** (`SymbolData::assembly`) is hardcoded to 64-bit x86 via
 `Decoder::with_ip(64, ..)`, so non-x86 objects decode as garbage rather than erroring. Each
 instruction is formatted into an `Instruction` implementing `iced_x86::FormatterOutput`, capturing
 `(String, SpanKind)` spans for the UI to colour. `SpanKind` is the backend-independent stand-in for
 `FormatterTextKind`; the app has no `iced-x86` or `object` dependency (`BinaryFormat` and
-`SectionIndex` are re-exported from `analysis` for that reason).
+`SectionIndex` are re-exported from `analysis` for that reason). The decode loop's own arithmetic
+is checked: the instruction pointer is the symbol's address plus what has been decoded, both of
+them the file's numbers, so a section placed at the end of the address space wraps it and the
+offset derived from it is a slice index. The listing stops at the wrap rather than indexing past
+the symbol.
 
 **Relocation handling** is the subtle part. A relocation whose address falls anywhere in the
 instruction's byte range is resolved to an `Arc<SymbolData>`, and the target's name is printed *in
@@ -173,6 +198,22 @@ back. Four things are dropped rather than drawn, each of which would be a line t
 not point at: a branch out of the symbol, one landing mid-instruction, one whose displacement is a
 relocation placeholder (tested on the *raw* relocation lookup, since a branch relocated against a
 section carries no text symbol while its displacement is just as meaningless), and `jmp $`.
+
+**"Never panic on any file input" is tested two ways, and they are different jobs.**
+`tests/mutations.rs` is the **search**: it takes every fixture the suite builds — both committed
+gcc objects, the synthesized DWARF one, the ELF `.so` and the PE DLL — and truncates it at every
+length, writes poison values (`0`, `u32::MAX`, `u64::MAX`, the file's own length…) into every
+numeric field of every header, section header, symbol and relocation, and splats pseudo-random
+runs over it, running the whole pipeline over each result. It is sampled by an even stride and
+seeded from a constant (never `rand`, never the clock), so which cases run is fixed and it stays
+under two seconds. `tests/robustness.rs` is the **regression suite**: one named, minimal fixture
+per defect that was actually found, because a sweep that goes green tells you nothing about which
+bug it was that stopped happening. `common::parse_and_walk` is the one definition of "ask a parsed
+object everything", shared by both. The rule that goes with them is `notes/Goals.md`'s: a minimal
+test case every time something is found wrong, and **checked arithmetic in preference to a wider
+`catch_unwind`** — the guard is for a dependency's bug, never for ours. Note also what *cannot* be
+caught: a stack overflow aborts, so anything recursing over file-controlled input (the demanglers,
+above) has to be bounded before the call rather than wrapped.
 
 ## Persistence
 

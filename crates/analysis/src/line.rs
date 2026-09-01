@@ -224,6 +224,16 @@ impl Dwarf {
 
     fn extent_inner(&self, bias: u64, address: u64) -> Option<u64> {
         let probe = address.checked_add(bias)?;
+        // `addr2line` 0.21 asks its range index about `probe + 1` with a plain addition
+        // (`Context::find_units`), so the very last address in the space is an "attempt to
+        // add with overflow" rather than an answer. A symbol there is one a corrupt or
+        // hostile section header produces — and there is nothing to lose by declining it,
+        // since a function starting on the last byte of the address space has no room for
+        // an extent either. Validated here rather than left to `without_panicking`: this
+        // one is ours to see coming.
+        if probe == u64::MAX {
+            return None;
+        }
 
         let context = self.context.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -311,15 +321,31 @@ fn subprogram_extents(
 
 /// Run DWARF parsing with a net under it, turning a panic into "no line info".
 ///
-/// This is not defensiveness in general — it is one known, reachable bug. `addr2line`
-/// 0.21 computes a line-table row's length as `next.address - row.address` with a plain
-/// subtraction (`LocationRangeUnitIter::next`), and nothing stops a line program from
-/// moving its address *backwards*: `DW_LNE_set_address` takes any address, and a sequence
-/// whose end address is below its last row is enough on its own. On a debug build — which
-/// is how this app is run while it is being developed — that is an "attempt to subtract
-/// with overflow" panic on a file the user merely opened, and this crate's one hard rule
-/// is that no file input makes it fall over. `crates/analysis/tests/robustness.rs`
-/// (`a_line_program_that_runs_backwards_does_not_panic`) is that input, reduced.
+/// This is not defensiveness in general — it is two known, reachable bugs, both of them
+/// unchecked arithmetic in `addr2line` 0.21 on numbers a `.debug_*` section states, and
+/// neither of them something this crate can validate without parsing the DWARF twice:
+///
+/// * A line-table row's length is `next.address - row.address`, a plain subtraction
+///   (`LocationRangeUnitIter::next`), and nothing stops a line program from moving its
+///   address *backwards*: `DW_LNE_set_address` takes any address, and a sequence whose
+///   end address is below its last row is enough on its own.
+///   `crates/analysis/tests/robustness.rs`
+///   (`a_line_program_that_runs_backwards_does_not_panic`) is that input, reduced.
+/// * A range is `low_pc + high_pc` wherever `high_pc` is a length
+///   (`RangeAttributes::for_each_range`), which overflows for anything declaring a length
+///   that runs off the end of the address space. It is read in two places and so panics
+///   in two: a *unit*'s range while the context is being **built**, before any query at
+///   all, which is why the guard is around `Dwarf::load` and not only around the queries;
+///   and a *subprogram*'s when `find_dwarf_and_unit` first parses that unit's functions,
+///   which is inside [`extent`](Dwarf::extent). The mutation sweep in
+///   `crates/analysis/tests/mutations.rs` reaches the first by writing a poison value
+///   into a `.debug_info` field;
+///   `robustness.rs`'s `a_function_at_the_end_of_the_address_space_does_not_panic` is the
+///   second, written on purpose.
+///
+/// On a debug build — which is how this app is run while it is being developed — either
+/// is an "attempt to add/subtract with overflow" panic on a file the user merely opened,
+/// and this crate's one hard rule is that no file input makes it fall over.
 ///
 /// Catching is sound here because a panic leaves nothing half-written: the context is
 /// only ever read, `addr2line`'s internal caches are filled after the value is computed
