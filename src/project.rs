@@ -25,7 +25,7 @@ use analysis::{Object, Symbol, SymbolData};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::history::History;
-use crate::tabs::Positions;
+use crate::tabs::{Driven, Positions};
 
 /// The one directory everything this app stores lives under: the projects, the recent
 /// list, the settings and the scratchpads.
@@ -278,7 +278,27 @@ pub struct SavedTab {
     /// Which line was at the top of the source side, `0` being the file's first line.
     #[serde(default)]
     pub src_row: usize,
+    /// Which line of the file a source-driven tab's assembly side was driven from, and
+    /// absent for every other tab. It is what makes `asm_row` mean anything for such a
+    /// tab: without it the listing that row is a row of is not there to come back to.
+    ///
+    /// Nothing resolves it -- it is a number, not a place -- so a rebuilt binary simply
+    /// answers it again out of what is loaded now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
     pub document: SavedDocument,
+}
+
+/// A saved tab that still points somewhere: what [`Session::resolve_tabs`] hands back.
+///
+/// Named rather than a tuple because it is four things now, and because the rows drop
+/// under a rebuilt binary while the line does not.
+#[derive(Clone, PartialEq)]
+pub struct RestoredTab {
+    pub document: Document,
+    pub asm_row: usize,
+    pub src_row: usize,
+    pub line: Option<u32>,
 }
 
 /// The navigation history in saved form: the index of the entry that was on screen, and
@@ -603,6 +623,7 @@ impl Session {
         tabs: &[Document],
         asm_rows: &Positions<Document>,
         src_rows: &Positions<Document>,
+        driven: &Driven,
         active: Option<&Document>,
         history: &History,
     ) -> Session {
@@ -623,6 +644,7 @@ impl Session {
                 .map(|tab| SavedTab {
                     asm_row: asm_rows.at(tab).unwrap_or(0),
                     src_row: src_rows.at(tab).unwrap_or(0),
+                    line: driven.line(tab),
                     document: SavedDocument::from_document(tab),
                 })
                 .collect(),
@@ -641,7 +663,7 @@ impl Session {
     /// The saved tabs as live documents, in strip order, each with the rows its two sides
     /// were left at. A tab that no longer resolves is **dropped** rather than degraded: a
     /// strip whose tabs all degraded onto the same object would collapse into one.
-    pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<(Document, usize, usize)> {
+    pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<RestoredTab> {
         let rebuilt = Rebuilt::of(self, objects);
         self.tabs
             .iter()
@@ -649,15 +671,22 @@ impl Session {
                 let document = saved.document.resolve(objects, &rebuilt)?;
                 // A row is a claim about a listing, so a rebuilt listing takes both its
                 // rows with it; the tab itself survives. A file has no binary path and so
-                // is never rebuilt.
+                // is never rebuilt. The driven line is a claim about a *file* rather than
+                // about a listing, so it survives a rebuild and is simply asked again.
                 let changed = saved
                     .document
                     .binary_path()
                     .is_some_and(|path| rebuilt.changed(path));
-                match changed {
-                    true => Some((document, 0, 0)),
-                    false => Some((document, saved.asm_row, saved.src_row)),
-                }
+                let (asm_row, src_row) = match changed {
+                    true => (0, 0),
+                    false => (saved.asm_row, saved.src_row),
+                };
+                Some(RestoredTab {
+                    document,
+                    asm_row,
+                    src_row,
+                    line: saved.line,
+                })
             })
             .collect()
     }

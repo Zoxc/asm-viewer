@@ -254,8 +254,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         open,
         asm_at,
         src_at,
-        // Written by commit 4; until then a driven line is not part of the session.
-        driven: _,
+        driven,
         history,
     } = states;
 
@@ -271,6 +270,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                 &open_documents(&dock, &docs),
                 &asm_at.read(),
                 &src_at.read(),
+                &driven.read(),
                 active_document(&dock, &docs).as_ref(),
                 &history.read(),
             )
@@ -327,6 +327,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         open,
         mut asm_at,
         mut src_at,
+        mut driven,
         history,
         ..
     } = states;
@@ -361,17 +362,22 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
 
         // The history first, so the `Visit::Went` below has a cursor to dedup against.
         history.set(restored_history);
-        // Where each side of each tab was left goes in before the tab is opened.
+        // Where each side of each tab was left, and what drove it, go in before the tab
+        // is opened. The line for the same reason the rows are: a pane looks at what it
+        // has been told exactly once, when it notices the tab it is showing has changed.
         {
-            let (mut asm, mut src) = (asm_at.write(), src_at.write());
-            for (tab, asm_row, src_row) in &restored_tabs {
-                asm.remember(tab.clone(), *asm_row);
-                src.remember(tab.clone(), *src_row);
+            let (mut asm, mut src, mut from) = (asm_at.write(), src_at.write(), driven.write());
+            for tab in &restored_tabs {
+                asm.remember(tab.document.clone(), tab.asm_row);
+                src.remember(tab.document.clone(), tab.src_row);
+                if let Some(line) = tab.line {
+                    from.remember(tab.document.clone(), line);
+                }
             }
         }
-        for (tab, _, _) in restored_tabs {
+        for tab in restored_tabs {
             // Reopening a tab is not visiting it.
-            activate(open, history, Some(tab), Visit::Moved);
+            activate(open, history, Some(tab.document), Visit::Moved);
         }
         // The document the app lands on is a place it went.
         activate(open, history, restored_active, Visit::Went);

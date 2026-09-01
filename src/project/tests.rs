@@ -63,6 +63,7 @@ fn from_state(
             .unwrap_or_default(),
         &Positions::default(),
         &Positions::default(),
+        &Driven::default(),
         document.as_ref(),
         history,
     )
@@ -464,6 +465,14 @@ fn positions<T: Clone + PartialEq>(at: &[(&T, usize)]) -> Positions<T> {
     positions
 }
 
+fn driven(from: &[(&Document, u32)]) -> Driven {
+    let mut driven = Driven::default();
+    for (tab, line) in from {
+        driven.remember((*tab).clone(), *line);
+    }
+    driven
+}
+
 fn tab(object: &Arc<Object>) -> Document {
     Document::Assembly(Selection::Object(object.clone()))
 }
@@ -476,6 +485,7 @@ fn saved_tab(object_name: &str, asm_row: usize) -> SavedTab {
     SavedTab {
         asm_row,
         src_row: 0,
+        line: None,
         document: saved_object(object_name),
     }
 }
@@ -484,9 +494,20 @@ fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
     SavedTab {
         asm_row,
         src_row,
+        line: None,
         document: SavedDocument::Source {
             path: path.to_owned(),
         },
+    }
+}
+
+/// A tab as [`Session::resolve_tabs`] hands it back, with nothing driving it.
+fn restored(document: &Document, asm_row: usize, src_row: usize) -> RestoredTab {
+    RestoredTab {
+        document: document.clone(),
+        asm_row,
+        src_row,
+        line: None,
     }
 }
 
@@ -509,6 +530,7 @@ fn saves_and_resolves_the_open_tabs() {
         &tabs,
         &Positions::default(),
         &Positions::default(),
+        &Driven::default(),
         Some(&tabs[3]),
         &History::default(),
     );
@@ -521,6 +543,7 @@ fn saves_and_resolves_the_open_tabs() {
             SavedTab {
                 asm_row: 0,
                 src_row: 0,
+                line: None,
                 document: SavedDocument::Symbol {
                     path: PathBuf::from("/tmp/lib.a"),
                     object_name: "a.o".into(),
@@ -534,10 +557,10 @@ fn saves_and_resolves_the_open_tabs() {
     assert!(
         session.resolve_tabs(&objects)
             == [
-                (tabs[0].clone(), 0, 0),
-                (tabs[1].clone(), 0, 0),
-                (tabs[2].clone(), 0, 0),
-                (tabs[3].clone(), 0, 0),
+                restored(&tabs[0], 0, 0),
+                restored(&tabs[1], 0, 0),
+                restored(&tabs[2], 0, 0),
+                restored(&tabs[3], 0, 0),
             ]
     );
 }
@@ -558,6 +581,7 @@ fn open_tabs_that_no_longer_resolve_are_dropped() {
             SavedTab {
                 asm_row: 5,
                 src_row: 0,
+                line: None,
                 document: SavedDocument::Symbol {
                     path: PathBuf::from("/tmp/lib.a"),
                     object_name: "a.o".into(),
@@ -574,9 +598,9 @@ fn open_tabs_that_no_longer_resolve_are_dropped() {
     assert!(
         session.resolve_tabs(&objects)
             == [
-                (tab(&objects[0]), 3, 0),
-                (file_tab("/no/such/file.rs"), 0, 9),
-                (tab(&objects[1]), 6, 0),
+                restored(&tab(&objects[0]), 3, 0),
+                restored(&file_tab("/no/such/file.rs"), 0, 9),
+                restored(&tab(&objects[1]), 6, 0),
             ]
     );
 }
@@ -592,6 +616,7 @@ fn the_rows_come_back_against_the_tabs_they_belong_to() {
         &tabs,
         &positions(&[(&tabs[0], 12), (&tabs[1], 900)]),
         &positions(&[(&tabs[1], 4)]),
+        &Driven::default(),
         Some(&tabs[0]),
         &History::default(),
     );
@@ -599,9 +624,9 @@ fn the_rows_come_back_against_the_tabs_they_belong_to() {
 
     let (mut asm, mut src): (Positions<Document>, Positions<Document>) =
         (Positions::default(), Positions::default());
-    for (tab, asm_row, src_row) in session.resolve_tabs(&objects) {
-        asm.remember(tab.clone(), asm_row);
-        src.remember(tab, src_row);
+    for tab in session.resolve_tabs(&objects) {
+        asm.remember(tab.document.clone(), tab.asm_row);
+        src.remember(tab.document, tab.src_row);
     }
     assert_eq!(asm.at(&tabs[0]), Some(12));
     assert_eq!(asm.at(&tabs[1]), Some(900));
@@ -631,7 +656,10 @@ fn a_saved_tab_with_no_rows_opens_at_the_top() {
     let objects = objects();
     assert!(
         session.resolve_tabs(&objects)
-            == [(tab(&objects[0]), 0, 0), (file_tab("/src/main.rs"), 0, 0),]
+            == [
+                restored(&tab(&objects[0]), 0, 0),
+                restored(&file_tab("/src/main.rs"), 0, 0),
+            ]
     );
 }
 
@@ -649,6 +677,7 @@ fn a_source_file_that_is_no_longer_there_still_comes_back() {
         &tabs,
         &Positions::default(),
         &Positions::default(),
+        &Driven::default(),
         Some(&tabs[0]),
         &History::default(),
     );
@@ -679,6 +708,7 @@ fn a_full_session_round_trips_through_toml() {
         &tabs,
         &positions(&[(&tabs[0], 12), (&tabs[1], 34)]),
         &positions(&[(&tabs[0], 56)]),
+        &driven(&[(&tabs[2], 42)]),
         Some(&tabs[1]),
         &history(&objects, 1),
     );
@@ -697,6 +727,41 @@ fn a_full_session_round_trips_through_toml() {
         .expect("the first tab's document");
     assert!(asm_row < document, "asm_row after its document\n{text}");
     assert!(src_row < document, "src_row after its document\n{text}");
+
+    // The driven line is written for one of the three kinds of tab and for no other.
+    assert!(text.contains("line = 42"), "{text}");
+    assert_eq!(text.matches("line = ").count(), 1, "{text}");
+}
+
+/// The round trip the app makes with it: out of `Driven`, through TOML, and back into
+/// one — which is what makes a source-driven tab's saved `asm_row` mean anything, the
+/// listing that row is a row of not being there until the line is asked again.
+#[test]
+fn the_line_a_source_tab_was_driven_from_comes_back() {
+    let objects = objects();
+    let tabs = vec![file_tab("/src/main.rs"), tab(&objects[0])];
+
+    let session = Session::from_state(
+        &objects,
+        &tabs,
+        &positions(&[(&tabs[0], 7)]),
+        &Positions::default(),
+        &driven(&[(&tabs[0], 42)]),
+        Some(&tabs[0]),
+        &History::default(),
+    );
+    let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
+
+    let mut driven = Driven::default();
+    for tab in session.resolve_tabs(&objects) {
+        if let Some(line) = tab.line {
+            driven.remember(tab.document, line);
+        }
+    }
+    assert_eq!(driven.line(&tabs[0]), Some(42));
+    // Only the tab that was driven. An assembly-driven tab is never one.
+    assert_eq!(driven.line(&tabs[1]), None);
+    assert_eq!(session.resolve_tabs(&objects)[0].asm_row, 7);
 }
 
 /// The digest of the objects the fixtures are built from, as it is written down.
@@ -712,6 +777,7 @@ fn saved_against(bytes: Option<&[u8]>, saved: SavedDocument, row: usize) -> Sess
             .unwrap_or_default(),
         active: Some(saved.clone()),
         tabs: vec![SavedTab {
+            line: None,
             asm_row: row,
             src_row: 0,
             document: saved.clone(),
@@ -766,7 +832,7 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
             }))
     );
     assert_eq!(session.resolve_tabs(&objects).len(), 1);
-    assert_eq!(session.resolve_tabs(&objects)[0].1, 42);
+    assert_eq!(session.resolve_tabs(&objects)[0].asm_row, 42);
 
     // The same name at an address it is not at, which this file does not explain.
     let moved = saved_against(
@@ -806,7 +872,7 @@ fn a_rebuilt_binary_matches_by_name_and_forgets_the_row() {
     });
     assert!(resolve_selection(&session, &objects) == Some(expected.clone()));
     let document = Document::Assembly(expected.clone());
-    assert!(session.resolve_tabs(&objects) == [(document.clone(), 0, 0)]);
+    assert!(session.resolve_tabs(&objects) == [restored(&document, 0, 0)]);
     assert!(session.resolve_history(&objects).entries() == [document]);
 }
 
@@ -876,7 +942,7 @@ fn a_digest_for_a_binary_that_is_not_open_says_nothing() {
         .digests
         .insert(PathBuf::from("/tmp/some.dll"), digest_of(b"whatever"));
 
-    assert_eq!(session.resolve_tabs(&objects)[0].1, 42);
+    assert_eq!(session.resolve_tabs(&objects)[0].asm_row, 42);
 }
 
 /// The digests are a TOML *table* holding hex strings, a `u64` digest not fitting TOML's
@@ -890,6 +956,7 @@ fn the_digests_round_trip_through_toml() {
         &tabs,
         &positions(&[(&tabs[0], 12)]),
         &Positions::default(),
+        &Driven::default(),
         Some(&tabs[0]),
         &history(&objects, 1),
     );
