@@ -4021,6 +4021,14 @@ impl Component for AssemblyTab {
                 .child(label().text("Assembly unavailable"))
                 .into();
         };
+        // An architecture no backend claims is a *third* answer, and the one above is now
+        // only "this symbol has no bytes". Naming it matters more than it looks: the
+        // listing being empty is indistinguishable from a function that is empty, and
+        // before the architecture reached the decoder this case was a confident page of
+        // nonsense rather than nothing at all.
+        if let Some(architecture) = assembly.undecodable {
+            return placeholder(format!("No disassembler for {architecture}"));
+        }
 
         rect()
             .width(Size::fill())

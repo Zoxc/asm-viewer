@@ -382,9 +382,10 @@ one item per part, so the unfinished half stays visible.
   not from `is_64()` — x32 is 64-bit code with 32-bit pointers, the one case the file's class
   gets backwards. An architecture no backend claims is now a third answer (`Assembly::
   undecodable`) rather than a confident page of nonsense.
-- [ ] Say so in the UI when an architecture cannot be decoded. `Assembly::undecodable` names
-  the reason, but `AssemblyView` does not read it yet, so such an object draws an empty pane
-  instead of "no disassembler for aarch64".
+- [x] Say so in the UI when an architecture cannot be decoded. The assembly pane reads
+  `Assembly::undecodable` and says "No disassembler for aarch64" rather than drawing an empty
+  pane the reader has to guess about — an empty listing being indistinguishable from an empty
+  function.
 - [x] Should never panic on any file input. Errors doing analysis should allow inspecting
   functions without errors. Searched for rather than asserted: a seeded, bounded mutation sweep
   (`tests/mutations.rs`) truncates every corpus file at every length, poisons every count, offset
