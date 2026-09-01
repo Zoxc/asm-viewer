@@ -80,9 +80,50 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/history.rs` — back/forward navigation history.
 - `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API, merged
   under the user's own; in points until one conversion at the end.
-- `src/ui.rs` — the entire freya UI (~8700 lines, in commented sections).
+- `src/ui.rs` — the freya UI's root: its prelude, the list of its files, `toolbar` and `app`.
 
-Everything except `ui.rs` is framework-free and unit-tested rather than eyeballed. **A module's tests
+The UI is a directory, and each of its files is a **cut out of what was one 8 700-line
+`ui.rs`** rather than a boundary designed from scratch — what each holds is what that file's
+section banners and this document already said belonged together. Two mechanical points
+carry across all of them and are written out in `src/ui.rs`'s own `//!` header: the imports
+there are `pub(crate) use` and every file begins `use super::*;`, so each keeps the set of
+names it had as a section; and each `mod x;` is followed by a `pub(crate) use x::*;`, so a
+name means what it always meant wherever it is written. Visibility is what the compiler
+asked for and no more, so the annotations *are* the list of what crosses a boundary.
+
+- `src/ui/metrics.rs` — every measurement no component owns, and the fonts they follow.
+- `src/ui/palette.rs` — every colour, the theme it is resolved from, and the two compositing
+  rules that turn a wash and a span kind into one.
+- `src/ui/state.rs` — the contexts provided once at the root and read with `use_consume`.
+- `src/ui/analyzed.rs` — the analysis worker, what it answers with, and the supersession rule.
+- `src/ui/focus.rs` — the two panes pointing at each other, and where each side of each tab
+  was left.
+- `src/ui/marks.rs` — the run of rows a reader picks out, and what Ctrl+C copies.
+- `src/ui/highlight.rs` — a source file parsed once when loaded, and the cache holding it.
+- `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
+- `src/ui/documents.rs` — what opening, closing and moving between documents means.
+- `src/ui/sidebar.rs` — the three lists a binary is browsed with, the Info pane, and their rows.
+- `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
+- `src/ui/source_view.rs` — the source side of one, and which file it is showing.
+- `src/ui/dock.rs` — the dock, its two-kinded tab, and the strip that is its document panel's
+  own tab bar.
+- `src/ui/project_view.rs` — which project is open: the pane, the switch and the save policy's
+  observers.
+- `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.
+- `src/ui/pad.rs` — the scratchpad and the one worker thread that owns its directory.
+- `src/ui/pad_view.rs` — the scratchpad's pane: the editor, the crates, the diagnostics, the output.
+- `src/ui/parts.rs` — eleven small stateless pieces of drawing shared by panes with nothing
+  else in common.
+
+Five of the names are not the obvious one, and each avoids shadowing a crate module the
+prelude has already brought in: `ui::source_view` (not `source`), `ui::project_view` (not
+`project`), `ui::filter_bar` (not `filter`), `ui::pad` (not `scratchpad`) and `ui::analyzed`
+(not `analysis`, which is the crate `ui/tests.rs` calls into). One name genuinely collides:
+`freya::prelude` exports a `use_theme` of its own, so `ui/tests.rs` names ours explicitly —
+an explicit import wins over a glob, and that line is the disambiguation rather than a
+duplicate.
+
+Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's tests
 are a file of their own** — `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at the
 foot of `src/<module>.rs` — so the module a reader opens is the module and not the module plus
 half again of what it is asserted to do. The path a test is named by (`project::tests::…`) is
@@ -197,7 +238,7 @@ load-bearing:
   behind `&self`, so it is `Send` but not `Sync`. `lib.rs` holds a `const _` assertion that
   `Object: Send + Sync` so this cannot regress silently — beside three more, `Symbol`,
   `Assembly` and `LineInfo`, which are what crosses into the app's analysis worker and back
-  (`ui.rs`, `use_analysis`). A field that stops being shared-safe is then a compile error in
+  (`ui/analyzed.rs`, `use_analysis`). A field that stops being shared-safe is then a compile error in
   the crate rather than a borrow error in the UI, where the cheap fix would be to go back on
   the UI thread.
 - **One query per symbol, not per instruction.** `SymbolData::line_info(&object)` returns an
@@ -237,7 +278,7 @@ class gets backwards. An architecture no backend claims is a **third answer**, n
 byte sequence a decoder could refuse on — the same bytes that are an aarch64 function are a
 confident page of x86 nonsense, which is what this used to print, and an empty listing on its own
 reads as a symbol that holds no code. `assembly` still answers `None` for one thing only: a symbol
-with no bytes at all. Nothing in `ui.rs` reads `undecodable` yet, so such an object currently draws
+with no bytes at all. Nothing in the UI reads `undecodable` yet, so such an object currently draws
 an empty pane rather than the reason.
 
 The trait is **one call wide** (`Disassembler::disassemble(&Code) -> Decoded`) and is shaped by what
@@ -415,7 +456,7 @@ forget a file through a change that had nothing to do with it.
 `start_new()`: both `flush` the project being left while the policy still points at it, `remember`
 the one being entered at the front of `recents.toml`, and re-point every baseline through
 `Saves::opened` — empty, because the app is about to be emptied. Emptying it is the caller's half
-and stays in `ui.rs`, the states being the UI's. `recent_projects()` is the list a view draws:
+and stays in `ui/project_view.rs`, the states being the UI's. `recent_projects()` is the list a view draws:
 `recents.toml`'s order, each row described by reading *that project's own* `project.toml`, with an
 id whose directory has gone dropped here — the list never prunes itself on load, and this is the
 point of use where the repair is free.
@@ -457,7 +498,7 @@ the round-trip test is what holds it. There is **no `Saves`-shaped policy and de
 autosave timer**: a settings change is already as rare as a deliberate action, so `Settings::save`
 is public and writes at once. **Resolving `Theme::Desktop` is deliberately not this module's job**:
 "which theme does the desktop prefer" is a question for whatever owns the window, so `settings.rs`
-holds only the choice and stays framework-free, and `ui.rs` puts the two together
+holds only the choice and stays framework-free, and `ui/palette.rs` puts the two together
 (`resolve_appearance`). It once spawned a subprocess per platform to answer it and no longer does —
 the windowing system already knows, it answers on every platform this runs on, and its answer is
 live rather than a value baked in at startup. `fonts::resolve` merges the settings over the
@@ -798,7 +839,7 @@ pane the reader is typing in, so the Scratchpad's editor *is* that component (be
 `SyntaxBlocks` + an `EditorSyntaxTheme` turn a `Rope` into one list of `(Color, TextNode)` spans per
 line. The theme is the app's own (`Palette::syntax`), the grammars are ours, and an unknown
 extension degrades to one plain span per line. A file is parsed once when loaded and cached in a
-`static` in `ui.rs` — parsing is stateful across lines, so it cannot be per row. Two things about
+`static` in `ui/highlight.rs` — parsing is stateful across lines, so it cannot be per row. Two things about
 `SyntaxBlocks` bite: `get_line` unwraps rather than answering `None`, and it holds one block per
 `Rope::len_lines()`, which counts a phantom line after a trailing newline (hence `Highlighted::lines`).
 
@@ -933,7 +974,7 @@ the baseline exactly. `new_project` is the same thing with nothing to restore.
 freya's 500ms default makes sweeping down a list useless. The filter toggles keep the default
 (their tooltip explains what `\b` means), and the code rows have none.
 
-**One palette, one place.** Every colour is a field of `Palette` in `ui.rs`, there are two
+**One palette, one place.** Every colour is a field of `Palette` in `ui/palette.rs`, there are two
 instances (`Palette::LIGHT` and `Palette::DARK`), and `palette()` is how anything reaches
 whichever is current — no call site names a colour, and none of them changed when the second
 palette arrived, which is what the indirection was for. The dark values are the light ones
@@ -1021,7 +1062,7 @@ context menu read their colours from it and from nothing else, and a white text 
 is not a theme switch.
 
 **A font change repaints the same way a theme change does, and moves the rows with it.** `fonts()`
-in `ui.rs` reads a thread-local `State<Arc<Fonts>>` exactly as `palette()` reads the appearance, so
+in `ui/metrics.rs` reads a thread-local `State<Arc<Fonts>>` exactly as `palette()` reads the appearance, so
 *asking for a font is what subscribes a scope to it*; `set_fonts` is the one writer, and unlike
 `set_appearance` it has nothing to invalidate beside it, a cached `SyntaxBlocks` carrying colours
 and no font. The readers are the two row heights, `icon_size`,
@@ -1203,7 +1244,7 @@ round of task polling (which is why a change needs somewhere between *n* and *2n
 `sync_and_update`s and why the tests here loop rather than count), and the house rule that a
 headless test has to be made to fail first on the *mechanism* it claims to test.
 
-### Gotchas before editing `ui.rs`
+### Gotchas before editing the UI
 
 - A `State`'s `peek`/`read` hands back a guard, and an `if let` holds its scrutinee's temporary
   until the end of its **body** — so `if let Some(x) = *state.peek() { state.set(..) }` compiles and
