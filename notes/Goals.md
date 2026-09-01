@@ -46,6 +46,13 @@ one item per part, so the unfinished half stays visible.
   languages nobody here is reading, while adding the one language a reader turns out to want is
   two lines and one dependency at the moment it is wanted. Undeferred by someone opening a
   binary built from something else; `notes/Plan.md` 5d says exactly what to write.
+- [ ] Weight and not only colour for the source side's keywords. Assembly mnemonics are drawn
+  bold and source keywords are not, so the two panes now agree about hue and still disagree
+  about emphasis. The spans `SyntaxBlocks` hands back carry a `Color` and nothing else, so a
+  row cannot ask whether a span is a keyword without comparing its colour to
+  `palette().keyword_fg` — a kind recovered from a colour, which is exactly backwards. It needs
+  the capture kind carried through beside the colour, or the bold dropped from the assembly
+  side instead.
 
 ## Navigation
 
@@ -134,6 +141,13 @@ one item per part, so the unfinished half stays visible.
   and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
   as the symbol needs; past five, the outermost lane is shared. Hovering a row draws its own
   branches darker, all the way to where they go.
+- [ ] Follow a jump by clicking its arrow. The gutter draws every branch that stays inside the
+  symbol and puts an arrowhead where it lands, but nothing about an arrow is a target, so the
+  place a jump goes is still reached by scrolling to it. The analysis is already there —
+  `Assembly::edges` names both ends as row indices and `reveal_row` already puts a pane on a
+  row — so this is a hit region over the gutter and not new work in the crate. Like clicking
+  across the two panes, it is a scroll within one symbol rather than a navigation: the
+  selection does not change and nothing is pushed onto the history.
 
 ## UI
 
@@ -170,6 +184,11 @@ one item per part, so the unfinished half stays visible.
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
   way is vendoring the whole scrollview module (~1350 lines) out of `freya-components` — too much to
   carry for a cosmetic change. Revisit if freya makes it themeable.
+- [ ] One background under both code panes. The assembly pane draws on `asm_pane_bg` and the
+  source pane on `pane_bg`, so there is a faint seam down the middle of the default layout. It
+  predates the shared palette and is a surface rather than a syntax colour, so 5e left it
+  alone; it is one line to unify, and the only real question is which of the two both panes
+  should take.
 
 ## Panels and tabs
 
@@ -242,6 +261,13 @@ one item per part, so the unfinished half stays visible.
   small enough to be a target you aim at rather than one you hit, and nothing distinguishes
   the pointer being over the × from being over the chip — so the only feedback that you are
   about to close a tab rather than switch to it arrives after the tab is gone.
+- [ ] Reach the panels from the keyboard. Only the two code panes have key handlers at all: the
+  tab chips are pointer targets, the sidebar lists have no cursor, and there is no way in to a
+  filter box — which is the ranked-search item above seen from the other side. Note what it
+  needs deciding first: what "the focused pane" means when either dock area can hold any view.
+- [ ] The archive row's object count should survive a narrow sidebar. A parent row ellipsises
+  its name before it drops the count column, so dragging the split far enough left eats the
+  count instead of the name. It reads correctly at the 300px the sidebar starts at.
 
 ## Projects
 
@@ -399,6 +425,21 @@ one item per part, so the unfinished half stays visible.
 - [ ] Follow the newest line of a running scratchpad's output. It has to be scrolled by hand
   today, so a long run scrolls away from the reader. Needs the viewport height and a "the reader
   has scrolled away, leave them there" rule — the same shape `reveal_row` already has.
+- [ ] Wrap or scroll the compiler output. Diagnostics and cargo's own stderr clip at the pane's
+  right edge, and a diagnostic carrying a span is exactly the line too wide to fit, so the part
+  that says where the error is is the part that gets cut.
+- [ ] Click a diagnostic to reach the code it is about. The span is drawn under the message but
+  is not a target, so a reader with an error still finds the line by counting. Both halves
+  already exist: cargo's JSON carries the span's line and column, and the editor has a cursor
+  that can be put on one.
+- [ ] More than one scratchpad. The storage already holds many — a scratchpad is a directory and
+  nothing about the model is singular — and the app opens exactly one because a picker is a
+  second document list, which the content strip deliberately is not (a chip there is a place in
+  a binary). Where that list lives is the decision to make before building it.
+- [ ] Stop a run's grandchildren with it. `Running::stop` kills the process the app spawned, so a
+  scratchpad that spawns a child of its own leaves it running with nothing that could ever find
+  it again. The fix is starting the run in a process group of its own and killing the group —
+  a `libc` call on Unix and a job object on Windows, neither of which this crate carries today.
 
 ## Binary inspection design
 
