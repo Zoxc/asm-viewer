@@ -312,14 +312,18 @@ fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
         // SHT_SYMTAB, SHT_RELA and SHT_DYNSYM: the three with 24-byte entries.
         let kind = u32::from_le_bytes(data[base + 4..base + 8].try_into().unwrap());
         if matches!(kind, 2 | 4 | 11) {
-            let offset = u64::from_le_bytes(data[base + 24..base + 32].try_into().unwrap()) as usize;
+            let offset =
+                u64::from_le_bytes(data[base + 24..base + 32].try_into().unwrap()) as usize;
             let size = u64::from_le_bytes(data[base + 32..base + 40].try_into().unwrap()) as usize;
             tables.push((offset, size));
         }
     }
 
     for (offset, size) in tables {
-        if !offset.checked_add(size).is_some_and(|end| end <= data.len()) {
+        if !offset
+            .checked_add(size)
+            .is_some_and(|end| end <= data.len())
+        {
             continue;
         }
         for entry in 0..size / 24 {

@@ -134,9 +134,9 @@ impl Disassembler for X86 {
             // Keep the `rip+` visible when — and only when — the name that is about to
             // replace the displacement is one the user can navigate to. See
             // `rip_relative`.
-            formatter
-                .options_mut()
-                .set_rip_relative_addresses(inst.relocation.is_some() && rip_relative(&instruction));
+            formatter.options_mut().set_rip_relative_addresses(
+                inst.relocation.is_some() && rip_relative(&instruction),
+            );
 
             formatter.format(&instruction, &mut inst);
 

@@ -114,7 +114,10 @@ fn the_digest_is_of_the_bytes_and_nothing_else() {
 /// question with one.
 #[test]
 fn every_object_out_of_one_archive_shares_one_digest() {
-    let bytes = archive(&[("first.o", &caller_and_target()), ("second.o", &caller_and_target())]);
+    let bytes = archive(&[
+        ("first.o", &caller_and_target()),
+        ("second.o", &caller_and_target()),
+    ]);
 
     let directory = std::env::temp_dir().join(format!(
         "analysis-digest-test-{}-{}",

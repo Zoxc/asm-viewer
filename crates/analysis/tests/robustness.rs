@@ -435,7 +435,10 @@ fn debug_sections_full_of_garbage_do_not_panic() {
             let mut data = valid.clone();
             let noise = garbage(seed, range.len());
             data[range.clone()].copy_from_slice(&noise);
-            cases.push((format!("section {range:?} replaced with garbage({seed})"), data));
+            cases.push((
+                format!("section {range:?} replaced with garbage({seed})"),
+                data,
+            ));
         }
 
         // And every section at once, which is the "a file that is not really DWARF at
@@ -911,11 +914,11 @@ fn elf_at_the_end_of_the_address_space(base: u64) -> Vec<u8> {
     let root = dwarf.unit.root();
     let subprogram = dwarf.unit.add(root, gimli::DW_TAG_subprogram);
     let entry = dwarf.unit.get_mut(subprogram);
+    entry.set(gimli::DW_AT_name, AttributeValue::String(b"edge".to_vec()));
     entry.set(
-        gimli::DW_AT_name,
-        AttributeValue::String(b"edge".to_vec()),
+        gimli::DW_AT_low_pc,
+        AttributeValue::Address(Address::Constant(base)),
     );
-    entry.set(gimli::DW_AT_low_pc, AttributeValue::Address(Address::Constant(base)));
     // Six: two bytes more than there is address space, which is the point of the fixture.
     entry.set(gimli::DW_AT_high_pc, AttributeValue::Udata(6));
 
@@ -931,7 +934,10 @@ fn elf_at_the_end_of_the_address_space(base: u64) -> Vec<u8> {
         gimli::DW_AT_comp_dir,
         AttributeValue::String(b"/src".to_vec()),
     );
-    entry.set(gimli::DW_AT_name, AttributeValue::String(b"edge.c".to_vec()));
+    entry.set(
+        gimli::DW_AT_name,
+        AttributeValue::String(b"edge.c".to_vec()),
+    );
 
     let mut sections = Sections::new(EndianVec::new(gimli::LittleEndian));
     dwarf.write(&mut sections).expect("writing the DWARF");
@@ -940,8 +946,11 @@ fn elf_at_the_end_of_the_address_space(base: u64) -> Vec<u8> {
             if writer.slice().is_empty() {
                 return Ok::<_, ()>(());
             }
-            let section =
-                obj.add_section(Vec::new(), id.name().as_bytes().to_vec(), SectionKind::Debug);
+            let section = obj.add_section(
+                Vec::new(),
+                id.name().as_bytes().to_vec(),
+                SectionKind::Debug,
+            );
             obj.append_section_data(section, writer.slice(), 1);
             Ok(())
         })
@@ -959,7 +968,10 @@ fn elf_at_the_end_of_the_address_space(base: u64) -> Vec<u8> {
         let file = object::File::parse(&data[..]).expect("the fixture parses");
         let shoff = u64::from_le_bytes(data[0x28..0x30].try_into().unwrap()) as usize;
         let shentsize = u16::from_le_bytes(data[0x3A..0x3C].try_into().unwrap()) as usize;
-        let text = file.section_by_name(".text").expect(".text is there").index();
+        let text = file
+            .section_by_name(".text")
+            .expect(".text is there")
+            .index();
         let symtab = file
             .section_by_name(".symtab")
             .expect(".symtab is there")
@@ -1034,8 +1046,18 @@ fn one_symbol_that_cannot_be_analysed_does_not_take_out_the_others() {
 
     let in_text = write::SymbolSection::Section(text);
     // `xor eax, eax; ret`, twice, around everything that cannot be read.
-    add(&mut obj, b"first_good".to_vec(), &[0x31, 0xC0, 0xC3], in_text);
-    add(&mut obj, b"absolute".to_vec(), &[], write::SymbolSection::Absolute);
+    add(
+        &mut obj,
+        b"first_good".to_vec(),
+        &[0x31, 0xC0, 0xC3],
+        in_text,
+    );
+    add(
+        &mut obj,
+        b"absolute".to_vec(),
+        &[],
+        write::SymbolSection::Absolute,
+    );
     add(
         &mut obj,
         format!("?deep@@YAX{}@Z", "P".repeat(3000)).into_bytes(),
@@ -1044,7 +1066,12 @@ fn one_symbol_that_cannot_be_analysed_does_not_take_out_the_others() {
         in_text,
     );
     add(&mut obj, b"cut_short".to_vec(), &[0xE8, 0x00], in_text);
-    add(&mut obj, b"second_good".to_vec(), &[0x31, 0xC0, 0xC3], in_text);
+    add(
+        &mut obj,
+        b"second_good".to_vec(),
+        &[0x31, 0xC0, 0xC3],
+        in_text,
+    );
     let mut data = obj.write().expect("writing the fixture object");
 
     // And one symbol pointed clean out of its own section, which the writer will not

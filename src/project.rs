@@ -792,12 +792,11 @@ impl SavedSelection {
     /// app opens, so landing near the last session's place beats landing nowhere;
     /// a history entry, of which there are many, is better dropped.
     fn resolve_or_degrade(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Selection {
-        self.resolve(objects, rebuilt).unwrap_or_else(|| {
-            match self.find_object(objects) {
+        self.resolve(objects, rebuilt)
+            .unwrap_or_else(|| match self.find_object(objects) {
                 Some(object) => Selection::Object(object.clone()),
                 None => Selection::None,
-            }
-        })
+            })
     }
 }
 
@@ -1641,7 +1640,7 @@ mod tests {
             let session = Session {
                 selection: Some(saved),
                 history: SavedHistory::default(),
-            ..Session::new()
+                ..Session::new()
             };
             assert!(session.resolve(&objects) == Selection::None);
         }
@@ -2507,9 +2506,7 @@ mod tests {
     fn saved_against(bytes: Option<&[u8]>, saved: SavedSelection, row: usize) -> Session {
         Session {
             digests: bytes
-                .map(|bytes| {
-                    BTreeMap::from([(PathBuf::from("/tmp/lib.a"), digest_of(bytes))])
-                })
+                .map(|bytes| BTreeMap::from([(PathBuf::from("/tmp/lib.a"), digest_of(bytes))]))
                 .unwrap_or_default(),
             selection: Some(saved.clone()),
             tabs: vec![SavedTab {
@@ -2544,10 +2541,7 @@ mod tests {
         assert_eq!(binaries(&objects), vec![PathBuf::from("/tmp/lib.a")]);
         assert_eq!(
             session.digests,
-            BTreeMap::from([(
-                PathBuf::from("/tmp/lib.a"),
-                digest_of(b"the first build")
-            )])
+            BTreeMap::from([(PathBuf::from("/tmp/lib.a"), digest_of(b"the first build"))])
         );
     }
 
@@ -2559,7 +2553,11 @@ mod tests {
     fn an_unchanged_binary_is_still_matched_on_the_address() {
         let objects = objects();
 
-        let session = saved_against(Some(b"the first build"), saved_symbol("a.o", "target", 6), 42);
+        let session = saved_against(
+            Some(b"the first build"),
+            saved_symbol("a.o", "target", 6),
+            42,
+        );
         assert!(
             session.resolve(&objects)
                 == Selection::Symbol(Symbol {
@@ -2572,7 +2570,11 @@ mod tests {
 
         // The same name at an address it is not at. Nothing about this file explains
         // that, so it degrades exactly as it always has.
-        let moved = saved_against(Some(b"the first build"), saved_symbol("a.o", "target", 999), 42);
+        let moved = saved_against(
+            Some(b"the first build"),
+            saved_symbol("a.o", "target", 999),
+            42,
+        );
         assert!(moved.resolve(&objects) == Selection::Object(objects[0].clone()));
         assert!(moved.resolve_tabs(&objects).is_empty());
         assert!(moved.resolve_history(&objects).entries().is_empty());
@@ -2585,12 +2587,21 @@ mod tests {
     #[test]
     fn a_rebuilt_binary_matches_by_name_and_forgets_the_row() {
         let objects = vec![
-            built("/tmp/lib.a", "a.o", &[("caller", 0), ("target", 96)], b"the second build"),
+            built(
+                "/tmp/lib.a",
+                "a.o",
+                &[("caller", 0), ("target", 96)],
+                b"the second build",
+            ),
             built("/tmp/lib.a", "b.o", &[("caller", 0)], b"the second build"),
         ];
 
         // Saved when `target` was at 6; it is at 96 now.
-        let session = saved_against(Some(b"the first build"), saved_symbol("a.o", "target", 6), 42);
+        let session = saved_against(
+            Some(b"the first build"),
+            saved_symbol("a.o", "target", 6),
+            42,
+        );
 
         let expected = Selection::Symbol(Symbol {
             object: objects[0].clone(),
@@ -2615,14 +2626,22 @@ mod tests {
             b"the second build",
         )];
 
-        let session = saved_against(Some(b"the first build"), saved_symbol("a.o", "helper", 6), 42);
+        let session = saved_against(
+            Some(b"the first build"),
+            saved_symbol("a.o", "helper", 6),
+            42,
+        );
         // The selection degrades to the object; the tab and the history entry drop.
         assert!(session.resolve(&objects) == Selection::Object(objects[0].clone()));
         assert!(session.resolve_tabs(&objects).is_empty());
         assert!(session.resolve_history(&objects).entries().is_empty());
 
         // And where the address still names one of them, it is still the tie-breaker.
-        let exact = saved_against(Some(b"the first build"), saved_symbol("a.o", "helper", 64), 42);
+        let exact = saved_against(
+            Some(b"the first build"),
+            saved_symbol("a.o", "helper", 64),
+            42,
+        );
         assert!(
             exact.resolve(&objects)
                 == Selection::Symbol(Symbol {
@@ -2654,7 +2673,11 @@ mod tests {
     #[test]
     fn a_digest_for_a_binary_that_is_not_open_says_nothing() {
         let objects = objects();
-        let mut session = saved_against(Some(b"the first build"), saved_symbol("a.o", "target", 6), 42);
+        let mut session = saved_against(
+            Some(b"the first build"),
+            saved_symbol("a.o", "target", 6),
+            42,
+        );
         session
             .digests
             .insert(PathBuf::from("/tmp/some.dll"), digest_of(b"whatever"));
@@ -3226,9 +3249,14 @@ mod tests {
     #[test]
     fn an_id_is_one_ordinary_path_component() {
         for good in ["project-1", "kernel_2", "a", "9lives"] {
-            assert_eq!(ProjectId::new(good).map(|id| id.as_str().to_owned()), Some(good.to_owned()));
+            assert_eq!(
+                ProjectId::new(good).map(|id| id.as_str().to_owned()),
+                Some(good.to_owned())
+            );
         }
-        for bad in ["", "..", ".", "-leading", "a/b", "a\\b", "a b", "a.toml", "é"] {
+        for bad in [
+            "", "..", ".", "-leading", "a/b", "a\\b", "a b", "a.toml", "é",
+        ] {
             assert_eq!(ProjectId::new(bad), None, "{bad}");
         }
         assert_eq!(ProjectId::new("x".repeat(MAX_ID + 1)), None);
@@ -3282,7 +3310,10 @@ mod tests {
             recents.touch(&id(&format!("project-{n}")));
         }
         assert_eq!(recents.projects.len(), MAX_RECENTS);
-        assert_eq!(recents.first(), Some(&id(&format!("project-{}", MAX_RECENTS + 9))));
+        assert_eq!(
+            recents.first(),
+            Some(&id(&format!("project-{}", MAX_RECENTS + 9)))
+        );
     }
 
     #[test]
@@ -3294,7 +3325,10 @@ mod tests {
         assert!(text.contains(r#""kernel_2""#), "{text}");
 
         // A missing or unreadable file is the empty list, never an error.
-        assert_eq!(Recents::load_from(Path::new("/no/such/recents.toml")), Recents::default());
+        assert_eq!(
+            Recents::load_from(Path::new("/no/such/recents.toml")),
+            Recents::default()
+        );
     }
 
     /// The claim is the `create_dir`, so two allocations in the same directory cannot

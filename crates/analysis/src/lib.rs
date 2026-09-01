@@ -417,7 +417,12 @@ impl SymbolData {
     /// full page of plausible, entirely invented instructions for an aarch64 function.
     pub fn assembly(&self, object: &Object) -> Option<Arc<Assembly>> {
         let bytes = self.data_in(object)?;
-        let code = Code::new(bytes, self.address, self.section.as_deref(), &object.symbols);
+        let code = Code::new(
+            bytes,
+            self.address,
+            self.section.as_deref(),
+            &object.symbols,
+        );
         Some(Arc::new(Assembly::decode(object.architecture, &code)))
     }
 }
@@ -435,7 +440,6 @@ impl PartialEq for Symbol {
         Arc::ptr_eq(&self.object, &other.object) && Arc::ptr_eq(&self.data, &other.data)
     }
 }
-
 
 /// A hard ceiling on how large a single section's decompressed bytes may be, whatever
 /// its header claims. See [`section_data`].

@@ -46,14 +46,7 @@ const AMBIGUOUS_WIDTH: &[u8] = &[0x48, 0x31, 0xC0, 0xC3];
 const AARCH64: &[u8] = &[0x20, 0x00, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6];
 
 fn one_function(architecture: Architecture, bytes: &[u8]) -> Vec<u8> {
-    elf_text(
-        architecture,
-        &[TextSymbol {
-            name: "f",
-            bytes,
-        }],
-        &[],
-    )
+    elf_text(architecture, &[TextSymbol { name: "f", bytes }], &[])
 }
 
 #[test]

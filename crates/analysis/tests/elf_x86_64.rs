@@ -531,8 +531,14 @@ fn a_forward_jump_and_a_backward_conditional_are_edges() {
     let assembly = assemble(&object, "looper");
 
     assert_eq!(assembly.instructions.len(), 6);
-    assert_eq!(text(&assembly.instructions[1]).trim_end(), "jmp       short 7");
-    assert_eq!(text(&assembly.instructions[4]).trim_end(), "jl        short 4");
+    assert_eq!(
+        text(&assembly.instructions[1]).trim_end(),
+        "jmp       short 7"
+    );
+    assert_eq!(
+        text(&assembly.instructions[4]).trim_end(),
+        "jl        short 4"
+    );
 
     // Both ends are instruction indices, not addresses: the gutter is drawn per row.
     assert_eq!(edges(&assembly), [(1, 3), (4, 2)]);
@@ -634,7 +640,10 @@ fn a_branch_out_of_the_symbol_is_not_an_edge() {
     ));
     let assembly = assemble(&object, "jumper");
 
-    assert_eq!(text(&assembly.instructions[0]).trim_end(), "jmp       short 3");
+    assert_eq!(
+        text(&assembly.instructions[0]).trim_end(),
+        "jmp       short 3"
+    );
     assert_eq!(assembly.instructions.len(), 2);
     assert!(
         edges(&assembly).is_empty(),
@@ -675,7 +684,10 @@ fn a_relocated_branch_is_not_an_edge() {
     let assembly = assemble(&relocated, "jumper");
     // The jump still names where it goes — it is just that the name comes from the
     // relocation and the address in the encoding means nothing.
-    assert_eq!(text(&assembly.instructions[0]).trim_end(), "jmp       target");
+    assert_eq!(
+        text(&assembly.instructions[0]).trim_end(),
+        "jmp       target"
+    );
     assert!(
         edges(&assembly).is_empty(),
         "expected no edge, got {:?}",
@@ -718,7 +730,12 @@ fn a_branch_into_the_middle_of_an_instruction_is_not_an_edge() {
 
         assert_eq!(assembly.instructions.len(), 3);
         assert_eq!(assembly.instructions[1].address, 2);
-        assert_eq!(edges(&assembly), expected, "jumping to {}", 2 + u64::from(rel));
+        assert_eq!(
+            edges(&assembly),
+            expected,
+            "jumping to {}",
+            2 + u64::from(rel)
+        );
     }
 }
 
@@ -784,7 +801,10 @@ fn a_branch_to_itself_is_not_an_edge() {
     ));
     let assembly = assemble(&object, "spinner");
 
-    assert_eq!(text(&assembly.instructions[0]).trim_end(), "jmp       short 0");
+    assert_eq!(
+        text(&assembly.instructions[0]).trim_end(),
+        "jmp       short 0"
+    );
     assert!(
         edges(&assembly).is_empty(),
         "expected no edge, got {:?}",

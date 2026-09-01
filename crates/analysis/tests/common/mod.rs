@@ -56,7 +56,8 @@ pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
                 // Which is exactly what makes `row_at` well defined: an address inside a
                 // row is answered by that row and no other.
                 assert_eq!(
-                    info.row_at(row.range.start).map(|found| found.range.clone()),
+                    info.row_at(row.range.start)
+                        .map(|found| found.range.clone()),
                     Some(row.range.clone())
                 );
                 let _ = info.file_of(row);
@@ -85,7 +86,6 @@ pub fn survivors<'a>(inputs: impl IntoIterator<Item = (String, &'a [u8])>) -> Ve
         })
         .collect()
 }
-
 
 pub struct TextSymbol<'a> {
     pub name: &'a str,
@@ -396,7 +396,13 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     let files: Vec<_> = fixture
         .files
         .iter()
-        .map(|file| program.add_file(LineString::String(file.as_bytes().to_vec()), directory, None))
+        .map(|file| {
+            program.add_file(
+                LineString::String(file.as_bytes().to_vec()),
+                directory,
+                None,
+            )
+        })
         .collect();
 
     let mut ranges = Vec::new();
@@ -445,8 +451,8 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     }
 
     // Without a range on the unit, nothing will look inside it for an address.
-    let unit_ranges = (fixture.sections.len() > 1)
-        .then(|| dwarf.unit.ranges.add(RangeList(ranges)));
+    let unit_ranges =
+        (fixture.sections.len() > 1).then(|| dwarf.unit.ranges.add(RangeList(ranges)));
     let entry = dwarf.unit.get_mut(root);
     entry.set(
         gimli::DW_AT_comp_dir,
@@ -478,8 +484,11 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
             if writer.slice().is_empty() {
                 return Ok::<_, ()>(());
             }
-            let section =
-                obj.add_section(Vec::new(), id.name().as_bytes().to_vec(), SectionKind::Debug);
+            let section = obj.add_section(
+                Vec::new(),
+                id.name().as_bytes().to_vec(),
+                SectionKind::Debug,
+            );
             obj.append_section_data(section, writer.slice(), 1);
 
             for relocation in &writer.relocations {
@@ -770,26 +779,43 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     // sh_name, sh_type, sh_flags, sh_addr, (sh_offset, sh_size), sh_link, sh_entsize.
     // sh_info is 1 for a symbol table (one local symbol, the null entry) and 0
     // otherwise; sh_addralign is always 1 here.
-    let shdr = |name: u32, kind: u32, flags: u64, addr: u64, at: (u64, u64), link: u32, entsize: u64| {
-        let mut bytes = Vec::with_capacity(SHDR);
-        bytes.extend_from_slice(&name.to_le_bytes());
-        bytes.extend_from_slice(&kind.to_le_bytes());
-        bytes.extend_from_slice(&flags.to_le_bytes());
-        bytes.extend_from_slice(&addr.to_le_bytes());
-        bytes.extend_from_slice(&at.0.to_le_bytes());
-        bytes.extend_from_slice(&at.1.to_le_bytes());
-        bytes.extend_from_slice(&link.to_le_bytes());
-        bytes.extend_from_slice(&u32::from(entsize != 0).to_le_bytes());
-        bytes.extend_from_slice(&1u64.to_le_bytes());
-        bytes.extend_from_slice(&entsize.to_le_bytes());
-        bytes
-    };
+    let shdr =
+        |name: u32, kind: u32, flags: u64, addr: u64, at: (u64, u64), link: u32, entsize: u64| {
+            let mut bytes = Vec::with_capacity(SHDR);
+            bytes.extend_from_slice(&name.to_le_bytes());
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&flags.to_le_bytes());
+            bytes.extend_from_slice(&addr.to_le_bytes());
+            bytes.extend_from_slice(&at.0.to_le_bytes());
+            bytes.extend_from_slice(&at.1.to_le_bytes());
+            bytes.extend_from_slice(&link.to_le_bytes());
+            bytes.extend_from_slice(&u32::from(entsize != 0).to_le_bytes());
+            bytes.extend_from_slice(&1u64.to_le_bytes());
+            bytes.extend_from_slice(&entsize.to_le_bytes());
+            bytes
+        };
 
     // SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_DYNSYM = 11.
     // SHF_WRITE = 1, SHF_ALLOC = 2, SHF_EXECINSTR = 4.
     out.extend_from_slice(&shdr(0, 0, 0, 0, (0, 0), 0, 0));
-    out.extend_from_slice(&shdr(names[0], 1, 2 | 4, IMAGE_BASE + TEXT_RVA, text_at, 0, 0));
-    out.extend_from_slice(&shdr(names[1], 1, 2 | 1, IMAGE_BASE + data_rva, data_at, 0, 0));
+    out.extend_from_slice(&shdr(
+        names[0],
+        1,
+        2 | 4,
+        IMAGE_BASE + TEXT_RVA,
+        text_at,
+        0,
+        0,
+    ));
+    out.extend_from_slice(&shdr(
+        names[1],
+        1,
+        2 | 1,
+        IMAGE_BASE + data_rva,
+        data_at,
+        0,
+        0,
+    ));
     out.extend_from_slice(&shdr(names[2], 11, 2, 0, dynsym_at, 4, SYM as u64));
     out.extend_from_slice(&shdr(names[3], 3, 2, 0, dynstr_at, 0, 0));
     out.extend_from_slice(&shdr(names[4], 2, 0, 0, symtab_at, 6, SYM as u64));
@@ -926,13 +952,18 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
     opt[56..60].copy_from_slice(&(image_size as u32).to_le_bytes());
     opt[60..64].copy_from_slice(&(HEADERS as u32).to_le_bytes()); // SizeOfHeaders
     opt[108..112].copy_from_slice(&16u32.to_le_bytes()); // NumberOfRvaAndSizes
-    // Data directory 0 is the export table.
+                                                         // Data directory 0 is the export table.
     opt[112..116].copy_from_slice(&(rdata_rva as u32).to_le_bytes());
     opt[116..120].copy_from_slice(&(rdata_size as u32).to_le_bytes());
 
     // Section headers at 0x58 + 240 = 0x148.
     let headers = 0x148;
-    let section = |name: &[u8], rva: u64, virtual_size: usize, pointer: usize, raw: usize, characteristics: u32| {
+    let section = |name: &[u8],
+                   rva: u64,
+                   virtual_size: usize,
+                   pointer: usize,
+                   raw: usize,
+                   characteristics: u32| {
         let mut bytes = vec![0u8; 40];
         bytes[..name.len()].copy_from_slice(name);
         bytes[8..12].copy_from_slice(&(virtual_size as u32).to_le_bytes());
@@ -943,7 +974,14 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
         bytes
     };
     // CNT_CODE | MEM_EXECUTE | MEM_READ, and CNT_INITIALIZED_DATA | MEM_READ.
-    let text_header = section(b".text", TEXT_RVA, text_size, HEADERS, text_raw, 0x6000_0020);
+    let text_header = section(
+        b".text",
+        TEXT_RVA,
+        text_size,
+        HEADERS,
+        text_raw,
+        0x6000_0020,
+    );
     let rdata_header = section(
         b".rdata",
         rdata_rva,

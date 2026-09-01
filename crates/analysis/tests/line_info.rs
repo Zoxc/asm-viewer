@@ -66,7 +66,8 @@ fn two_files(base_symbol: Option<usize>) -> Vec<u8> {
 }
 
 fn parse(data: &[u8]) -> Arc<Object> {
-    parse_object(data.into(), "line.o".into(), PathBuf::from("/line.o")).expect("the fixture parses")
+    parse_object(data.into(), "line.o".into(), PathBuf::from("/line.o"))
+        .expect("the fixture parses")
 }
 
 /// The one code section of a single-`.text` fixture. A range is only a question when it
@@ -134,7 +135,9 @@ fn a_symbol_touches_only_its_own_files() {
     let first = symbol(&object, "first").line_info(&object).expect("first");
     assert_eq!(first.files(), [Arc::from("/src/main.c")]);
 
-    let second = symbol(&object, "second").line_info(&object).expect("second");
+    let second = symbol(&object, "second")
+        .line_info(&object)
+        .expect("second");
     assert_eq!(second.files(), [Arc::from("/src/other.c")]);
 }
 
@@ -315,9 +318,7 @@ fn rows_are_ascending_and_do_not_overlap() {
     let object = parse(&data);
 
     for name in ["first", "second"] {
-        let info = symbol(&object, name)
-            .line_info(&object)
-            .expect("line info");
+        let info = symbol(&object, name).line_info(&object).expect("line info");
         let mut previous = 0;
         for row in info.rows() {
             assert!(row.range.start < row.range.end, "{name}: empty row");
@@ -330,7 +331,9 @@ fn rows_are_ascending_and_do_not_overlap() {
             // Every address inside a row is answered by that row, which is what
             // overlapping rows would break.
             for address in [row.range.start, row.range.end - 1] {
-                let found = info.row_at(address).expect("a row covering its own address");
+                let found = info
+                    .row_at(address)
+                    .expect("a row covering its own address");
                 assert_eq!(found.range, row.range);
             }
         }

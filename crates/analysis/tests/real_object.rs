@@ -308,7 +308,10 @@ fn rows_are_ascending_and_do_not_overlap() {
 
             let mut previous = symbol.address;
             for row in info.rows() {
-                assert!(row.range.start < row.range.end, "{name}/{function}: empty row");
+                assert!(
+                    row.range.start < row.range.end,
+                    "{name}/{function}: empty row"
+                );
                 assert!(
                     row.range.start >= previous,
                     "{name}/{function}: {:?} overlaps the row ending at {previous}",
@@ -324,7 +327,10 @@ fn rows_are_ascending_and_do_not_overlap() {
                     assert_eq!(found.range, row.range, "{name}/{function}");
                 }
             }
-            assert!(info.row_at(end).is_none(), "{name}/{function}: past the end");
+            assert!(
+                info.row_at(end).is_none(),
+                "{name}/{function}: past the end"
+            );
         }
     }
 }

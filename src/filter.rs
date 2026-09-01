@@ -114,7 +114,10 @@ fn message(error: &regex::Error) -> String {
         .unwrap_or(&text)
         .trim();
 
-    line.strip_prefix("error:").unwrap_or(line).trim().to_owned()
+    line.strip_prefix("error:")
+        .unwrap_or(line)
+        .trim()
+        .to_owned()
 }
 
 #[cfg(test)]

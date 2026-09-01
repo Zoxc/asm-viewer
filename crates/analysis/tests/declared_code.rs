@@ -23,8 +23,12 @@ const TEXT: &[u8] = &[
 ];
 
 fn parse(bytes: Vec<u8>) -> Arc<Object> {
-    parse_object(bytes.as_slice().into(), "fixture".into(), PathBuf::from("/f"))
-        .expect("the fixture should parse")
+    parse_object(
+        bytes.as_slice().into(),
+        "fixture".into(),
+        PathBuf::from("/f"),
+    )
+    .expect("the fixture should parse")
 }
 
 fn named<'a>(object: &'a Object, name: &str) -> &'a Arc<SymbolData> {
