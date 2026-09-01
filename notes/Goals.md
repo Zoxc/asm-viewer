@@ -367,6 +367,19 @@ one item per part, so the unfinished half stays visible.
   sorted list `estimate_size` searches answer 0; the section is found by looking the address up
   in the kept text sections, which is also what keeps exported *data* out. A relocatable object
   is skipped, 0 being a real function's first byte there rather than "no entry point".
+- [?] A multi-threaded, **deterministic** analysis pass that finds all the code: labels,
+  functions, jump targets, entry points, exports and the rest. Deterministic in the strong
+  sense — the same binary gives the same set of code locations, in the same order, whatever the
+  thread scheduling did, so a result can be cached, compared between runs and saved into project
+  info without ever being subtly different from the one before. Undecided because it sits
+  against the standing rule above ("rely on declared functions, don't assume things can be
+  code"): a jump-target sweep *discovers* code rather than reading a declaration, which is the
+  thing that rule exists to forbid. Deciding it means deciding how far that rule bends — a
+  target reached from an already-declared function is arguably still declared, transitively,
+  while scanning a section for instruction-looking bytes is not. The pieces that are already
+  declarations (entry points, exports, unwind targets in `.pdata`) do not need this and are
+  their own items.
+
 - [ ] Find unwind targets. Now also the honest fix for the other half of the above: a stripped
   PE's export table is sparse, so an exported function's extent is derived across every
   unexported function between it and the next export — megabytes, in nine cases in the DLL, and
