@@ -229,7 +229,7 @@ one item per part, so the unfinished half stays visible.
   an archive, or a file that contributed the one object it is named after — offers "Close
   file", and closing drops every object of that path, an archive's members with it. What
   pointed at them: the open tabs in it are closed and the selection moves to the
-  neighbouring tab the way closing one tab by hand does (`Selection::None` only when that
+  neighbouring tab the way closing one tab by hand does (no selection at all only when that
   was the last), the history entries are *dropped* rather than degraded, through the same
   walk a restore uses for binaries that have changed, and `Project::binaries` follows the
   objects and is written to disk at once. A member row offers nothing: the file is the unit

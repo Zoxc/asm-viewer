@@ -831,13 +831,13 @@ struct Loading(State<Loads>);
 /// which is why `Selection` is still the single thing the history records and the session
 /// saves — it did not become a second state, it grew a list around it.
 #[derive(Clone, Copy)]
-struct Sel(State<Selection>);
+struct Sel(State<Option<Selection>>);
 
 /// The tabs open in the content area, shared through context.
 ///
 /// The list only; the active one is `Sel`. Every entry is an `Object` or a `Symbol` —
-/// [`Selection::None`] is never a tab, it is what the app is in when the list is empty,
-/// which is the placeholder state.
+/// there is no "nothing" entry: having no selection is an absent one, which is what the
+/// app is in when the list is empty and is the placeholder state.
 ///
 /// Objects are in here alongside functions on purpose. A tab is a place the reader has
 /// open, the sidebar's object rows have always *been* a selection, and giving them a tab
@@ -1043,7 +1043,7 @@ struct ProjectStates {
     loading: State<Loads>,
     open: State<Tabs<Selection>>,
     asm_at: State<Positions<Selection>>,
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     history: State<History>,
     files: State<Tabs<Arc<str>>>,
     src_at: State<Positions<Arc<str>>>,
@@ -2366,17 +2366,24 @@ impl Filtered {
 /// active tab" an invariant rather than a convention: the sidebar's object and symbol
 /// rows, an assembly relocation link, the history panel and the back/forward buttons
 /// (both through [`navigate`]) and the startup restore all come through here, so none of
-/// them has to know that tabs exist. [`Selection::None`] opens nothing and is how the
-/// content area goes back to its placeholder.
+/// them has to know that tabs exist. `None` opens nothing and is how the content area
+/// goes back to its placeholder.
 ///
 /// Re-focusing a tab that is already open writes nothing: `State::write` notifies its
 /// subscribers whether or not the value changes, so both the list and the selection are
 /// asked before they are touched.
-fn activate(mut open: State<Tabs<Selection>>, mut selection: State<Selection>, target: Selection) {
+fn activate(
+    mut open: State<Tabs<Selection>>,
+    mut selection: State<Option<Selection>>,
+    target: Option<Selection>,
+) {
     // The guard from `peek` has to be gone before `write` is reached, so the answer is
     // taken out of it first rather than tested inline.
-    let already_open = matches!(target, Selection::None) || open.peek().find(&target).is_some();
-    if !already_open {
+    let opening = match &target {
+        Some(target) => open.peek().find(target).is_none(),
+        None => false,
+    };
+    if let (true, Some(target)) = (opening, &target) {
         open.write().open(target.clone());
     }
 
@@ -2395,11 +2402,11 @@ fn activate(mut open: State<Tabs<Selection>>, mut selection: State<Selection>, t
 /// top — and a leak, since a [`Selection`] holds the `Arc<Object>` it points into.
 fn close_tab(
     mut open: State<Tabs<Selection>>,
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     mut at: State<Positions<Selection>>,
     entry: &Selection,
 ) {
-    let was_showing = *selection.peek() == *entry;
+    let was_showing = selection.peek().as_ref() == Some(entry);
     let next = open.write().close(entry);
     at.write().forget(entry);
 
@@ -2407,7 +2414,7 @@ fn close_tab(
         // Through `activate` like everything else, even though the neighbour is by
         // construction already open: this is a selection change and there is one way to
         // make one. The write guard above is released before it is reached.
-        activate(open, selection, next.unwrap_or(Selection::None));
+        activate(open, selection, next);
     }
 }
 
@@ -2470,7 +2477,7 @@ fn close_file(
 ///   Degrading has nothing to fall back *to* here: a file takes its objects and their
 ///   symbols together, so `resolve_or_degrade`'s symbol-to-object step would land on an
 ///   object that is going away in the same breath. What is left is the tab rule -- the
-///   neighbouring tab, or [`Selection::None`] when the close emptied the strip -- and
+///   neighbouring tab, or nothing at all when the close emptied the strip -- and
 ///   that is also the only answer that keeps "the selection is the active tab" true,
 ///   since the placeholder with tabs still open would be a fourth state.
 /// - The **history** drops its entries rather than degrading them ([`History::retaining`]),
@@ -2503,7 +2510,7 @@ fn close_binary(
     mut objects: State<Vec<Arc<Object>>>,
     mut loading: State<Loads>,
     mut open: State<Tabs<Selection>>,
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     mut at: State<Positions<Selection>>,
     mut history: State<History>,
     path: &Path,
@@ -2511,7 +2518,9 @@ fn close_binary(
     // Every guard below is taken out of its own statement, so none of them is still
     // alive when the next write -- or `activate` at the end -- is reached.
     let showing = selection.peek().clone();
-    let next = open.write().close_all(&showing, |tab| tab.in_file(path));
+    let next = open
+        .write()
+        .close_all(showing.as_ref(), |tab| tab.in_file(path));
 
     // The same walk over the same rule, so the positions cannot outlive the tabs they
     // belong to.
@@ -2526,11 +2535,11 @@ fn close_binary(
     // dropped and the worker itself stop; see `take_load`.
     loading.write().cancel(path);
 
-    if showing.in_file(path) {
+    if showing.is_some_and(|showing| showing.in_file(path)) {
         // Through `activate` like every other selection change, even though the tab it
         // lands on is by construction already open. Landing there is an ordinary move,
         // so `use_record_history` records it exactly as it records closing one tab.
-        activate(open, selection, next.unwrap_or(Selection::None));
+        activate(open, selection, next);
     }
 }
 
@@ -2546,7 +2555,7 @@ fn close_menu(
     objects: State<Vec<Arc<Object>>>,
     loading: State<Loads>,
     open: State<Tabs<Selection>>,
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     at: State<Positions<Selection>>,
     history: State<History>,
     path: PathBuf,
@@ -2953,7 +2962,7 @@ impl Component for ObjectRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
-                    activate(open, selection, Selection::Object(object.clone()));
+                    activate(open, selection, Some(Selection::Object(object.clone())));
                 })
                 // A lone object *is* the file it came out of, so it closes like one. A
                 // member is not: it was never opened on its own, and the row that can
@@ -3048,7 +3057,7 @@ impl Component for SymbolRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
-                    activate(open, selection, Selection::Symbol(symbol.clone()));
+                    activate(open, selection, Some(Selection::Symbol(symbol.clone())));
                 })
                 .child(label().text(text).max_lines(1)),
         )
@@ -3062,11 +3071,8 @@ impl Component for SymbolRow {
 /// What a selection is called where it is named in a list: the same demangled name the
 /// symbol list shows, or the object's name for an object. The history rows and the tab
 /// chips both draw this, which is what makes a place read the same wherever it is named.
-/// `Selection::None` reaches neither list -- `History::push` refuses it and it is never a
-/// tab -- so its arm is unreachable in practice.
 fn entry_text(entry: &Selection) -> String {
     match entry {
-        Selection::None => String::new(),
         Selection::Object(object) => object.name.clone(),
         Selection::Symbol(symbol) => symbol
             .data
@@ -3088,7 +3094,6 @@ fn entry_text(entry: &Selection) -> String {
 /// short costs nothing.
 fn entry_addr(entry: &Selection) -> usize {
     match entry {
-        Selection::None => 0,
         Selection::Object(object) => Arc::as_ptr(object).addr(),
         Selection::Symbol(symbol) => Arc::as_ptr(&symbol.data).addr(),
     }
@@ -3208,7 +3213,7 @@ impl Component for RelocationLabel {
                     // also pin the line I am leaving", so the row never sees it.
                     e.stop_propagation();
 
-                    activate(open, selection, Selection::Symbol(symbol.clone()));
+                    activate(open, selection, Some(Selection::Symbol(symbol.clone())));
                 })
                 .child(label().text(text).max_lines(1).color(if hovering() {
                     palette().name_hover_fg
@@ -3803,7 +3808,7 @@ impl Component for TabChip {
             text,
             self.active,
             hovering,
-            move |_| activate(open, selection, activated.clone()),
+            move |_| activate(open, selection, Some(activated.clone())),
             move |_| close_tab(open, selection, at, &closed),
         )
     }
@@ -3845,7 +3850,7 @@ impl Component for TabStrip {
                 .map(|entry| {
                     TabChip {
                         entry: entry.clone(),
-                        active: *entry == active,
+                        active: Some(entry) == active.as_ref(),
                         key: DiffKey::None,
                     }
                     .key(entry_addr(entry))
@@ -4406,7 +4411,7 @@ impl Component for ObjectsTab {
         // and an `Object` is not, while pointer identity — which is the only identity the
         // UI uses anyway — compares as a number.
         let selected = match &*use_consume::<Sel>().0.read() {
-            Selection::Object(object) => Some(Arc::as_ptr(object).addr()),
+            Some(Selection::Object(object)) => Some(Arc::as_ptr(object).addr()),
             _ => None,
         };
         let length = tree.len();
@@ -4477,7 +4482,7 @@ impl Component for SymbolsTab {
             use_memo(move || Filtered::new(symbols.read().clone(), &filter.read().matcher()));
         let filtered = filtered.read().clone();
         let selected = match &*use_consume::<Sel>().0.read() {
-            Selection::Symbol(symbol) => Some(symbol.clone()),
+            Some(Selection::Symbol(symbol)) => Some(symbol.clone()),
             _ => None,
         };
         let length = filtered.len();
@@ -4517,15 +4522,15 @@ impl Component for InfoTab {
         let current = use_consume::<Sel>().0.read().clone();
 
         match &current {
-            Selection::None => placeholder("Nothing selected"),
-            Selection::Object(object) => rect()
+            None => placeholder("Nothing selected"),
+            Some(Selection::Object(object)) => rect()
                 .expanded()
                 .background(palette().pane_bg)
                 .child(info_line(format!("Object: `{}`", object.name)))
                 .child(info_line(format!("Format: {:?}", object.format)))
                 .child(info_line(format!("Symbols: {:?}", object.symbols.len())))
                 .into(),
-            Selection::Symbol(symbol) => rect()
+            Some(Selection::Symbol(symbol)) => rect()
                 .expanded()
                 .background(palette().pane_bg)
                 .child(ScrollView::new().child(symbol_info(symbol).into_element()))
@@ -6957,7 +6962,7 @@ fn use_save_on_change(states: ProjectStates) {
                 &objects,
                 open.read().tabs(),
                 &asm_at.read(),
-                &selection.read(),
+                selection.read().as_ref(),
                 &history.read(),
                 files.read().tabs(),
                 &src_at.read(),
@@ -7009,11 +7014,16 @@ fn use_periodic_save() {
 /// change, and `would_push` is false because that entry is exactly what the cursor is
 /// now on. Navigation therefore costs no entry, and no separate "we are navigating"
 /// flag is needed to make that true.
-fn use_record_history(selection: State<Selection>, history: State<History>) {
+fn use_record_history(selection: State<Option<Selection>>, history: State<History>) {
     use_side_effect(move || {
         // Reading subscribes the effect to the selection; `peek` on the history does
         // not, because the effect must not subscribe to the state it writes.
         let selection = selection.read().clone();
+        let Some(selection) = selection else {
+            // Nothing selected is not a place to come back to; it is the state the app
+            // boots into and the one an emptied strip leaves it in.
+            return;
+        };
 
         // `write()` notifies its subscribers before it hands the value over, whether or
         // not anything changes, so ask first: a push that would dedup away must not
@@ -7039,7 +7049,7 @@ fn use_record_history(selection: State<Selection>, history: State<History>) {
 /// Its own effect for the reason `use_record_history` is: it has no business subscribing
 /// to anything but `Sel`, and the two concerns stay separable.
 fn use_clear_focus(
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     focused: State<Option<LineFocus>>,
     pinned: State<Option<Pin>>,
 ) {
@@ -7072,7 +7082,7 @@ fn use_clear_focus(
 /// info and go when *it* does, while the source pane's run is a range of lines in a file
 /// that a change of symbol very often leaves open.
 fn use_clear_marks(
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     shown: State<Option<Arc<str>>>,
     marked: State<Option<Marks>>,
 ) {
@@ -7116,7 +7126,7 @@ fn use_clear_marks(
 /// brings the Source pane back to its file after the reader has switched to another chip
 /// by hand.
 fn use_open_source_file(
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     analysis: State<Analyzed>,
     files: State<Tabs<Arc<str>>>,
     shown: State<Option<Arc<str>>>,
@@ -7130,7 +7140,7 @@ fn use_open_source_file(
         let Some(studied) = studied else {
             return;
         };
-        if !matches!(&current, Selection::Symbol(symbol) if *symbol == studied.symbol) {
+        if !matches!(&current, Some(Selection::Symbol(symbol)) if *symbol == studied.symbol) {
             return;
         }
         if let Some(file) = studied.lines.file.clone() {
@@ -7172,7 +7182,7 @@ fn use_open_source_file(
 ///
 /// **What the panes show meanwhile** is in [`Analyzed`]: the listing they already have,
 /// until either the next one arrives or [`SLOW_ANALYSIS`] passes.
-fn use_analysis(selection: State<Selection>, analysis: State<Analyzed>) {
+fn use_analysis(selection: State<Option<Selection>>, analysis: State<Analyzed>) {
     use_analysis_with(selection, analysis, Studied::new);
 }
 
@@ -7181,7 +7191,7 @@ fn use_analysis(selection: State<Selection>, analysis: State<Analyzed>) {
 /// the one that arrives while the reader has already clicked on — and nothing can assert
 /// it against a worker that answers as fast as it is asked.
 fn use_analysis_with(
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     mut analysis: State<Analyzed>,
     study: impl Fn(Symbol) -> Studied + Send + 'static,
 ) {
@@ -7220,7 +7230,8 @@ fn use_analysis_with(
                 // The superseding rule. Cloned out of the guard first, since everything
                 // below it writes.
                 let current = selection.peek().clone();
-                if !matches!(&current, Selection::Symbol(symbol) if *symbol == studied.symbol) {
+                if !matches!(&current, Some(Selection::Symbol(symbol)) if *symbol == studied.symbol)
+                {
                     continue;
                 }
 
@@ -7252,7 +7263,7 @@ fn use_analysis_with(
         // to; the state it writes is `peek`ed, so it cannot wake itself.
         let current = selection.read().clone();
 
-        let Selection::Symbol(symbol) = current else {
+        let Some(Selection::Symbol(symbol)) = current else {
             // Not a symbol. There is nothing to work out and so nothing to wait for, and
             // the panes are told at once — clearing is instant even though replacing is
             // not. Anything still in flight is for a place the reader has left and is
@@ -7354,7 +7365,7 @@ impl Nav {
 fn navigate(
     open: State<Tabs<Selection>>,
     mut history: State<History>,
-    selection: State<Selection>,
+    selection: State<Option<Selection>>,
     nav: Nav,
 ) {
     // Ask before writing. `State::write` notifies its subscribers whether or not the
@@ -7368,7 +7379,7 @@ fn navigate(
     // The guard is released at the end of this statement, before the selection is set
     // and `use_record_history` peeks the history back.
     let entry = nav.step(&mut history.write());
-    if let Some(entry) = entry {
+    if entry.is_some() {
         activate(open, selection, entry);
     }
 }
@@ -7517,7 +7528,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
             }
         }
         for (tab, _) in restored_tabs {
-            activate(open, selection, tab);
+            activate(open, selection, Some(tab));
         }
         activate(open, selection, restored_selection);
 
@@ -7650,7 +7661,7 @@ pub fn app() -> impl IntoElement {
     // still-being-read rows from. Beside `objects` because it is the same list seen a
     // moment earlier.
     let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;
-    let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
+    let selection = use_provide_context(|| Sel(State::create(None))).0;
     // The places open in the content area, of which `selection` is the active one, and the
     // source files open in the Source pane, of which `shown` is. Both lists are opened and
     // closed only through `activate`/`close_tab` and `open_file`/`close_file`, which is
@@ -8127,9 +8138,7 @@ mod tests {
                 asm_at: $runner
                     .provide_root_context(|| AsmAt(State::create(Positions::default())))
                     .0,
-                selection: $runner
-                    .provide_root_context(|| Sel(State::create(Selection::None)))
-                    .0,
+                selection: $runner.provide_root_context(|| Sel(State::create(None))).0,
                 history: $runner
                     .provide_root_context(|| Hist(State::create(History::default())))
                     .0,
@@ -8173,12 +8182,12 @@ mod tests {
         activate(
             states.open,
             states.selection,
-            Selection::Symbol(first.clone()),
+            Some(Selection::Symbol(first.clone())),
         );
         activate(
             states.open,
             states.selection,
-            Selection::Symbol(second.clone()),
+            Some(Selection::Symbol(second.clone())),
         );
         history.write().push(Selection::Symbol(first.clone()));
         history.write().push(Selection::Symbol(second.clone()));
@@ -8220,7 +8229,7 @@ mod tests {
             "a viewing position was left behind"
         );
         assert!(
-            *states.selection.peek() == Selection::None,
+            states.selection.peek().is_none(),
             "the selection still points into the project just left"
         );
     }
@@ -8465,7 +8474,7 @@ mod tests {
         // Through `activate`, which is the only way anything opens a tab -- a partially
         // read file is not a special case for it.
         let opened = Selection::Object(objects[0].clone());
-        activate(states.open, states.selection, opened.clone());
+        activate(states.open, states.selection, Some(opened.clone()));
         test.sync_and_update();
 
         for object in &objects[1..] {
@@ -8480,7 +8489,7 @@ mod tests {
         pump(&mut test, || !states.loading.peek().is_loading(&path));
 
         assert!(
-            *states.selection.peek() == opened,
+            *states.selection.peek() == Some(opened),
             "the selection moved while the rest of the file was arriving"
         );
         assert_eq!(states.open.peek().tabs().len(), 1);
@@ -8643,9 +8652,7 @@ mod tests {
             move |runner| {
                 runner.provide_root_context(|| Study(Arc::new(study)));
                 (
-                    runner
-                        .provide_root_context(|| Sel(State::create(Selection::None)))
-                        .0,
+                    runner.provide_root_context(|| Sel(State::create(None))).0,
                     runner
                         .provide_root_context(|| Analysis(State::create(Analyzed::default())))
                         .0,
@@ -8665,7 +8672,7 @@ mod tests {
         settle(&mut test);
 
         // The first click. The worker takes it and stops inside it.
-        selection.set(Selection::Symbol(first.clone()));
+        selection.set(Some(Selection::Symbol(first.clone())));
         pump(&mut test, || !starts.is_empty());
         assert!(starts.recv_blocking().expect("the worker started") == first);
         assert!(
@@ -8675,7 +8682,7 @@ mod tests {
 
         // The second click, while the first is still being worked on. That the UI takes
         // it at all is the other half of what this sub-step is for.
-        selection.set(Selection::Symbol(second.clone()));
+        selection.set(Some(Selection::Symbol(second.clone())));
         settle(&mut test);
 
         // Let the first one finish. Its answer is on the channel by the time the worker
@@ -8723,9 +8730,7 @@ mod tests {
             |runner| {
                 runner.provide_root_context(|| Study(Arc::new(Studied::new)));
                 (
-                    runner
-                        .provide_root_context(|| Sel(State::create(Selection::None)))
-                        .0,
+                    runner.provide_root_context(|| Sel(State::create(None))).0,
                     runner
                         .provide_root_context(|| Analysis(State::create(Analyzed::default())))
                         .0,
@@ -8739,7 +8744,7 @@ mod tests {
         let mut selection = selection;
         test.sync_and_update();
 
-        selection.set(Selection::Symbol(symbol.clone()));
+        selection.set(Some(Selection::Symbol(symbol.clone())));
         pump(&mut test, || analysis.peek().shown.is_some());
 
         let state = analysis.peek().clone();
@@ -8759,7 +8764,7 @@ mod tests {
 
         // Selecting something that is not a symbol is answered on the spot: clearing does
         // not wait on the worker, only replacing does.
-        selection.set(Selection::None);
+        selection.set(None);
         test.sync_and_update();
         assert!(analysis.peek().clone() == Analyzed::default());
     }

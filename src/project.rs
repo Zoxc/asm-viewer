@@ -101,9 +101,13 @@ const MAX_ANONYMOUS: usize = 1000;
 ///
 /// Lives here rather than in `ui.rs` because it is plain data over the analysis types —
 /// no freya involved — and both persistence directions need to speak it.
+/// **There is no "nothing" variant.** A `Selection` is always a place, and having none is
+/// an absent one — `Option<Selection>` — which is the only spelling that stays honest once
+/// a selection is one of the things a tab can hold: a variant meaning "nothing" would be a
+/// tab for nowhere, and every list, every saved entry and every comparison would have to
+/// know that one of its values is not really one.
 #[derive(Clone)]
 pub enum Selection {
-    None,
     Object(Arc<Object>),
     Symbol(Symbol),
 }
@@ -119,7 +123,6 @@ impl Selection {
     /// file, members and all.
     pub fn in_file(&self, path: &Path) -> bool {
         match self {
-            Selection::None => false,
             Selection::Object(object) => object.path == path,
             Selection::Symbol(symbol) => symbol.object.path == path,
         }
@@ -129,7 +132,6 @@ impl Selection {
 impl PartialEq for Selection {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Selection::None, Selection::None) => true,
             (Selection::Object(a), Selection::Object(b)) => Arc::ptr_eq(a, b),
             (Selection::Symbol(a), Selection::Symbol(b)) => a == b,
             _ => false,
@@ -448,18 +450,15 @@ impl SavedHistory {
         }
     }
 
-    /// The saved form of `history`.
-    ///
-    /// [`History`] never holds a [`Selection::None`] — `push` refuses one and
-    /// [`History::restored`] is only ever handed entries that resolved — so nothing is
-    /// dropped here and the cursor stays pointing at the same entry.
+    /// The saved form of `history`. Every entry is a place, so nothing is dropped here
+    /// and the cursor stays pointing at the same entry.
     fn from_history(history: &History) -> SavedHistory {
         SavedHistory {
             cursor: history.cursor().unwrap_or(0),
             entries: history
                 .entries()
                 .iter()
-                .filter_map(SavedSelection::from_selection)
+                .map(SavedSelection::from_selection)
                 .collect(),
         }
     }
@@ -659,20 +658,20 @@ pub enum SavedSelection {
 }
 
 impl SavedSelection {
-    /// The saved form of `selection`, or `None` when nothing is selected.
-    pub fn from_selection(selection: &Selection) -> Option<SavedSelection> {
+    /// The saved form of `selection`. Total, because a [`Selection`] is always a place:
+    /// having none is an absent one, which is the caller's `Option` and not a variant here.
+    pub fn from_selection(selection: &Selection) -> SavedSelection {
         match selection {
-            Selection::None => None,
-            Selection::Object(object) => Some(SavedSelection::Object {
+            Selection::Object(object) => SavedSelection::Object {
                 path: object.path.clone(),
                 object_name: object.name.clone(),
-            }),
-            Selection::Symbol(symbol) => Some(SavedSelection::Symbol {
+            },
+            Selection::Symbol(symbol) => SavedSelection::Symbol {
                 path: symbol.object.path.clone(),
                 object_name: symbol.object.name.clone(),
                 symbol_name: symbol.data.name.clone(),
                 address: symbol.data.address,
-            }),
+            },
         }
     }
 
@@ -791,12 +790,9 @@ impl SavedSelection {
     /// This is what the *selection* wants. There is only one of it and it is where the
     /// app opens, so landing near the last session's place beats landing nowhere;
     /// a history entry, of which there are many, is better dropped.
-    fn resolve_or_degrade(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Selection {
+    fn resolve_or_degrade(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Selection> {
         self.resolve(objects, rebuilt)
-            .unwrap_or_else(|| match self.find_object(objects) {
-                Some(object) => Selection::Object(object.clone()),
-                None => Selection::None,
-            })
+            .or_else(|| self.find_object(objects).cloned().map(Selection::Object))
     }
 }
 
@@ -834,7 +830,7 @@ impl Session {
         objects: &[Arc<Object>],
         tabs: &[Selection],
         tab_rows: &Positions<Selection>,
-        selection: &Selection,
+        selection: Option<&Selection>,
         history: &History,
         sources: &[Arc<str>],
         source_rows: &Positions<Arc<str>>,
@@ -855,17 +851,12 @@ impl Session {
                 .and_then(|file| sources.iter().position(|open| &**open == file))
                 .unwrap_or(0),
             digests,
-            selection: SavedSelection::from_selection(selection),
-            // `filter_map` for the same reason [`SavedHistory::from_history`] uses it and
-            // with the same result: `Selection::None` is the app's placeholder state and
-            // never a tab, so nothing is actually dropped here.
+            selection: selection.map(SavedSelection::from_selection),
             tabs: tabs
                 .iter()
-                .filter_map(|tab| {
-                    Some(SavedTab {
-                        row: tab_rows.at(tab).unwrap_or(0),
-                        selection: SavedSelection::from_selection(tab)?,
-                    })
+                .map(|tab| SavedTab {
+                    row: tab_rows.at(tab).unwrap_or(0),
+                    selection: SavedSelection::from_selection(tab),
                 })
                 .collect(),
             sources: sources
@@ -885,11 +876,9 @@ impl Session {
     ///
     /// A binary that has been *rebuilt* since it was saved changes what "is gone" means
     /// — see [`Rebuilt`], which is where the digests are compared.
-    pub fn resolve(&self, objects: &[Arc<Object>]) -> Selection {
-        match &self.selection {
-            Some(saved) => saved.resolve_or_degrade(objects, &Rebuilt::of(self, objects)),
-            None => Selection::None,
-        }
+    pub fn resolve(&self, objects: &[Arc<Object>]) -> Option<Selection> {
+        let saved = self.selection.as_ref()?;
+        saved.resolve_or_degrade(objects, &Rebuilt::of(self, objects))
     }
 
     /// Turn the saved tabs back into live selections against the objects that are now
@@ -1499,10 +1488,14 @@ mod tests {
     /// Source pane has nothing open and whose panes are at the top of what they show — the
     /// state the tests written before there were tabs to save were already describing, now
     /// spelt out.
-    fn from_state(objects: &[Arc<Object>], selection: &Selection, history: &History) -> Session {
+    fn from_state(
+        objects: &[Arc<Object>],
+        selection: Option<&Selection>,
+        history: &History,
+    ) -> Session {
         Session::from_state(
             objects,
-            std::slice::from_ref(selection),
+            selection.map(std::slice::from_ref).unwrap_or_default(),
             &Positions::default(),
             selection,
             history,
@@ -1541,7 +1534,6 @@ mod tests {
         assert!(!symbol.in_file(other));
 
         // Nothing selected is in no file, so a close never has to special-case it.
-        assert!(!Selection::None.in_file(lib));
     }
 
     #[test]
@@ -1552,7 +1544,7 @@ mod tests {
             data: objects[1].symbols_sorted[0].clone(),
         });
 
-        let session = from_state(&objects, &selection, &History::default());
+        let session = from_state(&objects, Some(&selection), &History::default());
         assert_eq!(binaries(&objects), vec![PathBuf::from("/tmp/lib.a")]);
         assert_eq!(
             session.selection,
@@ -1565,23 +1557,23 @@ mod tests {
         );
 
         // The duplicate `caller` in `a.o` must not win.
-        assert!(session.resolve(&objects) == selection);
+        assert!(session.resolve(&objects) == Some(selection));
     }
 
     #[test]
     fn saves_and_resolves_an_object() {
         let objects = objects();
         let selection = Selection::Object(objects[0].clone());
-        let session = from_state(&objects, &selection, &History::default());
-        assert!(session.resolve(&objects) == selection);
+        let session = from_state(&objects, Some(&selection), &History::default());
+        assert!(session.resolve(&objects) == Some(selection));
     }
 
     #[test]
     fn no_selection_round_trips_as_none() {
         let objects = objects();
-        let session = from_state(&objects, &Selection::None, &History::default());
+        let session = from_state(&objects, None, &History::default());
         assert_eq!(session.selection, None);
-        assert!(session.resolve(&objects) == Selection::None);
+        assert!(session.resolve(&objects).is_none());
     }
 
     #[test]
@@ -1597,7 +1589,7 @@ mod tests {
             history: SavedHistory::default(),
             ..Session::new()
         };
-        assert!(session.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
     }
 
     #[test]
@@ -1614,7 +1606,7 @@ mod tests {
             history: SavedHistory::default(),
             ..Session::new()
         };
-        assert!(session.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
     }
 
     #[test]
@@ -1642,7 +1634,7 @@ mod tests {
                 history: SavedHistory::default(),
                 ..Session::new()
             };
-            assert!(session.resolve(&objects) == Selection::None);
+            assert!(session.resolve(&objects).is_none());
         }
     }
 
@@ -1691,7 +1683,7 @@ mod tests {
     #[test]
     fn a_session_with_no_selection_round_trips() {
         let objects = objects();
-        let session = from_state(&objects, &Selection::None, &History::default());
+        let session = from_state(&objects, None, &History::default());
         assert_eq!(session.selection, None);
         let text = round_trip(&session);
         assert!(!text.contains("selection"), "{text}");
@@ -1700,7 +1692,7 @@ mod tests {
     #[test]
     fn a_multi_entry_history_round_trips_as_an_array_of_tables() {
         let objects = objects();
-        let session = from_state(&objects, &Selection::None, &history(&objects, 1));
+        let session = from_state(&objects, None, &history(&objects, 1));
         assert_eq!(session.history.entries.len(), 3);
         let text = round_trip(&session);
         assert!(text.contains("[[history.entries]]"), "{text}");
@@ -1753,7 +1745,7 @@ mod tests {
         let objects = objects();
         let history = history(&objects, 0);
 
-        let session = from_state(&objects, &Selection::None, &history);
+        let session = from_state(&objects, None, &history);
         assert_eq!(session.history.entries.len(), 3);
         assert_eq!(session.history.cursor, 2);
 
@@ -1770,7 +1762,7 @@ mod tests {
         let history = history(&objects, 2);
         assert_eq!(history.cursor(), Some(0));
 
-        let session = from_state(&objects, &Selection::None, &history);
+        let session = from_state(&objects, None, &history);
         let restored = session.resolve_history(&objects);
 
         assert_eq!(restored.cursor(), Some(0));
@@ -1956,8 +1948,9 @@ mod tests {
             let restored_history = session.resolve_history(&objects);
             let restored_selection = session.resolve(&objects);
 
-            assert!(restored_history.current() == Some(&restored_selection));
-            assert!(!restored_history.would_push(&restored_selection));
+            assert!(restored_history.current() == restored_selection.as_ref());
+            assert!(!restored_history
+                .would_push(restored_selection.as_ref().expect("a restored selection")));
         }
     }
 
@@ -2019,15 +2012,16 @@ mod tests {
         for back in 0..3 {
             let history = history(&objects, back);
             let selection = history.current().expect("a current entry").clone();
-            let session = from_state(&objects, &selection, &history);
+            let session = from_state(&objects, Some(&selection), &history);
 
             let restored_history = session.resolve_history(&objects);
             let restored_selection = session.resolve(&objects);
 
-            assert!(restored_history.current() == Some(&restored_selection));
+            assert!(restored_history.current() == restored_selection.as_ref());
             // Which is what keeps the recording effect from pushing a duplicate the
             // moment the restore sets the selection.
-            assert!(!restored_history.would_push(&restored_selection));
+            assert!(!restored_history
+                .would_push(restored_selection.as_ref().expect("a restored selection")));
         }
     }
 
@@ -2048,7 +2042,7 @@ mod tests {
 
         // And it restores exactly as it would have: the selection back, no history.
         let objects = objects();
-        assert!(session.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
         assert!(session.resolve_history(&objects).entries().is_empty());
     }
 
@@ -2105,7 +2099,7 @@ mod tests {
     #[test]
     fn the_history_round_trips_through_toml() {
         let objects = objects();
-        let session = from_state(&objects, &Selection::None, &history(&objects, 1));
+        let session = from_state(&objects, None, &history(&objects, 1));
         round_trip(&session);
     }
 
@@ -2157,7 +2151,7 @@ mod tests {
             &objects,
             &tabs,
             &Positions::default(),
-            &tabs[2],
+            Some(&tabs[2]),
             &History::default(),
             &[],
             &Positions::default(),
@@ -2200,7 +2194,7 @@ mod tests {
             &objects,
             &tabs,
             &Positions::default(),
-            &tabs[0],
+            Some(&tabs[0]),
             &History::default(),
             &[],
             &Positions::default(),
@@ -2268,7 +2262,7 @@ mod tests {
             &objects,
             &tabs,
             &positions(&[(&tabs[1], 42)]),
-            &tabs[0],
+            Some(&tabs[0]),
             &History::default(),
             &files,
             &positions(&[(&files[0], 7)]),
@@ -2300,7 +2294,7 @@ mod tests {
             &objects,
             &tabs,
             &positions(&[(&tabs[0], 12), (&tabs[1], 900)]),
-            &tabs[0],
+            Some(&tabs[0]),
             &History::default(),
             &files,
             &positions(&[(&files[0], 4)]),
@@ -2350,7 +2344,7 @@ mod tests {
             &objects,
             &[],
             &Positions::default(),
-            &Selection::None,
+            None,
             &History::default(),
             &files,
             &Positions::default(),
@@ -2381,7 +2375,7 @@ mod tests {
             &objects(),
             &[],
             &Positions::default(),
-            &Selection::None,
+            None,
             &History::default(),
             &sources(&[path]),
             &Positions::default(),
@@ -2418,7 +2412,7 @@ mod tests {
             &objects(),
             &[],
             &Positions::default(),
-            &Selection::None,
+            None,
             &History::default(),
             &sources(&["/src/main.rs"]),
             &Positions::default(),
@@ -2447,7 +2441,7 @@ mod tests {
             &objects,
             &tabs,
             &positions(&[(&tabs[0], 12), (&tabs[1], 34)]),
-            &tabs[1],
+            Some(&tabs[1]),
             &history(&objects, 1),
             &files,
             &positions(&[(&files[1], 56)]),
@@ -2490,7 +2484,7 @@ mod tests {
         // And the selection still restores, opening its own tab through `activate` the
         // way a session saved before there were tabs to save would.
         let objects = objects();
-        assert!(session.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
         assert!(session.resolve_tabs(&objects).is_empty());
     }
 
@@ -2536,7 +2530,7 @@ mod tests {
     #[test]
     fn saves_one_digest_per_binary_however_many_objects_it_holds() {
         let objects = objects();
-        let session = from_state(&objects, &Selection::None, &History::default());
+        let session = from_state(&objects, None, &History::default());
 
         assert_eq!(binaries(&objects), vec![PathBuf::from("/tmp/lib.a")]);
         assert_eq!(
@@ -2560,10 +2554,10 @@ mod tests {
         );
         assert!(
             session.resolve(&objects)
-                == Selection::Symbol(Symbol {
+                == Some(Selection::Symbol(Symbol {
                     object: objects[0].clone(),
                     data: objects[0].symbols_sorted[1].clone(),
-                })
+                }))
         );
         assert_eq!(session.resolve_tabs(&objects).len(), 1);
         assert_eq!(session.resolve_tabs(&objects)[0].1, 42);
@@ -2575,7 +2569,7 @@ mod tests {
             saved_symbol("a.o", "target", 999),
             42,
         );
-        assert!(moved.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(moved.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
         assert!(moved.resolve_tabs(&objects).is_empty());
         assert!(moved.resolve_history(&objects).entries().is_empty());
     }
@@ -2607,7 +2601,7 @@ mod tests {
             object: objects[0].clone(),
             data: objects[0].symbols_sorted[1].clone(),
         });
-        assert!(session.resolve(&objects) == expected);
+        assert!(session.resolve(&objects) == Some(expected.clone()));
         assert!(session.resolve_tabs(&objects) == [(expected.clone(), 0)]);
         assert!(session.resolve_history(&objects).entries() == [expected]);
     }
@@ -2632,7 +2626,7 @@ mod tests {
             42,
         );
         // The selection degrades to the object; the tab and the history entry drop.
-        assert!(session.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
         assert!(session.resolve_tabs(&objects).is_empty());
         assert!(session.resolve_history(&objects).entries().is_empty());
 
@@ -2644,10 +2638,10 @@ mod tests {
         );
         assert!(
             exact.resolve(&objects)
-                == Selection::Symbol(Symbol {
+                == Some(Selection::Symbol(Symbol {
                     object: objects[0].clone(),
                     data: objects[0].symbols_sorted[1].clone(),
-                })
+                }))
         );
     }
 
@@ -2664,7 +2658,7 @@ mod tests {
         )];
 
         let session = saved_against(None, saved_symbol("a.o", "target", 6), 42);
-        assert!(session.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
         assert!(session.resolve_tabs(&objects).is_empty());
     }
 
@@ -2697,7 +2691,7 @@ mod tests {
             &objects,
             &tabs,
             &positions(&[(&tabs[0], 12)]),
-            &tabs[0],
+            Some(&tabs[0]),
             &history(&objects, 1),
             &sources(&["/src/main.rs"]),
             &Positions::default(),
@@ -2730,7 +2724,7 @@ mod tests {
         assert!(session.digests.is_empty());
 
         let objects = objects();
-        assert!(session.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
     }
 
     // --- the save policy ---------------------------------------------------

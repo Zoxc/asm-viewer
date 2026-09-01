@@ -175,13 +175,13 @@ impl History {
 
     /// Whether [`History::push`] would record `selection` as a new entry.
     ///
-    /// It would not for [`Selection::None`], which is the state the app boots into
-    /// rather than a place to come back to, nor for a selection that is already the
-    /// entry at the cursor. That second rule is the one that matters: it is what stops
-    /// back/forward navigation — which sets the selection, and so is observed like any
-    /// other selection change — from re-recording where it has just moved the cursor.
+    /// It would not for a selection that is already the entry at the cursor, which is
+    /// the whole of the rule now that "nothing selected" is an absent selection rather
+    /// than a value this could be handed: it is what stops back/forward navigation —
+    /// which sets the selection, and so is observed like any other selection change —
+    /// from re-recording where it has just moved the cursor.
     pub fn would_push(&self, selection: &Selection) -> bool {
-        !matches!(selection, Selection::None) && self.current() != Some(selection)
+        self.current() != Some(selection)
     }
 
     /// Record `selection` as the newest entry and put the cursor on it. A no-op when
@@ -345,14 +345,6 @@ mod tests {
         assert!(history.current() == Some(&b));
         assert!(history.can_back());
         assert!(!history.can_forward());
-    }
-
-    #[test]
-    fn nothing_selected_is_not_recorded() {
-        let mut history = History::default();
-        history.push(Selection::None);
-        assert!(history.current().is_none());
-        assert!(!history.can_back());
     }
 
     #[test]

@@ -61,7 +61,7 @@ impl<T: Clone + PartialEq> Tabs<T> {
     /// the caller's business rather than this list's — it does not know which that is.
     /// Closing something that is not open is a no-op and answers `None`.
     pub fn close(&mut self, item: &T) -> Option<T> {
-        self.close_all(item, |open| open == item)
+        self.close_all(Some(item), |open| open == item)
     }
 
     /// Close every open tab `closing` answers true for, and hand back the tab to show in
@@ -81,14 +81,17 @@ impl<T: Clone + PartialEq> Tabs<T> {
     /// division of labour [`Tabs::close`] already has. `None` therefore means either
     /// "nothing left open" or "nothing was closed", and neither is a case the caller
     /// reaches without having asked first.
-    pub fn close_all(&mut self, showing: &T, closing: impl Fn(&T) -> bool) -> Option<T> {
+    ///
+    /// `showing` is itself optional, because "nothing is on screen" is a state the app is
+    /// really in — an empty strip — and a close asked for from it still has to say which
+    /// tab is left. It lands where a tab that is not open lands: on the last survivor.
+    pub fn close_all(&mut self, showing: Option<&T>, closing: impl Fn(&T) -> bool) -> Option<T> {
         // Where the tab that moves into `showing`'s place will be once the closed ones
         // are gone: how many of the tabs before it survive. A tab that is not open at
-        // all counts as being past the end, which lands on the last survivor.
-        let position = self
-            .open
-            .iter()
-            .position(|open| open == showing)
+        // all — or no tab at all — counts as being past the end, which lands on the last
+        // survivor.
+        let position = showing
+            .and_then(|showing| self.open.iter().position(|open| open == showing))
             .unwrap_or(self.open.len());
         let landing = self.open[..position]
             .iter()
@@ -267,7 +270,7 @@ mod tests {
     fn closing_several_lands_on_the_first_survivor_after_the_shown_one() {
         let mut tabs = tabs(&["a", "b", "c", "d"]);
         assert_eq!(
-            tabs.close_all(&"b".to_owned(), |open| open == "b" || open == "c"),
+            tabs.close_all(Some(&"b".to_owned()), |open| open == "b" || open == "c"),
             Some("d".to_owned())
         );
         assert_eq!(tabs.tabs(), ["a", "d"]);
@@ -279,7 +282,7 @@ mod tests {
     fn closing_the_newest_several_moves_left() {
         let mut tabs = tabs(&["a", "b", "c"]);
         assert_eq!(
-            tabs.close_all(&"c".to_owned(), |open| open != "a"),
+            tabs.close_all(Some(&"c".to_owned()), |open| open != "a"),
             Some("a".to_owned())
         );
         assert_eq!(tabs.tabs(), ["a"]);
@@ -288,7 +291,7 @@ mod tests {
     #[test]
     fn closing_every_tab_leaves_nothing_to_show() {
         let mut tabs = tabs(&["a", "b"]);
-        assert_eq!(tabs.close_all(&"a".to_owned(), |_| true), None);
+        assert_eq!(tabs.close_all(Some(&"a".to_owned()), |_| true), None);
         assert!(tabs.tabs().is_empty());
     }
 
@@ -297,7 +300,7 @@ mod tests {
     #[test]
     fn closing_nothing_answers_nothing() {
         let mut tabs = tabs(&["a", "b"]);
-        assert_eq!(tabs.close_all(&"a".to_owned(), |_| false), None);
+        assert_eq!(tabs.close_all(Some(&"a".to_owned()), |_| false), None);
         assert_eq!(tabs.tabs(), ["a", "b"]);
     }
 
@@ -307,7 +310,7 @@ mod tests {
     fn a_shown_tab_that_survives_is_its_own_answer() {
         let mut tabs = tabs(&["a", "b", "c"]);
         assert_eq!(
-            tabs.close_all(&"b".to_owned(), |open| open == "a"),
+            tabs.close_all(Some(&"b".to_owned()), |open| open == "a"),
             Some("b".to_owned())
         );
         assert_eq!(tabs.tabs(), ["b", "c"]);
