@@ -53,14 +53,26 @@ const DEFAULT_MONO: &str = "monospace";
 
 /// The sizes the floem version hardcoded, used wherever the desktop has no say -- and
 /// also where it named a family but no size, which is a shape Gnome's setting allows.
-const DEFAULT_UI_SIZE: f32 = 12.0;
-const DEFAULT_MONO_SIZE: f32 = 14.0;
+///
+/// **In points, like everything else here**, which is a change of unit and not of value:
+/// they were 12 and 14 logical pixels, and 9pt and 10.5pt are those numbers exactly
+/// (`* 96 / 72`). The unit matters because the settings page draws the value an
+/// unspecified field is *inheriting* beside the box that would override it, and an
+/// override is stored in points -- so a default that was the one thing in the pipeline
+/// spelled in pixels would be the one row of that page that could not be compared with
+/// its own box. There is now a single conversion, at [`Font::size`].
+const DEFAULT_UI_POINTS: f32 = 9.0;
+const DEFAULT_MONO_POINTS: f32 = 10.5;
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct Font {
     /// Families to try, most preferred first: the desktop's choice, if there is one,
     /// in front of the platform's own font.
     pub families: Vec<Cow<'static, str>>,
-    pub size: f32,
+    /// The size **in points**: the unit the desktops answer in and the unit
+    /// [`crate::settings::FontSetting`] stores an override in, so that a value and the
+    /// value it overrides are the same kind of number all the way through.
+    pub points: f32,
 }
 
 impl Font {
@@ -70,14 +82,12 @@ impl Font {
     /// A family with no size keeps the family and takes the app's own size, which is
     /// deliberately not "no answer at all": a family is the half of the setting that is
     /// visible in every glyph on screen, and dropping it over a missing number would put
-    /// the chosen font back to `sans-serif`. `default_size` is already in logical pixels
-    /// -- it is this app's own number and not anybody's point size -- which is why only
-    /// the answered size goes through [`points_to_pixels`].
+    /// the chosen font back to `sans-serif`.
     fn new(
         family: Option<String>,
         points: Option<f32>,
         default: &'static str,
-        default_size: f32,
+        default_points: f32,
     ) -> Self {
         Font {
             families: family
@@ -85,11 +95,19 @@ impl Font {
                 .into_iter()
                 .chain([Cow::Borrowed(default)])
                 .collect(),
-            size: points.map_or(default_size, points_to_pixels),
+            points: points.unwrap_or(default_points),
         }
+    }
+
+    /// What this comes to on screen, in the logical pixels freya asks for. The only
+    /// place points become pixels, which is what keeps every other number in this module
+    /// and in `settings.rs` comparable with every other.
+    pub fn size(&self) -> f32 {
+        points_to_pixels(self.points)
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct Fonts {
     pub ui: Font,
     pub mono: Font,
@@ -538,6 +556,31 @@ fn query(which: Which) -> Option<Spec> {
     return desktop::query(which);
 }
 
+/// The same answer, asked once per process.
+///
+/// **This cache is what makes the settings page affordable.** A desktop lookup is one or
+/// two subprocesses, and the page re-[`resolve`]s both fonts on every change so that what
+/// is on screen is what the file will say -- so without it, clearing a family would spawn
+/// `kreadconfig` (or `gsettings`, twice) in the middle of a keystroke, and the row of the
+/// page that shows what an unspecified field is *inheriting* would cost a process per
+/// render. It is also honest to cache it: the answer is a desktop-wide setting read at
+/// startup, and this app has never followed a change to it mid-session.
+///
+/// One `OnceLock` per font rather than one for the pair, because [`needs_desktop`] still
+/// declines to ask about a font both of whose halves the reader has chosen, and a shared
+/// cell would make the first such question answer for both.
+fn desktop_answer(which: Which) -> Option<&'static Spec> {
+    static UI: OnceLock<Option<Spec>> = OnceLock::new();
+    static FIXED: OnceLock<Option<Spec>> = OnceLock::new();
+
+    let cell = match which {
+        Which::Ui => &UI,
+        Which::Fixed => &FIXED,
+    };
+
+    cell.get_or_init(|| query(which)).as_ref()
+}
+
 /// Whether the desktop has anything left to be asked. A font whose family *and* size the
 /// user has both chosen has no unanswered half, so a fully configured app spawns no
 /// process at startup at all -- which is the only reason this is a question rather than
@@ -553,12 +596,12 @@ fn needs_desktop(setting: &FontSetting) -> bool {
 /// the part with the rules in it -- is testable on a machine with no desktop at all.
 fn resolve_font(
     setting: &FontSetting,
-    desktop: Option<Spec>,
+    desktop: Option<&Spec>,
     default: &'static str,
-    default_size: f32,
+    default_points: f32,
 ) -> Font {
     let (family, points) = match desktop {
-        Some(desktop) => (Some(desktop.family), desktop.points),
+        Some(desktop) => (Some(desktop.family.clone()), desktop.points),
         None => (None, None),
     };
 
@@ -566,87 +609,63 @@ fn resolve_font(
         setting.family().map(str::to_owned).or(family),
         setting.size().or(points),
         default,
-        default_size,
+        default_points,
     )
 }
 
-fn font(setting: &FontSetting, which: Which, default: &'static str, default_size: f32) -> Font {
-    let desktop = needs_desktop(setting).then(|| query(which)).flatten();
+fn font(setting: &FontSetting, which: Which, default: &'static str, default_points: f32) -> Font {
+    let desktop = needs_desktop(setting)
+        .then(|| desktop_answer(which))
+        .flatten();
 
-    resolve_font(setting, desktop, default, default_size)
+    resolve_font(setting, desktop, default, default_points)
 }
 
 /// The two fonts these settings and this desktop come to.
 ///
-/// Public and taking the settings by argument, rather than reading them itself, because
-/// this is the half of [`fonts`] that survives the settings page: a page that changes a
-/// font calls this with the new settings and has the answer, with no cache to invalidate
-/// and no process-wide state to write.
+/// Public and taking the settings by argument rather than reading them itself, which is
+/// what makes it the whole of this module's answer to the settings page: the page holds
+/// the settings it is editing, calls this with them, and has what to draw with -- no
+/// cache to invalidate and no process-wide state written here. The state that *is*
+/// written lives in `ui.rs` beside the appearance, for the reason spelled out there:
+/// asking for a font has to be what subscribes a component to it, and the callers are
+/// free functions that cannot run a hook.
 ///
 /// Off a desktop that has anything to say -- no `kreadconfig`, no `gsettings`, no
 /// `SystemParametersInfo` -- and with nothing overridden, both fonts are the platform's
 /// own at the floem-era sizes.
 pub fn resolve(settings: &Settings) -> Fonts {
     Fonts {
-        ui: font(&settings.interface, Which::Ui, DEFAULT_UI, DEFAULT_UI_SIZE),
+        ui: font(
+            &settings.interface,
+            Which::Ui,
+            DEFAULT_UI,
+            DEFAULT_UI_POINTS,
+        ),
         mono: font(
             &settings.fixed,
             Which::Fixed,
             DEFAULT_MONO,
-            DEFAULT_MONO_SIZE,
+            DEFAULT_MONO_POINTS,
         ),
     }
 }
 
-/// The fonts the UI draws with: the stored settings over the desktop's answer, worked out
-/// once and handed out as a `&'static`.
+/// The fonts with nothing overridden: what every unspecified field is falling through to.
 ///
-/// **This is a `OnceLock`, and a setting the user can change at runtime cannot stay one.**
-/// It is left as it is deliberately rather than papered over, because making *this*
-/// function re-readable is not the missing piece and would only look like a fix. Two
-/// things stand in the way, and both belong to the settings page:
+/// This is what the settings page draws in the box of a field the reader has *not* set,
+/// which is `notes/Goals.md`'s "a default being unspecified with clear visual
+/// distinction" taken at its word: an empty box that showed nothing would say only that
+/// the reader has not chosen, where the question they are actually asking is what they
+/// are getting instead. It is [`resolve`] of the default settings and not a lookup of its
+/// own, so the value shown is by construction the value that would be used -- including
+/// the platform's own family and the app's own size where the desktop said nothing at
+/// all, which are just as inherited as the desktop's answer is.
 ///
-/// - **Nothing subscribes to it.** freya re-renders a scope when a state it *read*
-///   changes, and a `&'static` is not a read of anything. A `fonts()` that could answer
-///   differently would therefore reach only the elements that happened to re-render for
-///   some other reason -- half the window in the new font and half in the old, which is
-///   worse than a window that is consistently stale. `palette()` had exactly this hole and
-///   no longer does, which is the pattern to copy: the appearance behind it is a `State`,
-///   so *asking for a colour is what subscribes the caller to the theme*, and a switch
-///   repaints every scope that drew one and no other. A `fonts()` shaped like that -- a
-///   function over a state rather than a handed-out `&'static` -- is what turns a font
-///   change from a restart into a repaint. Note where `palette()` keeps that state: a
-///   thread-local `State::create_global`, not a context, precisely because it is read from
-///   free functions and render callbacks that cannot run a hook, and `icon_size` and
-///   `FontExt` are the same kind of caller.
-/// - **`&'static Fonts` is in the signatures around it.** `FontExt::font` in `ui.rs`
-///   takes a `&'static Font` precisely because this hands one out, so a `Fonts` with a
-///   lifetime shorter than the program cannot be threaded through today without either
-///   leaking every rebuild or touching those call sites.
-///
-/// So what the settings page has to change, exactly:
-///
-/// 1. Hold the fonts in a state, built with [`resolve`] from the settings that are loaded
-///    and replaced when the page writes a new [`Settings`]. A context (a `State<Arc<Fonts>>`
-///    beside `Objects` and the rest) if every reader turns out to be a component; a
-///    thread-local global, as the appearance is, if any of them stays a free function --
-///    which the bullet above is the reason to expect.
-/// 2. Move the four readers onto it: `icon_size`, `FontExt::interface_font` and
-///    `::assembly_font` -- whose `font(&'static Font)` becomes `font(&Font)` -- and the
-///    tooltip's `font_size` in the root `use_init_theme`, which is a hook and so wants the
-///    fonts read before it rather than inside a closure that runs once.
-/// 3. Decide what happens to `ROW_HEIGHT`. It is a `const` that must equal every
-///    `VirtualScrollView`'s `item_size`, and it is sized against the fixed-width font --
-///    so a size the reader can change makes the row height a *value* rather than a
-///    constant, and the saved per-tab rows, the lane gutter and `reveal_row`'s
-///    `CONTEXT_ROWS` are all downstream of it. This is the reason a font change may end up
-///    wanting a restart even after the first two are done, and it is a decision, not an
-///    oversight to inherit silently.
-///
-/// [`resolve`] is what survives all of that; this function goes away with its last caller.
-pub fn fonts() -> &'static Fonts {
-    static FONTS: OnceLock<Fonts> = OnceLock::new();
-    FONTS.get_or_init(|| resolve(&Settings::load()))
+/// Cheap enough to call per render: everything under it is behind [`desktop_answer`]'s
+/// cache, so this is two small allocations.
+pub fn inherited() -> Fonts {
+    resolve(&Settings::default())
 }
 
 #[cfg(test)]
@@ -740,9 +759,10 @@ mod tests {
     }
 
     /// The mono defaults, since every case below is one font resolved: `monospace` behind
-    /// whatever is chosen, and 14 logical pixels when nothing names a size.
+    /// whatever is chosen, and 10.5 points -- the 14 logical pixels the floem version drew
+    /// at -- when nothing names a size.
     fn resolved(setting: &FontSetting, desktop: Option<Spec>) -> Font {
-        resolve_font(setting, desktop, DEFAULT_MONO, DEFAULT_MONO_SIZE)
+        resolve_font(setting, desktop.as_ref(), DEFAULT_MONO, DEFAULT_MONO_POINTS)
     }
 
     #[test]
@@ -750,7 +770,7 @@ mod tests {
         let font = resolved(&setting(None, None), None);
 
         assert_eq!(font.families, ["monospace"]);
-        assert_eq!(font.size, DEFAULT_MONO_SIZE);
+        assert_eq!(font.points, DEFAULT_MONO_POINTS);
     }
 
     #[test]
@@ -761,7 +781,7 @@ mod tests {
         );
 
         assert_eq!(font.families, ["Noto Sans Mono", "monospace"]);
-        assert_eq!(font.size, points_to_pixels(10.0));
+        assert_eq!(font.points, 10.0);
     }
 
     #[test]
@@ -769,7 +789,7 @@ mod tests {
         let font = resolved(&setting(None, None), Spec::new("Noto Sans Mono", None));
 
         assert_eq!(font.families, ["Noto Sans Mono", "monospace"]);
-        assert_eq!(font.size, DEFAULT_MONO_SIZE);
+        assert_eq!(font.points, DEFAULT_MONO_POINTS);
     }
 
     #[test]
@@ -781,7 +801,7 @@ mod tests {
         // thing behind it is the platform's own, which is there so that a family that
         // resolves to nothing cannot leave the assembly view proportional.
         assert_eq!(font.families, ["Fira Code", "monospace"]);
-        assert_eq!(font.size, points_to_pixels(12.0));
+        assert_eq!(font.points, 12.0);
     }
 
     #[test]
@@ -789,7 +809,7 @@ mod tests {
         let font = resolved(&setting(Some("Fira Code"), Some(12.0)), None);
 
         assert_eq!(font.families, ["Fira Code", "monospace"]);
-        assert_eq!(font.size, points_to_pixels(12.0));
+        assert_eq!(font.points, 12.0);
     }
 
     /// The distinction the settings file exists to keep: unspecified is not a value, so
@@ -802,12 +822,12 @@ mod tests {
         // A family with no size: the desktop's size.
         let family_only = resolved(&setting(Some("Fira Code"), None), desktop());
         assert_eq!(family_only.families, ["Fira Code", "monospace"]);
-        assert_eq!(family_only.size, points_to_pixels(10.0));
+        assert_eq!(family_only.points, 10.0);
 
         // A size with no family: the desktop's family.
         let size_only = resolved(&setting(None, Some(12.0)), desktop());
         assert_eq!(size_only.families, ["Noto Sans Mono", "monospace"]);
-        assert_eq!(size_only.size, points_to_pixels(12.0));
+        assert_eq!(size_only.points, 12.0);
     }
 
     /// And a value that is present but says nothing is not a choice either, so it falls
@@ -820,7 +840,57 @@ mod tests {
         );
 
         assert_eq!(font.families, ["Noto Sans Mono", "monospace"]);
-        assert_eq!(font.size, points_to_pixels(10.0));
+        assert_eq!(font.points, 10.0);
+    }
+
+    /// Points in, pixels out, once and at the end.
+    ///
+    /// The two numbers on the right are the sizes the floem version drew at, which is what
+    /// makes 9pt and 10.5pt a change of unit rather than of value -- and the reason the
+    /// unit matters at all is the settings page: an override is stored in points, so a
+    /// default spelled in pixels would be the one value on that page that could not be
+    /// compared with the box above it.
+    #[test]
+    fn points_become_pixels_once_and_at_the_end() {
+        let ui = resolved(&setting(None, None), None);
+        assert_eq!(DEFAULT_UI_POINTS * 96.0 / 72.0, 12.0);
+        assert_eq!(DEFAULT_MONO_POINTS * 96.0 / 72.0, 14.0);
+        assert_eq!(ui.points, DEFAULT_MONO_POINTS);
+        assert_eq!(ui.size(), 14.0);
+
+        // And nothing else converts: a size that came from an override is the same kind of
+        // number as one that came from a desktop.
+        let chosen = resolved(&setting(None, Some(12.0)), None);
+        assert_eq!(chosen.points, 12.0);
+        assert_eq!(chosen.size(), 16.0);
+    }
+
+    /// What [`inherited`] means, which is the settings page's whole empty state: it is what
+    /// [`resolve`] answers with nothing said, so a field the reader has not set shows the
+    /// value it is actually falling through to and not a guess at one.
+    ///
+    /// Asserted as a *relationship* rather than against any family or size, since what this
+    /// machine's desktop answers is not something a test may know: overriding one half
+    /// leaves the other half exactly as inherited, and overriding neither leaves both.
+    #[test]
+    fn an_unset_field_is_showing_what_it_falls_through_to() {
+        let inherited = inherited();
+        assert_eq!(resolve(&Settings::default()), inherited);
+
+        let one_half = Settings {
+            fixed: FontSetting {
+                family: None,
+                size: Some(13.0),
+            },
+            ..Settings::default()
+        };
+        let resolved = resolve(&one_half);
+
+        // The interface font was not mentioned at all, so it is the inherited one entire.
+        assert_eq!(resolved.ui, inherited.ui);
+        // The half that was: the size is the reader's, the family is still inherited.
+        assert_eq!(resolved.mono.points, 13.0);
+        assert_eq!(resolved.mono.families, inherited.mono.families);
     }
 
     #[test]

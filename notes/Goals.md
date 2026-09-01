@@ -348,13 +348,20 @@ one item per part, so the unfinished half stays visible.
   external process; its fixed-width half stays `Consolas`, Windows storing no desktop-wide
   monospace font to look up. Compile-checked for the Windows target, but only the decoding is
   tested — nothing here has been run on Windows.
-- [ ] Have a settings page where you can override (with a default being unspecified with clear
-  visual distinction). The storage half is in: `settings.toml` sits beside the session file and
-  holds the font overrides and the theme choice, with "unspecified" as an absent key rather than
-  an empty string or the desktop's answer copied in, so the page has a real third state to draw.
-  What is left is the page itself, and the reactivity `fonts()` deliberately does not have — it
-  hands out a `&'static Font` that nothing subscribes to, so the fonts have to become a root
-  context before a change can repaint anything.
+- [x] Have a settings page where you can override (with a default being unspecified with clear
+  visual distinction). A dockable view with the theme (light / dark / follow the desktop, naming
+  which the desktop currently prefers) and, per font, a family box and a size stepper with a
+  preview in the resolved font. An override is told from an inherited value three ways: the
+  field's own label changes colour, the value is real text rather than a dim placeholder, and a
+  Clear button exists only where there is something to clear. What the placeholder shows is
+  `resolve(&Settings::default())`, so it is *by construction* the value that would be used
+  rather than a second guess at it. Sizes are a stepper and not a text box deliberately: with
+  settings applying live, a box means typing `1` on the way to `12` and getting a 1pt window,
+  and a third "not a number" state that nothing else here has.
+  Fonts became reactive the way colours did — asking for a font subscribes you to it — so the
+  row height now follows the fonts instead of being a constant. Every `item_size`, every row
+  height and the arrow gutter's geometry come from one place, which is what keeps a scroll view
+  and its rows from disagreeing; saved viewing positions are rows, so they survive the change.
 
 ## Scratchpad
 

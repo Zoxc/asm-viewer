@@ -67,8 +67,9 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/rows.rs` — the run of rows a reader picks out to copy.
 - `src/tabs.rs` — `Tabs<T>`, the open-tab list, with no cursor of its own.
 - `src/history.rs` — back/forward navigation history.
-- `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API.
-- `src/ui.rs` — the entire freya UI (~6800 lines, in commented sections).
+- `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API, merged
+  under the user's own; in points until one conversion at the end.
+- `src/ui.rs` — the entire freya UI (~7700 lines, in commented sections).
 
 Everything except `ui.rs` is framework-free and unit-tested rather than eyeballed.
 
@@ -301,7 +302,7 @@ paths this filesystem was asked about, with a `shown` index into them. Each open
 entry a `SavedSource` (`row` + `path`), rather than either list having an array of rows beside it.
 The row travels with its tab because `resolve_tabs` *drops* the tabs that no longer resolve, which
 would shift every later row of a parallel array onto the wrong tab. It is a row and not a pixel
-offset so that a later `ROW_HEIGHT` (Step 9's fonts) does not move every saved position, and it is
+offset so that the row height following the fonts (Step 9c) does not move every saved position, and it is
 a hint and not a fact — `#[serde(default)]`, and clamped to what the tab holds *now* by
 `Positions::row`. **Field order within these structs is load-bearing**: TOML emits plain values
 before tables, so `shown` must precede `digests`/`selection`/`tabs`/`sources`/`history`, every
@@ -400,10 +401,14 @@ is public and writes at once. **Resolving `Theme::Desktop` is deliberately not t
 holds only the choice and stays framework-free, and `ui.rs` puts the two together
 (`resolve_appearance`). It once spawned a subprocess per platform to answer it and no longer does —
 the windowing system already knows, it answers on every platform this runs on, and its answer is
-live rather than a value baked in at startup. `fonts()` merges
-the settings over the desktop's answer **field by field** (`fonts::resolve`, pure and tested), but
-is still a `OnceLock`: the doc comment on it says exactly what the settings page has to change and
-why a re-readable `fonts()` alone would not be the fix.
+live rather than a value baked in at startup. `fonts::resolve` merges the settings over the
+desktop's answer **field by field**, pure and tested, and `fonts::inherited` is that same merge of
+*nothing*: what an unspecified field is falling through to, which is what the settings page draws in
+an empty box. Everything in `fonts.rs` is in **points** up to one conversion at `Font::size`, the
+app's own defaults included (9pt and 10.5pt, which are the 12 and 14 logical pixels the floem
+version drew at), because an override and the value it overrides have to be the same kind of number
+for the page to put them beside each other. The desktop's answer is cached per process
+(`desktop_answer`), since the page re-resolves on every change and a lookup is a subprocess.
 
 **A scratchpad is a generated cargo package, and the package is the storage**
 (`src/scratchpad.rs`). One directory per scratchpad under the same base the other two files use
@@ -464,19 +469,19 @@ flex column of `TabStrip` over the `DockingArea`, so the open-document chips sit
 panes: the active tab is what the assembly *and* the source show, and a strip inside one of them
 would follow that pane wherever it was docked.
 
-Inside each panel is a `DockingArea` over a `DockArea` model; the seven views are dockable tabs
+Inside each panel is a `DockingArea` over a `DockArea` model; the eight views are dockable tabs
 draggable between the two areas (both use `Tab` as the payload, and `use_drag` keeps one
 `DockDrag<Tab>` at the root). The outer split stays a `ResizableContainer` because docking cannot
 express a literal 300px. A drag carries only the tab, so the area receiving a drop evicts it from
 the other through a wired-up `other: Option<State<DockArea>>`. `root()` never returns `None` — an
 area losing its last tab collapses to a single *empty* panel (`DockArea::tidy`) so tabs can be
-dragged back in. A tab is a **persistent view**, not a slot the selection drives: each of the seven
+dragged back in. A tab is a **persistent view**, not a slot the selection drives: each of the eight
 is a unit `Component` that consumes context and renders off the state it is about, so a
-selection change re-renders only the tabs that read it and never the root. Project starts tabbed
-beside Assembly and behind it, since the app is for reading disassembly and the project is what a
-reader looks at once.
+selection change re-renders only the tabs that read it and never the root. Project and Settings
+start tabbed beside Assembly and behind it, since the app is for reading disassembly and each of
+those is what a reader looks at once.
 
-**Tab strips are not dock tabs.** The six `Tab`s are *views*; the chips in a strip are the
+**Tab strips are not dock tabs.** The eight `Tab`s are *views*; the chips in a strip are the
 *documents* open in them. Open functions are not dock tabs because the dock tree is the *layout*
 (closing the last one would fold the split away), because a per-panel active tab gives two answers
 to "which function is active", and because the list would then be inseparable from a layout nothing
@@ -491,7 +496,7 @@ an object or a function — and never anything else, and that is what lets five 
 without a case each: the Assembly *and* Source panes both render "the active tab", the history
 records it, `SavedSelection::from_selection`/`::resolve` write it down as a path plus a name and
 find it again after a restart, `close_binary` knows which chips a closing file takes with it, and
-`entry_text` knows what to call it. A project view, a settings page (9c) and a scratchpad's editor
+`entry_text` knows what to call it. A project view, the settings page and a scratchpad's editor
 (10c) are none of that: they resolve against no object, there is one of each rather than many, and
 neither pane could draw one. So they are **dockable views** — a `Tab` — which is the mechanism the
 app already has for "a pane with its own state that the reader can put where they like", and which
@@ -742,13 +747,14 @@ app is running repaints, which the subprocess this replaced could never do. It r
 render body rather than in an effect, because an effect lands a frame late and a frame late on a
 dark desktop is a white window flashing; the write is idempotent, so the frame it costs is the one
 after an actual change, and the two-hop path (the platform wakes the root, the root's write wakes
-everything that drew a colour) is what the headless test spells out. There is no UI control for the
-choice yet, that being the settings page's (9c). The one thing `text_fg` adds is the
+everything that drew a colour) is what the headless test spells out. The control for the choice is
+the settings page's three buttons, which write the choice and nothing else — `set_appearance` stays
+the one writer. The one thing `text_fg` adds is the
 interface text: set once on the root rect and *inherited*, since freya resolves an unset `color`
 from the parent's, and it is `BLACK` in the light palette because that was already the default.
 
-**Fonts.** `fonts()` asks the desktop for its interface and fixed-width fonts and converts points
-to pixels. **Which desktop to ask is a runtime question**, not a compile-time one — one Linux build
+**Fonts.** `fonts.rs` asks the desktop for its interface and fixed-width fonts.
+**Which desktop to ask is a runtime question**, not a compile-time one — one Linux build
 runs on both — so `XDG_CURRENT_DESKTOP` only *sorts* `kreadconfig6`/`kreadconfig5` (KDE's `font`
 and `fixed`, a comma-separated spec) against `gsettings` (Gnome's `font-name` and
 `monospace-font-name`, a quoted Pango `Family Size` whose family can hold spaces and trailing style
@@ -778,6 +784,45 @@ freya's theming is used for colour: the filter boxes, scrollbars, resizable hand
 context menu read their colours from it and from nothing else, and a white text box on a dark pane
 is not a theme switch.
 
+**A font change repaints the same way a theme change does, and moves the rows with it.** `fonts()`
+in `ui.rs` reads a thread-local `State<Arc<Fonts>>` exactly as `palette()` reads the appearance, so
+*asking for a font is what subscribes a scope to it*; `set_fonts` is the one writer, and unlike
+`set_appearance` it has nothing to invalidate beside it, a cached `SyntaxBlocks` carrying colours
+and no font. The four readers are `icon_size`, `FontExt::interface_font`/`::assembly_font` and the
+tooltip's `font_size` in the root's `Theme` — that last one is the only place a change has to be
+*carried* rather than picked up, freya's theme sheet being a value, so the root's effect has the
+interface size in its deps beside the appearance. `ROW_HEIGHT` went the same way and became
+`row_height()`: the larger of the two font sizes plus `ROW_LEADING` (12, which is exactly what the
+old constant's 26 was over the 14px fixed-width default, so nothing moved). That was 9c's real
+decision, and the alternative — a page offering a 20pt assembly font and drawing it clipped inside
+a 26px row — was worse than the work. It is safe because the scroll view's `item_size` and its
+rows' own height are read in the **same render pass**, so they cannot see different numbers, and
+because the per-tab positions 8b saves are *rows* rather than pixel offsets. The floor
+(`MIN_ROW_HEIGHT`) is against a hand-edited `settings.toml`, where a size of 0.1 is positive enough
+to pass `FontSetting::size` and would make `item_size` a fraction of a pixel.
+
+**The Settings page** (`Tab::Settings`) is where the theme choice and the two font overrides are
+edited. `Prefs` holds an `EditedSettings` — `OpenProject`'s shape, and for its reason: a family is
+a `String` here and an `Option<String>` in the file, an empty box **is** how a reader says "I have
+not said", and `EditedSettings::settings` is the one place the two spellings meet. A *size* gets no
+such treatment: it is a stepper and not a text box, so there is no half-typed state and no third
+answer for text that is not a number — which also keeps a reader from spending a keystroke at 1pt
+on the way to typing 12. `use_settings` is the whole of the wiring, and the write it makes is
+compared against **what the file currently says** rather than against what was loaded, `Saves`'
+rule: a fixed baseline would leave the file holding the middle answer when a reader changes a
+setting and changes it back, and comparing at all is what stops a run that never opened the page
+from creating `settings.toml`. `use_settings_with` takes the write as an argument, since the real
+one edits the settings of whoever runs the tests.
+
+**An override is drawn differently from the value it would replace**, which is the goal's own
+words and the reason `settings.rs` keeps `None` as a real third state. Three cues, deliberately
+more than one: the field's *name* is interface text when the reader set it and `address_fg` when
+they did not; the *value* is real text in the box against a placeholder showing what is being
+inherited (`fonts::inherited`, so what is shown is by construction what would be used, the
+platform's own family and the app's own size included); and the **Clear** button is there only when
+there is something to clear, which is also the only way back to unspecified — a family box can be
+emptied, a stepper cannot.
+
 **Identity throughout the UI is `Arc` pointer identity**, not names or indices: list keys are
 `Arc::as_ptr(..).addr()` and every prop `PartialEq` is hand-written in terms of `Arc::ptr_eq`. That
 matters twice — duplicate symbol names across objects stay distinct, and `#[derive(PartialEq)]` on
@@ -796,8 +841,10 @@ an `Arc<T>` field would deep-compare on every parent render.
   keeps the highlight).
 - `VirtualScrollView`'s builder closure is never compared across renders, so anything the rows
   depend on must go through `new_with_data`, not be captured.
-- `ROW_HEIGHT` must equal the `item_size` given to each `VirtualScrollView`, or scrolling
-  misaligns. This is why variable-height rows are not free.
+- `row_height()` must equal the `item_size` given to each `VirtualScrollView`, or scrolling
+  misaligns. It is a function of the fonts and no longer a `const`, so never write a literal row
+  height anywhere; the two halves are safe only because both are read in the same render pass.
+  This is also why variable-height rows are not free.
 - `Size` has no `From<f32>` — write `Size::px(300.)`. But `.padding`, `.spacing`, `.margin` and
   `.corner_radius` do take plain `f32`.
 - `label()` and `paragraph()` do not implement `StyleExt`, so they have no `.background()` /

@@ -18,27 +18,69 @@ use rfd::AsyncFileDialog;
 use analysis::{open_files, Assembly, Instruction, LineInfo, Object, SpanKind, Symbol, SymbolData};
 
 use crate::filter::{Filter, Matcher};
-use crate::fonts::{fonts, Font};
+use crate::fonts::{self, Font, Fonts};
 use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 use crate::project::{self, Details, Project, ProjectId, Recent, Selection, Session};
 use crate::rows::RowSelection;
-use crate::settings::{Appearance, Settings, Theme as ThemeChoice};
+use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 use crate::source::{self, SourceFile};
 use crate::tabs::{Positions, Tabs};
 use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
 
-/// Height of every row in the object, symbol and instruction lists. This must stay
-/// equal to the `item_size` given to each `VirtualScrollView`.
-const ROW_HEIGHT: f32 = 26.0;
+/// The leading a row adds to the taller of the two fonts, and the floor under the answer.
+///
+/// Additive and not a multiple, because leading is what it is: twelve logical pixels of
+/// air is legible above an 11px line and above a 30px one, where a ratio that reads well
+/// at one of those is cramped or cavernous at the other. Twelve is also the number the app
+/// already had -- it is exactly what `ROW_HEIGHT`'s 26 was over the 14px fixed-width
+/// default -- so nothing on screen moved when this stopped being a constant. The floor is
+/// against a hand-edited `settings.toml`: `FontSetting::size` refuses a size that is not
+/// positive, but 0.1 is positive, and a list whose `item_size` is a fraction of a pixel is
+/// a division nothing recovers from.
+const ROW_LEADING: f32 = 12.0;
+const MIN_ROW_HEIGHT: f32 = 14.0;
 
-/// The height of the strip a filter bar's text box sits in. Taller than `ROW_HEIGHT` by
-/// the room an `Input`'s border and its own inner margin need; it is a bar and not a row,
-/// and nothing lines up with it.
-const FILTER_HEIGHT: f32 = 32.0;
+/// Height of every row in the object, symbol and instruction lists, and the `item_size`
+/// given to every `VirtualScrollView`. **The two must be equal or scrolling misaligns**,
+/// which is why this is one function and not a number each site repeats.
+///
+/// **It follows the fonts, which is 9c's decision and the one that was actually open.**
+/// It was a `const`, and the settings page makes the fixed-width size something a reader
+/// can change -- so the alternative was a page that offers a 20pt assembly font and draws
+/// it clipped inside a 26px row, with a sentence somewhere admitting it. That is a worse
+/// answer than the work: every consumer of the number already goes through one of four
+/// places (`item_size`, a row's own `height`, the gutter's stroke geometry, and
+/// `row_at`/`row_offset`), and a function is what keeps them from being able to disagree.
+/// What made it *safe* is that the two halves are read in the same render pass: the state
+/// under `fonts()` is written before anything is re-rendered, so a scroll view and the
+/// rows it builds cannot see different heights, and the per-tab positions 8b saves are
+/// **rows** rather than pixel offsets precisely so that a change here does not move any of
+/// them.
+///
+/// The larger of the two fonts and not the fixed-width one alone: the sidebar's rows are
+/// drawn in the interface font and the code panes' in the fixed-width one, and there is
+/// one height because `row_at` and `row_offset` are one conversion for every pane.
+fn row_height() -> f32 {
+    let fonts = fonts();
 
-/// The side of one of the three square toggle buttons.
-const TOGGLE_SIZE: f32 = 22.0;
+    (fonts.ui.size().max(fonts.mono.size()) + ROW_LEADING)
+        .round()
+        .max(MIN_ROW_HEIGHT)
+}
+
+/// The height of the strip a filter bar's text box sits in. Taller than a row by the room
+/// an `Input`'s border and its own inner margin need; it is a bar and not a row, and
+/// nothing lines up with it.
+fn filter_height() -> f32 {
+    row_height() + 6.0
+}
+
+/// The side of one of the three square toggle buttons: a row less the air around it, so
+/// the `Aa` and `.*` written inside them follow the interface font like everything else.
+fn toggle_size() -> f32 {
+    row_height() - 4.0
+}
 
 /// How much bigger than the interface font a tab bar's icon is drawn. A Lucide glyph
 /// fills its whole box where a letter fills its x-height, so an icon at exactly the text
@@ -49,12 +91,12 @@ const TOGGLE_SIZE: f32 = 22.0;
 const ICON_SCALE: f32 = 1.25;
 
 /// The side of a tab bar icon: the interface font, scaled, and capped so that it is never
-/// what decides how tall the bar is -- a `ROW_HEIGHT` strip has to keep a little air above
-/// and below whatever the desktop's font size turns out to be.
+/// what decides how tall the bar is -- a row has to keep a little air above and below
+/// whatever the desktop's font size turns out to be.
 fn icon_size() -> f32 {
-    (fonts().ui.size * ICON_SCALE)
+    (fonts().ui.size() * ICON_SCALE)
         .round()
-        .min(ROW_HEIGHT - 8.0)
+        .min(row_height() - 8.0)
 }
 
 /// The column a file row's disclosure triangle sits in, and the width every row of the
@@ -569,20 +611,68 @@ fn resolve_appearance(choice: ThemeChoice, preferred: PreferredTheme) -> Appeara
 /// about and could not be asked at all from a window that had not been opened yet. A
 /// `use_hook` here would put that limitation back, one line at a time.
 ///
-/// The *choice* is the half that is read once, because it is a file this process is the
-/// only writer of. It arrives as a closure rather than a value so the load stays inside
-/// the `use_hook` -- and so a test can hand this a choice without the machine's own
-/// settings file having a vote in what the test asserts.
+/// The *choice* arrives as a value rather than being loaded here, and since 9c it is a
+/// value that can change: `Prefs` holds it, the settings page writes it, and the root
+/// reads it -- so the same two-hop path that carries a desktop switch carries a click on
+/// the Dark button. That is also what lets a test hand this a choice without the machine's
+/// own settings file having a vote in what the test asserts.
 ///
 /// Written from the render body rather than from an effect, deliberately: an effect lands
 /// a frame late, and a frame late on a dark desktop is a white window flashing at someone
 /// who asked for neither. The write is idempotent (`set_if_modified_and_then`), so the
 /// render this runs in and every render after it that resolves the same way cost nothing.
-fn use_theme(choice: impl FnOnce() -> ThemeChoice) {
-    let choice = use_hook(choice);
+fn use_theme(choice: ThemeChoice) {
     let preferred = *Platform::get().preferred_theme.read();
 
     set_appearance(resolve_appearance(choice, preferred));
+}
+
+/// The whole of the wiring between the settings and what they are settings *of*: the
+/// appearance, the fonts, and `settings.toml`.
+///
+/// Three things come out of one state, and they are deliberately not three mechanisms.
+/// The theme resolves in the render body, because `use_theme` must (a frame late is a
+/// white flash); the fonts and the write go in one effect, because both are consequences
+/// of the settled value rather than of the keystroke, and `fonts::resolve` allocates.
+///
+/// **The baseline is why a run that never opens the page writes no file.** `Settings::save`
+/// has no policy in front of it by design -- a settings change is already as rare as a
+/// deliberate action -- but "the settings as they were loaded" is not a change, and saving
+/// it would create `settings.toml` on every first launch, which is `project.rs`'s rule
+/// about a directory made by the first write that has something to say. So what the file
+/// says is kept beside the hook and compared, exactly as `Saves::written` is.
+///
+/// `set_fonts` runs unconditionally, baseline or not: it is idempotent
+/// (`set_if_modified`), and the alternative -- trusting that the thread-local was
+/// initialised from the same file this hook loaded -- is two readers of one file agreeing
+/// by luck.
+fn use_settings(prefs: State<EditedSettings>) {
+    use_settings_with(prefs, |settings: &Settings| settings.save());
+}
+
+/// The same, with the write handed in -- `use_analysis`/`use_analysis_with`'s shape and
+/// for the same reason: [`Settings::save`] writes to the machine's real settings file, so
+/// a test that mounted this would be editing the settings of whoever ran it.
+fn use_settings_with(prefs: State<EditedSettings>, mut save: impl FnMut(&Settings) + 'static) {
+    // What the file currently says: the settings as they were loaded, and thereafter
+    // whatever was last written. It has to *move*, not sit at the loaded value -- a reader
+    // who changes a setting and changes it back would otherwise leave the file holding the
+    // middle answer, which is `Saves::written`'s rule and the same bug it exists for. An
+    // `Rc<RefCell>` rather than a `State`, since nothing renders from it.
+    let written = use_hook(|| Rc::new(RefCell::new(prefs.peek().settings())));
+    let settings = prefs.read().settings();
+
+    use_theme(settings.theme);
+
+    use_side_effect_with_deps(&settings, move |settings: &Settings| {
+        set_fonts(fonts::resolve(settings));
+
+        let mut written = written.borrow_mut();
+        if *settings != *written {
+            *written = settings.clone();
+            save(settings);
+        }
+    });
 }
 
 /// The sheet freya's own components read their colours from.
@@ -605,7 +695,7 @@ fn interface_theme(appearance: Appearance) -> Theme {
         theme.set(
             "tooltip",
             TooltipThemePreference {
-                font_size: Preference::Specific(fonts().ui.size),
+                font_size: Preference::Specific(fonts().ui.size()),
                 ..tooltip
             },
         );
@@ -614,15 +704,61 @@ fn interface_theme(appearance: Appearance) -> Theme {
     theme
 }
 
+// ---------------------------------------------------------------------------
+// Fonts
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// The two fonts the window is currently drawn in.
+    ///
+    /// **`palette()`'s story exactly, and for the same reasons.** `fonts.rs` handed out a
+    /// `&'static Fonts` from a `OnceLock`, and the doc on it spelled out why making *that*
+    /// re-readable would have looked like a fix and not been one: nothing subscribes to a
+    /// `&'static`, so a changed answer would have reached only whatever happened to
+    /// re-render for some other reason -- half the window in the new font and half in the
+    /// old. A `State` behind the accessor is the fix, because **asking for a font is what
+    /// subscribes the caller to it**: a settings page that writes here repaints every
+    /// scope that drew a glyph and no other, wherever in the tree it sits.
+    ///
+    /// Thread-local and global rather than a context, for the reason the appearance is:
+    /// `row_height`, `icon_size` and `FontExt` are free functions and trait methods called
+    /// from `if` arms, render callbacks and free functions, none of which may run a hook.
+    /// A `State` is `!Send`, only the UI thread draws, and nothing off it may ask.
+    ///
+    /// An `Arc` because `Fonts` owns two `Vec`s of families and a read is a clone: at a
+    /// row per `assembly_font()` that is one refcount rather than four short strings.
+    /// Initialised from the stored settings so the first frame is already in the right
+    /// font -- `use_settings` writes the same value back on mount, idempotently.
+    static FONTS: State<Arc<Fonts>> =
+        State::create_global(Arc::new(fonts::resolve(&Settings::load())));
+}
+
+/// The fonts to draw with, and a subscription to them for whoever asks.
+fn fonts() -> Arc<Fonts> {
+    FONTS.with(|fonts| Arc::clone(&fonts.read()))
+}
+
+/// Draw in these fonts from now on. Unlike `set_appearance` there is nothing to invalidate
+/// alongside it -- `HIGHLIGHTED` caches spans with the palette's *colours* baked in, and a
+/// span carries no font -- so this is the write and nothing else. It stays a function of
+/// its own all the same, so that the one place fonts change is as findable as the one
+/// place the theme does.
+fn set_fonts(next: Fonts) {
+    FONTS.with(|fonts| {
+        let mut fonts = *fonts;
+        fonts.set_if_modified(Arc::new(next));
+    });
+}
+
 /// Applying one of the two fonts. freya takes font families one at a time, pushing
 /// each onto the element's own list and appending the parent's behind it, so the
 /// chain is set by calling `font_family` in order of preference.
 trait FontExt: TextStyleExt + Sized {
-    fn font(mut self, font: &'static Font) -> Self {
+    fn font(mut self, font: &Font) -> Self {
         for family in &font.families {
             self = self.font_family(family.clone());
         }
-        self.font_size(font.size)
+        self.font_size(font.size())
     }
 
     /// The desktop's interface font, set on the root and inherited by everything.
@@ -765,6 +901,82 @@ fn given(text: &str) -> Option<&str> {
 /// The open project, shared through context.
 #[derive(Clone, Copy)]
 struct Proj(State<OpenProject>);
+
+/// The user's settings as the settings page has them.
+///
+/// [`OpenProject`]'s shape, and for its reason: `Settings` spells a family the reader has
+/// not chosen as an *absent* key, and a text box has no third state -- an empty box **is**
+/// how a reader says "I have not said". So the family is a `String` here and an
+/// `Option<String>` there, [`EditedSettings::settings`] is the one place the two spellings
+/// meet, and it trims, so a box of spaces is a box of nothing rather than a font family
+/// named `" "`.
+///
+/// The size does *not* get the same treatment, and that is the one place this differs.
+/// It is edited by a stepper rather than by a text box (see [`SettingsTab`]), so there is
+/// no half-typed state to hold and no third answer for text that is not a number: an
+/// `Option<f32>` here is an `Option<f32>` there and the mapping is the identity. The
+/// theme is likewise the stored enum itself -- three buttons, three answers.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct EditedSettings {
+    theme: ThemeChoice,
+    interface: EditedFont,
+    fixed: EditedFont,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct EditedFont {
+    family: String,
+    /// In points, like the file and like [`Font::points`], so that the number on screen,
+    /// the number the desktop answered and the number written down are one number.
+    size: Option<f32>,
+}
+
+impl EditedSettings {
+    /// The settings as they were read off disk.
+    fn of(settings: &Settings) -> EditedSettings {
+        EditedSettings {
+            theme: settings.theme,
+            interface: EditedFont::of(&settings.interface),
+            fixed: EditedFont::of(&settings.fixed),
+        }
+    }
+
+    /// What of this reaches `settings.toml` -- and, through [`fonts::resolve`], what is on
+    /// screen. Total, deliberately: there is no state of this struct that does not say
+    /// something, so nothing between the page and the file can be pending or invalid.
+    fn settings(&self) -> Settings {
+        Settings {
+            theme: self.theme,
+            interface: self.interface.setting(),
+            fixed: self.fixed.setting(),
+        }
+    }
+}
+
+impl EditedFont {
+    fn of(setting: &FontSetting) -> EditedFont {
+        EditedFont {
+            family: setting.family().unwrap_or_default().to_owned(),
+            size: setting.size(),
+        }
+    }
+
+    fn setting(&self) -> FontSetting {
+        FontSetting {
+            family: given(&self.family).map(str::to_owned),
+            size: self.size,
+        }
+    }
+}
+
+/// The settings, shared through context.
+///
+/// A root context and not state inside the settings view, for the reason `Proj` is one:
+/// the page is a dockable tab that may not be mounted, while the theme and the fonts are
+/// resolved at the root on every render. The page edits this; [`use_settings`] is what
+/// notices.
+#[derive(Clone, Copy)]
+struct Prefs(State<EditedSettings>);
 
 /// Every state a project owns.
 ///
@@ -1073,7 +1285,7 @@ fn release_focus(mut focused: State<Option<LineFocus>>, mine: Option<&LineFocus>
 
 /// One of the two panes that show code.
 ///
-/// Not `Tab`, which names six views of which four have nothing to answer here: this is the
+/// Not `Tab`, which names eight views of which six have nothing to answer here: this is the
 /// side of a mapping, and a mapping has exactly two.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
@@ -1146,10 +1358,11 @@ fn take_reveal(mut pinned: State<Option<Pin>>, pane: Pane) -> Option<LinePos> {
 fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
     let (_, scrolled) = <(i32, i32)>::from(*controller);
     let top = -scrolled as f32;
-    let row = index as f32 * ROW_HEIGHT;
-    let margin = CONTEXT_ROWS * ROW_HEIGHT;
+    let height = row_height();
+    let row = index as f32 * height;
+    let margin = CONTEXT_ROWS * height;
 
-    if row >= top + margin && row + ROW_HEIGHT <= top + viewport {
+    if row >= top + margin && row + height <= top + viewport {
         return;
     }
 
@@ -1160,16 +1373,16 @@ fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
 /// there — the one place the two units meet.
 ///
 /// A `VirtualScrollView`'s offset counts *down* from zero, so the arithmetic is a
-/// negation and a divide by `ROW_HEIGHT`, which is every list's `item_size`. Rounded
+/// negation and a divide by [`row_height`], which is every list's `item_size`. Rounded
 /// *down*, which is the half-row a position in rows gives up and the direction to give it
 /// up in: the row at the top edge is the one the reader is looking at even when it is only
 /// half on screen, and coming back to the one below it would lose the half they could see.
 fn row_at(offset: i32) -> usize {
-    ((-offset).max(0) as f32 / ROW_HEIGHT) as usize
+    ((-offset).max(0) as f32 / row_height()) as usize
 }
 
 fn row_offset(row: usize) -> i32 {
-    -((row as f32 * ROW_HEIGHT) as i32)
+    -((row as f32 * row_height()) as i32)
 }
 
 /// Keep `controller` pointed at the row `tab` was last left at, and keep [`Positions`]
@@ -1827,7 +2040,7 @@ impl Toggle {
     /// the tab bar's icons have since brought in, and on Lucide having nothing for a regex
     /// flag, which is simply wrong: the set carries `case-sensitive`, `whole-word` and
     /// `regex`, which are VS Code's three toggles glyph for glyph. Rendered at
-    /// `TOGGLE_SIZE` beside these, they lose anyway. `case-sensitive` is an `Aa` drawn as
+    /// [`toggle_size`] beside these, they lose anyway. `case-sensitive` is an `Aa` drawn as
     /// strokes, so it says exactly what the two letters say and no more; `regex` at 17px
     /// is a splayed asterisk over a rounded box, muddier than the two characters it stands
     /// for; and `\b` and `.*` *are* the regex the toggle turns on, written out, which in a
@@ -1896,8 +2109,8 @@ impl Component for FilterToggle {
 
         TooltipContainer::new(Tooltip::new(toggle.tooltip())).child(
             rect()
-                .width(Size::px(TOGGLE_SIZE))
-                .height(Size::px(TOGGLE_SIZE))
+                .width(Size::px(toggle_size()))
+                .height(Size::px(toggle_size()))
                 .center()
                 .corner_radius(4.0)
                 .background(background)
@@ -1950,7 +2163,7 @@ impl Component for FilterBar {
             .child(
                 rect()
                     .width(Size::fill())
-                    .height(Size::px(FILTER_HEIGHT))
+                    .height(Size::px(filter_height()))
                     .horizontal()
                     // The toggles take their own widths and the box takes the rest, which
                     // torin only works out for a `flex` child of a `Content::Flex` parent.
@@ -2018,7 +2231,12 @@ fn filter_pane(filter: State<Filter>, background: Color, list: impl IntoElement)
         .content(Content::Flex)
         .background(background)
         .child(FilterBar { filter })
-        .child(rect().width(Size::fill()).height(Size::flex(1.0)).child(list))
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .child(list),
+        )
         .into()
 }
 
@@ -2394,7 +2612,7 @@ impl Component for ArchiveRow {
                 // beside it leave, which torin only works out under `Content::Flex`.
                 .content(Content::Flex)
                 .width(Size::fill())
-                .height(Size::px(ROW_HEIGHT))
+                .height(Size::px(row_height()))
                 .padding(Gaps::new_symmetric(0.0, 5.0))
                 .background(background)
                 .overflow(Overflow::Clip)
@@ -2504,7 +2722,7 @@ impl Component for ObjectRow {
                 .cross_align(Alignment::Center)
                 .content(Content::Flex)
                 .width(Size::fill())
-                .height(Size::px(ROW_HEIGHT))
+                .height(Size::px(row_height()))
                 .padding(Gaps::new_symmetric(0.0, 5.0))
                 .background(background)
                 .overflow(Overflow::Clip)
@@ -2591,7 +2809,7 @@ impl Component for SymbolRow {
             text.clone(),
             rect()
                 .width(Size::fill())
-                .height(Size::px(ROW_HEIGHT))
+                .height(Size::px(row_height()))
                 .padding(5.0)
                 .background(background)
                 .overflow(Overflow::Clip)
@@ -2691,7 +2909,7 @@ impl Component for HistoryRow {
             text.clone(),
             rect()
                 .width(Size::fill())
-                .height(Size::px(ROW_HEIGHT))
+                .height(Size::px(row_height()))
                 .padding(5.0)
                 .background(background)
                 .overflow(Overflow::Clip)
@@ -2786,7 +3004,8 @@ impl Component for RelocationLabel {
 /// the row's own top and bottom edges, or the gutter would come out dashed with one gap
 /// per row.
 fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
-    let middle = ROW_HEIGHT / 2.0;
+    let height = row_height();
+    let middle = height / 2.0;
     // Where an arrowhead points, and where a horizontal run ends. Lane 0 is the innermost,
     // so the lanes are laid out leftwards from here.
     let tip = width as f32 * LANE_WIDTH + ARROW_WIDTH;
@@ -2811,13 +3030,13 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
 
     rect()
         .width(Size::px(tip + GUTTER_PAD))
-        .height(Size::px(ROW_HEIGHT))
+        .height(Size::px(row_height()))
         .children((0..width).filter_map(move |lane| {
             let vertical = arrows.lanes.lanes[lane];
             let (top, tall) = match (vertical.top, vertical.bottom) {
-                (true, true) => (0.0, ROW_HEIGHT),
+                (true, true) => (0.0, height),
                 (true, false) => (0.0, middle),
-                (false, true) => (middle, ROW_HEIGHT - middle),
+                (false, true) => (middle, height - middle),
                 (false, false) => return None,
             };
 
@@ -2991,7 +3210,7 @@ impl Component for InstructionRow {
             .horizontal()
             .cross_align(Alignment::Center)
             .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
+            .height(Size::px(row_height()))
             // Horizontally only, where it used to be on all four sides: the gutter's lines
             // run to the row's own top and bottom edges, and three pixels of padding at
             // each of them would break every line in the column once per row. Nothing else
@@ -3156,7 +3375,7 @@ impl Component for SourceRow {
             .horizontal()
             .cross_align(Alignment::Center)
             .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
+            .height(Size::px(row_height()))
             .padding(3.0)
             .assembly_font()
             .background(row_background(
@@ -3254,7 +3473,7 @@ fn chip(
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .height(Size::px(ROW_HEIGHT))
+            .height(Size::px(row_height()))
             .padding(Gaps::new_symmetric(0.0, 8.0))
             .spacing(6.0)
             .background(background)
@@ -3286,12 +3505,12 @@ fn chip(
 ///
 /// Horizontally scrollable, because unlike the dock's tabs these are opened by the dozen
 /// and a chip that has fallen off the right-hand edge would be unreachable. The scrollbar
-/// itself is off: it would eat a third of a `ROW_HEIGHT` bar, and the wheel and a drag
+/// itself is off: it would eat a third of a one-row bar, and the wheel and a drag
 /// both still move it.
 fn chip_strip(chips: Vec<Element>) -> Element {
     rect()
         .width(Size::fill())
-        .height(Size::px(ROW_HEIGHT))
+        .height(Size::px(row_height()))
         .background(palette().header_bg)
         .border(bottom_hairline())
         .child(
@@ -3634,7 +3853,7 @@ impl Component for InstructionList {
                     controller,
                 )
                 .length(length)
-                .item_size(ROW_HEIGHT),
+                .item_size(row_height()),
             )
     }
 }
@@ -3771,7 +3990,7 @@ impl Component for SourceList {
                             controller,
                         )
                         .length(length)
-                        .item_size(ROW_HEIGHT),
+                        .item_size(row_height()),
                     ),
             )
     }
@@ -3832,6 +4051,7 @@ enum Tab {
     Assembly,
     Source,
     Project,
+    Settings,
 }
 
 impl Tab {
@@ -3845,6 +4065,7 @@ impl Tab {
             Tab::Assembly => "Assembly",
             Tab::Source => "Source",
             Tab::Project => "Project",
+            Tab::Settings => "Settings",
         }
     }
 
@@ -3861,11 +4082,13 @@ impl Tab {
     /// because the pane is a strip of files and shows one of them. **Project** is
     /// `folder-open`, a project being a directory of the app's and pointing at one of the
     /// reader's, and open because it is the one the app is in rather than one of the
-    /// several the pane also lists.
+    /// several the pane also lists. **Settings** is `settings`, the cog every desktop has
+    /// meant this by for thirty years -- the one place in this set where the obvious glyph
+    /// is also the right one.
     ///
     /// The name is passed beside the bytes because `ImageSource` keys the raster cache on
-    /// a hash of whatever it is given, and hashing six short names per render is cheaper
-    /// than hashing six SVGs.
+    /// a hash of whatever it is given, and hashing eight short names per render is cheaper
+    /// than hashing eight SVGs.
     fn icon(self) -> Element {
         let (name, svg) = match self {
             Tab::Objects => ("package", lucide::package()),
@@ -3875,6 +4098,7 @@ impl Tab {
             Tab::Assembly => ("binary", lucide::binary()),
             Tab::Source => ("file-code", lucide::file_code()),
             Tab::Project => ("folder-open", lucide::folder_open()),
+            Tab::Settings => ("settings", lucide::settings()),
         };
 
         let side = icon_size();
@@ -3885,7 +4109,7 @@ impl Tab {
             // it knows one, and with none set it waits for an `on_styled` to tell it the
             // inherited text colour, which is a frame late and a frame of nothing in a
             // 26px bar. Setting it also skips the loader, which is off in any case --
-            // these are six 24px glyphs rasterized synchronously out of the binary, and a
+            // these are eight 24px glyphs rasterized synchronously out of the binary, and a
             // spinner in a tab header would be a lie about the work being done.
             .color(palette().icon_fg)
             .show_loader(false)
@@ -3901,6 +4125,7 @@ impl Tab {
             Tab::Assembly => AssemblyTab.into_element(),
             Tab::Source => SourceTab.into_element(),
             Tab::Project => ProjectTab.into_element(),
+            Tab::Settings => SettingsTab.into_element(),
         }
     }
 }
@@ -3979,7 +4204,7 @@ impl Component for ObjectsTab {
                 },
             )
             .length(length)
-            .item_size(ROW_HEIGHT),
+            .item_size(row_height()),
         )
     }
 }
@@ -3995,9 +4220,8 @@ impl Component for SymbolsTab {
         // `viewer-sample`, so the pass belongs to a change of the list or of the filter
         // rather than to a render — and the rows cannot each test themselves either, since
         // the `VirtualScrollView` has to be told its length before it builds any of them.
-        let filtered = use_memo(move || {
-            Filtered::new(symbols.read().clone(), &filter.read().matcher())
-        });
+        let filtered =
+            use_memo(move || Filtered::new(symbols.read().clone(), &filter.read().matcher()));
         let filtered = filtered.read().clone();
         let selected = match &*use_consume::<Sel>().0.read() {
             Selection::Symbol(symbol) => Some(symbol.clone()),
@@ -4027,7 +4251,7 @@ impl Component for SymbolsTab {
                 },
             )
             .length(length)
-            .item_size(ROW_HEIGHT),
+            .item_size(row_height()),
         )
     }
 }
@@ -4130,9 +4354,7 @@ impl Component for AssemblyTab {
         let studied = match analysis.showing() {
             Showing::Listing(studied) => studied,
             Showing::Message(text) => return placeholder(text),
-            Showing::Nothing => {
-                return rect().expanded().background(palette().asm_pane_bg).into()
-            }
+            Showing::Nothing => return rect().expanded().background(palette().asm_pane_bg).into(),
         };
         let Some(assembly) = studied.assembly.clone() else {
             return rect()
@@ -4240,7 +4462,7 @@ impl Component for SourceTab {
 fn section_heading(text: &str, action: Option<Element>) -> impl IntoElement {
     rect()
         .width(Size::fill())
-        // Padded rather than a fixed `ROW_HEIGHT`, unlike every other bar in the app: a
+        // Padded rather than a fixed row height, unlike every other bar in the app: a
         // section's action is a `Button`, which is taller than a row, and a fixed height
         // would draw the rule through it.
         .padding(Gaps::new_symmetric(2.0, 0.0))
@@ -4293,7 +4515,7 @@ fn binary_row(path: &Path, objects: usize) -> Element {
         text.clone(),
         rect()
             .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
+            .height(Size::px(row_height()))
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(8.0)
@@ -4355,7 +4577,7 @@ impl Component for RecentRow {
             recent.id.as_str().to_owned(),
             rect()
                 .width(Size::fill())
-                .height(Size::px(ROW_HEIGHT))
+                .height(Size::px(row_height()))
                 .horizontal()
                 .cross_align(Alignment::Center)
                 .padding(Gaps::new_symmetric(0.0, 4.0))
@@ -4553,6 +4775,328 @@ impl Component for ProjectTab {
 }
 
 // ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// The column a setting's status sits in, on the right of the value: wide enough for the
+/// **Clear** button that appears there when the setting is the reader's own, so that the
+/// value boxes above and below one another end at the same x whichever state each is in.
+const SETTING_STATUS_WIDTH: f32 = 76.0;
+
+/// How far one press of the size stepper moves a font, and the range it may be moved in.
+///
+/// Half a point, because that is the granularity the desktops themselves store (KDE writes
+/// integers, Gnome's Pango descriptions and the Windows `LOGFONTW` conversion both produce
+/// fractions) and because a whole point is a visible jump at nine of them. The bounds are
+/// not a claim about taste: below five points the window's own chrome stops being legible
+/// enough to change the setting back, and above thirty-two a row is taller than the
+/// toolbar. A hand-edited `settings.toml` may still say anything, and is honoured -- these
+/// bound the *stepper*, not the file.
+const SIZE_STEP: f32 = 0.5;
+const MIN_POINTS: f32 = 5.0;
+
+const MAX_POINTS: f32 = 32.0;
+
+/// The column the size is written in, between the two stepper buttons.
+const SIZE_VALUE_WIDTH: f32 = 52.0;
+
+/// A point size as the page writes it: `9`, `10.5`, and never `10.50` or `9.0`.
+///
+/// One decimal, because that is what the stepper's half-points need and what a desktop's
+/// answer can carry (Gnome multiplies its size by `text-scaling-factor`, so 11 at 1.25 is
+/// 13.75). Rounded for display only -- the value stored is the value stepped.
+fn points_text(points: f32) -> String {
+    let rounded = (points * 10.0).round() / 10.0;
+
+    match rounded.fract() == 0.0 {
+        true => format!("{rounded:.0}"),
+        false => format!("{rounded:.1}"),
+    }
+}
+
+/// One overridable setting: its name, what it says, and -- the whole point of this page --
+/// whether what it says is the reader's answer or the one they are inheriting.
+///
+/// `notes/Goals.md` asks for "a default being unspecified with clear visual distinction",
+/// and this is where that is cashed out. Three cues, deliberately more than one, because a
+/// single quiet difference is one a reader has to be told about:
+///
+/// - **The name changes colour.** An overridden setting is written in `name_fg`, the
+///   colour a function's name is drawn in; an inherited one in `address_fg`, the colour
+///   everything that recedes is drawn in. That is the cue that reads down the column
+///   without looking at any one row.
+/// - **The value reads as text or as a placeholder.** An override is real text in the box;
+///   an unspecified field shows what it is falling through to, in the box's placeholder
+///   colour, so the reader is never asked to remember what the desktop said.
+/// - **The Clear button is only there when there is something to clear.** It is also the
+///   *only* way back to unspecified, which is why it is a button and not a keystroke: an
+///   empty family box is unspecified, but a size has no empty state to type.
+fn setting_row(
+    name: &str,
+    overridden: bool,
+    value: impl IntoElement,
+    clear: impl FnMut(Event<PressEventData>) + 'static,
+) -> impl IntoElement {
+    rect()
+        .width(Size::fill())
+        .height(Size::px(row_height() + 8.0))
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .content(Content::Flex)
+        .spacing(8.0)
+        .child(
+            label()
+                .text(name.to_owned())
+                .width(Size::px(FIELD_LABEL_WIDTH))
+                // The same pair the value beside it uses: what the reader said is
+                // ordinary interface text, what they are inheriting recedes into the
+                // colour everything secondary in this app is written in.
+                .color(match overridden {
+                    true => palette().text_fg,
+                    false => palette().address_fg,
+                })
+                .max_lines(1),
+        )
+        .child(value)
+        .child(
+            rect()
+                .width(Size::px(SETTING_STATUS_WIDTH))
+                .horizontal()
+                .main_align(Alignment::End)
+                .cross_align(Alignment::Center)
+                .child(match overridden {
+                    true => Button::new()
+                        .compact()
+                        .on_press(clear)
+                        .child("Clear")
+                        .into_element(),
+                    // Not "unset" and not blank: the reader is being told where the value
+                    // in the box beside this came from, which is the question the page
+                    // exists to answer.
+                    false => label()
+                        .text("inherited")
+                        .color(palette().address_fg)
+                        .max_lines(1)
+                        .into_element(),
+                }),
+        )
+}
+
+/// One of the two fonts, as three rows: the family, the size, and a line of the font
+/// itself.
+///
+/// The preview earns its place on the fixed-width half and is kept on both for symmetry:
+/// the interface font is already every label in the window, but the fixed-width one is
+/// only visible when a symbol with code in it is open, and a reader changing it with the
+/// Assembly pane on a placeholder would otherwise be typing family names at nothing. The
+/// digits and the `l1I`/`O0` pairs are in it because they are what a monospaced face is
+/// actually chosen for.
+fn font_section(
+    title: &str,
+    edited: EditedFont,
+    inherited: &Font,
+    resolved: &Font,
+    family: Writable<String>,
+    size: impl FnMut(Option<f32>) + Clone + 'static,
+) -> Element {
+    let inherited_family = inherited
+        .families
+        .first()
+        .map(|family| family.to_string())
+        .unwrap_or_default();
+    // What the stepper moves from: the reader's size where there is one, and otherwise the
+    // one being inherited -- so the first press is one step away from what is on screen
+    // rather than a jump to some number of this file's own choosing.
+    let points = edited.size.unwrap_or(inherited.points);
+    let step = |by: f32| {
+        let mut size = size.clone();
+        move |_: Event<PressEventData>| {
+            let moved = (points + by).clamp(MIN_POINTS, MAX_POINTS);
+            // Back onto the half-point grid, so that stepping away from a desktop's
+            // 13.75 and back again lands on 13.75's neighbours rather than on a drift of
+            // its own.
+            size(Some((moved / SIZE_STEP).round() * SIZE_STEP));
+        }
+    };
+    let mut clear_size = size.clone();
+
+    rect()
+        .width(Size::fill())
+        .child(section_heading(title, None))
+        .child(setting_row(
+            "Family",
+            given(&edited.family).is_some(),
+            Input::new(family.clone())
+                .placeholder(inherited_family)
+                .compact()
+                .width(Size::flex(1.0)),
+            move |_| family.clone().set(String::new()),
+        ))
+        .child(setting_row(
+            "Size",
+            edited.size.is_some(),
+            rect()
+                .width(Size::flex(1.0))
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(6.0)
+                .child(
+                    Button::new()
+                        .compact()
+                        .on_press(step(-SIZE_STEP))
+                        .child("-"),
+                )
+                .child(
+                    label()
+                        .text(format!("{} pt", points_text(points)))
+                        // A fixed column, so that `+` does not move under the finger as
+                        // the number beside it grows a digit or loses a decimal -- the
+                        // reason `SourceRow`'s line-number gutter is a fixed width and not
+                        // a minimum, and it matters more here, where the thing that would
+                        // move is the button being pressed again.
+                        .width(Size::px(SIZE_VALUE_WIDTH))
+                        .text_align(TextAlign::Center)
+                        .color(match edited.size {
+                            Some(_) => palette().text_fg,
+                            None => palette().address_fg,
+                        })
+                        .max_lines(1),
+                )
+                .child(Button::new().compact().on_press(step(SIZE_STEP)).child("+")),
+            move |_| clear_size(None),
+        ))
+        .child(
+            rect()
+                .width(Size::fill())
+                .padding(Gaps::new(2.0, 0.0, 8.0, FIELD_LABEL_WIDTH + 8.0))
+                .overflow(Overflow::Clip)
+                .child(
+                    label()
+                        .text("Disassembly 0123 l1I O0 {}")
+                        .font(resolved)
+                        .color(palette().text_fg)
+                        .max_lines(1),
+                ),
+        )
+        .into()
+}
+
+/// The Settings pane: the theme, the two fonts, and which of those the reader has actually
+/// chosen.
+///
+/// **A view and not a document**, which is the rule 8e settled and this inherits: the
+/// content strip holds `Selection`s -- a place in a binary -- and there is one settings
+/// page, resolving against no object, that neither code pane could draw. So it is a `Tab`,
+/// the mechanism the app already has for "a pane with its own state the reader can put
+/// where they like", and it is excluded from the saved session for free, a dock layout not
+/// being persisted.
+///
+/// **What it writes and when.** Every control writes straight into `Prefs`, and
+/// [`use_settings`] at the root is what turns that into a font, a theme and a file --
+/// there is no Apply button and no autosave timer, `Settings::save` writing at once by
+/// design. So a press here is on disk and on screen before the finger is off the button,
+/// which is what makes the page its own preview: there is no "sample text" widget for the
+/// interface font because the whole window is one.
+#[derive(PartialEq)]
+struct SettingsTab;
+
+impl Component for SettingsTab {
+    fn render(&self) -> impl IntoElement {
+        let mut prefs = use_consume::<Prefs>().0;
+        let edited = prefs.read().clone();
+        // Both halves of what the page draws, from the same two functions the root
+        // resolves with: what the reader would be getting with nothing set, and what they
+        // are getting now. Cheap -- the desktop lookups behind them are cached for the
+        // life of the process (`fonts::desktop_answer`).
+        let inherited = fonts::inherited();
+        let resolved = fonts::resolve(&edited.settings());
+
+        // Only a question at all under `Desktop`, which is exactly what `resolve_appearance`
+        // says: a reader who named a theme is answered by their own answer, so telling them
+        // what the desktop prefers would be telling them about something that is not
+        // happening. Reading it here also subscribes this pane, so the line follows a
+        // desktop that changes its mind while the page is open.
+        let following = (edited.theme == ThemeChoice::Desktop).then(|| {
+            let preferred = *Platform::get().preferred_theme.read();
+
+            info_line(format!(
+                "Following the desktop, which prefers {}.",
+                match preferred {
+                    PreferredTheme::Light => "light",
+                    PreferredTheme::Dark => "dark",
+                }
+            ))
+            .into_element()
+        });
+
+        let themes = [
+            (ThemeChoice::Light, "Light"),
+            (ThemeChoice::Dark, "Dark"),
+            (ThemeChoice::Desktop, "Desktop"),
+        ];
+
+        rect()
+            .expanded()
+            .background(palette().pane_bg)
+            .child(
+                ScrollView::new().child(
+                    rect()
+                        .width(Size::fill())
+                        .padding(Gaps::new_symmetric(8.0, 12.0))
+                        .spacing(6.0)
+                        .child(section_heading("Appearance", None))
+                        .child(field_row(
+                            "Theme",
+                            SegmentedButton::new().children(themes.map(|(choice, text)| {
+                                ButtonSegment::new()
+                                    .key(text)
+                                    .selected(edited.theme == choice)
+                                    .on_press(move |_| {
+                                        prefs.write().theme = choice;
+                                    })
+                                    .child(text)
+                                    .into()
+                            })),
+                        ))
+                        .maybe_child(following)
+                        .child(font_section(
+                            "Interface font",
+                            edited.interface.clone(),
+                            &inherited.ui,
+                            &resolved.ui,
+                            prefs.into_writable().map(
+                                |edited| &edited.interface.family,
+                                |edited| &mut edited.interface.family,
+                            ),
+                            move |size| prefs.write().interface.size = size,
+                        ))
+                        .child(font_section(
+                            "Fixed-width font",
+                            edited.fixed.clone(),
+                            &inherited.mono,
+                            &resolved.mono,
+                            prefs.into_writable().map(
+                                |edited| &edited.fixed.family,
+                                |edited| &mut edited.fixed.family,
+                            ),
+                            move |size| prefs.write().fixed.size = size,
+                        ))
+                        // Said here rather than left to be discovered, because it is the
+                        // one consequence of a font change that is not a font: `row_height`
+                        // is the larger of the two sizes plus its leading, and it is every
+                        // list's `item_size`, so the lists get taller with the fonts rather
+                        // than clipping them.
+                        .child(info_line(format!(
+                            "Rows follow the larger of the two fonts: {} pixels.",
+                            points_text(row_height())
+                        ))),
+                ),
+            )
+            .into_element()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Docking
 // ---------------------------------------------------------------------------
 
@@ -4561,7 +5105,7 @@ impl Component for ProjectTab {
 type PanelId = u32;
 
 /// One docking area: the tree of splits and tabbed panels filling one of the two
-/// resizable panes. The six tabs are shared between the two areas, so a drop
+/// resizable panes. The eight tabs are shared between the two areas, so a drop
 /// here has to take the tab out of `other` -- which is safe to write from
 /// `on_drop` only because the two areas are separate `State`s, and freya's
 /// docking holds a mutable borrow of just the one being dropped into.
@@ -4709,7 +5253,7 @@ impl DockingModel for DockArea {
 /// reads like the old header strip.
 fn tab_label(tab: Tab, background: Color) -> impl IntoElement {
     rect()
-        .height(Size::px(ROW_HEIGHT))
+        .height(Size::px(row_height()))
         .horizontal()
         .cross_align(Alignment::Center)
         .padding(Gaps::new_symmetric(0.0, 8.0))
@@ -4745,7 +5289,7 @@ fn tab_drag(tab: Tab) -> Element {
 fn tab_bar(ctx: TabBarContext<PanelId>) -> Element {
     rect()
         .width(Size::fill())
-        .height(Size::px(ROW_HEIGHT))
+        .height(Size::px(row_height()))
         .horizontal()
         .background(palette().header_bg)
         .border(bottom_hairline())
@@ -4839,7 +5383,7 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 /// Scrolling a pane wakes it too, which is the one input here that a reader can produce
 /// continuously. It costs no more than the three above, and it is bounded by the unit the
 /// position is kept in: a viewing position is a *row*, so a scroll writes nothing until
-/// the pane has moved a whole `ROW_HEIGHT`, and `use_kept_position` compares before it
+/// the pane has moved a whole row, and `use_kept_position` compares before it
 /// writes.
 fn use_save_on_change(states: ProjectStates) {
     let ProjectStates {
@@ -5529,27 +6073,31 @@ fn new_project(states: ProjectStates) {
 }
 
 pub fn app() -> impl IntoElement {
-    // The theme: the stored choice over what the windowing system says it prefers,
-    // written down through the one function that also empties the highlighted-source
-    // cache. Before `use_init_theme` below on purpose -- that builds its value in a
-    // `use_hook`, so the appearance has to be right by the time the first render reaches
-    // it or the first frame is drawn in freya's own light sheet. It is also a live wire
-    // and not a startup step: the OS switching theme re-runs it. See `use_theme`.
-    use_theme(|| Settings::load().theme);
+    // What the user has said: the theme choice and the two font overrides, read off disk
+    // once and then edited by the settings page. Before everything, because the theme and
+    // the fonts are resolved from it and both have to be right on the first frame.
+    let prefs =
+        use_provide_context(|| Prefs(State::create(EditedSettings::of(&Settings::load())))).0;
+    // The theme, the fonts and the file, from that one state. See `use_settings`.
+    use_settings(prefs);
     // freya's own components -- the filter boxes, the scrollbars, the resizable handle,
     // the tooltips -- take their colours from its `Theme` and not from the palette, so
     // the sheet has to follow the appearance too; `interface_theme` is also where the
     // tooltip's font size is set, which is the one thing freya's theme is used for that
-    // has nothing to do with colours.
+    // has nothing to do with colours -- and the one place a font change has to be carried
+    // into freya's theming rather than being picked up by a re-render, which is why the
+    // interface size is a dep here beside the appearance.
     //
     // Two calls and not one: `use_init_theme` builds its value in a `use_hook`, so it
     // answers for the first render only, and the effect is what carries a later switch
-    // into it. The effect's dep is the appearance, so it runs on mount and then once per
-    // change -- never per render.
+    // into it. The effect's deps change on a theme or a font change and never per render.
     let mut interface = use_init_theme(|| interface_theme(appearance()));
-    use_side_effect_with_deps(&appearance(), move |appearance: &Appearance| {
-        interface.set(interface_theme(*appearance));
-    });
+    use_side_effect_with_deps(
+        &(appearance(), fonts().ui.size()),
+        move |(appearance, _): &(Appearance, f32)| {
+            interface.set(interface_theme(*appearance));
+        },
+    );
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
@@ -5645,7 +6193,7 @@ pub fn app() -> impl IntoElement {
     // shorter than it was; the handles between them, and dragging History onto the
     // middle panel, are both one gesture away. The right one is the split view the
     // goals ask to be the default: the source a symbol was compiled from beside its
-    // assembly, at equal widths. All six tabs share one `DockDrag<Tab>`, which
+    // assembly, at equal widths. All eight tabs share one `DockDrag<Tab>`, which
     // `use_drag` keeps at the root, so a tab can be dragged from either area into
     // the other; each area is told about the other so the one taking a tab can evict
     // it from the one losing it.
@@ -5656,8 +6204,12 @@ pub fn app() -> impl IntoElement {
             vec![Tab::History],
         ])
     });
-    let content_dock =
-        use_state(|| DockArea::row(vec![vec![Tab::Assembly, Tab::Project], vec![Tab::Source]]));
+    let content_dock = use_state(|| {
+        DockArea::row(vec![
+            vec![Tab::Assembly, Tab::Project, Tab::Settings],
+            vec![Tab::Source],
+        ])
+    });
     use_hook(move || {
         let (mut sidebar_dock, mut content_dock) = (sidebar_dock, content_dock);
         sidebar_dock.write().other = Some(content_dock);
@@ -5855,7 +6407,7 @@ mod tests {
                 move |index, _: &usize| {
                     rect()
                         .width(Size::fill())
-                        .height(Size::px(ROW_HEIGHT))
+                        .height(Size::px(row_height()))
                         .on_pointer_over(move |_| top.set(index))
                         .key(index)
                         .into()
@@ -5863,7 +6415,7 @@ mod tests {
                 controller,
             )
             .length(rows)
-            .item_size(ROW_HEIGHT),
+            .item_size(row_height()),
         )
     }
 
@@ -6146,10 +6698,7 @@ mod tests {
                 return;
             };
             // `peek` on the state it writes, or the effect would wake itself for ever.
-            let repeat = seen
-                .peek()
-                .last()
-                .is_some_and(|last| *last == shown.symbol);
+            let repeat = seen.peek().last().is_some_and(|last| *last == shown.symbol);
             if !repeat {
                 seen.write().push(shown.symbol);
             }
@@ -6236,11 +6785,15 @@ mod tests {
             move |runner| {
                 runner.provide_root_context(|| Study(Arc::new(study)));
                 (
-                    runner.provide_root_context(|| Sel(State::create(Selection::None))).0,
+                    runner
+                        .provide_root_context(|| Sel(State::create(Selection::None)))
+                        .0,
                     runner
                         .provide_root_context(|| Analysis(State::create(Analyzed::default())))
                         .0,
-                    runner.provide_root_context(|| Seen(State::create(Vec::new()))).0,
+                    runner
+                        .provide_root_context(|| Seen(State::create(Vec::new())))
+                        .0,
                 )
             },
             1.,
@@ -6288,7 +6841,11 @@ mod tests {
         assert!(shown.symbol == second);
         assert!(state.pending.is_none());
         assert!(!state.slow);
-        assert_eq!(seen.peek().len(), 1, "a superseded listing reached the panes");
+        assert_eq!(
+            seen.peek().len(),
+            1,
+            "a superseded listing reached the panes"
+        );
         assert!(seen.peek()[0] == second);
     }
 
@@ -6308,11 +6865,15 @@ mod tests {
             |runner| {
                 runner.provide_root_context(|| Study(Arc::new(Studied::new)));
                 (
-                    runner.provide_root_context(|| Sel(State::create(Selection::None))).0,
+                    runner
+                        .provide_root_context(|| Sel(State::create(Selection::None)))
+                        .0,
                     runner
                         .provide_root_context(|| Analysis(State::create(Analyzed::default())))
                         .0,
-                    runner.provide_root_context(|| Seen(State::create(Vec::new()))).0,
+                    runner
+                        .provide_root_context(|| Seen(State::create(Vec::new())))
+                        .0,
                 )
             },
             1.,
@@ -6422,7 +6983,7 @@ mod tests {
     /// render body wakes the very scope that made it. That settles only because the write
     /// is idempotent, and a test that hangs here is what would say it is not.
     fn desktop_theme_harness() -> impl IntoElement {
-        use_theme(|| ThemeChoice::Desktop);
+        use_theme(ThemeChoice::Desktop);
         let _ = appearance();
 
         rect().expanded().child(ThemedRow)
@@ -6779,6 +7340,307 @@ mod tests {
         }
     }
 
+    /// A `Fonts` with nothing left to ask the desktop about, so a test asserting a size
+    /// asserts a size and not whatever `kreadconfig` happens to answer on the machine
+    /// running it -- `needs_desktop` declines to spawn anything when both halves are
+    /// chosen, which is exactly the case here.
+    fn fixed_fonts(ui: f32, mono: f32) -> Fonts {
+        fonts::resolve(&Settings {
+            theme: ThemeChoice::Desktop,
+            interface: FontSetting {
+                family: Some("Interface".to_owned()),
+                size: Some(ui),
+            },
+            fixed: FontSetting {
+                family: Some("Fixed".to_owned()),
+                size: Some(mono),
+            },
+        })
+    }
+
+    /// The same pair as an [`EditedSettings`], which is what the page holds.
+    fn fixed_edited(ui: f32, mono: f32) -> EditedSettings {
+        EditedSettings {
+            theme: ThemeChoice::Desktop,
+            interface: EditedFont {
+                family: "Interface".to_owned(),
+                size: Some(ui),
+            },
+            fixed: EditedFont {
+                family: "Fixed".to_owned(),
+                size: Some(mono),
+            },
+        }
+    }
+
+    /// A component with no props at all, drawing one row at whatever the fonts come to.
+    /// `ThemedRow`'s twin, and for the same reason: nothing about it changes across a font
+    /// change, so freya has no reason to re-render it except that it read the state.
+    #[derive(PartialEq)]
+    struct FontedRow;
+
+    impl Component for FontedRow {
+        fn render(&self) -> impl IntoElement {
+            rect()
+                .width(Size::fill())
+                .height(Size::px(row_height()))
+                .background(palette().pane_bg)
+        }
+    }
+
+    fn font_harness() -> impl IntoElement {
+        rect().expanded().child(FontedRow)
+    }
+
+    /// The height of the first thing that painted anything, as it was actually laid out --
+    /// not as it was asked for. That distinction is the test: `row_height` returning a new
+    /// number proves nothing on its own, since a component that was never re-rendered is
+    /// still the old height on screen.
+    fn painted_height(test: &TestingRunner) -> f32 {
+        test.find(|node, element| {
+            let background = element.style().background.clone();
+            (background != Fill::Color(Color::TRANSPARENT)).then(|| node.layout().area.height())
+        })
+        .expect("a painted row")
+    }
+
+    /// The reactivity half of 9c, and the direct analogue of the theme's: a font change
+    /// repaints a component nothing else woke, *and* moves it, since the row height is
+    /// derived from the fonts rather than being a constant beside them.
+    ///
+    /// 9pt and 10.5pt are the app's own defaults, and 26 is the `ROW_HEIGHT` this replaced
+    /// -- which is the assertion that the constant became a function without moving
+    /// anything. 18pt is 24 logical pixels, so the row is 36.
+    #[test]
+    fn a_font_change_repaints_and_resizes_a_component_nothing_else_woke() {
+        set_fonts(fixed_fonts(9.0, 10.5));
+
+        let (mut test, ()) = TestingRunner::new(font_harness, (200., 200.).into(), |_| (), 1.);
+        test.sync_and_update();
+
+        assert_eq!(row_height(), 26.0);
+        assert_eq!(painted_height(&test), 26.0);
+
+        set_fonts(fixed_fonts(9.0, 18.0));
+        test.sync_and_update();
+        assert_eq!(row_height(), 36.0);
+        assert_eq!(painted_height(&test), 36.0);
+
+        // The interface font counts too: there is one row height for every pane, and the
+        // sidebar's rows are drawn in the other font from the code panes'.
+        set_fonts(fixed_fonts(21.0, 10.5));
+        test.sync_and_update();
+        assert_eq!(row_height(), 40.0);
+        assert_eq!(painted_height(&test), 40.0);
+    }
+
+    /// The invariant that made `ROW_HEIGHT` a `const` in the first place: a
+    /// `VirtualScrollView`'s `item_size` and the height its rows actually draw at must be
+    /// the same number, or scrolling misaligns -- silently, and looking like a rendering
+    /// glitch rather than a bug.
+    ///
+    /// Asserted through a real scroll view over the real hook, by asking which row is under
+    /// a given y: at the top of the list row *k* covers `[k*h, (k+1)*h)`, so a pointer at 90
+    /// is row 3 at 26px and row 2 at 36px. If the two numbers came apart, the rows would
+    /// drift by one per row down the pane and this would answer something else.
+    #[test]
+    fn a_scroll_view_and_its_rows_agree_at_every_font_size() {
+        set_fonts(fixed_fonts(9.0, 10.5));
+
+        let (mut test, top) = TestingRunner::new(
+            scrolling_harness,
+            (200., 200.).into(),
+            |runner| {
+                let mut tabs = Tabs::default();
+                tabs.open("a".to_owned());
+                runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
+                runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
+                runner.provide_root_context(|| KeptOpen(State::create(tabs)));
+                runner.provide_root_context(|| KeptLength(State::create(100)));
+                runner.provide_root_context(|| KeptTop(State::create(0))).0
+            },
+            1.,
+        );
+        test.sync_and_update();
+
+        let row_under = |test: &mut TestingRunner, y: f64| {
+            // Away and back, or entering the same row twice is no event at all.
+            test.move_cursor((50., 5.));
+            test.sync_and_update();
+            test.move_cursor((50., y));
+            test.sync_and_update();
+            *top.peek()
+        };
+
+        assert_eq!(row_height(), 26.0);
+        assert_eq!(row_under(&mut test, 90.), 3);
+
+        set_fonts(fixed_fonts(9.0, 18.0));
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        assert_eq!(row_height(), 36.0);
+        assert_eq!(row_under(&mut test, 90.), 2);
+    }
+
+    /// What the settings page's four boxes mean, which is the one place its `String`s and
+    /// `settings.toml`'s absent keys meet -- `an_empty_box_is_a_project_that_has_not_been_named`
+    /// for fonts. An empty family box is not a font family named the empty string: it is a
+    /// reader who has not chosen one, which is what unspecified *is*.
+    #[test]
+    fn an_empty_box_is_a_font_nobody_chose() {
+        assert_eq!(EditedSettings::default().settings(), Settings::default());
+
+        let blank = EditedFont {
+            family: "   ".to_owned(),
+            size: None,
+        };
+        assert_eq!(blank.setting(), FontSetting::default());
+
+        // And a round trip through the two spellings changes nothing, in either direction:
+        // the page is handed what the file says and hands back the same thing.
+        let stored = Settings {
+            theme: ThemeChoice::Dark,
+            interface: FontSetting {
+                family: Some("Cantarell".to_owned()),
+                size: Some(11.0),
+            },
+            fixed: FontSetting {
+                family: None,
+                size: Some(10.5),
+            },
+        };
+        assert_eq!(EditedSettings::of(&stored).settings(), stored);
+
+        // A family the file wrote with spaces around it comes back trimmed, once, and does
+        // not then differ from itself on the way out.
+        let padded = Settings {
+            interface: FontSetting {
+                family: Some(" Fira Code ".to_owned()),
+                ..FontSetting::default()
+            },
+            ..Settings::default()
+        };
+        let edited = EditedSettings::of(&padded);
+        assert_eq!(edited.interface.family, "Fira Code");
+        assert_eq!(edited.settings(), edited.settings());
+    }
+
+    /// A point size as the page writes it. `9` and not `9.0`, because the size a desktop
+    /// answers is usually a whole number and a trailing `.0` on every one of them reads as
+    /// precision that is not there; `10.5` because half-points are what the stepper moves
+    /// in and what Pango descriptions carry.
+    #[test]
+    fn a_point_size_is_written_as_short_as_it_is() {
+        assert_eq!(points_text(9.0), "9");
+        assert_eq!(points_text(10.5), "10.5");
+        assert_eq!(points_text(26.0), "26");
+        // Gnome's `text-scaling-factor` multiplies the point size, so a third decimal is
+        // reachable without anybody typing one.
+        assert_eq!(points_text(13.75), "13.8");
+    }
+
+    /// Everything the settings write, recorded rather than performed.
+    #[derive(Clone, Copy)]
+    struct Saved(State<Vec<Settings>>);
+
+    fn settings_harness() -> impl IntoElement {
+        let prefs = use_consume::<Prefs>().0;
+        let mut saved = use_consume::<Saved>().0;
+
+        use_settings_with(prefs, move |settings: &Settings| {
+            saved.write().push(settings.clone())
+        });
+
+        rect().expanded().child(FontedRow)
+    }
+
+    /// The wiring 9c is: one state, and the theme, the fonts and the file all following
+    /// from it -- with the write handed in, because the real one edits the settings of
+    /// whoever runs the tests.
+    ///
+    /// Three things are asserted that nothing else can say. That a run in which the page is
+    /// never opened writes **nothing**, so a first launch leaves no `settings.toml` behind.
+    /// That a change reaches all three consequences from the one write. And that changing a
+    /// setting *back* writes again -- the baseline moves to what was last written, or the
+    /// file would be left holding the middle answer of the three.
+    #[test]
+    fn the_settings_reach_the_theme_the_fonts_and_the_file() {
+        let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
+        // Both left on the wrong answer on purpose, so that arriving at the right one has
+        // to be a real write rather than a value that happened to already be there.
+        set_appearance(Appearance::Dark);
+        set_fonts(fixed_fonts(21.0, 21.0));
+
+        let (mut test, (prefs, saved)) = TestingRunner::new(
+            settings_harness,
+            (200., 200.).into(),
+            |runner| {
+                (
+                    runner
+                        .provide_root_context(|| Prefs(State::create(fixed_edited(9.0, 10.5))))
+                        .0,
+                    runner
+                        .provide_root_context(|| Saved(State::create(Vec::new())))
+                        .0,
+                )
+            },
+            1.,
+        );
+        let mut prefs = prefs;
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+
+        // Mounting is not a change: the settings were read off disk, and writing them
+        // straight back would create the file on a launch where the reader did nothing.
+        assert!(
+            saved.peek().is_empty(),
+            "a run that changed nothing wrote the settings file"
+        );
+        // But the app is drawn in them: the choice is `Desktop` and freya-testing mounts on
+        // `PreferredTheme::Light`, and the fonts are the ones the state holds.
+        assert_eq!(appearance(), Appearance::Light);
+        assert_eq!(fonts().mono.points, 10.5);
+        assert_eq!(painted_height(&test), 26.0);
+
+        // A theme chosen. Two passes, for `a_desktop_that_changes_its_mind_repaints_the_window`'s
+        // reason: the write the root makes wakes the scopes that drew a colour in the pass
+        // after the one it was made in.
+        prefs.write().theme = ThemeChoice::Dark;
+        test.sync_and_update();
+        assert_eq!(appearance(), Appearance::Dark);
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        assert_eq!(saved.peek().len(), 1);
+        assert_eq!(saved.peek()[0].theme, ThemeChoice::Dark);
+
+        // A size chosen: the fonts follow, and the rows with them.
+        prefs.write().fixed.size = Some(18.0);
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        assert_eq!(fonts().mono.points, 18.0);
+        assert_eq!(painted_height(&test), 36.0);
+        assert_eq!(saved.peek().len(), 2);
+        assert_eq!(saved.peek()[1].fixed.size, Some(18.0));
+
+        // Cleared again, which is the whole of "a way back to unspecified": the override is
+        // gone from the file, and the write happens even though this is the value the run
+        // started from -- the baseline is what was last *written*, not what was loaded.
+        prefs.write().fixed.size = Some(10.5);
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        assert_eq!(saved.peek().len(), 3);
+        assert_eq!(saved.peek()[2].fixed.size, Some(10.5));
+        assert_eq!(painted_height(&test), 26.0);
+
+        // And the thread is left as it was found.
+        set_appearance(Appearance::Light);
+    }
+
     #[test]
     fn a_swept_run_survives_the_button_coming_up() {
         let (mut test, marked) = TestingRunner::new(
@@ -6786,7 +7648,9 @@ mod tests {
             (100., 100.).into(),
             |runner| {
                 runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(|| Marked(State::create(None))).0
+                runner
+                    .provide_root_context(|| Marked(State::create(None)))
+                    .0
             },
             1.,
         );

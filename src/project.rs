@@ -389,9 +389,10 @@ pub struct SavedTab {
     /// Which row was at the top of the assembly pane, `0` being the first instruction.
     ///
     /// A row and not a pixel offset, for [`crate::tabs::Positions`]' reasons — and one
-    /// more that is only true of a saved one: `ROW_HEIGHT` is a compile-time constant of
-    /// the UI, so a build that changes it would move every saved pixel offset while every
-    /// saved row still names the instruction it named.
+    /// more that is only true of a saved one: the row height follows the fonts, so a
+    /// session saved before the reader changed the assembly font would have every pixel
+    /// offset land somewhere else, while every saved row still names the instruction it
+    /// named.
     ///
     /// `serde(default)` because it is a hint and not a fact: a hand-written or trimmed
     /// file that names a tab without saying where in it simply opens that tab at the top.

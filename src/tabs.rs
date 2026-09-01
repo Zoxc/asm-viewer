@@ -114,10 +114,10 @@ impl<T: Clone + PartialEq> Tabs<T> {
 /// content area's tabs and the Source pane's files each carry one of these without the
 /// list types learning about pixels.
 ///
-/// **A row and not a pixel offset.** The two are convertible (`ROW_HEIGHT` is every
+/// **A row and not a pixel offset.** The two are convertible (`row_height()` is every
 /// list's `item_size`), so this is a choice about which one to keep, and the row is the
 /// one that survives everything that can happen between leaving a tab and coming back to
-/// it: a row height that follows the interface font (Step 9), a listing that has grown or
+/// it: a row height that follows the fonts, which it now does, a listing that has grown or
 /// shrunk under a rebuilt binary, and a file edited since it was last read. It is also
 /// the unit the answer is wanted in — "the fourteenth instruction", not "364 pixels" —
 /// which is why the clamping in [`Positions::row`] can be written at all.
