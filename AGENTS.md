@@ -13,6 +13,8 @@ Standing instructions from the user.
 - Keep `notes/Goals.md` current. It is the checklist of planned features.
 - Prefer TOML for files, not JSON.
 - Add a minimal test case every time something is found wrong with binary inspection.
+- Answer a question about the UI with a headless test rather than by launching the app — a
+  throwaway one, deleted once it has answered, is fine. See `agents/Headless.md`.
 
 ## What this is
 
@@ -1170,14 +1172,40 @@ resolve-by-name machinery pointed at a live state instead of at a session file.
 matters twice — duplicate symbol names across objects stay distinct, and `#[derive(PartialEq)]` on
 an `Arc<T>` field would deep-compare on every parent render.
 
+### Testing the UI
+
+`freya-testing` runs the whole app — components, hooks, effects, layout, events — with no window,
+no GPU and no event loop, on the test's own thread. It is a dev-dependency for the tests at the
+bottom of `ui.rs` and for nothing else, and the binary's whole suite runs in under two seconds, so
+a test written to settle one point costs less than a `cargo run` and a look and is worth writing
+even when it is going to be deleted again. Keep the ones that pin a mechanism — that a component
+with no props re-rendered because it read `palette()`, that a superseded answer was dropped — and
+delete the ones that only proved the code just written does what it says.
+
+What it can be asked: **any control that can be pressed** and the state it changes, **a drag,
+including a drop into the dock**, **a scroll and where it lands**, **a keyboard binding** with the
+modifiers built by hand (`press_key` hardcodes `Modifiers::default()` and cannot express Ctrl),
+**a row height, width or position as laid out** rather than as requested, **anything a worker
+thread answers**, and **which component re-rendered** — that last has no other test shape at all.
+What it cannot: whether it *looks* right; any text width, which is really shaped by the machine's
+own fonts and so is an assertion about the machine; the platform's own behaviour, which is stubbed
+(the cursor icon, the desktop's real theme, the clipboard, the file dialog); and anything timed,
+there being no virtual clock, so a timing test costs its own duration in real seconds. Those are
+what launching the app is for.
+
+`agents/Headless.md` is the full account, checked against `freya-testing` 0.4.3's sources rather
+than its README: the runner's whole surface, the rule that a pass is *either* a render *or* a
+round of task polling (which is why a change needs somewhere between *n* and *2n*
+`sync_and_update`s and why the tests here loop rather than count), and the house rule that a
+headless test has to be made to fail first on the *mechanism* it claims to test.
+
 ### Gotchas before editing `ui.rs`
 
 - A `State`'s `peek`/`read` hands back a guard, and an `if let` holds its scrutinee's temporary
   until the end of its **body** — so `if let Some(x) = *state.peek() { state.set(..) }` compiles and
   panics the moment it runs. `let ... else` and `match` end theirs with the statement. Bind the read
-  to a `let` of its own before any write. The single headless test in `ui.rs` (`freya-testing`, a
-  dev-dependency for this and nothing else) exists because that class of bug is invisible to every
-  other test in the repo.
+  to a `let` of its own before any write. That class of bug is invisible to every other test in
+  the repo, and is what the headless tests at the bottom of `ui.rs` were first written for.
 - There is no `.hover()` pseudo-state. A hoverable row is a `Component` with `use_state(|| false)`
   plus `on_pointer_over`/`on_pointer_out` (`over`/`out`, not `enter`/`leave`, so hovering a child
   keeps the highlight).
