@@ -102,6 +102,24 @@ one item per part, so the unfinished half stays visible.
   and `ROW_HEIGHT` must equal it or scrolling misaligns, so a real *gap* means variable row
   heights (or a spacer row of its own in the list), while a hairline drawn inside the row's
   own top edge costs nothing and cannot desynchronise anything.
+- [ ] A unified **section** view of code rather than one function at a time: the whole `.text`
+  as one endless scroll, with the symbols drawn as labels *inside* the listing where they start
+  — what `objdump -d` reads like. It is how you see what sits between two functions, what the
+  padding is, and code no symbol claims at all.
+  Three things in the way, all of them real and worth knowing before starting. **Length**: a
+  `VirtualScrollView` is told a row count up front, and x86 is variable-length, so instruction
+  *n* of a section cannot be found without decoding from a known start — the sorted symbol
+  addresses in `Section::symbols` are the sync points that make this tractable, so the section
+  is probably the concatenation of its symbols' listings plus the gaps between them, decoded
+  lazily per symbol and counted as it goes. **Identity**: `Assembly::edges`, `Lanes`, the
+  per-tab viewing row and the copy-a-run selection are all indices into *one symbol's*
+  instructions today; a section view makes the address the identity again, which is what those
+  were deliberately moved away from. **Scale**: `viewer-sample`'s `.text` is far past what
+  decoding eagerly on the analysis worker would answer in one go, so this wants the worker to
+  answer for a *window* of the section rather than for a whole symbol.
+  Note what it would make easy in return: the "gap or line before a jump target" item below, and
+  showing a symbol in the context of its neighbours rather than as an island.
+
 - [x] Have arrows for jumps. A gutter left of the addresses draws every branch that stays
   inside the symbol as a line from its row to its target's, with an arrowhead where it lands
   and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
