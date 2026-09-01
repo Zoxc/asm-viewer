@@ -365,20 +365,23 @@ one item per part, so the unfinished half stays visible.
 
 ## Scratchpad
 
-- [ ] A scratchpad function which allows creating single file rust projects where you can build
-  with cargo and view assembly output. The model is in (`src/scratchpad.rs`): the generated
-  cargo package *is* the storage — one directory per scratchpad holding exactly the `Cargo.toml`
-  and `src/main.rs` cargo is handed, so there is no second format to disagree with the build —
-  and `cargo build --message-format=json` comes back as a value carrying the artifact cargo
-  named and the diagnostics. What is left is the UI: an editable source view, the build action
-  on a worker thread, somewhere to read the diagnostics, and feeding the built artifact into the
-  existing open path so its assembly appears in the pane it always does.
-- [ ] Let a scratchpad depend on crates.io crates, as a **list of crates edited in the UI** —
-  name and required version per row — rather than as a convention inside the source. The list
-  is what generates the `[dependencies]` of the scratchpad's `Cargo.toml`. A version is
-  required rather than optional, so a scratchpad builds the same way twice; a row whose crate
-  or version does not resolve is the reader's error to see, not a silently different build.
-- [ ] Allow these files to run with output viewable
+- [x] A scratchpad function which allows creating single file rust projects where you can build
+  with cargo and view assembly output. The generated cargo package *is* the storage, so there is
+  no second format to disagree with what cargo is handed, and the editor is freya's own
+  `CodeEditor` — rejected for the read-only source pane because it paints a line background only
+  for the cursor's row and keeps its scroll state private, both of which that pane needs and an
+  editor you type in does not. Building runs off the UI thread and what it produces goes through
+  the ordinary open path, so the scratchpad's functions appear in the content strip like any
+  other binary's. One scratchpad for now, with no picker: the model holds many, but a picker is a
+  second document list.
+- [x] Let a scratchpad depend on crates.io crates, as a **list of crates edited in the UI** —
+  name and required version per row — rather than as a convention inside the source. Every bad
+  row is marked in place, on the half of the row that is wrong, with the reason under it; a
+  wildcard is refused, a version being required so a scratchpad builds the same way twice. A
+  build that cargo rejects *before compiling anything* is shown against the rows rather than
+  searched for a crate name: the dependency list is the only part of the generated package this
+  pane can get wrong, so no compiler diagnostics means the rows are where the answer is.
+- [ ] Allow these files to run with output viewable. Building is in; running is not.
 
 ## Binary inspection design
 

@@ -8,9 +8,13 @@ members = ["crates/analysis"]
 
 [dependencies]
 analysis = { path = "crates/analysis" }
-# `code-editor` is on not for its editor component -- the source pane is hand-rolled --
-# but for the tree-sitter syntax highlighter that crate exposes on its own
-# (`SyntaxHighlighter`, `SyntaxBlocks`, `EditorSyntaxTheme`). See `notes/Plan.md`, 5a.
+# `code-editor` is on for two things. The tree-sitter syntax highlighter that crate
+# exposes on its own (`SyntaxHighlighter`, `SyntaxBlocks`, `EditorSyntaxTheme`), which is
+# what colours the read-only source pane -- that pane's rows are hand-rolled, since
+# `CodeEditor` paints a line background only for the cursor's row and keeps its scroll
+# state private, and both are things that pane has to do. And `CodeEditor` itself, for the
+# scratchpad's editor, where neither of those objections applies and where it brings a
+# cursor, a selection, an undo history and an incremental re-parse per keystroke.
 freya = { version = "0.4", features = ["code-editor", "icons-lucide"] }
 # The grammars the highlighter parses with; that crate deliberately ships none. Their
 # `tree-sitter-language` must be the one `freya-code-editor`'s `tree-sitter` 0.26 uses,

@@ -4,7 +4,11 @@
 //! Framework-free — no freya types appear here — like `project.rs` and `settings.rs`
 //! beside it, so the whole of it is unit-tested without a window. What is *not* here is
 //! any UI: the editable source view, the dependency rows on screen and the build button
-//! are still to come, and they are what will read this.
+//! are the Scratchpad view in `ui.rs`, and every one of them reads this and nothing else
+//! about what a scratchpad is. Three of the four functions it calls are documented here
+//! as never running on a UI thread — [`Scratchpad::opened`], [`Scratchpad::write`] and
+//! [`Scratchpad::build`] — which is why the view has a worker thread of its own and why
+//! that thread is the only thing that ever touches a scratchpad's directory.
 //!
 //! **The generated package is the storage.** A scratchpad is a name, a source and a list
 //! of `(crate, version)` rows, and every one of those is already a field of the package
@@ -25,12 +29,6 @@
 //! exists at that version is cargo's answer and arrives as a [`Build::Rejected`] with
 //! cargo's own words in it; asking the network here would put a spinner and a failure
 //! mode into a text box.
-
-// Nothing in the app reaches this module yet: what is built here is the model and the
-// disk, and the editor, the rows on screen and the build action come with the scratchpad
-// view. The allow is on the module rather than on each item because *every* item is in
-// that state, and it comes off whole the moment `ui.rs` grows that view.
-#![allow(dead_code)]
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -61,6 +59,17 @@ const PACKAGE_VERSION: &str = "0.1.0";
 /// crates.io's own limit, and the only length rule worth having: a name longer than this
 /// cannot be a crate whatever else is true of it.
 const MAX_NAME: usize = 64;
+
+/// What the one scratchpad the app opens is called, and so the directory it lives in.
+///
+/// A constant rather than something the reader names, because 10c ships one scratchpad
+/// and not a list of them: a name that can be edited is a name that can be edited into
+/// another scratchpad's directory, which is a picker and a rename with nowhere yet to
+/// draw either. Everything below is written in terms of a name all the same -- the model
+/// has always held several -- so the picker, when it comes, adds a list and changes
+/// nothing here. It is checked against [`check_name`] by a test, which is what lets
+/// [`Scratchpad::default`] hand it out without a `Result`.
+pub const DEFAULT_NAME: &str = "scratch";
 
 /// What a new scratchpad starts with.
 ///
@@ -137,6 +146,20 @@ pub enum Problem {
     Wildcard,
     /// Not a version requirement at all.
     NotAVersion,
+}
+
+/// Which of a row's two boxes a [`Problem`] is about.
+///
+/// A value and not a guess at the editor: the rows are two text boxes and every problem
+/// is about exactly one of them, so which box to mark is a property of the problem
+/// rather than something a UI can work out from its wording. [`Problem::Repeated`] is
+/// the one that is not obvious -- two rows asking for one crate at two versions is a
+/// *name* collision, since `[dependencies]` is keyed by the name and the second version
+/// is what would be lost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Half {
+    Name,
+    Version,
 }
 
 /// Why nothing was written or nothing was built. Every variant is something the reader
@@ -218,14 +241,21 @@ pub enum Level {
     Note,
 }
 
-impl Dependency {
-    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Dependency {
-        Dependency {
-            name: name.into(),
-            version: version.into(),
+impl Problem {
+    /// Which box of the row this is about.
+    pub fn half(&self) -> Half {
+        match self {
+            Problem::NoName
+            | Problem::NameStart
+            | Problem::NameCharacter(_)
+            | Problem::NameTooLong
+            | Problem::Repeated => Half::Name,
+            Problem::NoVersion | Problem::Wildcard | Problem::NotAVersion => Half::Version,
         }
     }
+}
 
+impl Dependency {
     /// The crate this row asks for, trimmed.
     pub fn name(&self) -> &str {
         self.name.trim()
@@ -242,6 +272,20 @@ impl Dependency {
     pub fn check(&self) -> Result<(), Problem> {
         check_name(self.name())?;
         check_version(self.version())
+    }
+}
+
+impl Default for Scratchpad {
+    /// The scratchpad the app opens with: [`DEFAULT_NAME`] over [`DEFAULT_SOURCE`], and
+    /// no crates asked for.
+    ///
+    /// No `Result`, unlike [`Scratchpad::new`], because the name is this module's own
+    /// constant rather than something typed. The `expect` is the only one in this module
+    /// and it is not a claim about anything read from a file: it is
+    /// `the_default_scratchpad_is_one_this_module_would_write` that holds it, by putting
+    /// `DEFAULT_NAME` through the very check this would fail.
+    fn default() -> Scratchpad {
+        Scratchpad::new(DEFAULT_NAME).expect("DEFAULT_NAME is a crate name")
     }
 }
 
@@ -366,6 +410,35 @@ impl Scratchpad {
                 .map(|(name, version)| Dependency { name, version })
                 .collect(),
         })
+    }
+
+    /// This scratchpad as its own directory has it, or this one where there is nothing
+    /// there. **Blocking, and never from a UI thread**, for [`Scratchpad::build`]'s
+    /// reason at a much smaller scale: it is two `read`s of a file whose size is the
+    /// reader's business, and the one thread that draws has no business waiting on any
+    /// of them.
+    ///
+    /// The name kept is **this** scratchpad's and never the manifest's, which is the one
+    /// decision in here. `directory()` is derived from the name, so a hand-edited
+    /// `Cargo.toml` naming another crate would otherwise send the next write somewhere
+    /// the reader never opened -- and the directory, not the manifest, is what the reader
+    /// asked for.
+    pub fn opened(self) -> Scratchpad {
+        match self.directory() {
+            Some(directory) => self.opened_in(&directory),
+            None => self,
+        }
+    }
+
+    /// [`Scratchpad::opened`], from a directory of the caller's choosing. Blocking.
+    pub fn opened_in(self, directory: &Path) -> Scratchpad {
+        match Scratchpad::load_from(directory) {
+            Some(loaded) => Scratchpad {
+                name: self.name,
+                ..loaded
+            },
+            None => self,
+        }
     }
 
     /// Write the package and build it. **Blocking, and never from a UI thread.**
@@ -720,9 +793,10 @@ impl fmt::Display for Failure {
         match self {
             // The rows say the detail; this is the sentence over the top of them, for a
             // place that has no rows to point at.
-            Failure::Dependencies(problems) => {
-                write!(formatter, "{} dependencies to fix", problems.len())
-            }
+            Failure::Dependencies(problems) => match problems.len() {
+                1 => write!(formatter, "1 dependency to fix"),
+                count => write!(formatter, "{count} dependencies to fix"),
+            },
             Failure::NoDirectory => write!(formatter, "nowhere to keep a scratchpad"),
             Failure::Write(error) => write!(formatter, "could not write the package: {error}"),
             Failure::NoCargo(error) => write!(formatter, "could not run cargo: {error}"),
@@ -747,6 +821,16 @@ mod tests {
 
     fn scratchpad() -> Scratchpad {
         Scratchpad::new("sketch").expect("a name")
+    }
+
+    /// One row, as a reader would have left the two boxes. A test helper and not a
+    /// constructor on [`Dependency`]: the editor builds its rows a field at a time out of
+    /// two text boxes, so nothing outside these tests ever has both halves at once.
+    fn dependency(name: impl Into<String>, version: impl Into<String>) -> Dependency {
+        Dependency {
+            name: name.into(),
+            version: version.into(),
+        }
     }
 
     #[test]
@@ -778,10 +862,10 @@ mod tests {
     fn a_package_is_a_manifest_and_a_main() {
         let mut scratchpad = scratchpad();
         scratchpad.dependencies = vec![
-            Dependency::new("rand", "0.8"),
+            dependency("rand", "0.8"),
             // Out of order and untrimmed on purpose: the manifest sorts and trims, the
             // list does not.
-            Dependency::new(" anyhow ", " 1.0.86 "),
+            dependency(" anyhow ", " 1.0.86 "),
         ];
 
         assert_eq!(
@@ -817,11 +901,11 @@ rand = \"0.8\"
     fn a_row_that_is_not_a_crate_name_says_which_row() {
         let mut scratchpad = scratchpad();
         scratchpad.dependencies = vec![
-            Dependency::new("serde", "1"),
-            Dependency::new("", "1"),
-            Dependency::new("1password", "1"),
-            Dependency::new("hello world", "1"),
-            Dependency::new("a".repeat(MAX_NAME + 1), "1"),
+            dependency("serde", "1"),
+            dependency("", "1"),
+            dependency("1password", "1"),
+            dependency("hello world", "1"),
+            dependency("a".repeat(MAX_NAME + 1), "1"),
         ];
 
         assert_eq!(
@@ -849,7 +933,7 @@ rand = \"0.8\"
             "1.0.0-alpha+build.5",
             " 1.0 ",
         ] {
-            assert_eq!(Dependency::new("serde", good).check(), Ok(()), "{good}");
+            assert_eq!(dependency("serde", good).check(), Ok(()), "{good}");
         }
 
         for (bad, problem) in [
@@ -867,11 +951,7 @@ rand = \"0.8\"
             ("1.2-rc/1", Problem::NotAVersion),
             (">=1,", Problem::NotAVersion),
         ] {
-            assert_eq!(
-                Dependency::new("serde", bad).check(),
-                Err(problem),
-                "{bad:?}"
-            );
+            assert_eq!(dependency("serde", bad).check(), Err(problem), "{bad:?}");
         }
     }
 
@@ -881,11 +961,11 @@ rand = \"0.8\"
     fn the_same_crate_twice_is_a_row_that_says_so() {
         let mut scratchpad = scratchpad();
         scratchpad.dependencies = vec![
-            Dependency::new("serde", "1"),
-            Dependency::new(" serde ", "2"),
+            dependency("serde", "1"),
+            dependency(" serde ", "2"),
             // A second empty row is empty, not a duplicate: it has nothing to duplicate.
-            Dependency::new("", ""),
-            Dependency::new("", ""),
+            dependency("", ""),
+            dependency("", ""),
         ];
 
         assert_eq!(
@@ -902,7 +982,7 @@ rand = \"0.8\"
     fn a_scratchpad_with_a_bad_row_will_not_write() {
         let directory = directory(line!());
         let mut scratchpad = scratchpad();
-        scratchpad.dependencies = vec![Dependency::new("rand", "")];
+        scratchpad.dependencies = vec![dependency("rand", "")];
 
         let failure = scratchpad.write_to(&directory).expect_err("a refusal");
         assert_eq!(
@@ -924,7 +1004,7 @@ rand = \"0.8\"
         let directory = directory(line!());
         let mut scratchpad = scratchpad();
         scratchpad.source = "fn main() { /* edited */ }\n".to_owned();
-        scratchpad.dependencies = vec![Dependency::new("anyhow", "1.0.86")];
+        scratchpad.dependencies = vec![dependency("anyhow", "1.0.86")];
 
         scratchpad.write_to(&directory).expect("writing");
         assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad));
@@ -942,6 +1022,67 @@ rand = \"0.8\"
         let _ = fs::remove_dir_all(&directory);
     }
 
+    /// What the app opens with, and the reason [`Scratchpad::default`] may hand out a
+    /// name without a `Result`: it is a name this module would accept if it were typed,
+    /// and it is a package it would agree to write.
+    #[test]
+    fn the_default_scratchpad_is_one_this_module_would_write() {
+        let scratchpad = Scratchpad::default();
+
+        assert_eq!(scratchpad.name(), DEFAULT_NAME);
+        assert_eq!(Scratchpad::new(DEFAULT_NAME), Ok(scratchpad.clone()));
+        assert!(scratchpad.problems().is_empty());
+        assert!(scratchpad.manifest().is_ok());
+    }
+
+    /// Reopening: what is on disk wins over what the caller was holding, except for the
+    /// name -- which is the directory the next write goes back to, and so cannot be
+    /// something a hand-edited manifest gets to choose.
+    #[test]
+    fn a_scratchpad_opens_as_its_directory_has_it() {
+        let directory = directory(line!());
+
+        // Nothing there yet: what the caller was holding, unchanged, so a first run opens
+        // on the default source rather than on nothing.
+        let fresh = Scratchpad::default().opened_in(&directory);
+        assert_eq!(fresh, Scratchpad::default());
+
+        let mut written = scratchpad();
+        written.source = "fn main() { /* saved */ }\n".to_owned();
+        written.dependencies = vec![dependency("anyhow", "1.0.86")];
+        written.write_to(&directory).expect("writing");
+
+        let opened = Scratchpad::default().opened_in(&directory);
+        assert_eq!(opened.source, written.source);
+        assert_eq!(opened.dependencies, written.dependencies);
+        // The manifest says `sketch` and the caller asked for `scratch`. The caller wins:
+        // the name is where the next write lands.
+        assert_eq!(opened.name(), DEFAULT_NAME);
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// Which box a row's problem belongs against. The editor marks one of the two, so
+    /// this is the model's answer rather than the view guessing from the wording.
+    #[test]
+    fn a_problem_is_about_one_half_of_its_row() {
+        for problem in [
+            Problem::NoName,
+            Problem::NameStart,
+            Problem::NameCharacter('/'),
+            Problem::NameTooLong,
+            // A repeat is a name collision: `[dependencies]` is keyed by the name, and
+            // the version of the second row is what would silently go missing.
+            Problem::Repeated,
+        ] {
+            assert_eq!(problem.half(), Half::Name, "{problem:?}");
+        }
+
+        for problem in [Problem::NoVersion, Problem::Wildcard, Problem::NotAVersion] {
+            assert_eq!(problem.half(), Half::Version, "{problem:?}");
+        }
+    }
+
     /// Writing twice is what the editor does on every build, so the second write has to
     /// be the new source and not a merge of the two.
     #[test]
@@ -950,7 +1091,7 @@ rand = \"0.8\"
         let mut scratchpad = scratchpad();
         scratchpad.write_to(&directory).expect("writing");
         scratchpad.source = "fn main() {}\n".to_owned();
-        scratchpad.dependencies = vec![Dependency::new("rand", "0.8")];
+        scratchpad.dependencies = vec![dependency("rand", "0.8")];
         scratchpad.write_to(&directory).expect("writing again");
 
         assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad));

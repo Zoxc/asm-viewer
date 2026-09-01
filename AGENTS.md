@@ -69,7 +69,7 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/history.rs` — back/forward navigation history.
 - `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API, merged
   under the user's own; in points until one conversion at the end.
-- `src/ui.rs` — the entire freya UI (~7700 lines, in commented sections).
+- `src/ui.rs` — the entire freya UI (~8900 lines, in commented sections).
 
 Everything except `ui.rs` is framework-free and unit-tested rather than eyeballed.
 
@@ -447,7 +447,8 @@ describes the older API and does not apply.
 `use_consume`: `Objects`, `Sel` (the active `Selection`), `Open`/`Files`/`Shown` (open tabs),
 `AsmAt`/`SrcAt` (where each of those tabs was left), `Hist`, `Proj` (which project all of that
 belongs to), `Focused`, `Pinned`, `Marked`/`Shift`, `Analysis` (what the worker has to say about
-the selected symbol), plus the memo `Symbols`. The nine that a project *owns* travel together as a
+the selected symbol), `Pad`/`PadText` (the scratchpad, and the buffer being typed into it), plus
+the memo `Symbols`. The nine that a project *owns* travel together as a
 `ProjectStates`, since a project switch closes all of them and reopens all of them.
 
 **`Sel` is the active tab.** `Open(State<Tabs<Selection>>)` is the *list* of open tabs and holds no
@@ -469,19 +470,19 @@ flex column of `TabStrip` over the `DockingArea`, so the open-document chips sit
 panes: the active tab is what the assembly *and* the source show, and a strip inside one of them
 would follow that pane wherever it was docked.
 
-Inside each panel is a `DockingArea` over a `DockArea` model; the eight views are dockable tabs
+Inside each panel is a `DockingArea` over a `DockArea` model; the nine views are dockable tabs
 draggable between the two areas (both use `Tab` as the payload, and `use_drag` keeps one
 `DockDrag<Tab>` at the root). The outer split stays a `ResizableContainer` because docking cannot
 express a literal 300px. A drag carries only the tab, so the area receiving a drop evicts it from
 the other through a wired-up `other: Option<State<DockArea>>`. `root()` never returns `None` — an
 area losing its last tab collapses to a single *empty* panel (`DockArea::tidy`) so tabs can be
-dragged back in. A tab is a **persistent view**, not a slot the selection drives: each of the eight
+dragged back in. A tab is a **persistent view**, not a slot the selection drives: each of the nine
 is a unit `Component` that consumes context and renders off the state it is about, so a
-selection change re-renders only the tabs that read it and never the root. Project and Settings
+selection change re-renders only the tabs that read it and never the root. Project, Settings and Scratchpad
 start tabbed beside Assembly and behind it, since the app is for reading disassembly and each of
 those is what a reader looks at once.
 
-**Tab strips are not dock tabs.** The eight `Tab`s are *views*; the chips in a strip are the
+**Tab strips are not dock tabs.** The nine `Tab`s are *views*; the chips in a strip are the
 *documents* open in them. Open functions are not dock tabs because the dock tree is the *layout*
 (closing the last one would fold the split away), because a per-panel active tab gives two answers
 to "which function is active", and because the list would then be inseparable from a layout nothing
@@ -577,7 +578,10 @@ pairing is load-bearing, because the analysis arrives from a worker thread and a
 `Sel` and it separately sees them disagree for as long as the work takes.
 
 The rows are the app's own (`SourceRow`, a `VirtualScrollView`), **not** freya's `CodeEditor`,
-which paints a line background only for the cursor's row and keeps its scroll state private. What
+which paints a line background only for the cursor's row and keeps its scroll state private —
+which is to say it cannot do the two things this pane exists to do, highlight the *set* of lines
+an instruction maps to and be scrolled to one from the other pane. Neither objection survives a
+pane the reader is typing in, so the Scratchpad's editor *is* that component (below). What
 `freya-code-editor` does offer is its tree-sitter pipeline, public on its own: `SyntaxHighlighter` +
 `SyntaxBlocks` + an `EditorSyntaxTheme` turn a `Rope` into one list of `(Color, TextNode)` spans per
 line. The theme is the app's own (`Palette::syntax`), the grammars are ours, and an unknown
@@ -822,6 +826,63 @@ inherited (`fonts::inherited`, so what is shown is by construction what would be
 platform's own family and the app's own size included); and the **Clear** button is there only when
 there is something to clear, which is also the only way back to unspecified — a family box can be
 emptied, a stepper cannot.
+
+**The Scratchpad page** (`Tab::Scratchpad`) is the source, the crates, the build and what the
+compiler said, and it is a *view* for the reason the settings page is: there is one of it, it
+resolves against no object, and neither code pane could draw one. What it **builds** needs no rule
+at all — the executable goes through `open_files` and its functions are ordinary chips.
+
+**Its editor is freya's own `CodeEditor`**, which the read-only source pane deliberately rejected.
+That is not a reversal: both of the pane's objections were about painting and scrolling a listing
+from *outside*, and neither survives a pane the reader is typing in — the one line it backgrounds
+is the caret's, which is the only current line an editor has, and nothing here wants to scroll it
+from elsewhere. What comes with it is a cursor, a selection, an undo history, the clipboard, IME
+preedit and an incremental tree-sitter re-parse per keystroke. Two things stay ours: the colours,
+mapped onto the palette (`EditorTheme` beside the `EditorSyntaxTheme` `Palette::syntax` already
+answers for), and the font — the component takes **one** family where everything else takes a
+chain, and the rest of the chain arrives by inheritance from the box around it, since freya appends
+a parent's families behind an element's own. Its line height is `row_height()` reached through the
+multiplier it wants, with half a pixel of slack because it multiplies and floors. The editor's
+`SyntaxBlocks` is `HIGHLIGHTED`'s hazard in a second place — colours resolved in at parse time, and
+`set_appearance`'s clear cannot reach inside a `CodeEditorData` — so an effect keyed on the
+appearance re-sets its theme and re-parses.
+
+**One worker thread owns the scratchpad's directory.** Reading a scratchpad back, writing the
+package and `cargo build` are all documented in `scratchpad.rs` as blocking, so all three go to one
+`std::thread` fed an `async_channel`, `use_analysis`'s shape — one thread and not three, because
+the point is not only that the UI thread stays free but that the directory has a single writer, so
+a save cannot land inside the build that is reading what it writes. **Saves supersede and builds
+never do**: a keystroke is a save, so the loop drains its queue while what it holds is one, and
+whatever is behind it is either a newer save or a build that writes the package itself. A build is
+what the reader asked for and its answer is the point. Two builds cannot start at once, on the
+button (`enabled`) and in `request_build` both, because a build takes seconds and a second job
+queued behind the first would compile bytes that have since changed.
+
+**Nothing is written until the disk has been read.** `PadState::opened` is `Saves::written`'s rule
+in a second place: the app boots holding `Scratchpad::default` and the reader's own source arrives a
+thread later, so a save in between would put the default over a scratchpad someone was keeping. The
+baseline is then seeded *by that answer*, so a run in which nothing is typed writes nothing and a
+scratchpad nobody opened leaves no directory behind. `Scratchpad::write` refuses outright rather
+than generating a manifest that differs from the rows, so a bad row stops the source being written
+too — which the pane says over the rows, each of which says its own half. Every bad row is marked,
+not the first: `Scratchpad::problems` answers with `(index, Problem)` for all of them, and
+`Problem::half` says which of the row's two boxes to redden, because `Repeated` is a *name*
+collision and nothing in its wording says so.
+
+**A failed build points back at a row structurally, never by looking for a crate name in a
+sentence.** A rejected build with no compiler diagnostics at all is cargo refusing before it
+compiled anything, and `[dependencies]` is the only part of the generated package this pane can get
+wrong — so cargo's own stderr, where `no matching package named ... found` is said and nowhere
+else, is drawn under the rows. Once the compiler has spoken, the same stderr says only what the
+diagnostics list already does and is dropped.
+
+**A rebuild replaces rather than accumulates.** `reopen_binary` is `close_binary` followed by what
+the toolbar's Open does, in one handler: a binary is a **path** throughout this app — that is what
+`close_binary` closes by and what `project::binaries` derives the saved list from — and a rebuild
+writes the same path with different bytes, so two generations of one file cannot both be in the
+objects list. The cost is real and is the reader's: the chips for that file's functions, their
+viewing positions and the history entries into them go with it. Keeping them would be `Rebuilt`'s
+resolve-by-name machinery pointed at a live state instead of at a session file.
 
 **Identity throughout the UI is `Arc` pointer identity**, not names or indices: list keys are
 `Arc::as_ptr(..).addr()` and every prop `PartialEq` is hand-written in terms of `Arc::ptr_eq`. That

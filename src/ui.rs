@@ -9,7 +9,8 @@ use std::{
 
 use async_io::Timer;
 use freya::code_editor::{
-    EditorLanguage, EditorSyntaxTheme, Rope, SyntaxBlocks, SyntaxHighlighter, TextNode,
+    CodeEditor, CodeEditorData, EditorLanguage, EditorSyntaxTheme, EditorThemePartialExt, Rope,
+    SyntaxBlocks, SyntaxHighlighter, TextNode,
 };
 use freya::icons::lucide;
 use freya::prelude::*;
@@ -23,6 +24,7 @@ use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 use crate::project::{self, Details, Project, ProjectId, Recent, Selection, Session};
 use crate::rows::RowSelection;
+use crate::scratchpad::{Build, Dependency, Diagnostic, Failure, Half, Level, Problem, Scratchpad};
 use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 use crate::source::{self, SourceFile};
 use crate::tabs::{Positions, Tabs};
@@ -1285,7 +1287,7 @@ fn release_focus(mut focused: State<Option<LineFocus>>, mine: Option<&LineFocus>
 
 /// One of the two panes that show code.
 ///
-/// Not `Tab`, which names eight views of which six have nothing to answer here: this is the
+/// Not `Tab`, which names nine views of which seven have nothing to answer here: this is the
 /// side of a mapping, and a mapping has exactly two.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
@@ -1907,11 +1909,13 @@ fn kind_color(kind: SpanKind) -> Color {
 /// A source file ready to be drawn: its text as a rope, and the coloured spans
 /// tree-sitter produced for each of its lines.
 ///
-/// The highlighter comes from `freya-code-editor`, which is a dependency for this and
-/// not for its editor component: `CodeEditor` paints a line background only for the
-/// cursor's own row and keeps its scroll state private, so it can neither highlight the
-/// set of lines an instruction maps to (5b) nor be scrolled to one (5c). Its
-/// `SyntaxHighlighter` is public on its own and is exactly the shape these rows want.
+/// The highlighter comes from `freya-code-editor`, whose `CodeEditor` component this pane
+/// deliberately does not use: it paints a line background only for the cursor's own row
+/// and keeps its scroll state private, so it can neither highlight the set of lines an
+/// instruction maps to nor be scrolled to one. Its `SyntaxHighlighter` is public on its
+/// own and is exactly the shape these rows want. (The Scratchpad pane *does* use the
+/// component -- see [`SourceEditor`] -- because neither objection survives the pane being
+/// one the reader is typing in.)
 struct Highlighted {
     rope: Rope,
     blocks: SyntaxBlocks,
@@ -4029,7 +4033,7 @@ fn symbol_info(symbol: &Symbol) -> impl IntoElement {
 // Tabs
 // ---------------------------------------------------------------------------
 
-/// One of the seven dockable views. A tab is a persistent view rather than a slot
+/// One of the nine dockable views. A tab is a persistent view rather than a slot
 /// the selection drives, so each one renders itself off the state it is about
 /// and subscribes to it on its own -- which also keeps a
 /// selection change from re-rendering the whole tree.
@@ -4052,6 +4056,7 @@ enum Tab {
     Source,
     Project,
     Settings,
+    Scratchpad,
 }
 
 impl Tab {
@@ -4066,6 +4071,7 @@ impl Tab {
             Tab::Source => "Source",
             Tab::Project => "Project",
             Tab::Settings => "Settings",
+            Tab::Scratchpad => "Scratchpad",
         }
     }
 
@@ -4084,11 +4090,14 @@ impl Tab {
     /// reader's, and open because it is the one the app is in rather than one of the
     /// several the pane also lists. **Settings** is `settings`, the cog every desktop has
     /// meant this by for thirty years -- the one place in this set where the obvious glyph
-    /// is also the right one.
+    /// is also the right one. **Scratchpad** is `notebook-pen`, which is what the pane
+    /// literally is -- a pad with something to write on it with -- where `hammer` and
+    /// `play` name the build rather than the thing being built and `flask-conical` calls
+    /// it an experiment.
     ///
     /// The name is passed beside the bytes because `ImageSource` keys the raster cache on
-    /// a hash of whatever it is given, and hashing eight short names per render is cheaper
-    /// than hashing eight SVGs.
+    /// a hash of whatever it is given, and hashing nine short names per render is cheaper
+    /// than hashing nine SVGs.
     fn icon(self) -> Element {
         let (name, svg) = match self {
             Tab::Objects => ("package", lucide::package()),
@@ -4099,6 +4108,7 @@ impl Tab {
             Tab::Source => ("file-code", lucide::file_code()),
             Tab::Project => ("folder-open", lucide::folder_open()),
             Tab::Settings => ("settings", lucide::settings()),
+            Tab::Scratchpad => ("notebook-pen", lucide::notebook_pen()),
         };
 
         let side = icon_size();
@@ -4109,7 +4119,7 @@ impl Tab {
             // it knows one, and with none set it waits for an `on_styled` to tell it the
             // inherited text colour, which is a frame late and a frame of nothing in a
             // 26px bar. Setting it also skips the loader, which is off in any case --
-            // these are eight 24px glyphs rasterized synchronously out of the binary, and a
+            // these are nine 24px glyphs rasterized synchronously out of the binary, and a
             // spinner in a tab header would be a lie about the work being done.
             .color(palette().icon_fg)
             .show_loader(false)
@@ -4126,6 +4136,7 @@ impl Tab {
             Tab::Source => SourceTab.into_element(),
             Tab::Project => ProjectTab.into_element(),
             Tab::Settings => SettingsTab.into_element(),
+            Tab::Scratchpad => ScratchpadTab.into_element(),
         }
     }
 }
@@ -5097,6 +5108,894 @@ impl Component for SettingsTab {
 }
 
 // ---------------------------------------------------------------------------
+// Scratchpad
+// ---------------------------------------------------------------------------
+
+/// The scratchpad the app has open, and what its worker is doing about it.
+///
+/// A root context and not state inside the view, for the reason [`Prefs`] and [`Proj`]
+/// are: the Scratchpad pane is a dockable tab, and a dock tab that is not the active one
+/// in its panel is *unmounted*. A buffer the reader is typing into cannot live somewhere
+/// that a click on the tab beside it throws away.
+#[derive(Clone, Copy)]
+struct Pad(State<PadState>);
+
+/// The scratchpad's source, as `freya-code-editor` holds it: a rope, a cursor, an undo
+/// history and the tree-sitter blocks the rows are drawn from.
+///
+/// Beside [`Pad`] rather than inside it, and it is the editor's copy that is the live
+/// one: `Scratchpad::source` is a `String` the model writes out, while this is what the
+/// keyboard edits, so one of the two has to follow the other and it is the model that
+/// follows. `use_scratchpad_with`'s first effect is the whole of that mirroring.
+///
+/// Also a root context, for [`Pad`]'s reason and one more: the theme effect below has to
+/// reach it whether or not the pane is on screen, since a `SyntaxBlocks` holds resolved
+/// colours and nothing a re-render does would repaint them (see [`HIGHLIGHTED`]).
+#[derive(Clone, Copy)]
+struct PadText(State<CodeEditorData>);
+
+/// The way to ask the scratchpad's worker for something, shared through context so that a
+/// button in the pane can ask without the pane owning the thread.
+#[derive(Clone)]
+struct PadJobs(async_channel::Sender<PadJob>);
+
+/// Everything the Scratchpad pane draws.
+#[derive(Clone, Default)]
+struct PadState {
+    scratchpad: Scratchpad,
+    /// Whether the worker has yet said what is on disk.
+    ///
+    /// `Saves::written`'s rule, in a second place and for the same reason: the app boots
+    /// holding [`Scratchpad::default`] and the reader's own source arrives a thread
+    /// later, so a save that ran before that answer landed would write the default source
+    /// over a good scratchpad. Nothing is saved until this is true.
+    opened: bool,
+    /// Whether a build is running. It is what disables the Build button, which is the
+    /// whole of "two builds cannot be started at once": one worker thread runs the jobs
+    /// in order anyway, but a second job queued behind the first would build bytes the
+    /// reader has since changed and answer for them afterwards.
+    building: bool,
+    /// What the last build of this run came back with, or `None` before there has been
+    /// one. A build is not remembered across runs: it describes bytes on disk that the
+    /// next `cargo build` will replace.
+    built: Option<Build>,
+    /// Why the package on disk is not what is on screen, or `None` when it is.
+    ///
+    /// [`Scratchpad::write`] refuses outright rather than generating a manifest that
+    /// differs from the rows -- which is the model's rule and a good one -- so a bad row
+    /// stops the *source* being written too, and the pane has to say so where the reader
+    /// is looking. It is one sentence over the rows, which each say their own half.
+    unsaved: Option<Failure>,
+}
+
+impl PadState {
+    /// What the compiler said about the last build. Warnings on a build that succeeded
+    /// and errors on one that did not are the same list to a reader.
+    fn diagnostics(&self) -> &[Diagnostic] {
+        match &self.built {
+            Some(Build::Built { diagnostics, .. }) => diagnostics,
+            Some(Build::Rejected { diagnostics, .. }) => diagnostics,
+            Some(Build::Unavailable(_)) | None => &[],
+        }
+    }
+
+    /// cargo's own words, when they are about the dependency rows.
+    ///
+    /// **This is the whole of how a failed build points back at a row**, and it is a
+    /// structural test rather than a search for a crate name in a sentence. A rejected
+    /// build with no compiler diagnostics at all is cargo refusing *before* it compiled
+    /// anything, and the only part of the generated package a reader can get wrong from
+    /// this pane is `[dependencies]` -- so `no matching package named ... found`, which
+    /// `analysis`' own note says is stated on stderr and nowhere else, is drawn under the
+    /// rows it is about instead of in the diagnostics list. Once the compiler has spoken
+    /// the same stderr is only `could not compile ... due to 1 previous error`, which
+    /// says nothing the list below does not, so it is dropped.
+    fn refusal(&self) -> Option<&str> {
+        match &self.built {
+            Some(Build::Rejected {
+                diagnostics,
+                message,
+            }) if diagnostics.is_empty() && !message.is_empty() => Some(message),
+            _ => None,
+        }
+    }
+
+    /// The one line over the pane saying where the last build got to, and whether that
+    /// line is bad news.
+    fn status(&self) -> Option<(String, bool)> {
+        if self.building {
+            return Some(("Building...".to_owned(), false));
+        }
+
+        let count = |level: Level, one: &str, many: &str| {
+            let count = self
+                .diagnostics()
+                .iter()
+                .filter(|diagnostic| diagnostic.level == level)
+                .count();
+            match count {
+                0 => String::new(),
+                1 => format!(": 1 {one}"),
+                count => format!(": {count} {many}"),
+            }
+        };
+
+        match self.built.as_ref()? {
+            Build::Built { .. } => Some((
+                format!("Built{}", count(Level::Warning, "warning", "warnings")),
+                false,
+            )),
+            Build::Rejected { .. } => Some((
+                format!("Not built{}", count(Level::Error, "error", "errors")),
+                true,
+            )),
+            // Nothing was compiled, and the reason is a sentence written to be shown as
+            // it stands -- a bad row, no cargo on the `PATH`, nowhere to keep a
+            // scratchpad.
+            Build::Unavailable(failure) => Some((failure.to_string(), true)),
+        }
+    }
+}
+
+/// What the scratchpad's worker thread is asked for. Each carries the whole scratchpad
+/// rather than a handle to one, so nothing the worker touches can change under it while
+/// it is writing or building.
+enum PadJob {
+    Open(Scratchpad),
+    Save(Scratchpad),
+    Build(Scratchpad),
+}
+
+/// What it answers with.
+enum PadAnswer {
+    Opened(Scratchpad),
+    /// Why the package could not be written, or `None` when it was.
+    Saved(Option<Failure>),
+    Built(Build),
+}
+
+/// The work itself: the three blocking calls `scratchpad.rs` documents as never belonging
+/// on a UI thread, and nothing else. Split out so [`use_scratchpad_with`] can be handed
+/// something that answers without a disk or a compiler -- `use_analysis_with`'s shape and
+/// for its reason.
+fn pad_work(job: PadJob) -> PadAnswer {
+    match job {
+        PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad.opened()),
+        PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.write().err()),
+        PadJob::Build(scratchpad) => PadAnswer::Built(scratchpad.build()),
+    }
+}
+
+/// The scratchpad's whole wiring: one worker thread, the editor's text mirrored into the
+/// model, the model written out as it changes, and the theme carried into the editor's
+/// own syntax blocks.
+///
+/// **One worker thread, and it is the only thing that ever touches the scratchpad's
+/// directory.** Reading it back, writing the package and running `cargo build` are all
+/// documented in `scratchpad.rs` as blocking, and a `cargo build` is seconds; putting
+/// them on one thread rather than one each is not only about the UI thread staying free
+/// but about the directory having a single writer, so a save cannot land in the middle of
+/// the build that is reading what it writes.
+///
+/// **Saves supersede, builds never do.** A keystroke is a save and a reader types
+/// faster than a package is written, so the loop drains its queue while what it is
+/// holding is a save: only the newest says anything, and a build that has arrived behind
+/// one writes the package itself on its way past. A build is what the reader *asked* for
+/// and its answer is the point, so it is never dropped.
+fn use_scratchpad(pad: State<PadState>, text: State<CodeEditorData>, states: ProjectStates) {
+    use_scratchpad_with(pad, text, states, pad_work);
+}
+
+/// [`use_scratchpad`] with the work handed in, so a test can drive the wiring without
+/// writing to the machine's own state directory or waiting on a compiler.
+fn use_scratchpad_with(
+    mut pad: State<PadState>,
+    mut text: State<CodeEditorData>,
+    states: ProjectStates,
+    work: impl Fn(PadJob) -> PadAnswer + Send + 'static,
+) -> PadJobs {
+    // What the worker was last handed, which is what the disk therefore says. The
+    // baseline `Saves::written` is, and it starts empty for the reason that one does: the
+    // app boots holding [`Scratchpad::default`], and a baseline seeded from it would make
+    // the reader's own scratchpad -- which arrives a thread later -- look like a change to
+    // be written back. It is *seeded by the answer* instead, so a run in which nothing is
+    // typed writes nothing at all and a scratchpad nobody has opened leaves no directory
+    // behind, which is `project.rs`'s rule about a file made by the first write that has
+    // something to say.
+    //
+    // An `Rc<RefCell>` rather than a `State`, since nothing renders from it.
+    let sent = use_hook(|| Rc::new(RefCell::new(None::<Scratchpad>)));
+
+    let requests = use_hook({
+        let sent = sent.clone();
+        move || {
+            let (requests, jobs) = async_channel::unbounded::<PadJob>();
+            let (answered, answers) = async_channel::unbounded::<PadAnswer>();
+
+            std::thread::spawn(move || {
+                while let Ok(job) = jobs.recv_blocking() {
+                    let mut job = job;
+                    // Superseded saves, dropped before they are started. Whatever is behind
+                    // one is either a newer save or a build, and a build writes the package
+                    // itself -- so nothing is lost by not writing this one.
+                    while matches!(job, PadJob::Save(_)) {
+                        match jobs.try_recv() {
+                            Ok(newer) => job = newer,
+                            Err(_) => break,
+                        }
+                    }
+
+                    // A send that fails is the app shutting down and taking the receiver
+                    // with it.
+                    if answered.send_blocking(work(job)).is_err() {
+                        return;
+                    }
+                }
+            });
+
+            spawn(async move {
+                while let Ok(answer) = answers.recv().await {
+                    match answer {
+                        PadAnswer::Opened(scratchpad) => {
+                            // The buffer is replaced rather than edited into place: this is
+                            // the first thing that happens to it, so there is no cursor and
+                            // no undo history to preserve, and `CodeEditorData` has no way to
+                            // set its text that would keep either honest anyway.
+                            //
+                            // `palette()` is asked here on the UI thread -- freya's `spawn`
+                            // runs its tasks there -- so this is the same thread-local every
+                            // component reads, and reading it outside a reactive scope simply
+                            // subscribes nothing.
+                            let mut editor = CodeEditorData::new(
+                                Rope::from_str(&scratchpad.source),
+                                language(Path::new(SOURCE_FILE)),
+                            );
+                            editor.set_theme(palette().syntax());
+                            // Without this the editor has no blocks at all and draws no
+                            // lines: `CodeEditorData::new` configures the highlighter and
+                            // never runs it.
+                            editor.parse();
+                            text.set(editor);
+
+                            // The baseline, seeded by the answer rather than at mount: what
+                            // is on disk is by definition what was last written, so a run in
+                            // which nothing is typed asks for no save at all.
+                            *sent.borrow_mut() = Some(scratchpad.clone());
+
+                            let mut next = pad.peek().clone();
+                            next.scratchpad = scratchpad;
+                            next.opened = true;
+                            pad.set(next);
+                        }
+                        PadAnswer::Saved(failure) => {
+                            let mut next = pad.peek().clone();
+                            next.unsaved = failure;
+                            pad.set(next);
+                        }
+                        PadAnswer::Built(build) => {
+                            let executable = match &build {
+                                Build::Built { executable, .. } => Some(executable.clone()),
+                                _ => None,
+                            };
+
+                            let mut next = pad.peek().clone();
+                            next.building = false;
+                            next.built = Some(build);
+                            // A build writes the package on its way, so the reason the last
+                            // save could not is answered by it too.
+                            if !matches!(
+                                next.built,
+                                Some(Build::Unavailable(Failure::Dependencies(_)))
+                            ) {
+                                next.unsaved = None;
+                            }
+                            pad.set(next);
+
+                            if let Some(executable) = executable {
+                                reopen_binary(states, executable);
+                            }
+                        }
+                    }
+                }
+            });
+
+            requests
+        }
+    });
+
+    // How the pane asks for a build. A context rather than an argument, because the
+    // button that asks is inside a dockable view that is handed nothing, and returned as
+    // well so that a test can ask without going through a button.
+    let jobs = use_provide_context(|| PadJobs(requests.clone()));
+
+    // What is on disk, asked for once. `use_hook` runs on mount and never again, which is
+    // what makes this the app's one reading of the scratchpad.
+    use_hook({
+        let requests = requests.clone();
+        move || {
+            let _ = requests.try_send(PadJob::Open(pad.peek().scratchpad.clone()));
+        }
+    });
+
+    // The editor's text into the model. Reading the editor subscribes this to every edit;
+    // a cursor move wakes it too, and the comparison is what makes that free.
+    use_side_effect(move || {
+        let typed = text.read().rope.to_string();
+
+        let changed = pad.peek().scratchpad.source != typed;
+        if changed {
+            pad.write().scratchpad.source = typed;
+        }
+    });
+
+    // The model onto the disk. Nothing is written while the two are the same, and the
+    // baseline moves to what was last *sent*: a reader who changes a row and changes it
+    // back has to write again, or the file would be left holding the middle answer.
+    use_side_effect(move || {
+        let state = pad.read().clone();
+        if !state.opened {
+            return;
+        }
+
+        let mut sent = sent.borrow_mut();
+        if sent.as_ref() != Some(&state.scratchpad) {
+            *sent = Some(state.scratchpad.clone());
+            let _ = requests.try_send(PadJob::Save(state.scratchpad));
+        }
+    });
+
+    // The theme, carried into the editor's own blocks. This is `HIGHLIGHTED`'s hazard in
+    // a second place: a `SyntaxBlocks` holds colours already resolved out of the palette,
+    // so the entries are not stale after a switch, they are the wrong theme -- and
+    // `set_appearance`'s clear cannot reach inside a `CodeEditorData`. Re-setting the
+    // theme rebuilds the highlighter's capture colours and `parse` re-colours every line.
+    //
+    // Reading the appearance here subscribes the root, which already reads it twice.
+    use_side_effect_with_deps(&appearance(), move |_: &Appearance| {
+        let mut editor = text.write();
+        editor.set_theme(palette().syntax());
+        editor.parse();
+    });
+
+    jobs
+}
+
+/// Ask for a build of what is on screen, unless one is already running.
+///
+/// The guard is here as well as on the button, so that "two builds cannot be started at
+/// once" is a property of the request rather than of one control's disabled state.
+fn request_build(mut pad: State<PadState>, jobs: &PadJobs) {
+    let state = pad.peek().clone();
+    if state.building {
+        return;
+    }
+
+    pad.write().building = true;
+    let _ = jobs.0.try_send(PadJob::Build(state.scratchpad));
+}
+
+/// Open the binary at `path` in place of whatever the app already had from it.
+///
+/// **Not a sixth function holding the tab invariants**: it is [`close_binary`] followed by
+/// exactly what the toolbar's Open button does, in that order and in one handler.
+///
+/// Replacing rather than accumulating is the only answer available, and the reason is the
+/// app's own identity rule: a binary is a **path**, `close_binary` closes by path, and
+/// `project::binaries` derives the saved list from the objects by path -- so two
+/// generations of one file cannot both be in the objects list without every one of those
+/// answering for which is which. A rebuild writes the same path with different bytes, so
+/// what was open is a listing of instructions that no longer exist.
+///
+/// What it costs the reader, honestly: `close_binary` takes the chips for that file's
+/// functions, their viewing positions and the history entries into them, so a rebuild
+/// leaves the content strip empty of the scratchpad and the reader clicks their function
+/// again. Keeping them would mean re-resolving each tab by name against the new objects,
+/// which is exactly what a session restore does for a rebuilt binary (`project.rs`'s
+/// `Rebuilt`) and is that machinery pointed at a live state rather than at a file.
+///
+/// The parse happens first and the close after it, so the two writes settle inside one
+/// handler and the save observer -- woken by a notify rather than at the write -- sees one
+/// state in which the file is open, rather than a moment in which the project has let go
+/// of it.
+fn reopen_binary(states: ProjectStates, path: PathBuf) {
+    spawn(async move {
+        let (sender, receiver) = async_channel::bounded(1);
+        let paths = vec![path.clone()];
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(open_files(paths));
+        });
+
+        let Ok(parsed) = receiver.recv().await else {
+            return;
+        };
+
+        // Unconditionally, and before the new objects go in: whether or not the new build
+        // parses, the objects the app is holding describe bytes that are no longer there.
+        close_binary(
+            states.objects,
+            states.open,
+            states.selection,
+            states.asm_at,
+            states.history,
+            &path,
+        );
+
+        let mut objects = states.objects;
+        objects.write().extend(parsed);
+    });
+}
+
+/// The file a scratchpad's source is, as cargo and rustc spell it: what `language` is
+/// asked about, and what a diagnostic's span names when it is about the reader's own
+/// source rather than a crate they depend on.
+const SOURCE_FILE: &str = "src/main.rs";
+
+/// How much of a dependency row the crate name takes against the version beside it. A
+/// name is a word and a requirement is a handful of characters, and both boxes have to
+/// shrink together in a 300px sidebar.
+const NAME_FLEX: f32 = 2.0;
+const VERSION_FLEX: f32 = 1.0;
+
+/// What the compiler's own word for a level is drawn in.
+///
+/// The palette has one red and one warm hue, and this is what they are for here: an error
+/// is the red every invalid thing in the app is written in, a warning is the terracotta a
+/// string literal is (the one warm colour in the set, and the only other thing that is
+/// meant to catch the eye), and a note recedes into the colour everything secondary is
+/// written in.
+fn level_color(level: Level) -> Color {
+    match level {
+        Level::Error => palette().invalid_fg,
+        Level::Warning => palette().string_fg,
+        Level::Note => palette().address_fg,
+    }
+}
+
+fn level_text(level: Level) -> &'static str {
+    match level {
+        Level::Error => "error",
+        Level::Warning => "warning",
+        Level::Note => "note",
+    }
+}
+
+/// A block of a tool's own output, laid out the way it wrote it: one label per line, in
+/// the fixed-width font, so rustc's carets sit under what they point at.
+///
+/// One label per line rather than one holding the newlines, for the reason every list in
+/// this app builds rows: a paragraph that wraps would put a caret under the wrong
+/// character, and the whole point of a rendered diagnostic is the column it points at.
+fn text_block(text: &str, color: Color) -> Element {
+    rect()
+        .width(Size::fill())
+        .overflow(Overflow::Clip)
+        .children(
+            text.lines()
+                .map(|line| {
+                    label()
+                        .text(line.to_owned())
+                        .assembly_font()
+                        .color(color)
+                        .max_lines(1)
+                        .into()
+                })
+                .collect::<Vec<Element>>(),
+        )
+        .into_element()
+}
+
+/// One thing the compiler said: a line that can be scanned, and cargo's own rendering of
+/// it under that.
+///
+/// The header repeats the message the block below it opens with, which is deliberate and
+/// is what every problems list does: the header is what a reader runs their eye down and
+/// the block is what they stop to read. What the header adds is the **place**, taken from
+/// the span rather than from the text -- `src/main.rs:3:5` for the reader's own source and
+/// the file's name alone for a diagnostic out of a crate they depend on, which is a
+/// distinction only the span can make.
+fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
+    let place = diagnostic.span.as_ref().map(|span| {
+        let file = match span.file == SOURCE_FILE {
+            true => span.file.clone(),
+            // A registry path is most of a line on its own, and which crate it is in is
+            // the useful half of it.
+            false => file_name(&span.file),
+        };
+
+        format!("{file}:{}:{}", span.line, span.column)
+    });
+
+    rect()
+        .width(Size::fill())
+        .padding(Gaps::new(2.0, 0.0, 6.0, 0.0))
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(row_height()))
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(6.0)
+                .content(Content::Flex)
+                .child(
+                    label()
+                        .text(level_text(diagnostic.level))
+                        .color(level_color(diagnostic.level))
+                        .max_lines(1),
+                )
+                .maybe_child(place.map(|place| {
+                    label()
+                        .text(place)
+                        .color(palette().address_fg)
+                        .max_lines(1)
+                        .into_element()
+                }))
+                .child(
+                    label()
+                        .text(diagnostic.message.clone())
+                        .width(Size::flex(1.0))
+                        .max_lines(1),
+                ),
+        )
+        .child(text_block(&diagnostic.rendered, palette().text_fg))
+        .into_element()
+}
+
+/// One `[dependencies]` row: the crate, the version required of it, and the × that drops
+/// it.
+///
+/// The problem is a prop rather than something worked out here, because it is a property
+/// of the *list* -- `Problem::Repeated` is about two rows -- and `Scratchpad::problems`
+/// answers for all of them at once so that every bad row can be marked rather than the
+/// first one.
+#[derive(Clone, PartialEq)]
+struct DependencyRow {
+    index: usize,
+    dependency: Dependency,
+    problem: Option<Problem>,
+    key: DiffKey,
+}
+
+impl KeyExt for DependencyRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for DependencyRow {
+    fn render(&self) -> impl IntoElement {
+        let mut pad = use_consume::<Pad>().0;
+        let index = self.index;
+        let problem = self.problem.clone();
+        // Which box is wrong is the model's answer and not this pane's guess at one:
+        // `Repeated` is about the name, and nothing in its wording says so.
+        let half = problem.as_ref().map(Problem::half);
+
+        // The two boxes write straight into the row they are drawn from, so a keystroke
+        // is a state change the save effect sees like any other -- the project view's
+        // name box, one level deeper. Indexing is safe because a row is mounted only for
+        // an index the list has: the × below shortens the list, and the rows are rebuilt
+        // from the shorter one before either box is read again.
+        let name = pad.into_writable().map(
+            move |pad: &PadState| &pad.scratchpad.dependencies[index].name,
+            move |pad: &mut PadState| &mut pad.scratchpad.dependencies[index].name,
+        );
+        let version = pad.into_writable().map(
+            move |pad: &PadState| &pad.scratchpad.dependencies[index].version,
+            move |pad: &mut PadState| &mut pad.scratchpad.dependencies[index].version,
+        );
+
+        let marked = |input: Input, box_half: Half| {
+            input.maybe(half == Some(box_half), |input: Input| {
+                input
+                    .color(palette().invalid_fg)
+                    .focus_border_fill(palette().invalid_fg)
+            })
+        };
+
+        rect()
+            .width(Size::fill())
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(row_height() + 8.0))
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .content(Content::Flex)
+                    .spacing(6.0)
+                    .child(marked(
+                        Input::new(name)
+                            .placeholder("crate")
+                            .compact()
+                            .width(Size::flex(NAME_FLEX)),
+                        Half::Name,
+                    ))
+                    .child(marked(
+                        Input::new(version)
+                            .placeholder("version")
+                            .compact()
+                            .width(Size::flex(VERSION_FLEX)),
+                        Half::Version,
+                    ))
+                    .child(
+                        Button::new()
+                            .compact()
+                            .on_press(move |_| {
+                                pad.write().scratchpad.dependencies.remove(index);
+                            })
+                            .child("\u{00d7}"),
+                    ),
+            )
+            // Against the row it belongs to and never as one message at the top, which is
+            // what `Scratchpad::problems` answering with every row's index is for.
+            .maybe_child(problem.map(|problem| {
+                rect()
+                    .width(Size::fill())
+                    .padding(Gaps::new(0.0, 0.0, 4.0, 2.0))
+                    .overflow(Overflow::Clip)
+                    .child(
+                        label()
+                            .text(problem.to_string())
+                            .color(palette().invalid_fg)
+                            .max_lines(1),
+                    )
+            }))
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// The scratchpad's source, in freya's own `CodeEditor`.
+///
+/// **5a rejected this component for the read-only source pane and 10c takes it, which is
+/// not a reversal**: both of 5a's reasons were about painting and scrolling a listing
+/// from outside, and neither survives the pane being one the reader is typing in.
+/// `editor_line.rs` paints a line background for exactly one line, the cursor's own --
+/// which is wrong for the source pane, where a set of lines maps to an instruction, and
+/// exactly right here, where the only current line *is* the caret's. Its
+/// `ScrollController` is built in a `use_hook` of its own and `CodeEditorData::scrolls` is
+/// `pub(crate)` -- which stopped 5c from scrolling the pane to a line, and there is
+/// nothing here that wants to. What is left is a real editor: a cursor, a selection, an
+/// undo history, the clipboard, IME preedit, and an *incremental* tree-sitter re-parse per
+/// keystroke through the same pipeline the source pane already borrows. Hand-rolling that
+/// would be several hundred lines of text editing to end up with less.
+///
+/// Two things are still ours, and both are the reason the app looks like one app: the
+/// colours come from the palette rather than from `EditorTheme::light()`, and the font is
+/// the desktop's fixed-width one.
+#[derive(PartialEq)]
+struct SourceEditor;
+
+impl Component for SourceEditor {
+    fn render(&self) -> impl IntoElement {
+        let text = use_consume::<PadText>().0;
+        let a11y_id = use_hook(AccessibilityId::new_unique);
+
+        let font = fonts();
+        let size = font.mono.size();
+        // The editor takes **one** family where everything else in the app takes a chain,
+        // and freya appends the parent element's families behind an element's own -- so
+        // the rest of the chain arrives by inheritance from the box around it, which is
+        // what keeps a desktop naming a font that is not installed from silently landing
+        // the listing in a proportional face.
+        let family = font
+            .mono
+            .families
+            .first()
+            .map(|family| family.to_string())
+            .unwrap_or_default();
+        // The editor multiplies its font size by this and floors the answer, and what is
+        // wanted is `row_height()` exactly -- so half a pixel of slack is what makes the
+        // product land on it rather than one below it.
+        let line_height = (row_height() + 0.5) / size;
+
+        rect()
+            .expanded()
+            .background(palette().pane_bg)
+            .assembly_font()
+            .child(
+                CodeEditor::new(text, a11y_id)
+                    .font_size(size)
+                    .font_family(family)
+                    .line_height(line_height)
+                    // The source pane draws indentation as plain spaces, and two panes of
+                    // code in one window disagreeing about that would read as two editors.
+                    .show_whitespace(false)
+                    .background(palette().pane_bg)
+                    .text(palette().name_fg)
+                    .cursor(palette().text_fg)
+                    // What would land on the clipboard, which is what `row_select_bg`
+                    // already says in both code panes -- a character selection here where
+                    // it is a run of rows there, and the same question either way.
+                    .highlight(palette().row_select_bg)
+                    // "You are here", which is `code_row_hover_bg`'s job in the other two
+                    // panes. Reusing it rather than adding a ninth wash to the palette is
+                    // safe because the editor paints no pointer hover at all, so the two
+                    // meanings can never be on screen together in this pane.
+                    .line_selected_background(palette().code_row_hover_bg)
+                    .gutter_selected(palette().text_fg)
+                    .gutter_unselected(palette().address_fg)
+                    .whitespace(palette().punctuation_fg),
+            )
+    }
+}
+
+/// The Scratchpad pane: a source file the reader edits, the crates it asks for, a build,
+/// and what the compiler said about it.
+///
+/// **A view and not a document**, which is the rule 8e settled and this inherits whole: a
+/// chip in the content strip is a `Selection` -- a place in a binary -- and a scratchpad
+/// is not one. What it *builds* is, and needs no rule at all: the executable goes through
+/// `open_files` like any other binary and its functions are ordinary chips.
+#[derive(PartialEq)]
+struct ScratchpadTab;
+
+impl Component for ScratchpadTab {
+    fn render(&self) -> impl IntoElement {
+        let mut pad = use_consume::<Pad>().0;
+        let jobs = use_consume::<PadJobs>();
+        let state = pad.read().clone();
+
+        // Every bad row at once, keyed by the row it belongs to. `Scratchpad::problems`
+        // answers with all of them precisely so that a reader who has two rows wrong is
+        // not shown them one at a time.
+        let problems: HashMap<usize, Problem> = state.scratchpad.problems().into_iter().collect();
+        let rows: Vec<Element> = state
+            .scratchpad
+            .dependencies
+            .iter()
+            .enumerate()
+            .map(|(index, dependency)| {
+                DependencyRow {
+                    index,
+                    dependency: dependency.clone(),
+                    problem: problems.get(&index).cloned(),
+                    key: DiffKey::None,
+                }
+                .key(index)
+                .into()
+            })
+            .collect();
+
+        let diagnostics: Vec<Element> = state.diagnostics().iter().map(diagnostic_block).collect();
+        let refusal = state
+            .refusal()
+            .map(|message| text_block(message, palette().text_fg));
+        let package = match state.scratchpad.directory() {
+            Some(directory) => directory.to_string_lossy().into_owned(),
+            None => "nowhere to keep a scratchpad".to_owned(),
+        };
+
+        rect()
+            .expanded()
+            .content(Content::Flex)
+            .background(palette().pane_bg)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .padding(Gaps::new_symmetric(8.0, 12.0))
+                    .spacing(6.0)
+                    .child(section_heading(
+                        "Scratchpad",
+                        Some(
+                            Button::new()
+                                // The whole of "two builds cannot be started at once", on
+                                // the control as well as in `request_build`: a build takes
+                                // seconds, and a button that goes on looking pressable
+                                // through them is a button that gets pressed again.
+                                .enabled(!state.building)
+                                .on_press(move |_| request_build(pad, &jobs))
+                                .child(match state.building {
+                                    true => "Building...",
+                                    false => "Build",
+                                })
+                                .into_element(),
+                        ),
+                    ))
+                    // The crate it generates, which is also what the executable it
+                    // builds is called -- so the row that appears in the Objects list
+                    // after a build is recognisable as this.
+                    .child(field_row(
+                        "Crate",
+                        label()
+                            .text(state.scratchpad.name().to_owned())
+                            .width(Size::flex(1.0))
+                            .max_lines(1),
+                    ))
+                    // Where it is on disk, which is the whole of what there is to know
+                    // about a scratchpad the app did not have to invent a format for: the
+                    // package cargo is handed *is* the storage. In a tooltip as well,
+                    // because a state directory is longer than any pane this can be
+                    // docked in -- which is what a tooltip is for everywhere else here.
+                    .child(row_tooltip(
+                        package.clone(),
+                        field_row(
+                            "Package",
+                            label()
+                                .text(package)
+                                .width(Size::flex(1.0))
+                                .color(palette().address_fg)
+                                .max_lines(1),
+                        ),
+                    ))
+                    .maybe_child(state.status().map(|(text, bad)| {
+                        rect()
+                            .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
+                            .overflow(Overflow::Clip)
+                            .child(
+                                label()
+                                    .text(text)
+                                    .color(match bad {
+                                        true => palette().invalid_fg,
+                                        false => palette().address_fg,
+                                    })
+                                    .max_lines(1),
+                            )
+                    }))
+                    .child(section_heading(
+                        "Dependencies",
+                        Some(
+                            Button::new()
+                                .compact()
+                                .on_press(move |_| {
+                                    pad.write()
+                                        .scratchpad
+                                        .dependencies
+                                        .push(Dependency::default());
+                                })
+                                .child("Add")
+                                .into_element(),
+                        ),
+                    ))
+                    .child(match rows.is_empty() {
+                        true => info_line("No crates asked for".to_owned()).into_element(),
+                        false => rect().width(Size::fill()).children(rows).into_element(),
+                    })
+                    // The package is what the reader is looking at, so the sentence saying
+                    // it is not the package on disk goes with the rows that say why.
+                    .maybe_child(state.unsaved.map(|failure| {
+                        rect()
+                            .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
+                            .overflow(Overflow::Clip)
+                            .child(
+                                label()
+                                    .text(format!("Not saved: {failure}"))
+                                    .color(palette().invalid_fg)
+                                    .max_lines(1),
+                            )
+                    }))
+                    // cargo's own words, when they are about these rows and are said
+                    // nowhere else. See `PadState::refusal`.
+                    .maybe_child(refusal),
+            )
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(2.0))
+                    .border(bottom_hairline())
+                    .child(SourceEditor),
+            )
+            .maybe_child((!diagnostics.is_empty()).then(|| {
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.0))
+                    .background(palette().asm_pane_bg)
+                    .child(
+                        ScrollView::new().child(
+                            rect()
+                                .width(Size::fill())
+                                .padding(Gaps::new_symmetric(4.0, 12.0))
+                                .children(diagnostics)
+                                .into_element(),
+                        ),
+                    )
+                    .into_element()
+            }))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Docking
 // ---------------------------------------------------------------------------
 
@@ -5105,7 +6004,7 @@ impl Component for SettingsTab {
 type PanelId = u32;
 
 /// One docking area: the tree of splits and tabbed panels filling one of the two
-/// resizable panes. The eight tabs are shared between the two areas, so a drop
+/// resizable panes. The nine tabs are shared between the two areas, so a drop
 /// here has to take the tab out of `other` -- which is safe to write from
 /// `on_drop` only because the two areas are separate `State`s, and freya's
 /// docking holds a mutable borrow of just the one being dropped into.
@@ -6186,6 +7085,20 @@ pub fn app() -> impl IntoElement {
     // Registered after the state it follows, for the obvious reason.
     use_open_source_file(selection, analysis, files, shown);
 
+    // The scratchpad: the source the reader edits, the crates it asks for, and the worker
+    // that is the only thing which ever reads or writes its directory. Both states are
+    // provided here rather than held by the view because a dock tab that is not the active
+    // one in its panel is unmounted, and a buffer being typed into cannot live there.
+    let pad = use_provide_context(|| Pad(State::create(PadState::default()))).0;
+    let pad_text = use_provide_context(|| {
+        PadText(State::create(CodeEditorData::new(
+            Rope::from_str(&pad.peek().scratchpad.source),
+            language(Path::new(SOURCE_FILE)),
+        )))
+    })
+    .0;
+    use_scratchpad(pad, pad_text, states);
+
     // One docking area per resizable pane: the left one a column of Objects, then
     // Symbols with Info tabbed beside it, then History at the bottom -- which is
     // where the goal asks for it, and where it is visible without a click. The
@@ -6193,7 +7106,7 @@ pub fn app() -> impl IntoElement {
     // shorter than it was; the handles between them, and dragging History onto the
     // middle panel, are both one gesture away. The right one is the split view the
     // goals ask to be the default: the source a symbol was compiled from beside its
-    // assembly, at equal widths. All eight tabs share one `DockDrag<Tab>`, which
+    // assembly, at equal widths. All nine tabs share one `DockDrag<Tab>`, which
     // `use_drag` keeps at the root, so a tab can be dragged from either area into
     // the other; each area is told about the other so the one taking a tab can evict
     // it from the one losing it.
@@ -6206,7 +7119,7 @@ pub fn app() -> impl IntoElement {
     });
     let content_dock = use_state(|| {
         DockArea::row(vec![
-            vec![Tab::Assembly, Tab::Project, Tab::Settings],
+            vec![Tab::Assembly, Tab::Project, Tab::Settings, Tab::Scratchpad],
             vec![Tab::Source],
         ])
     });
@@ -6520,32 +7433,37 @@ mod tests {
     /// crate the app does not depend on.
     macro_rules! project_states {
         () => {
-            |runner: &mut _| ProjectStates {
-                proj: runner
+            |runner: &mut _| project_states!(runner)
+        };
+        ($runner:expr) => {
+            ProjectStates {
+                proj: $runner
                     .provide_root_context(|| Proj(State::create(OpenProject::default())))
                     .0,
-                objects: runner
+                objects: $runner
                     .provide_root_context(|| Objects(State::create(Vec::new())))
                     .0,
-                open: runner
+                open: $runner
                     .provide_root_context(|| Open(State::create(Tabs::default())))
                     .0,
-                asm_at: runner
+                asm_at: $runner
                     .provide_root_context(|| AsmAt(State::create(Positions::default())))
                     .0,
-                selection: runner
+                selection: $runner
                     .provide_root_context(|| Sel(State::create(Selection::None)))
                     .0,
-                history: runner
+                history: $runner
                     .provide_root_context(|| Hist(State::create(History::default())))
                     .0,
-                files: runner
+                files: $runner
                     .provide_root_context(|| Files(State::create(Tabs::default())))
                     .0,
-                src_at: runner
+                src_at: $runner
                     .provide_root_context(|| SrcAt(State::create(Positions::default())))
                     .0,
-                shown: runner.provide_root_context(|| Shown(State::create(None))).0,
+                shown: $runner
+                    .provide_root_context(|| Shown(State::create(None)))
+                    .0,
             }
         };
     }
@@ -6710,9 +7628,9 @@ mod tests {
     /// Run the test runner until `ready` answers, and then a little further so that
     /// whatever the answer woke has run too.
     ///
-    /// A worker thread and two channels sit between a selection change and the state it
-    /// ends in, so how many turns of the loop that takes is not something a test can know
-    /// -- only that it is finite. Failing loudly rather than asserting on what happened to
+    /// A worker thread and two channels sit between a state change and the state it ends
+    /// in -- the analysis worker's and, since 10c, the scratchpad's -- so how many turns
+    /// of the loop that takes is not something a test can know, only that it is finite. Failing loudly rather than asserting on what happened to
     /// have arrived, since "the answer never came" and "the answer was wrong" are
     /// different bugs.
     fn pump(test: &mut TestingRunner, ready: impl Fn() -> bool) {
@@ -6726,7 +7644,7 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        panic!("the analysis never landed");
+        panic!("the worker's answer never landed");
     }
 
     /// The committed gcc fixture the analysis crate is pinned against, parsed the way the
@@ -7671,5 +8589,329 @@ mod tests {
         test.move_cursor((10., 50.));
         test.sync_and_update();
         assert_eq!(marked.peek().unwrap().rows.rows(), 0..=1);
+    }
+
+    /// The scratchpad worker's work, handed in through a context so a test can answer
+    /// without the machine's own state directory and without waiting on a compiler.
+    /// `Arc<dyn Fn>` and not a generic, for [`Study`]'s reason: a context value is one
+    /// concrete type.
+    #[derive(Clone)]
+    struct Working(Arc<dyn Fn(PadJob) -> PadAnswer + Send + Sync>);
+
+    /// The way to ask the worker for a build, as the wiring hands it back. A `State` so
+    /// that the harness can put it somewhere the test body can reach, which is what lets
+    /// a build be asked for the way the button asks rather than through coordinates.
+    #[derive(Clone, Copy)]
+    struct Asking(State<Option<PadJobs>>);
+
+    /// What the worker was handed, in the order it was handed it. The `Save`s carry the
+    /// source they would have written, because *what* was written is half of what the
+    /// save policy is for.
+    #[derive(Clone, Debug, PartialEq)]
+    enum Asked {
+        Open,
+        Save(String),
+        Build(String),
+    }
+
+    /// The scratchpad wiring and nothing else: no pane, since what is under test is which
+    /// jobs the worker is handed and what its answers do to the app.
+    fn scratchpad_harness() -> impl IntoElement {
+        scratchpad_wiring();
+
+        rect().expanded()
+    }
+
+    /// The same wiring under the real pane, for the one thing only the pane can be asked:
+    /// whether its rows survive one of them being taken away.
+    fn scratchpad_view_harness() -> impl IntoElement {
+        scratchpad_wiring();
+
+        rect().expanded().child(ScratchpadTab)
+    }
+
+    fn scratchpad_wiring() {
+        let pad = use_consume::<Pad>().0;
+        let text = use_consume::<PadText>().0;
+        let work = use_consume::<Working>().0;
+        let mut asking = use_consume::<Asking>().0;
+        let states = use_project_states();
+
+        let jobs = use_scratchpad_with(pad, text, states, move |job| work(job));
+        use_hook(move || asking.set(Some(jobs)));
+    }
+
+    /// The committed gcc fixture again, standing in for what a build produced: `open_files`
+    /// asks nothing of a file but that it parse, so a relocatable object is an artifact as
+    /// far as everything this test is about is concerned.
+    fn fixture_artifact() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o")
+    }
+
+    /// Mount the wiring over a worker that records every job and answers from `answer`.
+    ///
+    /// A macro rather than a function for `project_states!`'s reason -- the runner's type
+    /// is not one this crate can name -- and it hands back everything a test then drives:
+    /// the app's states, the scratchpad's two, the way to ask for a build and the record
+    /// of what was asked.
+    macro_rules! mount_scratchpad {
+        ($harness:expr, $answer:expr) => {{
+            let (asked, asks) = async_channel::unbounded::<Asked>();
+            let answer = $answer;
+            let work = move |job: PadJob| {
+                let recorded = match &job {
+                    PadJob::Open(_) => Asked::Open,
+                    PadJob::Save(scratchpad) => Asked::Save(scratchpad.source.clone()),
+                    PadJob::Build(scratchpad) => Asked::Build(scratchpad.source.clone()),
+                };
+                let _ = asked.send_blocking(recorded);
+                answer(job)
+            };
+
+            let (mut test, (states, pad, text, asking)) = TestingRunner::new(
+                $harness,
+                (400., 400.).into(),
+                move |runner: &mut _| {
+                    let states = project_states!(runner);
+                    runner.provide_root_context(move || Working(Arc::new(work)));
+                    let pad = runner
+                        .provide_root_context(|| Pad(State::create(PadState::default())))
+                        .0;
+                    let text = runner
+                        .provide_root_context(|| {
+                            PadText(State::create(CodeEditorData::new(
+                                Rope::from_str(""),
+                                language(Path::new(SOURCE_FILE)),
+                            )))
+                        })
+                        .0;
+                    let asking = runner
+                        .provide_root_context(|| Asking(State::create(None)))
+                        .0;
+
+                    (states, pad, text, asking)
+                },
+                1.,
+            );
+            test.sync_and_update();
+
+            (test, states, pad, text, asking, asks)
+        }};
+    }
+
+    /// The scratchpad on disk is what the app opens on, and **nothing is written until it
+    /// has arrived**.
+    ///
+    /// That second half is the whole reason the save baseline is seeded by the answer and
+    /// not at mount: the app boots holding `Scratchpad::default`, the reader's own source
+    /// comes back a worker thread later, and a save in between would put the default
+    /// source over a scratchpad someone had been keeping. It is also what keeps a run in
+    /// which the pane was never opened from creating the directory at all.
+    #[test]
+    fn a_scratchpad_is_read_before_anything_is_written_over_it() {
+        let mut saved = Scratchpad::default();
+        saved.source = "fn kept() {}\n".to_owned();
+        saved.dependencies = vec![Dependency {
+            name: "anyhow".to_owned(),
+            version: "1.0.86".to_owned(),
+        }];
+
+        let answering = saved.clone();
+        let (mut test, _states, pad, text, _asking, asks) =
+            mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+                PadJob::Open(_) => PadAnswer::Opened(answering.clone()),
+                PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
+                PadJob::Build(_) => unreachable!("this test never builds"),
+            });
+
+        pump(&mut test, || pad.peek().opened);
+
+        assert_eq!(pad.peek().scratchpad, saved);
+        // The editor is holding it too, which is the half a reader can see: the buffer is
+        // the live copy and the model follows it, so a restore that reached only the model
+        // would be a pane showing the default source over a scratchpad that is not it.
+        assert_eq!(text.peek().rope.to_string(), saved.source);
+
+        assert_eq!(asks.try_recv(), Ok(Asked::Open));
+        assert!(
+            asks.is_empty(),
+            "the package was written before the app knew what was in it"
+        );
+    }
+
+    /// An edit is written out, and a row that cannot be written says so against itself.
+    ///
+    /// Both halves go through the one policy: the model follows the editor, the effect
+    /// notices it differs from what was last sent, and the worker answers. What comes back
+    /// for a bad row is `Failure::Dependencies`, carrying the **index** of every row that
+    /// is wrong -- which is what lets the pane mark them in place rather than printing one
+    /// sentence at the top.
+    #[test]
+    fn an_edit_is_written_and_a_bad_row_says_which_row() {
+        let (mut test, _states, pad, text, _asking, asks) =
+            mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+                PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+                // The real refusal, without a disk: `write` fails on exactly what
+                // `manifest` fails on, the manifest being what it refuses to generate.
+                PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
+                PadJob::Build(_) => unreachable!("this test never builds"),
+            });
+
+        pump(&mut test, || pad.peek().opened);
+        assert_eq!(asks.try_recv(), Ok(Asked::Open));
+
+        // Typing. The rope is what the keyboard edits and the model is what is written, so
+        // this is the same path a keystroke takes.
+        let mut text = text;
+        text.write().rope.insert(0, "// typed\n");
+        pump(&mut test, || !asks.is_empty());
+
+        let typed = format!("// typed\n{}", crate::scratchpad::DEFAULT_SOURCE);
+        assert_eq!(asks.try_recv(), Ok(Asked::Save(typed.clone())));
+        assert_eq!(pad.peek().scratchpad.source, typed);
+        assert!(pad.peek().unsaved.is_none());
+
+        // A row that names no crate. It is the *second* row, so the index in the answer is
+        // the assertion: a failure that only said "one dependency to fix" would leave the
+        // pane guessing which.
+        let mut pad = pad;
+        {
+            let mut state = pad.write();
+            state.scratchpad.dependencies = vec![
+                Dependency {
+                    name: "anyhow".to_owned(),
+                    version: "1.0.86".to_owned(),
+                },
+                Dependency::default(),
+            ];
+        }
+        pump(&mut test, || pad.peek().unsaved.is_some());
+
+        assert_eq!(
+            pad.peek().unsaved,
+            Some(Failure::Dependencies(vec![(1, Problem::NoName)]))
+        );
+
+        // And fixing it writes again, rather than leaving the disk holding the last good
+        // version for ever.
+        pad.write().scratchpad.dependencies[1] = Dependency {
+            name: "rand".to_owned(),
+            version: "0.8".to_owned(),
+        };
+        pump(&mut test, || pad.peek().unsaved.is_none());
+    }
+
+    /// A build is asked for once however often the reader presses, and what it made is
+    /// opened **in place of** what the build before it made.
+    ///
+    /// Both halves are about the same thing being true twice. A build takes seconds, so
+    /// the pending state has to be honest enough that a second press cannot start a second
+    /// one; and a rebuild writes the same path with different bytes, so the objects the app
+    /// is holding for that path describe instructions that are no longer there. Opening
+    /// without closing would leave two generations of one file in a list where a binary is
+    /// identified by its path.
+    #[test]
+    fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
+        let artifact = fixture_artifact();
+        let built = artifact.clone();
+        let (mut test, states, pad, _text, asking, asks) =
+            mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+                PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+                PadJob::Save(_) => PadAnswer::Saved(None),
+                PadJob::Build(_) => PadAnswer::Built(Build::Built {
+                    executable: built.clone(),
+                    diagnostics: Vec::new(),
+                }),
+            });
+
+        pump(&mut test, || pad.peek().opened);
+        assert_eq!(asks.try_recv(), Ok(Asked::Open));
+
+        let jobs = asking.peek().clone().expect("the wiring handed one back");
+        request_build(pad, &jobs);
+        // The second press, while the first is still in flight. Nothing at all happens.
+        request_build(pad, &jobs);
+        assert!(pad.peek().building);
+
+        pump(&mut test, || !states.objects.peek().is_empty());
+        assert!(!pad.peek().building);
+        assert!(matches!(pad.peek().built, Some(Build::Built { .. })));
+
+        let opened = |states: &ProjectStates| {
+            states
+                .objects
+                .peek()
+                .iter()
+                .filter(|object| object.path == artifact)
+                .count()
+        };
+        let first = opened(&states);
+        assert!(first > 0, "the artifact was never opened");
+        assert_eq!(
+            asks.try_recv(),
+            Ok(Asked::Build(pad.peek().scratchpad.source.clone()))
+        );
+        assert!(
+            asks.is_empty(),
+            "the second press started a second build of the same scratchpad"
+        );
+
+        // And again. The path is the same one, so what the first build left has to go
+        // rather than sit beside it.
+        request_build(pad, &jobs);
+        pump(&mut test, || !pad.peek().building);
+        for _ in 0..8 {
+            test.sync_and_update();
+        }
+
+        assert_eq!(
+            opened(&states),
+            first,
+            "a rebuild left the objects of the build before it in the list"
+        );
+    }
+
+    /// Taking a dependency row away does not take the pane with it.
+    ///
+    /// The hazard is the one the gotchas list is about, and it is invisible to every other
+    /// kind of test here: each box in a row writes into `dependencies[index]` through a
+    /// mapped `Writable`, so a row that outlived the list being shortened would index past
+    /// the end at the moment it was next read -- a panic, not a compile error. Mounting the
+    /// real pane and shortening the list under it is the only thing that would say so.
+    #[test]
+    fn removing_a_dependency_row_does_not_take_the_pane_with_it() {
+        let (mut test, _states, pad, _text, _asking, _asks) =
+            mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+                PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+                PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
+                PadJob::Build(_) => unreachable!("this test never builds"),
+            });
+
+        pump(&mut test, || pad.peek().opened);
+
+        let mut pad = pad;
+        pad.write().scratchpad.dependencies = vec![
+            Dependency {
+                name: "anyhow".to_owned(),
+                version: "1.0.86".to_owned(),
+            },
+            Dependency {
+                name: "rand".to_owned(),
+                version: "0.8".to_owned(),
+            },
+        ];
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+
+        // The first row, which is what the × on it does -- so the row left behind is the
+        // one that was drawn at index 1.
+        pad.write().scratchpad.dependencies.remove(0);
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+
+        assert_eq!(pad.peek().scratchpad.dependencies.len(), 1);
+        assert_eq!(pad.peek().scratchpad.dependencies[0].name(), "rand");
     }
 }
