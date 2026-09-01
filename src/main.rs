@@ -4,6 +4,7 @@ mod history;
 mod lanes;
 mod project;
 mod rows;
+mod scratchpad;
 mod settings;
 mod source;
 mod tabs;

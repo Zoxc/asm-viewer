@@ -60,6 +60,7 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/project.rs` — the persisted session (`project.toml`) and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme choice.
 - `src/source.rs` — source files read off disk and cached by path, failures included.
+- `src/scratchpad.rs` — a scratchpad: the cargo package generated around one source file, and its build.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
 - `src/tree.rs` — the Objects list's tree shape: which objects came from which file.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
@@ -337,6 +338,33 @@ live rather than a value baked in at startup. `fonts()` merges
 the settings over the desktop's answer **field by field** (`fonts::resolve`, pure and tested), but
 is still a `OnceLock`: the doc comment on it says exactly what the settings page has to change and
 why a re-readable `fonts()` alone would not be the fix.
+
+**A scratchpad is a generated cargo package, and the package is the storage**
+(`src/scratchpad.rs`). One directory per scratchpad under the same base the other two files use
+plus `scratchpads/`, holding exactly what cargo needs: a `Cargo.toml` naming the crate, its
+pinned `edition` and its `[dependencies]`, and `src/main.rs`. Nothing describes a scratchpad
+*beside* that — every field of the model is already a field of the package — so `load_from` is
+the exact inverse of `write_to` rather than a second format that could disagree with what cargo
+is handed, and both files go down through the same `.tmp` + rename, which the source earns:
+`src/main.rs` is the reader's document. The manifest carries an empty `[workspace]`, so a
+scratchpad is its own workspace root wherever the state directory turns out to be.
+
+A dependency is a `(name, version)` row and the **version is required** — a `*` is refused with
+its own reason, since a requirement whose answer changes with the day is the one thing a
+scratchpad must not have. Rows are checked against two grammars (a possible crate name, a
+possible version requirement) and never against crates.io: whether a crate exists is cargo's
+answer. Every bad row comes back as `(index, Problem)` so the editor can mark all of them at
+once, a repeat of one crate included — `[dependencies]` is a table, so the second row would
+otherwise silently win — and a scratchpad with a bad row **refuses to write** rather than
+generating a manifest that differs from what is on screen. **Building is blocking and belongs on
+a worker thread**, exactly as `open_files` is: `build_in` writes the package, runs `cargo build
+--message-format=json --color=never` with a null stdin, and hands back a value. The artifact path
+is what cargo *named*, never `target/debug/<crate>` derived from the name and the profile, which
+a `CARGO_TARGET_DIR`, a config above the directory or an executable suffix each make silently
+wrong. Turning that stream into a `Build` is a pure function of cargo's stdout, stderr and exit
+status, which is what lets a failed build be a test over a canned stream. Three answers, not two:
+the compiler said no (with cargo's own stderr kept, since `no matching package named ... found`
+is said there and nowhere else), or nothing was compiled at all.
 
 ## UI (freya 0.4)
 

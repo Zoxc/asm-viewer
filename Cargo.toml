@@ -31,6 +31,14 @@ async-io = "2"
 env_logger = "0.10.0"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
+# Only for `cargo build --message-format=json` (`src/scratchpad.rs`): cargo says where
+# it put an artifact and what the compiler said in JSON lines, and parsing them is how
+# the scratchpad gets an artifact path it did not have to guess. Not a new crate in the
+# build -- serde_json is already compiled in this tree as a build-dependency of
+# `freya-skia-bindings`, and every crate it depends on is already in the lock, so this
+# adds an edge and no packages. Files this app writes are still TOML, per `AGENTS.md`;
+# this is a protocol, not a file.
+serde_json = "1"
 dirs = "6"
 toml = "1.1.4"
 

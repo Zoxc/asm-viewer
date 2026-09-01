@@ -298,7 +298,14 @@ one item per part, so the unfinished half stays visible.
 
 ## Scratchpad
 
-- [ ] A scratchpad function which allows creating single file rust projects where you can build with cargo and view assembly output.
+- [ ] A scratchpad function which allows creating single file rust projects where you can build
+  with cargo and view assembly output. The model is in (`src/scratchpad.rs`): the generated
+  cargo package *is* the storage — one directory per scratchpad holding exactly the `Cargo.toml`
+  and `src/main.rs` cargo is handed, so there is no second format to disagree with the build —
+  and `cargo build --message-format=json` comes back as a value carrying the artifact cargo
+  named and the diagnostics. What is left is the UI: an editable source view, the build action
+  on a worker thread, somewhere to read the diagnostics, and feeding the built artifact into the
+  existing open path so its assembly appears in the pane it always does.
 - [ ] Let a scratchpad depend on crates.io crates, as a **list of crates edited in the UI** —
   name and required version per row — rather than as a convention inside the source. The list
   is what generates the `[dependencies]` of the scratchpad's `Cargo.toml`. A version is

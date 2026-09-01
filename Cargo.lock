@@ -4452,6 +4452,7 @@ dependencies = [
  "regex",
  "rfd",
  "serde",
+ "serde_json",
  "toml",
  "tree-sitter-c",
  "tree-sitter-cpp",
