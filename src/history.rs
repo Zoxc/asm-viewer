@@ -14,7 +14,7 @@
 //! flush, is why the history is capped at [`MAX_ENTRIES`] rather than growing for the
 //! life of the session.
 //!
-//! The history *is* persisted, as [`crate::project::SavedHistory`] inside `project.toml`:
+//! The history *is* persisted, as [`crate::project::SavedHistory`] inside `session.toml`:
 //! [`History::entries`] and [`History::cursor`] are what goes out and
 //! [`History::restored`] is what comes back. Entries whose object or symbol no longer
 //! resolves are dropped on the way in, which is why `restored` takes an already-built
@@ -54,12 +54,12 @@ impl History {
     /// A history rebuilt from a saved session: `entries` oldest first, with the cursor on
     /// `entries[cursor]`.
     ///
-    /// The cursor is clamped into range, so neither a hand-edited `project.toml` nor a
+    /// The cursor is clamped into range, so neither a hand-edited `session.toml` nor a
     /// restore that dropped entries can leave it past the end. An empty `entries` gives
     /// back the empty history, cursor and all.
     ///
     /// The no-duplicates invariant [`History::push`] keeps is *enforced* here rather than
-    /// assumed, because the entries come from outside: a `project.toml` written before
+    /// assumed, because the entries come from outside: a `session.toml` written before
     /// entries were bumped rather than appended can name the same destination twice, two
     /// saved entries can resolve to the same `Arc`, and the file can be hand-edited.
     /// Duplicates are collapsed the way `push` would have left them — the newest
@@ -113,7 +113,7 @@ impl History {
     /// gone, with `cursor` an index into *that* list rather than into what survives.
     ///
     /// The one walk both ways of losing entries go through — a restore whose binaries
-    /// have changed ([`crate::project::Project::resolve_history`]) and a file the reader
+    /// have changed ([`crate::project::Session::resolve_history`]) and a file the reader
     /// closed ([`History::retaining`]) — because the rule is the same in both, and it is
     /// the *cursor* that makes it worth having in one place. Walking the entries up to
     /// and including `cursor`, it is left on the last one that survived: so it stays on
@@ -221,7 +221,7 @@ impl History {
     /// Dropping `excess` entries shifts every index that survives down by that much, so
     /// the cursor moves with them. `saturating_sub` is what keeps it in range when the
     /// entry it was on is itself one of the dropped ones: it lands on the oldest
-    /// survivor, which is the same place [`crate::project::Project::resolve_history`]
+    /// survivor, which is the same place [`crate::project::Session::resolve_history`]
     /// puts it when nothing older than the saved cursor survived. That case cannot arise
     /// from [`History::push`], which caps with the cursor on the entry it has just
     /// appended, only from [`History::restored`].
@@ -590,7 +590,7 @@ mod tests {
     fn restoring_collapses_duplicates_onto_the_newest_occurrence() {
         let (a, b) = (selection("a"), selection("b"));
 
-        // What a `project.toml` written before entries were bumped can hold. The cursor
+        // What a `session.toml` written before entries were bumped can hold. The cursor
         // is on the newest `a`, the usual case.
         let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 2);
 

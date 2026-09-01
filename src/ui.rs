@@ -21,7 +21,7 @@ use crate::filter::{Filter, Matcher};
 use crate::fonts::{fonts, Font};
 use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
-use crate::project::{self, Project, Selection};
+use crate::project::{self, Selection, Session};
 use crate::rows::RowSelection;
 use crate::settings::{Appearance, Settings, Theme as ThemeChoice};
 use crate::source::{self, SourceFile};
@@ -2077,7 +2077,7 @@ fn close_file(
 /// an object -- until now the app could open a binary and never let go of one. The unit
 /// is the **file** and never the object: an archive member is not something the reader
 /// opened, closing one member of 196 would leave a file half-present with no row able to
-/// say so, and `Project::binaries` is a list of paths, so half a file is not a thing the
+/// say so, and the saved `binaries` are a list of paths, so half a file is not a thing the
 /// session could even record. One path opened twice is therefore also one close: the
 /// objects list holds both copies, `Object::path` cannot tell them apart, and neither
 /// could the file it would be written to.
@@ -2101,8 +2101,8 @@ fn close_file(
 ///   is not tidiness: every entry is keyed by a [`Selection`], which holds the
 ///   `Arc<Object>` it points into, so one left behind would hold the file's bytes -- 331 MB
 ///   of them, for `viewer-sample` -- for as long as the app ran.
-/// - **`Project::binaries`** needs nothing here at all. It is derived from the objects by
-///   `Project::from_state`, so removing them removes the path, and `project::record` sees
+/// - **The saved `binaries`** need nothing here at all. They are derived from the objects
+///   by `project::binaries`, so removing them removes the path, and `project::record` sees
 ///   a *binaries* change and writes it to disk at once rather than marking it pending --
 ///   which is what `Goals.md` asks of a change the user made, and the first thing since
 ///   opening a file to take that path.
@@ -4382,7 +4382,7 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 /// the three `selection.set(..)` sites, the toolbar's `objects.write()`,
 /// `use_record_history`'s push and the two tab lists know nothing about persistence,
 /// and neither will any future one. The subscriptions *are* the `read()` calls, which
-/// is the whole of what makes adding a persisted field to `Project::from_state` also
+/// is the whole of what makes adding a persisted field to `Session::from_state` also
 /// add the state behind it to what wakes this.
 ///
 /// Whether a change reaches the disk now or at the next `use_periodic_save` tick is
@@ -4417,16 +4417,20 @@ fn use_save_on_change(
         // `record` call, and nothing here writes anything, so holding eight at once is
         // the safe half of the `peek`/`write` gotcha rather than the dangerous one.
         let shown = shown.read();
-        project::record(Project::from_state(
-            &objects.read(),
-            open.read().tabs(),
-            &asm_at.read(),
-            &selection.read(),
-            &history.read(),
-            files.read().tabs(),
-            &src_at.read(),
-            shown.as_deref(),
-        ));
+        let objects = objects.read();
+        project::record(
+            project::binaries(&objects),
+            Session::from_state(
+                &objects,
+                open.read().tabs(),
+                &asm_at.read(),
+                &selection.read(),
+                &history.read(),
+                files.read().tabs(),
+                &src_at.read(),
+                shown.as_deref(),
+            ),
+        );
     });
 }
 
@@ -4835,7 +4839,12 @@ fn navigate(
     }
 }
 
-/// Reopen the previous session's binaries, tabs and selection, once, at startup.
+/// Reopen the last project -- its binaries, tabs and selection -- once, at startup.
+///
+/// *Which* project that is, and what a project even is, is `project::reopen`'s: the app
+/// asks for the last one and is handed its two halves, or nothing. Nothing here knows
+/// where they came from, which is what keeps a project picker (`notes/Plan.md`, 8e) from
+/// having to reach into this hook.
 ///
 /// `use_hook` runs its initializer on mount and never again, which is what makes this
 /// happen exactly once; `spawn` is freya's own task spawner and is callable during
@@ -4845,11 +4854,11 @@ fn navigate(
 /// the result back over an `async_channel` -- so a large binary parses with the window
 /// already up and interactive.
 ///
-/// Every step degrades silently: no state file or a corrupt one is `None`, a path that
+/// Every step degrades silently: no project or an unreadable one is `None`, a path that
 /// no longer exists or no longer parses just contributes no `Object` (`open_files`
-/// swallows its own failures), `Project::resolve` falls back from a vanished symbol to
-/// its object and from a vanished object to nothing, and `Project::resolve_history` and
-/// `Project::resolve_tabs` drop what no longer points anywhere -- the history keeping
+/// swallows its own failures), `Session::resolve` falls back from a vanished symbol to
+/// its object and from a vanished object to nothing, and `Session::resolve_history` and
+/// `Session::resolve_tabs` drop what no longer points anywhere -- the history keeping
 /// its cursor on the right one.
 ///
 /// **Both strips are rebuilt through the functions that hold the app's invariants**,
@@ -4889,7 +4898,7 @@ fn use_restore_on_startup(
     shown: State<Option<Arc<str>>>,
 ) {
     use_hook(move || {
-        let Some(project) = Project::load() else {
+        let Some((project, session)) = project::reopen() else {
             return;
         };
         if project.binaries.is_empty() {
@@ -4922,9 +4931,9 @@ fn use_restore_on_startup(
             let (restored_history, restored_tabs, restored_selection) = {
                 let loaded = objects.read();
                 (
-                    project.resolve_history(&loaded),
-                    project.resolve_tabs(&loaded),
-                    project.resolve(&loaded),
+                    session.resolve_history(&loaded),
+                    session.resolve_tabs(&loaded),
+                    session.resolve(&loaded),
                 )
             };
 
@@ -4960,7 +4969,7 @@ fn use_restore_on_startup(
 
             // The Source pane's strip, which needs no resolving: a path that is gone is
             // still a tab, showing the pane's own "Source file not found".
-            let restored_sources = project.resolve_sources();
+            let restored_sources = session.resolve_sources();
             {
                 let mut at = src_at.write();
                 for (file, row) in &restored_sources {
@@ -4970,7 +4979,7 @@ fn use_restore_on_startup(
             for (file, _) in &restored_sources {
                 open_file(files, shown, file.clone());
             }
-            if let Some(file) = project.shown_source() {
+            if let Some(file) = session.shown_source() {
                 open_file(files, shown, Arc::from(file));
             }
         });

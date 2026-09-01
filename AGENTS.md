@@ -57,7 +57,7 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `crates/analysis/src/lib.rs` — object parsing, disassembly, relocation resolution.
 - `crates/analysis/src/line.rs` — DWARF line info, lazy. The only part that knows `gimli`/`addr2line`.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
-- `src/project.rs` — the persisted session (`project.toml`) and the save policy.
+- `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme choice.
 - `src/source.rs` — source files read off disk and cached by path, failures included.
 - `src/scratchpad.rs` — a scratchpad: the cargo package generated around one source file, and its build.
@@ -255,26 +255,61 @@ There is **no published version of this app yet**, so persisted formats need no 
 compatibility: a schema change is just a schema change, a stale file is ignored rather than
 migrated, and `#[serde(default)]` is added only when it earns its place on its own merits.
 
-The session is `project.toml` under `dirs::state_dir()` (falling back to `data_local_dir()`) +
-`assembly-viewer/`, written atomically via `.tmp` + rename. `Project` holds the opened `binaries`,
-the content area's open `tabs`, the `selection` and the `history`, all as **path + object name +
-symbol name + address**, never pointers; that mapping lives in exactly two places,
-`SavedSelection::from_selection` and `::resolve`. Beside them sit the Source pane's open
-`sources` — `String`s, since they are what the debug info said rather than paths this filesystem
-was asked about — and the `shown` index into them. Each open tab also carries **the row it was
-left at**: a `tabs` entry is a `SavedTab` (`row` + `selection`) and a `sources` entry a
-`SavedSource` (`row` + `path`), rather than either list having an array of rows beside it. The row
-travels with its tab because `resolve_tabs` *drops* the tabs that no longer resolve, which would
-shift every later row of a parallel array onto the wrong tab. It is a row and not a pixel offset
-so that a later `ROW_HEIGHT` (Step 9's fonts) does not move every saved position, and it is a
-hint and not a fact — `#[serde(default)]`, and clamped to what the tab holds *now* by
-`Positions::row`. **Field order within these structs is load-bearing**: TOML emits plain values
-before tables, so `binaries`/`shown` must precede `digests`/`selection`/`tabs`/`sources`/`history`,
-`SavedTab::row` must precede its `selection`, and `SavedHistory::cursor` its `entries`. Getting it
-wrong fails at *runtime*, not at compile time.
+Everything is written under `dirs::state_dir()` (falling back to `data_local_dir()`) +
+`assembly-viewer/`, atomically via `.tmp` + rename (one `write_atomically`, used by every file
+`project.rs` owns).
 
-`Project::digests` is the digest each binary had when the session was saved, keyed by path — a map
-beside `binaries` and not a field in it, because `binaries` is the list to *open* and a digest is
+**A project is a directory, and its id is that directory's name.** More than one exists;
+each is `projects/<id>/`, and `ProjectId` is a validated single path component — ASCII
+alphanumerics, `-` and `_`, first character alphanumeric — because it is interpolated into a
+path and is read back out of a file a user can edit. An **anonymous** project is one whose
+`name` key is simply *absent*, the way an unspecified font is in `settings.rs`; its id is the
+first free `project-N`, claimed by a `create_dir` that **fails rather than opens**, so the claim
+is one atomic operation rather than a listing followed by a race. It survives a restart because
+it is a directory, and it costs the user no decision. The `project-N` spelling carries no
+meaning: naming a project later does not move it. A project directory is created by the **first
+write that has something to say** (`open_project`, reached only from `record`/`flush`), so a run
+in which nothing was ever opened leaves nothing behind.
+
+**Each project is two files, and the line between them is the one the save policy already
+drew.** `project.toml` is what the user *said* — `name`, `directory`, `binaries` — and is written
+**at once**, because a binaries change is what `Saves` writes immediately. `session.toml` is what
+the app *noticed* — `shown`, `digests`, `selection`, `tabs`, `sources`, `history` — and is the
+file rewritten every thirty seconds. So the file a user might keep, copy or hand-edit is exactly
+the one that changes only when they do something. Three things follow, and they are why it is two
+files rather than two tables: a `session.toml` that will not parse loses a scroll position and
+not the list of binaries; the directory *is* the project, so a run killed between `create_dir` and
+the first write reopens as the empty project it is rather than being orphaned; and a binaries
+change writes **both**, so `session.toml` can never name a tab into a binary `project.toml` has
+already let go of.
+
+`recents.toml` sits above `projects/`, beside `settings.toml`: the ids, most recently opened
+first. **Which project to reopen is the first entry and not a field of its own** — a `last` beside
+the list would be a second answer the order already gives. It is an *order* and not an index of
+what exists (the directories are that), which is why `MAX_RECENTS` (50) is safe and why nothing
+prunes an id whose directory has gone: repairing it on load would write a file on a startup where
+the reader did nothing. `Recents::touch` answers whether anything moved, so reopening the project
+already at the front writes nothing. The recent-projects *view* is 8e's and will read each row's
+name out of that project's own `project.toml`, never out of this file.
+
+Inside those files, identity is **path + object name + symbol name + address**, never pointers;
+that mapping lives in exactly two places, `SavedSelection::from_selection` and `::resolve`. The
+Source pane's open `sources` are `String`s, since they are what the debug info said rather than
+paths this filesystem was asked about, with a `shown` index into them. Each open tab also carries
+**the row it was left at**: a `tabs` entry is a `SavedTab` (`row` + `selection`) and a `sources`
+entry a `SavedSource` (`row` + `path`), rather than either list having an array of rows beside it.
+The row travels with its tab because `resolve_tabs` *drops* the tabs that no longer resolve, which
+would shift every later row of a parallel array onto the wrong tab. It is a row and not a pixel
+offset so that a later `ROW_HEIGHT` (Step 9's fonts) does not move every saved position, and it is
+a hint and not a fact — `#[serde(default)]`, and clamped to what the tab holds *now* by
+`Positions::row`. **Field order within these structs is load-bearing**: TOML emits plain values
+before tables, so `shown` must precede `digests`/`selection`/`tabs`/`sources`/`history`, every
+field of `Project` is a plain value, `SavedTab::row` must precede its `selection`, and
+`SavedHistory::cursor` its `entries`. Getting it wrong fails at *runtime*, not at compile time,
+and a round trip through real TOML per struct is what holds it.
+
+`Session::digests` is the digest each binary had when the session was saved, keyed by path — in
+the *other* file from `binaries` and not a field beside them, because `binaries` is the list to *open* and a digest is
 what to *believe* afterwards. A mismatch is not an error, a dialog or a refusal: `Rebuilt` collects
 the paths whose digest no longer matches, and under one of those the **name is the identity and the
 address is only a tie-breaker** (a symbol that merely moved resolves, where an unchanged file drops
@@ -290,19 +325,28 @@ and a file-close go through, carrying the cursor to the last survivor at or befo
 `History::restored` also collapses duplicates and trims to the newest `MAX_ENTRIES` (200).
 
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
-two of the three things driving it sit outside the component tree. `record(project)` is called on
-every state change: a change to `binaries` writes **immediately**, carrying anything pending with
-it; a change to only the selection, a tab or the history marks it **pending** — a tab because it
-is expressed against the binaries rather than the other way round, costs one click to remake, and
-arrives on every navigation, `activate` opening one on the way to each selection change.
-`flush()` writes what is pending — on a 30s timer and from the window's close hook, which is the
-one exit hook freya 0.4 offers (`WindowConfig::with_on_close`, a `Send` callback that cannot read
-any `State`, which is exactly why the policy is a static). `Saves::written` starts as
-`Project::default()`, **not** as the project loaded at startup, so nothing is pending before
-something is actually opened — seeding it from the loaded project would write an empty project
-over a good one.
+two of the three things driving it sit outside the component tree. `record(binaries, session)` is
+called on every state change: a change to the `binaries` writes **both files immediately**; a
+change to only the session marks it **pending** — a tab because it is expressed against the
+binaries rather than the other way round, costs one click to remake, and arrives on every
+navigation, `activate` opening one on the way to each selection change. Nothing in `record` has to
+*say* which is which: which file a field lives in is what decides it. `flush()` writes the pending
+session — on a 30s timer and from the window's close hook, which is the one exit hook freya 0.4
+offers (`WindowConfig::with_on_close`, a `Send` callback that cannot read any `State`, which is
+exactly why the policy is a static).
 
-Both tab strips are restored, and **through the five functions that hold the invariants** rather
+Two things about the baselines. They start **empty** and pointedly not as the project loaded at
+startup, so nothing is pending before something is actually opened — seeding them from the loaded
+project would make the first comparison see the still-empty boot state as a change and write an
+empty project over a good one. But `Saves::given` — the loaded project's `name` and `directory` —
+*is* seeded by `reopen`, because it is the one thing no `record` can derive from what is on screen:
+nothing in the UI says what a project is called, so forgetting it would write it back as absent and
+erase it. `Saves` is where a rename will land (8e), and it is where the open `ProjectId` lives too;
+neither is a UI context because nothing renders from either yet.
+
+Startup reopens the **last project** — `project::reopen`, the front of `recents.toml`, both halves
+of it — and `use_restore_on_startup` knows nothing about where they came from, which is what keeps
+a project picker out of it. Both tab strips are then restored, and **through the five functions that hold the invariants** rather
 than by writing either list: `use_restore_on_startup` sets the history, `activate`s each content
 tab and then the selection, and `open_file`s each source file and then the shown one. Three
 orderings are load-bearing. Each strip's **rows go into its `Positions` map before its tabs are
@@ -316,13 +360,13 @@ on whatever it opens. A content tab that no longer resolves is **dropped**, like
 a source file is never resolved at all, so one that has been deleted comes back as a tab over the
 pane's own "Source file not found" rather than silently vanishing.
 
-**The settings are a second file, not a section of the first** (`src/settings.rs`, `settings.toml`
-beside `project.toml`, same directory, same atomic `.tmp` + rename, same "a missing, unreadable or
-corrupt file is simply the default"). This is the *user-given settings* half of the storage split
-`notes/Goals.md` asks for under *Projects*: the session is what the app **noticed** and changes on
-every click, a setting is what the user **said** and changes when they say so, so they have
-different rates, different save policies and different consequences when one of them will not
-parse. `Settings` is the theme choice (`Theme`: light, dark or follow the desktop) and a
+**The settings are a file of their own, above the projects** (`src/settings.rs`, `settings.toml`
+at the top of the state directory beside `recents.toml`, since a setting is the user's and not any
+one project's; same atomic `.tmp` + rename, same "a missing, unreadable or corrupt file is simply
+the default"). This was the first slice of the storage split `notes/Goals.md` asks for under
+*Projects*, and the same cut runs through each project: what the app **noticed** changes on every
+click, what the user **said** changes when they say so, so they have different rates, different
+save policies and different consequences when one of them will not parse. `Settings` is the theme choice (`Theme`: light, dark or follow the desktop) and a
 `FontSetting` — a family and a size — for each of the interface and fixed-width fonts. **Every
 field is an `Option` and `None` is a real third state**: "the user has not said, ask the desktop",
 which is neither an empty string nor the desktop's current answer copied into the file. An

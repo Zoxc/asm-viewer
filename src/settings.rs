@@ -7,7 +7,9 @@
 //! clicks; a setting is what the user *said*, it changes when they say so, and losing it
 //! is losing an instruction. They have different rates, different save policies (see
 //! [`Settings::save`]) and different consequences when the file is corrupt, so they are
-//! two files rather than two halves of one that a bad write takes down together.
+//! separate files rather than halves of one that a bad write takes down together. The rest
+//! of that split is `project.rs`'s, which cuts the session itself in two along the same
+//! line: what the user said about a project, and what the app noticed while they read it.
 //!
 //! Framework-free, exactly as `project.rs` is — no freya types — so it can move into a
 //! crate beside it later.
@@ -147,8 +149,10 @@ pub enum Appearance {
 }
 
 impl Settings {
-    /// The file the settings are stored in, beside the session's, or `None` on a system
-    /// with no state or local data directory to put it in.
+    /// The file the settings are stored in — at the top of the app's own state directory,
+    /// above the `projects/` the sessions live under, because a setting is the user's and
+    /// not any one project's — or `None` on a system with no state or local data directory
+    /// to put it in.
     pub fn path() -> Option<PathBuf> {
         let base = dirs::state_dir().or_else(dirs::data_local_dir)?;
         Some(base.join(APP_DIR).join(FILE_NAME))

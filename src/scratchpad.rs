@@ -420,7 +420,8 @@ impl Scratchpad {
     }
 }
 
-/// The directory scratchpads live in, beside `project.toml` and `settings.toml`.
+/// The directory scratchpads live in, beside `settings.toml` and the `projects/`
+/// directory.
 fn scratchpads() -> Option<PathBuf> {
     let base = dirs::state_dir().or_else(dirs::data_local_dir)?;
     Some(base.join(APP_DIR).join(SCRATCHPADS_DIR))

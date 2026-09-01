@@ -219,11 +219,21 @@ one item per part, so the unfinished half stays visible.
 
 - [x] Minimal project support: the previous session's binaries and selected symbol reopen when
   the app is rerun, for easier testing.
-- [ ] Have a project concept.
-- [ ] Anonymous projects — opening files without an explicit project — should be saved too, next
-  to the user / global settings. There can be multiple such anonymous projects.
-- [ ] Each project can have multiple binaries loaded.
-- [ ] Has an associated directory.
+- [x] Have a project concept. A project is a directory under `projects/<id>/`, and the
+  directory *is* the identity — not its files, not its given name, not its associated
+  directory. `ProjectId` is a validated single path component, checked on the way in from
+  disk too, so a hand-edited recents list cannot name `..`.
+- [x] Anonymous projects — opening files without an explicit project — should be saved too, next
+  to the user / global settings. There can be multiple such anonymous projects. Anonymous means
+  the `name` key is *absent*, the same real third state an unspecified font setting is. The id
+  is the first free `project-N`, claimed with a `create_dir` that fails rather than opens, so it
+  cannot collide with a directory already there or with a second copy of the app racing for it;
+  the spelling carries no meaning, and naming a project later does not move it. The directory is
+  created by the first write that has something to say, so a run in which nothing was opened
+  leaves nothing behind.
+- [x] Each project can have multiple binaries loaded.
+- [ ] Has an associated directory. The field is there and round-trips, but nothing sets it —
+  that needs somewhere to set it from, which is the project view below.
 - [x] Can have multiple tabs with different function assemblies / source files open. Within
   a session: the content area's strip holds the open functions and objects, the Source
   pane's holds the open files. They are carried across a restart by the "saves the open
@@ -259,9 +269,16 @@ one item per part, so the unfinished half stays visible.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [ ] A main view where you can see all project info.
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
-- [ ] Split project storage into toml? for user given settings and another file for opened tabs /
-  cached binary inspection data. Half done: the user-given settings are their own `settings.toml`
-  now. The session file still holds the opened tabs, and there is no cached inspection data yet.
+- [x] Split project storage into toml? for user given settings and another file for opened tabs /
+  cached binary inspection data. Three files now: `settings.toml` for the user's own preferences,
+  `projects/<id>/project.toml` for what the user *said* about a project (its name, its directory,
+  its binaries) and `projects/<id>/session.toml` for what the app *noticed* (tabs, sources, the
+  shown file, the selection, the history, the per-tab rows, the binary digests). The line is the
+  one the save policy already drew: the first is written the moment the user acts, the second on
+  the thirty-second flush — so the file worth keeping or hand-editing is exactly the one that
+  changes only when they do something. A corrupt session then costs a scroll position rather
+  than the list of binaries, and a binaries change writes both, so a session can never name a
+  tab into a binary the project has let go of.
 - [x] Save the navigation history.
 - [x] Opening binary files saves immediately.
 - [x] User project changes should save immediately. `project::record` writes at once when
@@ -274,8 +291,13 @@ one item per part, so the unfinished half stays visible.
 
 ## Startup
 
-- [ ] Reopen previous open project on startup.
-- [ ] Have a view of recent projects if none was open.
+- [x] Reopen previous open project on startup. `recents.toml` is an *order*, most recent first,
+  and the project to reopen is its first entry rather than a field of its own — the order already
+  answers that, and a second answer would be one to keep in step. The directories are what say
+  which projects exist, so the list needs no pruning.
+- [ ] Have a view of recent projects if none was open. The list is kept; the view is not built.
+  It should read each row's own `project.toml` for the name rather than have one copied into the
+  list, which would be a second copy to keep in step with the one the user edits.
 
 ## Fonts and settings
 
