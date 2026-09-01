@@ -6,9 +6,11 @@
 //! only a drag while the button is down — with no pixels in it and nothing about how the
 //! run is painted or copied.
 //!
-//! Why a *run* of rows rather than one row at a time: `notes/Plan.md` 7c establishes that
-//! freya's character selection wants one rope and one `paragraph()` per line, which the
-//! assembly listing is not, so the honest thing here is rows. Given that, a run is what a
+//! Why a *run* of rows rather than one row at a time: freya's character selection wants one
+//! rope and one `paragraph()` per line, which an assembly row — a gutter of rects, an
+//! address label and up to three elements, one of them a clickable relocation target — is
+//! not, so the honest thing here is rows. `notes/Goals.md` carries that as a `[D]` with the
+//! reasoning read out of the freya sources. Given that, a run is what a
 //! reader wants to paste — a basic block, a loop, the lines a bug is in — and it costs the
 //! two lists nothing, since they already work out per row what each row is.
 

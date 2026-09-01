@@ -116,7 +116,7 @@ impl Selection {
     /// A symbol answers for the file its *object* came out of, so a file takes the
     /// symbols in it with it. `path` is [`Object::path`] and never an object's name: an
     /// archive member is not something the reader opened, so the unit that closes is the
-    /// file, members and all (`notes/Plan.md`, 6d).
+    /// file, members and all.
     pub fn in_file(&self, path: &Path) -> bool {
         match self {
             Selection::None => false,
