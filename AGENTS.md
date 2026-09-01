@@ -64,7 +64,10 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 ## Layout
 
 - `crates/analysis/src/lib.rs` — object parsing, disassembly, relocation resolution.
-- `crates/analysis/src/line.rs` — DWARF line info, lazy. The only part that knows `gimli`/`addr2line`.
+- `crates/analysis/src/line.rs` — DWARF line info, lazy: an address range in, source rows out.
+  It and its one submodule are the only part that knows `gimli`/`addr2line`.
+- `crates/analysis/src/line/source.rs` — the same line info read the other way: a file and a
+  line, out to the symbols compiled from them.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
 - `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme choice.
@@ -256,6 +259,42 @@ load-bearing:
   literally and must be left alone, and an absolute relocation in a debug section is often an
   offset into another `.debug_*` section rather than an address. Hence `Object::line_info` takes a
   `&Section`: a bare range is not a question the crate can answer.
+
+**The reverse mapping is an index, and a whole-object one** (`line/source.rs`). "Which functions
+was this line compiled into" is not a question about one symbol, so it is not a query but a table:
+built on the **first source question against an object** and never before one, behind a `OnceLock`
+beside the two `Mutex`es, and empty rather than absent if building it panics. It is what Step 1d's
+source-driven tab, Step 4's find-all and Step 5's instance picker each need, and it is the whole of
+what the crate owes them — *where inside* a symbol the line's code sits is the forward direction's
+question and is already answered, so a caller walks index → symbol → `line_info` → rows and there is
+one definition of "this line's rows" rather than two that can drift.
+
+The build is one pass and its **order is load-bearing**: every symbol's extent is taken *first*,
+before the context's lock is held, because `SymbolData::extent` reaches `Dwarf::extent_inner`, which
+takes that same lock, and a `Mutex` is not reentrant — computing an extent inside the row loop
+deadlocks the first object anyone asks. Then one `find_location_range(0, u64::MAX)` over the whole
+address space (safe where `subprogram_extent` had to decline `u64::MAX`: that unchecked `probe + 1`
+is in `find_units`, and this goes through `find_units_range`), with each row attributed to the
+symbols its addresses fall in. Addresses stay **biased** throughout, so the section bias that tells
+two functions at address 0 apart is applied once and never undone. The extent used is
+`SymbolData::extent` and not the next-symbol estimate: the index and `SymbolData::line_info` then
+cannot disagree about what a symbol covers, which is the invariant a caller walking index → symbol →
+rows depends on and the one a test asserts over every fixture, the two committed gcc objects
+included. **A file is matched exactly**, on the string `addr2line` renders — which is by
+construction the string `LineInfo::files` spells, so a name out of the forward direction can be
+handed straight back. Nothing here normalises a path or asks the filesystem about one; two objects
+whose `DW_AT_comp_dir` disagree do not join, and that is a cross-object question for whoever asks
+one.
+
+Measured, release, first ask: `viewer-sample` 2.2 s — **2.0 s of it the extent pass** and 0.23 s the
+line-program walk — for 2 096 files and 624 544 `(line, symbol)` pairs, 10 MB of them, taking the
+process from 756 MB to 1.23 GB with the parsed line programs held; `libanalysis-sample.rlib` 94 ms
+for all 196 objects, 862 files, 25 870 pairs. Every ask afterwards is two binary searches (5 µs).
+The extent pass being nine tenths of it is the price of that agreement, and it is a DIE walk of the
+whole object — the cheap alternative, attributing by `estimate_size`, is one binary search per row
+and lets the index name a symbol whose own line info does not name the line back. One line into many
+symbols is not theoretical: `core/src/ptr/mod.rs:848`, `drop_in_place`, answers with **9 374** of
+`viewer-sample`'s symbols.
 
 `without_panicking` (a `catch_unwind`) wraps the context build and every query, for two known
 reachable bugs, both unchecked arithmetic in `addr2line` 0.21 on numbers a `.debug_*` section

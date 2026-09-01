@@ -6,6 +6,11 @@
 //! than borrows of [`ObjectData`](crate::ObjectData), so the context owns its data and
 //! [`Object`] does not become self-referential. Those `Arc`s are separate allocations: a
 //! section may be compressed, and every one is relocated in place (see [`relocate`]).
+//!
+//! This file is the forward direction — an address range in, source rows out. The reverse —
+//! a file and a line, out to the symbols compiled from them — is [`source`], a file of its
+//! own because it is a whole-object index rather than a query, sharing this one's [`Dwarf`],
+//! its biases and its guard.
 
 use crate::{section_data, Object, Section, SymbolData};
 use gimli::{EndianArcSlice, RunTimeEndian};
@@ -16,6 +21,10 @@ use object::{
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock};
+
+mod source;
+
+use source::SourceIndex;
 
 type Reader = EndianArcSlice<RunTimeEndian>;
 
@@ -39,6 +48,12 @@ pub(crate) struct Dwarf {
     /// `DW_TAG_subprogram` in it, keyed by the unit's `.debug_info` offset and then by the
     /// subprogram's `DW_AT_low_pc`. Both keys are in the biased address space.
     extents: Mutex<HashMap<u64, HashMap<u64, u64>>>,
+
+    /// The line info inverted — file and line to the symbols compiled from it — built whole
+    /// on the first source question and never before one. A `OnceLock` and not a `Mutex`
+    /// like the two above, because unlike them it is not filled in a unit at a time: see
+    /// [`source`].
+    index: OnceLock<SourceIndex>,
 }
 
 impl Dwarf {
@@ -70,6 +85,7 @@ impl Dwarf {
             context: Mutex::new(addr2line::Context::from_dwarf(dwarf).ok()?),
             biases,
             extents: Mutex::default(),
+            index: OnceLock::new(),
         })
     }
 

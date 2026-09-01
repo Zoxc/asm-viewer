@@ -333,6 +333,65 @@ fn a_real_loop_is_two_edges_and_the_call_between_them_is_none() {
     }
 }
 
+/// The reverse mapping over DWARF a compiler actually emitted. `SPLIT` is the case that
+/// matters: all three functions begin at address 0, so which symbol a line belongs to is
+/// answered by the section bias and by nothing else — and the reverse direction is where an
+/// address is the answer rather than the question.
+#[test]
+fn a_source_line_names_the_function_it_was_compiled_into() {
+    for name in [FLAT, SPLIT] {
+        let object = parse(name);
+        let found = |line: u32| {
+            object
+                .symbols_at_line(SOURCE, line)
+                .iter()
+                .map(|symbol| symbol.name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(found(23), ["add"], "{name}"); // return a + b;
+        assert_eq!(found(28), ["twice"], "{name}"); // return add(n, n);
+                                                    // Three rows of `sum_to`'s loop are line 35, and three rows are one answer.
+        assert_eq!(found(35), ["sum_to"], "{name}");
+
+        // A line of the file that produced no code: the licence header, a blank line, and
+        // one past the end of the file.
+        for line in [1, 20, 25, 1000] {
+            assert!(found(line).is_empty(), "{name}: line {line}");
+        }
+        // The file under any other spelling is a file this object does not name.
+        assert!(
+            object.symbols_at_line("line_fixture.c", 23).is_empty(),
+            "{name}"
+        );
+    }
+}
+
+/// The invariant Step 4 walks — index → symbols → `line_info` → ranges — over the only DWARF
+/// in the suite nobody here wrote: every line the forward direction gives a function answers
+/// with that function again.
+#[test]
+fn every_line_a_function_names_finds_that_function_again() {
+    for name in [FLAT, SPLIT] {
+        let object = parse(name);
+        for function in ["add", "twice", "sum_to"] {
+            let symbol = symbol(&object, function);
+            let info = line_info(&object, function);
+            for row in info.rows() {
+                let (Some(file), Some(line)) = (info.file_of(row), row.line) else {
+                    continue;
+                };
+                let back = object.symbols_at_line(file, line);
+                assert!(
+                    back.iter().any(|found| Arc::ptr_eq(found, &symbol)),
+                    "{name}: {file}:{line} is in {function} but answers with {:?}",
+                    back.iter().map(|s| &s.name).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
+
 /// The line numbers above can only go wrong one way: somebody edits the `.c` and does not
 /// rebuild the `.o`. Reading the source back turns that into a failure here rather than a
 /// puzzle later.
