@@ -143,19 +143,25 @@ pub(crate) fn on_listing_key(
 }
 
 /// Drop a pane's picked-out rows when the listing they index into is replaced: the
-/// assembly pane's when the selection moves to another symbol, the source pane's when
-/// another file is shown.
+/// assembly pane's when another question is asked, the source pane's when another file is
+/// shown.
 ///
 /// At the root and keyed on the states that say *which listing*, **never on the listings
 /// themselves**: `AsmData` carries an `Arc<Lanes>` rebuilt every render, so an effect
 /// inside each list would fire on every render and wipe the run the press just started.
 pub(crate) fn use_clear_marks(
     active: Memo<Option<Document>>,
+    asked: Asked,
     analysis: State<Analyzed>,
     marked: State<Option<Marks>>,
 ) {
+    // The **question** and not the active document: a source-driven tab's listing is
+    // replaced when a line in it is clicked, which changes no document, and a run picked
+    // out of the last line's function would survive into the next one's as raw row
+    // indices. Every document change that can have a run under it changes the question
+    // too, so this is a superset of what it was.
     use_side_effect(move || {
-        let _ = active.read();
+        let _ = asked.read_ask();
         unmark(marked, Pane::Assembly);
     });
     // Which file the Source pane was drawing the last time this ran. An `Rc<RefCell>`

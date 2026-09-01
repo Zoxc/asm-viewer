@@ -304,6 +304,7 @@ impl Component for DocumentHeader {
         let history = use_consume::<Hist>().0;
         let asm_at = use_consume::<AsmAt>().0;
         let src_at = use_consume::<SrcAt>().0;
+        let driven = use_consume::<Drives>().0;
 
         // Not reachable -- a tab and its table entry are closed together -- but a render
         // is no place to panic.
@@ -318,7 +319,7 @@ impl Component for DocumentHeader {
             entry_tooltip(&document),
             self.active,
             hovering,
-            move |_| close_tab(open, history, asm_at, src_at, &closed),
+            move |_| close_tab(open, history, asm_at, src_at, driven, &closed),
         )
         .into_element()
     }

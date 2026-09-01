@@ -27,6 +27,7 @@ pub(crate) use analysis::{
     SymbolData,
 };
 
+pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs};
 pub(crate) use crate::filter::{Filter, Matcher};
 pub(crate) use crate::fonts::{self, Font, Fonts};
@@ -42,7 +43,7 @@ pub(crate) use crate::scratchpad::{
 };
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 pub(crate) use crate::source::{self, SourceFile};
-pub(crate) use crate::tabs::{self, Positions};
+pub(crate) use crate::tabs::{self, Driven, Positions};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
@@ -177,6 +178,7 @@ pub fn app() -> impl IntoElement {
     });
     let asm_at = use_provide_context(|| AsmAt(State::create(Positions::default()))).0;
     let src_at = use_provide_context(|| SrcAt(State::create(Positions::default()))).0;
+    let driven = use_provide_context(|| Drives(State::create(Driven::default()))).0;
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     let focused = use_provide_context(|| Focused(State::create(None))).0;
     let pinned = use_provide_context(|| Pinned(State::create(None))).0;
@@ -190,6 +192,7 @@ pub fn app() -> impl IntoElement {
         open,
         asm_at,
         src_at,
+        driven,
         history,
     };
     use_save_on_change(states);
@@ -216,9 +219,12 @@ pub fn app() -> impl IntoElement {
     use_provide_context(move || Symbols(symbols));
 
     let analysis = use_provide_context(|| Analysis(State::create(Analyzed::default()))).0;
-    use_analysis_with(active, analysis, Studied::new);
+    // The question and not the active document: a source-driven tab's assembly side
+    // changes when a line in it is clicked, which changes no document.
+    let asked = Asked { active, driven };
+    use_analysis_with(asked, objects, history, analysis, answer);
     // After the analysis: the file the Source pane draws is what the analysis says it is.
-    use_clear_marks(active, analysis, marked);
+    use_clear_marks(active, asked, analysis, marked);
 
     // At the root rather than in the view: an inactive dock tab is unmounted, and a
     // buffer being typed into cannot live there.

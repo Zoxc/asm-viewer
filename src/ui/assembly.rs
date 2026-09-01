@@ -454,10 +454,16 @@ impl Component for InstructionRow {
 #[derive(Clone)]
 struct InstructionList {
     assembly: Arc<Assembly>,
-    /// The whole symbol and not just its object, because these rows answer to a *tab* as
-    /// well as to a disassembly: `Document::Assembly(Selection::Symbol(symbol))` is the
-    /// key its viewing position is kept under.
+    /// The whole symbol and not just its object, because these rows draw a disassembly
+    /// *and* answer to it -- a relocation label navigates to a symbol in the same object.
     symbol: Symbol,
+    /// The question this listing answers, and **not** the one being asked: while the
+    /// worker catches up the pane is still drawing the listing being left. Two things
+    /// come out of it -- [`asked_of`], the tab whose viewing position this is (the file's
+    /// tab for a source-driven one, never the resolved symbol's, which is very likely not
+    /// open at all), and the line a source-driven tab is driven from, which lights its
+    /// rows when nothing is pinned.
+    asked: Ask,
     lanes: Arc<Lanes>,
     lines: SymbolLines,
 }
@@ -466,6 +472,7 @@ impl PartialEq for InstructionList {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.assembly, &other.assembly)
             && self.symbol == other.symbol
+            && self.asked == other.asked
             && Arc::ptr_eq(&self.lanes, &other.lanes)
             && self.lines == other.lines
     }
@@ -482,7 +489,18 @@ impl Component for InstructionList {
             .as_ref()
             .map(|focus| focus.at.clone());
         let pinned = use_consume::<Pinned>().0;
-        let pin = pinned.read().as_ref().map(|pin| pin.at.clone());
+        // The pin, falling back to the line this listing was asked for. In a
+        // source-driven tab those are the same thing until `use_clear_focus` drops the
+        // pin with the tab, and coming back to a listing with nothing lit and no reason
+        // given is worse than lighting the line it is of.
+        let pin = pinned
+            .read()
+            .as_ref()
+            .map(|pin| pin.at.clone())
+            .or(match &self.asked {
+                Ask::Source(at) => Some(at.clone()),
+                Ask::Symbol(_) => None,
+            });
         let marked = use_consume::<Marked>().0;
         let rows = marked_rows(marked, Pane::Assembly);
         // The box the keyboard reaches this pane through: a `pointer_down` anywhere inside
@@ -515,7 +533,7 @@ impl Component for InstructionList {
             use_consume::<AsmAt>().0,
             move |document: &Document| docs.peek().id_of(document).is_some(),
             controller,
-            &Document::Assembly(Selection::Symbol(self.symbol.clone())),
+            &asked_of(&self.asked),
             length,
         );
         let touching = hover()
@@ -537,19 +555,23 @@ impl Component for InstructionList {
         // once per symbol; `use_side_effect`'s callback is built by a `use_hook` and would
         // otherwise still be holding the first symbol ever selected.
         use_side_effect_with_deps(&data, move |data: &AsmData| {
-            let Some(at) = take_reveal(pinned, Pane::Assembly) else {
+            let Some(at) = owed_reveal(pinned, Pane::Assembly) else {
                 return;
             };
 
             // Nothing at all when the line produced no instruction here -- one the
-            // optimiser folded away, or one belonging to another function. Scrolling
-            // somewhere arbitrary would be worse than not scrolling.
+            // optimiser folded away, or one belonging to another function, or, in a
+            // source-driven tab, the listing this very click is asking for not having
+            // arrived yet. Scrolling somewhere arbitrary would be worse than not
+            // scrolling, and **the request is left owed**, so the listing that can answer
+            // it still finds it.
             let Some(index) = (0..data.assembly.instructions.len())
                 .find(|&index| data.position(index).as_ref() == Some(&at))
             else {
                 return;
             };
 
+            reveal_made(pinned, Pane::Assembly);
             reveal_row(&mut controller, viewport(), index);
         });
 
@@ -600,9 +622,9 @@ impl Component for InstructionList {
 ///
 /// It reads the analysis and not the active document for everything it draws, which keeps
 /// the listing and the rows in step: while the worker is catching up the two disagree, and
-/// it is the analysis that says which symbol is actually in hand. The one thing it asks the
-/// document is what *kind* of tab this is: a source-driven one has no symbol to show yet,
-/// and draws nothing rather than the analysis' answer for another tab.
+/// it is the analysis that says which symbol is actually in hand. The one thing it asks
+/// the document is the word for having been asked nothing, which differs by the kind of
+/// tab -- a source-driven one is waiting for a line to be clicked in it.
 #[derive(Clone)]
 pub(crate) struct AssemblyPane {
     pub(crate) document: Document,
@@ -616,19 +638,13 @@ impl PartialEq for AssemblyPane {
 
 impl Component for AssemblyPane {
     fn render(&self) -> impl IntoElement {
-        let analysis = use_consume::<Analysis>().0;
-
-        let source_driven = matches!(self.document, Document::Source(_));
-        if source_driven {
-            return rect().expanded().background(palette().asm_pane_bg).into();
-        }
-
-        let analysis = analysis.read().clone();
-        let studied = match analysis.showing() {
-            Showing::Listing(studied) => studied,
+        let analysis = use_consume::<Analysis>().0.read().clone();
+        let shown = match analysis.showing(&self.document) {
+            Showing::Listing(shown) => shown,
             Showing::Message(text) => return placeholder(text),
             Showing::Nothing => return rect().expanded().background(palette().asm_pane_bg).into(),
         };
+        let studied = &shown.studied;
         let Some(assembly) = studied.assembly.clone() else {
             return rect()
                 .padding(5.0)
@@ -650,6 +666,8 @@ impl Component for AssemblyPane {
             .child(InstructionList {
                 assembly,
                 symbol: studied.symbol.clone(),
+                // The question the *drawn* answer answers, never the one being asked.
+                asked: shown.ask.clone(),
                 lanes: studied.lanes.clone(),
                 lines: studied.lines.clone(),
             })

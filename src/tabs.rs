@@ -1,7 +1,10 @@
-//! The two rules that go with a strip of open tabs, and no strip.
+//! The three rules that go with a strip of open tabs, and no strip.
 //!
-//! [`landing`] is the rule a close obeys; [`Positions`] is where each tab was left. Both
+//! [`landing`] is the rule a close obeys, [`Positions`] is where each tab was left, and
+//! [`Driven`] is which source line a source-driven tab's assembly side follows. All three
 //! are framework-free, so they are unit-tested without mounting a UI.
+
+use crate::project::Document;
 
 /// The tab to show in place of `showing` once every tab `closing` answers true for is
 /// gone: the one that moves into its place, else the last survivor, else `None`.
@@ -91,6 +94,46 @@ impl<T: Clone + PartialEq> Positions<T> {
     /// takes with it.
     pub fn forgetting(&mut self, keep: impl Fn(&T) -> bool) {
         self.at.retain(|(open, _)| keep(open));
+    }
+}
+
+/// Which source line each source-driven tab's assembly side is driven from.
+///
+/// [`Positions`]-shaped and deliberately not [`Positions`] itself: that type's
+/// [`row`](Positions::row) clamps a saved row against the listing that is there *now*,
+/// which is a rows-only answer and would have to grow a meaningless one for lines.
+///
+/// The value is a line and not the symbol it resolves to, so this holds no `Arc<Object>`:
+/// a driven line survives its binary being closed, and the next ask simply answers out of
+/// whatever is still open. Lines are 1-based, as DWARF's are.
+#[derive(Default)]
+pub struct Driven {
+    from: Vec<(Document, u32)>,
+}
+
+impl Driven {
+    /// The line `tab` is driven from, or `None` for a tab nothing has been clicked in —
+    /// which is a source-driven tab whose assembly side is still empty.
+    pub fn line(&self, tab: &Document) -> Option<u32> {
+        self.from
+            .iter()
+            .find(|(open, _)| open == tab)
+            .map(|(_, line)| *line)
+    }
+
+    /// Drive `tab` from `line`, in place of whatever it was driven from before.
+    pub fn remember(&mut self, tab: Document, line: u32) {
+        match self.from.iter_mut().find(|(open, _)| *open == tab) {
+            Some((_, from)) => *from = line,
+            None => self.from.push((tab, line)),
+        }
+    }
+
+    /// Forget what `tab` was driven from, because it is no longer open. Consistency and
+    /// not [`Positions::forget`]'s reason: a [`Document::Source`] key holds no
+    /// `Arc<Object>`, so nothing is being held up here.
+    pub fn forget(&mut self, tab: &Document) {
+        self.from.retain(|(open, _)| open != tab);
     }
 }
 

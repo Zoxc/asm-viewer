@@ -73,26 +73,36 @@ pub(crate) struct Pin {
 #[derive(Clone, Copy)]
 pub(crate) struct Pinned(pub(crate) State<Option<Pin>>);
 
-/// Take the request `pane` is owed, if it is owed one.
+/// The position `pane` still owes a scroll to, if it is owed one.
 ///
-/// **This removes the request** -- the pin itself stays, only `reveal` is cleared -- so it
-/// is answered exactly once and a repeat click is a second request.
-pub(crate) fn take_reveal(mut pinned: State<Option<Pin>>, pane: Pane) -> Option<LinePos> {
-    let at = {
-        // `read` and not `peek`: this is the subscription that wakes the caller's effect
-        // on the next click, so it has to happen before any early return.
-        let pin = pinned.read();
-        match pin.as_ref() {
-            Some(pin) if pin.reveal == Some(pane) => pin.at.clone(),
-            _ => return None,
-        }
-    };
+/// **A look and not a take.** The click that pins is, in a source-driven tab, the click
+/// that asks for the listing, so the run this wakes is still holding the *previous* one,
+/// in which no row matches. Consuming the request there would spend it on a listing that
+/// cannot answer it and the one that can would arrive to nothing owed. So the field is
+/// left meaning what it says -- the pane owes the scroll until it has made it -- and
+/// [`reveal_made`] is what clears it. A request nothing ever matches stays owed until the
+/// next click replaces it or [`use_clear_focus`] drops it with the tab.
+pub(crate) fn owed_reveal(pinned: State<Option<Pin>>, pane: Pane) -> Option<LinePos> {
+    // `read` and not `peek`: this is the subscription that wakes the caller's effect on
+    // the next click, so it has to happen before any early return.
+    let pin = pinned.read();
+    match pin.as_ref() {
+        Some(pin) if pin.reveal == Some(pane) => Some(pin.at.clone()),
+        _ => None,
+    }
+}
+
+/// Say that `pane` has made the scroll it was owed. The pin itself stays, only `reveal`
+/// is cleared, so it is answered exactly once and a repeat click is a second request.
+pub(crate) fn reveal_made(mut pinned: State<Option<Pin>>, pane: Pane) {
+    let owed = matches!(pinned.peek().as_ref(), Some(pin) if pin.reveal == Some(pane));
+    if !owed {
+        return;
+    }
 
     if let Some(pin) = pinned.write().as_mut() {
         pin.reveal = None;
     }
-
-    Some(at)
 }
 
 /// Bring the row at `index` into view, and leave the scroll alone when it already is.

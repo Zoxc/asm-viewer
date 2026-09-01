@@ -1,35 +1,185 @@
-//! The analysis worker `use_analysis` owns, the `Studied` it hands over, and the
-//! `Analyzed` the panes draw out of while it works.
+//! The analysis worker `use_analysis` owns, the question it is asked, the `Studied` it
+//! hands over, and the `Analyzed` the panes draw out of while it works.
 
 use super::*;
 
-/// Everything the analysis crate has to say about the selected symbol, shared through
-/// context.
+/// Everything the analysis crate has to say about what the panes are drawing, shared
+/// through context.
 #[derive(Clone, Copy)]
 pub(crate) struct Analysis(pub(crate) State<Analyzed>);
+
+/// What the panes are being asked to draw.
+///
+/// Two kinds because a tab has two: an assembly-driven one names its symbol outright,
+/// while a source-driven one names a line and the symbol is whatever that line was
+/// compiled into. Equality is still identity, but of two kinds -- [`Ask::Symbol`] by the
+/// `Arc` pointers [`Symbol`] compares, [`Ask::Source`] by [`LinePos`], which is the one
+/// `Arc` in the UI compared by its text.
+#[derive(Clone, PartialEq)]
+pub(crate) enum Ask {
+    Symbol(Symbol),
+    Source(LinePos),
+}
+
+/// The tab an answer to `ask` belongs to. One definition, used by the pane that keeps its
+/// row, by the run of rows a listing change drops, and by the rule that decides whether a
+/// question naming no symbol may leave the listing that is up.
+pub(crate) fn asked_of(ask: &Ask) -> Document {
+    match ask {
+        Ask::Symbol(symbol) => Document::Assembly(Selection::Symbol(symbol.clone())),
+        Ask::Source(at) => Document::Source(at.file.clone()),
+    }
+}
+
+/// What the panes are being asked to draw for `active`: the symbol an assembly-driven tab
+/// names, or the symbol the line a source-driven tab is driven from was compiled into.
+///
+/// `None` for an object (which is not a place with a listing), for a tab that is not a
+/// document, and for a source-driven tab nothing has been clicked in yet.
+pub(crate) fn ask(active: Option<&Document>, driven: &Driven) -> Option<Ask> {
+    match active? {
+        Document::Assembly(Selection::Symbol(symbol)) => Some(Ask::Symbol(symbol.clone())),
+        Document::Assembly(Selection::Object(_)) => None,
+        document @ Document::Source(file) => driven.line(document).map(|line| {
+            Ask::Source(LinePos {
+                file: file.clone(),
+                line,
+            })
+        }),
+    }
+}
+
+/// One job for the worker, and everything answering it needs.
+///
+/// `objects` and `recent` travel with the job because a worker thread can read no UI
+/// state. They are **not** the question: two asks that differ only in what was open are
+/// the same question asked twice, which is why [`Ask`] and not this is what supersession
+/// compares.
+pub(crate) enum Question {
+    Study(Symbol),
+    Resolve {
+        at: LinePos,
+        objects: Vec<Arc<Object>>,
+        /// Where the reader has been, newest first, with the symbol on screen at its
+        /// head. See [`compiled::pick`].
+        recent: Vec<Symbol>,
+    },
+}
+
+/// What the worker sends back: the question, and what it came to.
+///
+/// `studied` is `None` only for a source line no open object holds code from -- the one
+/// question that can name no symbol at all.
+pub(crate) struct Answer {
+    pub(crate) ask: Ask,
+    pub(crate) studied: Option<Studied>,
+}
+
+/// The expensive work, and the one definition of what an answer is: a third kind of
+/// question cannot grow a second `Studied::new` call site. Touches no UI state, which is
+/// what lets it run on a plain `std::thread`.
+pub(crate) fn answer(question: Question) -> Answer {
+    match question {
+        Question::Study(symbol) => Answer {
+            ask: Ask::Symbol(symbol.clone()),
+            studied: Some(Studied::new(symbol)),
+        },
+        Question::Resolve {
+            at,
+            objects,
+            recent,
+        } => {
+            let candidates = compiled::compiled_from(&objects, &at.file, at.line);
+            let studied = compiled::pick(&candidates, &recent).map(Studied::new);
+            Answer {
+                ask: Ask::Source(at),
+                studied,
+            }
+        }
+    }
+}
+
+/// A listing, and the question it was worked out for.
+#[derive(Clone)]
+pub(crate) struct Shown {
+    pub(crate) ask: Ask,
+    pub(crate) studied: Studied,
+}
+
+impl PartialEq for Shown {
+    fn eq(&self, other: &Self) -> bool {
+        self.ask == other.ask && self.studied == other.studied
+    }
+}
+
+impl Shown {
+    /// Whether this listing is an answer to `ask` as well as to the one it was worked out
+    /// for. It is what keeps "the answer for the first A of an A -> B -> A is a good
+    /// answer for the third" true across the two kinds: a source line that resolved to a
+    /// symbol has already answered a later ask for that symbol outright, and
+    /// re-disassembling it would be most of a second for nothing.
+    /// Whether the object this listing points into is still open.
+    ///
+    /// **The one thing in the analysis that can outlive the document that named it.** A
+    /// symbol question is a tab into one object and that tab closes with its file, so the
+    /// ordinary change of active document has always taken care of it -- which is why
+    /// nothing here needed asking before a source question could name a symbol. A
+    /// source-driven tab survives a binary close by doctrine, so its answer would go on
+    /// being drawn, and a [`Studied`] holds a [`Symbol`] holds the `Arc<Object>` holds
+    /// the whole file's bytes: `Positions::forget`'s leak in a second place.
+    ///
+    /// Asked in the two places an answer is judged: by the effect, so a closed binary is
+    /// a question asked again out of what is left, and by the task taking answers, so the
+    /// one already in flight when the file closed is not taken either.
+    fn still_open(&self, objects: &[Arc<Object>]) -> bool {
+        match self.ask {
+            Ask::Symbol(_) => true,
+            Ask::Source(_) => objects
+                .iter()
+                .any(|object| Arc::ptr_eq(object, &self.studied.symbol.object)),
+        }
+    }
+
+    fn answers(&self, ask: &Ask) -> bool {
+        match ask {
+            Ask::Symbol(symbol) => self.studied.symbol == *symbol,
+            Ask::Source(_) => self.ask == *ask,
+        }
+    }
+}
 
 /// What the two panes are drawing, and what is being worked out for them.
 #[derive(Clone, Default)]
 pub(crate) struct Analyzed {
-    /// The symbol the panes are drawing: the selected one once the worker has caught up,
-    /// and the one selected *before* it while it has not.
-    pub(crate) shown: Option<Studied>,
-    /// The symbol the worker is working on, or `None` when it is idle -- which is what
-    /// tells the two ways `shown` can be `None` apart: nothing selected, and nothing yet.
-    pub(crate) pending: Option<Symbol>,
+    /// The listing the panes draw, and the question it answers. Replaced by the next
+    /// listing and never by a blank, so its question can be older than `answered`.
+    pub(crate) shown: Option<Shown>,
+    /// The last question answered, whatever it answered *with*. What stops the effect
+    /// asking one question twice, and the one thing a listing cannot say for itself: a
+    /// source line no object holds code from leaves the listing that is up and is
+    /// recorded only here.
+    pub(crate) answered: Option<Ask>,
+    /// The question the worker is working on, or `None` when it is idle -- which is what
+    /// tells the two ways `shown` can be `None` apart: nothing asked, and nothing yet.
+    pub(crate) pending: Option<Ask>,
     /// Whether `pending` has been outstanding for [`SLOW_ANALYSIS`].
     pub(crate) slow: bool,
 }
 
 impl PartialEq for Analyzed {
     fn eq(&self, other: &Self) -> bool {
-        self.shown == other.shown && self.pending == other.pending && self.slow == other.slow
+        self.shown == other.shown
+            && self.answered == other.answered
+            && self.pending == other.pending
+            && self.slow == other.slow
     }
 }
 
 /// What a pane draws, which is one decision and not two panes' worth of `if`s.
 pub(crate) enum Showing<'a> {
-    Listing(&'a Studied),
+    /// The listing and the question it answers: a pane needs both, the question being
+    /// what says which tab the listing belongs to.
+    Listing(&'a Shown),
     /// Nothing to draw and a word for why.
     Message(&'static str),
     /// A wait too short to name, with no previous listing to leave up.
@@ -37,17 +187,28 @@ pub(crate) enum Showing<'a> {
 }
 
 impl Analyzed {
-    /// What the panes draw, one answer for both of them.
+    /// What the panes draw, one answer for both of them. The **document** and not a word
+    /// from the caller, so that this stays the one place either pane decides what it is
+    /// drawing.
     ///
     /// **The order of the arms is the mechanism**: a listing beats a short wait, so a
     /// click never flashes the pane empty; a wait past [`SLOW_ANALYSIS`] beats the stale
-    /// listing, so the previous function is not left up under the next one's tab.
-    pub(crate) fn showing(&self) -> Showing<'_> {
+    /// listing, so the previous function is not left up under the next one's tab; and a
+    /// wait beats a question that named nothing, because a stale *listing* is doctrine
+    /// and a stale *sentence* is not.
+    pub(crate) fn showing(&self, document: &Document) -> Showing<'_> {
         match (&self.shown, &self.pending, self.slow) {
             (_, Some(_), true) => Showing::Message("Analysing..."),
             (Some(shown), _, _) => Showing::Listing(shown),
             (None, Some(_), false) => Showing::Nothing,
-            (None, None, _) => Showing::Message("No symbol selected"),
+            // Asked, and answered with no symbol at all. Only a source line can.
+            (None, None, _) if self.answered.is_some() => {
+                Showing::Message("No code compiled from this line")
+            }
+            (None, None, _) => Showing::Message(match document {
+                Document::Assembly(_) => "No symbol selected",
+                Document::Source(_) => "Click a source line",
+            }),
         }
     }
 }
@@ -56,8 +217,7 @@ impl Analyzed {
 /// go.
 #[derive(Clone)]
 pub(crate) struct Studied {
-    /// Which symbol this is the analysis of. It travels with the answer, which is what
-    /// the supersession check in [`use_analysis_with`] compares against.
+    /// Which symbol this is the analysis of.
     pub(crate) symbol: Symbol,
     /// [`None`] for a symbol with no bytes to decode at all; the pane says so.
     pub(crate) assembly: Option<Arc<Assembly>>,
@@ -81,8 +241,7 @@ impl PartialEq for Studied {
 }
 
 impl Studied {
-    /// The expensive work: decoding the symbol and building the object's DWARF context.
-    /// Touches no UI state, which is what lets it run on a plain `std::thread`.
+    /// Decode the symbol and build the object's DWARF context.
     pub(crate) fn new(symbol: Symbol) -> Studied {
         let assembly = symbol.data.assembly(&symbol.object);
         let lanes = Arc::new(match &assembly {
@@ -140,67 +299,104 @@ impl SymbolLines {
     }
 }
 
-/// What [`use_analysis_with`] needs of the active document: a **read**, which subscribes
-/// the effect to it, and a **peek**, which does not -- the effect must wake on a change of
-/// document and must not wake on its own writes, so the two cannot collapse into one.
+/// What [`use_analysis_with`] needs of the question: a **read**, which subscribes the
+/// effect to it, and a **peek**, which does not -- the effect must wake on a change of
+/// question and must not wake on its own writes, so the two cannot collapse into one.
 ///
-/// A trait so the hook can be driven by the [`Active`] memo in the app and by a plain
-/// state in the tests.
-pub(crate) trait ReadsActive: Copy + 'static {
-    fn read_active(self) -> Option<Document>;
-    fn peek_active(self) -> Option<Document>;
+/// A trait so the hook can be driven by [`Asked`] in the app and by a plain state in the
+/// tests.
+pub(crate) trait ReadsAsk: Copy + 'static {
+    fn read_ask(self) -> Option<Ask>;
+    fn peek_ask(self) -> Option<Ask>;
 }
 
-impl ReadsActive for Memo<Option<Document>> {
-    fn read_active(self) -> Option<Document> {
+/// The question the app asks, out of the two states it is a function of.
+///
+/// **Not a `Memo`**: [`Active`] is already one, recomputed by a task woken on a notify, so
+/// a memo over it would be two beats behind -- and the lag is not only a rendering matter,
+/// [`ReadsAsk::peek_ask`] being what decides whether an answer that has landed is still
+/// wanted.
+#[derive(Clone, Copy)]
+pub(crate) struct Asked {
+    pub(crate) active: Memo<Option<Document>>,
+    pub(crate) driven: State<Driven>,
+}
+
+impl ReadsAsk for Asked {
+    fn read_ask(self) -> Option<Ask> {
+        let active = self.active.read();
+        ask(active.as_ref(), &self.driven.read())
+    }
+
+    fn peek_ask(self) -> Option<Ask> {
+        let active = self.active.peek();
+        ask(active.as_ref(), &self.driven.peek())
+    }
+}
+
+impl ReadsAsk for State<Option<Ask>> {
+    fn read_ask(self) -> Option<Ask> {
         self.read().clone()
     }
 
-    fn peek_active(self) -> Option<Document> {
+    fn peek_ask(self) -> Option<Ask> {
         self.peek().clone()
     }
 }
 
-impl ReadsActive for State<Option<Document>> {
-    fn read_active(self) -> Option<Document> {
-        self.read().clone()
-    }
-
-    fn peek_active(self) -> Option<Document> {
-        self.peek().clone()
-    }
+/// Where the reader has been, newest first, with the symbol on screen at its head --
+/// which is what keeps reading down the lines of a generic function inside one
+/// instantiation, nothing being pushed onto the history between two clicks in one.
+fn recent_symbols(shown: Option<&Shown>, history: &History) -> Vec<Symbol> {
+    shown
+        .map(|shown| shown.studied.symbol.clone())
+        .into_iter()
+        .chain(
+            history
+                .recent()
+                .filter_map(|(_, entry)| entry.symbol().cloned()),
+        )
+        .collect()
 }
 
-/// Work the selected symbol out on the app's one worker thread and hand the answer to the
-/// panes through [`Analysis`]. Requests supersede: the queue is drained to its newest
-/// entry, so what the reader clicked past is dropped before it is started.
+/// Work the question out on the app's one worker thread and hand the answer to the panes
+/// through [`Analysis`]. Requests supersede: the queue is drained to its newest entry, so
+/// what the reader clicked past is dropped before it is started.
+///
+/// **One worker and not two**, now that there are two kinds of question: `dwarf.index` is
+/// a `OnceLock` and the source index's build holds the same `context` mutex `line_info`
+/// and `extent` take, so a second thread asking a source question would block in
+/// `get_or_init` rather than race usefully -- and two producers writing one [`Analyzed`]
+/// would break the single `shown`/`pending` the panes read.
 ///
 /// The work itself is an argument so a test can hold it still: superseding is a race by
 /// construction and cannot be asserted against a worker that answers as fast as it is
 /// asked.
 pub(crate) fn use_analysis_with(
-    active: impl ReadsActive,
+    asked: impl ReadsAsk,
+    objects: State<Vec<Arc<Object>>>,
+    history: State<History>,
     mut analysis: State<Analyzed>,
-    study: impl Fn(Symbol) -> Studied + Send + 'static,
+    work: impl Fn(Question) -> Answer + Send + 'static,
 ) {
     // The worker and the task that listens to it, started once and never restarted.
     let requests = use_hook(move || {
-        let (requests, jobs) = async_channel::unbounded::<Symbol>();
-        let (answered, answers) = async_channel::unbounded::<Studied>();
+        let (requests, jobs) = async_channel::unbounded::<Question>();
+        let (answered, answers) = async_channel::unbounded::<Answer>();
 
-        // A `std::thread` and not a spawned task: this is seconds of decoding and DWARF
-        // parsing, and freya's executor is the UI thread.
+        // A `std::thread` and not a spawned task: this is seconds of decoding, DWARF
+        // parsing and index building, and freya's executor is the UI thread.
         std::thread::spawn(move || {
-            while let Ok(symbol) = jobs.recv_blocking() {
+            while let Ok(question) = jobs.recv_blocking() {
                 // Everything the reader clicked past while the last job ran, dropped
                 // without being started rather than after the fact.
-                let mut symbol = symbol;
+                let mut question = question;
                 while let Ok(newer) = jobs.try_recv() {
-                    symbol = newer;
+                    question = newer;
                 }
 
                 // A send that fails is the app shutting down.
-                if answered.send_blocking(study(symbol)).is_err() {
+                if answered.send_blocking(work(question)).is_err() {
                     return;
                 }
             }
@@ -208,36 +404,51 @@ pub(crate) fn use_analysis_with(
 
         spawn(async move {
             let mut analysis = analysis;
-            while let Ok(studied) = answers.recv().await {
-                // **The supersession rule**: an answer is kept only if its symbol is the
-                // one selected *now* -- a comparison and not a generation counter, since
-                // `Selection` already compares by `Arc` identity, and since the answer
-                // for the first A of an A -> B -> A is good for the third selection. A
-                // dropped answer is what clicking twice quickly means; nothing retries.
-                // Cloned out of the guard first, since everything below it writes.
-                let current = active.peek_active();
-                if !current
-                    .as_ref()
-                    .and_then(Document::symbol)
-                    .is_some_and(|symbol| *symbol == studied.symbol)
-                {
+            while let Ok(answer) = answers.recv().await {
+                // **The supersession rule**: an answer is kept only if its question is
+                // the one being asked *now* -- a comparison and not a generation counter,
+                // since an `Ask` already compares by identity, and since the answer for
+                // the first A of an A -> B -> A is a perfectly good answer for the third.
+                // A dropped answer is what clicking twice quickly means, so nothing logs
+                // or retries. Cloned out of the guard first, since everything below
+                // writes.
+                if asked.peek_ask().as_ref() != Some(&answer.ask) {
                     continue;
                 }
+                // And an answer out of a binary that has been closed since it was asked
+                // for is not taken either. `Shown::still_open` -- the same rule the effect
+                // applies to the listing that is up, so the two cannot drift.
+                let landed = answer.studied.map(|studied| Shown {
+                    ask: answer.ask.clone(),
+                    studied,
+                });
+                let landed = landed.filter(|shown| shown.still_open(&objects.peek()));
 
                 let mut next = analysis.peek().clone();
-                if next.pending.as_ref() == Some(&studied.symbol) {
+                if next.pending.as_ref() == Some(&answer.ask) {
                     next.pending = None;
                     next.slow = false;
                 }
-                // Already on screen: the same symbol answered twice. Keeping the listing
-                // that is up saves re-rendering every row for nothing.
-                if !next
-                    .shown
-                    .as_ref()
-                    .is_some_and(|shown| shown.symbol == studied.symbol)
-                {
-                    next.shown = Some(studied);
+                next.answered = Some(answer.ask.clone());
+
+                match landed {
+                    Some(shown) => next.shown = Some(shown),
+                    // A question that named no symbol leaves the listing that is up --
+                    // the click loses the pin's highlight and nothing else, which is what
+                    // says it landed nowhere -- but **only when that listing is this
+                    // tab's own**, or a source line holding no code would leave another
+                    // tab's function on screen for good.
+                    None => {
+                        let mine = next
+                            .shown
+                            .as_ref()
+                            .is_some_and(|shown| asked_of(&shown.ask) == asked_of(&answer.ask));
+                        if !mine {
+                            next.shown = None;
+                        }
+                    }
                 }
+
                 analysis.set_if_modified(next);
             }
         });
@@ -246,49 +457,83 @@ pub(crate) fn use_analysis_with(
     });
 
     use_side_effect(move || {
-        // Reading subscribes this to the active document; the state it writes is
-        // `peek`ed, so it cannot wake itself.
-        let current = active.read_active();
+        // Reading subscribes this to the question; the state it writes is `peek`ed, so it
+        // cannot wake itself.
+        let current = asked.read_ask();
+        // **Read and not peek**, unlike the history below: a question asked of a
+        // different set of objects is a different question, so this effect has to run
+        // again when they change. For a symbol it costs nothing -- the run hits the
+        // already-in-hand branch below and returns.
+        let open: Vec<Arc<Object>> = objects.read().clone();
 
-        let Some(symbol) = current.as_ref().and_then(Document::symbol).cloned() else {
-            // Not a function: nothing to work out and nothing to wait for. Anything
-            // still in flight is dropped when it lands.
+        let Some(ask) = current else {
+            // Not a place with a listing: nothing to work out and nothing to wait for.
+            // Anything still in flight is dropped when it lands.
             analysis.set_if_modified(Analyzed::default());
             return;
         };
 
-        let state = analysis.peek().clone();
+        let mut state = analysis.peek().clone();
 
+        // A listing whose binary has been closed is not in hand, whatever question it
+        // answered: dropped here rather than by `close_binary`, so that a rebuild and a
+        // project switch are covered by the same line, and so that the question is asked
+        // again out of the objects that are left.
         if state
             .shown
             .as_ref()
-            .is_some_and(|shown| shown.symbol == symbol)
+            .is_some_and(|shown| !shown.still_open(&open))
         {
-            // Already drawn, so nothing to ask for and nothing left to wait for: the
-            // pane must not go on saying it is waiting.
-            if state.pending.is_some() {
-                let mut next = state;
-                next.pending = None;
-                next.slow = false;
-                analysis.set(next);
+            state = Analyzed::default();
+            analysis.set(state.clone());
+        }
+
+        // Already in hand: the listing that is up answers this question, or the question
+        // has been asked and answered with nothing.
+        let held = state
+            .shown
+            .as_ref()
+            .is_some_and(|shown| shown.answers(&ask))
+            || state.answered.as_ref() == Some(&ask);
+        if held {
+            let mut next = state;
+            // Retagged, so the same listing is not asked for again under its new
+            // question, and so nothing goes on saying it is waiting.
+            if let Some(shown) = next.shown.as_mut().filter(|shown| shown.answers(&ask)) {
+                shown.ask = ask.clone();
             }
+            next.answered = Some(ask);
+            next.pending = None;
+            next.slow = false;
+            analysis.set_if_modified(next);
             return;
         }
-        if state.pending.as_ref() == Some(&symbol) {
+        if state.pending.as_ref() == Some(&ask) {
             return;
         }
 
+        let question = match &ask {
+            Ask::Symbol(symbol) => Question::Study(symbol.clone()),
+            Ask::Source(at) => Question::Resolve {
+                at: at.clone(),
+                objects: open,
+                // Peeked, not read: the ranking is an input to an answer and a visit must
+                // not re-ask a question that has been answered.
+                recent: recent_symbols(state.shown.as_ref(), &history.peek()),
+            },
+        };
+
         let mut next = state;
-        next.pending = Some(symbol.clone());
+        next.pending = Some(ask.clone());
         next.slow = false;
         analysis.set(next);
-        let _ = requests.try_send(symbol.clone());
+        let _ = requests.try_send(question);
 
         // The wait, started by the request and never polled.
         spawn(async move {
             Timer::after(SLOW_ANALYSIS).await;
             let mut analysis = analysis;
-            let still = analysis.peek().pending.as_ref() == Some(&symbol);
+            let still = analysis.peek().pending.as_ref() == Some(&ask);
             if still {
                 analysis.write().slow = true;
             }

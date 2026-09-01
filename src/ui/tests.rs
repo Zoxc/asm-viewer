@@ -280,7 +280,7 @@ fn project_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// The eight contexts `app()` provides, in one `ProjectStates`. A macro and not a
+/// The nine contexts `app()` provides, in one `ProjectStates`. A macro and not a
 /// function: the runner's type is `freya_core::integration::Runner`, which freya's prelude
 /// does not re-export, so naming it would mean naming a crate the app does not depend on.
 macro_rules! project_states {
@@ -320,6 +320,9 @@ macro_rules! project_states {
             open: Open { dock, docs },
             asm_at: $runner
                 .provide_root_context(|| AsmAt(State::create(Positions::default())))
+                .0,
+            driven: $runner
+                .provide_root_context(|| Drives(State::create(Driven::default())))
                 .0,
             src_at: $runner
                 .provide_root_context(|| SrcAt(State::create(Positions::default())))
@@ -655,6 +658,7 @@ fn the_panel_and_the_table_hold_the_same_documents() {
             states.history,
             states.asm_at,
             states.src_at,
+            states.driven,
             document,
         );
     }
@@ -704,6 +708,7 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.driven,
         &documents[1],
     );
     test.sync_and_update();
@@ -718,6 +723,7 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.driven,
         &documents[2],
     );
     test.sync_and_update();
@@ -729,6 +735,7 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.driven,
         &documents[0],
     );
     test.sync_and_update();
@@ -784,6 +791,7 @@ fn switching_to_an_open_tab_is_not_a_visit() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.driven,
         &first,
     );
     test.sync_and_update();
@@ -1054,29 +1062,33 @@ fn leaving_a_project_while_a_file_is_read_drops_what_was_still_coming() {
 /// The analysis worker's work, handed in through a context so a test can substitute one
 /// that stops when it is told to.
 #[derive(Clone)]
-struct Study(Arc<dyn Fn(Symbol) -> Studied + Send + Sync>);
+struct Work(Arc<dyn Fn(Question) -> Answer + Send + Sync>);
 
 /// Every distinct symbol the panes were told to draw, in order: what the superseding rule
 /// is about is what was *never* on screen, and only a recording can say that.
 #[derive(Clone, Copy)]
 struct Seen(State<Vec<Symbol>>);
 
-/// The active document as the analysis tests drive it. Deliberately not [`Active`], which
-/// in the app is a memo over the dock: these tests have no business building a dock to
-/// say which symbol is selected, and `use_analysis_with` takes anything that reads and
-/// peeks.
+/// The question as the analysis tests drive it. Deliberately not [`Asked`], which in the
+/// app is a memo over the dock beside the driven lines: these tests have no business
+/// building a dock to say what is being asked, and `use_analysis_with` takes anything
+/// that reads and peeks.
 #[derive(Clone, Copy)]
-struct Selected(State<Option<Document>>);
+struct Wanted(State<Option<Ask>>);
 
 /// The analysis wiring and nothing else: no panes, since what is under test is which
 /// answers reach them rather than what they draw.
 fn analysis_harness() -> impl IntoElement {
-    let active = use_consume::<Selected>().0;
+    let asking = use_consume::<Wanted>().0;
     let analysis = use_consume::<Analysis>().0;
-    let study = use_consume::<Study>().0;
+    let objects = use_consume::<Objects>().0;
+    let history = use_consume::<Hist>().0;
+    let work = use_consume::<Work>().0;
     let mut seen = use_consume::<Seen>().0;
 
-    use_analysis_with(active, analysis, move |symbol| study(symbol));
+    use_analysis_with(asking, objects, history, analysis, move |question| {
+        work(question)
+    });
 
     use_side_effect(move || {
         let shown = analysis.read().shown.clone();
@@ -1084,13 +1096,41 @@ fn analysis_harness() -> impl IntoElement {
             return;
         };
         // `peek` on the state it writes, or the effect would wake itself for ever.
-        let repeat = seen.peek().last().is_some_and(|last| *last == shown.symbol);
+        let repeat = seen
+            .peek()
+            .last()
+            .is_some_and(|last| *last == shown.studied.symbol);
         if !repeat {
-            seen.write().push(shown.symbol);
+            seen.write().push(shown.studied.symbol);
         }
     });
 
     rect().expanded()
+}
+
+/// The four states an analysis test drives the harness through, provided in the order
+/// `app()` provides them. A macro for [`project_states!`]'s reason.
+macro_rules! analysis_states {
+    ($runner:expr, $work:expr) => {{
+        $runner.provide_root_context(|| Work(Arc::new($work)));
+        (
+            $runner
+                .provide_root_context(|| Wanted(State::create(None)))
+                .0,
+            $runner
+                .provide_root_context(|| Analysis(State::create(Analyzed::default())))
+                .0,
+            $runner
+                .provide_root_context(|| Seen(State::create(Vec::new())))
+                .0,
+            $runner
+                .provide_root_context(|| Objects(State::create(Vec::new())))
+                .0,
+            $runner
+                .provide_root_context(|| Hist(State::create(History::default())))
+                .0,
+        )
+    }};
 }
 
 /// Run the test runner until `ready` answers, and then a little further so that whatever
@@ -1147,32 +1187,22 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
     // `Sync` and so cannot sit inside a shared `Fn`.
     let (started, starts) = async_channel::unbounded::<Symbol>();
     let (gate, gated) = async_channel::unbounded::<()>();
-    let study = move |symbol: Symbol| {
+    let work = move |question: Question| {
+        let Question::Study(symbol) = question else {
+            panic!("this test asks only about symbols");
+        };
         let _ = started.send_blocking(symbol.clone());
         let _ = gated.recv_blocking();
-        Studied::new(symbol)
+        answer(Question::Study(symbol))
     };
 
-    let (mut test, (selection, analysis, seen)) = TestingRunner::new(
+    let (mut test, (asking, analysis, seen, _objects, _history)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
-        move |runner| {
-            runner.provide_root_context(|| Study(Arc::new(study)));
-            (
-                runner
-                    .provide_root_context(|| Selected(State::create(None)))
-                    .0,
-                runner
-                    .provide_root_context(|| Analysis(State::create(Analyzed::default())))
-                    .0,
-                runner
-                    .provide_root_context(|| Seen(State::create(Vec::new())))
-                    .0,
-            )
-        },
+        move |runner| analysis_states!(runner, work),
         1.,
     );
-    let mut selection = selection;
+    let mut asking = asking;
     let settle = |test: &mut TestingRunner| {
         for _ in 0..8 {
             test.sync_and_update();
@@ -1181,7 +1211,7 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
     settle(&mut test);
 
     // The first click. The worker takes it and stops inside it.
-    selection.set(Some(Document::Assembly(Selection::Symbol(first.clone()))));
+    asking.set(Some(Ask::Symbol(first.clone())));
     pump(&mut test, || !starts.is_empty());
     assert!(starts.recv_blocking().expect("the worker started") == first);
     assert!(
@@ -1191,7 +1221,7 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
 
     // The second click, while the first is still being worked on. That the UI takes
     // it at all is the other half of what this sub-step is for.
-    selection.set(Some(Document::Assembly(Selection::Symbol(second.clone()))));
+    asking.set(Some(Ask::Symbol(second.clone())));
     settle(&mut test);
 
     // Let the first one finish. Its answer is on the channel by the time the worker
@@ -1204,7 +1234,7 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
         analysis.peek().shown.is_none(),
         "an answer for a symbol the reader had left was put on screen"
     );
-    assert!(analysis.peek().pending.as_ref() == Some(&second));
+    assert!(analysis.peek().pending == Some(Ask::Symbol(second.clone())));
 
     // And the answer that is wanted lands.
     gate.send_blocking(()).expect("the gate");
@@ -1212,7 +1242,7 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
 
     let state = analysis.peek().clone();
     let shown = state.shown.expect("the second symbol was analysed");
-    assert!(shown.symbol == second);
+    assert!(shown.studied.symbol == second);
     assert!(state.pending.is_none());
     assert!(!state.slow);
     assert_eq!(
@@ -1233,51 +1263,385 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
 
-    let (mut test, (selection, analysis, seen)) = TestingRunner::new(
+    let (mut test, (asking, analysis, seen, _objects, _history)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
-        |runner| {
-            runner.provide_root_context(|| Study(Arc::new(Studied::new)));
-            (
-                runner
-                    .provide_root_context(|| Selected(State::create(None)))
-                    .0,
-                runner
-                    .provide_root_context(|| Analysis(State::create(Analyzed::default())))
-                    .0,
-                runner
-                    .provide_root_context(|| Seen(State::create(Vec::new())))
-                    .0,
-            )
-        },
+        |runner| analysis_states!(runner, answer),
         1.,
     );
-    let mut selection = selection;
+    let mut asking = asking;
     test.sync_and_update();
 
-    selection.set(Some(Document::Assembly(Selection::Symbol(symbol.clone()))));
+    asking.set(Some(Ask::Symbol(symbol.clone())));
     pump(&mut test, || analysis.peek().shown.is_some());
 
     let state = analysis.peek().clone();
     let shown = state.shown.expect("the symbol was analysed");
-    assert!(shown.symbol == symbol);
+    assert!(shown.studied.symbol == symbol);
     assert!(state.pending.is_none());
-    let assembly = shown.assembly.expect("sum_to holds code");
+    let studied = shown.studied;
+    let assembly = studied.assembly.expect("sum_to holds code");
     assert!(!assembly.instructions.is_empty());
-    let lines = shown.lines.info.expect("the fixture has DWARF");
+    let lines = studied.lines.info.expect("the fixture has DWARF");
     assert!(!lines.files().is_empty());
-    assert!(shown
+    assert!(studied
         .lines
         .file
         .as_deref()
         .is_some_and(|file| file.ends_with("line_fixture.c")));
     assert_eq!(seen.peek().len(), 1);
 
-    // Selecting something that is not a symbol is answered on the spot: clearing does
-    // not wait on the worker, only replacing does.
-    selection.set(None);
+    // Being asked nothing is answered on the spot: clearing does not wait on the worker,
+    // only replacing does.
+    asking.set(None);
     test.sync_and_update();
     assert!(analysis.peek().clone() == Analyzed::default());
+}
+
+/// The file and a line inside `symbol`, out of its own line info — so nothing here
+/// hard-codes what the fixture's DWARF happens to spell, and the round trip the crate
+/// asserts is what makes the answer findable again.
+fn a_line_of(symbol: &Symbol) -> LinePos {
+    let info = symbol
+        .data
+        .line_info(&symbol.object)
+        .expect("the fixture has DWARF");
+    let row = info
+        .rows()
+        .iter()
+        .find(|row| row.line.is_some() && row.file.is_some())
+        .expect("sum_to's rows name a place");
+
+    LinePos {
+        file: info.files()[row.file.expect("filtered")].clone(),
+        line: row.line.expect("filtered"),
+    }
+}
+
+/// The step's own claim: a source line is a question the worker answers with the symbol
+/// that line was compiled into, over every object that is open.
+#[test]
+fn a_source_line_answers_with_the_symbol_it_was_compiled_into() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+
+    let (mut test, (asking, analysis, _seen, objects, _history)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        |runner| analysis_states!(runner, answer),
+        1.,
+    );
+    let (mut asking, mut objects) = (asking, objects);
+    objects.set(vec![wanted.object.clone()]);
+    test.sync_and_update();
+
+    asking.set(Some(Ask::Source(at.clone())));
+    pump(&mut test, || analysis.peek().shown.is_some());
+
+    let state = analysis.peek().clone();
+    let shown = state.shown.expect("the line was resolved");
+    assert!(shown.studied.symbol == wanted, "another symbol was picked");
+    assert!(shown.ask == Ask::Source(at.clone()));
+    assert!(state.pending.is_none());
+    assert!(shown
+        .studied
+        .assembly
+        .is_some_and(|assembly| !assembly.instructions.is_empty()));
+
+    // The tab such an answer belongs to is the *file's* tab, never the symbol's: it is
+    // what the assembly pane keeps its row under and what a listing change is measured
+    // against.
+    assert!(asked_of(&shown.ask) == Document::Source(at.file.clone()));
+}
+
+/// A line no open object holds code from leaves the listing that is up — the click loses
+/// the pin's highlight and nothing else — but only while that listing is this tab's own.
+#[test]
+fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    // Past the end of any file the fixture names, so nothing was compiled from it.
+    let barren = LinePos {
+        file: at.file.clone(),
+        line: 999_999,
+    };
+
+    let (mut test, (asking, analysis, _seen, objects, _history)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        |runner| analysis_states!(runner, answer),
+        1.,
+    );
+    let (mut asking, mut objects) = (asking, objects);
+    objects.set(vec![wanted.object.clone()]);
+    test.sync_and_update();
+
+    asking.set(Some(Ask::Source(at.clone())));
+    pump(&mut test, || analysis.peek().shown.is_some());
+
+    asking.set(Some(Ask::Source(barren.clone())));
+    pump(&mut test, || {
+        analysis.peek().answered == Some(Ask::Source(barren.clone()))
+    });
+
+    let state = analysis.peek().clone();
+    let shown = state.shown.expect("the listing was taken down");
+    assert!(shown.studied.symbol == wanted);
+    // And it is still filed under the question it was worked out for, not the one that
+    // answered with nothing.
+    assert!(shown.ask == Ask::Source(at.clone()));
+    assert!(state.pending.is_none());
+
+    // The same barren question against another tab's listing takes it down instead:
+    // leaving it up would put a function the reader never asked for on screen for good.
+    asking.set(Some(Ask::Symbol(wanted.clone())));
+    pump(&mut test, || {
+        analysis.peek().answered == Some(Ask::Symbol(wanted.clone()))
+    });
+    asking.set(Some(Ask::Source(barren.clone())));
+    pump(&mut test, || {
+        analysis.peek().answered == Some(Ask::Source(barren.clone()))
+    });
+    assert!(
+        analysis.peek().shown.is_none(),
+        "a listing belonging to another tab was left up"
+    );
+}
+
+/// An answer for a line the reader has clicked past must never reach the panes.
+/// Supersession across the *new* kind of question is a different claim from supersession
+/// across symbols: it is the `Ask` comparison being right for a `LinePos`, which is the
+/// one `Arc` in the UI compared by its text.
+#[test]
+fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    let later = LinePos {
+        // A distinct `Arc<str>` of the same path, which is exactly what the app hands
+        // about: a tab's file and a `LineInfo`'s are two allocations of one string.
+        file: at.file.to_string().into(),
+        line: at.line,
+    };
+
+    let (started, starts) = async_channel::unbounded::<LinePos>();
+    let (gate, gated) = async_channel::unbounded::<()>();
+    let work = move |question: Question| {
+        let Question::Resolve { at, .. } = &question else {
+            panic!("this test asks only about lines");
+        };
+        let _ = started.send_blocking(at.clone());
+        let _ = gated.recv_blocking();
+        answer(question)
+    };
+
+    let (mut test, (asking, analysis, seen, objects, _history)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner| analysis_states!(runner, work),
+        1.,
+    );
+    let (mut asking, mut objects) = (asking, objects);
+    objects.set(vec![wanted.object.clone()]);
+    let settle = |test: &mut TestingRunner| {
+        for _ in 0..8 {
+            test.sync_and_update();
+        }
+    };
+    settle(&mut test);
+
+    let barren = LinePos {
+        file: at.file.clone(),
+        line: 999_999,
+    };
+    asking.set(Some(Ask::Source(barren.clone())));
+    pump(&mut test, || !starts.is_empty());
+    assert!(starts.recv_blocking().expect("the worker started") == barren);
+
+    // Clicked past while the first is still being worked on.
+    asking.set(Some(Ask::Source(later.clone())));
+    settle(&mut test);
+
+    gate.send_blocking(()).expect("the gate");
+    assert!(starts.recv_blocking().expect("the worker started") == later);
+    settle(&mut test);
+    assert!(
+        analysis.peek().answered.is_none(),
+        "an answer for a line the reader had left was taken"
+    );
+
+    gate.send_blocking(()).expect("the gate");
+    pump(&mut test, || analysis.peek().shown.is_some());
+    assert!(seen.peek().len() == 1);
+    assert!(seen.peek()[0] == wanted);
+    // Two `Arc<str>`s of one path are one question, or every tab switch would re-resolve.
+    assert!(analysis.peek().answered == Some(Ask::Source(at)));
+}
+
+/// [`ask`] on its own, which is the whole of "what is this tab asking": no runner, since
+/// it is a function of two values.
+#[test]
+fn what_a_tab_asks_follows_its_kind_and_its_driven_line() {
+    let symbols = fixture_symbols();
+    let symbol = symbols[0].clone();
+    let object = symbol.object.clone();
+    let file: Arc<str> = "src/main.rs".into();
+    let tab = Document::Source(file.clone());
+    let mut driven = Driven::default();
+
+    assert!(ask(None, &driven).is_none(), "nothing open asks nothing");
+    assert!(
+        ask(
+            Some(&Document::Assembly(Selection::Symbol(symbol.clone()))),
+            &driven
+        ) == Some(Ask::Symbol(symbol.clone()))
+    );
+    // An object is a place in a binary but not one with a listing.
+    assert!(ask(
+        Some(&Document::Assembly(Selection::Object(object))),
+        &driven
+    )
+    .is_none());
+    // A source-driven tab nothing has been clicked in yet.
+    assert!(ask(Some(&tab), &driven).is_none());
+
+    driven.remember(tab.clone(), 42);
+    assert!(ask(Some(&tab), &driven) == Some(Ask::Source(LinePos { file, line: 42 })));
+    // And the line belongs to that tab and not to source-driven tabs at large.
+    assert!(ask(Some(&Document::Source("other.rs".into())), &driven).is_none());
+}
+
+/// The one thing in the analysis that can outlive the document that named it: a
+/// source-driven tab survives a binary close by doctrine, so the answer resolved out of
+/// that binary must not go on being drawn -- nor go on holding the file's bytes, a
+/// `Studied` holding a `Symbol` holding the `Arc<Object>`.
+#[test]
+fn closing_a_binary_lets_go_of_the_listing_it_answered() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    let object = wanted.object.clone();
+    drop(symbols);
+    let before = Arc::strong_count(&object);
+
+    let (mut test, (asking, analysis, seen, objects, _history)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        |runner| analysis_states!(runner, answer),
+        1.,
+    );
+    let (mut asking, mut objects, mut seen) = (asking, objects, seen);
+    objects.set(vec![object.clone()]);
+    test.sync_and_update();
+
+    asking.set(Some(Ask::Source(at.clone())));
+    pump(&mut test, || analysis.peek().shown.is_some());
+    assert!(Arc::strong_count(&object) > before, "the listing holds it");
+
+    // What `close_binary` does to the objects, which is the whole of what this can see
+    // of it: the tab, being source-driven, is deliberately left standing and so the
+    // question is unchanged.
+    objects.set(Vec::new());
+    // Waited on the *answer* and not on the listing going: the listing goes the moment
+    // the effect sees the objects change, and the question it then asks again is what
+    // this is about.
+    pump(&mut test, || {
+        let held = analysis.peek();
+        held.answered.is_some() && held.pending.is_none()
+    });
+
+    assert!(
+        analysis.peek().shown.is_none(),
+        "a listing out of a closed binary was left on screen"
+    );
+    // Asked again out of what is left, which is nothing, and said so.
+    assert!(analysis.peek().answered == Some(Ask::Source(at)));
+    assert!(analysis.peek().pending.is_none());
+    // The recorder this harness keeps for the supersession tests holds every symbol it
+    // was told about, which is this test's own doing and not the app's.
+    seen.set(Vec::new());
+    test.sync_and_update();
+    assert_eq!(
+        Arc::strong_count(&object),
+        before,
+        "the closed file's bytes are still held"
+    );
+}
+
+/// A reveal is owed until it has been *made*, not until it has been looked at.
+///
+/// In a source-driven tab the click that pins is the click that asks for the listing, so
+/// the assembly pane's first run after it is still holding the listing that cannot answer
+/// -- and a request spent there is a scroll the reader never gets, the listing that can
+/// answer arriving to nothing owed.
+#[test]
+fn a_reveal_the_listing_cannot_answer_is_left_owed() {
+    let at = LinePos {
+        file: "main.rs".into(),
+        line: 42,
+    };
+
+    let (mut test, pinned) = TestingRunner::new(
+        project_harness,
+        (100., 100.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| Pinned(State::create(None)))
+                .0
+        },
+        1.,
+    );
+    let mut pinned = pinned;
+    test.sync_and_update();
+
+    pinned.set(Some(Pin {
+        at: at.clone(),
+        reveal: Some(Pane::Assembly),
+    }));
+    test.sync_and_update();
+
+    // The pane that is owed it looks, twice, and the request is still there both times:
+    // the first look is the listing being left, the second the one that arrived.
+    assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
+    assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
+    // And the other pane is owed nothing: a click asks the pane it was not made in.
+    assert!(owed_reveal(pinned, Pane::Source).is_none());
+    // Which is also what a `reveal_made` from it must not undo.
+    reveal_made(pinned, Pane::Source);
+    test.sync_and_update();
+    assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
+
+    // Made, and so owed exactly once. The pin itself stays: it is what lights the rows.
+    reveal_made(pinned, Pane::Assembly);
+    test.sync_and_update();
+    assert!(owed_reveal(pinned, Pane::Assembly).is_none());
+    assert!(pinned.peek().as_ref().is_some_and(|pin| pin.at == at));
+
+    // A second click on the same line is a second request.
+    pinned.set(Some(Pin {
+        at: at.clone(),
+        reveal: Some(Pane::Assembly),
+    }));
+    test.sync_and_update();
+    assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
 }
 
 /// A component with no props at all, which is what every view in the app is. Its parent

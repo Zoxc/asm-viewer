@@ -25,6 +25,13 @@ struct SourceData {
     /// The run of rows picked out to be copied, or `None` when the selection is the
     /// assembly pane's or there is none.
     rows: Option<RowSelection>,
+    /// Whether these rows *drive* the tab they are in -- true for a source-driven tab,
+    /// where a click also says which assembly the other side shows, and false for the
+    /// companion file beside a symbol, where the click is only a pin.
+    ///
+    /// It travels here and through `new_with_data` rather than being captured by the
+    /// builder closure, which is never compared across renders.
+    drives: bool,
 }
 
 impl PartialEq for SourceData {
@@ -34,6 +41,7 @@ impl PartialEq for SourceData {
             && self.focus == other.focus
             && self.pin == other.pin
             && self.rows == other.rows
+            && self.drives == other.drives
     }
 }
 
@@ -52,6 +60,8 @@ struct SourceRow {
     /// Whether this row is one of the run picked out to be copied, told to it by the list
     /// for the reason `InstructionRow`'s is.
     selected: bool,
+    /// Whether a click here also drives the tab's assembly side. See [`SourceData`].
+    drives: bool,
     key: DiffKey,
 }
 
@@ -63,6 +73,7 @@ impl PartialEq for SourceRow {
             && self.focused == other.focused
             && self.pinned == other.pinned
             && self.selected == other.selected
+            && self.drives == other.drives
     }
 }
 
@@ -77,6 +88,7 @@ impl Component for SourceRow {
         let mut hovering = use_state(|| false);
         let mut focused = use_consume::<Focused>().0;
         let mut pinned = use_consume::<Pinned>().0;
+        let mut driven = use_consume::<Drives>().0;
         let marked = use_consume::<Marked>().0;
         let shift = use_consume::<Shift>().0;
         let index = self.index;
@@ -143,11 +155,24 @@ impl Component for SourceRow {
             })
             // Every source row is a position, so unlike an instruction row this one always
             // has something to pin.
-            .on_press(move |_| {
-                pinned.set(Some(Pin {
-                    at: at.clone(),
-                    reveal: Some(Pane::Assembly),
-                }));
+            .on_press({
+                let drives = self.drives;
+                move |_| {
+                    // **The only writer of `Driven`.** A click in the file a
+                    // source-driven tab is about is what says which assembly its other
+                    // side shows; a click in a companion file is a pin and nothing more,
+                    // and a click in the assembly pane never comes here at all, so there
+                    // is no way for the listing to re-drive itself.
+                    if drives {
+                        driven
+                            .write()
+                            .remember(Document::Source(at.file.clone()), at.line);
+                    }
+                    pinned.set(Some(Pin {
+                        at: at.clone(),
+                        reveal: Some(Pane::Assembly),
+                    }));
+                }
             })
             .child(
                 label()
@@ -208,7 +233,17 @@ impl Component for SourceList {
             .read()
             .as_ref()
             .and_then(|focus| line_here(&focus.at));
-        let pin = pinned.read().as_ref().and_then(|pin| line_here(&pin.at));
+        // The pin, falling back to the line this tab is driven from, for the reason
+        // `InstructionList`'s does: `use_clear_focus` drops the pin with the tab, and
+        // coming back to a tab whose assembly side is a listing of a line nothing points
+        // at reads as an accident. A companion file's tab is never driven, so this is the
+        // pin alone there.
+        let driven = use_consume::<Drives>().0;
+        let pin = pinned
+            .read()
+            .as_ref()
+            .and_then(|pin| line_here(&pin.at))
+            .or_else(|| driven.read().line(&self.document));
 
         let length = self.source.0.lines;
         // The tab and not the file: see `SourceList::document`.
@@ -239,7 +274,7 @@ impl Component for SourceList {
         };
 
         use_side_effect_with_deps(self, move |list: &SourceList| {
-            let Some(at) = take_reveal(pinned, Pane::Source) else {
+            let Some(at) = owed_reveal(pinned, Pane::Source) else {
                 return;
             };
 
@@ -257,6 +292,7 @@ impl Component for SourceList {
                 return;
             };
 
+            reveal_made(pinned, Pane::Source);
             reveal_row(&mut controller, viewport(), index);
         });
 
@@ -282,6 +318,9 @@ impl Component for SourceList {
                                 focus,
                                 pin,
                                 rows,
+                                // A source-driven tab's subject is the file its own
+                                // document names; a companion's tab is a symbol's.
+                                drives: matches!(self.document, Document::Source(_)),
                             },
                             |i, data: &SourceData| {
                                 let line = Some(i as u32 + 1);
@@ -292,6 +331,7 @@ impl Component for SourceList {
                                     focused: data.focus == line,
                                     pinned: data.pin == line,
                                     selected: data.rows.is_some_and(|rows| rows.contains(i)),
+                                    drives: data.drives,
                                     key: DiffKey::None,
                                 }
                                 .key(i)
@@ -331,7 +371,7 @@ pub(crate) fn source_side(active: Option<&Document>, analysis: &Analyzed) -> Opt
         Document::Source(file) => Some(SourceSide::Subject(file.clone())),
         Document::Assembly(_) => {
             let shown = analysis.shown.as_ref()?;
-            shown.lines.file.clone().map(SourceSide::Companion)
+            shown.studied.lines.file.clone().map(SourceSide::Companion)
         }
     }
 }
@@ -390,10 +430,10 @@ impl Component for SourcePane {
         let Some(side) = side else {
             // The same answer the assembly pane gives, from the same place, plus one case
             // of its own: a symbol can be analysed and still name no file.
-            return match analysis.showing() {
+            return match analysis.showing(&self.document) {
                 Showing::Message(text) => placeholder(text),
                 Showing::Nothing => rect().expanded().background(palette().pane_bg).into(),
-                Showing::Listing(studied) if studied.lines.info.is_some() => {
+                Showing::Listing(shown) if shown.studied.lines.info.is_some() => {
                     placeholder("No source file for this symbol")
                 }
                 Showing::Listing(_) => placeholder("No line info"),
@@ -406,7 +446,7 @@ impl Component for SourcePane {
             // The *drawn* symbol's tab and not the active one: a row written down against
             // the tab that is arriving would be a row of the listing that is leaving.
             SourceSide::Companion(_) => match analysis.shown.as_ref() {
-                Some(studied) => Document::Assembly(Selection::Symbol(studied.symbol.clone())),
+                Some(shown) => asked_of(&shown.ask),
                 None => return rect().expanded().background(palette().pane_bg).into(),
             },
         };

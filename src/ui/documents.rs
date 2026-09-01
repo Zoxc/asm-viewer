@@ -80,12 +80,14 @@ pub(crate) fn activate(
 ///
 /// Both of the tab's kept positions go with it: a [`Document::Assembly`] key holds the
 /// `Arc<Object>` it points into, so one left behind holds the file's bytes for the life of
-/// the app.
+/// the app. The line it was driven from goes with it too, for consistency and **not** for
+/// that reason: a [`Document::Source`] key holds no object, so it holds nothing up.
 pub(crate) fn close_tab(
     open: Open,
     history: State<History>,
     mut asm_at: State<Positions<Document>>,
     mut src_at: State<Positions<Document>>,
+    mut driven: State<Driven>,
     entry: &Document,
 ) {
     let Open { mut dock, mut docs } = open;
@@ -124,6 +126,7 @@ pub(crate) fn close_tab(
     docs.write().close(id);
     asm_at.write().forget(entry);
     src_at.write().forget(entry);
+    driven.write().forget(entry);
 
     // A document landed on goes through `activate`, even though it is by construction
     // already open. A *view* landed on is not a document, and the write above has already

@@ -254,6 +254,8 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         open,
         asm_at,
         src_at,
+        // Written by commit 4; until then a driven line is not part of the session.
+        driven: _,
         history,
     } = states;
 
@@ -388,6 +390,7 @@ pub(crate) fn clear_project(states: ProjectStates) {
         open,
         asm_at,
         src_at,
+        driven,
         history,
         ..
     } = states;
@@ -405,7 +408,7 @@ pub(crate) fn clear_project(states: ProjectStates) {
 
     let remaining = open.documents();
     for tab in &remaining {
-        close_tab(open, history, asm_at, src_at, tab);
+        close_tab(open, history, asm_at, src_at, driven, tab);
     }
 
     // And the history outright, which neither walk above does.

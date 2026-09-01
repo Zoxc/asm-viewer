@@ -125,3 +125,41 @@ fn a_closing_binary_forgets_every_position_into_it() {
     assert_eq!(positions.at(&"lib.a:one".to_owned()), None);
     assert_eq!(positions.at(&"lib.a:three".to_owned()), None);
 }
+
+/// A source-driven tab, which is the only kind [`Driven`] ever holds. Compared by its
+/// text, so two of these naming one file are one tab.
+fn source(file: &str) -> Document {
+    Document::Source(file.into())
+}
+
+#[test]
+fn a_tab_nothing_was_clicked_in_is_driven_from_nothing() {
+    let driven = Driven::default();
+    assert_eq!(driven.line(&source("main.rs")), None);
+}
+
+#[test]
+fn a_driven_line_comes_back_and_a_second_click_replaces_it() {
+    let mut driven = Driven::default();
+    driven.remember(source("main.rs"), 42);
+    driven.remember(source("lib.rs"), 7);
+    assert_eq!(driven.line(&source("main.rs")), Some(42));
+
+    driven.remember(source("main.rs"), 43);
+    assert_eq!(driven.line(&source("main.rs")), Some(43));
+    assert_eq!(driven.line(&source("lib.rs")), Some(7));
+}
+
+#[test]
+fn closing_a_tab_forgets_what_it_was_driven_from() {
+    let mut driven = Driven::default();
+    driven.remember(source("main.rs"), 42);
+    driven.remember(source("lib.rs"), 7);
+
+    driven.forget(&source("main.rs"));
+    assert_eq!(driven.line(&source("main.rs")), None);
+    assert_eq!(driven.line(&source("lib.rs")), Some(7));
+    // And forgetting a tab that was never driven is not an error.
+    driven.forget(&source("other.rs"));
+    assert_eq!(driven.line(&source("lib.rs")), Some(7));
+}

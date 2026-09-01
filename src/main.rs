@@ -1,3 +1,4 @@
+mod compiled;
 mod docs;
 mod filter;
 mod fonts;

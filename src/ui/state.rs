@@ -118,6 +118,12 @@ pub(crate) struct OpenDocs(pub(crate) State<Docs>);
 #[derive(Clone, Copy)]
 pub(crate) struct SrcAt(pub(crate) State<Positions<Document>>);
 
+/// Which source line each source-driven tab's assembly side is driven from, shared
+/// through context. Beside [`AsmAt`]/[`SrcAt`] because it is the same kind of thing: a
+/// fact about a tab, made by a click in it and forgotten with it.
+#[derive(Clone, Copy)]
+pub(crate) struct Drives(pub(crate) State<Driven>);
+
 /// Where the reader has been.
 #[derive(Clone, Copy)]
 pub(crate) struct Hist(pub(crate) State<History>);
@@ -247,6 +253,8 @@ pub(crate) struct ProjectStates {
     pub(crate) open: Open,
     pub(crate) asm_at: State<Positions<Document>>,
     pub(crate) src_at: State<Positions<Document>>,
+    /// Which line each source-driven tab's assembly side is driven from.
+    pub(crate) driven: State<Driven>,
     pub(crate) history: State<History>,
 }
 
@@ -268,6 +276,7 @@ pub(crate) fn use_project_states() -> ProjectStates {
         open: use_open(),
         asm_at: use_consume::<AsmAt>().0,
         src_at: use_consume::<SrcAt>().0,
+        driven: use_consume::<Drives>().0,
         history: use_consume::<Hist>().0,
     }
 }
