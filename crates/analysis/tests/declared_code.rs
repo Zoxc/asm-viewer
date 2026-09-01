@@ -1,20 +1,15 @@
 //! Entry points and exported functions, which a stripped shared library declares in
 //! places that are not its symbol table.
 //!
-//! Both fixtures are built in memory like every other one, but by hand rather than with
-//! `object`'s writer: it emits relocatable objects, and neither a `.dynsym` nor a PE
-//! export directory exists in one of those. Assembling the two images byte by byte is
-//! what lets the suite cover the case at all without committing a `.so` and a `.dll`.
+//! The two fixtures are assembled byte by byte rather than with `object`'s writer, which
+//! emits relocatable objects: neither a `.dynsym` nor a PE export directory exists in one.
 
 mod common;
 
-use analysis::{parse_object, Object, SymbolData};
-use common::{elf_shared_object, pe_dll, ExportedSymbol, SharedObject, TEXT_ADDRESS};
-use std::path::PathBuf;
-use std::sync::Arc;
+use common::{elf_shared_object, named, parse, pe_dll, ExportedSymbol, SharedObject, TEXT_ADDRESS};
 
-/// Four functions back to back, each `nop`s then a `ret`, so every offset below is a
-/// real instruction boundary and a listing decoded from it terminates.
+/// Four functions back to back, each `nop`s then a `ret`, so every offset below is a real
+/// instruction boundary and a listing decoded from it terminates.
 const TEXT: &[u8] = &[
     0x90, 0x90, 0x90, 0xC3, // 0: three nops and a ret
     0x90, 0xC3, // 4
@@ -22,34 +17,8 @@ const TEXT: &[u8] = &[
     0x90, 0x90, 0xC3, // 7
 ];
 
-fn parse(bytes: Vec<u8>) -> Arc<Object> {
-    parse_object(
-        bytes.as_slice().into(),
-        "fixture".into(),
-        PathBuf::from("/f"),
-    )
-    .expect("the fixture should parse")
-}
-
-fn named<'a>(object: &'a Object, name: &str) -> &'a Arc<SymbolData> {
-    object
-        .symbols_sorted
-        .iter()
-        .find(|symbol| symbol.name == name)
-        .unwrap_or_else(|| {
-            panic!(
-                "no symbol {name:?} among {:?}",
-                object
-                    .symbols_sorted
-                    .iter()
-                    .map(|symbol| &symbol.name)
-                    .collect::<Vec<_>>()
-            )
-        })
-}
-
-/// Three declarations: two functions, and one exported *global* which must not become a
-/// function however it is declared.
+/// Two functions and one exported *global*, which must not become a function however it
+/// is declared.
 const EXPORTS: &[ExportedSymbol] = &[
     ExportedSymbol {
         name: "first",
@@ -83,7 +52,7 @@ fn stripped(entry: Option<u64>) -> SharedObject<'static> {
 
 #[test]
 fn a_shared_object_with_no_symbol_table_still_lists_its_exports() {
-    let object = parse(elf_shared_object(stripped(Some(6))));
+    let object = parse(&elf_shared_object(stripped(Some(6))));
 
     let mut names: Vec<&str> = object
         .symbols_sorted
@@ -109,7 +78,7 @@ fn a_shared_object_with_no_symbol_table_still_lists_its_exports() {
 
 #[test]
 fn a_dll_with_no_coff_symbol_table_still_lists_its_exports() {
-    let object = parse(pe_dll(TEXT, EXPORTS, Some(6)));
+    let object = parse(&pe_dll(TEXT, EXPORTS, Some(6)));
 
     let mut names: Vec<&str> = object
         .symbols_sorted
@@ -129,8 +98,8 @@ fn a_dll_with_no_coff_symbol_table_still_lists_its_exports() {
 #[test]
 fn an_image_declaring_no_entry_point_grows_no_entry_symbol() {
     for object in [
-        parse(elf_shared_object(stripped(None))),
-        parse(pe_dll(TEXT, EXPORTS, None)),
+        parse(&elf_shared_object(stripped(None))),
+        parse(&pe_dll(TEXT, EXPORTS, None)),
     ] {
         let names: Vec<&str> = object
             .symbols_sorted
@@ -147,7 +116,7 @@ fn an_image_declaring_no_entry_point_grows_no_entry_symbol() {
 #[test]
 fn an_entry_point_on_an_exported_function_is_one_symbol_not_two() {
     // The entry point *is* `second`, which the export table already names.
-    let object = parse(pe_dll(TEXT, EXPORTS, Some(4)));
+    let object = parse(&pe_dll(TEXT, EXPORTS, Some(4)));
 
     let names: Vec<&str> = object
         .symbols_sorted
@@ -157,7 +126,7 @@ fn an_entry_point_on_an_exported_function_is_one_symbol_not_two() {
     assert_eq!(names.len(), 2, "{names:?}");
     assert!(!names.contains(&"<entry point>"), "{names:?}");
 
-    // And the section's address list is still strictly ascending, which is what
+    // The section's address list is still strictly ascending, which is what
     // `estimate_size` binary-searches.
     let section = named(&object, "second").section.clone().unwrap();
     assert_eq!(section.symbols, [TEXT_ADDRESS, TEXT_ADDRESS + 4]);
@@ -165,21 +134,19 @@ fn an_entry_point_on_an_exported_function_is_one_symbol_not_two() {
 
 #[test]
 fn a_declaration_carries_no_size_so_the_extent_comes_from_the_next_one() {
-    let object = parse(pe_dll(TEXT, EXPORTS, Some(7)));
+    let object = parse(&pe_dll(TEXT, EXPORTS, Some(7)));
 
-    // The declared size a PE export table can carry is none at all.
+    // A PE export table carries no size at all, so the extent is the next declaration's
+    // address, exactly as it is for a symbol-table entry declaring 0.
     assert_eq!(named(&object, "first").size, 0);
-
-    // ... so the extent is the next declaration's address, exactly as it is for a
-    // symbol-table entry declaring 0.
     assert_eq!(named(&object, "first").estimate_size(), Some(4));
     assert_eq!(named(&object, "second").estimate_size(), Some(3));
     // The last one runs to the end of the section's bytes.
     assert_eq!(named(&object, "<entry point>").estimate_size(), Some(3));
 
-    // An ELF `.dynsym` does carry one, and it is kept for display without displacing
-    // the derived extent.
-    let elf = parse(elf_shared_object(stripped(Some(7))));
+    // An ELF `.dynsym` does carry one, and it is kept for display without displacing the
+    // derived extent.
+    let elf = parse(&elf_shared_object(stripped(Some(7))));
     assert_eq!(named(&elf, "first").size, 4);
     assert_eq!(named(&elf, "first").estimate_size(), Some(4));
 }
@@ -187,8 +154,8 @@ fn a_declaration_carries_no_size_so_the_extent_comes_from_the_next_one() {
 #[test]
 fn an_exported_function_disassembles() {
     for object in [
-        parse(elf_shared_object(stripped(Some(6)))),
-        parse(pe_dll(TEXT, EXPORTS, Some(6))),
+        parse(&elf_shared_object(stripped(Some(6)))),
+        parse(&pe_dll(TEXT, EXPORTS, Some(6))),
     ] {
         let first = named(&object, "first").clone();
         let assembly = first.assembly(&object).expect("a listing for `first`");
@@ -210,9 +177,9 @@ fn an_exported_function_disassembles() {
 
 #[test]
 fn a_relocatable_object_declares_no_entry_point_however_the_header_reads() {
-    // `Object::entry()` answers 0 for an `.o`, and 0 there is the first byte of the
-    // first section — a real function, which must not also become `<entry point>`.
-    let object = parse(common::caller_and_target());
+    // `Object::entry()` answers 0 for an `.o`, and 0 there is the first byte of the first
+    // section — a real function, which must not also become `<entry point>`.
+    let object = parse(&common::caller_and_target());
 
     let mut names: Vec<&str> = object
         .symbols_sorted
@@ -225,11 +192,10 @@ fn a_relocatable_object_declares_no_entry_point_however_the_header_reads() {
 
 #[test]
 fn an_export_that_is_already_a_symbol_table_entry_is_not_listed_twice() {
-    // A library that was *not* stripped declares `first` twice: once in `.symtab`,
-    // where it is called `first_internal`, and once in `.dynsym` under its exported
-    // name. Both are declarations of the same address, and the symbol table wins —
-    // it is the table that carries a size and the name the code was compiled under.
-    let object = parse(elf_shared_object(SharedObject {
+    // A library that was *not* stripped declares `first` three times at one address: in
+    // `.symtab` as `first_internal`, in `.dynsym` under its exported name, and as the
+    // entry point. The symbol table wins.
+    let object = parse(&elf_shared_object(SharedObject {
         text: TEXT,
         dynamic: EXPORTS,
         static_symbols: &[ExportedSymbol {
@@ -238,7 +204,6 @@ fn an_export_that_is_already_a_symbol_table_entry_is_not_listed_twice() {
             size: 4,
             code: true,
         }],
-        // And the entry point is that same address a third time.
         entry: Some(0),
     }));
 
@@ -258,8 +223,7 @@ fn an_export_that_is_already_a_symbol_table_entry_is_not_listed_twice() {
     names.sort_unstable();
     assert_eq!(names, ["first_internal", "second"]);
 
-    // The addresses the section holds are still strictly ascending, which is what
-    // `estimate_size` binary-searches — a repeat would make it answer 0.
+    // A repeated address would make `estimate_size`'s binary search answer 0.
     let section = named(&object, "second").section.clone().unwrap();
     assert_eq!(section.symbols, [TEXT_ADDRESS, TEXT_ADDRESS + 4]);
 }

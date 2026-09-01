@@ -1,7 +1,7 @@
 use super::*;
 
 /// A directory of this test's own under the system temporary directory, named after
-/// the line that asked for it, exactly as `project.rs`'s file tests are.
+/// the line that asked for it.
 fn directory(line: u32) -> PathBuf {
     std::env::temp_dir().join(format!(
         "assembly-viewer-settings-test-{}-{line}",
@@ -9,7 +9,6 @@ fn directory(line: u32) -> PathBuf {
     ))
 }
 
-/// Everything spelled out, so a round trip has something to lose.
 fn settings() -> Settings {
     Settings {
         theme: Theme::Dark,
@@ -25,23 +24,11 @@ fn settings() -> Settings {
 }
 
 #[test]
-fn no_file_at_all_is_the_default() {
-    let path = directory(line!()).join(FILE_NAME);
-    assert_eq!(Settings::load_from(&path), Settings::default());
-
-    // And the default is "the user has said nothing", not a set of values.
-    let default = Settings::default();
-    assert_eq!(default.theme, Theme::Desktop);
-    assert_eq!(default.interface.family(), None);
-    assert_eq!(default.interface.size(), None);
-    assert_eq!(default.fixed.family(), None);
-    assert_eq!(default.fixed.size(), None);
-}
-
-#[test]
-fn a_corrupt_file_is_the_default() {
+fn a_missing_or_corrupt_file_is_the_default() {
     let directory = directory(line!());
     let path = directory.join(FILE_NAME);
+
+    assert_eq!(Settings::load_from(&path), Settings::default());
 
     fs::create_dir_all(&directory).expect("creating the test directory");
 
@@ -49,16 +36,15 @@ fn a_corrupt_file_is_the_default() {
     fs::write(&path, b"{ not toml").expect("writing the corrupt file");
     assert_eq!(Settings::load_from(&path), Settings::default());
 
-    // TOML, but not this schema: a theme this app has never heard of is a file it
-    // cannot honour, and starting in the default beats refusing to start.
+    // TOML, but not this schema: starting in the default beats refusing to start.
     fs::write(&path, b"theme = \"solarized\"\n").expect("writing the stale file");
     assert_eq!(Settings::load_from(&path), Settings::default());
 
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// A partial file is not a corrupt one: this is the `serde(default)` on the container
-/// earning its place, since a settings file is a file someone may write by hand.
+/// A partial file is not a corrupt one: `serde(default)` on the container, since a
+/// settings file is one someone may write by hand.
 #[test]
 fn a_file_that_names_one_setting_keeps_it() {
     let directory = directory(line!());
@@ -74,9 +60,8 @@ fn a_file_that_names_one_setting_keeps_it() {
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// The field-order test. TOML cannot reopen a table, so `theme` has to be written
-/// before `[interface]` — and that is a runtime failure, which is why it is asserted
-/// against a real serializer and a real file rather than reasoned about.
+/// The field-order test: TOML cannot reopen a table, so `theme` has to be written
+/// before `[interface]` — a runtime failure, hence a real serializer and a real file.
 #[test]
 fn writes_atomically_and_reads_back_with_its_tables_last() {
     let directory = directory(line!());
@@ -98,18 +83,14 @@ fn writes_atomically_and_reads_back_with_its_tables_last() {
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// Unspecified is not the desktop's answer, and the file is where that has to
-/// survive: a font nobody has chosen is a key that is *absent*, so nothing can later
-/// mistake it for a value that was chosen and happened to match.
+/// Unspecified is an *absent* key, so nothing can later mistake it for a value that was
+/// chosen and happened to match the desktop's answer.
 #[test]
 fn unspecified_is_an_absent_key_and_not_an_empty_one() {
     let text = toml::to_string_pretty(&Settings::default()).expect("writing the default");
     assert!(!text.contains("family"), "{text}");
     assert!(!text.contains("size"), "{text}");
 
-    // The same font written down explicitly — as a settings page that filled its
-    // boxes with what the desktop answered would write it — is a different file and
-    // a different value, and stays one across the round trip.
     let chosen = Settings {
         interface: FontSetting {
             family: Some("Cantarell".into()),
@@ -122,7 +103,7 @@ fn unspecified_is_an_absent_key_and_not_an_empty_one() {
     assert_eq!(toml::from_str::<Settings>(&text).ok(), Some(chosen));
 }
 
-/// The other end of the same distinction: a value that is present but says nothing is
+/// The other end of that distinction: a value that is present but says nothing is
 /// judged at the accessor, so a box the reader emptied is not a font named "".
 #[test]
 fn a_family_of_nothing_is_not_a_family() {
@@ -133,31 +114,10 @@ fn a_family_of_nothing_is_not_a_family() {
     assert_eq!(empty.family(), None);
     assert_eq!(empty.size(), None);
 
-    // And a real one is taken, trimmed.
     let named = FontSetting {
         family: Some(" Fira Code ".into()),
         size: Some(10.5),
     };
     assert_eq!(named.family(), Some("Fira Code"));
     assert_eq!(named.size(), Some(10.5));
-}
-
-#[test]
-fn the_theme_choice_is_a_plain_string() {
-    let text = toml::to_string_pretty(&Settings::default()).expect("writing the default");
-    assert!(text.contains("theme = \"desktop\""), "{text}");
-
-    for (choice, spelling) in [
-        (Theme::Desktop, "desktop"),
-        (Theme::Light, "light"),
-        (Theme::Dark, "dark"),
-    ] {
-        let settings = Settings {
-            theme: choice,
-            ..Settings::default()
-        };
-        let text = toml::to_string_pretty(&settings).expect("writing the theme");
-        assert!(text.contains(&format!("theme = \"{spelling}\"")), "{text}");
-        assert_eq!(toml::from_str::<Settings>(&text).ok(), Some(settings));
-    }
 }

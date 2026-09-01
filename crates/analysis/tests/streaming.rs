@@ -1,10 +1,6 @@
-//! Objects arriving one at a time: what [`open_files_streaming`] says, in what order, and
-//! what stops it.
-//!
-//! The point of the shape is that a reader can be looking at an archive's first member
-//! while its last is still being parsed, so what these tests are really about is *when*
-//! each answer is delivered — a `Vec` returned at the end would satisfy every assertion
-//! about contents and none about order.
+//! Objects arriving one at a time: what `open_files_streaming` says, in what order, and
+//! what stops it. Order is the point — a `Vec` returned at the end would satisfy every
+//! assertion about contents and none about when each answer is delivered.
 
 mod common;
 
@@ -13,14 +9,12 @@ use common::{archive, caller_and_target};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-/// One event, flattened to something a test can compare and print.
 #[derive(Debug, PartialEq, Eq)]
 enum Event {
     Parsed(String),
     Finished(PathBuf),
 }
 
-/// Every event `paths` produces, in order, with the walk allowed to run to the end.
 fn events(paths: Vec<PathBuf>) -> Vec<Event> {
     let mut seen = Vec::new();
     open_files_streaming(paths, |progress| {
@@ -33,9 +27,9 @@ fn events(paths: Vec<PathBuf>) -> Vec<Event> {
     seen
 }
 
-/// A directory of this test's own, named after the line that asked for it so two tests
-/// cannot collide. The archive fixtures have to be on disk: reading the file is the first
-/// half of what is under test.
+/// A directory named after the line that asked for it, so two tests cannot collide. The
+/// archive fixtures have to be on disk: reading the file is the first half of what is
+/// under test.
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -59,9 +53,8 @@ impl Drop for Scratch {
     }
 }
 
-/// The whole of the sub-step in one assertion: an archive's members arrive one by one,
-/// each of them *before* the file they came out of is finished with. The archive itself
-/// is not an object file and so adds nothing at the end.
+/// Members arrive one by one, each before the file they came out of is finished with. The
+/// archive itself is not an object file and so adds nothing at the end.
 #[test]
 fn an_archive_streams_its_members_before_it_finishes() {
     let scratch = Scratch::new(line!());
@@ -83,10 +76,8 @@ fn an_archive_streams_its_members_before_it_finishes() {
     );
 }
 
-/// Files are walked in the order they were asked for, and each one's objects sit between
-/// its own predecessor's end and its own — which is what lets a caller draw "this file is
-/// still being read" against the right row without the crate having to name the file each
-/// object belongs to a second time.
+/// Each file's objects sit between its predecessor's end and its own, which is what lets
+/// a caller draw "this file is still being read" against the right row.
 #[test]
 fn each_file_is_finished_before_the_next_one_starts() {
     let scratch = Scratch::new(line!());
@@ -104,9 +95,7 @@ fn each_file_is_finished_before_the_next_one_starts() {
     );
 }
 
-/// A path that yields nothing is still finished with, both ways it can happen. This is
-/// the variant's whole reason for existing: a caller drawing a pending file has no other
-/// way to learn that nothing is coming.
+/// A caller drawing a pending file has no other way to learn that nothing is coming.
 #[test]
 fn a_path_that_yields_nothing_is_still_finished() {
     let scratch = Scratch::new(line!());
@@ -119,9 +108,8 @@ fn a_path_that_yields_nothing_is_still_finished() {
     );
 }
 
-/// Work nobody is waiting for stops. A caller that breaks on the first object it is
-/// handed sees nothing after it — not the rest of the archive, not the file's own
-/// `Finished`, and not the path behind it.
+/// A caller that breaks on the first object sees nothing after it — not the rest of the
+/// archive, not the file's own `Finished`, and not the path behind it.
 #[test]
 fn breaking_stops_the_walk_where_it_stands() {
     let scratch = Scratch::new(line!());
@@ -143,8 +131,6 @@ fn breaking_stops_the_walk_where_it_stands() {
     assert_eq!(seen, ["a.o"]);
 }
 
-/// The collecting entry point is the streaming one with a `Vec` closed over, so the two
-/// cannot disagree about what a file contributes.
 #[test]
 fn collecting_the_stream_is_what_open_files_returns() {
     let scratch = Scratch::new(line!());
@@ -168,10 +154,8 @@ fn collecting_the_stream_is_what_open_files_returns() {
     assert_eq!(collected, streamed);
 }
 
-/// Streaming must not quietly turn one hash per file into one per object. A member's
-/// digest is the *whole archive's* — which it could only be if the file was hashed as a
-/// file — and a member hashing its own bytes would answer something else here, since no
-/// member is the archive.
+/// A member's digest is the *whole archive's*, which it could only be if the file was
+/// hashed as a file: a member hashing its own bytes would answer something else.
 #[test]
 fn streaming_does_not_hash_a_file_once_per_object() {
     let scratch = Scratch::new(line!());
@@ -194,8 +178,7 @@ fn streaming_does_not_hash_a_file_once_per_object() {
     assert_ne!(FileDigest::of(&member), FileDigest::of(&bytes));
 }
 
-/// A relative path, and a path with no file name at all, are what the *name* of a plain
-/// object is derived from. Nothing here should be able to panic on one.
+/// A path with no file name at all is what a plain object's *name* is derived from.
 #[test]
 fn a_path_with_no_file_name_still_finishes() {
     assert_eq!(

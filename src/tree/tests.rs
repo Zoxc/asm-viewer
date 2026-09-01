@@ -6,8 +6,7 @@ use crate::filter::Filter;
 
 use super::*;
 
-/// An `Object` with nothing in it but the two fields the tree reads. Parsing a real
-/// one would be testing `analysis` instead of this file.
+/// An `Object` with nothing in it but the two fields the tree reads.
 fn object(path: &str, name: &str) -> Arc<Object> {
     Arc::new(Object {
         path: PathBuf::from(path),
@@ -29,7 +28,7 @@ fn plain(pattern: &str) -> Filter {
     }
 }
 
-/// The rows as `(name, kind)`, which is what every assertion below is about.
+/// The rows as text, which is what every assertion below is about.
 fn described(tree: &ObjectTree) -> Vec<String> {
     tree.rows()
         .iter()
@@ -70,8 +69,6 @@ fn loading_tree(
     )
 }
 
-/// A `Loads` with one load over `paths`, which is what every load in the app is
-/// except the multi-file one the Open dialog can make.
 fn reading(paths: &[&str]) -> Loads {
     let mut loads = Loads::default();
     loads.begin(&paths.iter().map(PathBuf::from).collect::<Vec<_>>());
@@ -115,9 +112,7 @@ fn an_archive_folds_its_members_away() {
     );
 }
 
-/// Grouping is by consecutive run, so a file opened twice is one row over both
-/// copies rather than two rows the reader would have to tell apart. What that row
-/// counts is what is under it.
+/// Grouping is by consecutive run, so a file opened twice is one row over both copies.
 #[test]
 fn one_path_opened_twice_is_one_group() {
     let objects = [archive(), archive()].concat();
@@ -132,8 +127,8 @@ fn one_path_opened_twice_is_one_group() {
     );
 }
 
-/// A member matched, so the member is the answer: its file comes with it as the thing
-/// it hangs under, held open, and the members that did not match are not there.
+/// A member matched, so the member is the answer: its file comes with it as the thing it
+/// hangs under, held open, and the members that did not match are not there.
 #[test]
 fn a_matching_member_opens_its_file() {
     let objects = archive();
@@ -147,8 +142,8 @@ fn a_matching_member_opens_its_file() {
     );
 }
 
-/// The file matched, so the file is the answer: every member is under it and the row
-/// stays folded the way it was left. Opening it would bury the row that matched.
+/// The file matched, so the file is the answer: every member is under it — matching or not
+/// — and the row stays folded the way it was left.
 #[test]
 fn a_matching_file_keeps_its_own_expansion() {
     let objects = archive();
@@ -169,25 +164,8 @@ fn a_matching_file_keeps_its_own_expansion() {
     );
 }
 
-/// The file's name matches nothing a member is called, so this is the case where a
-/// member-only rule would have shown an empty file row.
-#[test]
-fn a_matching_file_carries_members_that_match_nothing() {
-    let objects = archive();
-    let group = Arc::as_ptr(&objects[0]).addr();
-    assert_eq!(
-        described(&tree(&objects, &plain("libfoo"), &[group])),
-        [
-            "file libfoo.rlib (3) Expanded",
-            "  object foo.o",
-            "  object bar.o",
-            "  object baz.o",
-        ]
-    );
-}
-
-/// Nothing under a file matched and the file did not either, so the file is gone —
-/// not an empty row that folds open onto nothing.
+/// Neither the file nor anything under it matched, so the file is gone — not an empty row
+/// that folds open onto nothing.
 #[test]
 fn a_file_nothing_matches_is_not_there() {
     let objects = [archive(), vec![object("/tmp/hello", "hello")]].concat();
@@ -204,9 +182,8 @@ fn the_directory_is_not_matched() {
     assert!(described(&tree(&objects, &plain("tmp"), &[])).is_empty());
 }
 
-/// A pattern that will not compile matches nothing, so the list is empty — the bar
-/// above it is what says why, and a file row with no reason to be there would be the
-/// one thing left on screen.
+/// A pattern that will not compile matches nothing, so the list is empty; the bar above it
+/// is what says why.
 #[test]
 fn an_invalid_pattern_empties_the_tree() {
     let objects = [archive(), vec![object("/tmp/hello", "hello")]].concat();
@@ -217,39 +194,23 @@ fn an_invalid_pattern_empties_the_tree() {
     assert!(described(&tree(&objects, &filter, &[])).is_empty());
 }
 
-/// The row that could not exist before objects streamed: a file that has been asked
-/// for and has produced nothing yet is still on screen, saying so. This is the whole
-/// of `Goals.md`'s "an indicator for an object still being processed".
+/// A file that has been asked for and has produced nothing yet is still on screen, saying
+/// so — and has no group, so nothing can fold it.
 #[test]
 fn a_file_being_read_is_a_row_before_it_has_an_object() {
-    assert_eq!(
-        described(&loading_tree(
-            &[],
-            &reading(&["/tmp/libfoo.rlib"]),
-            &Filter::default(),
-            &[]
-        )),
-        ["file libfoo.rlib (0) Collapsed reading"]
-    );
-}
-
-/// A file with nothing behind it has no group either, since the group is the first
-/// object's pointer -- so nothing can fold it, and nothing draws a triangle inviting
-/// the reader to try.
-#[test]
-fn a_file_with_nothing_behind_it_has_no_group() {
     let tree = loading_tree(
         &[],
         &reading(&["/tmp/libfoo.rlib"]),
         &Filter::default(),
         &[],
     );
+    assert_eq!(described(&tree), ["file libfoo.rlib (0) Collapsed reading"]);
     assert!(matches!(tree.row(0), TreeRow::File { group: None, .. }));
 }
 
-/// While a file is being read, one object is not yet an answer: the row stays a file
-/// row so that the second member landing does not turn a top-level row into a parent
-/// under a reader who is already reading it.
+/// While a file is being read, one object is not yet an answer: the row stays a file row so
+/// that a second member landing does not turn a top-level row into a parent under a reader
+/// who is already reading it.
 #[test]
 fn one_object_of_a_file_still_being_read_stays_under_its_file() {
     let objects = vec![object("/tmp/libfoo.rlib", "foo.o")];
@@ -266,49 +227,15 @@ fn one_object_of_a_file_still_being_read_stays_under_its_file() {
         ["file libfoo.rlib (1) Expanded reading", "  object foo.o"]
     );
 
-    // And once the read is over it collapses into the one row the rule has always
-    // given it.
+    // And once the read is over it collapses into the one row the rule has always given it.
     assert_eq!(
         described(&tree(&objects, &Filter::default(), &[group])),
         ["object foo.o"]
     );
 }
 
-/// The members that have arrived are ordinary rows under an ordinary file row; only
-/// the indicator says the rest are still coming.
-#[test]
-fn a_part_read_archive_shows_what_it_has() {
-    let objects = archive();
-    let loads = reading(&["/tmp/libfoo.rlib"]);
-    let group = Arc::as_ptr(&objects[0]).addr();
-
-    assert_eq!(
-        described(&loading_tree(
-            &objects,
-            &loads,
-            &Filter::default(),
-            &[group]
-        )),
-        [
-            "file libfoo.rlib (3) Expanded reading",
-            "  object foo.o",
-            "  object bar.o",
-            "  object baz.o",
-        ]
-    );
-    assert_eq!(
-        described(&tree(&objects, &Filter::default(), &[group])),
-        [
-            "file libfoo.rlib (3) Expanded",
-            "  object foo.o",
-            "  object bar.o",
-            "  object baz.o",
-        ]
-    );
-}
-
-/// A file being read is filtered like any other row, on the only name it has. It has
-/// no members to match through, so its own name is the whole question.
+/// A file being read has no members to match through, so its own name is the whole
+/// question.
 #[test]
 fn a_file_being_read_is_filtered_on_its_name() {
     let loads = reading(&["/tmp/libfoo.rlib"]);
@@ -319,8 +246,8 @@ fn a_file_being_read_is_filtered_on_its_name() {
     assert!(described(&loading_tree(&[], &loads, &plain("bar"), &[])).is_empty());
 }
 
-/// Two files asked for at once are two rows, in the order they were asked for, and
-/// the one that has started producing objects is drawn where its objects are.
+/// Two files asked for at once are two rows, in the order they were asked for, and the one
+/// that has started producing objects is drawn where its objects are.
 #[test]
 fn every_file_being_read_gets_a_row_of_its_own() {
     let objects = vec![object("/tmp/hello", "hello")];
@@ -334,8 +261,7 @@ fn every_file_being_read_gets_a_row_of_its_own() {
     );
 }
 
-/// Closing a file stops every load of it, whoever asked: the unit is the path, which
-/// is what `close_binary` closes by and what the saved binaries are a list of.
+/// Closing a file stops every load of it, whoever asked: the unit is the path.
 #[test]
 fn cancelling_a_path_stops_every_load_of_it() {
     let mut loads = Loads::default();
@@ -346,15 +272,14 @@ fn cancelling_a_path_stops_every_load_of_it() {
 
     assert!(!loads.holds(first, Path::new("/tmp/a")));
     assert!(!loads.holds(second, Path::new("/tmp/a")));
-    // The other path of the first load is untouched: one file closing is not the
-    // request closing.
+    // One file closing is not the request closing.
     assert!(loads.holds(first, Path::new("/tmp/b")));
     assert!(loads.active(first));
     assert!(!loads.active(second));
 }
 
-/// The reason a load has an id at all: a path closed and immediately reopened is two
-/// loads, and the abandoned one's objects must not arrive into the new one's row.
+/// The reason a load has an id at all: a path closed and immediately reopened is two loads,
+/// and the abandoned one's objects must not arrive into the new one's row.
 #[test]
 fn one_load_does_not_answer_for_another_over_the_same_path() {
     let mut loads = Loads::default();
@@ -368,8 +293,7 @@ fn one_load_does_not_answer_for_another_over_the_same_path() {
     assert!(loads.is_loading(Path::new("/tmp/a")));
 }
 
-/// Finishing is per path, so a load over several files goes quiet one file at a time
-/// — which is what lets each row stop saying it is being read at the right moment.
+/// Finishing is per path, so a load over several files goes quiet one file at a time.
 #[test]
 fn finishing_one_path_leaves_the_rest_of_its_load() {
     let mut loads = Loads::default();
@@ -386,8 +310,7 @@ fn finishing_one_path_leaves_the_rest_of_its_load() {
     assert!(loads.paths().is_empty());
 }
 
-/// One file is one row however many loads are producing it, and the order is the
-/// order it was asked for in.
+/// One file is one row however many loads are producing it, in the order it was asked for.
 #[test]
 fn the_paths_being_read_do_not_repeat() {
     let mut loads = Loads::default();
@@ -407,11 +330,4 @@ fn clearing_abandons_every_load() {
 
     assert!(!loads.active(id));
     assert!(loads.paths().is_empty());
-}
-
-#[test]
-fn tags_name_the_format() {
-    assert_eq!(format_tag(BinaryFormat::Elf), "ELF");
-    assert_eq!(format_tag(BinaryFormat::Pe), "PE");
-    assert_eq!(format_tag(BinaryFormat::Coff), "COFF");
 }

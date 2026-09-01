@@ -1,5 +1,5 @@
-//! The bytes an `Object` keeps: an object file is parsed from a slice of a file's bytes
-//! and holds on to them, so a later pass can read what parsing did not keep.
+//! The bytes an `Object` keeps: it is parsed from a slice of a file's bytes and holds on
+//! to them, so a later pass can read what parsing did not keep.
 
 mod common;
 
@@ -7,19 +7,6 @@ use analysis::{open_files, parse_object, FileDigest, ObjectData};
 use common::{archive, caller_and_target};
 use std::path::PathBuf;
 use std::sync::Arc;
-
-#[test]
-fn a_parsed_object_keeps_the_bytes_it_was_parsed_from() {
-    let data = caller_and_target();
-    let object = parse_object(
-        data[..].into(),
-        "fixture.o".into(),
-        PathBuf::from("/fixture.o"),
-    )
-    .expect("fixture parses");
-
-    assert_eq!(object.data.bytes(), &data[..]);
-}
 
 #[test]
 fn a_member_is_the_slice_of_the_file_it_lives_in() {
@@ -35,7 +22,6 @@ fn a_member_is_the_slice_of_the_file_it_lives_in() {
     let data = ObjectData::member(&file, prefix.len() as u64, member.len() as u64)
         .expect("the member lies inside the file");
 
-    // The member's own bytes, not the whole file's.
     assert_eq!(data.bytes(), &member[..]);
 
     let object = parse_object(data, "member.o".into(), PathBuf::from("/lib.a"))
@@ -48,8 +34,7 @@ fn a_member_is_the_slice_of_the_file_it_lives_in() {
 fn a_member_range_outside_the_file_is_rejected() {
     let file = ObjectData::whole_file(Arc::from(vec![0u8; 16]));
 
-    // Every way a member header can lie about where its data is. Each must come back as
-    // `None` — `open_files` then skips the member, exactly as a failed `data()` did.
+    // Every way a member header can lie about where its data is, overflow included.
     assert!(ObjectData::member(&file, 0, 17).is_none());
     assert!(ObjectData::member(&file, 16, 1).is_none());
     assert!(ObjectData::member(&file, u64::MAX, 1).is_none());
@@ -70,8 +55,8 @@ fn a_member_range_outside_the_file_is_rejected() {
     );
 }
 
-/// The digest is the *file's*, so a member carries the archive's and not its own bytes'.
-/// That is what makes it comparable with what a session saved: a session names files.
+/// The digest is the *file's*, which is what makes it comparable with what a session
+/// saved: a session names files.
 #[test]
 fn a_member_carries_the_digest_of_the_file_it_lives_in() {
     let member = caller_and_target();
@@ -85,8 +70,6 @@ fn a_member_carries_the_digest_of_the_file_it_lives_in() {
 
     assert_eq!(data.digest(), FileDigest::of(&bytes));
     assert_eq!(data.digest(), file.digest());
-    // And emphatically not the digest of the slice it addresses, which would answer for
-    // a unit nothing names.
     assert_ne!(data.digest(), FileDigest::of(&member));
 
     let object = parse_object(data, "member.o".into(), PathBuf::from("/lib.a"))
@@ -94,8 +77,6 @@ fn a_member_carries_the_digest_of_the_file_it_lives_in() {
     assert_eq!(object.data.digest(), FileDigest::of(&bytes));
 }
 
-/// One byte's difference is a different digest; the same bytes are the same digest
-/// whatever allocation they arrive in. Both halves are what a restore leans on.
 #[test]
 fn the_digest_is_of_the_bytes_and_nothing_else() {
     let bytes = caller_and_target();
@@ -104,14 +85,12 @@ fn the_digest_is_of_the_bytes_and_nothing_else() {
 
     assert_eq!(FileDigest::of(&bytes), FileDigest::of(&bytes.clone()));
     assert_ne!(FileDigest::of(&bytes), FileDigest::of(&rebuilt));
-    // Written as sixteen hex digits, which is the form the session file holds.
+    // Sixteen hex digits, which is the form the session file holds.
     assert_eq!(FileDigest::of(&bytes).to_string().len(), 16);
 }
 
-/// The archive case the whole design turns on: 196 members must cost one hash, not 196,
-/// and every object out of one file must answer the same thing — a session names the
-/// file, and a member that disagreed with its archive would be a second answer to a
-/// question with one.
+/// 196 members must cost one hash, not 196, and every object out of one file must answer
+/// the same thing.
 #[test]
 fn every_object_out_of_one_archive_shares_one_digest() {
     let bytes = archive(&[

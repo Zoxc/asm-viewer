@@ -1,35 +1,21 @@
-//! The tests that run the UI rather than the logic under it, and the
-//! palette's, which have nowhere else to live.
+//! The tests that run the UI rather than the logic under it, and the palette's, which have
+//! nowhere else to live.
 //!
-//! Everything decided by cases lives in a framework-free module with its own tests
-//! ([`crate::rows`] here), and this is deliberately not a second home for that. What is
-//! here is what those modules cannot hold. The runner tests exist for the one class of
-//! bug they are blind to by construction: a `State` borrow that is legal to the compiler
-//! and panics at the moment a gesture ends. `mark_release` shipped holding a `peek` guard
-//! across its own write, so *every* mouse-up on a run brought the window down, and no
-//! amount of testing `RowSelection` would have said a word about it. A press, a sweep and
-//! a release through freya's own headless runner is the smallest thing that would have.
-//!
-//! The palette's tests are here because a `Color` is a freya type and the palette cannot
-//! move out of `ui.rs`. They assert the properties a second set of values can silently
-//! break -- a foreground that has gone invisible against its own surface, a translucent
-//! wash that says nothing over a dark ground, a capture colour that sends
-//! `resolve_capture_color` walking up the dotted name -- rather than the values
-//! themselves, which are a design and not an assertion.
+//! The runner tests exist for the class of bug the framework-free modules' own tests are
+//! blind to by construction: a `State` borrow that is legal to the compiler and panics at
+//! the moment a gesture ends. The palette's are here because a `Color` is a freya type;
+//! they assert the properties a second set of values can silently break rather than the
+//! values themselves.
 use super::*;
-// Named again, because `use super::*` offers two `use_theme`s -- ours, re-exported out of
-// `settings_view`, and freya's own out of the prelude -- and two globs offering one name is
-// an ambiguity at the call site rather than a shadowing. An explicit import wins over a
-// glob, so this is what the name means here: ours. It is spelled out in this file and not
-// in `ui.rs` because this file is the only one that calls it from outside the module that
-// defines it; a re-export up there would be unused by the build that is not running tests.
+// Named again: `use super::*` offers two `use_theme`s -- ours and freya's own out of the
+// prelude -- and two globs offering one name is an ambiguity rather than a shadowing. An
+// explicit import wins over a glob, so this is what the name means here: ours.
 use super::settings_view::use_theme;
 use freya_testing::TestingRunner;
 
-/// Three rows wired exactly the way the two panes are, and no more of them than that:
-/// the press that starts a run, the `pointer_over` that sweeps it, and the release
-/// watched globally at the root, because the button very often comes up somewhere the
-/// run does not reach.
+/// Three rows wired exactly the way the two panes are: the press that starts a run, the
+/// `pointer_over` that sweeps it, and the release watched globally at the root, because the
+/// button very often comes up somewhere the run does not reach.
 fn harness() -> impl IntoElement {
     let marked = use_consume::<Marked>().0;
 
@@ -54,28 +40,25 @@ fn harness() -> impl IntoElement {
         .child(row(2))
 }
 
-/// The five states [`scrolling_harness`] is wired to, as context types of their own
-/// so that three `State<usize>`s cannot be confused for one another.
+/// The five states [`scrolling_harness`] is wired to, as context types of their own so that
+/// three `State<usize>`s cannot be confused for one another.
 #[derive(Clone, Copy)]
 struct KeptTab(State<String>);
 #[derive(Clone, Copy)]
 struct KeptAt(State<Positions<String>>);
-/// The tabs that are open, which is what a position is only kept for. A plain list
-/// here where the app asks `Docs`: what the hook wants is an answer that is true
-/// *now*, and both of these are.
+/// The tabs that are open, which is what a position is only kept for.
 #[derive(Clone, Copy)]
 struct KeptOpen(State<Vec<String>>);
 #[derive(Clone, Copy)]
 struct KeptLength(State<usize>);
-/// The last row the pointer was over, which is how the test asks where the view
-/// actually is rather than believing what the map says about it.
+/// The last row the pointer was over, which is how the test asks where the view actually
+/// is rather than believing what the map says about it.
 #[derive(Clone, Copy)]
 struct KeptTop(State<usize>);
 
-/// A scroll view wired the way both **code** panes are: one `ScrollController` reused
-/// across every tab the pane shows, `use_kept_position` between them, and
-/// [`code_row_height`] on both halves of the view -- which is what those panes are,
-/// and the only kind of list that keeps a position at all.
+/// A scroll view wired the way both **code** panes are: one `ScrollController` reused across
+/// every tab the pane shows, `use_kept_position` between them, and [`code_row_height`] on
+/// both halves of the view.
 fn scrolling_harness() -> impl IntoElement {
     let tab = use_consume::<KeptTab>().0;
     let at = use_consume::<KeptAt>().0;
@@ -112,10 +95,9 @@ fn scrolling_harness() -> impl IntoElement {
     )
 }
 
-/// A sidebar list's shape: the same view over [`list_row_height`], and no kept
-/// position, because the Objects and Symbols lists have none. It exists so that the
-/// agreement between an `item_size` and its rows is asserted for *both* heights rather
-/// than for one and assumed for the other.
+/// A sidebar list's shape: the same view over [`list_row_height`], and no kept position.
+/// It exists so the agreement between an `item_size` and its rows is asserted for *both*
+/// heights rather than for one and assumed for the other.
 fn list_scrolling_harness() -> impl IntoElement {
     let mut top = use_consume::<KeptTop>().0;
 
@@ -133,12 +115,10 @@ fn list_scrolling_harness() -> impl IntoElement {
     )
 }
 
-/// Switching tab puts the pane back where that tab was left, and a tab seen for the
-/// first time opens at the top rather than at the last one's offset.
-///
-/// Headless because none of it is visible to any other kind of test: the position is
-/// read out of a `ScrollController` inside an effect that a scroll wakes, and what it
-/// is asserted against is which row a real `VirtualScrollView` put under the pointer.
+/// Switching tab puts the pane back where that tab was left, and a tab seen for the first
+/// time opens at the top rather than at the last one's offset. Headless because the
+/// position is read out of a `ScrollController` inside an effect a scroll wakes, and is
+/// asserted against which row a real `VirtualScrollView` put under the pointer.
 #[test]
 fn a_tab_comes_back_to_the_row_it_was_left_at() {
     let (mut test, (tab, at, open, _length, top)) = TestingRunner::new(
@@ -170,9 +150,8 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
     // Where the top of the view is, asked the only way a pane can be asked: the
     // pointer is moved away first, or entering the same row twice is no event at all.
     let top_row = |test: &mut TestingRunner| {
-        // Settled first: an effect is a spawned task, so the scroll it asks for lands
-        // a poll after the state change that asked for it, and a view that moves under
-        // a pointer already sitting still sends no `pointerover` to say so.
+        // Settled first: the scroll an effect asks for lands a poll after the state change
+        // that asked for it.
         for _ in 0..4 {
             test.sync_and_update();
         }
@@ -187,12 +166,12 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
     test.sync_and_update();
     let left_at = top_row(&mut test);
     assert!(left_at > 0, "the wheel moved nothing");
-    // The scroll was written down as it happened, which is what makes the position
-    // survive the pane being left in any way at all -- including the window closing.
+    // The scroll was written down as it happened, which is what survives the window merely
+    // being closed.
     assert_eq!(at.peek().at(&"a".to_owned()), Some(left_at));
 
-    // A tab this pane has never shown starts at the top, and pointedly not at the
-    // offset the tab before it was at: that is the bug this hook exists for.
+    // A tab this pane has never shown starts at the top, and pointedly not at the offset
+    // the tab before it was at.
     tab.set("b".to_owned());
     test.sync_and_update();
     assert_eq!(top_row(&mut test), 0);
@@ -203,9 +182,8 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
     test.sync_and_update();
     assert_eq!(top_row(&mut test), left_at);
 
-    // And closing the tab on screen does not put it back. `close_tab` forgets the
-    // position and then moves to a neighbour, so the run that follows is holding a
-    // tab that is gone -- which is a `Selection` holding a whole `Object` in the app.
+    // And closing the tab on screen does not put it back: `close_tab` forgets the position
+    // and then moves to a neighbour, so the run that follows is holding a tab that is gone.
     let (mut open, mut at) = (open, at);
     open.write().retain(|tab| tab != "a");
     at.write().forget(&"a".to_owned());
@@ -215,10 +193,6 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
     }
     assert_eq!(at.peek().at(&"a".to_owned()), None);
 }
-
-// --- the dock's document panel -----------------------------------------
-//
-// Plain data, so no runner: a `DockArea` is a tree and three rules over it.
 
 fn area(groups: Vec<Vec<Tab>>) -> DockArea {
     DockArea::row(groups).with_documents(DOCUMENT_PANEL)
@@ -236,10 +210,9 @@ fn panels(area: &DockArea) -> Vec<PanelId> {
     found
 }
 
-/// The whole reason the panel is designated. freya's own sweep retains every
-/// non-empty child with no exemption, so the panel documents live in would fold away
-/// the moment the reader closed the last one -- and the content area would come back
-/// as whatever was left beside it.
+/// The whole reason the panel is designated: freya's own sweep retains every non-empty
+/// child with no exemption, so the panel documents live in would fold away the moment the
+/// reader closed the last one.
 #[test]
 fn the_document_panel_survives_being_emptied() {
     let mut dock = area(vec![vec![], vec![Tab::View(View::Settings)]]);
@@ -300,29 +273,24 @@ fn a_view_may_be_dropped_anywhere() {
     ));
 }
 
-/// Nothing on screen: what a project switch does is to the states, and the states are
-/// what this asserts. A runner all the same, because a `State` needs a runtime and
-/// because the bug being looked for is a borrow held across a write, which is a
-/// runtime panic and not a compile error.
+/// Nothing on screen: what a project switch does is to the states. A runner all the same,
+/// because a `State` needs a runtime and because a borrow held across a write is a runtime
+/// panic rather than a compile error.
 fn project_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// The eight contexts `app()` provides, in one `ProjectStates`, so a test can drive a
-/// switch exactly as the recent list's press does.
-///
-/// A macro and not a function: the runner's type is `freya_core::integration::Runner`,
-/// which freya's prelude does not re-export, so naming it here would mean naming a
-/// crate the app does not depend on.
+/// The eight contexts `app()` provides, in one `ProjectStates`. A macro and not a
+/// function: the runner's type is `freya_core::integration::Runner`, which freya's prelude
+/// does not re-export, so naming it would mean naming a crate the app does not depend on.
 macro_rules! project_states {
     () => {
         |runner: &mut _| project_states!(runner)
     };
     ($runner:expr) => {{
-        // The two states that are what is open, and the derivation over them, in the
-        // same order and by the same rule `app()` uses -- so a test drives exactly
-        // what the app does. `Active` is provided but not returned: it is not one of
-        // the project's states, it is a reading of two of them.
+        // The two states that are what is open, and the derivation over them, in the same
+        // order `app()` uses. `Active` is provided but not returned: it is not one of the
+        // project's states, it is a reading of two of them.
         let dock = $runner
             .provide_root_context(|| {
                 ContentDock(State::create(
@@ -363,17 +331,13 @@ macro_rules! project_states {
     }};
 }
 
-/// Leaving a project leaves nothing of it behind: no object, no tab of either kind,
-/// no viewing position, no history entry and nothing active.
+/// Leaving a project leaves nothing of it behind: no object, no tab of either kind, no
+/// viewing position, no history entry and nothing active.
 ///
-/// Headless for the reason the swept run below is. `clear_project` goes through
-/// `close_binary` and `close_tab`, and each of those reads a state and then writes
-/// it -- which is legal to the compiler and panics at the moment it runs if the read
-/// is still borrowed. Asserting the emptiness is half of it; the other half is that
-/// the whole walk happens at all.
-///
-/// The source-driven tab is the case a binary close deliberately leaves standing, so
-/// it is the one only this walk reaches.
+/// Headless because `close_binary` and `close_tab` each read a state and then write it,
+/// which is legal to the compiler and panics at the moment it runs if the read is still
+/// borrowed. The source-driven tab is the case a binary close deliberately leaves
+/// standing, so it is the one only this walk reaches.
 #[test]
 fn leaving_a_project_leaves_nothing_of_it_behind() {
     let symbols = fixture_symbols();
@@ -385,9 +349,8 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
         TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
     test.sync_and_update();
 
-    // The app as a session leaves it: a binary open, two of its functions in the
-    // strip with a row remembered for one of them, a source file open beside them and
-    // somewhere to go back to.
+    // The app as a session leaves it: a binary open, two of its functions in the strip with
+    // a row remembered for one of them, a source file open beside them, somewhere to go.
     let (mut objects, mut asm_at, mut src_at) = (states.objects, states.asm_at, states.src_at);
     objects.write().push(object.clone());
     let tab = |symbol: &Symbol| Document::Assembly(Selection::Symbol(symbol.clone()));
@@ -400,8 +363,7 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     test.sync_and_update();
 
     assert_eq!(states.open.documents().len(), 3);
-    // Three visits, the source file included: the history records documents, which is
-    // what lets its panel list a file at all.
+    // Three visits, the source file included: the history records documents.
     assert_eq!(states.history.peek().entries().len(), 3);
 
     clear_project(states);
@@ -416,9 +378,7 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
         states.history.peek().entries().is_empty(),
         "a history entry was left behind"
     );
-    // Not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points
-    // into, so a position left here would hold the whole binary of the project just
-    // left.
+    // Not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into.
     assert_eq!(
         states.asm_at.peek().at(&tab(&first)),
         None,
@@ -445,15 +405,10 @@ fn menu_harness() -> impl IntoElement {
         .child(DocumentMenuButton)
 }
 
-/// And it stays hanging from that edge when the list grows underneath it.
-///
-/// `MenuContainer` measures itself once and keeps the offset it worked out then
-/// (`menu.rs:236`), so a menu that widens after that is placed for the width it used to
-/// be and hangs off the side of the window -- by 315px here. The menu is keyed by its
-/// row count so a change remounts it, which is what makes it measure the size it is.
-///
-/// Not a contrived case: the tab list fills in from a worker, so a menu opened while a
-/// binary is still being read is open while rows arrive.
+/// And it stays hanging from that edge when the list grows underneath it. `MenuContainer`
+/// measures itself once and keeps the offset it worked out then (`menu.rs:236`), so a menu
+/// that widens after that hangs off the side of the window -- by 315px here. Not a
+/// contrived case: the tab list fills in from a worker.
 #[test]
 fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
     let (mut test, states) =
@@ -461,7 +416,7 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
     test.sync_and_update();
 
     // The app's panel always holds the three views, so the button is there before any
-    // document is -- which is exactly how the menu comes to be open while rows arrive.
+    // document is.
     {
         let mut dock = states.open.dock;
         let mut dock = dock.write();
@@ -523,18 +478,12 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
     );
 }
 
-/// The menu hangs from the button's right-hand edge rather than off the side of the
-/// window.
-///
-/// It is positioned *vertically only*, and this is what says why. `MenuContainer`
-/// corrects its own overflow -- and latches the first position it is measured at
-/// (`menu.rs:236`, `measured` is written once) -- so a `right(0.)` of ours lands it on
-/// the button's edge and freya's correction then shifts it a whole menu-width further
-/// left, which is the misalignment this asserts against. Dropping our half and letting
-/// freya pull it back into the window is what puts the two edges together.
-///
-/// The harness puts the button hard against the right edge, which is where the tab bar
-/// really puts it and the only place the correction fires at all.
+/// The menu hangs from the button's right-hand edge rather than off the side of the window,
+/// and is positioned *vertically only*. `MenuContainer` corrects its own overflow and
+/// latches the first position it is measured at (`menu.rs:236`), so a `right(0.)` of ours
+/// lands it on the button's edge and freya's correction then shifts it a whole menu-width
+/// further left. The harness puts the button hard against the right edge, which is the
+/// only place the correction fires.
 #[test]
 fn the_tab_menu_hangs_from_the_buttons_right_edge() {
     let symbols = fixture_symbols();
@@ -594,21 +543,12 @@ fn the_tab_menu_hangs_from_the_buttons_right_edge() {
     );
 }
 
-/// The overflow menu opens on a press and closes on the next one.
+/// The overflow menu opens on a press and closes on the next one. The assertion is that
+/// the element tree *grew*: what is checked is that the control does anything at all.
 ///
-/// The assertion is that the element tree *grew*, rather than that some particular row
-/// exists: what is being checked is that the control does anything at all, and a menu
-/// that shut in the frame it opened would look exactly like a button that does not
-/// work.
-///
-/// That it *cannot* shut in the frame it opened is the reason there is no guard against
-/// `Menu`'s close-on-any-global-press here, where `ContextMenu` has one. The listeners
-/// for a global event are collected when it is measured, before a single handler runs,
-/// and this opens on `on_press` -- derived from the very `MouseUp` that emits the global
-/// press -- so the menu is not in the tree to be asked. A menu opened from a `*_down`
-/// handler is the case that needs the swallow, which is what `ContextMenu`'s is for:
-/// a right-click menu opens on `on_secondary_down`, and the `MouseUp` ending that same
-/// gesture *is* measured against a tree that holds it.
+/// It needs no guard against `Menu`'s close-on-any-global-press, where `ContextMenu` has
+/// one: the listeners for a global event are collected before a single handler runs, and
+/// this opens on `on_press`, derived from the very `MouseUp` that emits the global press.
 #[test]
 fn the_document_menu_opens_and_closes() {
     let symbols = fixture_symbols();
@@ -658,13 +598,9 @@ fn the_document_menu_opens_and_closes() {
     assert_eq!(nodes(&test), shut, "the menu did not close");
 }
 
-/// The invariant the whole two-state arrangement rests on: a document has a tab in the
-/// panel exactly while it has an entry in the table.
-///
-/// It is what makes "the panel's `tabs` vec is the list of open documents" true
-/// without a second list, and `use_kept_position` leans on it directly -- it asks
-/// `Docs` whether a tab is still open in order to decide whether to write its row
-/// down, and would resurrect a just-closed tab's position if the two could drift.
+/// A document has a tab in the panel exactly while it has an entry in the table, which is
+/// what makes "the panel's `tabs` vec is the list of open documents" true without a second
+/// list. `use_kept_position` leans on it directly.
 #[test]
 fn the_panel_and_the_table_hold_the_same_documents() {
     let symbols = fixture_symbols();
@@ -726,11 +662,9 @@ fn the_panel_and_the_table_hold_the_same_documents() {
     assert!(agree(&states).is_empty());
 }
 
-/// Closing a tab lands on the one to its right, and freya would land on the leftmost.
-///
-/// `DockNode::remove_tab_except` sets a panel's active tab to `tabs.first()` when it
-/// removes the active one, so the removal is done by hand and the landing chosen with
-/// [`tabs::landing`]. This is the assertion that says the app's rule won.
+/// Closing a tab lands on the one to its right, where freya would land on the leftmost:
+/// `DockNode::remove_tab_except` sets the active tab to `tabs.first()`, so the removal is
+/// done by hand and the landing chosen with [`tabs::landing`].
 #[test]
 fn closing_a_document_lands_on_its_right_hand_neighbour() {
     let symbols = fixture_symbols();
@@ -801,13 +735,9 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
     assert!(states.open.active().is_none());
 }
 
-/// The history records where the reader *went* and not what is on screen.
-///
-/// The rule Step 1e settled, and the reason `activate` is told why it is being called:
-/// opening a document is a visit, switching to a tab that is already open is not, and
-/// the neighbour a close lands on is not either. An effect observing the active
-/// document could not tell any of these apart, which is why the recording is no longer
-/// one.
+/// The history records where the reader *went* and not what is on screen: opening a
+/// document is a visit, switching to an open tab is not, and the neighbour a close lands
+/// on is not either. An effect observing the active document could not tell them apart.
 #[test]
 fn switching_to_an_open_tab_is_not_a_visit() {
     let symbols = fixture_symbols();
@@ -865,13 +795,9 @@ fn switching_to_an_open_tab_is_not_a_visit() {
     );
 }
 
-/// Closing a binary takes its own tabs and leaves a source-driven one standing.
-///
-/// The rule the one strip inherited from the two: a file tab outlives the binary that
-/// led the reader to it, because the text stands on its own and nothing records which
-/// object opened it. Worth a runner rather than a `Tabs` test, because what has to
-/// hold is that `close_binary` lands the *active* document somewhere sensible when the
-/// tab it was on goes and a tab of the other kind is what is left.
+/// Closing a binary takes its own tabs and leaves a source-driven one standing: a file tab
+/// outlives the binary that led the reader to it. Worth a runner because what has to hold
+/// is that `close_binary` lands the *active* document somewhere sensible.
 #[test]
 fn closing_a_binary_keeps_the_source_tabs() {
     let symbols = fixture_symbols();
@@ -914,23 +840,19 @@ fn closing_a_binary_keeps_the_source_tabs() {
     );
 }
 
-/// The channel a load test feeds by hand, and the paths the harness registers as
-/// being read. Standing in for `open_binaries`' worker thread: what has to be
-/// asserted is what the app does with an answer that arrives after the reader has
-/// moved on, which against a real worker is a race and against a channel is a fact.
-/// The receiver is *taken* rather than cloned, because a clone left in the context
-/// map would keep the channel open for ever and the test could never see the one
-/// thing that stops a worker: `take_load` returning and dropping the last receiver.
+/// The channel a load test feeds by hand, and the paths the harness registers as being
+/// read, standing in for `open_binaries`' worker thread. The receiver is *taken* rather
+/// than cloned: a clone left in the context map would keep the channel open for ever, and
+/// the test could never see `take_load` returning and dropping the last receiver.
 #[derive(Clone)]
 struct Feed(
     Arc<Mutex<Option<async_channel::Receiver<Progress>>>>,
     Arc<Vec<PathBuf>>,
 );
 
-/// The real `take_load` over the real Objects tree, with the worker replaced by
-/// [`Feed`]. The tree is mounted rather than left out so that every one of these
-/// tests also builds the rows for a file that is being read -- including the row with
-/// no group behind it, which is the one shape no other test reaches.
+/// The real `take_load` over the real Objects tree, with the worker replaced by [`Feed`].
+/// The tree is mounted so these tests also build the rows for a file being read --
+/// including the row with no group behind it, which no other test reaches.
 fn load_harness() -> impl IntoElement {
     let objects = use_consume::<Objects>().0;
     let loading = use_consume::<Loading>().0;
@@ -955,9 +877,9 @@ fn load_harness() -> impl IntoElement {
     rect().expanded().child(ObjectsTab)
 }
 
-/// `n` objects that all came out of one path, which is what an archive's members look
-/// like to everything above the analysis crate. Parsed `n` times rather than cloned,
-/// so they are `n` distinct `Arc`s exactly as real members are.
+/// `n` objects that all came out of one path, which is what an archive's members look like
+/// above the analysis crate. Parsed `n` times rather than cloned, so they are `n` distinct
+/// `Arc`s exactly as real members are.
 fn fixture_objects(n: usize) -> (PathBuf, Vec<Arc<Object>>) {
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
@@ -996,9 +918,8 @@ fn mount_load(
     (test, states, sender)
 }
 
-/// How the Objects tree describes what is on screen, which is the one thing these
-/// tests are really about: a file that is being read has a row before it has an
-/// object, and stops saying so when the last of them has landed.
+/// How the Objects tree describes what is on screen: a file being read has a row before it
+/// has an object, and stops saying so when the last of them has landed.
 fn reading(states: &ProjectStates) -> Vec<(String, usize, bool)> {
     let tree = ObjectTree::new(
         &states.objects.peek(),
@@ -1019,17 +940,16 @@ fn reading(states: &ProjectStates) -> Vec<(String, usize, bool)> {
         .collect()
 }
 
-/// The sub-step in one test: the objects of one file reach the sidebar one at a time,
-/// and the row for that file is there before the first of them is.
+/// The objects of one file reach the sidebar one at a time, and the row for that file is
+/// there before the first of them is.
 #[test]
 fn objects_reach_the_sidebar_as_they_are_parsed() {
     let (path, objects) = fixture_objects(3);
     let (mut test, states, sender) = mount_load(&path);
     test.sync_and_update();
 
-    // Before a single byte has been parsed. This is the state `Goals.md` asks for an
-    // indicator for and which nothing could be in while the parse handed back one
-    // `Vec` at the end.
+    // Before a single byte has been parsed, which nothing could be in while the parse
+    // handed back one `Vec` at the end.
     assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 0, true)]);
     assert!(states.objects.peek().is_empty());
 
@@ -1043,10 +963,8 @@ fn objects_reach_the_sidebar_as_they_are_parsed() {
             [("line_fixture.o".to_owned(), arrived + 1, true)],
             "the file stopped saying it was being read before it was finished"
         );
-        // The save side: the path joins the binaries with its first object, so a
-        // session written half way through a parse names the file rather than a
-        // truncated version of it. There is nothing else in `binaries` to truncate --
-        // it is a list of paths.
+        // The save side: the path joins the binaries with its first object, so a session
+        // written half way through a parse names the file.
         assert_eq!(project::binaries(&states.objects.peek()), [path.clone()]);
     }
 
@@ -1055,17 +973,14 @@ fn objects_reach_the_sidebar_as_they_are_parsed() {
         .expect("the app is still listening");
     pump(&mut test, || !states.loading.peek().is_loading(&path));
 
-    // Done, so the ordinary rules take over again: three objects out of one file is
-    // an archive-shaped row, and nothing says it is still being read.
+    // Done, so the ordinary rules take over: three objects out of one file is an
+    // archive-shaped row.
     assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 3, false)]);
 }
 
-/// Closing a file half way through reading it takes the objects that have already
-/// arrived *and* the ones that have not.
-///
-/// The second half is what needs a test: the worker is already parsing when the row
-/// is closed, so the answers exist whatever the app does, and without the check they
-/// would put the file back one member at a time.
+/// Closing a file half way through reading it takes the objects that have already arrived
+/// *and* the ones that have not. The second half is what needs a test: the worker is
+/// already parsing when the row is closed.
 #[test]
 fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
     let (path, objects) = fixture_objects(2);
@@ -1102,15 +1017,14 @@ fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
         "an object arrived for a file that had been closed"
     );
 
-    // And the worker is told, by the only thing that can tell it: the receiver is
-    // gone, so its next send fails and the walk stops rather than parsing the rest of
-    // a file nobody is waiting for.
+    // And the worker is told, by the only thing that can tell it: the receiver is gone, so
+    // its next send fails and the walk stops.
     assert!(sender.send_blocking(Progress::Finished(path)).is_err());
 }
 
 /// Leaving a project while one of its files is being read. The load is cancelled by
-/// `clear_project` itself and not through `close_binary`, because a file that has
-/// produced nothing yet is not in the objects list for the per-path walk to reach.
+/// `clear_project` itself and not through `close_binary`, a file that has produced
+/// nothing yet not being in the objects list for the per-path walk to reach.
 #[test]
 fn leaving_a_project_while_a_file_is_read_drops_what_was_still_coming() {
     let (path, objects) = fixture_objects(2);
@@ -1137,110 +1051,20 @@ fn leaving_a_project_while_a_file_is_read_drops_what_was_still_coming() {
         .is_err());
 }
 
-/// Reading a file that is still being read, which is the whole point of the sub-step:
-/// an object that has arrived is an ordinary row, selecting it opens an ordinary tab,
-/// and the members still landing behind it change none of that.
-#[test]
-fn a_file_still_being_read_can_be_explored() {
-    let (path, objects) = fixture_objects(3);
-    let (mut test, states, sender) = mount_load(&path);
-    test.sync_and_update();
-
-    sender
-        .send_blocking(Progress::Parsed(objects[0].clone()))
-        .expect("the app is still listening");
-    pump(&mut test, || states.objects.peek().len() == 1);
-
-    // Through `activate`, which is the only way anything opens a tab -- a partially
-    // read file is not a special case for it.
-    let opened = Document::Assembly(Selection::Object(objects[0].clone()));
-    activate(
-        states.open,
-        states.history,
-        Some(opened.clone()),
-        Visit::Went,
-    );
-    test.sync_and_update();
-
-    for object in &objects[1..] {
-        sender
-            .send_blocking(Progress::Parsed(object.clone()))
-            .expect("the app is still listening");
-    }
-    pump(&mut test, || states.objects.peek().len() == 3);
-    sender
-        .send_blocking(Progress::Finished(path.clone()))
-        .expect("the app is still listening");
-    pump(&mut test, || !states.loading.peek().is_loading(&path));
-
-    assert!(
-        states.open.active() == Some(opened),
-        "the active document moved while the rest of the file was arriving"
-    );
-    assert_eq!(states.open.documents().len(), 1);
-    assert_eq!(states.objects.peek().len(), 3);
-}
-
-/// What the two text boxes mean, which is the one place the project view's `String`s
-/// and `project.toml`'s absent keys meet. An empty box is not a project named the
-/// empty string: it is a project the reader has not named, which is what anonymous
-/// *is*, and a box holding spaces says exactly as much.
-#[test]
-fn an_empty_box_is_a_project_that_has_not_been_named() {
-    assert_eq!(OpenProject::default().details(), Details::default());
-
-    let blank = OpenProject {
-        id: None,
-        name: "   ".to_owned(),
-        directory: String::new(),
-    };
-    assert_eq!(blank.details(), Details::default());
-
-    let named = OpenProject {
-        id: None,
-        name: " kernel ".to_owned(),
-        directory: "/src/kernel".to_owned(),
-    };
-    assert_eq!(
-        named.details(),
-        Details {
-            name: Some("kernel".to_owned()),
-            directory: Some(PathBuf::from("/src/kernel")),
-        }
-    );
-}
-
-/// And back the other way, which is what a restore and a switch both do: a project
-/// with no name comes back as an empty box rather than as the word "None".
-#[test]
-fn an_unnamed_project_comes_back_as_an_empty_box() {
-    let id = ProjectId::new("project-1").expect("an id");
-    let open = OpenProject::opened(id.clone(), &Project::default());
-    assert_eq!(open.id, Some(id));
-    assert!(open.name.is_empty() && open.directory.is_empty());
-    // And a round trip through the two spellings changes nothing.
-    assert_eq!(open.details(), Details::default());
-}
-
-/// The analysis worker's work, handed in through a context so a test can substitute
-/// one that stops when it is told to. `Arc<dyn Fn>` and not a generic, because a
-/// context value is one concrete type.
+/// The analysis worker's work, handed in through a context so a test can substitute one
+/// that stops when it is told to.
 #[derive(Clone)]
 struct Study(Arc<dyn Fn(Symbol) -> Studied + Send + Sync>);
 
-/// Every distinct symbol the panes were told to draw, in order. The assertion the
-/// superseding rule is really about is not what is on screen at the end but what was
-/// *never* on screen, and only a recording can say that.
+/// Every distinct symbol the panes were told to draw, in order: what the superseding rule
+/// is about is what was *never* on screen, and only a recording can say that.
 #[derive(Clone, Copy)]
 struct Seen(State<Vec<Symbol>>);
 
-/// The active document as the analysis tests drive it.
-///
-/// Deliberately not [`Active`], which in the app is a memo over the dock: these tests
-/// are about the worker -- which answers reach the panes, and which are dropped -- and
-/// have no business building a dock and a document panel to say which symbol is
-/// selected. `use_analysis_with` takes anything that reads and peeks, which is what
-/// lets them.
+/// The active document as the analysis tests drive it. Deliberately not [`Active`], which
+/// in the app is a memo over the dock: these tests have no business building a dock to
+/// say which symbol is selected, and `use_analysis_with` takes anything that reads and
+/// peeks.
 #[derive(Clone, Copy)]
 struct Selected(State<Option<Document>>);
 
@@ -1269,14 +1093,11 @@ fn analysis_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// Run the test runner until `ready` answers, and then a little further so that
-/// whatever the answer woke has run too.
-///
-/// A worker thread and two channels sit between a state change and the state it ends
-/// in -- the analysis worker's and, since 10c, the scratchpad's -- so how many turns
-/// of the loop that takes is not something a test can know, only that it is finite. Failing loudly rather than asserting on what happened to
-/// have arrived, since "the answer never came" and "the answer was wrong" are
-/// different bugs.
+/// Run the test runner until `ready` answers, and then a little further so that whatever
+/// the answer woke has run too. A worker thread and two channels sit between a state
+/// change and the state it ends in, so how many turns that takes is not something a test
+/// can know, only that it is finite. Failing loudly, since "the answer never came" and
+/// "the answer was wrong" are different bugs.
 fn pump(test: &mut TestingRunner, ready: impl Fn() -> bool) {
     for _ in 0..200 {
         test.sync_and_update();
@@ -1291,9 +1112,8 @@ fn pump(test: &mut TestingRunner, ready: impl Fn() -> bool) {
     panic!("the worker's answer never landed");
 }
 
-/// The committed gcc fixture the analysis crate is pinned against, parsed the way the
-/// app parses it. Small, real DWARF, three functions -- so a `Studied` built from one
-/// of its symbols has both halves and neither is empty.
+/// The committed gcc fixture the analysis crate is pinned against, parsed the way the app
+/// parses it: small, real DWARF, three functions.
 fn fixture_symbols() -> Vec<Symbol> {
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
@@ -1311,20 +1131,12 @@ fn fixture_symbols() -> Vec<Symbol> {
         .collect()
 }
 
-/// The central correctness question of Step 11c: an answer for a symbol the reader has
-/// already clicked past must never reach the panes.
+/// An answer for a symbol the reader has already clicked past must never reach the panes.
 ///
-/// Staged rather than raced. The worker is a real thread running the real
-/// `use_analysis_with` machinery, but the work it does is a gate the test opens one
-/// job at a time, which is the only way to be *sure* the stale answer was produced,
-/// delivered and then dropped rather than merely being slow. That the test can set the
-/// selection twice while the worker sits blocked is itself the other half of the
-/// sub-step: the UI thread is not waiting for any of this.
-///
-/// It also pins the hazard the per-tab viewing position brings: while a symbol is
-/// pending, `shown` is not it, so no pane is ever mounted for a tab whose listing does
-/// not exist yet -- which is what keeps `use_kept_position` from writing that tab down
-/// at row 0 before the reader has seen a single row of it.
+/// Staged rather than raced: the worker is real, but the work it does is a gate the test
+/// opens one job at a time, which is the only way to be sure the stale answer was
+/// produced, delivered and then dropped rather than merely being slow. That the
+/// selection can be set twice while the worker sits blocked is the other half of it.
 #[test]
 fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
     let symbols = fixture_symbols();
@@ -1468,61 +1280,8 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
     assert!(analysis.peek().clone() == Analyzed::default());
 }
 
-/// What the panes are told to say, which is a rule about honesty rather than about
-/// pixels: a listing is replaced by the next listing and never by a blank, a wait is
-/// only named once it is long enough to have been noticed, and "no symbol selected" is
-/// said only when none is.
-#[test]
-fn nothing_is_said_until_the_wait_is_worth_saying() {
-    let symbol = fixture_symbols().into_iter().next().expect("a symbol");
-    let studied = Studied::new(symbol.clone());
-
-    let idle = Analyzed::default();
-    assert!(matches!(
-        idle.showing(),
-        Showing::Message("No symbol selected")
-    ));
-
-    // Nothing analysed yet and something on its way: an empty pane, not a message.
-    let opening = Analyzed {
-        pending: Some(symbol.clone()),
-        ..Analyzed::default()
-    };
-    assert!(matches!(opening.showing(), Showing::Nothing));
-
-    // The same wait, once it has gone on long enough to name.
-    let slow = Analyzed {
-        slow: true,
-        ..opening.clone()
-    };
-    assert!(matches!(slow.showing(), Showing::Message("Analysing...")));
-
-    // A listing in hand is drawn, and goes on being drawn while the next one is worked
-    // out -- which is what keeps a click from flashing the pane empty.
-    let showing = Analyzed {
-        shown: Some(studied),
-        ..idle
-    };
-    assert!(matches!(showing.showing(), Showing::Listing(_)));
-    let replacing = Analyzed {
-        pending: Some(symbol),
-        ..showing
-    };
-    assert!(matches!(replacing.showing(), Showing::Listing(_)));
-    // Until the wait is worth naming, and then the stale listing gives way to it.
-    let dragging = Analyzed {
-        slow: true,
-        ..replacing
-    };
-    assert!(matches!(
-        dragging.showing(),
-        Showing::Message("Analysing...")
-    ));
-}
-
-/// A component with no props at all, which is what every view in this file is: the
-/// six dock tabs, every row of every list. Its parent reads nothing coloured, so
-/// freya has no reason to re-render it -- the theme has to reach it on its own.
+/// A component with no props at all, which is what every view in the app is. Its parent
+/// reads nothing coloured, so the theme has to reach it on its own.
 #[derive(PartialEq)]
 struct ThemedRow;
 
@@ -1536,14 +1295,10 @@ fn theme_harness() -> impl IntoElement {
     rect().expanded().child(ThemedRow)
 }
 
-/// The same row, under the wiring that resolves the theme -- with the choice handed in
-/// rather than loaded, so that the settings file on the machine running the tests has
-/// no vote in what they assert.
-///
-/// The root reads the appearance as well, which is not decoration: `app()` does the
-/// same (twice, for freya's own theme sheet), so the write `use_theme` makes during the
-/// render body wakes the very scope that made it. That settles only because the write
-/// is idempotent, and a test that hangs here is what would say it is not.
+/// The same row under the wiring that resolves the theme, with the choice handed in so the
+/// machine's own settings file has no vote. The root reads the appearance as well, as
+/// `app()` does, so the write `use_theme` makes during the render body wakes the very
+/// scope that made it -- which settles only because that write is idempotent.
 fn desktop_theme_harness() -> impl IntoElement {
     use_theme(ThemeChoice::Desktop);
     let _ = appearance();
@@ -1551,8 +1306,8 @@ fn desktop_theme_harness() -> impl IntoElement {
     rect().expanded().child(ThemedRow)
 }
 
-/// The first background anything paints, which is the row's: the harness's own rect
-/// has none, and a transparent background is what "none" is.
+/// The first background anything paints, which is the row's: the harness's own rect has
+/// none.
 fn painted(test: &TestingRunner) -> Fill {
     test.find(|_, element| {
         let background = element.style().background.clone();
@@ -1561,18 +1316,13 @@ fn painted(test: &TestingRunner) -> Fill {
     .expect("a painted row")
 }
 
-/// `HIGHLIGHTED` is process-wide while the appearance is per-thread, so the two tests
-/// that switch themes have to be the only one doing it at a time -- cargo runs them on
-/// threads of their own, and one clearing the cache the other has just filled would be
-/// a failure that comes and goes.
+/// `HIGHLIGHTED` is process-wide while the appearance is per-thread, so the tests that
+/// switch themes have to be the only one doing it at a time.
 static SWITCHING: Mutex<()> = Mutex::new(());
 
-/// The reactivity half of dark mode: a switch repaints a component that did not change
-/// and whose parent did not either.
-///
-/// This is the assertion the design is for. Nothing about `ThemedRow` differs across
-/// the switch -- same type, same (absent) props, same parent element -- so freya will
-/// not re-render it for any reason except that it read the state that changed. Asking
+/// A theme switch repaints a component that did not change and whose parent did not
+/// either. Nothing about `ThemedRow` differs across the switch, so freya will not
+/// re-render it for any reason except that it read the state that changed -- and asking
 /// for a colour is that read.
 #[test]
 fn a_theme_switch_repaints_a_component_nothing_else_woke() {
@@ -1594,10 +1344,9 @@ fn a_theme_switch_repaints_a_component_nothing_else_woke() {
     assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
 }
 
-/// The other half: the source pane's spans are cached with the palette resolved into
-/// them, so a switch has to throw the cache away and parse again in the new colours.
-/// Nothing re-renders a `SyntaxBlocks`, which is why this cannot be left to the
-/// reactivity above.
+/// The other half: the source pane's spans are cached with the palette resolved into them,
+/// so a switch has to throw the cache away and parse again. Nothing re-renders a
+/// `SyntaxBlocks`, which is why the reactivity above cannot cover it.
 #[test]
 fn a_theme_switch_empties_the_highlighted_cache() {
     let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
@@ -1632,43 +1381,9 @@ fn a_theme_switch_empties_the_highlighted_cache() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
-/// The rule the two enums exist to express: a named theme is its own answer, and
-/// `Desktop` is the only one of the three that asks the window anything.
-///
-/// Pure, so the whole matrix is six lines and needs no window -- which is why
-/// `resolve_appearance` takes the platform's answer as an argument instead of reading
-/// it. What replaced the old subprocess is not testable at all on the machine running
-/// this; the rule in front of it is entirely.
-#[test]
-fn only_following_the_desktop_asks_the_desktop() {
-    for preferred in [PreferredTheme::Light, PreferredTheme::Dark] {
-        assert_eq!(
-            resolve_appearance(ThemeChoice::Light, preferred),
-            Appearance::Light
-        );
-        assert_eq!(
-            resolve_appearance(ThemeChoice::Dark, preferred),
-            Appearance::Dark
-        );
-    }
-
-    assert_eq!(
-        resolve_appearance(ThemeChoice::Desktop, PreferredTheme::Light),
-        Appearance::Light
-    );
-    assert_eq!(
-        resolve_appearance(ThemeChoice::Desktop, PreferredTheme::Dark),
-        Appearance::Dark
-    );
-}
-
-/// The half of dark mode that the subprocess could never have: the windowing system
-/// changing its mind about the theme, *after* the window is open, repaints it.
-///
-/// freya keeps `Platform::preferred_theme` from winit's `Window::theme()` and re-sets
-/// it on the OS's `ThemeChanged` event, so setting it here is exactly what that event
-/// does -- and what this asserts is the path from there to `set_appearance` and out to
-/// a component that reads no props and was woken by nothing else.
+/// The windowing system changing its mind about the theme, *after* the window is open,
+/// repaints it. freya keeps `Platform::preferred_theme` from winit and re-sets it on the
+/// OS's `ThemeChanged` event, so setting it here is what that event does.
 #[test]
 fn a_desktop_that_changes_its_mind_repaints_the_window() {
     let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
@@ -1676,9 +1391,8 @@ fn a_desktop_that_changes_its_mind_repaints_the_window() {
     // rather than a value that happened to already be there.
     set_appearance(Appearance::Dark);
 
-    // `provide_root_context` runs its closure in the root scope, where freya-testing
-    // has already put the `Platform` -- so this is how a test gets hold of the states
-    // a renderer would otherwise be the only writer of.
+    // `provide_root_context` runs its closure in the root scope, where freya-testing has
+    // already put the `Platform`.
     let (mut test, platform) = TestingRunner::new(
         desktop_theme_harness,
         (100., 100.).into(),
@@ -1687,21 +1401,15 @@ fn a_desktop_that_changes_its_mind_repaints_the_window() {
     );
     test.sync_and_update();
 
-    // freya-testing mounts on `PreferredTheme::Light`, and the choice is a question,
-    // so the answer arrived on the first render: the appearance the thread was left in
-    // is gone, and nothing had to be set by hand to do it.
+    // freya-testing mounts on `PreferredTheme::Light`, and the choice is a question, so the
+    // answer arrived on the first render.
     assert_eq!(appearance(), Appearance::Light);
     assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
 
-    // **Two passes, and the second is not padding.** The change reaches the window in
-    // two hops -- the platform state wakes the scope holding `use_theme`, and the write
-    // that scope makes wakes everything that drew a colour -- and a pass renders the
-    // dirty scopes it *began* with, so the second hop lands in the pass after the
-    // first. The renderer does the same thing on its own (a marked scope sends a
-    // message that brings its loop straight back round and requests a redraw), so the
-    // cost of resolving the theme in the render body rather than an effect is one
-    // frame, spelled out here rather than hidden behind a loop that polls until it
-    // likes the answer.
+    // **Two passes, and the second is not padding.** The change reaches the window in two
+    // hops -- the platform state wakes the scope holding `use_theme`, and the write that
+    // scope makes wakes everything that drew a colour -- and a pass renders the dirty
+    // scopes it *began* with.
     let mut preferred = platform.preferred_theme;
     preferred.set(PreferredTheme::Dark);
     test.sync_and_update();
@@ -1718,9 +1426,8 @@ fn a_desktop_that_changes_its_mind_repaints_the_window() {
     assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
 }
 
-/// sRGB relative luminance, and the contrast ratio between two colours, both as WCAG
-/// defines them. Written out rather than pulled in: it is eight lines, and a
-/// dependency for eight lines used by two tests is not a trade.
+/// sRGB relative luminance, and the contrast ratio between two colours, as WCAG defines
+/// them.
 fn luminance(color: Color) -> f32 {
     let channel = |value: u8| {
         let value = value as f32 / 255.0;
@@ -1739,15 +1446,9 @@ fn contrast(a: Color, b: Color) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// Every foreground is legible on the surface it is actually drawn on, in both
-/// palettes.
-///
-/// The floor is 3.0 and not WCAG AA's 4.5 on purpose. Two of the light palette's own
-/// colours sit between 3 and 3.5 -- the address column and comments, both of which are
-/// *meant* to recede -- and this test is not here to redesign the light theme that has
-/// been on screen since 5e. It is here so that a value carried over to a dark ground
-/// cannot land on top of it: a foreground that came out at 1.5 would be a colour
-/// nobody can read, and that is what a second palette gets wrong.
+/// Every foreground is legible on the surface it is actually drawn on, in both palettes.
+/// The floor is 3.0 and not WCAG AA's 4.5: two of the light palette's own colours sit
+/// between 3 and 3.5, both of which are *meant* to recede.
 #[test]
 fn every_foreground_is_legible_on_its_own_surface() {
     for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
@@ -1796,10 +1497,8 @@ fn every_foreground_is_legible_on_its_own_surface() {
             }
         }
 
-        // The branch gutter is a diagram and is drawn quiet deliberately -- 1.8 in the
-        // light palette -- so its floor is only against a line that has disappeared
-        // into the pane altogether, and the hovered one has to be the louder of the
-        // two or hovering a row says nothing.
+        // The branch gutter is a diagram and is drawn quiet deliberately, so its floor is
+        // only against a line that has disappeared into the pane altogether.
         let line = contrast(palette.branch_fg, palette.asm_pane_bg);
         let lit = contrast(palette.branch_hover_fg, palette.asm_pane_bg);
         assert!(line >= 1.5, "{theme} branch_fg: {line:.2}");
@@ -1807,12 +1506,9 @@ fn every_foreground_is_legible_on_its_own_surface() {
     }
 }
 
-/// Every translucent wash still says something once it is composited.
-///
-/// This is the half of a palette that cannot be carried over by turning its channels
-/// through the background: `blend` puts the pane under these, so the same alpha over a
-/// dark ground is a fraction of the step it was over white. Each is asserted as what
-/// it comes out as -- and the pin, which is the focus said louder, has to stay louder.
+/// Every translucent wash still says something once it is composited: `blend` puts the pane
+/// under these, so the same alpha over a dark ground is a fraction of the step it was over
+/// white. The pin, which is the focus said louder, has to stay louder.
 #[test]
 fn every_wash_reads_against_the_pane_under_it() {
     // How far a wash moves the surface it is over, in the channel it moves most.
@@ -1846,13 +1542,9 @@ fn every_wash_reads_against_the_pane_under_it() {
     }
 }
 
-/// The `resolve_capture_color` trap, in both palettes.
-///
-/// It decides a capture is unmapped by comparing its colour to `text` and then walks
-/// *up* the dotted name, so a child field holding the text colour while its parent
-/// holds another is silently painted in the parent's. Nothing in either mapping is
-/// caught by it -- but that is a fact about which fields share a value, so a second
-/// palette can break it by landing two colours on each other by accident.
+/// The `resolve_capture_color` trap, in both palettes: it decides a capture is unmapped by
+/// comparing its colour to `text` and then walks *up* the dotted name, so a child field
+/// holding the text colour while its parent holds another is painted in the parent's.
 #[test]
 fn captures_do_not_walk_up() {
     for (name, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
@@ -1903,9 +1595,7 @@ fn captures_do_not_walk_up() {
 }
 
 /// A `Fonts` with nothing left to ask the desktop about, so a test asserting a size
-/// asserts a size and not whatever `kreadconfig` happens to answer on the machine
-/// running it -- `needs_desktop` declines to spawn anything when both halves are
-/// chosen, which is exactly the case here.
+/// asserts a size and not whatever `kreadconfig` answers on the machine running it.
 fn fixed_fonts(ui: f32, mono: f32) -> Fonts {
     fonts::resolve(&Settings {
         theme: ThemeChoice::Desktop,
@@ -1935,11 +1625,9 @@ fn fixed_edited(ui: f32, mono: f32) -> EditedSettings {
     }
 }
 
-/// Two components with no props at all, one row at each of the two heights.
-/// `ThemedRow`'s twins, and for the same reason: nothing about either changes across a
-/// font change, so freya has no reason to re-render them except that they read the
-/// state. Their backgrounds differ so that `painted_height` can ask for one of them by
-/// name rather than by which came first.
+/// Two components with no props at all, one row at each of the two heights. `ThemedRow`'s
+/// twins: nothing about either changes across a font change, so freya has no reason to
+/// re-render them except that they read the state.
 #[derive(PartialEq)]
 struct FontedRow;
 
@@ -1968,10 +1656,8 @@ fn font_harness() -> impl IntoElement {
     rect().expanded().child(FontedRow).child(FontedCodeRow)
 }
 
-/// The height of the row painted in `fill`, as it was actually laid out -- not as it
-/// was asked for. That distinction is the test: a row height function returning a new
-/// number proves nothing on its own, since a component that was never re-rendered is
-/// still the old height on screen.
+/// The height of the row painted in `fill`, as it was actually laid out -- not as it was
+/// asked for: a component that was never re-rendered is still the old height on screen.
 fn painted_height(test: &TestingRunner, fill: Color) -> f32 {
     test.find(|node, element| {
         let background = element.style().background.clone();
@@ -1980,15 +1666,9 @@ fn painted_height(test: &TestingRunner, fill: Color) -> f32 {
     .expect("a painted row")
 }
 
-/// The reactivity half of 9c, and the direct analogue of the theme's: a font change
-/// repaints a component nothing else woke, *and* moves it, since the row heights are
-/// derived from the fonts rather than being constants beside them.
-///
-/// It is also where the two heights are asserted to be **independent**, which is the
-/// whole of the split: no row mixes the fonts, so a size the reader steps must move
-/// the rows drawn in *that* font and no others. 9pt and 10.5pt are the app's own
-/// defaults -- 12 and 14 logical pixels, so 24 and 26 -- and each of the two changes
-/// below leaves the other row exactly where it was.
+/// A font change repaints a component nothing else woke, *and* moves it, the row heights
+/// being derived from the fonts. The two heights are **independent**: no row mixes the
+/// fonts, so each change below leaves the other row exactly where it was.
 #[test]
 fn a_font_change_repaints_and_resizes_a_component_nothing_else_woke() {
     set_fonts(fixed_fonts(9.0, 10.5));
@@ -2020,22 +1700,13 @@ fn a_font_change_repaints_and_resizes_a_component_nothing_else_woke() {
     assert_eq!(painted_height(&test, code), 26.0);
 }
 
-/// The invariant that made `ROW_HEIGHT` a `const` in the first place: a
-/// `VirtualScrollView`'s `item_size` and the height its rows actually draw at must be
-/// the same number, or scrolling misaligns -- silently, and looking like a rendering
-/// glitch rather than a bug.
+/// A `VirtualScrollView`'s `item_size` and the height its rows actually draw at must be the
+/// same number, or scrolling misaligns silently. Two claims since the height was split in
+/// two, so it is asserted over a code pane and a sidebar list.
 ///
-/// **It is two claims since the height was split in two**, so it is asserted over both
-/// kinds of list: a code pane, whose rows and `item_size` are [`code_row_height`] and
-/// which is the only kind with a kept position, and a sidebar list at
-/// [`list_row_height`]. A view handed the *other* height would misalign exactly as one
-/// handed a stale one would, and only a view of each kind can catch that.
-///
-/// Asserted through real scroll views, by asking which row is under a given y: at the
-/// top of the list row *k* covers `[k*h, (k+1)*h)`, so a pointer at 90 is row 3 at 26px
-/// and row 2 at 36px. If the two numbers came apart, the rows would drift by one per
-/// row down the pane and this would answer something else. Each half also steps the
-/// font it is *not* drawn in and asserts that nothing moved.
+/// Asked through real scroll views, by which row is under a given y: at the top of the
+/// list row *k* covers `[k*h, (k+1)*h)`, so a pointer at 90 is row 3 at 26px and row 2 at
+/// 36px. Each half also steps the font it is *not* drawn in and asserts nothing moved.
 #[test]
 fn a_scroll_view_and_its_rows_agree_at_every_font_size() {
     set_fonts(fixed_fonts(9.0, 10.5));
@@ -2049,9 +1720,8 @@ fn a_scroll_view_and_its_rows_agree_at_every_font_size() {
         *top.peek()
     }
 
-    // A font change wakes the rows through the state they read, and the view they sit
-    // in re-measures behind them; several passes because the scroll view answers the
-    // new item size on the render after the one that moved its rows.
+    // A font change wakes the rows through the state they read; several passes because the
+    // scroll view answers the new item size on the render after the one that moved them.
     fn settle(test: &mut TestingRunner) {
         for _ in 0..4 {
             test.sync_and_update();
@@ -2118,63 +1788,6 @@ fn a_scroll_view_and_its_rows_agree_at_every_font_size() {
     }
 }
 
-/// What the settings page's four boxes mean, which is the one place its `String`s and
-/// `settings.toml`'s absent keys meet -- `an_empty_box_is_a_project_that_has_not_been_named`
-/// for fonts. An empty family box is not a font family named the empty string: it is a
-/// reader who has not chosen one, which is what unspecified *is*.
-#[test]
-fn an_empty_box_is_a_font_nobody_chose() {
-    assert_eq!(EditedSettings::default().settings(), Settings::default());
-
-    let blank = EditedFont {
-        family: "   ".to_owned(),
-        size: None,
-    };
-    assert_eq!(blank.setting(), FontSetting::default());
-
-    // And a round trip through the two spellings changes nothing, in either direction:
-    // the page is handed what the file says and hands back the same thing.
-    let stored = Settings {
-        theme: ThemeChoice::Dark,
-        interface: FontSetting {
-            family: Some("Cantarell".to_owned()),
-            size: Some(11.0),
-        },
-        fixed: FontSetting {
-            family: None,
-            size: Some(10.5),
-        },
-    };
-    assert_eq!(EditedSettings::of(&stored).settings(), stored);
-
-    // A family the file wrote with spaces around it comes back trimmed, once, and does
-    // not then differ from itself on the way out.
-    let padded = Settings {
-        interface: FontSetting {
-            family: Some(" Fira Code ".to_owned()),
-            ..FontSetting::default()
-        },
-        ..Settings::default()
-    };
-    let edited = EditedSettings::of(&padded);
-    assert_eq!(edited.interface.family, "Fira Code");
-    assert_eq!(edited.settings(), edited.settings());
-}
-
-/// A point size as the page writes it. `9` and not `9.0`, because the size a desktop
-/// answers is usually a whole number and a trailing `.0` on every one of them reads as
-/// precision that is not there; `10.5` because half-points are what the stepper moves
-/// in and what Pango descriptions carry.
-#[test]
-fn a_point_size_is_written_as_short_as_it_is() {
-    assert_eq!(points_text(9.0), "9");
-    assert_eq!(points_text(10.5), "10.5");
-    assert_eq!(points_text(26.0), "26");
-    // Gnome's `text-scaling-factor` multiplies the point size, so a third decimal is
-    // reachable without anybody typing one.
-    assert_eq!(points_text(13.75), "13.8");
-}
-
 /// Everything the settings write, recorded rather than performed.
 #[derive(Clone, Copy)]
 struct Saved(State<Vec<Settings>>);
@@ -2187,21 +1800,14 @@ fn settings_harness() -> impl IntoElement {
         saved.write().push(settings.clone())
     });
 
-    // The **code** row, because what this test steps is the fixed-width size: it is
-    // the one whose consequences reach a file, a theme and a row all at once, and a
-    // row drawn in the other font would now sit still through the whole of it.
+    // The **code** row, because what this test steps is the fixed-width size.
     rect().expanded().child(FontedCodeRow)
 }
 
-/// The wiring 9c is: one state, and the theme, the fonts and the file all following
-/// from it -- with the write handed in, because the real one edits the settings of
-/// whoever runs the tests.
-///
-/// Three things are asserted that nothing else can say. That a run in which the page is
-/// never opened writes **nothing**, so a first launch leaves no `settings.toml` behind.
-/// That a change reaches all three consequences from the one write. And that changing a
-/// setting *back* writes again -- the baseline moves to what was last written, or the
-/// file would be left holding the middle answer of the three.
+/// One state, and the theme, the fonts and the file all following from it -- with the
+/// write handed in, because the real one edits the settings of whoever runs the tests.
+/// A run that never opens the page writes **nothing**, and changing a setting *back*
+/// writes again.
 #[test]
 fn the_settings_reach_the_theme_the_fonts_and_the_file() {
     let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
@@ -2242,9 +1848,8 @@ fn the_settings_reach_the_theme_the_fonts_and_the_file() {
     assert_eq!(fonts().mono.points, 10.5);
     assert_eq!(painted_height(&test, palette().asm_pane_bg), 26.0);
 
-    // A theme chosen. Two passes, for `a_desktop_that_changes_its_mind_repaints_the_window`'s
-    // reason: the write the root makes wakes the scopes that drew a colour in the pass
-    // after the one it was made in.
+    // A theme chosen. Two passes: the write the root makes wakes the scopes that drew a
+    // colour in the pass after the one it was made in.
     prefs.write().theme = ThemeChoice::Dark;
     test.sync_and_update();
     assert_eq!(appearance(), Appearance::Dark);
@@ -2264,9 +1869,8 @@ fn the_settings_reach_the_theme_the_fonts_and_the_file() {
     assert_eq!(saved.peek().len(), 2);
     assert_eq!(saved.peek()[1].fixed.size, Some(18.0));
 
-    // Cleared again, which is the whole of "a way back to unspecified": the override is
-    // gone from the file, and the write happens even though this is the value the run
-    // started from -- the baseline is what was last *written*, not what was loaded.
+    // Cleared again: the write happens even though this is the value the run started from
+    // -- the baseline is what was last *written*, not what was loaded.
     prefs.write().fixed.size = Some(10.5);
     for _ in 0..4 {
         test.sync_and_update();
@@ -2311,22 +1915,16 @@ fn a_swept_run_survives_the_button_coming_up() {
     assert_eq!(marked.peek().unwrap().rows.rows(), 0..=1);
 }
 
-/// The scratchpad worker's work, handed in through a context so a test can answer
-/// without the machine's own state directory and without waiting on a compiler.
-/// `Arc<dyn Fn>` and not a generic, for [`Study`]'s reason: a context value is one
-/// concrete type.
+/// The scratchpad worker's work, handed in through a context so a test can answer without
+/// the machine's own state directory and without waiting on a compiler.
 #[derive(Clone)]
 struct Working(Arc<dyn Fn(PadJob) -> PadAnswer + Send + Sync>);
 
-/// The way to ask the worker for a build, as the wiring hands it back. A `State` so
-/// that the harness can put it somewhere the test body can reach, which is what lets
-/// a build be asked for the way the button asks rather than through coordinates.
+/// The way to ask the worker for a build, as the wiring hands it back.
 #[derive(Clone, Copy)]
 struct Asking(State<Option<PadJobs>>);
 
-/// What the worker was handed, in the order it was handed it. The `Save`s carry the
-/// source they would have written, because *what* was written is half of what the
-/// save policy is for.
+/// What the worker was handed, in the order it was handed it.
 #[derive(Clone, Debug, PartialEq)]
 enum Asked {
     Open,
@@ -2362,19 +1960,13 @@ fn scratchpad_wiring() {
     use_hook(move || asking.set(Some(jobs)));
 }
 
-/// The committed gcc fixture again, standing in for what a build produced: `open_files`
-/// asks nothing of a file but that it parse, so a relocatable object is an artifact as
-/// far as everything this test is about is concerned.
+/// The committed gcc fixture again, standing in for what a build produced.
 fn fixture_artifact() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o")
 }
 
-/// Mount the wiring over a worker that records every job and answers from `answer`.
-///
-/// A macro rather than a function for `project_states!`'s reason -- the runner's type
-/// is not one this crate can name -- and it hands back everything a test then drives:
-/// the app's states, the scratchpad's two, the way to ask for a build and the record
-/// of what was asked.
+/// Mount the wiring over a worker that records every job and answers from `answer`. A
+/// macro for `project_states!`'s reason: the runner's type is not one this crate can name.
 macro_rules! mount_scratchpad {
     ($harness:expr, $answer:expr) => {{
         let (asked, asks) = async_channel::unbounded::<Asked>();
@@ -2421,14 +2013,9 @@ macro_rules! mount_scratchpad {
     }};
 }
 
-/// The scratchpad on disk is what the app opens on, and **nothing is written until it
-/// has arrived**.
-///
-/// That second half is the whole reason the save baseline is seeded by the answer and
-/// not at mount: the app boots holding `Scratchpad::default`, the reader's own source
-/// comes back a worker thread later, and a save in between would put the default
-/// source over a scratchpad someone had been keeping. It is also what keeps a run in
-/// which the pane was never opened from creating the directory at all.
+/// The scratchpad on disk is what the app opens on, and **nothing is written until it has
+/// arrived** -- the app boots holding `Scratchpad::default`, and a save before the answer
+/// lands would put that default over a scratchpad someone had been keeping.
 #[test]
 fn a_scratchpad_is_read_before_anything_is_written_over_it() {
     let mut saved = Scratchpad::default();
@@ -2450,9 +2037,7 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
     pump(&mut test, || pad.peek().opened);
 
     assert_eq!(pad.peek().scratchpad, saved);
-    // The editor is holding it too, which is the half a reader can see: the buffer is
-    // the live copy and the model follows it, so a restore that reached only the model
-    // would be a pane showing the default source over a scratchpad that is not it.
+    // The editor is holding it too, which is the half a reader can see.
     assert_eq!(text.peek().rope.to_string(), saved.source);
 
     assert_eq!(asks.try_recv(), Ok(Asked::Open));
@@ -2463,12 +2048,8 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
 }
 
 /// An edit is written out, and a row that cannot be written says so against itself.
-///
-/// Both halves go through the one policy: the model follows the editor, the effect
-/// notices it differs from what was last sent, and the worker answers. What comes back
-/// for a bad row is `Failure::Dependencies`, carrying the **index** of every row that
-/// is wrong -- which is what lets the pane mark them in place rather than printing one
-/// sentence at the top.
+/// `Failure::Dependencies` carries the **index** of every row that is wrong, which is
+/// what lets the pane mark them in place.
 #[test]
 fn an_edit_is_written_and_a_bad_row_says_which_row() {
     let (mut test, _states, pad, text, _asking, asks) =
@@ -2484,8 +2065,7 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
     pump(&mut test, || pad.peek().opened);
     assert_eq!(asks.try_recv(), Ok(Asked::Open));
 
-    // Typing. The rope is what the keyboard edits and the model is what is written, so
-    // this is the same path a keystroke takes.
+    // Typing: the rope is what the keyboard edits and the model is what is written.
     let mut text = text;
     text.write().rope.insert(0, "// typed\n");
     pump(&mut test, || !asks.is_empty());
@@ -2495,9 +2075,8 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
     assert_eq!(pad.peek().scratchpad.source, typed);
     assert!(pad.peek().unsaved.is_none());
 
-    // A row that names no crate. It is the *second* row, so the index in the answer is
-    // the assertion: a failure that only said "one dependency to fix" would leave the
-    // pane guessing which.
+    // A row that names no crate. It is the *second* row, so the index in the answer is the
+    // assertion.
     let mut pad = pad;
     {
         let mut state = pad.write();
@@ -2525,15 +2104,9 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
     pump(&mut test, || pad.peek().unsaved.is_none());
 }
 
-/// A build is asked for once however often the reader presses, and what it made is
-/// opened **in place of** what the build before it made.
-///
-/// Both halves are about the same thing being true twice. A build takes seconds, so
-/// the pending state has to be honest enough that a second press cannot start a second
-/// one; and a rebuild writes the same path with different bytes, so the objects the app
-/// is holding for that path describe instructions that are no longer there. Opening
-/// without closing would leave two generations of one file in a list where a binary is
-/// identified by its path.
+/// A build is asked for once however often the reader presses, and what it made is opened
+/// **in place of** what the build before it made: a rebuild writes the same path with
+/// different bytes, and a binary is identified by its path.
 #[test]
 fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
     let artifact = fixture_artifact();
@@ -2581,12 +2154,10 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
         "the second press started a second build of the same scratchpad"
     );
 
-    // And again. The path is the same one, so what the first build left has to go
-    // rather than sit beside it.
+    // And again. The path is the same one, so what the first build left has to go rather
+    // than sit beside it -- waited for on the *objects*, a rebuild being a close followed
+    // by a streaming reopen.
     request_build(pad, &jobs);
-    // Waited for on the *objects* and not on the build, because a rebuild is now a
-    // close followed by a streaming reopen: the build is over the moment cargo has
-    // answered, and the artifact's objects come back over the load after it.
     pump(&mut test, || !pad.peek().building && opened(&states) > 0);
 
     assert_eq!(
@@ -2596,13 +2167,10 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
     );
 }
 
-/// Taking a dependency row away does not take the pane with it.
-///
-/// The hazard is the one the gotchas list is about, and it is invisible to every other
-/// kind of test here: each box in a row writes into `dependencies[index]` through a
-/// mapped `Writable`, so a row that outlived the list being shortened would index past
-/// the end at the moment it was next read -- a panic, not a compile error. Mounting the
-/// real pane and shortening the list under it is the only thing that would say so.
+/// Taking a dependency row away does not take the pane with it: each box writes into
+/// `dependencies[index]` through a mapped `Writable`, so a row that outlived the list
+/// being shortened would index past the end at the moment it was next read -- a panic,
+/// not a compile error.
 #[test]
 fn removing_a_dependency_row_does_not_take_the_pane_with_it() {
     let (mut test, _states, pad, _text, _asking, _asks) =
@@ -2641,9 +2209,7 @@ fn removing_a_dependency_row_does_not_take_the_pane_with_it() {
     assert_eq!(pad.peek().scratchpad.dependencies[0].name(), "rand");
 }
 
-/// A directory of this test's own, named after the line that asked for it -- the shape
-/// `scratchpad.rs`'s own file tests use, so a failing test leaves something
-/// identifiable behind.
+/// A directory of this test's own, named after the line that asked for it.
 fn run_directory(line: u32) -> PathBuf {
     std::env::temp_dir().join(format!(
         "assembly-viewer-run-test-{}-{line}",
@@ -2651,11 +2217,8 @@ fn run_directory(line: u32) -> PathBuf {
     ))
 }
 
-/// Build a program that says something and then never exits, and say where it is.
-///
-/// A real `cargo build`, for `scratchpad.rs`'s reason: it is hermetic (no dependencies
-/// means no registry, so it is one rustc invocation) and it is the only way to have an
-/// executable that behaves the way the hazard this sub-step is about behaves. Nothing
+/// Build a program that says something and then never exits, and say where it is. A real
+/// `cargo build`: it is hermetic (no dependencies, so one rustc invocation), and nothing
 /// short of a real process can say whether a stop actually killed anything.
 fn looping_program(directory: &Path) -> PathBuf {
     let mut scratchpad = Scratchpad::new("looper").expect("a name");
@@ -2672,12 +2235,9 @@ fn looping_program(directory: &Path) -> PathBuf {
     executable.clone()
 }
 
-/// What a build left behind, put where a build would have put it.
-///
-/// Written into the state rather than answered through `PadJob::Build`, so the
-/// artifact does not go through `reopen_binary` on the way: what that does with a
-/// rebuilt binary is `a_build_runs_once_and_replaces_what_the_last_one_opened`'s
-/// question, and it would cost these tests a parse of a real executable for nothing.
+/// What a build left behind, put where a build would have put it -- written into the
+/// state rather than answered through `PadJob::Build`, so it does not go through
+/// `reopen_binary` on the way.
 fn already_built(mut pad: State<PadState>, executable: PathBuf) {
     pad.write().built = Some(Build::Built {
         executable,
@@ -2685,15 +2245,10 @@ fn already_built(mut pad: State<PadState>, executable: PathBuf) {
     });
 }
 
-/// The two things 10d exists to make true, and only a real process can say either.
-///
-/// A program that prints and then loops for ever has **said something**, and it is on
-/// screen while it is still going -- which is the whole difference between this and
-/// `build_in`'s collect-the-output-and-return-it shape, since this program has no exit
-/// for such a shape to answer at. And asking it to stop **really kills it**: the state
-/// reaches `Over(Stopped)` only when the run's own `Ended` event arrives, and that is
-/// emitted after the process has been reaped -- so this waits for the process to be
-/// gone rather than for the button to have been pressed.
+/// A program that prints and then loops for ever has said something, and it is on screen
+/// while it is still going. Asking it to stop really kills it: `Over(Stopped)` is
+/// written by the run's own `Ended`, which is emitted after the process has been reaped.
+/// Only a real process can say either.
 #[test]
 fn a_run_streams_while_it_is_going_and_a_stop_really_ends_it() {
     let directory = run_directory(line!());
@@ -2745,14 +2300,10 @@ fn a_run_streams_while_it_is_going_and_a_stop_really_ends_it() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
-/// A rebuild stops the program the last one started.
-///
-/// cargo is about to write over the executable this process *is*, and `reopen_binary`
-/// is about to close the objects describing those bytes -- so a program left going
-/// across a build would be output arriving into a pane belonging to a build the reader
-/// can no longer see. Asserted through `request_build` rather than through the button,
-/// because the guard belongs to the request for the reason the two-builds-at-once one
-/// does: it has to be a property of asking, not of one control's disabled state.
+/// A rebuild stops the program the last one started: cargo is about to write over the
+/// executable that process *is*, and `reopen_binary` is about to close the objects
+/// describing those bytes. Through `request_build` rather than the button, the guard
+/// being a property of asking.
 #[test]
 fn a_rebuild_stops_the_program_the_last_one_started() {
     let directory = run_directory(line!());
@@ -2797,8 +2348,8 @@ fn a_rebuild_stops_the_program_the_last_one_started() {
 }
 
 /// A program that will not start is a sentence, not a pane that sits on "Starting..."
-/// for ever. No subprocess: what is under test is that the failure the worker answers
-/// with reaches the line the reader reads.
+/// for ever. No subprocess: what is under test is that the worker's failure reaches the
+/// line the reader reads.
 #[test]
 fn a_run_that_cannot_start_says_why() {
     let (mut test, _states, pad, _text, asking, _asks) =

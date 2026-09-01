@@ -1,21 +1,14 @@
-//! A function's extent taken from the debug info that states it, rather than derived
-//! from where the next symbol starts.
-//!
-//! The two answers differ by the alignment padding a linker leaves between functions,
-//! which is what these fixtures put there on purpose: `first` is six bytes of code with
-//! four bytes of `int3` after it, so the next-symbol estimate says ten and DWARF says
-//! six.
+//! A function's extent taken from the debug info that states it, rather than derived from
+//! where the next symbol starts. The two differ by the alignment padding a linker leaves
+//! between functions, which is what these fixtures put there on purpose.
 
 mod common;
 
-use analysis::{parse_object, Object, Section, SymbolData};
-use common::{elf_x86_64_with_dwarf, DwarfFixture, DwarfRow, DwarfSection, TextSymbol};
-use std::path::PathBuf;
-use std::sync::Arc;
+use common::{
+    elf_x86_64_with_dwarf, named, parse, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
+};
 
-/// Five instructions and a `ret`, then four bytes of the padding a linker inserts to
-/// align what follows. `first` is the whole ten bytes as far as the symbol table can
-/// tell; DWARF knows it is the first six.
+/// Six bytes of code then four bytes of padding: ten to the symbol table, six to DWARF.
 const FIRST: &[u8] = &[
     0x90, 0x90, 0x90, 0x90, 0x90, 0xC3, // the function
     0xCC, 0xCC, 0xCC, 0xCC, // padding
@@ -59,34 +52,12 @@ fn fixture(subprograms: &[(usize, u64)], base_symbol: Option<usize>) -> Vec<u8> 
     })
 }
 
-fn parse(data: &[u8]) -> Arc<Object> {
-    parse_object(data.into(), "e.o".into(), PathBuf::from("/e.o")).expect("the fixture parses")
-}
-
-fn named<'a>(object: &'a Object, name: &str) -> &'a Arc<SymbolData> {
-    object
-        .symbols_sorted
-        .iter()
-        .find(|symbol| symbol.name == name)
-        .expect("the fixture has this symbol")
-}
-
-fn text(object: &Object) -> &Section {
-    object
-        .sections
-        .iter()
-        .find(|section| section.name == ".text")
-        .expect("the fixture has a .text")
-}
-
 #[test]
 fn a_subprogram_extent_is_preferred_to_the_next_symbols_address() {
     let object = parse(&fixture(&[(0, 6), (1, 2)], Some(0)));
     let first = named(&object, "first");
 
-    // What the symbol table alone can say: everything up to `second`, padding included.
     assert_eq!(first.estimate_size(), Some(10));
-    // What DWARF says.
     assert_eq!(first.dwarf_extent(&object), Some(6));
     assert_eq!(first.extent(&object), Some(6));
 
@@ -146,21 +117,24 @@ fn the_extent_is_the_range_line_info_is_asked_about() {
 
 #[test]
 fn a_linked_image_is_asked_in_its_own_addresses() {
-    // `base_symbol: None` writes the line program and the subprogram DIEs at literal
-    // addresses, the way a linked image holds them — so no section bias is in play and
-    // the query must not add one.
+    // `base_symbol: None` writes literal addresses, the way a linked image holds them, so
+    // no section bias is in play and the query must not add one.
     let object = parse(&fixture(&[(0, 6)], None));
     let first = named(&object, "first");
+    let text = object
+        .sections
+        .iter()
+        .find(|section| section.name == ".text")
+        .expect("the fixture has a .text");
 
     assert_eq!(first.address, 0);
-    assert_eq!(object.subprogram_extent(text(&object), 0), Some(6));
+    assert_eq!(object.subprogram_extent(text, 0), Some(6));
     assert_eq!(first.extent(&object), Some(6));
 }
 
-/// The rustc shape: one `.text.<name>` per function, **both at address 0**, each
-/// subprogram relocated against its own section's symbol. An address alone cannot say
-/// which function it means, so the query has to carry the section's bias in and the
-/// answer has to be the one from that section.
+/// The rustc shape: one `.text.<name>` per function, both at address 0, each subprogram
+/// relocated against its own section's symbol — so the query has to carry the section's
+/// bias in and answer from that section.
 fn two_sections() -> Vec<u8> {
     elf_x86_64_with_dwarf(DwarfFixture {
         comp_dir: "/src",
@@ -221,12 +195,11 @@ fn two_functions_at_address_zero_get_their_own_extents() {
     assert_eq!(first.extent(&object), Some(6));
 }
 
-/// A derived extent past [`MAX_DERIVED_SIZE`] is the derivation saying nothing rather
-/// than a function that long: an export table declares a handful of the functions in an
-/// image, so the gap to the next declaration spans everything unexported in between.
+/// A derived extent past `MAX_DERIVED_SIZE` is the derivation saying nothing rather than
+/// a function that long: an export table declares a handful of an image's functions, so
+/// the gap to the next declaration spans everything unexported in between.
 #[test]
 fn a_derivation_reaching_a_megabyte_is_cut_off() {
-    // One symbol at the front of a section far larger than the cap.
     let mut text = vec![0x90u8; (2 << 20) + 16];
     *text.last_mut().unwrap() = 0xC3;
     let object = parse(&elf_x86_64_with_dwarf(DwarfFixture {

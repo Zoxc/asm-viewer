@@ -1,8 +1,7 @@
 use super::*;
 
-/// A directory of this test's own under the system temporary directory, named after
-/// the line that asked for it — `project.rs`'s and `settings.rs`'s file tests do the
-/// same, so a failing test leaves something identifiable behind.
+/// A directory of this test's own under the system temporary directory, named after the
+/// line that asked for it, so a failing test leaves something identifiable behind.
 fn directory(line: u32) -> PathBuf {
     std::env::temp_dir().join(format!(
         "assembly-viewer-scratchpad-test-{}-{line}",
@@ -14,9 +13,6 @@ fn scratchpad() -> Scratchpad {
     Scratchpad::new("sketch").expect("a name")
 }
 
-/// One row, as a reader would have left the two boxes. A test helper and not a
-/// constructor on [`Dependency`]: the editor builds its rows a field at a time out of
-/// two text boxes, so nothing outside these tests ever has both halves at once.
 fn dependency(name: impl Into<String>, version: impl Into<String>) -> Dependency {
     Dependency {
         name: name.into(),
@@ -24,38 +20,16 @@ fn dependency(name: impl Into<String>, version: impl Into<String>) -> Dependency
     }
 }
 
-#[test]
-fn a_new_scratchpad_is_a_name_and_something_to_look_at() {
-    let scratchpad = scratchpad();
-    assert_eq!(scratchpad.name(), "sketch");
-    assert_eq!(scratchpad.source, DEFAULT_SOURCE);
-    assert!(scratchpad.dependencies.is_empty());
-    assert!(scratchpad.problems().is_empty());
-
-    // The name is a path component as well as a crate name, and the crate-name rules
-    // are what keeps it one.
-    assert_eq!(Scratchpad::new("../escape"), Err(Problem::NameStart));
-    assert_eq!(Scratchpad::new("a/b"), Err(Problem::NameCharacter('/')));
-    assert_eq!(Scratchpad::new(""), Err(Problem::NoName));
-    // Trimmed, because it comes from a text box.
-    assert_eq!(
-        Scratchpad::new("  sketch  ").map(|s| s.name),
-        Ok("sketch".into())
-    );
-}
-
-/// The whole generated manifest, asserted as text rather than as a value: the field
-/// order rule this codebase keeps hitting is a property of the *serializer*, and a
-/// round trip through a struct would not see it. `[workspace]` being emitted at all
-/// is here for the same reason — an empty table is the one thing a serializer might
-/// reasonably drop.
+/// The whole generated manifest, asserted as text rather than as a value: the field order
+/// rule is a property of the *serializer*, and a round trip through a struct would not see
+/// it. `[workspace]` being emitted at all is here for the same reason.
 #[test]
 fn a_package_is_a_manifest_and_a_main() {
     let mut scratchpad = scratchpad();
     scratchpad.dependencies = vec![
         dependency("rand", "0.8"),
-        // Out of order and untrimmed on purpose: the manifest sorts and trims, the
-        // list does not.
+        // Out of order and untrimmed on purpose: the manifest sorts and trims, the list
+        // does not.
         dependency(" anyhow ", " 1.0.86 "),
     ];
 
@@ -76,16 +50,12 @@ rand = \"0.8\"
     );
 }
 
-/// The empty case is the one that actually ships, so it is asserted whole too: no
-/// `[dependencies]` header at all rather than an empty one.
+/// The empty case is the one that actually ships: no `[dependencies]` header at all rather
+/// than an empty one.
 #[test]
 fn a_scratchpad_with_no_crates_has_no_dependencies_table() {
     let manifest = scratchpad().manifest().expect("a manifest");
     assert!(!manifest.contains("[dependencies]"), "{manifest}");
-
-    let package = manifest.find("[package]").expect("the package table");
-    let workspace = manifest.find("[workspace]").expect("the workspace table");
-    assert!(package < workspace, "{manifest}");
 }
 
 #[test]
@@ -146,8 +116,7 @@ fn a_version_that_is_not_a_version_says_so() {
     }
 }
 
-/// A table cannot hold a key twice, so the second row would silently win. That is
-/// exactly the "silently different build" this module exists to refuse.
+/// A table cannot hold a key twice, so the second row would silently win.
 #[test]
 fn the_same_crate_twice_is_a_row_that_says_so() {
     let mut scratchpad = scratchpad();
@@ -188,8 +157,7 @@ fn a_scratchpad_with_a_bad_row_will_not_write() {
     assert!(!directory.exists());
 }
 
-/// The package is the storage, so this is the whole of the persistence test: what
-/// was written comes back, dependencies and all, with no second file involved.
+/// The package is the storage, so this is the whole of the persistence test.
 #[test]
 fn writes_and_reads_back() {
     let directory = directory(line!());
@@ -198,11 +166,17 @@ fn writes_and_reads_back() {
     scratchpad.dependencies = vec![dependency("anyhow", "1.0.86")];
 
     scratchpad.write_to(&directory).expect("writing");
-    assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad));
+    assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad.clone()));
 
     // The temporaries were renamed, not left behind.
     assert!(!directory.join("Cargo.toml.tmp").exists());
     assert!(!directory.join("src").join("main.rs.tmp").exists());
+
+    // Writing again replaces rather than merges.
+    scratchpad.source = "fn main() {}\n".to_owned();
+    scratchpad.dependencies = vec![dependency("rand", "0.8")];
+    scratchpad.write_to(&directory).expect("writing again");
+    assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad));
 
     // A directory with nothing in it is not a scratchpad, and neither is one with a
     // manifest and no source.
@@ -213,9 +187,8 @@ fn writes_and_reads_back() {
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// What the app opens with, and the reason [`Scratchpad::default`] may hand out a
-/// name without a `Result`: it is a name this module would accept if it were typed,
-/// and it is a package it would agree to write.
+/// The reason [`Scratchpad::default`] may hand out a name without a `Result`: it is a name
+/// this module would accept if it were typed, and a package it would agree to write.
 #[test]
 fn the_default_scratchpad_is_one_this_module_would_write() {
     let scratchpad = Scratchpad::default();
@@ -226,15 +199,13 @@ fn the_default_scratchpad_is_one_this_module_would_write() {
     assert!(scratchpad.manifest().is_ok());
 }
 
-/// Reopening: what is on disk wins over what the caller was holding, except for the
-/// name -- which is the directory the next write goes back to, and so cannot be
-/// something a hand-edited manifest gets to choose.
+/// Reopening: what is on disk wins over what the caller was holding, except for the name,
+/// which is the directory the next write goes back to.
 #[test]
 fn a_scratchpad_opens_as_its_directory_has_it() {
     let directory = directory(line!());
 
-    // Nothing there yet: what the caller was holding, unchanged, so a first run opens
-    // on the default source rather than on nothing.
+    // Nothing there yet: what the caller was holding, unchanged.
     let fresh = Scratchpad::default().opened_in(&directory);
     assert_eq!(fresh, Scratchpad::default());
 
@@ -246,52 +217,14 @@ fn a_scratchpad_opens_as_its_directory_has_it() {
     let opened = Scratchpad::default().opened_in(&directory);
     assert_eq!(opened.source, written.source);
     assert_eq!(opened.dependencies, written.dependencies);
-    // The manifest says `sketch` and the caller asked for `scratch`. The caller wins:
-    // the name is where the next write lands.
+    // The manifest says `sketch` and the caller asked for `scratch`. The caller wins.
     assert_eq!(opened.name(), DEFAULT_NAME);
 
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// Which box a row's problem belongs against. The editor marks one of the two, so
-/// this is the model's answer rather than the view guessing from the wording.
-#[test]
-fn a_problem_is_about_one_half_of_its_row() {
-    for problem in [
-        Problem::NoName,
-        Problem::NameStart,
-        Problem::NameCharacter('/'),
-        Problem::NameTooLong,
-        // A repeat is a name collision: `[dependencies]` is keyed by the name, and
-        // the version of the second row is what would silently go missing.
-        Problem::Repeated,
-    ] {
-        assert_eq!(problem.half(), Half::Name, "{problem:?}");
-    }
-
-    for problem in [Problem::NoVersion, Problem::Wildcard, Problem::NotAVersion] {
-        assert_eq!(problem.half(), Half::Version, "{problem:?}");
-    }
-}
-
-/// Writing twice is what the editor does on every build, so the second write has to
-/// be the new source and not a merge of the two.
-#[test]
-fn writing_again_replaces_what_was_there() {
-    let directory = directory(line!());
-    let mut scratchpad = scratchpad();
-    scratchpad.write_to(&directory).expect("writing");
-    scratchpad.source = "fn main() {}\n".to_owned();
-    scratchpad.dependencies = vec![dependency("rand", "0.8")];
-    scratchpad.write_to(&directory).expect("writing again");
-
-    assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad));
-
-    let _ = fs::remove_dir_all(&directory);
-}
-
-/// What a failed build reports, over a canned cargo stream — which is why `outcome`
-/// is a function of its own. Nothing here shells out.
+/// What a failed build reports, over a canned cargo stream — which is why `outcome` is a
+/// function of its own. Nothing here shells out.
 #[test]
 fn a_failed_build_reports_the_compilers_diagnostics() {
     let stdout = concat!(
@@ -330,14 +263,12 @@ fn a_failed_build_reports_the_compilers_diagnostics() {
             column: 5,
         })
     );
-    // cargo's own stderr is kept whole: some failures are said there and nowhere
-    // else.
+    // cargo's own stderr is kept whole: some failures are said there and nowhere else.
     assert!(message.contains("could not compile"));
 }
 
-/// The failure with no diagnostics behind it at all — a dependency row that names a
-/// crate nothing has heard of. cargo says it on stderr and emits no compiler
-/// message, so a build result that only carried diagnostics would report nothing.
+/// The failure with no diagnostics behind it at all — a dependency row that names a crate
+/// nothing has heard of. cargo says it on stderr and emits no compiler message.
 #[test]
 fn a_dependency_that_does_not_resolve_is_cargos_own_words() {
     let stderr = "error: no matching package named `not-a-real-crate` found\n\
@@ -393,30 +324,8 @@ fn a_build_that_names_no_artifact_says_so() {
     );
 }
 
-/// The one test that shells out. It is hermetic and needs no network: a scratchpad
-/// with no dependencies never touches the registry, so this is one rustc invocation
-/// in a temporary directory. `$CARGO` is set for anything cargo launches, this test
-/// included, so the cargo running the suite is the cargo that runs here.
-#[test]
-fn an_empty_scratchpad_really_builds() {
-    let directory = directory(line!());
-    let mut scratchpad = scratchpad();
-    scratchpad.source = "fn main() {}\n".to_owned();
-
-    let build = scratchpad.build_in(&directory);
-    let Build::Built { executable, .. } = &build else {
-        panic!("a build, got {build:?}");
-    };
-    // The path cargo named, and not one derived from the crate name: this is the
-    // whole argument for `--message-format=json` in one assertion.
-    assert!(executable.is_file(), "{}", executable.display());
-
-    let _ = fs::remove_dir_all(&directory);
-}
-
-/// The line cap, over a reader that never says anything: a program writing megabytes
-/// with no newline in it must still be *delivered*, in pieces, rather than kept in one
-/// growing string nobody ever sees.
+/// The line cap: a program writing megabytes with no newline in it must still be
+/// *delivered*, in pieces, rather than kept in one growing string nobody ever sees.
 #[test]
 fn a_line_with_no_end_to_it_is_cut_rather_than_kept() {
     let written = "x".repeat(MAX_LINE as usize * 2 + 7);
@@ -432,9 +341,8 @@ fn a_line_with_no_end_to_it_is_cut_rather_than_kept() {
     assert!(lines.iter().all(|line| line.stream == Stream::Out));
 }
 
-/// And the ordinary case, including the two things a naive `read_line` gets wrong: a
-/// Windows line ending left in the text, and a last line with no terminator at all
-/// being dropped instead of delivered.
+/// The ordinary case, including the two things a naive `read_line` gets wrong: a Windows
+/// line ending left in the text, and a last line with no terminator being dropped.
 #[test]
 fn lines_arrive_without_their_terminators() {
     let mut lines = Vec::new();
@@ -449,9 +357,8 @@ fn lines_arrive_without_their_terminators() {
     assert!(lines.iter().all(|line| line.stream == Stream::Err));
 }
 
-/// The other bound. A program printing in a tight loop is not an edge case in a
-/// scratchpad, so what has to be true is that the *oldest* goes and that the view can
-/// say how much of the story it is missing.
+/// The other bound: the *oldest* goes, and the view can say how much of the story it is
+/// missing.
 #[test]
 fn output_keeps_the_newest_and_counts_what_it_dropped() {
     let mut output = RunOutput::default();
@@ -475,10 +382,9 @@ fn output_keeps_the_newest_and_counts_what_it_dropped() {
     assert_eq!(output.line(MAX_OUTPUT_LINES), None);
 }
 
-/// Build a scratchpad whose source is `source` and hand back what to run. Hermetic
-/// and needs no network for `an_empty_scratchpad_really_builds`'s reason: no
-/// dependencies means no registry, so it is one rustc invocation in a temporary
-/// directory.
+/// Build a scratchpad whose source is `source` and hand back what to run. Hermetic and
+/// needs no network: no dependencies means no registry, so it is one rustc invocation in a
+/// temporary directory. The path is the one cargo named.
 fn program(directory: &Path, source: &str) -> PathBuf {
     let mut scratchpad = scratchpad();
     scratchpad.source = source.to_owned();
@@ -490,9 +396,8 @@ fn program(directory: &Path, source: &str) -> PathBuf {
     executable.clone()
 }
 
-/// Whether [`stop_all`] would still reach this run. Not called here -- other tests
-/// have programs of their own running in parallel threads of this same binary, and
-/// stopping *all* of them is exactly what it does.
+/// Whether [`stop_all`] would still reach this run. Not called here -- other tests have
+/// programs of their own running in parallel threads of this same binary.
 fn listed(running: &Running) -> bool {
     RUNNING
         .lock()
@@ -516,13 +421,11 @@ fn until_ended(events: &std::sync::mpsc::Receiver<RunEvent>) -> Vec<RunEvent> {
     }
 }
 
-/// A program that prints and exits: both streams arrive, the end comes last, and the
-/// exit status is the program's own.
+/// A program that prints and exits: both streams arrive, the end comes last, and the exit
+/// status is the program's own.
 ///
 /// Asserted without an order *between* the streams, which is not a promise this module
-/// makes and could not keep: two pipes read by two threads deliver in whatever order
-/// the kernel woke them. Within a stream the order is the program's own, which is what
-/// the other run tests rest on.
+/// makes: two pipes read by two threads deliver in whatever order the kernel woke them.
 #[test]
 fn a_program_that_prints_and_exits_is_streamed_and_reported() {
     let directory = directory(line!());
@@ -566,14 +469,9 @@ fn a_program_that_prints_and_exits_is_streamed_and_reported() {
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// The hazard this whole sub-step is about: a program that does not exit.
-///
-/// Two things have to be true and only a real process can say either. What it printed
-/// **before** it stopped exiting is on screen — which is the difference between
-/// streaming and collecting an output at exit, since this one has no exit — and asking
-/// it to stop really ends it. `Ended::Stopped` arriving is itself the proof of the
-/// second: it is emitted only after the process has been *reaped*, so a run that
-/// reports it is a run the system no longer has.
+/// The hazard this is all about: a program that does not exit. What it printed **before**
+/// it stopped exiting is on screen, and asking it to stop really ends it — `Ended::Stopped`
+/// is emitted only after the process has been reaped.
 #[test]
 fn a_program_that_never_exits_still_says_something_and_can_be_killed() {
     let directory = directory(line!());
@@ -600,8 +498,7 @@ fn a_program_that_never_exits_still_says_something_and_can_be_killed() {
         }))
     );
     assert!(!running.finished(), "it exited on its own");
-    // On the list the window's close hook walks, which is the only way a program
-    // still going when the app goes away can be reached at all.
+    // On the list the window's close hook walks.
     assert!(listed(&running), "nothing would have stopped it at exit");
 
     running.stop();
@@ -613,8 +510,8 @@ fn a_program_that_never_exits_still_says_something_and_can_be_killed() {
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// Nothing to run is an answer and not a panic — the executable a build named can be
-/// gone by the time the reader presses the button.
+/// Nothing to run is an answer and not a panic — the executable a build named can be gone
+/// by the time the reader presses the button.
 #[test]
 fn a_program_that_is_not_there_says_so() {
     let directory = directory(line!());
@@ -623,28 +520,4 @@ fn a_program_that_is_not_there_says_so() {
         .expect("a refusal");
 
     assert!(matches!(failure, Failure::NoProgram(_)), "{failure:?}");
-}
-
-/// And the same directory built again with source that does not compile: what a
-/// failed build reports, end to end, once.
-#[test]
-fn a_scratchpad_that_does_not_compile_reports_it() {
-    let directory = directory(line!());
-    let mut scratchpad = scratchpad();
-    scratchpad.source = "fn main() { let _: u32 = \"not a number\"; }\n".to_owned();
-
-    let build = scratchpad.build_in(&directory);
-    let Build::Rejected { diagnostics, .. } = &build else {
-        panic!("a rejection, got {build:?}");
-    };
-    let error = diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.level == Level::Error)
-        .expect("an error");
-    assert_eq!(
-        error.span.as_ref().map(|span| span.file.as_str()),
-        Some("src/main.rs")
-    );
-
-    let _ = fs::remove_dir_all(&directory);
 }

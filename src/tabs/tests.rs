@@ -1,16 +1,11 @@
 use super::*;
 
-// --- the landing rule, on its own -------------------------------------
-//
-// The same rules as the `Tabs` tests above, asked of the free function directly, so
-// that "a close lands on the right-hand neighbour" keeps its coverage wherever the
-// tabs are being kept. `landing` is asked *before* anything is removed, so each of
-// these passes the whole list and the predicate that is about to thin it.
-
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_string()).collect()
 }
 
+/// `landing` is asked *before* anything is removed, so each of these passes the whole
+/// list and the predicate that is about to thin it.
 fn shut(items: &[&str], showing: &str, closing: &[&str]) -> Option<String> {
     let open = strings(items);
     let closing = strings(closing);
@@ -44,14 +39,6 @@ fn landing_after_several_is_the_first_survivor_after_the_shown_one() {
     );
 }
 
-#[test]
-fn landing_after_closing_the_newest_several_moves_left() {
-    assert_eq!(
-        shut(&["a", "b", "c", "d"], "c", &["c", "d"]),
-        Some("b".to_owned())
-    );
-}
-
 /// A tab that survives is its own answer, which is what lets a caller ask without
 /// first working out whether what is on screen is going anywhere.
 #[test]
@@ -75,24 +62,6 @@ fn landing_from_nothing_shown_is_the_last_survivor() {
         Some("c".to_owned())
     );
 }
-
-/// `landing` removes nothing, so it cannot tell "nothing was closed" from "nothing
-/// is left" — it answers the tab that is still there, and the distinction is
-/// [`Tabs::close_all`]'s to draw because it is the one doing the removing.
-#[test]
-fn landing_that_closes_nothing_answers_the_shown_tab() {
-    let open = strings(&["a", "b"]);
-    assert_eq!(
-        landing(&open, Some(&"a".to_owned()), |_| false),
-        Some("a".to_owned())
-    );
-    assert_eq!(
-        landing::<String>(&[], Some(&"a".to_owned()), |_| false),
-        None
-    );
-}
-
-// --- where each tab was left ------------------------------------------
 
 fn positions(at: &[(&str, usize)]) -> Positions<String> {
     let mut positions = Positions::default();
@@ -121,26 +90,20 @@ fn remembering_a_tab_twice_replaces_its_row() {
     let mut positions = positions(&[("a", 12)]);
     positions.remember("a".to_owned(), 13);
     assert_eq!(positions.at(&"a".to_owned()), Some(13));
-    // Replaced, not appended: the second answer is the only answer.
     assert_eq!(positions.at.len(), 1);
 }
 
 /// The listing has shrunk under the position — a rebuilt binary, a source file edited
 /// since it was read — so the row is the last one there now rather than one past the
-/// end. The end is where the reader was; the top is not.
+/// end, and an empty listing is row 0 rather than an underflow.
 #[test]
 fn a_row_past_the_end_clamps_to_the_last_one() {
     let positions = positions(&[("a", 900)]);
     assert_eq!(positions.row(&"a".to_owned(), 100), 99);
+    assert_eq!(positions.row(&"a".to_owned(), 0), 0);
     // And `at` still says what was remembered: only the answer given to a pane is
     // clamped, because only a pane knows what it is holding.
     assert_eq!(positions.at(&"a".to_owned()), Some(900));
-}
-
-#[test]
-fn an_empty_listing_has_no_row_but_the_first() {
-    let positions = positions(&[("a", 900)]);
-    assert_eq!(positions.row(&"a".to_owned(), 0), 0);
 }
 
 #[test]

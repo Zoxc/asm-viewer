@@ -1,162 +1,60 @@
-//! The **search** behind `robustness.rs`. That file holds one named fixture per defect;
-//! this one is how the defects were found, and it stays so that the next change to the
-//! crate has to survive the same search.
+//! The search behind `robustness.rs`: every fixture the suite builds, mutated three ways
+//! — truncated, poisoned field by field, and splatted with random bytes — with the whole
+//! pipeline run over each result (`common::parse_and_walk`). A mutated file may parse into
+//! anything at all; the only failure is a panic.
 //!
-//! Fuzzing a parser is the honest way to find these (`notes/Goals.md`, *Binary inspection
-//! design*: "should never panic on any file input"). `cargo fuzz` is not available here,
-//! so this is the cheap version of it: take every fixture the suite already builds, mutate
-//! it three ways, and run the whole pipeline over each result — `parse_object`,
-//! `symbols_sorted`, `estimate_size`, `extent`, `data_in`, `assembly`, `edges`,
-//! `line_info` and reading the rows back (`common::parse_and_walk`). A result is a panic
-//! or it is not; a mutated file is allowed to parse into anything at all, including
-//! nothing.
-//!
-//! **Everything here is deterministic and bounded**, so a failure is reproducible from
-//! its label alone and the suite stays in single-digit seconds:
-//!
-//! * The pseudo-random bytes are `common::garbage`, an xorshift64* over a fixed seed —
-//!   never `rand`, never the clock.
-//! * The sweeps are sampled where the full product would be large, and always by an even
-//!   stride from the front rather than by picking: at most [`MAX_FIELDS`] numeric fields
-//!   per file, and every [`TRUNCATION_STRIDE`]-th length past [`WHOLE_TRUNCATION`] bytes.
-//!   Which cases run is therefore fixed, and the sampled tables are still represented end
-//!   to end.
-//!
-//! What the three sweeps are for is different, which is why all three are here:
-//! **truncation** is the file that stops in the middle of a structure, **field-targeted
-//! corruption** is the file whose numbers are wrong (a count, an offset, a size — the
-//! things a length check is written against), and **splatting** is everything neither of
-//! those thought of.
+//! **Everything here is deterministic and bounded**, so a failure is reproducible from its
+//! label alone and the suite stays in single-digit seconds: the pseudo-random bytes are
+//! `common::garbage` over a fixed seed, never `rand` and never the clock, and where the
+//! full product would be large the sweep is sampled by an even stride from the front
+//! rather than by picking — at most [`MAX_FIELDS`] numeric fields per file, and every
+//! [`TRUNCATION_STRIDE`]-th length past [`WHOLE_TRUNCATION`] bytes. Which cases run is
+//! therefore fixed, and a sampled table is still represented end to end.
 
 mod common;
 
 use common::{
-    caller_and_target, elf_shared_object, elf_x86_64_with_dwarf, garbage, pe_dll, survivors,
-    DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SharedObject, TextSymbol,
+    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, garbage, survivors,
 };
 
-/// At most this many numeric fields are poisoned per file; see the module docs for how
-/// they are sampled. The committed objects have 371 and 471 of them, and a stride over
-/// the whole table finds the same classes of defect the whole table does.
+/// At most this many numeric fields are poisoned per file. The committed objects have 371
+/// and 471 of them, and a stride over the whole table finds the same classes of defect.
 const MAX_FIELDS: usize = 128;
 
 /// Every length up to here is truncated to; past it, every [`TRUNCATION_STRIDE`]-th.
-/// Everything a header parser reads is in the first few hundred bytes, so the dense part
-/// is where the answers are.
+/// Everything a header parser reads is in the first few hundred bytes.
 const WHOLE_TRUNCATION: usize = 1024;
 
 /// See [`WHOLE_TRUNCATION`]. An odd stride on purpose: a power of two would land on the
 /// same alignment inside every structure it walked past.
 const TRUNCATION_STRIDE: usize = 7;
 
-/// The corpus: every shape the crate can be asked about. Relocatable objects with and
-/// without DWARF, real compiler output in DWARF 5, and the two linked images, whose
-/// export and entry-point paths (`declared_code`) no `.o` reaches at all.
+/// Every shape the crate can be asked about: relocatable objects with and without DWARF,
+/// real compiler output in DWARF 5, and the two linked images, whose export and
+/// entry-point paths (`declared_code`) no `.o` reaches at all.
 fn corpus() -> Vec<(String, Vec<u8>)> {
-    const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3];
-    const EXPORTS: &[ExportedSymbol] = &[
-        ExportedSymbol {
-            name: "first",
-            offset: 0,
-            size: 4,
-            code: true,
-        },
-        ExportedSymbol {
-            name: "a_global",
-            offset: 0,
-            size: 8,
-            code: false,
-        },
-    ];
-
-    vec![
+    let mut corpus = vec![
         ("caller_and_target".to_owned(), caller_and_target()),
-        ("dwarf".to_owned(), dwarf_fixture()),
-        ("line_fixture.o".to_owned(), committed("line_fixture.o")),
+        ("dwarf".to_owned(), dwarf_fixture(&[(0, 6), (1, 2)])),
+        (
+            "line_fixture.o".to_owned(),
+            committed_fixture("line_fixture.o"),
+        ),
         (
             "line_fixture_split.o".to_owned(),
-            committed("line_fixture_split.o"),
+            committed_fixture("line_fixture_split.o"),
         ),
-        (
-            "elf .so".to_owned(),
-            elf_shared_object(SharedObject {
-                text: TEXT,
-                dynamic: EXPORTS,
-                static_symbols: &[],
-                entry: Some(4),
-            }),
-        ),
-        ("pe dll".to_owned(), pe_dll(TEXT, EXPORTS, Some(4))),
-    ]
+    ];
+    corpus.extend(
+        declared_code_images()
+            .into_iter()
+            .map(|(label, data)| (label.to_owned(), data)),
+    );
+    corpus
 }
 
-/// A relocatable object with a line program, subprogram extents and two source files:
-/// the synthesized half of the DWARF corpus, in DWARF 4 with its strings inline.
-fn dwarf_fixture() -> Vec<u8> {
-    elf_x86_64_with_dwarf(DwarfFixture {
-        comp_dir: "/src",
-        files: &["main.c", "other.c"],
-        sections: &[DwarfSection {
-            name: None,
-            symbols: &[
-                TextSymbol {
-                    name: "first",
-                    bytes: &[0x90, 0x90, 0x90, 0x90, 0x90, 0xC3],
-                },
-                TextSymbol {
-                    name: "second",
-                    bytes: &[0x90, 0xC3],
-                },
-            ],
-            rows: &[
-                DwarfRow {
-                    address: 0,
-                    file: 0,
-                    line: 10,
-                    column: 3,
-                },
-                DwarfRow {
-                    address: 3,
-                    file: 0,
-                    line: 11,
-                    column: 0,
-                },
-                DwarfRow {
-                    address: 6,
-                    file: 1,
-                    line: 42,
-                    column: 7,
-                },
-            ],
-            length: 8,
-            subprograms: &[(0, 6), (1, 2)],
-            base_symbol: Some(1),
-        }],
-    })
-}
-
-/// One of the committed, compiler-produced objects (`tests/fixtures/`). These are the
-/// only inputs here a real toolchain wrote: DWARF 5, with a `.debug_line_str`, a version
-/// 5 line-program header and — in the `-ffunction-sections` build — a `.debug_rnglists`,
-/// none of which the synthesized fixture reaches.
-fn committed(name: &str) -> Vec<u8> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|error| {
-        panic!(
-            "{}: {error}\n\
-             This fixture is committed to the repository, not generated. Restore it from \
-             git, or rebuild it with the command in tests/fixtures/line_fixture.c.",
-            path.display()
-        )
-    })
-}
-
-/// A file that stops part-way through is the commonest malformed file there is — a
-/// truncated download, a build killed mid-write, an archive member whose header lies
-/// about its length. Every prefix has to come back as an object or as nothing.
+/// A file that stops part-way through is the commonest malformed file there is. Every
+/// prefix has to come back as an object or as nothing.
 #[test]
 fn truncation_at_every_length_does_not_panic() {
     let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
@@ -172,15 +70,12 @@ fn truncation_at_every_length_does_not_panic() {
     assert!(failures.is_empty(), "panicked on: {failures:?}");
 }
 
-/// The sweep that finds the arithmetic. A single flipped bit rarely turns a count into
-/// something interesting; writing `u64::MAX` into it always does. Every field a parser
-/// reads as a **count, an offset or a size** — file header, section table, symbol table,
-/// relocation table, PE optional header and data directories, PE export directory — takes
-/// each of [`poisons`] in turn, and the whole pipeline runs over the result.
+/// The sweep that finds the arithmetic: a flipped bit rarely turns a count into something
+/// interesting, where writing `u64::MAX` into it always does. Every field a parser reads as
+/// a count, an offset or a size takes each of [`poisons`] in turn.
 ///
-/// This is the sweep that reaches `addr2line` 0.21's two unchecked additions (see
-/// `without_panicking` in `src/line.rs`); both are caught there, and this test is green
-/// *because* they are.
+/// This is the sweep that reaches `addr2line` 0.21's two unchecked additions, caught by
+/// `without_panicking` in `src/line.rs` — this test is green *because* they are.
 #[test]
 fn field_targeted_corruption_does_not_panic() {
     let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
@@ -203,9 +98,8 @@ fn field_targeted_corruption_does_not_panic() {
     assert!(failures.is_empty(), "panicked on: {failures:?}");
 }
 
-/// And the sweep that knows nothing about the formats: runs of pseudo-random bytes
-/// written over a valid file at pseudo-random places. A field-targeted sweep finds only
-/// what its author thought to name; this is for what neither of us did.
+/// The sweep that knows nothing about the formats: runs of pseudo-random bytes over a
+/// valid file at pseudo-random places, for what a field-targeted sweep never names.
 #[test]
 fn random_splats_do_not_panic() {
     let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
@@ -235,8 +129,8 @@ fn random_splats_do_not_panic() {
 }
 
 /// The values written into a field, chosen for the boundaries a length check is written
-/// against rather than for variety: nothing, everything, each width's own limit, and the
-/// file's own length on either side of it.
+/// against: nothing, everything, each width's own limit, and the file's own length on
+/// either side of it.
 fn poisons(len: usize) -> [u64; 8] {
     [
         0,
@@ -251,7 +145,7 @@ fn poisons(len: usize) -> [u64; 8] {
 }
 
 /// Every `(offset, width)` in an ELF64 that a parser reads as a count, an offset or a
-/// size: the file header, then every section header, then every entry of every symbol or
+/// size: the file header, every section header, and every entry of every symbol or
 /// relocation table those headers point at.
 fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
     let mut fields = Vec::new();
@@ -284,8 +178,8 @@ fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
         return fields;
     }
 
-    // The tables the section headers point at, as `(offset, size)`. Every entry of each
-    // is 24 bytes, whether it is a symbol or a RELA.
+    // The tables the section headers point at. Every entry of each is 24 bytes, whether it
+    // is a symbol or a RELA.
     let mut tables: Vec<(usize, usize)> = Vec::new();
     for i in 0..shnum {
         let base = shoff + i * shentsize;
@@ -339,9 +233,8 @@ fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
     fields
 }
 
-/// Every `(offset, width)` in a PE image that a parser reads as a count, an offset or a
-/// size: the COFF header, the PE32+ optional header, the export data directory, the
-/// section table, and the export directory the section table points at — which is what
+/// The same for a PE image: the COFF header, the PE32+ optional header, the export data
+/// directory, the section table, and the export directory it points at — what
 /// `declared_code` walks in an image with no symbol table.
 fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
     let mut fields = Vec::new();

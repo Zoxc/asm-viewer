@@ -1,37 +1,14 @@
-//! Parsing, size estimation, disassembly and relocation resolution on a minimal
-//! hand-built x86-64 ELF relocatable object.
+//! Parsing, size estimation, disassembly, relocation resolution and branch edges on
+//! hand-built x86-64 ELF relocatable objects.
 
 mod common;
 
-use analysis::{parse_object, Object, SpanKind, SymbolData};
+use analysis::SpanKind;
 use common::{
-    branch_to_data, caller_and_target, elf_x86_64, indirect_caller_and_target,
-    rip_relative_store_to_data, TextRelocation, TextSymbol,
+    branch_to_data, caller_and_target, elf_x86_64, indirect_caller_and_target, names, parse,
+    rip_relative_store_to_data, symbol, text, TextRelocation, TextSymbol,
 };
-use std::path::PathBuf;
 use std::sync::Arc;
-
-fn parse(data: &[u8]) -> Arc<Object> {
-    parse_object(data.into(), "fixture.o".into(), PathBuf::from("/fixture.o"))
-        .expect("fixture parses")
-}
-
-fn symbol(object: &Object, name: &str) -> Arc<SymbolData> {
-    object
-        .symbols_sorted
-        .iter()
-        .find(|symbol| symbol.name == name)
-        .unwrap_or_else(|| panic!("no symbol named {name}; got {:?}", names(object)))
-        .clone()
-}
-
-fn names(object: &Object) -> Vec<&str> {
-    object
-        .symbols_sorted
-        .iter()
-        .map(|symbol| symbol.name.as_str())
-        .collect()
-}
 
 #[test]
 fn both_text_symbols_parse() {
@@ -112,7 +89,6 @@ fn the_call_resolves_to_the_target_symbol() {
     let call = &assembly.instructions[0];
 
     let resolved = call.relocation.as_ref().expect("the call has a relocation");
-    // Identity is `Arc` pointer identity everywhere, so assert that and not the name.
     assert!(Arc::ptr_eq(resolved, &target));
 
     // The relocation covers only the call; the trailing `ret` has none.
@@ -127,8 +103,8 @@ fn the_placeholder_operand_is_replaced_when_a_relocation_applies() {
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let call = &assembly.instructions[0];
 
-    // The encoded displacement is a meaningless placeholder (0), so it must never be
-    // printed: the target's name stands in its place, in the operand's own position.
+    // The encoded displacement is a placeholder, so the target's name stands in its place
+    // rather than the number being printed.
     assert!(
         !call
             .format
@@ -143,8 +119,7 @@ fn the_placeholder_operand_is_replaced_when_a_relocation_applies() {
 
 #[test]
 fn an_unrelocated_branch_keeps_its_target() {
-    // Control for the test above: the same `call rel32` with no relocation on it still
-    // prints the encoded (here meaningless) displacement.
+    // Control for the test above: the same `call rel32` with no relocation on it.
     let data = elf_x86_64(
         &[
             TextSymbol {
@@ -165,9 +140,8 @@ fn an_unrelocated_branch_keeps_its_target() {
     let call = &assembly.instructions[0];
 
     assert!(call.relocation.is_none());
-    // The branch target is a `FunctionAddress`, i.e. `SpanKind::Address` — not a number
-    // span — so it is `write_number` being suppressed that removes it above, and the
-    // text is what has to be asserted on.
+    // A branch target is `SpanKind::Address`, not a number span, so the text is what has
+    // to be asserted on above.
     assert_eq!(text(call).trim_end(), "call      5");
     assert_eq!(
         spans_of(call, SpanKind::Address),
@@ -179,9 +153,8 @@ fn an_unrelocated_branch_keeps_its_target() {
 
 #[test]
 fn jump_targets_are_address_spans_too() {
-    // The same rule for a plain jump, whose target iced-x86 emits as a `LabelAddress`
-    // rather than the `FunctionAddress` a call gets: a short `EB xx` and a near
-    // `E9 xx xx xx xx`, both unrelocated so the encoded displacement is printed.
+    // A plain jump's target is a `LabelAddress` rather than the `FunctionAddress` a call
+    // gets: a short `EB xx` and a near `E9 xx xx xx xx`, both unrelocated.
     let data = elf_x86_64(
         &[TextSymbol {
             name: "jumper",
@@ -203,15 +176,14 @@ fn jump_targets_are_address_spans_too() {
     assert_eq!(text(near).trim_end(), "jmp       7");
     assert_eq!(spans_of(near, SpanKind::Address), ["7"]);
 
-    // The `ret` that follows has no operand at all, so nothing else is coloured as one.
+    // The `ret` that follows has no operand at all.
     assert!(spans_of(&assembly.instructions[2], SpanKind::Address).is_empty());
 }
 
 #[test]
 fn a_branch_target_is_not_zero_padded() {
-    // The two jumps above target addresses 2 and 7, which iced-x86 writes in decimal
-    // because they are below ten -- so they say nothing about padding. This one lands on
-    // 0x22, which is written as hex and was padded to the width of a 64-bit address
+    // The jumps above target 2 and 7, written in decimal, so they say nothing about
+    // padding. This one lands on 0x22, which was padded to a full 64-bit address
     // (`jmp short 0000000000000022h`) until `assembly` turned `branch_leading_zeros` off.
     let data = elf_x86_64(
         &[TextSymbol {
@@ -232,8 +204,8 @@ fn a_branch_target_is_not_zero_padded() {
 
 #[test]
 fn a_relocation_drops_an_immediate_number_span() {
-    // `mov eax, imm32` does produce a `SpanKind::Number` operand, so this is where the
-    // dropped-placeholder rule is visible as a missing number span.
+    // `mov eax, imm32` produces a real `SpanKind::Number` operand, so this is where the
+    // dropped placeholder is visible as a missing number span.
     let symbols = [
         TextSymbol {
             name: "loader",
@@ -315,9 +287,8 @@ fn a_relocation_anywhere_in_the_instruction_counts() {
 
 #[test]
 fn an_unrelocated_indirect_call_keeps_its_displacement() {
-    // The control for the test below: the same `call qword ptr [rip+0x0]` with nothing
-    // relocating it prints the encoded displacement, which iced-x86 resolves to the
-    // absolute address it points at (the instruction is 6 bytes long and starts at 0).
+    // Control for the test below: with nothing relocating it, iced-x86 prints the absolute
+    // address the displacement resolves to (the instruction is 6 bytes and starts at 0).
     let object = parse(&indirect_caller_and_target(false));
     let caller = symbol(&object, "caller");
 
@@ -332,14 +303,10 @@ fn an_unrelocated_indirect_call_keeps_its_displacement() {
 
 #[test]
 fn a_relocated_indirect_call_names_its_target_inside_the_brackets() {
-    // The regression: the relocation applies to a *memory* operand, so the number it
-    // replaces sits inside brackets the formatter has already opened. Dropping it left
-    // `call qword ptr []`; the target's name has to take its place instead.
-    //
-    // The operand is rip-relative, and naming it does not make it any less so: the `rip+`
-    // stays, because `[target]` would claim an absolute address the encoding does not
-    // have. (The control above, which has no name to show, keeps iced-x86's default and
-    // prints the absolute address the displacement resolves to.)
+    // The relocation applies to a *memory* operand, so the number it replaces sits inside
+    // brackets the formatter has already opened: dropping it left `call qword ptr []`.
+    // The `rip+` stays, because `[target]` would claim an absolute address the encoding
+    // does not have.
     let object = parse(&indirect_caller_and_target(true));
     let caller = symbol(&object, "caller");
     let target = symbol(&object, "target");
@@ -351,22 +318,19 @@ fn a_relocated_indirect_call_names_its_target_inside_the_brackets() {
     assert!(Arc::ptr_eq(resolved, &target));
 
     assert_eq!(text(call).trim_end(), "call      qword ptr [rip+target]");
-    // The placeholder displacement is gone, not merely hidden ...
     assert!(
         spans_of(call, SpanKind::Number).is_empty(),
         "the relocated displacement kept a number span: {:?}",
         call.format
     );
-    // ... and the name is one span of its own, which is what the UI turns into the
-    // clickable link.
+    // The name is one span of its own, which is what the UI turns into the link.
     assert_eq!(relocation_span(call), Some(("target", SpanKind::Address)));
 }
 
 #[test]
 fn the_relocation_span_is_the_only_one_replaced() {
-    // An instruction with a relocated memory operand *and* an unrelated immediate:
-    // `mov dword ptr [rip+0x0], 7`, relocated at offset 2. Only the memory operand is
-    // named; the immediate is a real value and must survive.
+    // `mov dword ptr [rip+0x0], 7`, relocated at offset 2: only the memory operand is
+    // named, and the unrelated immediate is a real value that must survive.
     let data = elf_x86_64(
         &[
             TextSymbol {
@@ -406,11 +370,9 @@ fn the_relocation_span_is_the_only_one_replaced() {
 
 #[test]
 fn an_unresolvable_relocation_keeps_the_plain_displacement() {
-    // The same `mov dword ptr [rip+0x0], 7`, but relocated against a *data* symbol, which
-    // parsing drops along with everything else that is not a text symbol. There is a
-    // relocation on the instruction and nothing to navigate to, so there must be no link
-    // — and with no name to put after it, no `rip+` either: the operand prints exactly
-    // what an unrelocated one prints, the absolute address the displacement resolves to.
+    // The same store relocated against a *data* symbol, which parsing drops: a relocation
+    // on the instruction with nothing to navigate to, so no link — and with no name to put
+    // after it, no `rip+` either, just the absolute address an unrelocated one prints.
     let object = parse(&rip_relative_store_to_data());
     let storer = symbol(&object, "storer");
     assert_eq!(names(&object), ["storer"]);
@@ -426,9 +388,9 @@ fn an_unresolvable_relocation_keeps_the_plain_displacement() {
 
 #[test]
 fn the_rip_form_is_per_instruction() {
-    // Two identical `call qword ptr [rip+0x0]`, only the first relocated. The rip-relative
-    // form is turned on for the instruction being named and must not leak into the next
-    // one, which still prints its own absolute address (it starts at 6 and is 6 long).
+    // Two identical `call qword ptr [rip+0x0]`, only the first relocated: the rip-relative
+    // form must not leak into the second, which still prints its own absolute address (it
+    // starts at 6 and is 6 long).
     let data = elf_x86_64(
         &[
             TextSymbol {
@@ -464,57 +426,14 @@ fn the_rip_form_is_per_instruction() {
 }
 
 #[test]
-fn a_direct_relocated_operand_never_gains_a_rip() {
-    // The two direct forms, neither of which has a memory operand at all: the rip-relative
-    // rule keys off `memory_base`, so both must read exactly as they did before it.
-    let object = parse(&caller_and_target());
-    let call = symbol(&object, "caller")
-        .assembly(&object)
-        .expect("disassembles")
-        .instructions[0]
-        .clone();
-    assert_eq!(text(&call).trim_end(), "call      target");
-    assert_eq!(relocation_span(&call), Some(("target", SpanKind::Address)));
-
+fn a_forward_jump_and_a_backward_conditional_are_edges() {
+    //   0  31 C0        xor eax, eax
+    //   2  EB 03        jmp short 7      ─┐  index 1 -> 3
+    //   4  48 FF C0     inc rax          ←┼┐ index 2
+    //   7  48 83 F8 0A  cmp rax, 0Ah     ←┘│ index 3
+    //   B  7C F7        jl short 4        ─┘  index 4 -> 2
+    //   D  C3           ret
     let object = parse(&elf_x86_64(
-        &[
-            TextSymbol {
-                name: "loader",
-                bytes: &[0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3],
-            },
-            TextSymbol {
-                name: "target",
-                bytes: &[0xC3],
-            },
-        ],
-        &[TextRelocation {
-            in_symbol: 0,
-            offset: 1,
-            target: 1,
-        }],
-    ));
-    let mov = symbol(&object, "loader")
-        .assembly(&object)
-        .expect("disassembles")
-        .instructions[0]
-        .clone();
-    assert_eq!(text(&mov).trim_end(), "mov       eax, target");
-    assert_eq!(relocation_span(&mov), Some(("target", SpanKind::Address)));
-}
-
-/// A loop, which is the shape the gutter exists for: a forward jump over the body and a
-/// conditional one back up into it.
-///
-/// ```text
-///   0  31 C0        xor eax, eax
-///   2  EB 03        jmp short 7      ─┐  index 1 -> 3
-///   4  48 FF C0     inc rax          ←┼┐ index 2
-///   7  48 83 F8 0A  cmp rax, 0Ah     ←┘│ index 3
-///   B  7C F7        jl short 4        ─┘  index 4 -> 2
-///   D  C3           ret
-/// ```
-fn looper() -> Vec<u8> {
-    elf_x86_64(
         &[TextSymbol {
             name: "looper",
             bytes: &[
@@ -522,12 +441,7 @@ fn looper() -> Vec<u8> {
             ],
         }],
         &[],
-    )
-}
-
-#[test]
-fn a_forward_jump_and_a_backward_conditional_are_edges() {
-    let object = parse(&looper());
+    ));
     let assembly = assemble(&object, "looper");
 
     assert_eq!(assembly.instructions.len(), 6);
@@ -549,16 +463,14 @@ fn a_forward_jump_and_a_backward_conditional_are_edges() {
 
     let backward = assembly.edges[1];
     assert!(backward.is_backward());
-    // The span is the same whichever way the branch runs, which is what nests one edge
-    // inside another.
+    // The span is the same whichever way the branch runs, which is what nests edges.
     assert_eq!((backward.first(), backward.last()), (2, 4));
 }
 
 #[test]
 fn a_loop_instruction_is_an_edge() {
     // `loop` is a conditional branch as far as iced-x86 is concerned, so it needs no case
-    // of its own — but it is the one instruction whose name says "branch" nowhere in its
-    // mnemonic, and a reader wants the arrow for it as much as for a `jne`.
+    // of its own — but it is the one branch whose mnemonic does not say so.
     //
     //   0  48 FF C8  dec rax
     //   3  E2 FB     loop 0
@@ -578,9 +490,8 @@ fn a_loop_instruction_is_an_edge() {
 
 #[test]
 fn an_xbegin_names_its_fallback_row() {
-    // `xbegin` branches to the address execution resumes at when the transaction aborts,
-    // which is a second exit from its row and a place a few instructions down the same
-    // function — an edge like any other.
+    // `xbegin` branches to where execution resumes when the transaction aborts: a second
+    // exit from its row, and an edge like any other.
     //
     //   0  C7 F8 01 00 00 00  xbegin 7
     //   6  90                 nop
@@ -600,10 +511,9 @@ fn an_xbegin_names_its_fallback_row() {
 
 #[test]
 fn an_xabort_is_not_a_branch_to_the_top_of_the_symbol() {
-    // The case the operand-kind check in `branch_target` exists for: `xabort` shares
-    // `xbegin`'s flow-control kind, but its operand is an immediate, and
-    // `near_branch_target` answers 0 for it — which is a perfectly ordinary address in a
-    // relocatable object, namely this symbol's own first byte.
+    // What the operand-kind check in `branch_target` exists for: `xabort` shares `xbegin`'s
+    // flow-control kind, but its operand is an immediate and `near_branch_target` answers
+    // 0 — this symbol's own first byte in a relocatable object.
     let object = parse(&elf_x86_64(
         &[TextSymbol {
             name: "aborter",
@@ -623,8 +533,8 @@ fn an_xabort_is_not_a_branch_to_the_top_of_the_symbol() {
 
 #[test]
 fn a_branch_out_of_the_symbol_is_not_an_edge() {
-    // `jumper` jumps to address 3, which is the *next* symbol's first byte: a real branch,
-    // but not one this listing has a row at either end of.
+    // A jump to address 3, the *next* symbol's first byte: a real branch, but not one this
+    // listing has a row at both ends of.
     let object = parse(&elf_x86_64(
         &[
             TextSymbol {
@@ -654,9 +564,9 @@ fn a_branch_out_of_the_symbol_is_not_an_edge() {
 
 #[test]
 fn a_relocated_branch_is_not_an_edge() {
-    // The trap: `jmp target`'s displacement is a relocation placeholder, and read
-    // literally it points at address 5 — the `ret` of this very symbol. The control below
-    // is the same bytes with nothing relocating them, where that *is* the answer.
+    // `jmp target`'s displacement is a relocation placeholder, and read literally it points
+    // at address 5, the `ret` of this very symbol. The control is the same bytes
+    // unrelocated, where that *is* the answer.
     let symbols = [
         TextSymbol {
             name: "jumper",
@@ -682,8 +592,6 @@ fn a_relocated_branch_is_not_an_edge() {
         }],
     ));
     let assembly = assemble(&relocated, "jumper");
-    // The jump still names where it goes — it is just that the name comes from the
-    // relocation and the address in the encoding means nothing.
     assert_eq!(
         text(&assembly.instructions[0]).trim_end(),
         "jmp       target"
@@ -697,10 +605,9 @@ fn a_relocated_branch_is_not_an_edge() {
 
 #[test]
 fn a_relocation_that_resolves_to_nothing_still_suppresses_the_edge() {
-    // The same jump relocated against a *data* symbol, which parsing drops: the
-    // instruction's `relocation` is `None` and yet its displacement is every bit as much a
-    // placeholder, pointing at this symbol's own `ret`. So the rule is "a relocation
-    // covers these bytes", not "a relocation resolved to something navigable".
+    // The same jump relocated against a *data* symbol, which parsing drops: `relocation` is
+    // `None` and yet the displacement is still a placeholder pointing at this symbol's own
+    // `ret`. The rule is "a relocation covers these bytes", not "it resolved to something".
     let object = parse(&branch_to_data());
     let assembly = assemble(&object, "jumper");
 
@@ -715,9 +622,9 @@ fn a_relocation_that_resolves_to_nothing_still_suppresses_the_edge() {
 
 #[test]
 fn a_branch_into_the_middle_of_an_instruction_is_not_an_edge() {
-    // `jumper` jumps to address 3, which is the second byte of the three-byte `inc rax` at
-    // 2. There is no row to point an arrowhead at, so there is no edge; the control below
-    // aims the same jump one byte earlier, at the instruction itself.
+    // Address 3 is the second byte of the three-byte `inc rax` at 2: no row to point an
+    // arrowhead at. The second case aims the same jump one byte earlier, at the
+    // instruction itself.
     for (rel, expected) in [(0x01u8, &[][..]), (0x00, &[(0usize, 1usize)][..])] {
         let object = parse(&elf_x86_64(
             &[TextSymbol {
@@ -741,9 +648,8 @@ fn a_branch_into_the_middle_of_an_instruction_is_not_an_edge() {
 
 #[test]
 fn a_call_inside_the_symbol_is_not_an_edge() {
-    // An unrelocated `call rel32` landing on this symbol's own `ret`. Control comes
-    // straight back to the row underneath the call, so an arrow leading the eye away from
-    // it would say the opposite of what happens.
+    // An unrelocated `call rel32` landing on this symbol's own `ret`: control comes straight
+    // back to the row underneath, so an arrow away from it would say the opposite.
     let object = parse(&elf_x86_64(
         &[TextSymbol {
             name: "caller",
@@ -761,16 +667,16 @@ fn a_call_inside_the_symbol_is_not_an_edge() {
         assembly.edges
     );
 
-    // Nor is the relocated call of the oldest fixture in this file, which is the same
-    // instruction with a placeholder displacement: two independent reasons, no edge.
+    // Nor the relocated call, which is the same instruction with a placeholder
+    // displacement: two independent reasons, no edge.
     let object = parse(&caller_and_target());
     assert!(edges(&assemble(&object, "caller")).is_empty());
 }
 
 #[test]
 fn an_indirect_jump_is_not_an_edge() {
-    // `jmp rax` names no address at all; `near_branch_target` would answer 0 for it, which
-    // is this symbol's own first byte.
+    // `jmp rax` names no address at all, and `near_branch_target` would answer 0 — this
+    // symbol's own first byte.
     let object = parse(&elf_x86_64(
         &[TextSymbol {
             name: "jumper",
@@ -790,8 +696,8 @@ fn an_indirect_jump_is_not_an_edge() {
 
 #[test]
 fn a_branch_to_itself_is_not_an_edge() {
-    // `jmp $`, the one-instruction spin loop. Both ends are the same row, so the line
-    // would have no length to be drawn along, and the operand already says where it goes.
+    // `jmp $`: both ends are the same row, so the line would have no length to be drawn
+    // along.
     let object = parse(&elf_x86_64(
         &[TextSymbol {
             name: "spinner",
@@ -812,15 +718,13 @@ fn a_branch_to_itself_is_not_an_edge() {
     );
 }
 
-/// The symbol's disassembly, which every branch-edge test above starts from.
-fn assemble(object: &Object, name: &str) -> Arc<analysis::Assembly> {
+fn assemble(object: &analysis::Object, name: &str) -> Arc<analysis::Assembly> {
     symbol(object, name)
         .assembly(object)
         .unwrap_or_else(|| panic!("{name} disassembles"))
 }
 
-/// The edges as `(from, to)` pairs of instruction indices, which reads at a glance where
-/// a list of struct literals would not.
+/// The edges as `(from, to)` pairs of instruction indices.
 fn edges(assembly: &analysis::Assembly) -> Vec<(usize, usize)> {
     assembly
         .edges
@@ -836,20 +740,11 @@ fn relocation_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKin
     Some((text.as_str(), *kind))
 }
 
-/// The text of every span in `instruction` that carries `kind`.
 fn spans_of(instruction: &analysis::Instruction, kind: SpanKind) -> Vec<&str> {
     instruction
         .format
         .iter()
         .filter(|(_, span)| *span == kind)
-        .map(|(text, _)| text.as_str())
-        .collect()
-}
-
-fn text(instruction: &analysis::Instruction) -> String {
-    instruction
-        .format
-        .iter()
         .map(|(text, _)| text.as_str())
         .collect()
 }

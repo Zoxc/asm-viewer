@@ -1,36 +1,11 @@
 //! The shape the Objects list is drawn in: the files that were opened, and the objects
-//! each of them contributed.
+//! each of them contributed. Framework-free.
 //!
-//! This module is **framework-free** — no freya types appear here — for the reason
-//! `filter.rs` and `history.rs` are: it can move into a crate alongside the rest of the
-//! non-UI code, and the rules below can be asserted without mounting a UI.
-//!
-//! The list was flat until now, but the model under it never was. One *file* contributes
-//! one [`Object`] and an archive contributes one per member (`analysis`'s parse pipeline),
-//! so opening `libanalysis-sample.rlib` put 196 sibling rows in the sidebar with nothing
-//! on screen saying they were one file. [`ObjectTree`] groups them back: the rows are the
-//! consecutive runs of objects sharing a [`Object::path`] — consecutive because
-//! `open_files` emits a file's objects together, and runs rather than a map keyed by path
-//! so that the rows keep the order the files were opened in rather than a hash order.
-//! Opening one file twice therefore folds into one row holding both copies of its
-//! members, the two runs being adjacent; that is the objects list holding a file twice
-//! showing through, and the row still says truthfully how many objects are under it.
-//!
-//! A file is also in this list *before* it has contributed anything. `open_files_streaming`
-//! hands objects over as they are parsed, so between the moment a file is asked for and
-//! the moment its last member lands there is a row with nothing behind it yet -- which is
-//! the state `notes/Goals.md` asks for an indicator for, and which nothing could be in
-//! while the parse handed back one `Vec` at the end. [`Loads`] is that half of the model:
-//! the files being read right now, which is a list only the app can keep (the crate is
-//! told the paths and hands back objects; it has no opinion about what a reader is
-//! looking at meanwhile).
-//!
-//! A file that contributed exactly **one** object is its own row and grows no parent: the
-//! parent would be named after the same file, carry the same tooltip, and fold away a
-//! single child. That rule is about the count and not about the archive-ness, so a
-//! one-member archive collapses to one row named after its member — nothing is lost, the
-//! path is still in the row's tooltip, and the alternative is a disclosure triangle that
-//! never has more than one thing behind it.
+//! [`ObjectTree`] groups objects into the **consecutive runs** sharing a [`Object::path`] —
+//! runs rather than a map keyed by path, so the rows keep the order the files were opened
+//! in. One file opened twice therefore folds into one row over both copies. A file that
+//! contributed exactly one object is its own row and grows no parent. [`Loads`] is the
+//! other half: the files being read right now, which have a row before they have an object.
 
 use std::{
     collections::HashSet,
@@ -42,44 +17,25 @@ use analysis::{BinaryFormat, Object};
 
 use crate::filter::Matcher;
 
-/// Which load asked for a file, so that one abandoned load cannot speak for another.
-///
-/// A plain counter and not a path, because the same path can be loading twice -- a reader
-/// who opens a file, closes it and opens it again before the first parse has finished has
-/// two loads of it, and the first one's objects must not arrive into the second's row.
-/// Compare this with the analysis worker (`ui.rs`, `use_analysis`), which deliberately
-/// has *no* counter: an answer there is about a `Symbol` that already existed and so
-/// carries its own identity, while a load is about work that has not produced anything to
-/// be identified by.
+/// Which load asked for a file. A counter and not a path, because the same path can be
+/// loading twice — a file closed and reopened mid-parse is two loads, and the first one's
+/// objects must not arrive into the second's row.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LoadId(u64);
 
-/// The files being read and parsed right now.
+/// The files being read and parsed right now, one entry per (load, path).
 ///
-/// One entry per (load, path) rather than per path, and a `Vec` rather than a set,
-/// because both questions asked of it are ordered ones: the rows are drawn in the order
-/// the files were asked for, and an arriving object has to be checked against the load
-/// that produced it rather than against the path alone.
-///
-/// **Cancelling is by path and never by load**, which is not an oversight: closing a file
-/// is `close_binary`'s business (in `ui.rs`) and its unit is the path, so a path that is
-/// closed stops loading however many loads happened to be producing it. Leaving *this*
-/// project is `clear`, which is every load at once.
+/// **Cancelling is by path and never by load**: closing a file is `close_binary`'s business
+/// and its unit is the path. Leaving a project is [`Loads::clear`].
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Loads {
     entries: Vec<(LoadId, PathBuf)>,
-    /// The next id to hand out. Per-state rather than a process-wide counter: two states
-    /// never compare ids with each other, and a test wants to start from zero.
     next: u64,
 }
 
 impl Loads {
     /// Register `paths` as being read, and hand back the id the answers will be checked
-    /// against.
-    ///
-    /// Called by whoever is about to start the work and *before* it starts, so the row
-    /// saying "this file is being read" is on screen from the click rather than from the
-    /// first byte read -- which for a 331 MB file is a second and a half later.
+    /// against. Called *before* the work starts, so the row is on screen from the click.
     pub fn begin(&mut self, paths: &[PathBuf]) -> LoadId {
         let id = LoadId(self.next);
         self.next += 1;
@@ -94,8 +50,7 @@ impl Loads {
             .retain(|(entry, loading)| *entry != id || loading != path);
     }
 
-    /// Whether this load's answers about `path` are still wanted. `false` for a file that
-    /// has since been closed, and for one whose project has been left.
+    /// Whether this load's answers about `path` are still wanted.
     pub fn holds(&self, id: LoadId, path: &Path) -> bool {
         self.entries
             .iter()
@@ -113,8 +68,7 @@ impl Loads {
         self.entries.iter().any(|(_, loading)| loading == path)
     }
 
-    /// Stop reading `path`, whoever asked for it. See the type's note on why the unit is
-    /// the path.
+    /// Stop reading `path`, whoever asked for it.
     pub fn cancel(&mut self, path: &Path) {
         self.entries.retain(|(_, loading)| loading != path);
     }
@@ -142,56 +96,33 @@ impl Loads {
 pub enum Expansion {
     Collapsed,
     Expanded,
-    /// Opened by the filter rather than by the reader, because this file matched only
-    /// through its members: the rows under it *are* the search results, and a search that
-    /// leaves its own results folded away has answered nothing.
-    ///
-    /// A third state rather than a `true` written into the expansion set, because the two
-    /// differ in what a click can do. The set is what the reader asked for and outlives
-    /// the filter; while a filter is holding a file open, folding it would hide the
-    /// matches the filter is pointing at, so the row draws no disclosure triangle at all
-    /// and nothing invites the click. The triangle comes back when the filter is cleared,
-    /// on whichever side of it the reader had left the file.
+    /// Held open by the filter rather than by the reader, because the file matched only
+    /// through its members. A third state and not a `true` in the expansion set: the set is
+    /// what the reader asked for and outlives the filter, and a forced row draws no
+    /// disclosure triangle, since folding it would hide the matches it is pointing at.
     Forced,
 }
 
-/// One row of the flattened objects list.
-///
-/// Flattened because a `VirtualScrollView` is told a length and asked for row *n*: the
-/// tree is a shape in the data and never in the element tree.
+/// One row of the flattened objects list. Flattened because a `VirtualScrollView` is told a
+/// length and asked for row *n*: the tree is a shape in the data, never in the element tree.
 #[derive(Clone)]
 pub enum TreeRow {
-    /// A file that contributed more than one object — an archive — and the row its
-    /// members fold under. It is not an [`Object`] itself: an `.a`/`.lib` does not parse
-    /// as one, so this row has a path and a count and nothing to select.
-    ///
-    /// It is also what a file being read is drawn as before anything has come out of it,
-    /// and what one stays as while it is still being read even if only one object has:
-    /// the alternative is a top-level object row that turns into a parent under the
-    /// reader the moment a second member lands.
+    /// A file its members fold under. Not an [`Object`] itself: an `.a`/`.lib` does not
+    /// parse as one, so this row has a path and a count and nothing to select.
     File {
-        /// What the row is called: the file's name, without its directory.
+        /// The file's name, without its directory.
         name: String,
         /// The whole path, which is what the row's tooltip says.
         path: PathBuf,
-        /// The group's identity, and the key the expansion set holds. The pointer of the
-        /// first object the file contributed, which is `Arc` pointer identity the way the
-        /// rest of the UI keys things — a path would collide with the same file opened
-        /// twice, and an index would move under the reader as files are opened.
-        ///
-        /// [`None`] for a file that has contributed nothing yet: there is no object to
-        /// point at, and there is equally nothing to fold, so the row that has no key is
-        /// exactly the row that never needs one.
+        /// The group's identity and the key the expansion set holds: the pointer of the
+        /// first object the file contributed. [`None`] for a file that has contributed
+        /// nothing yet, which is exactly the row that can never be folded.
         group: Option<usize>,
         /// How many objects are under this row *now*, which under a filter is how many
         /// of them matched.
         members: usize,
         expansion: Expansion,
-        /// Whether more objects may still arrive out of this file. It is the indicator
-        /// `notes/Goals.md` asks for, and it is a property of the **file** rather than of
-        /// an object because an object that has not been parsed does not exist: the unit
-        /// that is part-way through is the one the reader opened, the one `close_binary`
-        /// closes, and the one that already has a row.
+        /// Whether more objects may still arrive out of this file.
         loading: bool,
     },
     /// One object: an archive member indented under its file, or a file that contributed
@@ -199,12 +130,8 @@ pub enum TreeRow {
     Object { object: Arc<Object>, member: bool },
 }
 
-/// The rows the Objects list draws, in order.
-///
-/// Built in a memo over the objects, the filter and the expansion set — never per row —
-/// and shared by an `Arc` so that handing it to a scroll view costs a pointer. Compared
-/// by that pointer for the reason every other `Arc` in the UI is: a `Vec` of rows holding
-/// `Arc<Object>`s has no meaningful structural equality.
+/// The rows the Objects list draws, in order. Built in a memo and shared by an `Arc`,
+/// compared by that pointer.
 #[derive(Clone)]
 pub struct ObjectTree(Arc<Vec<TreeRow>>);
 
@@ -218,36 +145,28 @@ impl ObjectTree {
     /// Group `objects` by the file they came from, drop what the filter does not match,
     /// and flatten what is left into rows.
     ///
-    /// **What a match on a member does to its parent**, which is the part worth stating:
-    /// a file row is never hidden while a row under it is visible, because a member
-    /// indented under nothing is not a tree. So a file is shown when its own name matches
-    /// *or* any of its members' names do, and the two cases differ in what comes with it:
+    /// A file row is never hidden while a row under it is visible, so a file is shown when
+    /// its own name matches *or* any member's does, and the two differ:
     ///
-    /// - The **file's name matched**, so the whole file is the answer: every member is
-    ///   under it, and whether they are on screen is left to whatever the reader had the
-    ///   row folded to. The result being pointed at is the file row itself, so opening it
-    ///   would bury it under 196 members it did not ask about.
-    /// - Only **members matched**, so those members are the answer: the file is drawn as
-    ///   the context they hang under, only the matching ones are under it, and it is held
-    ///   open ([`Expansion::Forced`]) whatever the reader had it folded to.
+    /// - The **file's name matched**: every member is under it, folded the way the reader
+    ///   left it.
+    /// - Only **members matched**: only those members are under it, and it is held open
+    ///   ([`Expansion::Forced`]).
     /// - **Neither**, and the file is not there at all.
     ///
-    /// Matching is on the name each row shows — the file's own name, not the directory
-    /// above it, and the member's name — for the reason the symbol list matches on the
-    /// demangled name: a filter whose effect cannot be seen on screen is not one.
+    /// Matching is on the name each row shows, so the directory is not read.
+    ///
     /// **A file still being read is always a file row**, whatever it has contributed so
-    /// far — nothing, one object or fifty. The "one object is its own row" rule needs to
-    /// know that the one is all there will be, which is exactly what is not known yet,
-    /// and a row that promoted itself to a parent as the second member landed would move
-    /// the list under a reader who is already reading it.
+    /// far: "one object is its own row" needs to know the one is all there will be, and a
+    /// row that promoted itself to a parent as the second member landed would move the
+    /// list under a reader already reading it.
     pub fn new(
         objects: &[Arc<Object>],
         loads: &Loads,
         matcher: &Matcher,
         expanded: &HashSet<usize>,
     ) -> Self {
-        // Whether the filter is asking anything at all. Nothing may be forced open while
-        // it is not: an untouched list is exactly the list, folded the way it was left.
+        // Nothing may be forced open while the filter is asking nothing.
         let filtering = !matches!(matcher, Matcher::Everything);
         let mut rows = Vec::new();
         let mut rest = objects;
@@ -259,9 +178,6 @@ impl ObjectTree {
 
             let loading = loads.is_loading(&first.path);
 
-            // One object from this file: it *is* the row. See the module comment — and
-            // only once the file is done with, since "one" is not yet an answer while
-            // more may be coming.
             if let ([object], false) = (group, loading) {
                 if matcher.matches(&object.name) {
                     rows.push(TreeRow::Object {
@@ -308,16 +224,10 @@ impl ObjectTree {
             }
         }
 
-        // The files that have been asked for and have produced nothing yet. They cannot
-        // come out of the walk above, which is over objects, and they are the whole
-        // difference between a window that says it is working and one that sits empty for
-        // the second and a half it takes to read 331 MB. Appended rather than interleaved:
-        // there is no object to place them next to, and a file's row moves into the walk
-        // above the moment its first one lands.
-        //
-        // The filter reads the file's name and nothing else here, there being no member
-        // names to match yet. A file nothing matches is simply not there, exactly as a
-        // loaded one is not.
+        // The files that have produced nothing yet cannot come out of the walk above, which
+        // is over objects. Appended rather than interleaved: there is no object to place
+        // them next to, and a file's row moves into the walk above once its first one
+        // lands. Only the file's own name is matched, there being no members yet.
         for path in loads.paths() {
             if objects.iter().any(|object| object.path == path) {
                 continue;
@@ -339,12 +249,10 @@ impl ObjectTree {
         ObjectTree(Arc::new(rows))
     }
 
-    /// How many rows there are, which is what the `VirtualScrollView` is given.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// The row at `index`, which the scroll view only ever asks for in range.
     pub fn row(&self, index: usize) -> &TreeRow {
         &self.0[index]
     }
@@ -355,9 +263,8 @@ impl ObjectTree {
     }
 }
 
-/// What a file is called without its directory. The whole path when it has no file name
-/// at all — a path ending in `..`, say, which nothing here would open but which must not
-/// come out as an empty row.
+/// What a file is called without its directory, falling back to the whole path when it has
+/// no file name at all — a path ending in `..`, say, which must not come out empty.
 fn file_name(path: &Path) -> String {
     path.file_name()
         .unwrap_or(path.as_os_str())
@@ -365,15 +272,8 @@ fn file_name(path: &Path) -> String {
         .into_owned()
 }
 
-/// The short tag a row wears to say what kind of file it is.
-///
-/// Text and not a picture, which is the answer the filter toggles' glyphs already gave
-/// for the same question. The dependency half of that reasoning is gone -- the dock tab
-/// bar draws Lucide icons now -- and the other half was checked again against all 1640 of
-/// them: nothing in the set names an object file format, so every row would wear one
-/// generic page and the column would stop answering the question it exists to answer.
-/// Four characters of the format's own name say all of it, and say it differently for
-/// each format.
+/// The short tag a row wears to say what kind of file it is. Text and not an icon: nothing
+/// in Lucide's set names an object file format.
 pub fn format_tag(format: BinaryFormat) -> &'static str {
     match format {
         BinaryFormat::Elf => "ELF",
@@ -382,14 +282,14 @@ pub fn format_tag(format: BinaryFormat) -> &'static str {
         BinaryFormat::MachO => "MACH",
         BinaryFormat::Wasm => "WASM",
         BinaryFormat::Xcoff => "XCOF",
-        // `BinaryFormat` is `#[non_exhaustive]`, so a format this build has never heard
-        // of is still a row that has to say something.
+        // `BinaryFormat` is `#[non_exhaustive]`, so a format this build has never heard of
+        // is still a row that has to say something.
         _ => "OBJ",
     }
 }
 
-/// The tag on a file row. Its children have formats; the archive holding them is an
-/// archive, which is a file format `object` does not parse and so has no `BinaryFormat`.
+/// The tag on a file row: the archive holding them is a format `object` does not parse and
+/// so has no `BinaryFormat`.
 pub const ARCHIVE_TAG: &str = "AR";
 
 #[cfg(test)]

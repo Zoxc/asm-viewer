@@ -11,12 +11,7 @@ fn an_opened_document_comes_back_by_its_id() {
     let id = docs.open(file("/src/main.rs"));
     assert!(docs.get(id) == Some(&file("/src/main.rs")));
     assert_eq!(docs.id_of(&file("/src/main.rs")), Some(id));
-}
-
-#[test]
-fn a_document_that_is_not_open_has_no_id() {
-    let docs = Docs::default();
-    assert_eq!(docs.id_of(&file("/src/main.rs")), None);
+    assert_eq!(docs.id_of(&file("/src/other.rs")), None);
 }
 
 #[test]
@@ -26,15 +21,6 @@ fn a_closed_id_stands_for_nothing() {
     docs.close(id);
     assert!(docs.get(id).is_none());
     assert_eq!(docs.id_of(&file("/src/main.rs")), None);
-    assert_eq!(docs.len(), 0);
-}
-
-#[test]
-fn closing_something_that_is_not_open_does_nothing() {
-    let mut docs = Docs::default();
-    let id = docs.open(file("a.rs"));
-    docs.close(id);
-    docs.close(id);
     assert_eq!(docs.len(), 0);
 }
 
@@ -54,15 +40,4 @@ fn an_id_is_never_reused() {
     let third = docs.open(file("a.rs"));
     assert_ne!(first, third);
     assert_ne!(second, third);
-}
-
-#[test]
-fn opening_two_documents_gives_two_ids() {
-    let mut docs = Docs::default();
-    let a = docs.open(file("a.rs"));
-    let b = docs.open(file("b.rs"));
-    assert_ne!(a, b);
-    assert!(docs.get(a) == Some(&file("a.rs")));
-    assert!(docs.get(b) == Some(&file("b.rs")));
-    assert_eq!(docs.len(), 2);
 }

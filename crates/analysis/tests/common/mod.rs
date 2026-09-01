@@ -1,38 +1,94 @@
-//! In-memory fixture builders. Nothing here touches the filesystem or commits a blob:
-//! every test object is assembled with the `object` crate's writer.
+//! In-memory fixture builders: every test object is assembled with the `object` and
+//! `gimli` writers rather than read off disk.
 
 #![allow(dead_code)]
 
-use analysis::{parse_object, Object};
+use analysis::{parse_object, Instruction, Object, SymbolData};
 use object::write;
 use object::{
     Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
     SymbolFlags, SymbolKind, SymbolScope,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Parse, then walk everything a parsed object exposes, so a panic in size estimation or
-/// disassembly is caught too and not just one in `parse_object`.
+/// Parse a fixture built by one of the writers below. The name and path are the same for
+/// every one of them: nothing asserts on either, and a fixture is identified by what it
+/// holds rather than by what it is called.
+pub fn parse(data: &[u8]) -> Arc<Object> {
+    parse_object(data.into(), "fixture.o".into(), PathBuf::from("/fixture.o"))
+        .expect("the fixture parses")
+}
+
+/// Every text symbol's name, in the sorted order the object lists them.
+pub fn names(object: &Object) -> Vec<&str> {
+    object
+        .symbols_sorted
+        .iter()
+        .map(|symbol| symbol.name.as_str())
+        .collect()
+}
+
+/// The symbol a fixture was built to have. The panic lists what the object actually
+/// holds, which is the only thing that helps when a fixture stops declaring it.
+pub fn named<'a>(object: &'a Object, name: &str) -> &'a Arc<SymbolData> {
+    object
+        .symbols_sorted
+        .iter()
+        .find(|symbol| symbol.name == name)
+        .unwrap_or_else(|| panic!("no symbol named {name}; got {:?}", names(object)))
+}
+
+/// [`named`] for a caller that wants the symbol on its own rather than borrowed from the
+/// object it came out of.
+pub fn symbol(object: &Object, name: &str) -> Arc<SymbolData> {
+    named(object, name).clone()
+}
+
+/// One instruction's formatted text, the spans it was captured in run back together.
+pub fn text(instruction: &Instruction) -> String {
+    instruction
+        .format
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect()
+}
+
+/// One of the committed, compiler-produced fixtures (`tests/fixtures/`) — the only inputs
+/// in the suite a real toolchain wrote. A missing one is a broken checkout, not a reason
+/// to skip: fail loudly and say how to put it back.
+pub fn committed_fixture(name: &str) -> Vec<u8> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|error| {
+        panic!(
+            "{}: {error}\n\
+             This fixture is committed to the repository, not generated. Restore it from \
+             git, or rebuild it with the command in tests/fixtures/line_fixture.c.",
+            path.display()
+        )
+    })
+}
+
+/// Parse, then walk everything a parsed object exposes, so a panic anywhere past
+/// `parse_object` is caught too.
 pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
     let object = parse_object(data.into(), "fuzz".into(), PathBuf::from("/fuzz"))?;
 
     for symbol in &object.symbols_sorted {
         let _ = symbol.estimate_size();
         let _ = symbol.data();
-        // The debug-info extent goes down the same DWARF path `line_info` does, and it
-        // is what `assembly` slices the symbol's bytes with.
         let _ = symbol.extent(&object);
         let _ = symbol.data_in(&object);
         if let Some(assembly) = symbol.assembly(&object) {
             for instruction in &assembly.instructions {
                 let _: String = instruction.format.iter().map(|(t, _)| t.as_str()).collect();
             }
-            // A branch edge is a pair of row indices a renderer will index the listing
-            // with, so both ends have to be rows that exist however corrupt the bytes
-            // they were decoded from — an edge naming a row that is not there would be a
-            // panic in the gutter rather than here.
+            // Both ends index `instructions`, so a renderer must never be handed a row
+            // that is not there.
             let mut previous = None;
             for edge in &assembly.edges {
                 assert!(edge.from < assembly.instructions.len());
@@ -43,18 +99,13 @@ pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
                 previous = Some(edge.from);
             }
         }
-        // The DWARF path, on every input the sweeps below produce. Reading the rows back
-        // matters as much as building them: `LineInfo`'s own invariants (ascending,
-        // non-overlapping, in-range file indices) are what `row_at` and `file_of` rely on.
-        // Non-overlapping holds for *any* input, however corrupt — the rows are clipped
-        // to make it hold — so `previous` is the last row's **end**, not its start.
+        // Rows are ascending and non-overlapping for *any* input, however corrupt — they
+        // are clipped to make it so — hence `previous` is the last row's end.
         if let Some(info) = symbol.line_info(&object) {
             let mut previous = 0;
             for row in info.rows() {
                 assert!(row.range.start >= previous && row.range.start < row.range.end);
                 previous = row.range.end;
-                // Which is exactly what makes `row_at` well defined: an address inside a
-                // row is answered by that row and no other.
                 assert_eq!(
                     info.row_at(row.range.start)
                         .map(|found| found.range.clone()),
@@ -66,8 +117,7 @@ pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
             let _ = info.location(u64::MAX);
         }
     }
-    // Also ask each section about a range no symbol covers, so the context is built even
-    // for an object whose symbols were all dropped.
+    // Build the DWARF context even for an object whose symbols were all dropped.
     for section in &object.sections {
         let _ = object.line_info(section, 0..u64::MAX);
     }
@@ -92,28 +142,21 @@ pub struct TextSymbol<'a> {
     pub bytes: &'a [u8],
 }
 
-/// A relocation inside the generated `.text`: `(symbol index, offset within that
-/// symbol, index of the symbol it targets)`.
+/// A relocation inside the generated `.text`, at `offset` within `in_symbol`.
 pub struct TextRelocation {
     pub in_symbol: usize,
     pub offset: u64,
     pub target: usize,
 }
 
-/// Build a minimal x86-64 ELF relocatable object whose `.text` holds `symbols` laid out
-/// back to back, each declared with `st_size == 0` — the common case that
-/// `SymbolData::estimate_size` exists to work around.
+/// A minimal x86-64 ELF relocatable object whose `.text` holds `symbols` back to back.
 pub fn elf_x86_64(symbols: &[TextSymbol], relocations: &[TextRelocation]) -> Vec<u8> {
     elf_text(Architecture::X86_64, symbols, relocations)
 }
 
-/// The same fixture for any architecture, which is what makes "the decoder comes from the
-/// file" testable: the *bytes* of a `.text` section say nothing about how to read
-/// themselves, so the only difference between an object that decodes as 32-bit x86 and
-/// one that decodes as aarch64 is the `e_machine` in its header.
-///
-/// `relocations` are written with x86's branch encoding, so anything but x86 has to pass
-/// none — which is no loss, since what a non-x86 fixture is for is the decode itself.
+/// The same fixture for any architecture: the only difference between an object that
+/// decodes as 32-bit x86 and one that decodes as aarch64 is the `e_machine` in its header.
+/// `relocations` are written with x86's branch encoding, so anything else must pass none.
 pub fn elf_text(
     architecture: Architecture,
     symbols: &[TextSymbol],
@@ -159,8 +202,7 @@ pub fn elf_text(
     obj.write().expect("writing the fixture object")
 }
 
-/// The fixture from the plan: `caller` = `call rel32; ret` with a relocation at offset 1
-/// pointing at `target` = `ret`.
+/// `caller` = `call rel32; ret`, relocated at offset 1 against `target` = `ret`.
 pub fn caller_and_target() -> Vec<u8> {
     elf_x86_64(
         &[
@@ -181,13 +223,10 @@ pub fn caller_and_target() -> Vec<u8> {
     )
 }
 
-/// `caller` = `call qword ptr [rip+0x0]; ret` — an *indirect* call, where the operand the
-/// relocation applies to is a rip-relative **memory** operand rather than the whole branch
-/// target. `FF 15` is the opcode and the four displacement bytes start at offset 2, which
-/// is where a linker puts the relocation. `target` = `ret`, as in [`caller_and_target`].
-///
-/// With `relocated` unset the same bytes carry no relocation at all, which is the control
-/// for what the relocated form should print.
+/// `caller` = `call qword ptr [rip+0x0]; ret`, where the relocation applies to a
+/// rip-relative **memory** operand rather than to the whole branch target. The
+/// displacement starts at offset 2. `relocated` unset is the control: the same bytes with
+/// no relocation on them.
 pub fn indirect_caller_and_target(relocated: bool) -> Vec<u8> {
     elf_x86_64(
         &[
@@ -212,13 +251,10 @@ pub fn indirect_caller_and_target(relocated: bool) -> Vec<u8> {
     )
 }
 
-/// `jumper` = `jmp rel32; ret`, with the branch relocated against a **data** symbol.
-///
-/// Parsing keeps only `SymbolKind::Text` symbols, so the instruction's `relocation` comes
-/// out as [`None`] even though the four displacement bytes are every bit as much a
-/// placeholder as a resolvable branch's are. Read literally the jump lands on address 5,
-/// which is this symbol's own `ret`: the fixture where "did a relocation resolve?" and
-/// "is this displacement real?" give different answers.
+/// `jumper` = `jmp rel32; ret`, with the branch relocated against a **data** symbol —
+/// which parsing drops, so the instruction's `relocation` is [`None`] while its
+/// displacement is still a placeholder. Read literally the jump lands on address 5, this
+/// symbol's own `ret`.
 pub fn branch_to_data() -> Vec<u8> {
     let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
 
@@ -264,7 +300,8 @@ pub fn branch_to_data() -> Vec<u8> {
     obj.write().expect("writing the fixture object")
 }
 
-/// Deterministic pseudo-random bytes (xorshift64*), so a failure is always reproducible.
+/// Deterministic pseudo-random bytes (xorshift64*), so a failure is reproducible from its
+/// seed alone — never `rand`, never the clock.
 pub fn garbage(seed: u64, len: usize) -> Vec<u8> {
     let mut state = seed | 1;
     (0..len)
@@ -277,8 +314,7 @@ pub fn garbage(seed: u64, len: usize) -> Vec<u8> {
         .collect()
 }
 
-/// One row of a fixture's line program: an offset from the start of the section it
-/// belongs to, and the source position at it.
+/// One row of a fixture's line program.
 pub struct DwarfRow {
     pub address: u64,
     /// An index into [`DwarfFixture::files`].
@@ -292,29 +328,23 @@ pub struct DwarfRow {
 /// One code section of a fixture, its symbols laid out back to back, and the one line
 /// program sequence describing them.
 ///
-/// A fixture with several of these is the shape rustc emits: one `.text.<name>` section
-/// per function, **every one of them at address 0**, because a section in a relocatable
-/// object has no address until it is linked. That is the case an address alone cannot
-/// key, and the one the single-`.text` fixtures cannot show.
+/// Several of these is the shape rustc emits: one `.text.<name>` per function, **every one
+/// at address 0**, since a section in a relocatable object has no address until it is
+/// linked — the case an address alone cannot key.
 pub struct DwarfSection<'a> {
-    /// [`None`] for the standard `.text`; [`Some`] for a section of its own, named the
-    /// way a compiler names them (`.text.first`).
+    /// [`None`] for the standard `.text`; [`Some`] for a section of its own (`.text.first`).
     pub name: Option<&'a str>,
     pub symbols: &'a [TextSymbol<'a>],
     /// Rows of this section's sequence, addressed from the section's own start.
     pub rows: &'a [DwarfRow],
     /// Where this section's sequence ends, as an offset into the section.
     pub length: u64,
-    /// One `DW_TAG_subprogram` per entry, as `(index into `symbols`, extent in bytes)`
-    /// — the compiler stating a function's `DW_AT_low_pc`/`DW_AT_high_pc` rather than
-    /// leaving `SymbolData::extent` to derive it from where the next symbol starts.
-    /// Empty is the shape every line-info fixture had before extents were read.
+    /// One `DW_TAG_subprogram` per entry, as `(index into `symbols`, extent in bytes)`:
+    /// a stated `DW_AT_low_pc`/`DW_AT_high_pc` rather than a derived extent.
     pub subprograms: &'a [(usize, u64)],
-    /// When set, an index into this section's `symbols`: the sequence's
-    /// `DW_LNE_set_address` (and the unit's range entry, where there is one) is written
-    /// as zero with an absolute relocation against that symbol, exactly the way a
-    /// compiler emits it for a relocatable object. When unset, the address is a
-    /// constant, as in a linked binary.
+    /// When set, an index into this section's `symbols`: addresses are written as zero
+    /// with an absolute relocation against it, the way a compiler emits a relocatable
+    /// object. When unset they are constants, as in a linked binary.
     pub base_symbol: Option<usize>,
 }
 
@@ -322,20 +352,15 @@ pub struct DwarfFixture<'a> {
     pub comp_dir: &'a str,
     /// The source files the line programs can name; `DwarfRow::file` indexes this.
     pub files: &'a [&'a str],
-    /// One or more code sections. One keeps the linked shape — a unit with
-    /// `DW_AT_low_pc`/`DW_AT_high_pc`; several give the unit a `DW_AT_ranges` list with
-    /// one relocated entry apiece, which is what a discontiguous unit looks like.
+    /// One section gives the unit a `DW_AT_low_pc`/`DW_AT_high_pc`; several give it a
+    /// `DW_AT_ranges` list with one relocated entry apiece — a discontiguous unit.
     pub sections: &'a [DwarfSection<'a>],
 }
 
-/// Build an x86-64 ELF like [`elf_x86_64`], with a DWARF compilation unit and line
-/// program describing its code sections.
-///
-/// This is real DWARF written by `gimli::write`, not bytes copied out of a compiler, so
-/// the test that reads it back is a round trip through the same formats a compiler emits
-/// without needing one installed. Addresses that a compiler would relocate are written
-/// through [`RelocWriter`], which records where each one landed, so the ELF carries the
-/// same relocations against the same symbols — no byte pattern is searched for.
+/// [`elf_x86_64`] plus a DWARF compilation unit and line program describing its code
+/// sections. Addresses a compiler would relocate go through [`RelocWriter`], which records
+/// where each landed, so the ELF carries the same relocations against the same symbols —
+/// no byte pattern is searched for.
 pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     use gimli::write::{
         Address, AttributeValue, DwarfUnit, LineProgram, LineString, Range, RangeList, Sections,
@@ -343,10 +368,8 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
 
     let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
 
-    // One symbol table for the whole fixture: `Address::Symbol` indexes into this, and so
-    // does the relocation pass at the bottom.
+    // `Address::Symbol` indexes into this, and so does the relocation pass at the bottom.
     let mut symbols: Vec<write::SymbolId> = Vec::new();
-    // The flat index of each section's base symbol, where it has one.
     let mut bases: Vec<Option<usize>> = Vec::new();
 
     for section in fixture.sections {
@@ -371,8 +394,8 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
         bases.push(section.base_symbol.map(|index| first + index));
     }
 
-    // The address a section's line program starts at: a relocation against one of its
-    // symbols, or a literal 0 the way a linked image has it.
+    // A relocation against one of the section's symbols, or a literal 0 as a linked image
+    // has it.
     let address = |section: usize| match bases[section] {
         Some(symbol) => Address::Symbol { symbol, addend: 0 },
         None => Address::Constant(0),
@@ -424,9 +447,6 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     }
     dwarf.unit.line_program = program;
 
-    // The subprogram DIEs, as children of the unit's root. Their `low_pc` is written
-    // through the same relocated `Address::Symbol` a compiler uses, so a relocatable
-    // fixture's extents are keyed the same way its line rows are.
     let root = dwarf.unit.root();
     let mut first = 0;
     for section in fixture.sections {
@@ -512,9 +532,54 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     obj.write().expect("writing the fixture object")
 }
 
-/// Where one address in a debug section is, and what it is relative to.
+/// The written half of the DWARF corpus: DWARF 4 with its strings inline, two functions
+/// in one `.text` and three line-program rows over them. `subprograms` is what a caller
+/// wanting stated `DW_AT_low_pc`/`DW_AT_high_pc` extents passes; empty is line info alone.
+pub fn dwarf_fixture(subprograms: &[(usize, u64)]) -> Vec<u8> {
+    elf_x86_64_with_dwarf(DwarfFixture {
+        comp_dir: "/src",
+        files: &["main.c", "other.c"],
+        sections: &[DwarfSection {
+            name: None,
+            symbols: &[
+                TextSymbol {
+                    name: "first",
+                    bytes: &[0x90, 0x90, 0x90, 0x90, 0x90, 0xC3],
+                },
+                TextSymbol {
+                    name: "second",
+                    bytes: &[0x90, 0xC3],
+                },
+            ],
+            rows: &[
+                DwarfRow {
+                    address: 0,
+                    file: 0,
+                    line: 10,
+                    column: 3,
+                },
+                DwarfRow {
+                    address: 3,
+                    file: 0,
+                    line: 11,
+                    column: 0,
+                },
+                DwarfRow {
+                    address: 6,
+                    file: 1,
+                    line: 42,
+                    column: 7,
+                },
+            ],
+            length: 8,
+            subprograms,
+            base_symbol: Some(1),
+        }],
+    })
+}
+
 #[derive(Clone)]
-pub struct DebugRelocation {
+struct DebugRelocation {
     offset: u64,
     /// An index into the fixture's symbol table.
     symbol: usize,
@@ -523,15 +588,11 @@ pub struct DebugRelocation {
     size: u8,
 }
 
-/// A `gimli::write::Writer` that records relocations instead of refusing them.
-///
-/// `EndianVec` alone answers `Address::Symbol` with `Error::InvalidAddress`, which is
-/// exactly the address form a compiler emits into a relocatable object's `.debug_line`
-/// and `.debug_ranges`. Recording each one — where it landed, which symbol it is against
-/// and with what addend — is what lets the fixture carry real relocations without
-/// searching the written bytes for the opcode that produced them.
+/// A `gimli::write::Writer` that records relocations instead of refusing them: `EndianVec`
+/// alone answers `Address::Symbol` with `Error::InvalidAddress`, which is exactly the form
+/// a compiler emits into a relocatable object's `.debug_line` and `.debug_ranges`.
 #[derive(Clone)]
-pub struct RelocWriter {
+struct RelocWriter {
     inner: gimli::write::EndianVec<gimli::LittleEndian>,
     relocations: Vec<DebugRelocation>,
 }
@@ -584,21 +645,15 @@ impl gimli::write::Writer for RelocWriter {
                     addend,
                     size,
                 });
-                // The placeholder the relocation replaces, as a compiler writes it.
                 self.write_udata(0, size)
             }
         }
     }
 }
 
-/// `storer` = `mov dword ptr [rip+0x0], 7; ret`, with the relocation at offset 2 pointing
-/// at a **data** symbol in `.data` — a global variable, which is what a rip-relative store
-/// like this one actually writes to.
-///
-/// Parsing keeps only `SymbolKind::Text` symbols, so the relocation is present on the
-/// instruction and yet resolves to nothing the viewer can navigate to. That is the case
-/// where the operand has to keep its plain displacement rather than gain a link that goes
-/// nowhere.
+/// `storer` = `mov dword ptr [rip+0x0], 7; ret`, relocated at offset 2 against a **data**
+/// symbol — which parsing drops, so the relocation is on the instruction and yet resolves
+/// to nothing navigable.
 pub fn rip_relative_store_to_data() -> Vec<u8> {
     let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
 
@@ -650,48 +705,39 @@ pub fn rip_relative_store_to_data() -> Vec<u8> {
     obj.write().expect("writing the fixture object")
 }
 
-/// One entry of a hand-built shared library's export/dynamic symbol table.
+/// One entry of a hand-built image's export or dynamic symbol table.
 pub struct ExportedSymbol<'a> {
     pub name: &'a str,
-    /// An offset into the fixture's `.text`, not a virtual address: the builders below
-    /// place `.text` themselves, so a test never has to know where.
+    /// An offset into the fixture's `.text`, not a virtual address.
     pub offset: u64,
-    /// What the declaration itself claims, which is 0 for a PE export — its table has no
-    /// room for a size — and whatever is asked for in an ELF `.dynsym`.
+    /// What the declaration itself claims — always 0 for a PE export, whose table has no
+    /// room for a size.
     pub size: u64,
     /// When false the symbol is written as data (ELF `STT_OBJECT`, or a PE export whose
     /// address is in `.rdata`), which must **not** come out as a text symbol.
     pub code: bool,
 }
 
-/// Where a hand-built image puts its code, chosen to look like something a linker
-/// produced rather than to be memorable: a page in, at a non-zero image base.
-pub const IMAGE_BASE: u64 = 0x1_4000_0000;
-pub const TEXT_RVA: u64 = 0x1000;
-/// The virtual address of the fixtures' `.text`, i.e. what an exported `offset` is
-/// relative to.
+/// Where a hand-built image puts its code: a page in, at a non-zero image base.
+const IMAGE_BASE: u64 = 0x1_4000_0000;
+const TEXT_RVA: u64 = 0x1000;
+/// What an exported `offset` is relative to.
 pub const TEXT_ADDRESS: u64 = IMAGE_BASE + TEXT_RVA;
 
-/// A hand-built ELF shared object: what is in `.text`, what each of the two symbol
-/// tables declares, and whether the header names an entry point.
 pub struct SharedObject<'a> {
     pub text: &'a [u8],
-    /// Written to `.dynsym`, which is the table a stripped library still has.
+    /// Written to `.dynsym`, the table a stripped library still has.
     pub dynamic: &'a [ExportedSymbol<'a>],
-    /// Written to `.symtab`, which is the table `strip` removes. Leave it empty for the
-    /// stripped case; filling both is how a file declaring one function twice is built.
+    /// Written to `.symtab`, the table `strip` removes. Empty is the stripped case;
+    /// filling both is how a file declaring one function twice is built.
     pub static_symbols: &'a [ExportedSymbol<'a>],
     /// An offset into `.text`, or [`None`] for an image that declares no entry point.
     pub entry: Option<u64>,
 }
 
-/// Build an x86-64 ELF **shared object** (`ET_DYN`) with the symbol tables asked for.
-///
-/// This one is assembled byte by byte rather than with `object`'s writer, which emits
-/// `ET_REL` relocatable objects and has no way to write a dynamic symbol table at all.
-/// That is precisely the shape being tested: a stripped `.so` has no `.symtab`, so
-/// `Object::symbols()` is empty and everything the file says about its own code it says
-/// through `.dynsym`.
+/// An x86-64 ELF **shared object** (`ET_DYN`), assembled byte by byte because `object`'s
+/// writer emits `ET_REL` relocatable objects and cannot write a dynamic symbol table —
+/// which is the shape being tested: a stripped `.so` has no `.symtab` at all.
 pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     const SHDR: usize = 64;
     const EHDR: usize = 64;
@@ -714,8 +760,7 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     let data = [0u8; 8];
     let data_rva = TEXT_RVA + text.len() as u64 + 0x1000;
 
-    // One symbol table: the string table it names, and the entries themselves, which
-    // start with the null entry every ELF symbol table has.
+    // The entries start with the null entry every ELF symbol table has.
     let table = |symbols: &[ExportedSymbol]| {
         let mut strings = vec![0u8];
         let mut entries = vec![0u8; SYM];
@@ -760,7 +805,6 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
         section_name(".shstrtab"),
     ];
 
-    // Contents laid out back to back after the header; addresses are their own thing.
     let mut out = vec![0u8; EHDR];
     let place = |out: &mut Vec<u8>, bytes: &[u8]| {
         let offset = out.len() as u64;
@@ -843,19 +887,13 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     out
 }
 
-/// Build an x86-64 PE **DLL** with an export directory and **no COFF symbol table**,
-/// which is the shape of the repo's `LLVM-24-rust-dev.dll` sample: `Object::symbols()`
-/// is empty and the export table is the only thing that names any code.
-///
-/// Hand-assembled for the same reason the ELF above is — `object`'s writer emits COFF
-/// object files, not images, and has no export directory in it.
-///
-/// `entry` is an offset into `.text`, or [`None`] for a DLL with no entry point (which
-/// is a real thing: `AddressOfEntryPoint` is 0 in a resource-only DLL).
+/// An x86-64 PE **DLL** with an export directory and **no COFF symbol table**: the export
+/// table is then the only thing naming any code. Hand-assembled for the reason the ELF
+/// above is. `entry` is an offset into `.text`, or [`None`] as in a resource-only DLL.
 pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Vec<u8> {
     const FILE_ALIGNMENT: usize = 0x200;
     const SECTION_ALIGNMENT: u64 = 0x1000;
-    /// DOS stub, `PE\0\0`, COFF header, PE32+ optional header, two section headers,
+    /// DOS stub, `PE\0\0`, COFF header, PE32+ optional header and two section headers,
     /// rounded up to one file-alignment unit — which everything below assumes fits.
     const HEADERS: usize = FILE_ALIGNMENT;
 
@@ -863,8 +901,8 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
     let text_raw = text_size.next_multiple_of(FILE_ALIGNMENT);
     let rdata_rva = TEXT_RVA + (text_size as u64).next_multiple_of(SECTION_ALIGNMENT);
 
-    // The export directory, then the three parallel arrays it points at, then the
-    // name strings — all inside `.rdata`, laid out in that order.
+    // The export directory, the three parallel arrays it points at, then the name
+    // strings — all inside `.rdata`, in that order.
     let named: Vec<&ExportedSymbol> = symbols.iter().collect();
     let count = named.len() as u32;
     const DIRECTORY: u64 = 40;
@@ -884,8 +922,8 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
         strings.push(0);
     }
 
-    // A data export points into `.rdata` — past everything the export table itself
-    // occupies — so it is an address in a section that is not code.
+    // Past everything the export table occupies, so a data export is an address in a
+    // section that is not code.
     let data_rva = strings_rva + strings.len() as u64 + 0x10;
 
     let mut rdata = Vec::new();
@@ -996,8 +1034,42 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
     out
 }
 
-/// A GNU `ar` archive holding `members`, built by hand: the writers this crate's fixtures
-/// use can write object files but not the archive around them.
+/// The two images `declared_code` reads: a stripped ELF `.so` whose only symbol table is
+/// `.dynsym`, and a PE DLL whose only declaration is its export directory. An `.o`
+/// declares neither, so a corpus of relocatable objects leaves the export and entry-point
+/// paths unexercised entirely.
+pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>)> {
+    const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3];
+    const SYMBOLS: &[ExportedSymbol] = &[
+        ExportedSymbol {
+            name: "first",
+            offset: 0,
+            size: 4,
+            code: true,
+        },
+        ExportedSymbol {
+            name: "a_global",
+            offset: 0,
+            size: 8,
+            code: false,
+        },
+    ];
+
+    vec![
+        (
+            "elf .so",
+            elf_shared_object(SharedObject {
+                text: TEXT,
+                dynamic: SYMBOLS,
+                static_symbols: &[],
+                entry: Some(4),
+            }),
+        ),
+        ("pe dll", pe_dll(TEXT, SYMBOLS, Some(4))),
+    ]
+}
+
+/// A GNU `ar` archive holding `members`: the `object` writer cannot produce one.
 pub fn archive(members: &[(&str, &[u8])]) -> Vec<u8> {
     let mut file = b"!<arch>\n".to_vec();
     for (name, data) in members {

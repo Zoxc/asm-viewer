@@ -1,47 +1,25 @@
 //! What the filter bar under each of the sidebar lists is asking for, and what answers it.
 //!
-//! This module is deliberately **framework-free** — no freya types appear here — so it can
-//! move into a crate of its own alongside the rest of the non-UI code. A [`Filter`] is a
-//! view of a list and never part of the session, so nothing here is serialized either.
-//!
-//! Every filter compiles to a [`regex::Regex`], the plain ones included: the three toggles
-//! the goal asks for *are* three regex constructs — `(?i)` is "match case" turned off,
-//! `\b…\b` is "whole word", and the third one is whether the pattern is read as a pattern
-//! at all — so escaping a literal pattern and letting one engine answer all four
-//! combinations is what makes them compose instead of four hand-written search loops that
-//! agree with each other by inspection. It is also the faster answer, measured on
-//! `viewer-sample`'s 151k demangled names (18 MB of text): 3 ms for a case-sensitive
-//! literal against 3.7 ms for `str::contains`, and 8 ms case-insensitively against 7.4 ms
-//! for lowercasing both sides — with the worst case seen, a whole-word single letter, at
-//! 22 ms, which is one keystroke's worth of work and not one frame's.
+//! Every filter compiles to one [`regex::Regex`], the plain ones included, because the
+//! three toggles *are* three regex constructs — so they compose instead of being four
+//! hand-written search loops. It is also the faster answer over 151k demangled names.
 
 use regex::{Regex, RegexBuilder};
 
 /// One list's filter: what was typed, and the three toggles that say how to read it.
-///
-/// The default is what a list that has never been filtered has, and `matcher` answers
-/// [`Matcher::Everything`] for it — so "no filter" costs no pass over the list at all.
 #[derive(Clone, Default, PartialEq)]
 pub struct Filter {
     pub pattern: String,
-    /// Case matters. Off by default, which is what a search box is expected to do.
     pub case_sensitive: bool,
-    /// The pattern has to be a whole word: `\b` on both ends of it. With `regex` on it
-    /// wraps the user's whole pattern rather than being abandoned, which is what an
-    /// alternation needs (`\b(?:a|b)\b`, never `\ba|b\b`).
+    /// The pattern has to be a whole word: `\b` on both ends of the *whole* pattern.
     pub whole_word: bool,
     /// The pattern is a regular expression rather than text to be found literally.
     pub regex: bool,
 }
 
 impl Filter {
-    /// The three toggles compose, so this is one expression built in three steps and
-    /// never four cases.
-    ///
-    /// `case_insensitive` is set as a flag on the builder rather than as a `(?i)` prefix
-    /// on purpose: a flag is the pattern's starting state, so a regex carrying its own
-    /// `(?i)`/`(?-i)` still overrides it for the part it covers, which a prefix wrapped
-    /// around the whole thing could not.
+    /// `case_insensitive` is a flag on the builder rather than a `(?i)` prefix, so a regex
+    /// carrying its own `(?i)`/`(?-i)` still overrides it for the part it covers.
     pub fn matcher(&self) -> Matcher {
         if self.pattern.is_empty() {
             return Matcher::Everything;
@@ -53,6 +31,8 @@ impl Filter {
             regex::escape(&self.pattern)
         };
         if self.whole_word {
+            // The group is load-bearing and must be non-capturing: `\ba|b\b` would bind
+            // the boundaries to the first and last branch only.
             expression = format!(r"\b(?:{expression})\b");
         }
 
@@ -72,12 +52,9 @@ pub enum Matcher {
     /// that a list with no filter on it can skip the pass entirely.
     Everything,
     Pattern(Regex),
-    /// A pattern that will not compile, with what is wrong with it.
-    ///
-    /// A state of its own rather than a fallback to one of the other two, because both of
-    /// those are lies a half-typed `(` would tell: matching everything hides the mistake
-    /// and matching nothing looks like a list with nothing in it. The bar shows the
-    /// message instead.
+    /// A pattern that will not compile, with what is wrong with it. A state of its own,
+    /// because both of the others are lies a half-typed `(` would tell: matching everything
+    /// hides the mistake and matching nothing looks like an empty list.
     Invalid(String),
 }
 
@@ -99,12 +76,8 @@ impl Matcher {
     }
 }
 
-/// The one line of a `regex` error worth putting in a filter bar.
-///
-/// `regex::Error`'s own `Display` is a four-line report — the pattern, a caret under the
-/// offending byte, and then the sentence — which is right for a terminal and far too tall
-/// for a strip under a list. The sentence is the last non-empty line of it, and the crate
-/// prefixes that with `error:` where the whole thing is already labelled as one.
+/// The one line of a `regex` error worth putting in a filter bar: its `Display` is a
+/// four-line report, of which the sentence is the last non-empty line, prefixed `error:`.
 fn message(error: &regex::Error) -> String {
     let text = error.to_string();
     let line = text

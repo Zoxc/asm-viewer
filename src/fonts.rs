@@ -1,39 +1,24 @@
 //! The two fonts the UI uses: the interface font and the fixed-width one for the
-//! assembly. The desktop is asked for its own settings, so the interface matches the rest
-//! of the desktop and the assembly view matches the desktop's editor; where there is
-//! nothing to ask, the platform's standard fonts are named explicitly, at the sizes the
-//! floem version used.
+//! assembly, asked of the desktop and merged under the user's own settings field by
+//! field. Nothing here fails: a missing binary, a call that returns `FALSE` or a value
+//! in a shape nobody expected all come back as "the desktop said nothing".
 //!
-//! **Which desktop to ask is a runtime question, not a compile-time one.** One Linux
-//! build runs on KDE and on Gnome, so `XDG_CURRENT_DESKTOP` only decides the *order* the
-//! two tools are tried in and the other one is tried anyway: a tool that is not installed
-//! is already a `None` here rather than an error, so asking both costs one failed `exec`
-//! on a desktop that has neither and gets an answer on the desktops that set the variable
-//! to something neither of them recognises. Windows has no such tool and no such
-//! question: there is one shell, and `user32` is asked directly.
+//! **Which desktop to ask is a runtime question**: one Linux build runs on KDE and on
+//! Gnome, so `XDG_CURRENT_DESKTOP` only decides the order the two tools are tried in and
+//! the other is tried anyway.
 //!
-//! Nothing here fails: a missing binary, a call that returns `FALSE`, a value in a shape
-//! nobody expected and a font size of zero all come back as "the desktop said nothing",
-//! which is what the platform defaults are for.
-//!
-//! **The user comes before the desktop.** `Settings` holds a family and a size for each
-//! of the two fonts, each independently unspecified, and [`resolve`] merges them over the
-//! desktop's answer *field by field*: an override wins, an unspecified field falls
-//! through to the desktop, and the platform's own family stands behind both. Merging by
-//! field rather than by font is what lets a reader take their editor's family at the
-//! desktop's size, or the desktop's family a little larger, without writing down a value
-//! they did not choose.
+//! Everything here is **in points** — the unit the desktops answer in and the unit an
+//! override is stored in — up to the one conversion at [`Font::size`].
 
 use std::{borrow::Cow, sync::OnceLock};
 
 use crate::settings::{FontSetting, Settings};
 
-/// The platform's own interface and fixed-width families. These have to be named:
-/// freya's global fallbacks (`Segoe UI`, `Noto Sans`, `Arial`, ...) are all
-/// proportional, so a font nothing resolves would silently take the assembly view out
-/// of a monospaced face. Naming another platform's fonts here would be worse than
-/// naming none -- a Windows machine that happens to have DejaVu or Liberation
-/// installed would render in those instead of its own fonts.
+/// The platform's own interface and fixed-width families. These have to be *named*:
+/// freya's global fallbacks are all proportional, so a font nothing resolves would
+/// silently take the assembly view out of a monospaced face. Naming another platform's
+/// fonts here would be worse than naming none -- a Windows machine that happens to have
+/// DejaVu installed would render in it instead of its own fonts.
 #[cfg(target_os = "windows")]
 const DEFAULT_UI: &str = "Segoe UI";
 #[cfg(target_os = "windows")]
@@ -51,59 +36,27 @@ const DEFAULT_UI: &str = "sans-serif";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const DEFAULT_MONO: &str = "monospace";
 
-/// The sizes the floem version hardcoded, used wherever the desktop has no say -- and
-/// also where it named a family but no size, which is a shape Gnome's setting allows.
-///
-/// **In points, like everything else here**, which is a change of unit and not of value:
-/// they were 12 and 14 logical pixels, and 9pt and 10.5pt are those numbers exactly
-/// (`* 96 / 72`). The unit matters because the settings page draws the value an
-/// unspecified field is *inheriting* beside the box that would override it, and an
-/// override is stored in points -- so a default that was the one thing in the pipeline
-/// spelled in pixels would be the one row of that page that could not be compared with
-/// its own box. There is now a single conversion, at [`Font::size`].
+/// The app's own sizes, in points: the 12 and 14 logical pixels the floem version drew
+/// at. Used wherever the desktop has no say, and where it named a family but no size.
 const DEFAULT_UI_POINTS: f32 = 9.0;
 const DEFAULT_MONO_POINTS: f32 = 10.5;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Font {
-    /// Families to try, most preferred first: the desktop's choice, if there is one,
-    /// in front of the platform's own font.
+    /// Families to try, most preferred first: the desktop's choice, if there is one, in
+    /// front of the platform's own font.
     pub families: Vec<Cow<'static, str>>,
-    /// The size **in points**: the unit the desktops answer in and the unit
-    /// [`crate::settings::FontSetting`] stores an override in, so that a value and the
-    /// value it overrides are the same kind of number all the way through.
+    /// The size **in points**.
     pub points: f32,
 }
 
 impl Font {
-    /// A family to put in front of the platform's own, and a size in points -- either of
-    /// which may be missing, and separately.
-    ///
-    /// A family with no size keeps the family and takes the app's own size, which is
-    /// deliberately not "no answer at all": a family is the half of the setting that is
-    /// visible in every glyph on screen, and dropping it over a missing number would put
-    /// the chosen font back to `sans-serif`.
-    fn new(
-        family: Option<String>,
-        points: Option<f32>,
-        default: &'static str,
-        default_points: f32,
-    ) -> Self {
-        Font {
-            families: family
-                .map(Cow::Owned)
-                .into_iter()
-                .chain([Cow::Borrowed(default)])
-                .collect(),
-            points: points.unwrap_or(default_points),
-        }
-    }
-
-    /// What this comes to on screen, in the logical pixels freya asks for. The only
-    /// place points become pixels, which is what keeps every other number in this module
-    /// and in `settings.rs` comparable with every other.
+    /// What this comes to on screen, in the logical pixels freya asks for: the only
+    /// place points become pixels. The 96 is the nominal DPI logical pixels are defined
+    /// at -- the display's real one is winit's business, applied to the whole window as
+    /// a scale factor on top of this.
     pub fn size(&self) -> f32 {
-        points_to_pixels(self.points)
+        self.points * 96.0 / 72.0
     }
 }
 
@@ -113,9 +66,8 @@ pub struct Fonts {
     pub mono: Font,
 }
 
-/// Which of the two fonts is being asked for. Every desktop names the same pair, and
-/// names it differently, so the key belongs where the desktop is rather than at the call
-/// site.
+/// Which of the two fonts is being asked for. Every desktop names the same pair and
+/// names it differently, so the key belongs where the desktop is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Which {
     Ui,
@@ -123,8 +75,7 @@ enum Which {
 }
 
 /// A font as a desktop wrote it down. The size is optional because Gnome's spec allows
-/// `Cantarell` with no number after it, and because a size of zero is a key that has
-/// never been set rather than an invisible font.
+/// `Cantarell` with no number after it.
 #[derive(Debug, PartialEq)]
 struct Spec {
     family: String,
@@ -144,25 +95,17 @@ impl Spec {
     }
 }
 
-/// Desktops store font sizes in points, freya wants logical pixels. The 96 is the
-/// nominal DPI logical pixels are defined at -- the display's real one is winit's
-/// business, applied to the whole window as a scale factor on top of this.
-fn points_to_pixels(points: f32) -> f32 {
-    points * 96.0 / 72.0
-}
-
-/// The desktop lookups, which are the whole of the story on everything that is not
-/// Windows. Compiled on Windows too, but only so its parsers stay under test there.
+/// The desktop lookups. Compiled on Windows too, but only so its parsers stay under test
+/// there.
 #[cfg(any(not(target_os = "windows"), test))]
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 mod desktop {
     use super::{Spec, Which};
     use std::{env, process::Command, sync::OnceLock};
 
-    /// Run a tool and take its stdout, trimmed. Everything that can go wrong is one
-    /// `None`: the binary is not installed (the ordinary case for whichever desktop this
-    /// is not), it answered with a failure because the key does not exist, or it wrote
-    /// something that is not text.
+    /// Run a tool and take its stdout, trimmed. Everything that can go wrong -- the
+    /// binary is not installed, the key does not exist, the output is not text -- is one
+    /// `None`.
     fn output(command: &mut Command) -> Option<String> {
         let output = command.output().ok()?;
 
@@ -172,34 +115,15 @@ mod desktop {
             .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 
-    /// The two desktops that can be asked. Nothing else is: every other desktop either
-    /// answers to `gsettings` (it is the GTK setting, not a Gnome-only one) or has no
-    /// tool to ask, and a list of desktops to keep current is worse than two tools that
-    /// each say `None` when they are not there.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Desktop {
         Kde,
         Gnome,
     }
 
-    impl Desktop {
-        fn query(self, which: Which) -> Option<Spec> {
-            match self {
-                Desktop::Kde => kde(which),
-                Desktop::Gnome => gnome(which),
-            }
-        }
-    }
-
     /// Both desktops, in the order this one should be asked in. `XDG_CURRENT_DESKTOP` is
-    /// a colon-separated list of names and is frequently absent (a bare X session, a
-    /// window manager that sets nothing, a terminal launched outside the session), which
-    /// is why it only sorts the two rather than choosing one: getting the order wrong
-    /// costs one failed `exec`, while choosing wrong costs the setting.
-    ///
-    /// KDE stays first when the variable says nothing, because that is the order this
-    /// file already had and a KDE session is the one that most reliably sets the
-    /// variable anyway.
+    /// frequently absent, which is why it only sorts the two rather than choosing one:
+    /// getting the order wrong costs one failed `exec`, choosing wrong costs the setting.
     pub fn order(current: &str) -> [Desktop; 2] {
         let gnome_first = current.split(':').any(|name| {
             let name = name.trim();
@@ -220,20 +144,21 @@ mod desktop {
         }
     }
 
-    /// The first desktop that has an answer wins; a desktop with no tool installed, or
-    /// with the key unset, is not an answer.
+    /// The first desktop that has an answer wins.
     pub fn query(which: Which) -> Option<Spec> {
         let current = env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
 
         order(&current)
             .into_iter()
-            .find_map(|desktop| desktop.query(which))
+            .find_map(|desktop| match desktop {
+                Desktop::Kde => kde(which),
+                Desktop::Gnome => gnome(which),
+            })
     }
 
     /// Ask KDE for a key in the `[General]` group of `kdeglobals`. Going through
-    /// `kreadconfig` rather than reading the file directly matters: neither `font` nor
-    /// `fixed` is written out until it is changed in System Settings, and only KDE knows
-    /// what its own defaults are.
+    /// `kreadconfig` rather than reading the file matters: neither `font` nor `fixed` is
+    /// written out until it is changed, and only KDE knows its own defaults.
     fn kde(which: Which) -> Option<Spec> {
         let key = match which {
             Which::Ui => "font",
@@ -249,9 +174,8 @@ mod desktop {
             })
     }
 
-    /// KDE's specs look like `Noto Sans Mono,10,-1,5,50,0,0,0,0,0` -- a comma-separated
-    /// list whose first two fields are the family and the point size, and whose remaining
-    /// eight are the weight, style and hinting flags nothing here has an opinion about.
+    /// KDE's specs look like `Noto Sans Mono,10,-1,5,50,0,0,0,0,0`: the first two fields
+    /// are the family and the point size, the rest are flags nothing here reads.
     pub fn parse_kde(spec: &str) -> Option<Spec> {
         let mut parts = spec.split(',');
         let family = parts.next()?;
@@ -260,8 +184,7 @@ mod desktop {
         Spec::new(family, points)
     }
 
-    /// Ask Gnome, through the GTK schema every GTK desktop shares. `gsettings` prints the
-    /// GVariant rather than the string inside it, so the value arrives quoted.
+    /// Ask Gnome, through the GTK schema every GTK desktop shares.
     fn gnome(which: Which) -> Option<Spec> {
         let key = match which {
             Which::Ui => "font-name",
@@ -270,13 +193,10 @@ mod desktop {
 
         let mut spec = parse_pango(&gsettings(key)?)?;
 
-        // `text-scaling-factor` is applied here, and this is the decision worth writing
-        // down. It is how Gnome says "make text bigger": `font-name` keeps its nominal
-        // 11, and the accessibility slider (and every fractional font scale) moves this
-        // instead -- so a reader who set 1.5 and got no larger text would be looking at
-        // an app that ignored the one setting they changed. It multiplies the point size
-        // and nothing else, which is exactly what GTK does with it: the *window* scale is
-        // winit's, taken from the display, and multiplying that too would compound.
+        // `text-scaling-factor` is how Gnome says "make text bigger": `font-name` keeps
+        // its nominal size and the accessibility slider moves this instead. It multiplies
+        // the point size and nothing else, as GTK does -- the *window* scale is winit's,
+        // taken from the display, and multiplying that too would compound.
         if let Some(points) = spec.points.as_mut() {
             *points *= text_scaling();
         }
@@ -289,8 +209,7 @@ mod desktop {
     }
 
     /// Cached, because it is the same answer for both fonts and each call is a process.
-    /// Out-of-range values are ignored rather than clamped: a scale outside this range is
-    /// a value that was not written by the settings app, and honouring it would produce a
+    /// Out-of-range values are ignored rather than clamped: honouring one would produce a
     /// window nothing on screen fits in.
     fn text_scaling() -> f32 {
         static SCALING: OnceLock<f32> = OnceLock::new();
@@ -305,21 +224,14 @@ mod desktop {
 
     /// Gnome's specs are Pango font descriptions -- `Cantarell 11`, `Source Code Pro
     /// Semi-Bold 10`, `Cantarell` -- which is `Family [Styles] [Size]` with spaces
-    /// throughout, and *not* KDE's list: the family itself contains spaces, so the size
-    /// is the last word if the last word is a number, and there may be no size at all.
-    ///
-    /// The style words are dropped rather than kept in the family, because that is what
-    /// they are to Pango -- a weight, not part of the name -- and skia is being asked to
-    /// resolve a family. `words.len() > 1` guards the degenerate case: a description of
-    /// nothing but style words keeps the first one rather than becoming empty, since
-    /// there is nothing better to answer and an empty family is no answer at all.
+    /// throughout: the family itself contains spaces, so the size is the last word if the
+    /// last word is a number, and there may be no size at all. Style words are a weight
+    /// to Pango rather than part of the name, so they are dropped -- except where they
+    /// are all there is, since an empty family is no answer.
     pub fn parse_pango(value: &str) -> Option<Spec> {
         let mut words: Vec<&str> = unquote(value.trim()).split_whitespace().collect();
 
-        let points = match words.last() {
-            Some(last) => last.parse::<f32>().ok(),
-            None => None,
-        };
+        let points = words.last().and_then(|last| last.parse::<f32>().ok());
         if points.is_some() {
             words.pop();
         }
@@ -393,15 +305,9 @@ mod desktop {
     }
 }
 
-/// Windows, asked through `user32` rather than through a tool: there is one shell here
-/// and it answers `SystemParametersInfo`, so nothing is shelled out to and nothing is
-/// read back out of another program's output.
-///
-/// Compiled on Linux too, but only for its tests: [`font_spec`] -- a `LOGFONTW`'s face
-/// name and height turned into a family and a point size -- is the half of this that can
-/// be checked from a machine that is not Windows, and a `cfg` that hid it from `cargo
-/// test` would leave it checked nowhere at all. Everything that touches the API sits
-/// behind a second `cfg` inside, because that half compiles nowhere else.
+/// Windows, asked through `user32`. Compiled on Linux too, but only so [`font_spec`] --
+/// the half that does not touch the API -- stays under test; everything that does sits
+/// behind a second `cfg` inside.
 #[cfg(any(target_os = "windows", test))]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod windows {
@@ -421,11 +327,9 @@ mod windows {
     /// real one cannot be had.
     const NOMINAL_DPI: u32 = 96;
 
-    /// Windows has a message font and no fixed-width font: nothing in the shell settings
-    /// names one. The nearest thing is `HKCU\Console`'s `FaceName`, which is the console
-    /// host's own choice, is often the raster `Terminal` face that skia cannot use for a
-    /// UI, and carries its size as a packed cell in pixels rather than a point size --
-    /// three reasons it is not the desktop answering, so `Consolas` stands.
+    /// Windows stores no desktop-wide fixed-width font: the nearest thing is the console
+    /// host's own `FaceName`, which is often a raster face and carries a pixel cell size,
+    /// so `Consolas` stands.
     #[cfg(target_os = "windows")]
     pub fn query(which: Which) -> Option<Spec> {
         match which {
@@ -434,22 +338,14 @@ mod windows {
         }
     }
 
-    /// `SPI_GETNONCLIENTMETRICS` fills a `NONCLIENTMETRICSW` with the fonts and widths the
-    /// shell draws its own chrome with. `lfMessageFont` is the one dialogs and message
-    /// boxes use, which is what "the interface font" means on Windows -- and unlike the
-    /// registry copy of it, the API answers on a machine that has never changed a setting.
+    /// `lfMessageFont` is the font dialogs and message boxes use, which is what "the
+    /// interface font" means on Windows.
     #[cfg(target_os = "windows")]
     fn message_font() -> Option<Spec> {
-        // `cbSize` is neither optional nor a formality: it is how `user32` tells the two
-        // layouts of this struct apart, and a call carrying neither of them returns
-        // `FALSE` having written nothing. The struct grew an `iPaddedBorderWidth` after
-        // XP, so code that had to run there passed the *old* size -- this one less an
-        // `i32` -- and got the short answer back. The whole struct is the right answer
-        // here: `windows-sys` declares only the post-XP layout, so the short size would
-        // leave a field this code can name uninitialised while gaining nothing, and the
-        // oldest Windows this app runs on is far past XP anyway (freya wants an OpenGL
-        // context XP's drivers do not give it). The rest is zeroed, which is what
-        // `Default` is here: `SPI_GETNONCLIENTMETRICS` writes every field of it.
+        // `cbSize` is how `user32` tells the two layouts of this struct apart; a call
+        // carrying neither returns `FALSE` having written nothing. `windows-sys` declares
+        // only the post-XP layout, so the whole struct is the right size here. The rest is
+        // zeroed, which `SPI_GETNONCLIENTMETRICS` then overwrites in full.
         let mut metrics = NONCLIENTMETRICSW {
             cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
             ..Default::default()
@@ -468,9 +364,7 @@ mod windows {
             )
         };
 
-        // A `BOOL`, and a `FALSE` is one more "the desktop said nothing": the reason is
-        // over in `GetLastError` and there is nothing this file would do differently for
-        // any of them.
+        // A `FALSE` is one more "the desktop said nothing".
         if read == 0 {
             return None;
         }
@@ -480,28 +374,15 @@ mod windows {
         font_spec(&font.lfFaceName, font.lfHeight, metrics_dpi())
     }
 
-    /// The DPI the metrics just read are in, which is the part of this that has to be got
-    /// right rather than merely written down.
+    /// The DPI the metrics just read are in. `SystemParametersInfoW` answers in whatever
+    /// DPI space the *process* is in, and `GetDeviceCaps(LOGPIXELSY)` on the screen DC is
+    /// virtualised the same way, so the two agree without this file knowing which that is.
     ///
-    /// `SystemParametersInfoW` answers in whatever DPI space the *process* is in: 96 while
-    /// it is still DPI-unaware, the system DPI once winit has made it per-monitor aware.
-    /// `GetDeviceCaps(LOGPIXELSY)` on the screen DC is virtualised in exactly the same
-    /// way, so the two agree whichever of those two states this was called in -- which is
-    /// the reason to read the DPI here rather than to assume one.
-    ///
-    /// `SystemParametersInfoForDpi(.., 96)` would ask for the answer already in the units
-    /// this file works in and drop the division outright. It is deliberately not used:
-    /// `windows-sys` links its imports statically, and that entry point -- like
-    /// `GetDpiForSystem`, the other way to skip the DC -- exists only from Windows 10
-    /// 1607, so naming it turns "the desktop said nothing" into a process that will not
-    /// start at all on anything older. winit reaches that same family of functions through
-    /// `GetProcAddress` for precisely that reason, and a font setting is not worth
-    /// lowering the app's floor under winit's own.
-    ///
-    /// Dividing at all matters however the DPI arrives: 9pt is `-12` at 96 and `-18` at
-    /// 144, while freya is handed logical pixels at a nominal 96 with winit applying the
-    /// display's real scale factor on top of them. Passing the 144 DPI number straight
-    /// through would scale the font twice.
+    /// `SystemParametersInfoForDpi(.., 96)` would drop the division outright and is
+    /// deliberately not used: it and `GetDpiForSystem` exist only from Windows 10 1607,
+    /// and `windows-sys` links its imports statically, so naming one would turn "no font
+    /// setting" into a process that will not start. winit `GetProcAddress`es that family
+    /// for the same reason.
     #[cfg(target_os = "windows")]
     fn metrics_dpi() -> u32 {
         // SAFETY: `GetDC(null)` is the documented way to ask for the screen's own DC and
@@ -525,17 +406,13 @@ mod windows {
             .unwrap_or(NOMINAL_DPI)
     }
 
-    /// The family and the point size inside a `LOGFONTW`, which is the half of this a
-    /// machine that is not Windows can be asked about.
+    /// The family and the point size inside a `LOGFONTW`.
     ///
     /// `lfFaceName` is a fixed `[u16; 32]` and is NUL-terminated only when the name is
     /// shorter than that, so the name runs to the first NUL *or* to the end of the array.
-    /// An empty one is not an answer, which [`Spec::new`] is already the judge of.
-    ///
     /// `lfHeight` is in logical units at `dpi`: negative for the character height and
-    /// positive for the cell height, which is taller by the font's internal leading. The
-    /// sign is dropped rather than corrected for -- the difference is a point either way
-    /// on a UI font, and every writer of this value uses the negative form.
+    /// positive for the cell height, and the sign is dropped rather than corrected for --
+    /// a point either way on a UI font, and every writer of it uses the negative form.
     pub fn font_spec(face: &[u16; 32], height: i32, dpi: u32) -> Option<Spec> {
         let name: Vec<u16> = face.iter().copied().take_while(|unit| *unit != 0).collect();
         let family = String::from_utf16(&name).ok()?;
@@ -547,28 +424,12 @@ mod windows {
     }
 }
 
-/// The desktop's answer for one of the two fonts, as the desktop wrote it down: a
-/// family, and a size still in points.
-fn query(which: Which) -> Option<Spec> {
-    #[cfg(target_os = "windows")]
-    return windows::query(which);
-    #[cfg(not(target_os = "windows"))]
-    return desktop::query(which);
-}
-
-/// The same answer, asked once per process.
+/// The desktop's answer for one of the two fonts, asked once per process: a lookup is one
+/// or two subprocesses, and the settings page re-[`resolve`]s both fonts on every change.
 ///
-/// **This cache is what makes the settings page affordable.** A desktop lookup is one or
-/// two subprocesses, and the page re-[`resolve`]s both fonts on every change so that what
-/// is on screen is what the file will say -- so without it, clearing a family would spawn
-/// `kreadconfig` (or `gsettings`, twice) in the middle of a keystroke, and the row of the
-/// page that shows what an unspecified field is *inheriting* would cost a process per
-/// render. It is also honest to cache it: the answer is a desktop-wide setting read at
-/// startup, and this app has never followed a change to it mid-session.
-///
-/// One `OnceLock` per font rather than one for the pair, because [`needs_desktop`] still
-/// declines to ask about a font both of whose halves the reader has chosen, and a shared
-/// cell would make the first such question answer for both.
+/// One `OnceLock` per font rather than one for the pair, because [`font`] declines to ask
+/// about a font both of whose halves the reader has chosen, and a shared cell would make
+/// the first such question answer for both.
 fn desktop_answer(which: Which) -> Option<&'static Spec> {
     static UI: OnceLock<Option<Spec>> = OnceLock::new();
     static FIXED: OnceLock<Option<Spec>> = OnceLock::new();
@@ -578,62 +439,59 @@ fn desktop_answer(which: Which) -> Option<&'static Spec> {
         Which::Fixed => &FIXED,
     };
 
-    cell.get_or_init(|| query(which)).as_ref()
-}
+    cell.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        let answer = windows::query(which);
+        #[cfg(not(target_os = "windows"))]
+        let answer = desktop::query(which);
 
-/// Whether the desktop has anything left to be asked. A font whose family *and* size the
-/// user has both chosen has no unanswered half, so a fully configured app spawns no
-/// process at startup at all -- which is the only reason this is a question rather than
-/// two unconditional lookups.
-fn needs_desktop(setting: &FontSetting) -> bool {
-    setting.family().is_none() || setting.size().is_none()
+        answer
+    })
+    .as_ref()
 }
 
 /// One font, merged: the user's overrides in front of the desktop's answer, field by
-/// field, with the platform's own family behind both.
-///
-/// Pure, and handed the desktop's answer rather than asking for it, so that the merge --
-/// the part with the rules in it -- is testable on a machine with no desktop at all.
+/// field, with the platform's own family behind both. Pure, and handed the desktop's
+/// answer rather than asking for it, so the merge is testable with no desktop at all.
 fn resolve_font(
     setting: &FontSetting,
     desktop: Option<&Spec>,
     default: &'static str,
     default_points: f32,
 ) -> Font {
-    let (family, points) = match desktop {
-        Some(desktop) => (Some(desktop.family.clone()), desktop.points),
-        None => (None, None),
-    };
+    let family = setting
+        .family()
+        .map(str::to_owned)
+        .or_else(|| desktop.map(|desktop| desktop.family.clone()));
 
-    Font::new(
-        setting.family().map(str::to_owned).or(family),
-        setting.size().or(points),
-        default,
-        default_points,
-    )
+    Font {
+        // A family with no size keeps the family and takes the app's own size: dropping
+        // it over a missing number would put the chosen font back to the platform's.
+        families: family
+            .map(Cow::Owned)
+            .into_iter()
+            .chain([Cow::Borrowed(default)])
+            .collect(),
+        points: setting
+            .size()
+            .or_else(|| desktop.and_then(|desktop| desktop.points))
+            .unwrap_or(default_points),
+    }
 }
 
 fn font(setting: &FontSetting, which: Which, default: &'static str, default_points: f32) -> Font {
-    let desktop = needs_desktop(setting)
+    // The desktop is asked only where it has something left to answer: a font whose
+    // family *and* size the user has chosen has no unanswered half, so a fully configured
+    // app spawns no process.
+    let desktop = (setting.family().is_none() || setting.size().is_none())
         .then(|| desktop_answer(which))
         .flatten();
 
     resolve_font(setting, desktop, default, default_points)
 }
 
-/// The two fonts these settings and this desktop come to.
-///
-/// Public and taking the settings by argument rather than reading them itself, which is
-/// what makes it the whole of this module's answer to the settings page: the page holds
-/// the settings it is editing, calls this with them, and has what to draw with -- no
-/// cache to invalidate and no process-wide state written here. The state that *is*
-/// written lives in `ui.rs` beside the appearance, for the reason spelled out there:
-/// asking for a font has to be what subscribes a component to it, and the callers are
-/// free functions that cannot run a hook.
-///
-/// Off a desktop that has anything to say -- no `kreadconfig`, no `gsettings`, no
-/// `SystemParametersInfo` -- and with nothing overridden, both fonts are the platform's
-/// own at the floem-era sizes.
+/// The two fonts these settings and this desktop come to. Takes the settings by argument
+/// rather than reading them, so the settings page can resolve what it is editing.
 pub fn resolve(settings: &Settings) -> Fonts {
     Fonts {
         ui: font(
@@ -649,23 +507,6 @@ pub fn resolve(settings: &Settings) -> Fonts {
             DEFAULT_MONO_POINTS,
         ),
     }
-}
-
-/// The fonts with nothing overridden: what every unspecified field is falling through to.
-///
-/// This is what the settings page draws in the box of a field the reader has *not* set,
-/// which is `notes/Goals.md`'s "a default being unspecified with clear visual
-/// distinction" taken at its word: an empty box that showed nothing would say only that
-/// the reader has not chosen, where the question they are actually asking is what they
-/// are getting instead. It is [`resolve`] of the default settings and not a lookup of its
-/// own, so the value shown is by construction the value that would be used -- including
-/// the platform's own family and the app's own size where the desktop said nothing at
-/// all, which are just as inherited as the desktop's answer is.
-///
-/// Cheap enough to call per render: everything under it is behind [`desktop_answer`]'s
-/// cache, so this is two small allocations.
-pub fn inherited() -> Fonts {
-    resolve(&Settings::default())
 }
 
 #[cfg(test)]

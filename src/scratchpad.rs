@@ -1,45 +1,11 @@
 //! A scratchpad: one Rust source file, the cargo package generated around it, and the
 //! `cargo build` that turns the two into something this app can open.
 //!
-//! Framework-free — no freya types appear here — like `project.rs` and `settings.rs`
-//! beside it, so the whole of it is unit-tested without a window. What is *not* here is
-//! any UI: the editable source view, the dependency rows on screen and the build button
-//! are the Scratchpad view in `ui.rs`, and every one of them reads this and nothing else
-//! about what a scratchpad is. Three of the five functions it calls are documented here
-//! as never running on a UI thread — [`Scratchpad::opened`], [`Scratchpad::write`] and
-//! [`Scratchpad::build`] — which is why the view has a worker thread of its own and why
-//! that thread is the only thing that ever touches a scratchpad's directory. The fourth,
-//! [`Scratchpad::run`], goes to the same thread for a weaker reason: it does not block,
-//! but it forks, and the one thread that draws has no business doing that either.
-//!
-//! **A program the reader wrote is one that may never stop**, so what [`Scratchpad::run`]
-//! hands back is a [`Running`] — a handle whose whole purpose is [`Running::stop`], which
-//! kills the process rather than dropping anything. Its output is *streamed* through a
-//! callback as it is written rather than collected and returned the way a build's is: a
-//! program that prints and then loops for ever has said something, and a shape that
-//! answers only at exit would never say it. Everything still running is also reachable
-//! without a handle, through [`stop_all`], because the window's close hook can read no
-//! state — the same reason `project.rs` keeps its save policy in a `static`.
-//!
-//! **The generated package is the storage.** A scratchpad is a name, a source and a list
-//! of `(crate, version)` rows, and every one of those is already a field of the package
-//! it generates — the package name, `src/main.rs`, and `[dependencies]`. So nothing here
-//! writes a second file describing a scratchpad, and [`Scratchpad::load_from`] is the
-//! exact inverse of [`Scratchpad::write_to`] rather than a parallel format that could
-//! disagree with what cargo is actually handed. It also means the reader can open a
-//! scratchpad in any other editor and lose nothing.
-//!
-//! **A version is required on every row**, which is the point of the goal rather than a
-//! detail of it: a scratchpad is a thing you come back to, and `*` means "whatever was
-//! newest the day you built it". A requirement plus the `Cargo.lock` cargo leaves in the
-//! scratchpad's own directory is what makes the second build the same as the first.
-//!
-//! **Rows are validated here and never at crates.io.** What this module can answer is
-//! whether a row is a *possible* crate name and a *possible* version requirement — both
-//! are grammars, and both are what a half-typed row fails. Whether a crate by that name
-//! exists at that version is cargo's answer and arrives as a [`Build::Rejected`] with
-//! cargo's own words in it; asking the network here would put a spinner and a failure
-//! mode into a text box.
+//! The generated package is the storage — [`Scratchpad::load_from`] is the exact inverse
+//! of [`Scratchpad::write_to`], so there is no second format to disagree with what cargo
+//! is handed. [`Scratchpad::opened_in`], [`Scratchpad::write_to`] and
+//! [`Scratchpad::build_in`] block and [`run_in`] forks, so all four belong on a worker
+//! thread.
 
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
@@ -58,11 +24,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-/// The directory this app keeps its state in, the same one `project.rs` and
-/// `settings.rs` name, and a `scratchpads/` under it — one directory per scratchpad.
-/// Spelled out again rather than shared, for their reason: the three modules are meant
-/// to be separable and a constant is a cheaper duplicate than a dependency between them.
-const APP_DIR: &str = "assembly-viewer";
+use crate::project::{base, write_atomically};
+
 const SCRATCHPADS_DIR: &str = "scratchpads";
 
 const MANIFEST_NAME: &str = "Cargo.toml";
@@ -74,60 +37,31 @@ const SOURCE_NAME: &str = "main.rs";
 const EDITION: &str = "2021";
 const PACKAGE_VERSION: &str = "0.1.0";
 
-/// crates.io's own limit, and the only length rule worth having: a name longer than this
-/// cannot be a crate whatever else is true of it.
+/// crates.io's own limit.
 const MAX_NAME: usize = 64;
 
 /// How much of one line of a program's output is kept before it is cut and continued on
-/// the next.
-///
-/// The bound that has to exist *first*, and it is about a single `String` rather than
-/// about the list: a program that writes a gigabyte and never a newline would otherwise
-/// grow one line until the machine gave out, and `read_line` would never hand it over on
-/// the way. 4 KiB is far past any line a person reads and far short of a problem.
+/// the next: a program writing megabytes with no newline in them is still *delivered*
+/// rather than accumulated into a string nobody ever sees.
 const MAX_LINE: u64 = 4096;
 
-/// How many lines of a program's output are kept.
-///
-/// A line cap and not a byte cap, because what the view is is a list of rows and what a
-/// cap has to answer is "how many rows" — a byte budget would make the row count a
-/// function of how long the lines happened to be, so the same tight loop would keep
-/// twenty thousand short lines and two hundred long ones. With [`MAX_LINE`] above it the
-/// two together bound the memory anyway, at a worst case of about 20 MB and a realistic
-/// one of a few hundred KB. What is dropped is the *oldest*, because the interesting end
-/// of a program that will not stop is the end it is still writing; [`RunOutput::dropped`]
-/// is what lets the view say so rather than silently showing a truncated story.
+/// How many lines of a program's output are kept, oldest first out. A line cap and not a
+/// byte cap, because the view is a list of rows; [`RunOutput::dropped`] is what lets it
+/// say the story is missing its beginning.
 const MAX_OUTPUT_LINES: usize = 5000;
 
-/// How often a program whose output has ended is asked whether it has exited.
-///
-/// Polled rather than waited on, and the reason is [`Running::stop`]: a blocking `wait`
-/// needs the `Child`, and holding it is exactly what would make a stop wait for the
-/// process it is trying to kill. Normally the first ask succeeds — both pipes reaching
-/// the end *is* the process exiting — so this interval is only paid by a program that
-/// closes its own output and lives on.
+/// How often a program whose output has ended is asked whether it has exited. Polled
+/// rather than waited on: a blocking `wait` needs the `Child`, and holding it is what
+/// would make [`Running::stop`] wait for the process it is trying to kill.
 const REAP_POLL: Duration = Duration::from_millis(20);
 
 /// What the one scratchpad the app opens is called, and so the directory it lives in.
-///
-/// A constant rather than something the reader names, because 10c ships one scratchpad
-/// and not a list of them: a name that can be edited is a name that can be edited into
-/// another scratchpad's directory, which is a picker and a rename with nowhere yet to
-/// draw either. Everything below is written in terms of a name all the same -- the model
-/// has always held several -- so the picker, when it comes, adds a list and changes
-/// nothing here. It is checked against [`check_name`] by a test, which is what lets
-/// [`Scratchpad::default`] hand it out without a `Result`.
+/// Checked against [`check_name`] by a test, which is what lets [`Scratchpad::default`]
+/// hand it out without a `Result`.
 pub const DEFAULT_NAME: &str = "scratch";
 
-/// What a new scratchpad starts with.
-///
-/// Not `fn main() {}`, which is the obvious answer and the useless one: a scratchpad
-/// exists to be *looked at* in the assembly pane, and an empty `main` compiles to a
-/// symbol the reader did not write. One named function with `#[inline(never)]` on it is
-/// the smallest thing that puts something of theirs in the listing, and the attribute is
-/// there because the first edit is usually to make the body more interesting — at which
-/// point an inlined one-liner would vanish into `main` and read as the build being
-/// broken.
+/// What a new scratchpad starts with. `#[inline(never)]` because the point of a scratchpad
+/// is a symbol of the reader's own in the assembly pane.
 pub const DEFAULT_SOURCE: &str = "\
 #[inline(never)]
 pub fn scratch(x: u64) -> u64 {
@@ -141,28 +75,20 @@ fn main() {
 
 /// One scratchpad: the package's name, the source it holds, and the crates it asks for.
 ///
-/// The name is both the crate name and the directory name, and [`Scratchpad::new`]
-/// checks it against the crate-name rules — which are strictly stronger than what a safe
-/// path component needs (no separators, no `.`, no `..`, ASCII only), so validating once
-/// covers both and there is no second place a name could get through.
+/// The name is both the crate name and the directory name, and the crate-name rules are
+/// strictly stronger than what a safe path component needs, so validating once covers
+/// both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scratchpad {
     name: String,
-    /// The whole of `src/main.rs`. Public because the editor owns it: this module has no
-    /// opinion about Rust source beyond writing it out verbatim.
     pub source: String,
-    /// `[dependencies]`, in the order the reader put them in — the manifest sorts them,
-    /// this list does not, because a row is a place on screen and reordering under an
-    /// edit is the one thing a list of text boxes must not do.
+    /// In the order the reader put them in — the manifest sorts them, this list does not,
+    /// since reordering under an edit is the one thing a list of text boxes must not do.
     pub dependencies: Vec<Dependency>,
 }
 
-/// One `[dependencies]` row: a crate and the version required of it.
-///
-/// Both halves are the raw text of a box the reader is typing in, so both are trimmed at
-/// the accessor rather than on the way in (`settings.rs` does the same with a font
-/// family): a row is edited far more often than it is read, and a half-typed row must
-/// stay exactly what was typed.
+/// One `[dependencies]` row. Both halves are the raw text of a box the reader is typing
+/// in, so both are trimmed at the accessor rather than on the way in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Dependency {
     pub name: String,
@@ -170,79 +96,50 @@ pub struct Dependency {
 }
 
 /// What is wrong with one dependency row.
-///
-/// A value and not a `bool`, because the whole point of validating locally is that the
-/// UI can say *why* against the row that is wrong — a row that is silently dropped from
-/// the generated manifest is a scratchpad that builds differently from the one on
-/// screen, which is the failure this is here to prevent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Problem {
-    /// The row names no crate at all.
     NoName,
-    /// A crate name begins with a letter; cargo's own `restricted_names` says so, and a
-    /// leading digit or `-` is what a half-typed version in the wrong box looks like.
+    /// A crate name begins with a letter.
     NameStart,
-    /// A character no crate name may hold.
     NameCharacter(char),
     NameTooLong,
     /// Two rows naming the same crate. `[dependencies]` is a table, so the second would
-    /// silently replace the first — the omission this module refuses to make quietly.
+    /// silently replace the first.
     Repeated,
-    /// The row requires no version. Required, not defaulted: see the module docs.
     NoVersion,
     /// `*`, `1.*`, `>=1, <2.*` — a requirement whose answer changes with the day.
     Wildcard,
-    /// Not a version requirement at all.
     NotAVersion,
 }
 
 /// Which of a row's two boxes a [`Problem`] is about.
-///
-/// A value and not a guess at the editor: the rows are two text boxes and every problem
-/// is about exactly one of them, so which box to mark is a property of the problem
-/// rather than something a UI can work out from its wording. [`Problem::Repeated`] is
-/// the one that is not obvious -- two rows asking for one crate at two versions is a
-/// *name* collision, since `[dependencies]` is keyed by the name and the second version
-/// is what would be lost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Half {
     Name,
     Version,
 }
 
-/// Why nothing was written or nothing was built. Every variant is something the reader
-/// can be shown as it stands; none of them is a panic and none of them is a dialog.
+/// Why nothing was written or nothing was built.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Failure {
-    /// Rows that have to be fixed first, each as an index into
-    /// [`Scratchpad::dependencies`] so the editor can point at the row rather than at
-    /// the build.
+    /// Rows to fix first, each an index into [`Scratchpad::dependencies`].
     Dependencies(Vec<(usize, Problem)>),
-    /// No state directory and no local data directory on this system, so there is
-    /// nowhere a scratchpad may live. The same answer `project.rs` gives.
+    /// No state directory and no local data directory on this system.
     NoDirectory,
-    /// The package could not be written.
     Write(String),
     /// `cargo` could not be started at all — not on the `PATH`, or not executable.
     NoCargo(String),
-    /// cargo reported success and named no executable, which nothing in a generated
-    /// package should be able to do. A third answer rather than an `unwrap`.
+    /// cargo reported success and named no executable.
     NoArtifact,
-    /// The built program could not be started at all — deleted since the build, or on a
-    /// filesystem mounted `noexec`. Distinct from [`Failure::NoCargo`] because it is the
-    /// reader's own program and not the toolchain that is missing.
+    /// The built program could not be started — deleted since the build, or on a
+    /// filesystem mounted `noexec`.
     NoProgram(String),
 }
 
 /// What a build came back with.
-///
-/// Three answers and not two, because "the compiler said no" and "there was no compiler"
-/// are different things to a reader: one is a page of diagnostics to read and one is a
-/// machine to fix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Build {
-    /// cargo built it. `diagnostics` is whatever it said on the way — warnings and
-    /// notes; a successful build's errors do not exist.
+    /// `diagnostics` is whatever cargo said on the way — warnings and notes.
     Built {
         executable: PathBuf,
         diagnostics: Vec<Diagnostic>,
@@ -259,23 +156,20 @@ pub enum Build {
     Unavailable(Failure),
 }
 
-/// One thing the compiler said, flattened out of cargo's JSON into what a UI can draw.
+/// One thing the compiler said, flattened out of cargo's JSON.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub level: Level,
-    /// The one-line message, for a list.
     pub message: String,
-    /// cargo's own rendered block — the source excerpt with the carets under it — asked
-    /// for without colour, so it is text and not escape codes.
+    /// cargo's own rendered block, asked for without colour.
     pub rendered: String,
-    /// Where it points, when it points anywhere. The primary span, since a UI marking
-    /// every span of every diagnostic marks most of the file.
+    /// The primary span, since a UI marking every span of every diagnostic marks most of
+    /// the file.
     pub span: Option<Span>,
 }
 
 /// A place in a file the compiler named. `file` is as cargo gave it — `src/main.rs` for
-/// the scratchpad's own source, and a registry path for a diagnostic from a dependency,
-/// which is exactly the distinction a UI needs to decide whether it can point at it.
+/// the scratchpad's own source, a registry path for a dependency's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
     pub file: String,
@@ -288,13 +182,11 @@ pub struct Span {
 pub enum Level {
     Error,
     Warning,
-    /// Everything else rustc emits — `note`, `help`, `failure-note`. Not worth a variant
-    /// each: nothing decides anything on the difference.
+    /// Everything else rustc emits — `note`, `help`, `failure-note`.
     Note,
 }
 
 impl Problem {
-    /// Which box of the row this is about.
     pub fn half(&self) -> Half {
         match self {
             Problem::NoName
@@ -308,19 +200,16 @@ impl Problem {
 }
 
 impl Dependency {
-    /// The crate this row asks for, trimmed.
     pub fn name(&self) -> &str {
         self.name.trim()
     }
 
-    /// The version requirement, trimmed.
     pub fn version(&self) -> &str {
         self.version.trim()
     }
 
-    /// What is wrong with this row on its own. [`Problem::Repeated`] is not answered
-    /// here and cannot be — it is a property of the list, and [`Scratchpad::problems`]
-    /// is where the list is.
+    /// What is wrong with this row on its own. [`Problem::Repeated`] is a property of the
+    /// list and is answered by [`Scratchpad::problems`].
     pub fn check(&self) -> Result<(), Problem> {
         check_name(self.name())?;
         check_version(self.version())
@@ -328,21 +217,12 @@ impl Dependency {
 }
 
 impl Default for Scratchpad {
-    /// The scratchpad the app opens with: [`DEFAULT_NAME`] over [`DEFAULT_SOURCE`], and
-    /// no crates asked for.
-    ///
-    /// No `Result`, unlike [`Scratchpad::new`], because the name is this module's own
-    /// constant rather than something typed. The `expect` is the only one in this module
-    /// and it is not a claim about anything read from a file: it is
-    /// `the_default_scratchpad_is_one_this_module_would_write` that holds it, by putting
-    /// `DEFAULT_NAME` through the very check this would fail.
     fn default() -> Scratchpad {
         Scratchpad::new(DEFAULT_NAME).expect("DEFAULT_NAME is a crate name")
     }
 }
 
 impl Scratchpad {
-    /// A new, empty scratchpad, or the reason its name is not a name.
     pub fn new(name: impl Into<String>) -> Result<Scratchpad, Problem> {
         let name = name.into();
         check_name(name.trim())?;
@@ -357,10 +237,8 @@ impl Scratchpad {
         &self.name
     }
 
-    /// Every dependency row that cannot be written, in list order.
-    ///
-    /// All of them and not the first: the editor marks rows, and a reader who fixes one
-    /// row only to be told about the next is being shown the list one item at a time.
+    /// Every dependency row that cannot be written, in list order — all of them, since
+    /// the editor marks rows.
     pub fn problems(&self) -> Vec<(usize, Problem)> {
         let mut seen = HashSet::new();
         let mut problems = Vec::new();
@@ -368,7 +246,7 @@ impl Scratchpad {
             match dependency.check() {
                 Err(problem) => problems.push((row, problem)),
                 // Only a row that is otherwise good can be a duplicate: two empty rows
-                // are two empty rows, and saying so twice over would be noise.
+                // are two empty rows.
                 Ok(()) if !seen.insert(dependency.name()) => {
                     problems.push((row, Problem::Repeated))
                 }
@@ -378,12 +256,8 @@ impl Scratchpad {
         problems
     }
 
-    /// The `Cargo.toml` this scratchpad generates, as text.
-    ///
-    /// The one interesting thing about it is `[workspace]`: an empty table makes the
-    /// package its own workspace root, so a scratchpad that happens to sit under a
-    /// directory holding a workspace manifest still builds. Nothing decides where a
-    /// state directory is, so that is a guarantee rather than a prediction.
+    /// The `Cargo.toml` this scratchpad generates, as text. The empty `[workspace]` makes
+    /// the package its own workspace root wherever the state directory turns out to be.
     pub fn manifest(&self) -> Result<String, Failure> {
         let problems = self.problems();
         if !problems.is_empty() {
@@ -404,31 +278,20 @@ impl Scratchpad {
             workspace: Workspace {},
         };
 
-        // Nothing here can fail to serialize — it is three strings and a map of strings
-        // — but the error is turned into a value rather than unwrapped, for the reason
-        // `project.rs` gives: writing a file must not be a way to crash the app.
         toml::to_string_pretty(&manifest).map_err(|error| Failure::Write(error.to_string()))
     }
 
     /// Where this scratchpad lives, or `None` on a system with no state or local data
     /// directory to put it in.
     pub fn directory(&self) -> Option<PathBuf> {
-        Some(scratchpads()?.join(&self.name))
-    }
-
-    /// Write the package out where it belongs.
-    pub fn write(&self) -> Result<(), Failure> {
-        let directory = self.directory().ok_or(Failure::NoDirectory)?;
-        self.write_to(&directory)
+        Some(base()?.join(SCRATCHPADS_DIR).join(&self.name))
     }
 
     /// Write the package into `directory`, creating it and its `src/`.
     ///
-    /// Both files go down through the same `.tmp` + rename the session and the settings
-    /// use, and here it is the source that earns it: `src/main.rs` is the reader's
-    /// document, so an interrupted write must leave the last good version behind rather
-    /// than a truncated one. The manifest is written first, so a directory that exists
-    /// at all is a package cargo can be pointed at.
+    /// Both files go down through `.tmp` + rename, which `src/main.rs` earns: it is the
+    /// reader's document, so an interrupted write must leave the last good version behind.
+    /// The manifest goes first, so a directory that exists at all is a package.
     pub fn write_to(&self, directory: &Path) -> Result<(), Failure> {
         let manifest = self.manifest()?;
         let source = directory.join(SOURCE_DIR);
@@ -441,13 +304,11 @@ impl Scratchpad {
         write().map_err(|error| Failure::Write(error.to_string()))
     }
 
-    /// Read a scratchpad back out of its directory, or `None` if there is not one there:
-    /// no manifest, a manifest that is not this app's, or no source beside it.
+    /// Read a scratchpad back out of its directory, or `None` if there is not one there.
     ///
-    /// The exact inverse of [`Scratchpad::write_to`], and deliberately nothing more —
-    /// a manifest naming a dependency this module would refuse to write is still read
-    /// back as those rows, so a hand-edited scratchpad opens with the bad row visible
-    /// rather than not opening at all.
+    /// The exact inverse of [`Scratchpad::write_to`] and nothing more: a manifest naming a
+    /// dependency this module would refuse to write reads back as those rows, so a
+    /// hand-edited scratchpad opens with the bad row visible rather than not opening.
     pub fn load_from(directory: &Path) -> Option<Scratchpad> {
         let manifest = fs::read_to_string(directory.join(MANIFEST_NAME)).ok()?;
         let manifest: Manifest = toml::from_str(&manifest).ok()?;
@@ -464,25 +325,12 @@ impl Scratchpad {
         })
     }
 
-    /// This scratchpad as its own directory has it, or this one where there is nothing
-    /// there. **Blocking, and never from a UI thread**, for [`Scratchpad::build`]'s
-    /// reason at a much smaller scale: it is two `read`s of a file whose size is the
-    /// reader's business, and the one thread that draws has no business waiting on any
-    /// of them.
+    /// This scratchpad as `directory` has it, or this one where there is nothing there.
+    /// Blocking.
     ///
-    /// The name kept is **this** scratchpad's and never the manifest's, which is the one
-    /// decision in here. `directory()` is derived from the name, so a hand-edited
-    /// `Cargo.toml` naming another crate would otherwise send the next write somewhere
-    /// the reader never opened -- and the directory, not the manifest, is what the reader
-    /// asked for.
-    pub fn opened(self) -> Scratchpad {
-        match self.directory() {
-            Some(directory) => self.opened_in(&directory),
-            None => self,
-        }
-    }
-
-    /// [`Scratchpad::opened`], from a directory of the caller's choosing. Blocking.
+    /// The name kept is **this** scratchpad's and never the manifest's: `directory()` is
+    /// derived from the name, so a hand-edited `Cargo.toml` naming another crate would
+    /// otherwise send the next write somewhere the reader never opened.
     pub fn opened_in(self, directory: &Path) -> Scratchpad {
         match Scratchpad::load_from(directory) {
             Some(loaded) => Scratchpad {
@@ -493,92 +341,48 @@ impl Scratchpad {
         }
     }
 
-    /// Write the package and build it. **Blocking, and never from a UI thread.**
+    /// Write the package into `directory` and build it. Blocking, and never from a UI
+    /// thread.
     ///
-    /// A `cargo build` is seconds at best and a full dependency tree at worst, so this
-    /// is the same discipline `analysis::open_files` already follows and for the same
-    /// reason: the work is a plain blocking function that hands back a *value*, and
-    /// `ui.rs` puts it on a `std::thread` with an `async_channel` to carry the answer
-    /// home. Nothing here prints, nothing here holds a lock, and nothing here needs the
-    /// caller to be a particular kind of thread — which is exactly what makes it safe to
-    /// move off the one thread that must not block.
-    ///
-    /// The subprocess gets a null stdin, so a cargo that decides to ask a question
-    /// cannot sit waiting for an answer no one can give it.
-    pub fn build(&self) -> Build {
-        match self.directory() {
-            Some(directory) => self.build_in(&directory),
-            None => Build::Unavailable(Failure::NoDirectory),
-        }
-    }
-
-    /// [`Scratchpad::build`], in a directory of the caller's choosing. Blocking.
+    /// The subprocess gets a null stdin, so a cargo that decides to ask a question cannot
+    /// sit waiting for an answer no one can give it.
     pub fn build_in(&self, directory: &Path) -> Build {
         if let Err(failure) = self.write_to(directory) {
             return Build::Unavailable(failure);
         }
 
-        let output = Command::new(cargo())
-            .current_dir(directory)
-            // The artifact path is *asked for* rather than guessed at. Deriving
-            // `target/debug/<name>` from the crate name and the profile is wrong the
-            // moment there is a `CARGO_TARGET_DIR` in the environment, a `.cargo/config`
-            // above the directory, or an executable suffix — and it would be wrong
-            // silently, by handing the viewer a path that is not there. cargo names it.
-            .args(["build", "--message-format=json", "--color=never"])
-            .stdin(Stdio::null())
-            .output();
+        let output =
+            Command::new(std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
+                .current_dir(directory)
+                // The artifact path is *asked for* rather than guessed at: deriving
+                // `target/debug/<name>` from the crate name and the profile is silently wrong
+                // under a `CARGO_TARGET_DIR`, a `.cargo/config` above the directory, or an
+                // executable suffix. cargo names it.
+                .args(["build", "--message-format=json", "--color=never"])
+                .stdin(Stdio::null())
+                .output();
 
         let output = match output {
             Ok(output) => output,
             Err(error) => return Build::Unavailable(Failure::NoCargo(error.to_string())),
         };
 
-        // Lossy rather than a decode error: a diagnostic quoting a source line this app
-        // read as UTF-8 cannot itself be invalid, and a build must not fail on the way
-        // its own failure was spelt.
         outcome(
             &String::from_utf8_lossy(&output.stdout),
             &String::from_utf8_lossy(&output.stderr),
             output.status.success(),
         )
     }
-
-    /// Start the program a build made, streaming what it writes into `emit` until it
-    /// ends.
-    ///
-    /// **The artifact is run, not `cargo run`**, and that is the one design decision in
-    /// here. `build_in` already asked cargo where it put the executable and cargo already
-    /// answered, so re-entering cargo would redo dependency resolution and a build to
-    /// arrive back at the path this is handed — and it could arrive at a *different* one,
-    /// since the reader has very likely typed since. What runs would then not be what the
-    /// diagnostics on screen are about. It is also the only shape in which stopping means
-    /// anything: killing a `cargo run` kills cargo, whose child goes on running with
-    /// nothing left holding it, whereas the process spawned here **is** the reader's
-    /// program. And cargo's own progress lines would arrive interleaved into the stream
-    /// the reader is reading as the output of what they wrote.
-    ///
-    /// The working directory is the scratchpad's own, which is what `cargo run` would
-    /// have given it — a program that opens a relative path finds the package it was
-    /// written in. stdin is null for [`Scratchpad::build`]'s reason: nothing can answer a
-    /// question asked of a process with no terminal.
-    pub fn run(
-        &self,
-        executable: &Path,
-        emit: impl FnMut(RunEvent) + Send + 'static,
-    ) -> Result<Running, Failure> {
-        match self.directory() {
-            Some(directory) => run_in(executable, &directory, emit),
-            None => Err(Failure::NoDirectory),
-        }
-    }
 }
 
-/// [`Scratchpad::run`], in a directory of the caller's choosing.
+/// Start the program a build made in `directory`, streaming what it writes into `emit`
+/// until it ends.
 ///
-/// Not blocking, unlike everything else this module hands the worker: it forks, wires up
-/// two threads to the process's two pipes, and returns. Every wait after that is on one
-/// of those threads.
+/// The artifact is run, not `cargo run`: re-entering cargo would rebuild to a path that
+/// may differ from the one the diagnostics on screen are about, interleave cargo's own
+/// progress into the program's output, and make stopping meaningless — killing a
+/// `cargo run` leaves its child running. Not blocking: it forks, wires up two threads to
+/// the process's two pipes, and returns.
 pub fn run_in(
     executable: &Path,
     directory: &Path,
@@ -603,23 +407,22 @@ pub fn run_in(
         stopped: AtomicBool::new(false),
     });
     let running = Running(process.clone());
-    remember(&running);
+    {
+        let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
+        list.retain(|other| !other.finished());
+        list.push(running.clone());
+    }
 
     // One `emit` behind one lock, so the two streams interleave in the order the program
-    // actually wrote them rather than in two lists a view would have to merge. Holding it
-    // across the call is deliberate: the callback is what carries a line to the UI, so a
-    // consumer that has fallen behind blocks a reader thread, which fills a pipe, which
-    // blocks the program itself. That is the *only* backpressure available against a
-    // program printing in a tight loop, and it is exactly the right one — the alternative
-    // is a queue that grows as fast as the program can write.
+    // wrote them. Holding it across the call is deliberate: a consumer that has fallen
+    // behind blocks a reader thread, which fills a pipe, which blocks the program itself —
+    // the only backpressure there is against a program printing in a tight loop.
     let emit: Emit = Arc::new(Mutex::new(Box::new(emit)));
 
-    // A run is over when both of its pipes have reached the end **and** the process has
-    // been reaped, and the last pipe to finish is what says so. No third thread and no
-    // polling in the ordinary case: the pipes end because the process exited. A program
-    // that hands its output to a grandchild outliving it is therefore reported as still
-    // running until that grandchild lets go, which is the honest answer rather than a
-    // wrong one — the output is still coming.
+    // A run is over when both pipes have reached the end **and** the process has been
+    // reaped, and the last pipe to finish says so. A program that hands its output to a
+    // grandchild outliving it therefore reads as still running, which is honest: the
+    // output is still coming.
     let unfinished = Arc::new(AtomicUsize::new(2));
     pipe_thread(out, Stream::Out, &emit, &unfinished, &process);
     pipe_thread(err, Stream::Err, &emit, &unfinished, &process);
@@ -630,11 +433,8 @@ pub fn run_in(
 /// Stop every program any scratchpad has started and that has not ended by itself.
 ///
 /// For the window's close hook, which is a `Send` callback that can read no `State` —
-/// `project.rs`'s `flush` is there for the same reason and this sits beside it. **A child
-/// process outliving the app is a bug and not an untidiness**: it holds a terminal, a
-/// port or a file the next run will want, and nothing in the app would ever be able to
-/// find it again. What it cannot cover is the app being killed rather than closed, where
-/// no hook of ours runs at all; that is the same bound `project.rs` accepts for a save.
+/// `project.rs`'s `flush` is there for the same reason. A child outliving the app holds a
+/// terminal, a port or a file the next run will want, with nothing able to find it again.
 pub fn stop_all() {
     let running = {
         let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
@@ -645,32 +445,23 @@ pub fn stop_all() {
     }
 }
 
-/// Which of a program's two output streams a line came from. The whole of what the view
-/// needs to draw them differently, and the whole of what this module claims about them:
-/// `stderr` is *not* an error, it is the other stream.
+/// Which of a program's two output streams a line came from. `stderr` is not an error, it
+/// is the other stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stream {
     Out,
     Err,
 }
 
-/// One line a running program wrote.
-///
-/// The text is an `Arc<str>` rather than a `String` because the app keeps thousands of
-/// these in a value it clones whenever a line is added to it; a clone is then a run of
-/// refcount bumps instead of a run of allocations.
+/// One line a running program wrote. The text is an `Arc<str>` because the app keeps
+/// thousands of these in a value it clones whenever a line is added.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutputLine {
     pub stream: Stream,
     pub text: Arc<str>,
 }
 
-/// What a running program has written, bounded.
-///
-/// Bounded *here*, in the model, and not by the view trimming a list it was handed: how
-/// much of a program's output is kept is a decision with a reason (see
-/// [`MAX_OUTPUT_LINES`]), and a decision with a reason belongs where it can be tested
-/// without a window.
+/// What a running program has written, bounded by [`MAX_OUTPUT_LINES`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunOutput {
     lines: VecDeque<OutputLine>,
@@ -696,16 +487,14 @@ impl RunOutput {
         self.lines.get(index)
     }
 
-    /// How many lines were let go to make room. Not a detail: a reader looking at a list
-    /// that starts in the middle of a sentence has to be told that is what it is.
+    /// How many lines were let go to make room, so the view can say the story is missing
+    /// its beginning.
     pub fn dropped(&self) -> usize {
         self.dropped
     }
 }
 
-/// What a run says as it goes. Every one of them is something the view appends to what it
-/// is already showing, which is what makes streaming a matter of *when* they arrive
-/// rather than of what they are.
+/// What a run says as it goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunEvent {
     Wrote(OutputLine),
@@ -716,39 +505,29 @@ pub enum RunEvent {
 /// How a run finished.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ended {
-    /// The program returned by itself. `None` where the system ended it without one — a
-    /// signal on Unix — which is a different thing from exiting with a code of zero.
+    /// The program returned by itself. `None` where the system ended it without a code.
     Exited(Option<i32>),
-    /// [`Running::stop`] was asked for. Reported as its own answer rather than as the
-    /// exit status a killed process leaves behind, because "you stopped it" and "it died"
-    /// are different things to the person who pressed the button.
+    /// [`Running::stop`] was asked for.
     Stopped,
-    /// It could not be waited for. Nothing normal reaches this.
+    /// It could not be waited for.
     Failed(String),
 }
 
-/// A program that was started, and the only thing that can stop it.
-///
-/// Cloneable and cheap, because the app holds one of these in a state it clones on every
-/// render and [`stop_all`] holds another.
+/// A program that was started, and the only thing that can stop it. Cloneable and cheap:
+/// the app holds one in a state it clones on every render and [`stop_all`] holds another.
 #[derive(Clone)]
 pub struct Running(Arc<Process>);
 
 impl Running {
-    /// Kill it.
+    /// Kill it — `SIGKILL` on Unix, `TerminateProcess` on Windows.
     ///
-    /// **This really kills the process** — `SIGKILL` on Unix, `TerminateProcess` on
-    /// Windows — rather than dropping the handle, which would do nothing at all: `Child`'s
-    /// own `Drop` deliberately does not wait and deliberately does not kill, so a run
-    /// abandoned rather than stopped goes on running with nothing left that could ever
-    /// find it. What it does not reach is a *grandchild*: a process the reader's program
-    /// spawned is not this app's to kill without putting the run in a process group of
-    /// its own, which is a platform-specific piece of `libc` this does not carry.
+    /// Dropping the handle would do nothing: `Child`'s own `Drop` neither waits nor kills,
+    /// so a run abandoned rather than stopped goes on running with nothing left that could
+    /// find it. What this does not reach is a *grandchild*, which would need the run in a
+    /// process group of its own and a `libc` this crate does not carry.
     ///
     /// Ends immediately if the run is already over, so a stop that races an exit cannot
-    /// name a pid the system has since given to somebody else — and `Child::kill` refuses
-    /// a reaped child for the same reason, so the guard is doubled and neither half is
-    /// load-bearing on its own.
+    /// name a pid the system has since given to somebody else.
     pub fn stop(&self) {
         self.0.stopped.store(true, Ordering::SeqCst);
         if self.0.over.load(Ordering::SeqCst) {
@@ -768,9 +547,8 @@ impl Running {
 /// The process behind a [`Running`], shared by the handle, the two pipe threads and the
 /// list [`stop_all`] walks.
 struct Process {
-    /// Behind a `Mutex` because a stop and the reap race by construction, and every
-    /// operation taken under it is a syscall that returns at once — which is why the reap
-    /// polls rather than waits (see [`REAP_POLL`]).
+    /// Behind a `Mutex` because a stop and the reap race by construction; every operation
+    /// taken under it is a syscall that returns at once (see [`REAP_POLL`]).
     child: Mutex<Child>,
     over: AtomicBool,
     stopped: AtomicBool,
@@ -816,9 +594,8 @@ fn pipe_thread<R: Read + Send + 'static>(
 ) {
     let (emit, unfinished, process) = (emit.clone(), unfinished.clone(), process.clone());
     thread::spawn(move || {
-        // `None` cannot happen for a `Stdio::piped()` child that was just spawned, but a
-        // pipe that is not there is simply a pipe with nothing on it, and answering that
-        // way keeps the two-must-finish count honest either way.
+        // A pipe that is not there is a pipe with nothing on it, which keeps the
+        // two-must-finish count honest either way.
         if let Some(pipe) = pipe {
             stream_lines(BufReader::new(pipe), stream, |line| {
                 let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
@@ -831,21 +608,18 @@ fn pipe_thread<R: Read + Send + 'static>(
         }
 
         let ended = process.reap();
-        forget(&process);
+        {
+            let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
+            list.retain(|other| !Arc::ptr_eq(&other.0, &process));
+        }
         let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
         emit(RunEvent::Ended(ended));
     });
 }
 
-/// Split what a program writes into lines and hand each one over as it arrives.
-///
-/// A function of its own rather than three lines inside the thread, because both of the
-/// bounds that matter are in it and neither needs a process to be tested: a line is cut
-/// at [`MAX_LINE`] and continues on the next, so output with no newline in it at all is
-/// still *delivered* rather than accumulating for ever, and the delivery is per line
-/// rather than per read so the view is told what it has as soon as there is a line of it.
-/// Invalid UTF-8 is taken lossily, for the reason a diagnostic is: what a program writes
-/// is not this app's to reject.
+/// Split what a program writes into lines and hand each one over as it arrives, cut at
+/// [`MAX_LINE`]. Invalid UTF-8 is taken lossily: what a program writes is not this app's
+/// to reject.
 fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(OutputLine)) {
     let mut buffer = Vec::new();
     loop {
@@ -855,11 +629,10 @@ fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(O
             .take(MAX_LINE)
             .read_until(b'\n', &mut buffer)
         {
-            // The end of the pipe, which is the end of the program's output.
-            Ok(0) => return,
+            // The end of the pipe, or a pipe that will not read: either way there is
+            // nothing more to say.
+            Ok(0) | Err(_) => return,
             Ok(_) => {}
-            // A pipe that will not read is one with nothing more to say.
-            Err(_) => return,
         }
 
         // The terminator, and a `\r` in front of it: the rows are drawn one line each, so
@@ -876,62 +649,14 @@ fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(O
 }
 
 /// Everything started and not yet ended, so that [`stop_all`] can reach it without a
-/// handle. A `static` for the same reason `project.rs`'s save policy is one: the window's
-/// close hook is outside the component tree and can be handed nothing.
+/// handle. A `static` because the window's close hook can be handed nothing.
 static RUNNING: Mutex<Vec<Running>> = Mutex::new(Vec::new());
 
-fn remember(running: &Running) {
-    let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
-    // Anything that ended while nobody was looking. The list is walked on every start and
-    // every end, so it is as long as the number of programs running at once, which is one.
-    list.retain(|other| !other.finished());
-    list.push(running.clone());
-}
-
-fn forget(process: &Arc<Process>) {
-    let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
-    list.retain(|other| !Arc::ptr_eq(&other.0, process));
-}
-
-/// The directory scratchpads live in, beside `settings.toml` and the `projects/`
-/// directory.
-fn scratchpads() -> Option<PathBuf> {
-    let base = dirs::state_dir().or_else(dirs::data_local_dir)?;
-    Some(base.join(APP_DIR).join(SCRATCHPADS_DIR))
-}
-
-/// Which cargo to run.
+/// Turn one `cargo build --message-format=json` run into an answer. A pure function of
+/// what cargo said, so a failed build is a test over a canned stream.
 ///
-/// `$CARGO` is set by cargo itself for anything it launches, so a development build run
-/// with `cargo run` builds its scratchpads with the very cargo that built it — the same
-/// toolchain, without going back through a rustup shim. An installed copy of the app has
-/// no such parent and falls back to the `PATH`, which is where a user's rustup shim is.
-fn cargo() -> OsString {
-    std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
-}
-
-/// Write `path` by writing `path.tmp` first and renaming it over the top, so an
-/// interrupted write cannot leave a half-written file behind. The same two lines
-/// `project.rs` and `settings.rs` each have; they are duplicated rather than shared for
-/// the same reason the directory constant is.
-fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-
-    fs::write(&temporary, contents)?;
-    fs::rename(&temporary, path)
-}
-
-/// Turn one `cargo build --message-format=json` run into an answer.
-///
-/// Split out of [`Scratchpad::build_in`] so it is a pure function of what cargo said:
-/// what a failed build reports is then a test over a canned stream rather than a test
-/// that needs a broken compiler to hand.
-///
-/// Every line of stdout is one JSON message; cargo's own progress goes to stderr, so a
-/// line that does not parse is not something to report, it is a cargo that has started
-/// saying something new. Those are skipped rather than failed on.
+/// Every line of stdout is one JSON message and cargo's own progress goes to stderr, so a
+/// line that does not parse is skipped rather than failed on.
 fn outcome(stdout: &str, stderr: &str, success: bool) -> Build {
     let mut diagnostics = Vec::new();
     let mut executable = None;
@@ -939,11 +664,9 @@ fn outcome(stdout: &str, stderr: &str, success: bool) -> Build {
     for line in stdout.lines() {
         match serde_json::from_str::<Report>(line) {
             Ok(Report::Message { message }) => diagnostics.push(message.into()),
-            // The generated package has exactly one binary and cargo builds no
-            // dependency's binaries, so the one artifact carrying an executable is ours.
-            // A build script's artifact has none, which is what `Option` is doing here.
-            // A rebuild that recompiled nothing still names it (the artifact comes back
-            // `fresh`), so pressing build twice is not a build that produced nothing.
+            // The generated package has one binary and cargo builds no dependency's
+            // binaries, so the one artifact carrying an executable is ours; a build
+            // script's has none. A rebuild that recompiled nothing still names it.
             Ok(Report::Artifact {
                 executable: Some(path),
             }) => executable = Some(path),
@@ -967,11 +690,9 @@ fn outcome(stdout: &str, stderr: &str, success: bool) -> Build {
     }
 }
 
-/// The messages cargo emits, as much of each as this module reads.
-///
-/// `#[serde(other)]` is what makes an unknown `reason` — `build-script-executed`,
-/// `build-finished`, whatever cargo adds next — a message that is skipped rather than a
-/// parse failure that would throw away the artifact path with it.
+/// The messages cargo emits, as much of each as this module reads. `#[serde(other)]` is
+/// what makes an unknown `reason` a message that is skipped rather than a parse failure
+/// that would throw the artifact path away with it.
 #[derive(Deserialize)]
 #[serde(tag = "reason")]
 enum Report {
@@ -1004,9 +725,8 @@ struct MessageSpan {
 
 impl From<CompilerMessage> for Diagnostic {
     fn from(message: CompilerMessage) -> Diagnostic {
-        // The primary span, and the first one only as a fallback: a diagnostic with
-        // secondary spans and no primary is rare, and pointing at one of them beats
-        // pointing nowhere.
+        // The primary span, falling back to the first: a diagnostic with secondary spans
+        // and no primary is rare, and pointing at one of them beats pointing nowhere.
         let span = message
             .spans
             .iter()
@@ -1018,8 +738,18 @@ impl From<CompilerMessage> for Diagnostic {
                 column: span.column_start,
             });
 
+        // `starts_with`, because rustc spells an ICE `error: internal compiler error` and
+        // a lint's level can arrive as `warning: ...`.
+        let level = if message.level.starts_with("error") {
+            Level::Error
+        } else if message.level.starts_with("warning") {
+            Level::Warning
+        } else {
+            Level::Note
+        };
+
         Diagnostic {
-            level: Level::from(message.level.as_str()),
+            level,
             rendered: message.rendered.unwrap_or_else(|| message.message.clone()),
             message: message.message,
             span,
@@ -1027,37 +757,16 @@ impl From<CompilerMessage> for Diagnostic {
     }
 }
 
-impl Level {
-    fn from(level: &str) -> Level {
-        // `starts_with`, because rustc spells an ICE `error: internal compiler error`
-        // and a lint's level can arrive as `warning: ...` — both of which are the level
-        // they start with.
-        if level.starts_with("error") {
-            Level::Error
-        } else if level.starts_with("warning") {
-            Level::Warning
-        } else {
-            Level::Note
-        }
-    }
-}
-
-/// The generated manifest, as a serializable shape.
-///
-/// **Field order is load-bearing**, the rule this codebase keeps hitting: TOML cannot
-/// reopen a table once a later one has begun, so a serializer must emit every plain
-/// value of a table before its first sub-table. Everything here is a table, so the order
-/// is only the order the file reads in — but `Package`'s own fields are all plain values
-/// and a table added to it later would have to go last. The generated-manifest test is
-/// what holds both.
+/// The generated manifest, as a serializable shape. **Field order is load-bearing**: TOML
+/// cannot reopen a table once a later one has begun, so every plain value of a table must
+/// be emitted before its first sub-table.
 #[derive(Serialize, Deserialize)]
 struct Manifest {
     package: Package,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     dependencies: BTreeMap<String, String>,
-    /// An empty `[workspace]`, so the package is its own workspace root wherever it
-    /// happens to sit. `default` on the way back in, since a hand-edited scratchpad that
-    /// dropped it is still a scratchpad.
+    /// `default` on the way back in, since a hand-edited scratchpad that dropped it is
+    /// still a scratchpad.
     #[serde(default)]
     workspace: Workspace,
 }
@@ -1072,12 +781,10 @@ struct Package {
 #[derive(Default, Serialize, Deserialize)]
 struct Workspace {}
 
-/// Whether `name` could be a crate name — cargo's own rule: a letter, then letters,
-/// digits, `-` and `_`.
+/// Whether `name` could be a crate name — a letter, then letters, digits, `-` and `_`.
 ///
-/// It is deliberately the rule for a name crates.io could hold rather than the rule for
-/// a name cargo would *accept*, which is looser (a leading `_`, non-ASCII), because
-/// every one of these names is about to be asked for at a registry.
+/// Deliberately the rule for a name crates.io could hold rather than the looser one cargo
+/// would accept, since every one of these names is about to be asked for at a registry.
 fn check_name(name: &str) -> Result<(), Problem> {
     let mut characters = name.chars();
     let Some(first) = characters.next() else {
@@ -1095,18 +802,13 @@ fn check_name(name: &str) -> Result<(), Problem> {
     }
 }
 
-/// Whether `version` could be a cargo version requirement.
+/// Whether `version` could be a cargo version requirement: a comma-separated list of
+/// comparators, each an optional operator in front of a version. The *shape* only —
+/// whether it resolves is a question about the registry.
 ///
-/// A requirement is a comma-separated list of comparators, each an optional operator in
-/// front of a version. This checks the *shape* of each and nothing about what it would
-/// resolve to — which is the honest division of labour, since resolution is a question
-/// about the registry and about every other crate in the tree.
-///
-/// The one judgement in here is that a wildcard is refused outright rather than parsed.
-/// `*` is a legal requirement and cargo takes it; it is also precisely the thing this
-/// feature exists to prevent, since it makes what a scratchpad builds a function of the
-/// day it is built on. It gets its own [`Problem`] so the row can say that rather than
-/// "not a version".
+/// A wildcard is refused outright though cargo takes it: it is what makes a scratchpad
+/// build differently on a different day, and it gets its own [`Problem`] so the row can
+/// say that rather than "not a version".
 fn check_version(version: &str) -> Result<(), Problem> {
     if version.is_empty() {
         return Err(Problem::NoVersion);
@@ -1162,9 +864,8 @@ fn check_comparator(comparator: &str) -> Result<(), Problem> {
 }
 
 impl fmt::Display for Problem {
-    /// One sentence per row, written to be shown *beside the row it belongs to* — so
-    /// none of them names the crate or repeats the value, which the row is already
-    /// showing.
+    /// One sentence per row, shown beside the row it belongs to — so none of them names
+    /// the crate or repeats the value.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Problem::NoName => write!(formatter, "name a crate"),
@@ -1191,8 +892,7 @@ impl fmt::Display for Problem {
 impl fmt::Display for Failure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            // The rows say the detail; this is the sentence over the top of them, for a
-            // place that has no rows to point at.
+            // The rows say the detail; this is the sentence over the top of them.
             Failure::Dependencies(problems) => match problems.len() {
                 1 => write!(formatter, "1 dependency to fix"),
                 count => write!(formatter, "{count} dependencies to fix"),

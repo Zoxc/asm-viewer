@@ -2,64 +2,23 @@
 //! compiler said, and what the program printed. The model and the worker are the file
 //! beside this one.
 //!
-//! **The editor is freya's own `CodeEditor`**, which the read-only source pane deliberately
-//! rejected -- and that is not a reversal. Both of that pane's objections were about
-//! painting and scrolling a listing from *outside*: the one line it backgrounds is the
-//! caret's, which is the only current line an editor has, and nothing here wants to scroll
-//! it from elsewhere. Neither survives a pane the reader is typing in.
-//!
-//! **Every bad dependency row is marked, not the first**, since `[dependencies]` is a table
-//! and the second row of a repeated crate would otherwise silently win. And **a failed build
-//! points back at a row structurally**, never by looking for a crate name in a sentence: a
-//! rejection with no diagnostics at all is cargo refusing before it compiled anything, so
-//! cargo's own stderr is drawn under the rows it is about.
-//!
-//! **stdout and stderr are told apart by colour and by nothing else**, and deliberately not
-//! by the red every invalid thing wears: stderr is not an error, it is the other stream, so
-//! it takes the palette's one warm hue.
+//! Every bad dependency row is marked, not the first, and a failed build points back at a
+//! row structurally rather than by looking for a crate name in a sentence. stdout and
+//! stderr are told apart by colour and by nothing else -- stderr is not an error, it is
+//! the other stream, so it takes the palette's one warm hue rather than the red.
 
 use super::*;
 
-/// The file a scratchpad's source is, as cargo and rustc spell it: what `language` is
-/// asked about, and what a diagnostic's span names when it is about the reader's own
-/// source rather than a crate they depend on.
+/// The file a scratchpad's source is, as cargo and rustc spell it.
 pub(crate) const SOURCE_FILE: &str = "src/main.rs";
 
-/// How much of a dependency row the crate name takes against the version beside it. A
-/// name is a word and a requirement is a handful of characters, and both boxes have to
-/// shrink together in a 300px sidebar.
+/// How much of a dependency row the crate name takes against the version beside it.
 const NAME_FLEX: f32 = 2.0;
 const VERSION_FLEX: f32 = 1.0;
 
-/// What the compiler's own word for a level is drawn in.
-///
-/// The palette has one red and one warm hue, and this is what they are for here: an error
-/// is the red every invalid thing in the app is written in, a warning is the terracotta a
-/// string literal is (the one warm colour in the set, and the only other thing that is
-/// meant to catch the eye), and a note recedes into the colour everything secondary is
-/// written in.
-fn level_color(level: Level) -> Color {
-    match level {
-        Level::Error => palette().invalid_fg,
-        Level::Warning => palette().string_fg,
-        Level::Note => palette().address_fg,
-    }
-}
-
-fn level_text(level: Level) -> &'static str {
-    match level {
-        Level::Error => "error",
-        Level::Warning => "warning",
-        Level::Note => "note",
-    }
-}
-
 /// A block of a tool's own output, laid out the way it wrote it: one label per line, in
-/// the fixed-width font, so rustc's carets sit under what they point at.
-///
-/// One label per line rather than one holding the newlines, for the reason every list in
-/// this app builds rows: a paragraph that wraps would put a caret under the wrong
-/// character, and the whole point of a rendered diagnostic is the column it points at.
+/// the fixed-width font, so rustc's carets sit under what they point at. A paragraph that
+/// wrapped would put a caret under the wrong character.
 fn text_block(text: &str, color: Color) -> Element {
     rect()
         .width(Size::fill())
@@ -80,14 +39,8 @@ fn text_block(text: &str, color: Color) -> Element {
 }
 
 /// One thing the compiler said: a line that can be scanned, and cargo's own rendering of
-/// it under that.
-///
-/// The header repeats the message the block below it opens with, which is deliberate and
-/// is what every problems list does: the header is what a reader runs their eye down and
-/// the block is what they stop to read. What the header adds is the **place**, taken from
-/// the span rather than from the text -- `src/main.rs:3:5` for the reader's own source and
-/// the file's name alone for a diagnostic out of a crate they depend on, which is a
-/// distinction only the span can make.
+/// it under that. The header adds the **place**, taken from the span rather than from the
+/// text.
 fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
     let place = diagnostic.span.as_ref().map(|span| {
         let file = match span.file == SOURCE_FILE {
@@ -113,8 +66,18 @@ fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
                 .content(Content::Flex)
                 .child(
                     label()
-                        .text(level_text(diagnostic.level))
-                        .color(level_color(diagnostic.level))
+                        .text(match diagnostic.level {
+                            Level::Error => "error",
+                            Level::Warning => "warning",
+                            Level::Note => "note",
+                        })
+                        // An error is the red every invalid thing wears, a warning the one
+                        // warm hue in the palette, and a note recedes.
+                        .color(match diagnostic.level {
+                            Level::Error => palette().invalid_fg,
+                            Level::Warning => palette().string_fg,
+                            Level::Note => palette().address_fg,
+                        })
                         .max_lines(1),
                 )
                 .maybe_child(place.map(|place| {
@@ -136,12 +99,8 @@ fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
 }
 
 /// One `[dependencies]` row: the crate, the version required of it, and the × that drops
-/// it.
-///
-/// The problem is a prop rather than something worked out here, because it is a property
-/// of the *list* -- `Problem::Repeated` is about two rows -- and `Scratchpad::problems`
-/// answers for all of them at once so that every bad row can be marked rather than the
-/// first one.
+/// it. The problem is a prop because it is a property of the *list* -- `Problem::Repeated`
+/// is about two rows -- and every bad row is marked rather than the first.
 #[derive(Clone, PartialEq)]
 struct DependencyRow {
     index: usize,
@@ -161,15 +120,13 @@ impl Component for DependencyRow {
         let mut pad = use_consume::<Pad>().0;
         let index = self.index;
         let problem = self.problem.clone();
-        // Which box is wrong is the model's answer and not this pane's guess at one:
-        // `Repeated` is about the name, and nothing in its wording says so.
+        // Which box is wrong is the model's answer: `Repeated` is about the name, and
+        // nothing in its wording says so.
         let half = problem.as_ref().map(Problem::half);
 
-        // The two boxes write straight into the row they are drawn from, so a keystroke
-        // is a state change the save effect sees like any other -- the project view's
-        // name box, one level deeper. Indexing is safe because a row is mounted only for
-        // an index the list has: the × below shortens the list, and the rows are rebuilt
-        // from the shorter one before either box is read again.
+        // The two boxes write straight into the row they are drawn from. Indexing is safe
+        // because a row is mounted only for an index the list has: the × below shortens
+        // the list, and the rows are rebuilt before either box is read again.
         let name = pad.into_writable().map(
             move |pad: &PadState| &pad.scratchpad.dependencies[index].name,
             move |pad: &mut PadState| &mut pad.scratchpad.dependencies[index].name,
@@ -220,8 +177,7 @@ impl Component for DependencyRow {
                             .child("\u{00d7}"),
                     ),
             )
-            // Against the row it belongs to and never as one message at the top, which is
-            // what `Scratchpad::problems` answering with every row's index is for.
+            // Against the row it belongs to and never as one message at the top.
             .maybe_child(problem.map(|problem| {
                 rect()
                     .width(Size::fill())
@@ -241,24 +197,10 @@ impl Component for DependencyRow {
     }
 }
 
-/// The scratchpad's source, in freya's own `CodeEditor`.
-///
-/// **5a rejected this component for the read-only source pane and 10c takes it, which is
-/// not a reversal**: both of 5a's reasons were about painting and scrolling a listing
-/// from outside, and neither survives the pane being one the reader is typing in.
-/// `editor_line.rs` paints a line background for exactly one line, the cursor's own --
-/// which is wrong for the source pane, where a set of lines maps to an instruction, and
-/// exactly right here, where the only current line *is* the caret's. Its
-/// `ScrollController` is built in a `use_hook` of its own and `CodeEditorData::scrolls` is
-/// `pub(crate)` -- which stopped 5c from scrolling the pane to a line, and there is
-/// nothing here that wants to. What is left is a real editor: a cursor, a selection, an
-/// undo history, the clipboard, IME preedit, and an *incremental* tree-sitter re-parse per
-/// keystroke through the same pipeline the source pane already borrows. Hand-rolling that
-/// would be several hundred lines of text editing to end up with less.
-///
-/// Two things are still ours, and both are the reason the app looks like one app: the
-/// colours come from the palette rather than from `EditorTheme::light()`, and the font is
-/// the desktop's fixed-width one.
+/// The scratchpad's source, in freya's own `CodeEditor` -- which the read-only source pane
+/// rejected, both of its objections being about painting and scrolling a listing from
+/// outside and neither surviving a pane the reader is typing in. What is ours is the
+/// colours, out of the palette, and the font.
 #[derive(PartialEq)]
 struct SourceEditor;
 
@@ -269,20 +211,17 @@ impl Component for SourceEditor {
 
         let font = fonts();
         let size = font.mono.size();
-        // The editor takes **one** family where everything else in the app takes a chain,
-        // and freya appends the parent element's families behind an element's own -- so
-        // the rest of the chain arrives by inheritance from the box around it, which is
-        // what keeps a desktop naming a font that is not installed from silently landing
-        // the listing in a proportional face.
+        // The editor takes **one** family where everything else takes a chain, and freya
+        // appends the parent element's families behind an element's own -- so the rest of
+        // the chain arrives by inheritance from the box around it.
         let family = font
             .mono
             .families
             .first()
             .map(|family| family.to_string())
             .unwrap_or_default();
-        // The editor multiplies its font size by this and floors the answer, and what is
-        // wanted is `code_row_height()` exactly -- so half a pixel of slack is what makes the
-        // product land on it rather than one below it.
+        // The editor multiplies its font size by this and floors the answer, so half a
+        // pixel of slack is what lands the product on `code_row_height()` exactly.
         let line_height = (code_row_height() + 0.5) / size;
 
         rect()
@@ -294,20 +233,17 @@ impl Component for SourceEditor {
                     .font_size(size)
                     .font_family(family)
                     .line_height(line_height)
-                    // The source pane draws indentation as plain spaces, and two panes of
-                    // code in one window disagreeing about that would read as two editors.
                     .show_whitespace(false)
                     .background(palette().pane_bg)
                     .text(palette().name_fg)
                     .cursor(palette().text_fg)
                     // What would land on the clipboard, which is what `row_select_bg`
+                    // already says in both code panes.
                     // already says in both code panes -- a character selection here where
                     // it is a run of rows there, and the same question either way.
                     .highlight(palette().row_select_bg)
                     // "You are here", which is `code_row_hover_bg`'s job in the other two
-                    // panes. Reusing it rather than adding a ninth wash to the palette is
-                    // safe because the editor paints no pointer hover at all, so the two
-                    // meanings can never be on screen together in this pane.
+                    // panes. Safe to reuse, the editor painting no pointer hover at all.
                     .line_selected_background(palette().code_row_hover_bg)
                     .gutter_selected(palette().text_fg)
                     .gutter_unselected(palette().address_fg)
@@ -316,12 +252,9 @@ impl Component for SourceEditor {
     }
 }
 
-/// The lines a running program has written, as the row builder is handed them.
-///
-/// A wrapper for the identity: `PartialEq` here is `Arc::ptr_eq`, the app's rule
-/// everywhere, and it is load-bearing rather than an optimisation -- deriving it would
-/// compare thousands of strings on every render of a pane that is being appended to
-/// several times a second.
+/// The lines a running program has written, as the row builder is handed them. `PartialEq`
+/// is `Arc::ptr_eq`, which is load-bearing rather than an optimisation: deriving it would
+/// compare thousands of strings on every render of a pane being appended to.
 #[derive(Clone)]
 struct OutputRows(Arc<RunOutput>);
 
@@ -332,13 +265,6 @@ impl PartialEq for OutputRows {
 }
 
 /// One line, in the colour of the stream it came from.
-///
-/// **stdout and stderr are told apart by colour and by nothing else**, and the colour is
-/// deliberately not the red every invalid thing in the app wears: a program writing to
-/// stderr is not a program in error -- logs, progress and prompts all go there -- so it
-/// takes `string_fg`, the palette's one warm hue and the colour a warning already is. Both
-/// are palette fields, so both are answered in the dark theme by the same contrast floor
-/// every other foreground is held to.
 fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
     let color = match line.stream {
         Stream::Out => palette().text_fg,
@@ -363,12 +289,8 @@ fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
 }
 
 /// The Scratchpad pane: a source file the reader edits, the crates it asks for, a build,
-/// and what the compiler said about it.
-///
-/// **A view and not a document**, which is the rule 8e settled and this inherits whole: a
-/// chip in the content strip is a `Selection` -- a place in a binary -- and a scratchpad
-/// is not one. What it *builds* is, and needs no rule at all: the executable goes through
-/// `open_files` like any other binary and its functions are ordinary chips.
+/// and what the compiler said about it. What it *builds* goes through `open_files` like
+/// any other binary.
 #[derive(PartialEq)]
 pub(crate) struct ScratchpadTab;
 
@@ -378,9 +300,6 @@ impl Component for ScratchpadTab {
         let jobs = use_consume::<PadJobs>();
         let state = pad.read().clone();
 
-        // Every bad row at once, keyed by the row it belongs to. `Scratchpad::problems`
-        // answers with all of them precisely so that a reader who has two rows wrong is
-        // not shown them one at a time.
         let problems: HashMap<usize, Problem> = state.scratchpad.problems().into_iter().collect();
         let rows: Vec<Element> = state
             .scratchpad
@@ -409,10 +328,7 @@ impl Component for ScratchpadTab {
         };
 
         // **One button, because there is one program.** While something is running the
-        // only thing to want from it is to stop it, and a Run beside a Stop would be two
-        // controls whose combined meaning has to be worked out. It is never both disabled
-        // and hiding something: with nothing built there is nothing to run, and the status
-        // line above says whether a build has happened.
+        // only thing to want from it is to stop it.
         let running = state.is_running();
         let run_jobs = jobs.clone();
         let run = Button::new()
@@ -459,18 +375,15 @@ impl Component for ScratchpadTab {
                         ),
                 )
                 .child(
-                    // The lines go through `new_with_data` and are not captured, which is
-                    // the gotcha this list would otherwise walk straight into: the builder
+                    // The lines go through `new_with_data` and are not captured: the builder
                     // closure is never compared across renders, so a captured `Arc` would
                     // draw the first batch of output for ever.
                     VirtualScrollView::new_with_data(
                         OutputRows(lines),
                         |index, rows: &OutputRows| match rows.0.line(index) {
                             Some(line) => output_row(line),
-                            // Only reachable if the list shortened between the length
-                            // being read and the row being asked for, which the cap cannot
-                            // do -- it drops from the front and keeps the count. An empty
-                            // row rather than an index that panics all the same.
+                            // Only reachable if the list shortened between the length being
+                            // read and the row being asked for, which the cap cannot do.
                             None => rect().height(Size::px(code_row_height())).into_element(),
                         },
                     )
@@ -498,11 +411,8 @@ impl Component for ScratchpadTab {
                                 .spacing(6.0)
                                 .child(
                                     Button::new()
-                                        // The whole of "two builds cannot be started at
-                                        // once", on the control as well as in
-                                        // `request_build`: a build takes seconds, and a
-                                        // button that goes on looking pressable through
-                                        // them is a button that gets pressed again.
+                                        // "Two builds cannot be started at once", on the
+                                        // control as well as in `request_build`.
                                         .enabled(!state.building)
                                         .on_press(move |_| request_build(pad, &jobs))
                                         .child(match state.building {
@@ -514,9 +424,6 @@ impl Component for ScratchpadTab {
                                 .into_element(),
                         ),
                     ))
-                    // The crate it generates, which is also what the executable it
-                    // builds is called -- so the row that appears in the Objects list
-                    // after a build is recognisable as this.
                     .child(field_row(
                         "Crate",
                         label()
@@ -524,11 +431,8 @@ impl Component for ScratchpadTab {
                             .width(Size::flex(1.0))
                             .max_lines(1),
                     ))
-                    // Where it is on disk, which is the whole of what there is to know
-                    // about a scratchpad the app did not have to invent a format for: the
-                    // package cargo is handed *is* the storage. In a tooltip as well,
-                    // because a state directory is longer than any pane this can be
-                    // docked in -- which is what a tooltip is for everywhere else here.
+                    // Where it is on disk: the package cargo is handed *is* the storage. In
+                    // a tooltip too, a state directory being longer than any pane.
                     .child(row_tooltip(
                         package.clone(),
                         field_row(
@@ -573,8 +477,6 @@ impl Component for ScratchpadTab {
                         true => info_line("No crates asked for".to_owned()).into_element(),
                         false => rect().width(Size::fill()).children(rows).into_element(),
                     })
-                    // The package is what the reader is looking at, so the sentence saying
-                    // it is not the package on disk goes with the rows that say why.
                     .maybe_child(state.unsaved.map(|failure| {
                         rect()
                             .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
@@ -586,8 +488,6 @@ impl Component for ScratchpadTab {
                                     .max_lines(1),
                             )
                     }))
-                    // cargo's own words, when they are about these rows and are said
-                    // nowhere else. See `PadState::refusal`.
                     .maybe_child(refusal),
             )
             .child(
@@ -615,9 +515,7 @@ impl Component for ScratchpadTab {
             }))
             // Under the diagnostics rather than over them: what the compiler said is about
             // the source directly above it, and what the program said is the newest thing
-            // in the pane. Both are `flex(1)` against the editor's `flex(2)`, so a run in a
-            // pane that is already showing warnings costs the editor a third of its height
-            // and not all of it.
+            // in the pane.
             .maybe_child(output)
     }
 }

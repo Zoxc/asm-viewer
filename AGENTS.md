@@ -1066,7 +1066,7 @@ in `ui/metrics.rs` reads a thread-local `State<Arc<Fonts>>` exactly as `palette(
 *asking for a font is what subscribes a scope to it*; `set_fonts` is the one writer, and unlike
 `set_appearance` it has nothing to invalidate beside it, a cached `SyntaxBlocks` carrying colours
 and no font. The readers are the two row heights, `icon_size`,
-`FontExt::interface_font`/`::assembly_font` and the
+`FontExt::assembly_font`, the root rect's own `.font(&fonts().ui)` and the
 tooltip's `font_size` in the root's `Theme` — that last one is the only place a change has to be
 *carried* rather than picked up, freya's theme sheet being a value, so the root's effect has the
 interface size in its deps beside the appearance. `ROW_HEIGHT` went the same way and became a
@@ -1090,8 +1090,8 @@ assembly font made the objects tree, the symbol list, the tab bars and the chips
 12px font. Which height a site takes is decided by **the font its rows are actually drawn in**, and
 getting one wrong is a misalignment that reads as a rendering glitch: the code height goes to the
 instruction and source rows, the editor's line height, a run's output rows and the `item_size` of
-those views; the list height to everything else, `filter_height`, `toggle_size` and `icon_size`'s
-cap included, since a filter bar sits over a sidebar list and there is no filter over a code pane.
+those views; the list height to everything else, the filter bar's own height, `toggle_size` and
+`icon_size`'s cap included, since a filter bar sits over a sidebar list and there is no filter over a code pane.
 `row_at`/`row_offset` are the **code** panes' conversion alone — `use_kept_position` and
 `reveal_row` are called by `InstructionList` and `SourceList` and by nothing else — so the old
 "one conversion for every pane" argument for a single height went with the `max`. One thing did

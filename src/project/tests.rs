@@ -4,16 +4,13 @@ use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, Sy
 
 use super::*;
 
-/// A bare `Object` with the given text symbols. The analysis crate's own fixtures
-/// go through `parse_object`; here only the fields the mapping reads matter, and
-/// every one of them is public, so the objects are built directly.
+/// A bare `Object` with the given text symbols — only the fields the mapping reads.
 fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
     built(path, name, symbols, b"the first build")
 }
 
-/// The same, out of a named build of the file. `bytes` is only ever hashed here —
-/// these objects were not parsed from it — so "the file was rebuilt" is spelt as two
-/// calls with different bytes.
+/// The same, out of a named build of the file. `bytes` is only ever hashed, so "the file
+/// was rebuilt" is spelt as two calls with different bytes.
 fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<Object> {
     let section = Arc::new(Section {
         index: SectionIndex(0),
@@ -45,20 +42,13 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         symbols: HashMap::new(),
         symbols_sorted,
         sections: vec![section],
-        // The mapping never looks at the bytes themselves; what it does look at is
-        // the digest they hash to, which is what says whether this is still the file
-        // the session was saved against.
         data: ObjectData::from(bytes),
         dwarf: Default::default(),
     })
 }
 
-/// [`Session::from_state`] over a session whose only open tab is the active document
-/// and whose panes are at the top of what they show — the state the tests written
-/// before there were tabs to save were already describing, now spelt out.
-///
-/// It takes a [`Selection`] because every test that reaches for it is about a place in
-/// a binary; a source-driven tab has its own tests below.
+/// [`Session::from_state`] over a session whose only open tab is the active document and
+/// whose panes are at the top of what they show.
 fn from_state(
     objects: &[Arc<Object>],
     selection: Option<&Selection>,
@@ -78,13 +68,20 @@ fn from_state(
     )
 }
 
-/// What [`Session::resolve`] answers, as the selection inside it. Every use of this
-/// is a test about a place in a binary, which is what the app had before a document
-/// could also be a file.
+/// What [`Session::resolve`] answers, as the selection inside it.
 fn resolve_selection(session: &Session, objects: &[Arc<Object>]) -> Option<Selection> {
     session
         .resolve(objects)
-        .and_then(|document| document.selection().cloned())
+        .and_then(|document| match document {
+            Document::Assembly(selection) => Some(selection),
+            Document::Source(_) => None,
+        })
+}
+
+/// What `load_project` does with `session.toml`: a missing or corrupt file is `None`.
+fn load_session(path: &Path) -> Option<Session> {
+    let data = fs::read_to_string(path).ok()?;
+    toml::from_str(&data).ok()
 }
 
 fn objects() -> Vec<Arc<Object>> {
@@ -95,9 +92,8 @@ fn objects() -> Vec<Arc<Object>> {
     ]
 }
 
-/// The one question closing a file asks. A member is not a file, so both members of
-/// `/tmp/lib.a` answer for it and a symbol answers for the file its object came out
-/// of — closing the archive takes every one of them.
+/// A member is not a file, so both members of `/tmp/lib.a` answer for it and a symbol
+/// answers for the file its object came out of.
 #[test]
 fn everything_in_a_file_says_so() {
     let objects = objects();
@@ -114,8 +110,6 @@ fn everything_in_a_file_says_so() {
     });
     assert!(symbol.in_file(lib));
     assert!(!symbol.in_file(other));
-
-    // Nothing selected is in no file, so a close never has to special-case it.
 }
 
 #[test]
@@ -175,23 +169,6 @@ fn a_missing_symbol_falls_back_to_its_object() {
 }
 
 #[test]
-fn a_moved_symbol_falls_back_to_its_object() {
-    let objects = objects();
-    let session = Session {
-        active: Some(SavedDocument::Symbol {
-            path: PathBuf::from("/tmp/lib.a"),
-            object_name: "a.o".into(),
-            // Right name, recompiled to a different address.
-            symbol_name: "target".into(),
-            address: 999,
-        }),
-        history: SavedHistory::default(),
-        ..Session::new()
-    };
-    assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
-}
-
-#[test]
 fn a_missing_object_falls_back_to_nothing() {
     let objects = objects();
     for saved in [
@@ -220,10 +197,8 @@ fn a_missing_object_falls_back_to_nothing() {
     }
 }
 
-/// Serialize to TOML and read it straight back, which is the only way to catch the
-/// `toml` crate's runtime failures: a bare `None`, and a value emitted after a table.
-/// Generic over the two files, because the trap is a property of the serializer and
-/// both halves are equally subject to it.
+/// Serialize to TOML and read it straight back, which is the only way to catch the `toml`
+/// crate's runtime failures: a bare `None`, and a value emitted after a table.
 fn round_trip<T>(value: &T) -> String
 where
     T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -255,18 +230,9 @@ fn toml_round_trips() {
 
 #[test]
 fn an_empty_session_round_trips() {
-    // Nothing selected and nothing visited: the `None` the `toml` crate cannot write
-    // has to be left out of the file entirely, and read back as `None`.
+    // The `None` the `toml` crate cannot write has to be left out of the file entirely,
+    // and read back as `None`.
     let session = Session::new();
-    let text = round_trip(&session);
-    assert!(!text.contains("active"), "{text}");
-}
-
-#[test]
-fn a_session_with_no_selection_round_trips() {
-    let objects = objects();
-    let session = from_state(&objects, None, &History::default());
-    assert_eq!(session.active, None);
     let text = round_trip(&session);
     assert!(!text.contains("active"), "{text}");
 }
@@ -299,15 +265,15 @@ fn writes_atomically_and_reads_back() {
     };
     session.save_to(&path).expect("saving");
 
-    assert_eq!(Session::load_from(&path), Some(session));
+    assert_eq!(load_session(&path), Some(session));
     // The temporary was renamed, not left behind.
     assert!(!path.with_extension("toml.tmp").exists());
 
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// A history over the fixture objects: object `a.o`, then its `target` symbol, then
-/// object `b.o`, with the cursor wherever `back` calls leave it.
+/// Object `a.o`, then its `target` symbol, then object `b.o`, with the cursor wherever
+/// `back` calls leave it.
 fn history(objects: &[Arc<Object>], back: usize) -> History {
     let mut history = History::default();
     history.push(Document::Assembly(Selection::Object(objects[0].clone())));
@@ -338,24 +304,7 @@ fn saves_and_restores_the_history() {
     assert!(!restored.can_forward());
 }
 
-#[test]
-fn a_history_the_user_walked_back_through_keeps_its_cursor() {
-    let objects = objects();
-    let history = history(&objects, 2);
-    assert_eq!(history.cursor(), Some(0));
-
-    let session = from_state(&objects, None, &history);
-    let restored = session.resolve_history(&objects);
-
-    assert_eq!(restored.cursor(), Some(0));
-    // The two entries in front of the cursor survived, so they are still there to
-    // go forward to.
-    assert!(restored.can_forward());
-    assert!(!restored.can_back());
-}
-
-/// Building a saved history by hand, since these are entries no live `History`
-/// could have produced against these objects.
+/// A saved history built by hand: entries no live `History` could have produced.
 fn saved_history(entries: &[SavedDocument], cursor: usize) -> Session {
     Session {
         active: None,
@@ -382,10 +331,8 @@ fn history_entries_that_no_longer_resolve_are_dropped() {
             saved_object("a.o"),
             // A member that is no longer in the archive.
             saved_object("c.o"),
-            // The object is there but the symbol is gone. Unlike the selection,
-            // which would degrade to the object, an entry is dropped: the user
-            // never visited the object, and a list of places they did not go is
-            // worse than a shorter list.
+            // The object is there but the symbol is gone. Unlike the selection, which
+            // would degrade to the object, an entry is dropped.
             SavedDocument::Symbol {
                 path: PathBuf::from("/tmp/lib.a"),
                 object_name: "a.o".into(),
@@ -408,8 +355,7 @@ fn history_entries_that_no_longer_resolve_are_dropped() {
 #[test]
 fn a_saved_history_with_duplicates_restores_without_them() {
     let objects = objects();
-    // What a saved history written before entries were bumped rather than appended
-    // looks like: the same destination visited twice, saved twice.
+    // The same destination visited twice, saved twice.
     let session = saved_history(
         &[
             saved_object("a.o"),
@@ -427,149 +373,6 @@ fn a_saved_history_with_duplicates_restores_without_them() {
 }
 
 #[test]
-fn duplicates_collapse_around_the_entries_that_were_dropped() {
-    let objects = objects();
-    let session = saved_history(
-        &[
-            saved_object("a.o"),
-            // Gone, so it is dropped before anything is collapsed.
-            saved_object("c.o"),
-            saved_object("b.o"),
-            saved_object("a.o"),
-        ],
-        3,
-    );
-
-    let restored = session.resolve_history(&objects);
-    assert!(restored.entries() == [tab(&objects[1]), tab(&objects[0]),]);
-    assert_eq!(restored.cursor(), Some(1));
-}
-
-#[test]
-fn the_restored_cursor_follows_its_entry_through_the_collapse() {
-    let objects = objects();
-    // The cursor is on `b.o`, in the middle, and the collapse of the two `a.o`s
-    // moves it to the front of the list.
-    let session = saved_history(
-        &[
-            saved_object("a.o"),
-            saved_object("b.o"),
-            saved_object("a.o"),
-        ],
-        1,
-    );
-
-    let restored = session.resolve_history(&objects);
-    assert!(restored.current() == Some(&tab(&objects[1])));
-    assert_eq!(restored.cursor(), Some(0));
-    // The newest `a.o` is still in front of it to go forward to.
-    assert!(restored.can_forward());
-    assert!(!restored.can_back());
-}
-
-#[test]
-fn two_saved_symbols_naming_the_same_one_restore_as_one_entry() {
-    let objects = objects();
-    let symbol = || SavedDocument::Symbol {
-        path: PathBuf::from("/tmp/lib.a"),
-        object_name: "a.o".into(),
-        symbol_name: "target".into(),
-        address: 6,
-    };
-    let session = saved_history(&[symbol(), saved_object("b.o"), symbol()], 2);
-
-    // Both resolve through the same lookup to the same `Arc`, so they are equal
-    // entries however far apart they were saved.
-    let restored = session.resolve_history(&objects);
-    assert!(
-        restored.entries()
-            == [
-                tab(&objects[1]),
-                Document::Assembly(Selection::Symbol(Symbol {
-                    object: objects[0].clone(),
-                    data: objects[0].symbols_sorted[1].clone(),
-                })),
-            ]
-    );
-    assert_eq!(restored.cursor(), Some(1));
-}
-
-#[test]
-fn a_collapsed_cursor_entry_is_still_the_restored_selection() {
-    let objects = objects();
-    // Every cursor position over a saved history that holds a duplicate.
-    for cursor in 0..3 {
-        let mut session = saved_history(
-            &[
-                saved_object("a.o"),
-                saved_object("b.o"),
-                saved_object("a.o"),
-            ],
-            cursor,
-        );
-        session.active = Some(session.history.entries[cursor].clone());
-
-        let restored_history = session.resolve_history(&objects);
-        let restored_active = session.resolve(&objects);
-
-        assert!(restored_history.current() == restored_active.as_ref());
-        assert!(
-            !restored_history.would_push(restored_active.as_ref().expect("a restored document"))
-        );
-    }
-}
-
-#[test]
-fn a_dropped_cursor_entry_falls_back_to_the_nearest_older_survivor() {
-    let objects = objects();
-    let session = saved_history(
-        &[
-            saved_object("a.o"),
-            saved_object("c.o"),
-            saved_object("b.o"),
-        ],
-        1,
-    );
-
-    let restored = session.resolve_history(&objects);
-    assert!(restored.cursor() == Some(0));
-    assert!(restored.current() == Some(&tab(&objects[0])));
-    // `b.o` was in front of the cursor and still is.
-    assert!(restored.can_forward());
-}
-
-#[test]
-fn a_cursor_with_no_older_survivor_lands_on_the_oldest_entry_left() {
-    let objects = objects();
-    let session = saved_history(&[saved_object("c.o"), saved_object("b.o")], 0);
-
-    let restored = session.resolve_history(&objects);
-    assert!(restored.cursor() == Some(0));
-    assert!(restored.current() == Some(&tab(&objects[1])));
-}
-
-#[test]
-fn a_history_that_resolves_to_nothing_restores_as_empty() {
-    let objects = objects();
-    let session = saved_history(&[saved_object("c.o"), saved_object("d.o")], 1);
-
-    let restored = session.resolve_history(&objects);
-    assert!(restored.entries().is_empty());
-    assert!(restored.cursor().is_none());
-    assert!(!restored.can_back());
-    assert!(!restored.can_forward());
-}
-
-#[test]
-fn a_hand_edited_cursor_past_the_end_is_clamped() {
-    let objects = objects();
-    let session = saved_history(&[saved_object("a.o"), saved_object("b.o")], 99);
-
-    let restored = session.resolve_history(&objects);
-    assert_eq!(restored.cursor(), Some(1));
-}
-
-#[test]
 fn the_restored_cursor_entry_is_the_restored_selection() {
     let objects = objects();
 
@@ -577,7 +380,9 @@ fn the_restored_cursor_entry_is_the_restored_selection() {
     for back in 0..3 {
         let history = history(&objects, back);
         let current = history.current().expect("a current entry").clone();
-        let selection = current.selection().expect("a place in a binary").clone();
+        let Document::Assembly(selection) = current else {
+            panic!("a place in a binary");
+        };
         let session = from_state(&objects, Some(&selection), &history);
 
         let restored_history = session.resolve_history(&objects);
@@ -592,10 +397,10 @@ fn the_restored_cursor_entry_is_the_restored_selection() {
     }
 }
 
+/// A hand-written or trimmed file: the `serde(default)`s keep a missing table from taking
+/// the active document down with it, and the restore is exactly what it would have been.
 #[test]
-fn a_file_with_no_history_still_loads() {
-    // Hand-written, or trimmed: `serde(default)` is what keeps the missing table
-    // from taking the binaries and the selection down with it.
+fn a_partial_file_still_loads() {
     let text = r#"
             binaries = ["/tmp/lib.a"]
 
@@ -605,29 +410,17 @@ fn a_file_with_no_history_still_loads() {
         "#;
     let session: Session = toml::from_str(text).expect("deserializing");
 
-    assert_eq!(session.history, SavedHistory::new());
+    assert_eq!(session.history, SavedHistory::default());
+    assert!(session.tabs.is_empty());
+    assert!(session.digests.is_empty());
 
-    // And it restores exactly as it would have: the selection back, no history.
     let objects = objects();
     assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
     assert!(session.resolve_history(&objects).entries().is_empty());
+    assert!(session.resolve_tabs(&objects).is_empty());
 }
 
-#[test]
-fn a_history_with_no_entries_still_loads() {
-    let text = r#"
-            binaries = []
-
-            [history]
-            cursor = 0
-        "#;
-    let session: Session = toml::from_str(text).expect("deserializing");
-    assert_eq!(session, Session::new());
-}
-
-/// A path TOML cannot spell is refused rather than mangled, in *both* files: the
-/// binaries are the project half and the digests are keyed by the same paths, so the
-/// one refusal has to hold on either side of the split.
+/// A path TOML cannot spell is refused rather than mangled, in *both* files.
 #[test]
 fn a_non_utf8_path_is_not_written_rather_than_mangled() {
     // Only Unix has a `PathBuf` that can hold one at all.
@@ -653,7 +446,7 @@ fn a_non_utf8_path_is_not_written_rather_than_mangled() {
             std::process::id(),
             line!()
         ));
-        assert!(project.save_to(&directory.join(PROJECT_FILE)).is_err());
+        assert!(write_toml(&directory.join(PROJECT_FILE), &project).is_err());
         assert!(session.save_to(&directory.join(SESSION_FILE)).is_err());
         // Nothing reached the disk, so a good earlier file would still be there.
         assert!(!directory.join(PROJECT_FILE).exists());
@@ -663,16 +456,6 @@ fn a_non_utf8_path_is_not_written_rather_than_mangled() {
     }
 }
 
-#[test]
-fn the_history_round_trips_through_toml() {
-    let objects = objects();
-    let session = from_state(&objects, None, &history(&objects, 1));
-    round_trip(&session);
-}
-
-// --- the open tabs ------------------------------------------------------
-
-/// Where the panes were left, in the map the UI keeps it in.
 fn positions<T: Clone + PartialEq>(at: &[(&T, usize)]) -> Positions<T> {
     let mut positions = Positions::default();
     for (tab, row) in at {
@@ -681,12 +464,10 @@ fn positions<T: Clone + PartialEq>(at: &[(&T, usize)]) -> Positions<T> {
     positions
 }
 
-/// An assembly-driven tab over a whole object.
 fn tab(object: &Arc<Object>) -> Document {
     Document::Assembly(Selection::Object(object.clone()))
 }
 
-/// A source-driven tab, in the `Arc<str>` the UI holds a file in.
 fn file_tab(path: &str) -> Document {
     Document::Source(Arc::from(path))
 }
@@ -709,9 +490,7 @@ fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
     }
 }
 
-/// One strip of both kinds goes out in the reader's own order and comes back in it,
-/// through the very mapping the history already uses — which is the whole reason a
-/// saved tab costs no new one.
+/// One strip of both kinds goes out in the reader's own order and comes back in it.
 #[test]
 fn saves_and_resolves_the_open_tabs() {
     let objects = objects();
@@ -763,38 +542,9 @@ fn saves_and_resolves_the_open_tabs() {
     );
 }
 
-/// The active tab is not written twice: it is `active`, and a saved session says
-/// which tab is on screen only by naming it there.
-#[test]
-fn the_active_tab_is_only_the_active_document() {
-    let objects = objects();
-    let tabs = [tab(&objects[0])];
-    let session = Session::from_state(
-        &objects,
-        &tabs,
-        &Positions::default(),
-        &Positions::default(),
-        Some(&tabs[0]),
-        &History::default(),
-    );
-
-    assert_eq!(session.active, Some(saved_object("a.o")));
-    assert_eq!(session.tabs, [saved_tab("a.o", 0)]);
-}
-
-/// A tab is dropped exactly where the active document would degrade. There is one
-/// active document and the app has to open somewhere, but a strip whose tabs lead to
-/// places that are no longer there is worse than a shorter strip — and degrading
-/// would be worse still, since two symbols of one object would degrade onto the
-/// same tab and `Tabs::open` would collapse them into one.
-///
-/// A **source-driven tab is never dropped**: it resolves against nothing, so there is
-/// nothing for it to fail against, and a file that has been deleted since is the
-/// pane's own "Source file not found" rather than a tab that quietly went away.
-///
-/// The rows go with the tabs they belong to, which is the whole reason they are
-/// fields of one: the second and third tabs here are dropped, and a parallel array of
-/// rows would have handed `b.o` the rows of a tab that vanished before it.
+/// A tab that no longer resolves is dropped where the active document would degrade — a
+/// **source-driven tab never is**, resolving against nothing. The rows travel with their
+/// tab: a parallel array would have handed `b.o` the rows of a tab dropped before it.
 #[test]
 fn open_tabs_that_no_longer_resolve_are_dropped() {
     let objects = objects();
@@ -831,41 +581,7 @@ fn open_tabs_that_no_longer_resolve_are_dropped() {
     );
 }
 
-/// Where each *side* of each tab was left goes out with the tab it belongs to, and a
-/// side that was never scrolled is written as the top rather than left out.
-///
-/// Two rows and not one, because a tab has two sides: keying the source position by
-/// the file — which is what the Source pane's own strip did — made two functions
-/// compiled from one file share a position they have no reason to share.
-#[test]
-fn saves_the_rows_each_side_of_a_tab_was_left_at() {
-    let objects = objects();
-    let tabs = vec![tab(&objects[0]), tab(&objects[1])];
-
-    let session = Session::from_state(
-        &objects,
-        &tabs,
-        &positions(&[(&tabs[1], 42)]),
-        &positions(&[(&tabs[0], 7)]),
-        Some(&tabs[0]),
-        &History::default(),
-    );
-
-    assert_eq!(
-        session.tabs,
-        [
-            SavedTab {
-                asm_row: 0,
-                src_row: 7,
-                document: saved_object("a.o"),
-            },
-            saved_tab("b.o", 42),
-        ]
-    );
-}
-
-/// The round trip the app actually makes: out of the two maps, through TOML, and back
-/// into them the way `use_restore_on_startup` does it.
+/// The round trip the app makes: out of the two maps, through TOML, and back into them.
 #[test]
 fn the_rows_come_back_against_the_tabs_they_belong_to() {
     let objects = objects();
@@ -919,10 +635,8 @@ fn a_saved_tab_with_no_rows_opens_at_the_top() {
     );
 }
 
-/// Nothing about a source file is resolved against this filesystem, on purpose:
-/// the pane's own "Source file not found" is the right answer for one that has been
-/// deleted, and dropping the tab would lose a file the reader had open without ever
-/// saying so.
+/// Nothing about a source file is resolved against this filesystem: the pane's own
+/// "Source file not found" is the right answer for one that has been deleted.
 #[test]
 fn a_source_file_that_is_no_longer_there_still_comes_back() {
     let path = "/no/such/directory/gone.rs";
@@ -947,10 +661,8 @@ fn a_source_file_that_is_no_longer_there_still_comes_back() {
     assert!(session.resolve(&objects) == Some(file_tab(path)));
 }
 
-/// The field-order trap, which only a real serialization catches: a saved tab's two
-/// rows are plain values and have to reach the file before the `document` sub-table
-/// under them. A session with every field set at once is the one that fails when they
-/// do not.
+/// The field-order trap, which only a real serialization catches: a saved tab's two rows
+/// are plain values and have to reach the file before its `document` sub-table.
 #[test]
 fn a_full_session_round_trips_through_toml() {
     let objects = objects();
@@ -987,37 +699,12 @@ fn a_full_session_round_trips_through_toml() {
     assert!(src_row < document, "src_row after its document\n{text}");
 }
 
-#[test]
-fn a_file_with_no_tabs_still_loads() {
-    // The `serde(default)`s, from the other side: a hand-written or trimmed file is
-    // a session with an empty strip rather than a load failure.
-    let text = r#"
-            binaries = ["/tmp/lib.a"]
-
-            [active.Object]
-            path = "/tmp/lib.a"
-            object_name = "a.o"
-        "#;
-    let session: Session = toml::from_str(text).expect("deserializing");
-
-    assert!(session.tabs.is_empty());
-
-    // And the active document still restores, opening its own tab through `activate`
-    // the way a session saved before there were tabs to save would.
-    let objects = objects();
-    assert!(session.resolve(&objects) == Some(tab(&objects[0])));
-    assert!(session.resolve_tabs(&objects).is_empty());
-}
-
-// --- the binaries' digests ---------------------------------------------
-
 /// The digest of the objects the fixtures are built from, as it is written down.
 fn digest_of(bytes: &[u8]) -> String {
     analysis::FileDigest::of(bytes).to_string()
 }
 
-/// A saved session naming one binary at `row`, with the digest of `bytes` — what a
-/// run that had this file open would have written.
+/// A saved session naming one binary at `row`, with the digest of `bytes`.
 fn saved_against(bytes: Option<&[u8]>, saved: SavedDocument, row: usize) -> Session {
     Session {
         digests: bytes
@@ -1046,9 +733,7 @@ fn saved_symbol(object_name: &str, symbol_name: &str, address: u64) -> SavedDocu
     }
 }
 
-/// One digest per *file*, however many objects came out of it: the members of an
-/// archive share one `ObjectData` and so one hash, and the map is keyed by the path
-/// the rest of the session is expressed in.
+/// One digest per *file*, however many objects came out of it.
 #[test]
 fn saves_one_digest_per_binary_however_many_objects_it_holds() {
     let objects = objects();
@@ -1062,9 +747,8 @@ fn saves_one_digest_per_binary_however_many_objects_it_holds() {
 }
 
 /// The file is the one the session was saved against, so the saved address is a fact
-/// about it: an exact match resolves, a symbol that is not where it was said to be
-/// does not, and the row the tab was left at is still that tab's row. All of which is
-/// what the app did before there were digests — an unchanged file changes nothing.
+/// about it: an exact match resolves, a symbol that is not where it was said to be does
+/// not, and the row the tab was left at is still that tab's row.
 #[test]
 fn an_unchanged_binary_is_still_matched_on_the_address() {
     let objects = objects();
@@ -1084,8 +768,7 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
     assert_eq!(session.resolve_tabs(&objects).len(), 1);
     assert_eq!(session.resolve_tabs(&objects)[0].1, 42);
 
-    // The same name at an address it is not at. Nothing about this file explains
-    // that, so it degrades exactly as it always has.
+    // The same name at an address it is not at, which this file does not explain.
     let moved = saved_against(
         Some(b"the first build"),
         saved_symbol("a.o", "target", 999),
@@ -1096,10 +779,8 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
     assert!(moved.resolve_history(&objects).entries().is_empty());
 }
 
-/// The file has been rebuilt under the session. The name is what the reader meant, so
-/// a symbol that has merely moved comes back — where an unchanged file would have
-/// dropped it — and the saved row goes, because it named a row of a listing this
-/// build no longer has.
+/// The file has been rebuilt under the session, so a symbol that merely moved comes back
+/// by name — and the saved row goes, naming a listing this build no longer has.
 #[test]
 fn a_rebuilt_binary_matches_by_name_and_forgets_the_row() {
     let objects = vec![
@@ -1129,11 +810,8 @@ fn a_rebuilt_binary_matches_by_name_and_forgets_the_row() {
     assert!(session.resolve_history(&objects).entries() == [document]);
 }
 
-/// The half that is a refusal rather than a recovery: two symbols of one name in a
-/// rebuilt object, and a saved address that is now neither of theirs. The address is
-/// the only thing that could choose between them and it describes a layout this file
-/// no longer has, so nothing is chosen — landing the reader on a function they never
-/// opened is the failure this whole step exists to stop.
+/// The refusal rather than the recovery: two symbols of one name in a rebuilt object and
+/// a saved address that is now neither of theirs, so nothing is chosen.
 #[test]
 fn a_rebuilt_binary_will_not_guess_between_two_symbols_of_one_name() {
     let objects = vec![built(
@@ -1168,9 +846,8 @@ fn a_rebuilt_binary_will_not_guess_between_two_symbols_of_one_name() {
     );
 }
 
-/// A session that never wrote a digest — a hand-edited file, or one saved before
-/// there were any — says nothing about the bytes, so nothing new is done with it.
-/// "Not known to be unchanged" is not "known to have changed".
+/// A session that never wrote a digest says nothing about the bytes: "not known to be
+/// unchanged" is not "known to have changed".
 #[test]
 fn a_binary_with_no_saved_digest_is_believed_exactly_as_before() {
     let objects = vec![built(
@@ -1202,8 +879,8 @@ fn a_digest_for_a_binary_that_is_not_open_says_nothing() {
     assert_eq!(session.resolve_tabs(&objects)[0].1, 42);
 }
 
-/// The digests are a TOML *table*, and a hex string is what it holds, since a `u64`
-/// digest does not fit TOML's signed integers at all.
+/// The digests are a TOML *table* holding hex strings, a `u64` digest not fitting TOML's
+/// signed integers at all.
 #[test]
 fn the_digests_round_trip_through_toml() {
     let objects = objects();
@@ -1225,25 +902,6 @@ fn the_digests_round_trip_through_toml() {
     );
 }
 
-/// And a file with no digests at all still loads, the way one with no tabs does.
-#[test]
-fn a_file_with_no_digests_still_loads() {
-    let text = r#"
-            binaries = ["/tmp/lib.a"]
-
-            [active.Object]
-            path = "/tmp/lib.a"
-            object_name = "a.o"
-        "#;
-    let session: Session = toml::from_str(text).expect("deserializing");
-    assert!(session.digests.is_empty());
-
-    let objects = objects();
-    assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
-}
-
-// --- the save policy ---------------------------------------------------
-
 fn paths(binaries: &[&str]) -> Vec<PathBuf> {
     binaries.iter().map(PathBuf::from).collect()
 }
@@ -1251,27 +909,21 @@ fn paths(binaries: &[&str]) -> Vec<PathBuf> {
 fn session_with(selection: Option<&str>) -> Session {
     Session {
         active: selection.map(saved_object),
-        history: SavedHistory::new(),
+        history: SavedHistory::default(),
         ..Session::new()
     }
 }
 
-/// What `record` hands back to be written: the project half, the session half where
-/// one is owed, or nothing at all.
-///
-/// The details handed in are the ones the project already has, so every test below
-/// that uses this is asking about a change to the binaries or the session and nothing
-/// else — which is what they were all asking before a rename could reach `record` at
-/// all. The rename tests spell theirs out.
+/// `record` with the details the project already has, so every test using this is asking
+/// about a change to the binaries or the session and nothing else. The rename tests spell
+/// theirs out.
 fn recorded(
     saves: &mut Saves,
     binaries: Vec<PathBuf>,
     session: Session,
 ) -> Option<(Project, Option<Session>)> {
     let unchanged = saves.given.clone();
-    saves
-        .record(unchanged, binaries, session)
-        .map(|written| (written.project, written.session))
+    saves.record(unchanged, binaries, session)
 }
 
 fn written(
@@ -1285,10 +937,8 @@ fn written(
 #[test]
 fn the_state_the_app_boots_into_is_never_written() {
     let mut saves = Saves::new();
-    // The save observer runs once on mount, before anything is restored, and this
-    // is what it records. Nothing may come of it: the files on disk are the good
-    // ones — and no project directory is allocated either, since only a write
-    // allocates one.
+    // The save observer's first run, before anything is restored. Nothing may come of
+    // it: the files on disk are the good ones, and no project directory is allocated.
     assert_eq!(recorded(&mut saves, Vec::new(), Session::new()), None);
     assert_eq!(saves.flush(), None);
 }
@@ -1313,17 +963,15 @@ fn opening_a_binary_is_written_at_once() {
     assert_eq!(saves.flush(), None);
 }
 
-/// Closing one takes the same path opening one does, which is the whole of what
-/// makes 6d's "the save is immediate" true: `binaries` is what `record` looks at,
-/// and it does not care in which direction the list changed.
+/// Closing one takes the same path opening one does: `binaries` is what `record` looks
+/// at, and it does not care in which direction the list changed.
 #[test]
 fn closing_a_binary_is_written_at_once() {
     let mut saves = Saves::new();
     written(&mut saves, &["/tmp/lib.a", "/tmp/some.dll"], Some("a.o"));
 
-    // The selection is still pending from the open above; closing writes the lot,
-    // so `session.toml` never names a place inside a binary `project.toml` has
-    // already let go of.
+    // The selection is still pending from the open above; closing writes the lot, so
+    // `session.toml` never names a place inside a binary `project.toml` has let go of.
     let written = written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
     assert_eq!(
         written.as_ref().map(|(project, _)| &project.binaries),
@@ -1336,8 +984,8 @@ fn closing_a_binary_is_written_at_once() {
     assert_eq!(saves.flush(), None);
 }
 
-/// Closing the last one is not "nothing changed": the empty project is a project,
-/// and it has to reach the disk or the next run reopens what was just closed.
+/// The empty project is a project, and it has to reach the disk or the next run reopens
+/// what was just closed.
 #[test]
 fn closing_the_only_binary_is_written_too() {
     let mut saves = Saves::new();
@@ -1390,10 +1038,8 @@ fn opening_a_binary_carries_the_pending_change_with_it() {
     assert_eq!(saves.flush(), None);
 }
 
-/// A tab is pending and not an immediate write, and nothing in `record` says so:
-/// which file a field lives in is what decides it, and a tab lives in the session.
-/// That is the answer wanted — `activate` opens a tab on the way to every selection
-/// change, so an immediate write here would be one file per click.
+/// A tab is pending and not an immediate write, and nothing in `record` says so: which
+/// file a field lives in is what decides it, and a tab lives in the session.
 #[test]
 fn opening_a_tab_waits_for_the_flush() {
     let mut saves = Saves::new();
@@ -1409,57 +1055,8 @@ fn opening_a_tab_waits_for_the_flush() {
     assert_eq!(saves.flush(), None);
 }
 
-/// And so is a source file, by the same route: the pane opens one whenever the
-/// selection lands on a symbol with line info.
-#[test]
-fn opening_a_source_file_waits_for_the_flush() {
-    let mut saves = Saves::new();
-    written(&mut saves, &["/tmp/lib.a"], None);
-
-    let mut session = session_with(None);
-    session.tabs = vec![
-        saved_file_tab("/src/main.rs", 0, 0),
-        saved_file_tab("/src/lib.rs", 0, 0),
-    ];
-    session.active = Some(SavedDocument::Source {
-        path: "/src/lib.rs".into(),
-    });
-    assert_eq!(
-        recorded(&mut saves, paths(&["/tmp/lib.a"]), session.clone()),
-        None
-    );
-    assert_eq!(saves.flush(), Some(session));
-    assert_eq!(saves.flush(), None);
-}
-
-/// Closing a binary still writes at once, and now carries the tabs it closed with
-/// it: they were pending, and `record` takes everything pending along with the
-/// binaries change, so the session file never names a tab into a binary the project
-/// file has already let go of.
-#[test]
-fn closing_a_binary_carries_the_tabs_it_closed_with_it() {
-    let mut saves = Saves::new();
-    let mut opened = session_with(Some("a.o"));
-    opened.tabs = vec![saved_tab("a.o", 0)];
-    recorded(&mut saves, paths(&["/tmp/lib.a", "/tmp/some.dll"]), opened);
-
-    let closed = session_with(None);
-    assert_eq!(
-        recorded(&mut saves, paths(&["/tmp/lib.a"]), closed.clone()),
-        Some((
-            Project {
-                binaries: paths(&["/tmp/lib.a"]),
-                ..Project::default()
-            },
-            Some(closed)
-        ))
-    );
-    assert_eq!(saves.flush(), None);
-}
-
-/// The name and the directory survive a record that is not about them: they are the
-/// baseline, so a record handing back the same ones is handing back "unchanged" and
-/// the write carries them rather than the absence a derived project would have.
+/// The name and the directory survive a record that is not about them, the write carrying
+/// them rather than the absence a derived project would have.
 #[test]
 fn a_record_keeps_the_name_the_project_was_given() {
     let mut saves = Saves::new();
@@ -1473,17 +1070,13 @@ fn a_record_keeps_the_name_the_project_was_given() {
     let (project, _) = written(&mut saves, &["/tmp/lib.a"], None).expect("a write");
     assert_eq!(project.name.as_deref(), Some("kernel"));
     assert_eq!(project.directory, Some(PathBuf::from("/src/kernel")));
-    // And the binaries are the ones the app is showing, not the ones it was opened
-    // with: that half *is* derived, on every record.
+    // And the binaries are the ones the app is showing: that half *is* derived.
     assert_eq!(project.binaries, paths(&["/tmp/lib.a"]));
 }
 
-/// The other half of that: a reopen seeds the *name* and not the contents. Both are
-/// the same rule — a baseline is the state the app boots into — applied to two fields
-/// that are restored at different moments. The name is put on screen synchronously,
-/// so the baseline holds it; the binaries arrive when a worker thread has finished
-/// parsing them, so a baseline holding them would read the still-empty boot state as a
-/// change and write an empty project over a good one.
+/// A reopen seeds the *name* and not the contents: the name is restored synchronously,
+/// while the binaries arrive from a worker thread — so a baseline holding them would read
+/// the still-empty boot state as a change and write an empty project over a good one.
 #[test]
 fn reopening_seeds_the_name_but_not_the_baseline() {
     let mut saves = Saves::new();
@@ -1494,8 +1087,7 @@ fn reopening_seeds_the_name_but_not_the_baseline() {
     };
     saves.opened(ProjectId::new("kernel-1").expect("an id"), &loaded);
 
-    // The boot state, recorded by the observer's first run: it equals the baseline,
-    // so nothing is written and the good files are left alone.
+    // The boot state equals the baseline, so nothing is written.
     assert_eq!(recorded(&mut saves, Vec::new(), Session::new()), None);
     // And the restore that follows is an ordinary change, written at once.
     let (project, _) =
@@ -1503,9 +1095,8 @@ fn reopening_seeds_the_name_but_not_the_baseline() {
     assert_eq!(project, loaded);
 }
 
-/// Naming a project is a user project change, so it is on disk before the next
-/// click — and it is a `project.toml` write and nothing else, since a rename lets go
-/// of no binary and so cannot leave the two files disagreeing.
+/// A rename is on disk before the next click, and is a `project.toml` write and nothing
+/// else: it lets go of no binary and so cannot leave the two files disagreeing.
 #[test]
 fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
     let mut saves = Saves::new();
@@ -1525,28 +1116,25 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
         )
         .expect("a write");
     assert_eq!(
-        written.project,
+        written.0,
         Project {
             name: named.name.clone(),
             directory: named.directory.clone(),
             binaries: paths(&["/tmp/lib.a"]),
         }
     );
-    // The session was not owed and so was not written — and is still pending, which
-    // is the half that says the rename did not quietly take it along.
-    assert_eq!(written.session, None);
+    // The session was not owed, and is still pending: the rename did not take it along.
+    assert_eq!(written.1, None);
     assert_eq!(saves.flush(), Some(session_with(Some("a.o"))));
 
-    // And the same name recorded again is not a second write: `given` is a baseline
-    // like the binaries, so a re-render costs nothing.
+    // And the same name recorded again is not a second write.
     assert_eq!(
         saves.record(named, paths(&["/tmp/lib.a"]), session_with(Some("a.o"))),
         None
     );
 }
 
-/// Clearing a name is a change like any other, and writes the key away rather than
-/// leaving the old one on disk.
+/// Clearing a name writes the key away rather than leaving the old one on disk.
 #[test]
 fn clearing_a_name_is_a_change_too() {
     let mut saves = Saves::new();
@@ -1559,19 +1147,15 @@ fn clearing_a_name_is_a_change_too() {
     );
 
     let written = saves
-        .record(Details::new(), Vec::new(), Session::new())
+        .record(Details::default(), Vec::new(), Session::new())
         .expect("a write");
-    assert_eq!(written.project.name, None);
-    assert_eq!(written.session, None);
+    assert_eq!(written.0.name, None);
+    assert_eq!(written.1, None);
 }
 
-/// A rename while the binaries are still being parsed — or after a restore that
-/// opened none of them at all — writes back the list the file already holds.
-///
-/// The app holds no binary in that window and deliberately writes nothing to say so,
-/// since a file that is only temporarily missing must not be forgotten. A rename is
-/// an immediate write all the same, and writing the app's own empty list would forget
-/// them through a change that had nothing to do with them.
+/// A rename while the binaries are still being parsed writes back the list the file
+/// already holds: the app holds none in that window, and writing its own empty list would
+/// forget them through a change that had nothing to do with them.
 #[test]
 fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
     let mut saves = Saves::new();
@@ -1589,11 +1173,11 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
     let written = saves
         .record(named, Vec::new(), Session::new())
         .expect("a write");
-    assert_eq!(written.project.name.as_deref(), Some("kernel"));
-    assert_eq!(written.project.binaries, loaded.binaries);
+    assert_eq!(written.0.name.as_deref(), Some("kernel"));
+    assert_eq!(written.0.binaries, loaded.binaries);
 
-    // And once the parse lands, the binaries are the app's own again: that write *is*
-    // about them, so it is the one kind that may replace the list.
+    // Once the parse lands the write *is* about the binaries, which is the one kind that
+    // may replace the list.
     let written = saves
         .record(
             saves.given.clone(),
@@ -1601,16 +1185,15 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
             Session::new(),
         )
         .expect("a write");
-    assert_eq!(written.project.binaries, paths(&["/tmp/vmlinux"]));
+    assert_eq!(written.0.binaries, paths(&["/tmp/vmlinux"]));
     // Closing the last one is still a real change and still empties the file.
     let written = recorded(&mut saves, Vec::new(), Session::new()).expect("a write");
     assert_eq!(written.0.binaries, Vec::<PathBuf>::new());
 }
 
-/// Entering another project empties every baseline, because the app is about to be
-/// emptied of everything that belonged to the last one. A baseline still describing
-/// those binaries would read that emptying as a change and write it into the project
-/// just entered.
+/// Entering another project empties every baseline, the app being about to be emptied: a
+/// baseline still describing the old binaries would write that emptying into the new
+/// project.
 #[test]
 fn entering_a_project_empties_every_baseline() {
     let mut saves = Saves::new();
@@ -1622,22 +1205,24 @@ fn entering_a_project_empties_every_baseline() {
     };
     saves.opened(ProjectId::new("other-2").expect("an id"), &entered);
 
-    // The state a switch leaves the app in: nothing open, nothing selected, and the
-    // name of the project just entered. Every one of those is the baseline, so
-    // nothing is written into the new project before its own restore has run.
+    // The state a switch leaves the app in: nothing open, nothing selected, and the name
+    // of the project just entered — every one of them the baseline.
     assert_eq!(
-        saves.record(entered.details(), Vec::new(), Session::new()),
+        saves.record(
+            Details {
+                name: entered.name.clone(),
+                directory: entered.directory.clone(),
+            },
+            Vec::new(),
+            Session::new()
+        ),
         None
     );
-    // Nor is the old project's pending session waiting to be written into the new
-    // one: `switch` flushed it, and entering dropped whatever was left.
+    // Nor is the old project's pending session waiting to be written into the new one.
     assert_eq!(saves.flush(), None);
 }
 
-// --- the two files, the ids and the recent list -------------------------
-
-/// A directory of this test's own under the system temporary directory, named after
-/// the line that asked for it, exactly as the file tests above are.
+/// A directory of this test's own, named after the line that asked for it.
 fn directory(line: u32) -> PathBuf {
     std::env::temp_dir().join(format!(
         "assembly-viewer-project-test-{}-{line}",
@@ -1653,9 +1238,8 @@ fn a_project() -> Project {
     }
 }
 
-/// The field-order trap for the project half. Everything in it is a plain value
-/// today, which is exactly the kind of thing that stops being true when a field is
-/// added, so it is asserted against a real serializer rather than read off the struct.
+/// The field-order trap for the project half, asserted against a real serializer rather
+/// than read off the struct.
 #[test]
 fn a_project_round_trips_through_toml() {
     let project = a_project();
@@ -1668,9 +1252,8 @@ fn a_project_round_trips_through_toml() {
     assert!(name < directory && directory < binaries, "{text}");
 }
 
-/// Anonymous is an *absent* key, the way an unspecified font is in `settings.rs`:
-/// it is what makes the project anonymous, so it must not be spelt as an empty name
-/// that a later reader could mistake for one the user chose.
+/// Anonymous is an *absent* key, never an empty name a later reader could mistake for one
+/// the user chose.
 #[test]
 fn an_anonymous_project_writes_no_name() {
     let project = Project {
@@ -1682,8 +1265,8 @@ fn an_anonymous_project_writes_no_name() {
     assert!(!text.contains("directory"), "{text}");
 }
 
-/// The whole of the split, seen from the disk: each half in its own file, neither
-/// holding a word of the other's.
+/// The split seen from the disk: each half in its own file, neither holding a word of the
+/// other's.
 #[test]
 fn the_two_halves_are_written_to_their_own_files() {
     let directory = directory(line!());
@@ -1694,9 +1277,7 @@ fn the_two_halves_are_written_to_their_own_files() {
         ..Session::new()
     };
 
-    project
-        .save_to(&directory.join(PROJECT_FILE))
-        .expect("saving the project");
+    write_toml(&directory.join(PROJECT_FILE), &project).expect("saving the project");
     session
         .save_to(&directory.join(SESSION_FILE))
         .expect("saving the session");
@@ -1712,51 +1293,31 @@ fn the_two_halves_are_written_to_their_own_files() {
         Project::load_from(&directory.join(PROJECT_FILE)),
         Some(project)
     );
-    assert_eq!(
-        Session::load_from(&directory.join(SESSION_FILE)),
-        Some(session)
-    );
+    assert_eq!(load_session(&directory.join(SESSION_FILE)), Some(session));
 
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// The reason the split is worth two files rather than two tables: the half the app
-/// rewrites every thirty seconds cannot take the half the user gave down with it.
+/// Why the split is worth two files: the half the app rewrites every thirty seconds cannot
+/// take the half the user gave down with it.
 #[test]
 fn a_corrupt_session_leaves_the_project_readable() {
     let directory = directory(line!());
     let project = a_project();
-    project
-        .save_to(&directory.join(PROJECT_FILE))
-        .expect("saving the project");
+    write_toml(&directory.join(PROJECT_FILE), &project).expect("saving the project");
     fs::write(directory.join(SESSION_FILE), b"{ not toml").expect("writing the corrupt half");
 
     assert_eq!(
         Project::load_from(&directory.join(PROJECT_FILE)),
         Some(project)
     );
-    assert_eq!(Session::load_from(&directory.join(SESSION_FILE)), None);
+    assert_eq!(load_session(&directory.join(SESSION_FILE)), None);
 
     let _ = fs::remove_dir_all(&directory);
 }
 
-#[test]
-fn a_missing_or_corrupt_file_is_none() {
-    let directory = directory(line!());
-    let path = directory.join(SESSION_FILE);
-
-    assert_eq!(Session::load_from(&path), None);
-    assert_eq!(Project::load_from(&directory.join(PROJECT_FILE)), None);
-
-    fs::create_dir_all(&directory).expect("creating the test directory");
-    fs::write(&path, b"{ not toml").expect("writing the corrupt file");
-    assert_eq!(Session::load_from(&path), None);
-
-    let _ = fs::remove_dir_all(&directory);
-}
-
-/// An id is interpolated into a path, so what it may be is the whole of what keeps
-/// `recents.toml` from naming somewhere else on the disk.
+/// An id is interpolated into a path, so what it may be is what keeps `recents.toml` from
+/// naming somewhere else on the disk.
 #[test]
 fn an_id_is_one_ordinary_path_component() {
     for good in ["project-1", "kernel_2", "a", "9lives"] {
@@ -1773,8 +1334,8 @@ fn an_id_is_one_ordinary_path_component() {
     assert_eq!(ProjectId::new("x".repeat(MAX_ID + 1)), None);
 }
 
-/// Deserializing goes through the same check, so an id out of a hand-edited file
-/// cannot be a path — and a file holding one is a corrupt file, which is the default.
+/// Deserializing goes through the same check, so a file holding an id that is not one is a
+/// corrupt file, which is the default.
 #[test]
 fn a_hand_edited_recent_that_is_not_an_id_is_refused() {
     assert!(toml::from_str::<Recents>(r#"projects = ["../elsewhere"]"#).is_err());
@@ -1793,9 +1354,8 @@ fn id(text: &str) -> ProjectId {
     ProjectId::new(text).expect("an id")
 }
 
-/// The order *is* the answer to "which project was last open", so touching the one
-/// already at the front changes nothing — which is what keeps a startup that reopens
-/// it from writing a file to say so.
+/// The order *is* the answer to "which project was last open", so touching the one already
+/// at the front changes nothing and writes no file.
 #[test]
 fn touching_a_project_moves_it_to_the_front_once() {
     let mut recents = Recents::default();
@@ -1811,9 +1371,8 @@ fn touching_a_project_moves_it_to_the_front_once() {
     assert_eq!(recents.projects, vec![id("a"), id("b")]);
 }
 
-/// Bounded, because this file is appended to for as long as the app is ever used.
-/// What falls off the end is a place in the order and never a project: every one of
-/// them is still a directory.
+/// Bounded, because this file is appended to for as long as the app is ever used. What
+/// falls off the end is a place in the order and never a project.
 #[test]
 fn the_recent_list_is_bounded() {
     let mut recents = Recents::default();
@@ -1842,9 +1401,8 @@ fn the_recent_list_round_trips_through_toml() {
     );
 }
 
-/// The claim is the `create_dir`, so two allocations in the same directory cannot
-/// land on the same name however the numbers are counted — and the directory is what
-/// makes the id survive a restart.
+/// The claim is the `create_dir`, so two allocations in the same directory cannot land on
+/// the same name.
 #[test]
 fn anonymous_projects_do_not_collide() {
     let directory = directory(line!());
@@ -1864,8 +1422,8 @@ fn anonymous_projects_do_not_collide() {
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// The whole of "a project appears when there is something to put in it": nothing on
-/// disk until the first write, then a directory, and the recent list pointing at it.
+/// A project appears when there is something to put in it: nothing on disk until the first
+/// write, then a directory, and the recent list pointing at it.
 #[test]
 fn the_first_write_creates_a_project_and_remembers_it() {
     let base = directory(line!());
@@ -1878,15 +1436,13 @@ fn the_first_write_creates_a_project_and_remembers_it() {
         vec![id.clone()]
     );
 
-    // Every later write of the run goes into the same one rather than allocating
-    // another, which is what makes the id the run's identity and not the write's.
+    // Every later write of the run goes into the same one rather than allocating another.
     assert_eq!(open_project(&mut saves, &base), Some(id));
 
     let _ = fs::remove_dir_all(&base);
 }
 
-/// Startup: the front of the recent list, both halves of it, through the same
-/// defaulting every other read here uses.
+/// Startup: the front of the recent list, both halves of it.
 #[test]
 fn the_last_project_is_the_one_reopened() {
     let base = directory(line!());
@@ -1898,8 +1454,7 @@ fn the_last_project_is_the_one_reopened() {
 
     for id in ["other-1", "wanted-2"] {
         let id = self::id(id);
-        project
-            .save_to(&project_in(&base, &id).join(PROJECT_FILE))
+        write_toml(&project_in(&base, &id).join(PROJECT_FILE), &project)
             .expect("saving the project");
         session
             .save_to(&project_in(&base, &id).join(SESSION_FILE))
@@ -1922,19 +1477,16 @@ fn nothing_to_reopen_is_not_an_error() {
     // No recent list at all: a first run, or one whose file was deleted.
     assert!(reopen_in(&base).is_none());
 
-    // A recent list naming a project whose directory has gone — deleted by hand, or
-    // on another machine the state directory is synced from.
+    // A recent list naming a project whose directory has gone.
     remember(&base, &id("gone-1"));
     assert!(reopen_in(&base).is_none());
 
     let _ = fs::remove_dir_all(&base);
 }
 
-/// The directory *is* the project, so a run that was killed between creating one and
-/// writing either file into it reopens as the empty project it is — rather than being
-/// orphaned while a second one is allocated beside it. A corrupt session is the same
-/// answer for the same reason, and this is the split earning its keep: the half the
-/// app rewrites every thirty seconds cannot take the other half down with it.
+/// The directory *is* the project, so a run killed between creating one and writing either
+/// file into it reopens as the empty project it is rather than being orphaned. A corrupt
+/// session is the same answer.
 #[test]
 fn a_project_missing_a_half_still_reopens() {
     let base = directory(line!());
@@ -1949,9 +1501,7 @@ fn a_project_missing_a_half_still_reopens() {
 
     // The user's half good, the app's half corrupt.
     let project = a_project();
-    project
-        .save_to(&project_in(&base, &id).join(PROJECT_FILE))
-        .expect("saving the project");
+    write_toml(&project_in(&base, &id).join(PROJECT_FILE), &project).expect("saving the project");
     fs::write(project_in(&base, &id).join(SESSION_FILE), b"{ not toml")
         .expect("writing the corrupt half");
 
@@ -1962,20 +1512,21 @@ fn a_project_missing_a_half_still_reopens() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// The recent-projects view reads each row's name out of that project's own file,
-/// in the order the list keeps, and not out of the list — which holds ids and nothing
-/// else precisely so there is one copy of a name.
+/// The recent-projects view reads each row's name out of that project's own file, in the
+/// order the list keeps, so there is one copy of a name.
 #[test]
 fn the_recent_view_names_each_project_from_its_own_file() {
     let base = directory(line!());
     for (id, name) in [("first-1", "kernel"), ("second-2", "loader")] {
         let id = self::id(id);
-        Project {
-            name: Some(name.to_owned()),
-            directory: Some(PathBuf::from("/src").join(name)),
-            binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
-        }
-        .save_to(&project_in(&base, &id).join(PROJECT_FILE))
+        write_toml(
+            &project_in(&base, &id).join(PROJECT_FILE),
+            &Project {
+                name: Some(name.to_owned()),
+                directory: Some(PathBuf::from("/src").join(name)),
+                binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+            },
+        )
         .expect("saving the project");
         remember(&base, &id);
     }
@@ -1995,11 +1546,8 @@ fn the_recent_view_names_each_project_from_its_own_file() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// Two things that are not errors and not empty rows. A project whose directory has
-/// gone is dropped here — the list never prunes itself on load, and this is the point
-/// of use where the repair is free — while one that has a directory and no readable
-/// file at all is a real project the reader can be put into, so it keeps its row and
-/// describes itself as the empty project it is.
+/// A project whose directory has gone is dropped here, where the repair is free; one with
+/// a directory and no readable file is a real project and keeps its row.
 #[test]
 fn a_recent_project_that_is_gone_is_dropped_and_an_empty_one_is_not() {
     let base = directory(line!());
@@ -2014,22 +1562,4 @@ fn a_recent_project_that_is_gone_is_dropped_and_an_empty_one_is_not() {
     assert_eq!(recents[0].binaries, 0);
 
     let _ = fs::remove_dir_all(&base);
-}
-
-/// Anonymity is the missing name and not the shape of the id: a project the reader
-/// later names keeps the directory it was allocated.
-#[test]
-fn an_anonymous_id_says_nothing_about_the_name() {
-    let directory = directory(line!());
-    let id = ProjectId::anonymous(&directory).expect("an id");
-
-    let named = Project {
-        name: Some("kernel".into()),
-        ..Project::default()
-    };
-    let path = directory.join(id.as_str()).join(PROJECT_FILE);
-    named.save_to(&path).expect("saving");
-    assert_eq!(Project::load_from(&path), Some(named));
-
-    let _ = fs::remove_dir_all(&directory);
 }

@@ -1,22 +1,11 @@
 //! DWARF line-number information, read lazily out of the bytes an [`Object`] was parsed
-//! from.
+//! from. Nothing here runs at parse time; the first query builds the context, and an object
+//! with no DWARF caches that answer too.
 //!
-//! Nothing here runs at parse time. The first caller that asks a given object for line
-//! info pays for building a [`Dwarf`] context; every later question is answered from it.
-//! An object with no DWARF — the sample `LLVM-24-rust-dev.dll` is a PE whose debug info,
-//! if it had any, would be CodeView in a PDB, and the sample `.rlib`'s member is COFF with
-//! `.debug$S`/`.debug$T` — caches *that* answer too, so it is asked once and never again.
-//!
-//! ## Lifetimes
-//!
-//! `addr2line::Context<R>` borrows nothing from an `object::File`; it borrows through its
-//! `gimli::Reader`. Handing it readers that borrow [`ObjectData`](crate::ObjectData) would
-//! make [`Object`] self-referential, which is the trap this module exists to avoid: the
-//! readers are [`gimli::EndianArcSlice`] instead, i.e. `Arc<[u8]>` per DWARF section, so
-//! the context owns its data outright and is `'static`. Those `Arc`s are *not* slices of
-//! `Object::data` — a section may be compressed, and every section is relocated in place
-//! (see [`relocate`]) — so each is a separate allocation, sized by the `.debug_*` sections
-//! and nothing else.
+//! The readers are [`gimli::EndianArcSlice`] — an `Arc<[u8]>` per DWARF section — rather
+//! than borrows of [`ObjectData`](crate::ObjectData), so the context owns its data and
+//! [`Object`] does not become self-referential. Those `Arc`s are separate allocations: a
+//! section may be compressed, and every one is relocated in place (see [`relocate`]).
 
 use crate::{section_data, Object, Section, SymbolData};
 use gimli::{EndianArcSlice, RunTimeEndian};
@@ -28,52 +17,33 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Every DWARF section is read through one of these: an `Arc<[u8]>` plus an endianness.
-/// Owning the bytes rather than borrowing them is what keeps [`Dwarf`] free of any
-/// lifetime, and cloning a reader — which `gimli` does constantly — is an `Arc` bump.
 type Reader = EndianArcSlice<RunTimeEndian>;
 
-/// An [`Object`]'s DWARF, or the fact that it has none, worked out at most once.
-///
-/// Caching the *absence* matters as much as caching the context: without it, every query
-/// against an object with no debug info — the common case for a stripped binary, and for
-/// both of the repo's sample files — would re-parse its section table looking for
-/// `.debug_info` that is not there.
-///
-/// A field of [`Object`] rather than something a caller builds; the only thing to do with
-/// one is `DwarfCache::default()`.
+/// An [`Object`]'s DWARF, or the fact that it has none, worked out at most once. Caching the
+/// *absence* is what keeps a stripped binary from re-scanning its section table per query.
 #[derive(Default)]
 pub struct DwarfCache(OnceLock<Option<Dwarf>>);
 
 /// One object's DWARF, parsed once and kept for the object's lifetime.
-///
-/// The [`Mutex`] is not about contention, it is about `Sync`. `addr2line::Context` caches
-/// each unit's parsed line program in an `UnsafeCell` behind `&self` (`addr2line::lazy`),
-/// so it is `Send` but deliberately not `Sync` — upstream's own test only asserts `Send`.
-/// [`Object`] is shared as an `Arc` across threads, so the context has to be behind a lock
-/// to travel with it. Contention is a non-issue in practice: a query is a binary search
-/// plus a walk of a handful of line-table rows, and the one call that does real work (the
-/// first query into a compilation unit, which parses its line program) is exactly the one
-/// that must not be repeated anyway.
 pub(crate) struct Dwarf {
+    /// The [`Mutex`] is about `Sync`, not contention: `addr2line::Context` caches each
+    /// unit's parsed line program in an `UnsafeCell` behind `&self`, so it is `Send` but not
+    /// `Sync`, and [`Object`] is shared across threads as an `Arc`.
     context: Mutex<addr2line::Context<Reader>>,
 
-    /// Where each code section was placed in the address space the context reads in.
-    /// See [`section_biases`]; empty for a linked image, which needs none.
+    /// Where each code section was placed in the address space the context reads in. See
+    /// [`section_biases`]; empty for a linked image, which needs none.
     biases: HashMap<SectionIndex, u64>,
 
     /// Every compilation unit that has been asked about, and the extent of each
-    /// `DW_TAG_subprogram` in it, keyed by the unit's `.debug_info` offset and then by
-    /// the subprogram's `DW_AT_low_pc`. Both keys are in the biased address space this
-    /// context reads in. Built one unit at a time, on demand; see
-    /// [`Object::subprogram_extent`].
+    /// `DW_TAG_subprogram` in it, keyed by the unit's `.debug_info` offset and then by the
+    /// subprogram's `DW_AT_low_pc`. Both keys are in the biased address space.
     extents: Mutex<HashMap<u64, HashMap<u64, u64>>>,
 }
 
 impl Dwarf {
-    /// Build the context for one object file, or [`None`] when it has no DWARF to build
-    /// one from. Never an error: foreign debug info and corrupt debug info are both
-    /// simply "no line info".
+    /// Build the context for one object file, or [`None`] when it has no DWARF. Never an
+    /// error: foreign debug info and corrupt debug info are both simply "no line info".
     pub(crate) fn load(data: &crate::ObjectData) -> Option<Dwarf> {
         without_panicking(|| Dwarf::load_inner(data)).flatten()
     }
@@ -81,9 +51,8 @@ impl Dwarf {
     fn load_inner(data: &crate::ObjectData) -> Option<Dwarf> {
         let file = object::File::parse(data.bytes()).ok()?;
 
-        // The cheap test first, so an object with no DWARF costs one section-table scan
-        // and not a single byte of parsing. `section_by_name` already knows about ELF's
-        // `.zdebug_info` and Mach-O's `__debug_info` spellings.
+        // The cheap test first, so an object with no DWARF costs one section-table scan.
+        // `section_by_name` already knows ELF's `.zdebug_info` and Mach-O's `__debug_info`.
         file.section_by_name(gimli::SectionId::DebugInfo.name())?;
 
         let endian = if file.is_little_endian() {
@@ -92,8 +61,6 @@ impl Dwarf {
             RunTimeEndian::Big
         };
 
-        // Worked out before a single byte is relocated: `load_section` needs it, and so
-        // does every query afterwards.
         let biases = section_biases(&file);
 
         let dwarf =
@@ -106,48 +73,42 @@ impl Dwarf {
         })
     }
 
-    /// How far the section with this index was moved when the debug sections were
-    /// relocated; 0 for a section that was not moved, and for every section of a linked
-    /// image.
+    /// How far the section with this index was moved by [`section_biases`]; 0 for a section
+    /// that was not moved, and for every section of a linked image.
     fn bias(&self, section: SectionIndex) -> u64 {
         self.biases.get(&section).copied().unwrap_or(0)
     }
 
-    /// Resolve a whole address range in one pass; see [`Object::line_info`]. `bias` is
-    /// what the range's section was moved by, so the query and the rows it produces are
-    /// translated in and out of the address space the context was built in.
+    /// Resolve a whole address range in one pass. `bias` is what the range's section was
+    /// moved by, so the query and the rows it produces are translated in and out of the
+    /// address space the context was built in.
     fn line_info(&self, bias: u64, range: Range<u64>) -> Option<Arc<LineInfo>> {
         without_panicking(|| self.line_info_inner(bias, range)).flatten()
     }
 
     fn line_info_inner(&self, bias: u64, range: Range<u64>) -> Option<Arc<LineInfo>> {
-        // A poisoned lock means a previous query panicked. Nothing here is left in a
-        // half-written state by a panic (the context is only ever read), so recover
-        // rather than propagating: "no line info" would be a worse answer than the
-        // right one, and a panic is what the tests exist to keep from happening.
+        // A poisoned lock means a previous query panicked. Nothing here is left half-written
+        // by one (the context is only ever read), so recover rather than propagate.
         let context = self.context.lock().unwrap_or_else(|e| e.into_inner());
 
-        // The caller asks in the section's own address space; the context reads in the
-        // one `section_biases` laid out. Saturating rather than wrapping, so an absurd
-        // range asks about less than it meant to instead of about something else.
+        // Saturating rather than wrapping, so an absurd range asks about less than it meant
+        // to instead of about something else.
         let query = range.start.saturating_add(bias)..range.end.saturating_add(bias);
 
         let mut files: Vec<Arc<str>> = Vec::new();
         let mut file_indices: HashMap<Arc<str>, usize> = HashMap::new();
         let mut rows: Vec<LineRow> = Vec::new();
 
-        // One call for the symbol's whole extent rather than one per instruction: this
-        // walks each covering unit's line table once, where per-instruction lookups
-        // would binary-search it again for every address.
+        // One call for the symbol's whole extent: this walks each covering unit's line table
+        // once, where per-instruction lookups would binary-search it per address.
         for (address, length, location) in
             context.find_location_range(query.start, query.end).ok()?
         {
             let Some(end) = address.checked_add(length) else {
                 continue;
             };
-            // addr2line hands back the row *containing* the start of the query, which
-            // may begin before it, and clips nothing at the top either. Both ends come
-            // back out of the biased space the context reads in.
+            // addr2line hands back the row *containing* the start of the query, which may
+            // begin before it, and clips nothing at the top either.
             let start = address.max(query.start).wrapping_sub(bias);
             let end = end.min(query.end).wrapping_sub(bias);
             if start >= end {
@@ -174,18 +135,14 @@ impl Dwarf {
 
         drop(context);
 
-        // Units are visited in range order and rows within a unit ascend, but two units
-        // may cover overlapping addresses, so sort rather than assume.
+        // Units are visited in range order and rows within a unit ascend, but two units may
+        // cover overlapping addresses, so sort rather than assume.
         rows.sort_by_key(|row| (row.range.start, row.range.end));
 
-        // And clip what is left so the rows genuinely do not overlap, which
-        // [`LineInfo::row_at`] needs to be able to binary-search them: it looks for the
-        // last row starting at or before an address, and a row nested inside a longer one
-        // would make that answer arbitrary. Scoping the query to a section is what stops
-        // whole line programs from piling up (see [`section_biases`]); this is the
-        // backstop for what a single unit can still say — two units describing one
-        // address, or a hand-written line program that overlaps itself. The row that
-        // starts first keeps the addresses it covers, and one left with nothing goes.
+        // Then clip so the rows genuinely do not overlap, which [`LineInfo::row_at`] needs to
+        // binary-search them: it looks for the last row starting at or before an address, and
+        // a row nested inside a longer one makes that answer arbitrary. The row that starts
+        // first keeps the addresses it covers, and one left with nothing goes.
         let mut covered = 0;
         rows.retain_mut(|row| {
             row.range.start = row.range.start.max(covered);
@@ -196,9 +153,8 @@ impl Dwarf {
             true
         });
 
-        // Coalesce runs that say the same thing. A line program emits a row per
-        // is_stmt/discriminator change as well as per source position, so a single
-        // source line routinely arrives as several adjacent identical rows.
+        // Coalesce runs that say the same thing: a line program emits a row per
+        // is_stmt/discriminator change as well as per source position.
         rows.dedup_by(|next, row| {
             let same = row.range.end == next.range.start
                 && row.file == next.file
@@ -210,35 +166,28 @@ impl Dwarf {
             same
         });
 
-        // "There is DWARF but it says nothing about this symbol" and "there is no DWARF"
-        // are the same answer to a caller, so give it the same shape.
+        // "There is DWARF but it says nothing about this symbol" and "there is no DWARF" are
+        // the same answer to a caller.
         (!rows.is_empty()).then(|| Arc::new(LineInfo { rows, files }))
     }
 
-    /// The extent of the `DW_TAG_subprogram` that begins at `address`, or [`None`] when
-    /// no unit covers the address or the subprogram that does begins elsewhere. `bias` is
-    /// what the address's section was moved by, exactly as in [`line_info`](Self::line_info).
+    /// The extent of the `DW_TAG_subprogram` beginning at `address`, or [`None`] when no unit
+    /// covers the address or the subprogram that does begins elsewhere.
     fn extent(&self, bias: u64, address: u64) -> Option<u64> {
         without_panicking(|| self.extent_inner(bias, address)).flatten()
     }
 
     fn extent_inner(&self, bias: u64, address: u64) -> Option<u64> {
         let probe = address.checked_add(bias)?;
-        // `addr2line` 0.21 asks its range index about `probe + 1` with a plain addition
-        // (`Context::find_units`), so the very last address in the space is an "attempt to
-        // add with overflow" rather than an answer. A symbol there is one a corrupt or
-        // hostile section header produces — and there is nothing to lose by declining it,
-        // since a function starting on the last byte of the address space has no room for
-        // an extent either. Validated here rather than left to `without_panicking`: this
-        // one is ours to see coming.
+        // `addr2line` 0.21's `Context::find_units` asks its range index about `probe + 1`
+        // with a plain addition, so the very last address in the space panics. Declined here
+        // rather than left to `without_panicking`: this one is ours to see coming.
         if probe == u64::MAX {
             return None;
         }
 
         let context = self.context.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Which unit to walk, from the range index the context already built at load
-        // time — so an address no unit covers costs a binary search and nothing else.
         // `skip_all_loads` declines to fetch split DWARF, which this crate does not read
         // anywhere else either.
         let (sections, unit) = context.find_dwarf_and_unit(probe).skip_all_loads()?;
@@ -256,22 +205,14 @@ impl Dwarf {
 }
 
 /// Every `DW_TAG_subprogram` in one unit that states where it begins and ends, as
-/// `low_pc -> size`.
+/// `low_pc -> size`. A whole-unit walk rather than a search, because the answer is cached
+/// per unit and a reader asks about symbol after symbol out of the same unit.
 ///
-/// A whole-unit walk rather than a search for the one address asked about, because the
-/// answer is cached per unit: a reader clicking down a function list asks about symbol
-/// after symbol out of the same compilation unit, and walking its DIEs once for each of
-/// them would be the same work again every time.
-///
-/// What is skipped is as important as what is kept. A subprogram with no `DW_AT_low_pc`
-/// is a declaration and not code; one with `DW_AT_ranges` instead of `DW_AT_high_pc` is
-/// discontiguous, so it has no single extent and the next-symbol estimate is the better
-/// answer; one claiming zero bytes says nothing a caller can use. `DW_AT_high_pc` is an
-/// *end address* when its form is an address and a *length* when its form is a constant,
-/// which is DWARF 4's change and not a producer quirk — both spellings are in the wild.
-///
-/// Abstract origins are deliberately not followed: this asks where a function's bytes
-/// are, and only the DIE carrying `low_pc` knows that.
+/// Skipped: a subprogram with no `DW_AT_low_pc` (a declaration, not code), one with
+/// `DW_AT_ranges` instead of `DW_AT_high_pc` (discontiguous, so no single extent), and one
+/// claiming zero bytes. `DW_AT_high_pc` is an *end address* when its form is an address and a
+/// *length* when its form is a constant; both spellings are in the wild. Abstract origins are
+/// not followed: only the DIE carrying `low_pc` knows where the bytes are.
 fn subprogram_extents(
     sections: &gimli::Dwarf<Reader>,
     unit: &gimli::Unit<Reader>,
@@ -279,8 +220,8 @@ fn subprogram_extents(
     let mut extents = HashMap::new();
 
     let mut entries = unit.entries();
-    // A malformed unit stops the walk where it goes wrong rather than discarding what
-    // was read before it, which is the same bargain the rest of this module strikes.
+    // A malformed unit stops the walk where it goes wrong rather than discarding what was
+    // read before it.
     while let Ok(Some((_, entry))) = entries.next_dfs() {
         if entry.tag() != gimli::DW_TAG_subprogram {
             continue;
@@ -310,9 +251,8 @@ fn subprogram_extents(
             continue;
         }
 
-        // Two subprograms at one address is a concrete instance beside its abstract
-        // root, or a unit that was included twice; the first one read keeps the address,
-        // the way overlapping line rows are resolved above.
+        // Two subprograms at one address is a concrete instance beside its abstract root, or
+        // a unit included twice; the first one read keeps the address.
         extents.entry(low).or_insert(size);
     }
 
@@ -321,77 +261,35 @@ fn subprogram_extents(
 
 /// Run DWARF parsing with a net under it, turning a panic into "no line info".
 ///
-/// This is not defensiveness in general — it is two known, reachable bugs, both of them
-/// unchecked arithmetic in `addr2line` 0.21 on numbers a `.debug_*` section states, and
-/// neither of them something this crate can validate without parsing the DWARF twice:
+/// Not general defensiveness: two known, reachable bugs in `addr2line` 0.21, both unchecked
+/// arithmetic on numbers a `.debug_*` section states. A line-table row's length is
+/// `next.address - row.address`, and nothing stops a line program from moving its address
+/// backwards; and a range is `low_pc + high_pc` wherever `high_pc` is a length, which
+/// overflows for a length running off the end of the address space — that one while the
+/// context is being *built*, which is why the guard is around [`Dwarf::load`] too.
 ///
-/// * A line-table row's length is `next.address - row.address`, a plain subtraction
-///   (`LocationRangeUnitIter::next`), and nothing stops a line program from moving its
-///   address *backwards*: `DW_LNE_set_address` takes any address, and a sequence whose
-///   end address is below its last row is enough on its own.
-///   `crates/analysis/tests/robustness.rs`
-///   (`a_line_program_that_runs_backwards_does_not_panic`) is that input, reduced.
-/// * A range is `low_pc + high_pc` wherever `high_pc` is a length
-///   (`RangeAttributes::for_each_range`), which overflows for anything declaring a length
-///   that runs off the end of the address space. It is read in two places and so panics
-///   in two: a *unit*'s range while the context is being **built**, before any query at
-///   all, which is why the guard is around `Dwarf::load` and not only around the queries;
-///   and a *subprogram*'s when `find_dwarf_and_unit` first parses that unit's functions,
-///   which is inside [`extent`](Dwarf::extent). The mutation sweep in
-///   `crates/analysis/tests/mutations.rs` reaches the first by writing a poison value
-///   into a `.debug_info` field;
-///   `robustness.rs`'s `a_function_at_the_end_of_the_address_space_does_not_panic` is the
-///   second, written on purpose.
-///
-/// On a debug build — which is how this app is run while it is being developed — either
-/// is an "attempt to add/subtract with overflow" panic on a file the user merely opened,
-/// and this crate's one hard rule is that no file input makes it fall over.
-///
-/// Catching is sound here because a panic leaves nothing half-written: the context is
-/// only ever read, `addr2line`'s internal caches are filled after the value is computed
-/// rather than during, and the lock the panic poisons is recovered explicitly. On a
-/// release build the subtraction wraps instead of panicking and the absurd length it
-/// produces is clipped away by the range check in [`Dwarf::line_info_inner`], so the
-/// guard changes nothing there.
-///
-/// The panic message still reaches stderr through the process-wide hook; suppressing it
-/// would mean installing a global hook, which a library has no business doing.
+/// Sound because a panic leaves nothing half-written: the context is only ever read, and the
+/// lock a panic poisons is recovered explicitly.
 fn without_panicking<T>(f: impl FnOnce() -> T) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
 }
 
 /// Where each code section is placed in the address space the DWARF is read in.
 ///
-/// **An address alone is not a key in a relocatable object.** A section there has no
-/// address until it is linked — every one of the sample rlib's 2 291 sections reports 0 —
-/// and rustc emits one `.text.<name>` section per function, so every function in a member
-/// sits at 0 and so does every symbol in it. Relocating each unit's `DW_LNE_set_address`
-/// against those symbols therefore lands every line program on the same address and they
-/// pile up: 52 229 of the 54 109 rows read out of that sample overlapped the row before
-/// them, and four symbols with different extents reported one another's rows.
+/// **An address alone is not a key in a relocatable object.** Sections there have no address
+/// until linked and rustc emits one `.text.<name>` per function, so every function lands on 0
+/// and the line programs pile up. This does what a linker does and gives each code section a
+/// place of its own: a bias, added to every address relocated against that section
+/// ([`relocate`]) and subtracted again from every row a query returns.
 ///
-/// The section is the missing half of the identity, exactly as it already is for
-/// relocation lookup ([`Section::relocations`](crate::Section::relocations)) and for
-/// [`SymbolData::estimate_size`]. Rather than thread it through every row, this does what
-/// a linker does and gives each code section a place of its own: a **bias**, added to
-/// every address relocated against that section ([`relocate`]) and subtracted again from
-/// every row a query returns ([`Dwarf::line_info`]). Addresses are unique within the
-/// object again, and a query scoped to one section cannot see another's rows.
+/// Two limits, both load-bearing:
 ///
-/// Sections are laid out in index order, the first at 0 — so an object with a single code
-/// section, which is what every hand-written fixture and every C `.o` looks like, is
-/// biased by nothing at all and reads exactly as it did before.
-///
-/// Two limits on what gets a bias, both load-bearing:
-///
-/// * **Relocatable objects only.** A linked image already has real, distinct section
-///   addresses, and its debug sections hold those addresses *literally* rather than
-///   through relocations; moving the few that are relocated would move them away from all
-///   the ones that are not.
-/// * **Code sections only.** An absolute relocation in a debug section is not always an
-///   address: `DW_AT_stmt_list`, `DW_FORM_strp` and friends are offsets into another
-///   `.debug_*` section, which ELF writes as a relocation against *that section's* symbol.
-///   Those must come out exactly as they went in, so only [`SectionKind::Text`] is moved.
+/// * **Relocatable objects only.** A linked image holds real addresses literally rather than
+///   through relocations; moving the few that are relocated would move them away from the
+///   rest.
+/// * **Code sections only.** An absolute relocation in a debug section is often an offset
+///   into another `.debug_*` section (`DW_AT_stmt_list`, `DW_FORM_strp`), which must come out
+///   exactly as it went in.
 fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u64> {
     let mut biases = HashMap::new();
     if file.kind() != ObjectKind::Relocatable {
@@ -406,11 +304,9 @@ fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u64> {
 
         biases.insert(section.index(), next.wrapping_sub(section.address()));
 
-        // Somewhere for the next section to go, past this one's last byte. A zero-length
-        // section still takes an address of its own, so that two of them are two places.
-        // Nothing here can overflow into another section's ground: an object whose
-        // sections do not fit in the address space simply stops being biased past that
-        // point, and the sections already placed keep the identity they were given.
+        // Somewhere for the next section to go. A zero-length section still takes an address
+        // of its own, so that two of them are two places. An object whose sections do not fit
+        // in the address space simply stops being biased past that point.
         let Some(end) = next.checked_add(section.size().max(1)) else {
             break;
         };
@@ -424,9 +320,7 @@ fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u64> {
 }
 
 /// What [`section_biases`] rounds each section's placement up to. Nothing depends on the
-/// value — the addresses are this crate's own and never leave it — but keeping them
-/// aligned makes a biased address readable in a debugger and leaves a gap between
-/// sections, so an off-by-one cannot walk out of one section and into the next.
+/// value; the gap it leaves means an off-by-one cannot walk into the next section.
 const SECTION_ALIGNMENT: u64 = 16;
 
 /// Read one DWARF section, decompressing and relocating it. A section that is missing or
@@ -440,10 +334,8 @@ fn load_section(
     let data = file
         .section_by_name(id.name())
         .and_then(|section| {
-            // The same guard the rest of the crate uses: a section header that lies
-            // about how much it decompresses to is dropped, not believed. `.debug_*`
-            // sections are the ones that are actually compressed in practice, so this
-            // path needs it at least as much as the text sections do.
+            // `section_data`'s guard: a header that lies about how much it decompresses to is
+            // dropped, not believed.
             let mut data = section_data(&section)?;
             relocate(&mut data, file, &section, endian, biases);
             Some(data)
@@ -455,23 +347,18 @@ fn load_section(
 
 /// Apply a debug section's relocations to a copy of its bytes.
 ///
-/// In a relocatable object the addresses in `.debug_info` and `.debug_line` are not in
-/// the file: `DW_AT_low_pc` and `DW_LNE_set_address` are written as zero with a
-/// relocation against the function's symbol, so line info read without relocating maps
-/// every function in the object to address 0. Since the bytes are already a private copy,
-/// they can be patched in place — no `gimli::Reader` wrapper is needed the way
-/// `dwarfdump`'s is.
+/// In a relocatable object `DW_AT_low_pc` and `DW_LNE_set_address` are written as zero with a
+/// relocation against the function's symbol, so line info read without relocating maps every
+/// function to address 0. The bytes are already a private copy, so they are patched in place.
 ///
-/// Only `Absolute` relocations are applied, which is what DWARF's address and offset
-/// forms use. Anything else (a COFF `SECREL`, say) is left alone rather than guessed at,
-/// so a section keeps whatever the file already held there.
+/// Only `Absolute` relocations are applied, which is what DWARF's address and offset forms
+/// use; anything else (a COFF `SECREL`, say) is left alone rather than guessed at.
 ///
-/// The value written is `symbol/section address + addend`, plus the bytes already there
-/// when the format keeps the addend in the section (ELF `REL`, COFF) rather than in the
-/// relocation (ELF `RELA`), plus the bias the target's section was given by
-/// [`section_biases`] — which is 0 for every section of a linked image, and for the one
-/// code section of an object that has only one. Every step wraps and every write is bounds-checked, so no
-/// relocation table, however corrupt, can do more than scribble on this copy.
+/// The value written is `symbol/section address + addend`, plus the bytes already there when
+/// the format keeps the addend in the section (ELF `REL`, COFF) rather than in the relocation
+/// (ELF `RELA`), plus the target section's bias. Every step wraps and every write is
+/// bounds-checked, so no relocation table, however corrupt, can do more than scribble on this
+/// copy.
 fn relocate<'data, 'file>(
     data: &mut [u8],
     file: &object::File<'data>,
@@ -484,9 +371,9 @@ fn relocate<'data, 'file>(
             continue;
         }
 
-        // A target's address is the address of the section it lives in plus its offset
-        // in it, and in a relocatable object that section address is the bias
-        // `section_biases` gave it rather than the 0 the file states.
+        // A target's address is its section's address plus its offset in it, and in a
+        // relocatable object that section address is the bias rather than the 0 the file
+        // states.
         let bias = |index: Option<SectionIndex>| {
             index
                 .and_then(|index| biases.get(&index))
@@ -527,8 +414,8 @@ fn relocate<'data, 'file>(
     }
 }
 
-/// The 4- or 8-byte unsigned at `bytes`. Any other width is not a DWARF address or
-/// offset and is left to the caller to ignore.
+/// The 4- or 8-byte unsigned at `bytes`. Any other width is not a DWARF address or offset and
+/// answers 0.
 fn read_uint(bytes: &[u8], endian: RunTimeEndian) -> u64 {
     let mut buffer = [0u8; 8];
     match (bytes.len(), endian) {
@@ -561,19 +448,16 @@ fn write_uint(bytes: &mut [u8], endian: RunTimeEndian, value: u64) {
 /// One run of instructions and the source position DWARF gives it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LineRow {
-    /// The instruction addresses this row covers, clipped to the range that was asked
-    /// about and in the same address space as [`SymbolData::address`] and
-    /// [`Instruction::address`](crate::Instruction::address).
+    /// The instruction addresses this row covers, clipped to the range that was asked about
+    /// and in the same address space as [`SymbolData::address`].
     pub range: Range<u64>,
     /// An index into [`LineInfo::files`], or [`None`] when the row names no file.
     pub file: Option<usize>,
-    /// DWARF's line number. Genuinely optional: a row with line 0 says "these
-    /// instructions belong to no source line", which is not the same as line 0 and not
-    /// the same as line 1.
+    /// DWARF's line number. Genuinely optional: line 0 means "these instructions belong to no
+    /// source line", which is neither line 0 nor line 1.
     pub line: Option<u32>,
-    /// DWARF's column number, [`None`] both when the producer emitted no column at all
-    /// (the common case outside clang) and when it emitted `DW_LNS_set_column 0`, the
-    /// "left edge of the line" marker.
+    /// DWARF's column number, [`None`] both when the producer emitted no column at all and
+    /// when it emitted `DW_LNS_set_column 0`, the "left edge of the line" marker.
     pub column: Option<u32>,
 }
 
@@ -585,51 +469,35 @@ pub struct Location<'a> {
     pub column: Option<u32>,
 }
 
-/// The line info covering one address range, resolved in a single pass.
+/// The line info covering one address range, resolved in a single pass, so a caller holding a
+/// symbol's instructions asks once and then answers each of them locally with
+/// [`row_at`](Self::row_at).
 ///
-/// This is the shape the assembly view wants: it holds a `Vec<Instruction>` for a symbol
-/// and needs a source position for each, so it asks once for the symbol and then answers
-/// each instruction locally with [`row_at`](Self::row_at) — a binary search over rows that
-/// are typically an order of magnitude fewer than the instructions. Asking per instruction
-/// instead would re-enter the DWARF context, and its lock, once per row of the view.
-///
-/// The rows are ascending, non-overlapping, and coalesced: adjacent rows that name the
-/// same position are merged, so a source line that produced twenty instructions is one
-/// row and not twenty. They are *not* contiguous — compiler-generated instructions
-/// belonging to no source line leave gaps, and [`row_at`](Self::row_at) returns [`None`]
-/// there rather than inventing a position.
-///
-/// Non-overlapping is an invariant of *this type*, not something DWARF hands over. Two
-/// things establish it, and both were once missing: the query is scoped to a section
-/// ([`section_biases`]), without which every line program in a relocatable object answers
-/// every question and 96% of the rows read out of the sample rlib overlapped the row
-/// before them; and whatever a single unit can still say is clipped in
-/// [`Dwarf::line_info_inner`], so a row is never nested inside another one whatever a
-/// line program claims. What is *not* claimed is that the rows say everything DWARF said:
-/// where two rows genuinely covered one address, the one that starts first keeps it.
+/// The rows are ascending, non-overlapping and coalesced, but *not* contiguous —
+/// compiler-generated instructions belonging to no source line leave gaps, and
+/// [`row_at`](Self::row_at) returns [`None`] there rather than inventing a position.
+/// Non-overlapping is an invariant of this type, established by scoping the query to a
+/// section ([`section_biases`]) and by the clipping in [`Dwarf::line_info_inner`]; where two
+/// rows genuinely covered one address, the one that starts first keeps it.
 pub struct LineInfo {
     rows: Vec<LineRow>,
     files: Vec<Arc<str>>,
 }
 
 impl LineInfo {
-    /// Every row, ascending by address and non-overlapping: each row starts at or after
-    /// the previous row's end.
+    /// Every row, ascending by address and non-overlapping.
     pub fn rows(&self) -> &[LineRow] {
         &self.rows
     }
 
-    /// The set of source files these rows touch, deduplicated, in the order they were
-    /// first seen. [`LineRow::file`] indexes into this.
+    /// The source files these rows touch, deduplicated, in the order they were first seen.
+    /// [`LineRow::file`] indexes into this.
     pub fn files(&self) -> &[Arc<str>] {
         &self.files
     }
 
-    /// The row covering `address`, or [`None`] when no row does.
-    ///
-    /// The last row starting at or before `address` is the only candidate *because* the
-    /// rows do not overlap: with a row nested inside a longer one, the search could land
-    /// on either and answer [`None`] for an address the outer row covers.
+    /// The row covering `address`, or [`None`] when no row does. The last row starting at or
+    /// before `address` is the only candidate *because* the rows do not overlap.
     pub fn row_at(&self, address: u64) -> Option<&LineRow> {
         let index = match self
             .rows
@@ -663,44 +531,32 @@ impl Object {
     /// The line info for an address range **within one section**, building this object's
     /// DWARF context on the first call and reusing it afterwards.
     ///
-    /// The section is not decoration: in a relocatable object every section starts at 0,
-    /// so `range` on its own does not say which code it means and answering it without
-    /// the section returns every function in the file at once. See [`section_biases`].
+    /// The section is not decoration: in a relocatable object every section starts at 0, so
+    /// `range` on its own does not say which code it means. See [`section_biases`].
     ///
-    /// [`None`] means "no line info": no DWARF, debug info in a format this does not read
-    /// (PE + CodeView, COFF `.debug$S`), DWARF that will not parse, or DWARF that simply
-    /// says nothing about this range. Never an error — an object the app can list is an
-    /// object it can show, with or without sources.
+    /// [`None`] means "no line info" for every reason at once: no DWARF, debug info in a
+    /// format this does not read (CodeView), DWARF that will not parse, or DWARF that says
+    /// nothing about this range.
     ///
-    /// **Cost.** The first call parses `.debug_abbrev` and every compilation unit's
-    /// header and range list; later calls do not. Each call then parses the line program
-    /// of every unit covering the range, once per unit for the object's lifetime. This is
-    /// worker-thread work by construction — call it where [`SymbolData::assembly`] is
-    /// called, not on a UI thread.
+    /// Worker-thread work by construction: the first call parses `.debug_abbrev` and every
+    /// unit's header and range list, and each call parses the line program of every unit
+    /// covering the range, once per unit for the object's lifetime.
     pub fn line_info(&self, section: &Section, range: Range<u64>) -> Option<Arc<LineInfo>> {
         let dwarf = self.dwarf()?;
         dwarf.line_info(dwarf.bias(section.index), range)
     }
 
-    /// How many bytes of code the debug info says the function starting at `address`
-    /// **within one section** is, or [`None`] when it does not say.
-    ///
-    /// Same shape and the same reasons as [`line_info`](Self::line_info): the section is
-    /// half the identity in a relocatable object, [`None`] covers every way of not
-    /// knowing at once, and the DWARF context is built at most once and shared. On top of
-    /// that it is one DIE walk per compilation unit *visited* — units nothing was asked
-    /// about are never walked — so an object with no debug info still costs one
-    /// section-table scan for its whole lifetime and nothing more.
-    ///
-    /// This is what [`SymbolData::extent`] prefers over the next-symbol estimate; see
-    /// there for why the two bound each other rather than one simply winning.
+    /// How many bytes of code the debug info says the function starting at `address` **within
+    /// one section** is, or [`None`] when it does not say. One DIE walk per compilation unit
+    /// visited, cached; see [`SymbolData::extent`] for how it and the next-symbol estimate
+    /// bound each other.
     pub fn subprogram_extent(&self, section: &Section, address: u64) -> Option<u64> {
         let dwarf = self.dwarf()?;
         dwarf.extent(dwarf.bias(section.index), address)
     }
 
     /// This object's DWARF context, built at most once — including the "there is none"
-    /// answer, so an object without debug info is not re-examined on every query.
+    /// answer.
     fn dwarf(&self) -> Option<&Dwarf> {
         self.dwarf
             .0
@@ -710,21 +566,15 @@ impl Object {
 }
 
 impl SymbolData {
-    /// The line info for this symbol's instructions, over the extent
-    /// [`estimate_size`](Self::estimate_size) derives — the same bytes
-    /// [`assembly`](Self::assembly) decodes, so every instruction it produces is inside
-    /// the range asked about here.
-    ///
-    /// Takes the object for the same reason [`assembly`](Self::assembly) does: a symbol
-    /// does not own the file it came from.
+    /// The line info for this symbol's instructions, over the same extent
+    /// [`assembly`](Self::assembly) decodes.
     pub fn line_info(&self, object: &Object) -> Option<Arc<LineInfo>> {
         let section = self.section.as_ref()?;
         let end = self.address.checked_add(self.extent(object)?)?;
         object.line_info(section, self.address..end)
     }
 
-    /// What DWARF says this symbol's extent is, [`None`] when it says nothing. The
-    /// half of [`extent`](Self::extent) that needs the object; see there.
+    /// What DWARF says this symbol's extent is, [`None`] when it says nothing.
     pub fn dwarf_extent(&self, object: &Object) -> Option<u64> {
         object.subprogram_extent(self.section.as_ref()?, self.address)
     }
