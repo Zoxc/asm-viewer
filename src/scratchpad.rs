@@ -5,10 +5,21 @@
 //! beside it, so the whole of it is unit-tested without a window. What is *not* here is
 //! any UI: the editable source view, the dependency rows on screen and the build button
 //! are the Scratchpad view in `ui.rs`, and every one of them reads this and nothing else
-//! about what a scratchpad is. Three of the four functions it calls are documented here
+//! about what a scratchpad is. Three of the five functions it calls are documented here
 //! as never running on a UI thread — [`Scratchpad::opened`], [`Scratchpad::write`] and
 //! [`Scratchpad::build`] — which is why the view has a worker thread of its own and why
-//! that thread is the only thing that ever touches a scratchpad's directory.
+//! that thread is the only thing that ever touches a scratchpad's directory. The fourth,
+//! [`Scratchpad::run`], goes to the same thread for a weaker reason: it does not block,
+//! but it forks, and the one thread that draws has no business doing that either.
+//!
+//! **A program the reader wrote is one that may never stop**, so what [`Scratchpad::run`]
+//! hands back is a [`Running`] — a handle whose whole purpose is [`Running::stop`], which
+//! kills the process rather than dropping anything. Its output is *streamed* through a
+//! callback as it is written rather than collected and returned the way a build's is: a
+//! program that prints and then loops for ever has said something, and a shape that
+//! answers only at exit would never say it. Everything still running is also reachable
+//! without a handle, through [`stop_all`], because the window's close hook can read no
+//! state — the same reason `project.rs` keeps its save policy in a `static`.
 //!
 //! **The generated package is the storage.** A scratchpad is a name, a source and a list
 //! of `(crate, version)` rows, and every one of those is already a field of the package
@@ -31,11 +42,18 @@
 //! mode into a text box.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     ffi::OsString,
-    fmt, fs, io,
+    fmt, fs,
+    io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -59,6 +77,36 @@ const PACKAGE_VERSION: &str = "0.1.0";
 /// crates.io's own limit, and the only length rule worth having: a name longer than this
 /// cannot be a crate whatever else is true of it.
 const MAX_NAME: usize = 64;
+
+/// How much of one line of a program's output is kept before it is cut and continued on
+/// the next.
+///
+/// The bound that has to exist *first*, and it is about a single `String` rather than
+/// about the list: a program that writes a gigabyte and never a newline would otherwise
+/// grow one line until the machine gave out, and `read_line` would never hand it over on
+/// the way. 4 KiB is far past any line a person reads and far short of a problem.
+const MAX_LINE: u64 = 4096;
+
+/// How many lines of a program's output are kept.
+///
+/// A line cap and not a byte cap, because what the view is is a list of rows and what a
+/// cap has to answer is "how many rows" — a byte budget would make the row count a
+/// function of how long the lines happened to be, so the same tight loop would keep
+/// twenty thousand short lines and two hundred long ones. With [`MAX_LINE`] above it the
+/// two together bound the memory anyway, at a worst case of about 20 MB and a realistic
+/// one of a few hundred KB. What is dropped is the *oldest*, because the interesting end
+/// of a program that will not stop is the end it is still writing; [`RunOutput::dropped`]
+/// is what lets the view say so rather than silently showing a truncated story.
+const MAX_OUTPUT_LINES: usize = 5000;
+
+/// How often a program whose output has ended is asked whether it has exited.
+///
+/// Polled rather than waited on, and the reason is [`Running::stop`]: a blocking `wait`
+/// needs the `Child`, and holding it is exactly what would make a stop wait for the
+/// process it is trying to kill. Normally the first ask succeeds — both pipes reaching
+/// the end *is* the process exiting — so this interval is only paid by a program that
+/// closes its own output and lives on.
+const REAP_POLL: Duration = Duration::from_millis(20);
 
 /// What the one scratchpad the app opens is called, and so the directory it lives in.
 ///
@@ -180,6 +228,10 @@ pub enum Failure {
     /// cargo reported success and named no executable, which nothing in a generated
     /// package should be able to do. A third answer rather than an `unwrap`.
     NoArtifact,
+    /// The built program could not be started at all — deleted since the build, or on a
+    /// filesystem mounted `noexec`. Distinct from [`Failure::NoCargo`] because it is the
+    /// reader's own program and not the toolchain that is missing.
+    NoProgram(String),
 }
 
 /// What a build came back with.
@@ -491,6 +543,354 @@ impl Scratchpad {
             output.status.success(),
         )
     }
+
+    /// Start the program a build made, streaming what it writes into `emit` until it
+    /// ends.
+    ///
+    /// **The artifact is run, not `cargo run`**, and that is the one design decision in
+    /// here. `build_in` already asked cargo where it put the executable and cargo already
+    /// answered, so re-entering cargo would redo dependency resolution and a build to
+    /// arrive back at the path this is handed — and it could arrive at a *different* one,
+    /// since the reader has very likely typed since. What runs would then not be what the
+    /// diagnostics on screen are about. It is also the only shape in which stopping means
+    /// anything: killing a `cargo run` kills cargo, whose child goes on running with
+    /// nothing left holding it, whereas the process spawned here **is** the reader's
+    /// program. And cargo's own progress lines would arrive interleaved into the stream
+    /// the reader is reading as the output of what they wrote.
+    ///
+    /// The working directory is the scratchpad's own, which is what `cargo run` would
+    /// have given it — a program that opens a relative path finds the package it was
+    /// written in. stdin is null for [`Scratchpad::build`]'s reason: nothing can answer a
+    /// question asked of a process with no terminal.
+    pub fn run(
+        &self,
+        executable: &Path,
+        emit: impl FnMut(RunEvent) + Send + 'static,
+    ) -> Result<Running, Failure> {
+        match self.directory() {
+            Some(directory) => run_in(executable, &directory, emit),
+            None => Err(Failure::NoDirectory),
+        }
+    }
+}
+
+/// [`Scratchpad::run`], in a directory of the caller's choosing.
+///
+/// Not blocking, unlike everything else this module hands the worker: it forks, wires up
+/// two threads to the process's two pipes, and returns. Every wait after that is on one
+/// of those threads.
+pub fn run_in(
+    executable: &Path,
+    directory: &Path,
+    emit: impl FnMut(RunEvent) + Send + 'static,
+) -> Result<Running, Failure> {
+    let mut child = Command::new(executable)
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| Failure::NoProgram(error.to_string()))?;
+
+    // Taken before the child goes behind the mutex, since a reader thread owns its pipe
+    // outright and must never need the lock a stop is waiting on.
+    let out = child.stdout.take();
+    let err = child.stderr.take();
+
+    let process = Arc::new(Process {
+        child: Mutex::new(child),
+        over: AtomicBool::new(false),
+        stopped: AtomicBool::new(false),
+    });
+    let running = Running(process.clone());
+    remember(&running);
+
+    // One `emit` behind one lock, so the two streams interleave in the order the program
+    // actually wrote them rather than in two lists a view would have to merge. Holding it
+    // across the call is deliberate: the callback is what carries a line to the UI, so a
+    // consumer that has fallen behind blocks a reader thread, which fills a pipe, which
+    // blocks the program itself. That is the *only* backpressure available against a
+    // program printing in a tight loop, and it is exactly the right one — the alternative
+    // is a queue that grows as fast as the program can write.
+    let emit: Emit = Arc::new(Mutex::new(Box::new(emit)));
+
+    // A run is over when both of its pipes have reached the end **and** the process has
+    // been reaped, and the last pipe to finish is what says so. No third thread and no
+    // polling in the ordinary case: the pipes end because the process exited. A program
+    // that hands its output to a grandchild outliving it is therefore reported as still
+    // running until that grandchild lets go, which is the honest answer rather than a
+    // wrong one — the output is still coming.
+    let unfinished = Arc::new(AtomicUsize::new(2));
+    pipe_thread(out, Stream::Out, &emit, &unfinished, &process);
+    pipe_thread(err, Stream::Err, &emit, &unfinished, &process);
+
+    Ok(running)
+}
+
+/// Stop every program any scratchpad has started and that has not ended by itself.
+///
+/// For the window's close hook, which is a `Send` callback that can read no `State` —
+/// `project.rs`'s `flush` is there for the same reason and this sits beside it. **A child
+/// process outliving the app is a bug and not an untidiness**: it holds a terminal, a
+/// port or a file the next run will want, and nothing in the app would ever be able to
+/// find it again. What it cannot cover is the app being killed rather than closed, where
+/// no hook of ours runs at all; that is the same bound `project.rs` accepts for a save.
+pub fn stop_all() {
+    let running = {
+        let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
+        std::mem::take(&mut *list)
+    };
+    for running in running {
+        running.stop();
+    }
+}
+
+/// Which of a program's two output streams a line came from. The whole of what the view
+/// needs to draw them differently, and the whole of what this module claims about them:
+/// `stderr` is *not* an error, it is the other stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stream {
+    Out,
+    Err,
+}
+
+/// One line a running program wrote.
+///
+/// The text is an `Arc<str>` rather than a `String` because the app keeps thousands of
+/// these in a value it clones whenever a line is added to it; a clone is then a run of
+/// refcount bumps instead of a run of allocations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputLine {
+    pub stream: Stream,
+    pub text: Arc<str>,
+}
+
+/// What a running program has written, bounded.
+///
+/// Bounded *here*, in the model, and not by the view trimming a list it was handed: how
+/// much of a program's output is kept is a decision with a reason (see
+/// [`MAX_OUTPUT_LINES`]), and a decision with a reason belongs where it can be tested
+/// without a window.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunOutput {
+    lines: VecDeque<OutputLine>,
+    dropped: usize,
+}
+
+impl RunOutput {
+    /// Keep one more line, letting the oldest go if that is what it costs.
+    pub fn push(&mut self, line: OutputLine) {
+        if self.lines.len() >= MAX_OUTPUT_LINES {
+            self.lines.pop_front();
+            self.dropped += 1;
+        }
+        self.lines.push_back(line);
+    }
+
+    pub fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// The line at `index`, counting from the oldest one still kept.
+    pub fn line(&self, index: usize) -> Option<&OutputLine> {
+        self.lines.get(index)
+    }
+
+    /// How many lines were let go to make room. Not a detail: a reader looking at a list
+    /// that starts in the middle of a sentence has to be told that is what it is.
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+}
+
+/// What a run says as it goes. Every one of them is something the view appends to what it
+/// is already showing, which is what makes streaming a matter of *when* they arrive
+/// rather than of what they are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunEvent {
+    Wrote(OutputLine),
+    /// The last thing any run says, and it is said exactly once.
+    Ended(Ended),
+}
+
+/// How a run finished.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ended {
+    /// The program returned by itself. `None` where the system ended it without one — a
+    /// signal on Unix — which is a different thing from exiting with a code of zero.
+    Exited(Option<i32>),
+    /// [`Running::stop`] was asked for. Reported as its own answer rather than as the
+    /// exit status a killed process leaves behind, because "you stopped it" and "it died"
+    /// are different things to the person who pressed the button.
+    Stopped,
+    /// It could not be waited for. Nothing normal reaches this.
+    Failed(String),
+}
+
+/// A program that was started, and the only thing that can stop it.
+///
+/// Cloneable and cheap, because the app holds one of these in a state it clones on every
+/// render and [`stop_all`] holds another.
+#[derive(Clone)]
+pub struct Running(Arc<Process>);
+
+impl Running {
+    /// Kill it.
+    ///
+    /// **This really kills the process** — `SIGKILL` on Unix, `TerminateProcess` on
+    /// Windows — rather than dropping the handle, which would do nothing at all: `Child`'s
+    /// own `Drop` deliberately does not wait and deliberately does not kill, so a run
+    /// abandoned rather than stopped goes on running with nothing left that could ever
+    /// find it. What it does not reach is a *grandchild*: a process the reader's program
+    /// spawned is not this app's to kill without putting the run in a process group of
+    /// its own, which is a platform-specific piece of `libc` this does not carry.
+    ///
+    /// Ends immediately if the run is already over, so a stop that races an exit cannot
+    /// name a pid the system has since given to somebody else — and `Child::kill` refuses
+    /// a reaped child for the same reason, so the guard is doubled and neither half is
+    /// load-bearing on its own.
+    pub fn stop(&self) {
+        self.0.stopped.store(true, Ordering::SeqCst);
+        if self.0.over.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let mut child = self.0.child.lock().unwrap_or_else(|held| held.into_inner());
+        let _ = child.kill();
+    }
+
+    /// Whether it has ended and been reaped.
+    pub fn finished(&self) -> bool {
+        self.0.over.load(Ordering::SeqCst)
+    }
+}
+
+/// The process behind a [`Running`], shared by the handle, the two pipe threads and the
+/// list [`stop_all`] walks.
+struct Process {
+    /// Behind a `Mutex` because a stop and the reap race by construction, and every
+    /// operation taken under it is a syscall that returns at once — which is why the reap
+    /// polls rather than waits (see [`REAP_POLL`]).
+    child: Mutex<Child>,
+    over: AtomicBool,
+    stopped: AtomicBool,
+}
+
+impl Process {
+    /// Wait for the process to be gone, and say how it went.
+    fn reap(&self) -> Ended {
+        loop {
+            {
+                let mut child = self.child.lock().unwrap_or_else(|held| held.into_inner());
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        self.over.store(true, Ordering::SeqCst);
+                        return match self.stopped.load(Ordering::SeqCst) {
+                            true => Ended::Stopped,
+                            false => Ended::Exited(status.code()),
+                        };
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.over.store(true, Ordering::SeqCst);
+                        return Ended::Failed(error.to_string());
+                    }
+                }
+            }
+            thread::sleep(REAP_POLL);
+        }
+    }
+}
+
+/// One boxed callback behind one lock: what both pipe threads write a line through.
+type Emit = Arc<Mutex<Box<dyn FnMut(RunEvent) + Send>>>;
+
+/// Read one of the process's pipes on a thread of its own, and let the last of the two to
+/// finish say the run is over.
+fn pipe_thread<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    stream: Stream,
+    emit: &Emit,
+    unfinished: &Arc<AtomicUsize>,
+    process: &Arc<Process>,
+) {
+    let (emit, unfinished, process) = (emit.clone(), unfinished.clone(), process.clone());
+    thread::spawn(move || {
+        // `None` cannot happen for a `Stdio::piped()` child that was just spawned, but a
+        // pipe that is not there is simply a pipe with nothing on it, and answering that
+        // way keeps the two-must-finish count honest either way.
+        if let Some(pipe) = pipe {
+            stream_lines(BufReader::new(pipe), stream, |line| {
+                let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
+                emit(RunEvent::Wrote(line));
+            });
+        }
+
+        if unfinished.fetch_sub(1, Ordering::SeqCst) != 1 {
+            return;
+        }
+
+        let ended = process.reap();
+        forget(&process);
+        let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
+        emit(RunEvent::Ended(ended));
+    });
+}
+
+/// Split what a program writes into lines and hand each one over as it arrives.
+///
+/// A function of its own rather than three lines inside the thread, because both of the
+/// bounds that matter are in it and neither needs a process to be tested: a line is cut
+/// at [`MAX_LINE`] and continues on the next, so output with no newline in it at all is
+/// still *delivered* rather than accumulating for ever, and the delivery is per line
+/// rather than per read so the view is told what it has as soon as there is a line of it.
+/// Invalid UTF-8 is taken lossily, for the reason a diagnostic is: what a program writes
+/// is not this app's to reject.
+fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(OutputLine)) {
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        match reader
+            .by_ref()
+            .take(MAX_LINE)
+            .read_until(b'\n', &mut buffer)
+        {
+            // The end of the pipe, which is the end of the program's output.
+            Ok(0) => return,
+            Ok(_) => {}
+            // A pipe that will not read is one with nothing more to say.
+            Err(_) => return,
+        }
+
+        // The terminator, and a `\r` in front of it: the rows are drawn one line each, so
+        // a carriage return left in would be a control character in the middle of a label.
+        while matches!(buffer.last(), Some(b'\n' | b'\r')) {
+            buffer.pop();
+        }
+
+        emit(OutputLine {
+            stream,
+            text: Arc::from(String::from_utf8_lossy(&buffer).as_ref()),
+        });
+    }
+}
+
+/// Everything started and not yet ended, so that [`stop_all`] can reach it without a
+/// handle. A `static` for the same reason `project.rs`'s save policy is one: the window's
+/// close hook is outside the component tree and can be handed nothing.
+static RUNNING: Mutex<Vec<Running>> = Mutex::new(Vec::new());
+
+fn remember(running: &Running) {
+    let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
+    // Anything that ended while nobody was looking. The list is walked on every start and
+    // every end, so it is as long as the number of programs running at once, which is one.
+    list.retain(|other| !other.finished());
+    list.push(running.clone());
+}
+
+fn forget(process: &Arc<Process>) {
+    let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
+    list.retain(|other| !Arc::ptr_eq(&other.0, process));
 }
 
 /// The directory scratchpads live in, beside `settings.toml` and the `projects/`
@@ -801,6 +1201,7 @@ impl fmt::Display for Failure {
             Failure::Write(error) => write!(formatter, "could not write the package: {error}"),
             Failure::NoCargo(error) => write!(formatter, "could not run cargo: {error}"),
             Failure::NoArtifact => write!(formatter, "cargo built nothing to open"),
+            Failure::NoProgram(error) => write!(formatter, "could not start it: {error}"),
         }
     }
 }
@@ -1221,6 +1622,217 @@ rand = \"0.8\"
         assert!(executable.is_file(), "{}", executable.display());
 
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// The line cap, over a reader that never says anything: a program writing megabytes
+    /// with no newline in it must still be *delivered*, in pieces, rather than kept in one
+    /// growing string nobody ever sees.
+    #[test]
+    fn a_line_with_no_end_to_it_is_cut_rather_than_kept() {
+        let written = "x".repeat(MAX_LINE as usize * 2 + 7);
+        let mut lines = Vec::new();
+        stream_lines(io::Cursor::new(written), Stream::Out, |line| {
+            lines.push(line)
+        });
+
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text.len(), MAX_LINE as usize);
+        assert_eq!(lines[1].text.len(), MAX_LINE as usize);
+        assert_eq!(lines[2].text.len(), 7);
+        assert!(lines.iter().all(|line| line.stream == Stream::Out));
+    }
+
+    /// And the ordinary case, including the two things a naive `read_line` gets wrong: a
+    /// Windows line ending left in the text, and a last line with no terminator at all
+    /// being dropped instead of delivered.
+    #[test]
+    fn lines_arrive_without_their_terminators() {
+        let mut lines = Vec::new();
+        stream_lines(
+            io::Cursor::new("first\r\nsecond\n\nlast"),
+            Stream::Err,
+            |line| lines.push(line),
+        );
+
+        let text: Vec<&str> = lines.iter().map(|line| &*line.text).collect();
+        assert_eq!(text, ["first", "second", "", "last"]);
+        assert!(lines.iter().all(|line| line.stream == Stream::Err));
+    }
+
+    /// The other bound. A program printing in a tight loop is not an edge case in a
+    /// scratchpad, so what has to be true is that the *oldest* goes and that the view can
+    /// say how much of the story it is missing.
+    #[test]
+    fn output_keeps_the_newest_and_counts_what_it_dropped() {
+        let mut output = RunOutput::default();
+        assert_eq!(output.len(), 0);
+
+        for line in 0..MAX_OUTPUT_LINES + 12 {
+            output.push(OutputLine {
+                stream: Stream::Out,
+                text: Arc::from(line.to_string().as_str()),
+            });
+        }
+
+        assert_eq!(output.len(), MAX_OUTPUT_LINES);
+        assert_eq!(output.dropped(), 12);
+        // The oldest kept is the twelfth written, and the newest is the last.
+        assert_eq!(&*output.line(0).expect("a line").text, "12");
+        assert_eq!(
+            &*output.line(MAX_OUTPUT_LINES - 1).expect("a line").text,
+            (MAX_OUTPUT_LINES + 11).to_string()
+        );
+        assert_eq!(output.line(MAX_OUTPUT_LINES), None);
+    }
+
+    /// Build a scratchpad whose source is `source` and hand back what to run. Hermetic
+    /// and needs no network for `an_empty_scratchpad_really_builds`'s reason: no
+    /// dependencies means no registry, so it is one rustc invocation in a temporary
+    /// directory.
+    fn program(directory: &Path, source: &str) -> PathBuf {
+        let mut scratchpad = scratchpad();
+        scratchpad.source = source.to_owned();
+
+        let build = scratchpad.build_in(directory);
+        let Build::Built { executable, .. } = &build else {
+            panic!("a build, got {build:?}");
+        };
+        executable.clone()
+    }
+
+    /// Whether [`stop_all`] would still reach this run. Not called here -- other tests
+    /// have programs of their own running in parallel threads of this same binary, and
+    /// stopping *all* of them is exactly what it does.
+    fn listed(running: &Running) -> bool {
+        RUNNING
+            .lock()
+            .expect("the list")
+            .iter()
+            .any(|other| Arc::ptr_eq(&other.0, &running.0))
+    }
+
+    /// Collect a run's events until it ends, or give up saying so.
+    fn until_ended(events: &std::sync::mpsc::Receiver<RunEvent>) -> Vec<RunEvent> {
+        let mut collected = Vec::new();
+        loop {
+            let event = events
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the run never ended");
+            let ended = matches!(event, RunEvent::Ended(_));
+            collected.push(event);
+            if ended {
+                return collected;
+            }
+        }
+    }
+
+    /// A program that prints and exits: both streams arrive, the end comes last, and the
+    /// exit status is the program's own.
+    ///
+    /// Asserted without an order *between* the streams, which is not a promise this module
+    /// makes and could not keep: two pipes read by two threads deliver in whatever order
+    /// the kernel woke them. Within a stream the order is the program's own, which is what
+    /// the other run tests rest on.
+    #[test]
+    fn a_program_that_prints_and_exits_is_streamed_and_reported() {
+        let directory = directory(line!());
+        let executable = program(
+            &directory,
+            "fn main() {\n\
+             \x20   println!(\"to stdout\");\n\
+             \x20   eprintln!(\"to stderr\");\n\
+             \x20   std::process::exit(3);\n\
+             }\n",
+        );
+
+        let (events, arrived) = std::sync::mpsc::channel();
+        let running = run_in(&executable, &directory, move |event| {
+            let _ = events.send(event);
+        })
+        .expect("it started");
+
+        let collected = until_ended(&arrived);
+        let (ended, written) = collected.split_last().expect("something happened");
+        // The program's own status, not a zero for having run at all, and said last.
+        assert_eq!(ended, &RunEvent::Ended(Ended::Exited(Some(3))));
+
+        let mut written: Vec<(Stream, String)> = written
+            .iter()
+            .map(|event| match event {
+                RunEvent::Wrote(line) => (line.stream, line.text.to_string()),
+                RunEvent::Ended(_) => panic!("it ended twice"),
+            })
+            .collect();
+        written.sort_by(|left, right| left.1.cmp(&right.1));
+        assert_eq!(
+            written,
+            vec![
+                (Stream::Err, "to stderr".to_owned()),
+                (Stream::Out, "to stdout".to_owned()),
+            ]
+        );
+        assert!(running.finished());
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// The hazard this whole sub-step is about: a program that does not exit.
+    ///
+    /// Two things have to be true and only a real process can say either. What it printed
+    /// **before** it stopped exiting is on screen — which is the difference between
+    /// streaming and collecting an output at exit, since this one has no exit — and asking
+    /// it to stop really ends it. `Ended::Stopped` arriving is itself the proof of the
+    /// second: it is emitted only after the process has been *reaped*, so a run that
+    /// reports it is a run the system no longer has.
+    #[test]
+    fn a_program_that_never_exits_still_says_something_and_can_be_killed() {
+        let directory = directory(line!());
+        let executable = program(
+            &directory,
+            "fn main() {\n\
+             \x20   println!(\"before the loop\");\n\
+             \x20   loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n\
+             }\n",
+        );
+
+        let (events, arrived) = std::sync::mpsc::channel();
+        let running = run_in(&executable, &directory, move |event| {
+            let _ = events.send(event);
+        })
+        .expect("it started");
+
+        // Said while it is still going, which is the whole point.
+        assert_eq!(
+            arrived.recv_timeout(Duration::from_secs(30)),
+            Ok(RunEvent::Wrote(OutputLine {
+                stream: Stream::Out,
+                text: Arc::from("before the loop"),
+            }))
+        );
+        assert!(!running.finished(), "it exited on its own");
+        // On the list the window's close hook walks, which is the only way a program
+        // still going when the app goes away can be reached at all.
+        assert!(listed(&running), "nothing would have stopped it at exit");
+
+        running.stop();
+        assert_eq!(until_ended(&arrived), vec![RunEvent::Ended(Ended::Stopped)]);
+        assert!(running.finished());
+        // And off it again, so a long session of runs is not a list of dead handles.
+        assert!(!listed(&running), "it stayed on the list after it ended");
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// Nothing to run is an answer and not a panic — the executable a build named can be
+    /// gone by the time the reader presses the button.
+    #[test]
+    fn a_program_that_is_not_there_says_so() {
+        let directory = directory(line!());
+        let failure = run_in(&directory.join("not-a-program"), &directory, |_| {})
+            .err()
+            .expect("a refusal");
+
+        assert!(matches!(failure, Failure::NoProgram(_)), "{failure:?}");
     }
 
     /// And the same directory built again with source that does not compile: what a

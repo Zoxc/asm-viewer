@@ -33,6 +33,13 @@ fn main() {
                 // close request; the periodic flush is what bounds the loss there.
                 .with_on_close(|_, _| {
                     project::flush();
+                    // And every program a scratchpad started. A child process outliving
+                    // the app is a real bug -- it holds whatever it opened and nothing
+                    // left in the app could ever find it again -- and the same sentence
+                    // above about a kill applies here too: what this covers is the way a
+                    // window is normally closed, which is the only exit freya 0.4 tells
+                    // us about at all.
+                    scratchpad::stop_all();
                     CloseDecision::Close
                 }),
         ),

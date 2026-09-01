@@ -437,6 +437,35 @@ status, which is what lets a failed build be a test over a canned stream. Three 
 the compiler said no (with cargo's own stderr kept, since `no matching package named ... found`
 is said there and nowhere else), or nothing was compiled at all.
 
+**Running is the artifact and not `cargo run`.** `run_in` spawns the executable `build_in` already
+asked cargo to name, in the scratchpad's own directory with a null stdin. Re-entering cargo would
+redo resolution to arrive back at that same path, could arrive at a *different* one (the reader has
+usually typed since, so what ran would not be what the diagnostics describe), would interleave
+cargo's progress into the stream the reader is reading as their program's output, and would make
+stopping meaningless — killing a `cargo run` kills cargo and leaves its child with nothing holding
+it. What the app is handed back is a `Running`, whose one job is `stop`: `Child::kill`, since
+`Child`'s own `Drop` neither waits nor kills, so a run abandoned rather than stopped goes on running
+with nothing that could ever find it again. A **grandchild is out of reach**, which would need the
+run in a process group of its own and a `libc` this crate does not carry. `stop_all` is the same
+thing for every run at once, off a `static`, because the window's close hook can read no state —
+`Saves`' reason exactly, and it sits beside `flush` in `main.rs`.
+
+**Output is streamed, not collected**, which is the whole difference from `build_in`'s
+run-it-and-return-the-output shape: a program that prints and then loops for ever has said
+something, and a value returned at exit would never say it. Two threads, one per pipe, hand each
+line to a callback as it arrives; whichever finishes last reaps the process and emits the one
+`Ended`. So a run is over when both pipes are at the end **and** the process is reaped — a program
+that hands its output to a grandchild outliving it reads as still running, which is the honest
+answer, since the output is still coming. The reap `try_wait`s on a poll rather than `wait`ing,
+because holding the `Child` is exactly what would make a stop wait for the process it is killing.
+**Three bounds, and each is a different failure**: `MAX_LINE` (4 KiB) cuts a line with no newline in
+it, so a program writing megabytes in one line is still *delivered* rather than accumulated;
+`MAX_OUTPUT_LINES` (5000) is what is kept, oldest first out, with `RunOutput::dropped` so the view
+can say the story is missing its beginning (a line cap and not a byte cap, because the view is a
+list of rows and a byte budget would make the row count depend on how long the lines happened to
+be); and the app's own `RUN_EVENTS`-bounded channel is backpressure that reaches the program itself
+— a full channel blocks the pipe thread, which fills the pipe, which blocks the writer.
+
 ## UI (freya 0.4)
 
 freya 0.4 is **not** Dioxus-based: no `rsx!`, no `#[component]`, no `use_signal`. It is a builder
@@ -875,6 +904,40 @@ compiled anything, and `[dependencies]` is the only part of the generated packag
 wrong — so cargo's own stderr, where `no matching package named ... found` is said and nowhere
 else, is drawn under the rows. Once the compiler has spoken, the same stderr says only what the
 diagnostics list already does and is dropped.
+
+**Running does not sit on that worker, and stopping does not go near it.** `PadJob::Run` only
+starts the program and comes straight back — it goes to the worker because it forks and because the
+directory it hands the program is that thread's, not because it blocks. A run has no bound on how
+long it takes (an accidental `loop {}` is the ordinary case in a buffer someone is experimenting
+in), so a run queued like a build would freeze every save behind it and the reader could not edit
+their way out. A stop is the same argument turned around: queued behind a build it would arrive
+after the thing it was meant to interrupt, so it is a direct `Running::stop` from the handler.
+`RunState` has four states because `Starting` is the one a `bool` loses — a fork is fast but not
+instant, and a Stop pressed inside that window is remembered by leaving `Starting`, which is what
+makes the arriving handle unwanted and stopped where it lands. `Over(Stopped)` is written by the
+run's own `Ended` and never by the button, so the pane says "Stopped" when the process is gone
+rather than when it was asked. **Events carry a run number**, which `use_analysis` was at pains not
+to need: it can compare identities because an answer carries the `Symbol` it is about and that
+symbol predates the request, whereas the process an event is about does not exist until after the
+first bytes can be written. Stopping one program and starting another is one keypress, and untagged
+the first one's last lines and its `Ended` would land in the second's output. **stdout and stderr
+are told apart by colour and by nothing else**, and deliberately not by the red every invalid thing
+wears: stderr is not an error, it is the other stream, so it takes the palette's one warm hue.
+Between the two streams there is no order to preserve and none is claimed — two pipes read by two
+threads, which is all a terminal has either. Recorded, not built: the list does not follow the
+newest line, so a long run has to be scrolled; auto-follow needs the viewport height and a "the
+reader has scrolled away" rule, which is `reveal_row`'s shape and its own piece of work.
+
+**What stops a run**: the Stop button, a rebuild, the next run, and the window closing. A **rebuild**
+stops it for three separate sufficient reasons — cargo is about to write over the file the process
+*is*, `reopen_binary` is about to close the objects describing those bytes, and one scratchpad has
+one output pane. The **next run** stops it because two generations of output arriving into one list
+is a pane with no answer to "what is this". An **edit** stops nothing, deliberately: a run is of an
+executable and not of the buffer, and a keystroke that killed the reader's program would make it
+impossible to take a note about what it printed. A **project switch** stops nothing either, and for
+a reason that is already settled — `Pad` is not one of the nine states in `ProjectStates`, because
+there is one scratchpad and it belongs to the app rather than to a project, so a switch never
+touches it.
 
 **A rebuild replaces rather than accumulates.** `reopen_binary` is `close_binary` followed by what
 the toolbar's Open does, in one handler: a binary is a **path** throughout this app — that is what

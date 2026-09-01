@@ -381,7 +381,20 @@ one item per part, so the unfinished half stays visible.
   build that cargo rejects *before compiling anything* is shown against the rows rather than
   searched for a crate name: the dependency list is the only part of the generated package this
   pane can get wrong, so no compiler diagnostics means the rows are where the answer is.
-- [ ] Allow these files to run with output viewable. Building is in; running is not.
+- [x] Allow these files to run with output viewable. The built artifact is spawned directly
+  rather than through `cargo run`: the build already asked cargo where it put the executable, and
+  re-entering cargo would redo resolution, interleave its own progress lines into what the reader
+  is reading as their program's output, and leave a killed `cargo run` with a child nobody holds.
+  Output streams line by line while the program is going, stdout and stderr told apart by colour,
+  and Stop is a real kill rather than a dropped handle — `Child`'s `Drop` neither waits nor
+  kills. A run is also ended by a rebuild (cargo is about to overwrite the file the process *is*)
+  and by closing the window; an edit ends nothing, a run being of an executable rather than of
+  the buffer. Bounded three ways, each a different failure: a line with no newline is cut rather
+  than accumulated, the oldest lines are dropped past a cap and the pane says how many, and the
+  channel is bounded so backpressure reaches the program itself.
+- [ ] Follow the newest line of a running scratchpad's output. It has to be scrolled by hand
+  today, so a long run scrolls away from the reader. Needs the viewport height and a "the reader
+  has scrolled away, leave them there" rule — the same shape `reveal_row` already has.
 
 ## Binary inspection design
 

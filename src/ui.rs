@@ -24,7 +24,10 @@ use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 use crate::project::{self, Details, Project, ProjectId, Recent, Selection, Session};
 use crate::rows::RowSelection;
-use crate::scratchpad::{Build, Dependency, Diagnostic, Failure, Half, Level, Problem, Scratchpad};
+use crate::scratchpad::{
+    Build, Dependency, Diagnostic, Ended, Failure, Half, Level, Problem, RunEvent, RunOutput,
+    Running, Scratchpad, Stream,
+};
 use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 use crate::source::{self, SourceFile};
 use crate::tabs::{Positions, Tabs};
@@ -5136,8 +5139,25 @@ struct PadText(State<CodeEditorData>);
 
 /// The way to ask the scratchpad's worker for something, shared through context so that a
 /// button in the pane can ask without the pane owning the thread.
+///
+/// Two senders and not one, because they carry traffic of two different shapes. `jobs` is
+/// what the reader asked for, one message per press. `events` is what a *running program*
+/// is saying, which is as many messages a second as it cares to write -- so it is
+/// [`RUN_EVENTS`]-bounded where the other is unbounded, and that bound is the app's half
+/// of the backpressure `scratchpad.rs` documents: a full channel blocks the thread reading
+/// the pipe, which fills the pipe, which blocks the program.
 #[derive(Clone)]
-struct PadJobs(async_channel::Sender<PadJob>);
+struct PadJobs {
+    jobs: async_channel::Sender<PadJob>,
+    events: async_channel::Sender<(u64, RunEvent)>,
+}
+
+/// How many of a running program's lines may sit between the pipe and the pane.
+///
+/// Big enough that an ordinary burst is never throttled and small enough that the queue is
+/// not somewhere output can pile up unnoticed. It is a *bound* and not a buffer size: the
+/// point is that there is a number here at all.
+const RUN_EVENTS: usize = 512;
 
 /// Everything the Scratchpad pane draws.
 #[derive(Clone, Default)]
@@ -5166,6 +5186,42 @@ struct PadState {
     /// stops the *source* being written too, and the pane has to say so where the reader
     /// is looking. It is one sentence over the rows, which each say their own half.
     unsaved: Option<Failure>,
+    /// Which run the arriving output belongs to, counted up by [`request_run`].
+    ///
+    /// **A number, where `use_analysis` was at pains not to have one** -- and the
+    /// difference is worth stating, since the rule there is that superseding is a
+    /// comparison and never a counter. It could compare because an answer carries the
+    /// `Symbol` it is about and that symbol existed *before* the request. Here the thing an
+    /// event is about is the process, and the process does not exist until the worker has
+    /// forked -- by which time the first lines can already be on their way. There is
+    /// nothing yet to compare against, so the run is numbered instead. It matters for a
+    /// gesture that is one keypress long: stopping a program and starting another leaves
+    /// the first one's last lines and its `Ended` still in flight, and untagged they would
+    /// land in the new run's output and mark it finished.
+    run: u64,
+    run_state: RunState,
+    /// What the running program has written. Behind an `Arc` because this struct is cloned
+    /// on every render and on every answer the worker sends, and the deque under it holds
+    /// thousands of lines: the clone is a refcount bump, and appending is one
+    /// `Arc::make_mut` per *batch* of arrivals rather than one per line.
+    output: Arc<RunOutput>,
+}
+
+/// Where the program the reader started has got to.
+///
+/// Four states and not a `bool`, because three of them draw differently and the fourth --
+/// [`RunState::Starting`] -- is the one a `bool` would get wrong: a fork is fast but it is
+/// not instant, and a Stop pressed in that window has to be remembered rather than
+/// dropped. `Idle` is not "not running", it is *nothing has been run*, which is why the
+/// output pane is absent rather than empty before the first press.
+#[derive(Clone, Default)]
+enum RunState {
+    #[default]
+    Idle,
+    /// Asked for; the worker has not come back with a handle yet.
+    Starting,
+    Going(Running),
+    Over(Ended),
 }
 
 impl PadState {
@@ -5235,6 +5291,49 @@ impl PadState {
             Build::Unavailable(failure) => Some((failure.to_string(), true)),
         }
     }
+
+    /// What the last build made, and so what there is to run.
+    ///
+    /// The path cargo *named*, carried through from the build rather than derived here --
+    /// which is the same argument `scratchpad.rs` makes for asking cargo in the first
+    /// place, and the reason the Run button is unavailable until something has been built:
+    /// what runs is then, by construction, what the diagnostics on screen are about.
+    fn executable(&self) -> Option<&Path> {
+        match &self.built {
+            Some(Build::Built { executable, .. }) => Some(executable),
+            _ => None,
+        }
+    }
+
+    /// Whether a program is on its way up or already going.
+    fn is_running(&self) -> bool {
+        matches!(self.run_state, RunState::Starting | RunState::Going(_))
+    }
+
+    /// The line over the output, saying where the run got to, and whether that is bad
+    /// news. `None` before anything has been run, which is what leaves the pane out.
+    fn run_status(&self) -> Option<(String, bool)> {
+        let dropped = match self.output.dropped() {
+            0 => String::new(),
+            1 => " (1 earlier line dropped)".to_owned(),
+            count => format!(" ({count} earlier lines dropped)"),
+        };
+
+        let (text, bad) = match &self.run_state {
+            RunState::Idle => return None,
+            RunState::Starting => ("Starting...".to_owned(), false),
+            RunState::Going(_) => ("Running".to_owned(), false),
+            RunState::Over(Ended::Exited(Some(0))) => ("Exited".to_owned(), false),
+            RunState::Over(Ended::Exited(Some(code))) => (format!("Exited with {code}"), true),
+            // A signal on Unix. Spelt as what is *known* rather than as a guess at which,
+            // since the number is not portable and the app has no use for it.
+            RunState::Over(Ended::Exited(None)) => ("Ended with no exit code".to_owned(), true),
+            RunState::Over(Ended::Stopped) => ("Stopped".to_owned(), false),
+            RunState::Over(Ended::Failed(error)) => (format!("Could not run it: {error}"), true),
+        };
+
+        Some((format!("{text}{dropped}"), bad))
+    }
 }
 
 /// What the scratchpad's worker thread is asked for. Each carries the whole scratchpad
@@ -5244,6 +5343,21 @@ enum PadJob {
     Open(Scratchpad),
     Save(Scratchpad),
     Build(Scratchpad),
+    /// Start what the last build made. The odd one out: it is not blocking work, and what
+    /// it hands back is a handle rather than an answer. It goes to the worker all the same
+    /// because it *forks*, and the thread that draws has no business doing that -- and
+    /// because the scratchpad's directory, which becomes the program's working directory,
+    /// is this thread's to hand out.
+    Run {
+        /// Which run this is, carried so that a handle arriving after the reader has moved
+        /// on can be recognised and stopped rather than stored. See [`PadState::run`].
+        run: u64,
+        scratchpad: Scratchpad,
+        executable: PathBuf,
+        /// Where each line goes as it is written. A boxed callback rather than a channel,
+        /// so `scratchpad.rs` never learns what the app carries its values in.
+        emit: Box<dyn FnMut(RunEvent) + Send>,
+    },
 }
 
 /// What it answers with.
@@ -5252,6 +5366,10 @@ enum PadAnswer {
     /// Why the package could not be written, or `None` when it was.
     Saved(Option<Failure>),
     Built(Build),
+    /// The handle to a started program, or why there is none. Everything the program then
+    /// *says* arrives on the other channel, not here: this is the answer to "did it
+    /// start", and the run itself has no answer, only an end.
+    Started(u64, Result<Running, Failure>),
 }
 
 /// The work itself: the three blocking calls `scratchpad.rs` documents as never belonging
@@ -5263,6 +5381,12 @@ fn pad_work(job: PadJob) -> PadAnswer {
         PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad.opened()),
         PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.write().err()),
         PadJob::Build(scratchpad) => PadAnswer::Built(scratchpad.build()),
+        PadJob::Run {
+            run,
+            scratchpad,
+            executable,
+            emit,
+        } => PadAnswer::Started(run, scratchpad.run(&executable, emit)),
     }
 }
 
@@ -5282,6 +5406,16 @@ fn pad_work(job: PadJob) -> PadAnswer {
 /// holding is a save: only the newest says anything, and a build that has arrived behind
 /// one writes the package itself on its way past. A build is what the reader *asked* for
 /// and its answer is the point, so it is never dropped.
+///
+/// **A run does not sit on that thread**, which is the one thing 10d added to the shape.
+/// `PadJob::Run` only starts the program and comes straight back; the program itself lives
+/// on two threads of `scratchpad.rs`'s and reports on a second channel. It has to be that
+/// way round for a reason the other three jobs do not have: a run has no bound on how long
+/// it takes -- an accidental `loop {}` is the ordinary case in a buffer somebody is
+/// experimenting in -- and a run queued like a build would freeze every save behind it, so
+/// the reader could not even edit their way out of it. **Stopping does not go through the
+/// worker either**, for the same reason turned around: a stop queued behind a build would
+/// arrive after the thing it was meant to interrupt.
 fn use_scratchpad(pad: State<PadState>, text: State<CodeEditorData>, states: ProjectStates) {
     use_scratchpad_with(pad, text, states, pad_work);
 }
@@ -5311,6 +5445,11 @@ fn use_scratchpad_with(
         move || {
             let (requests, jobs) = async_channel::unbounded::<PadJob>();
             let (answered, answers) = async_channel::unbounded::<PadAnswer>();
+            // One channel for the app's lifetime rather than one per run, which is what
+            // makes the run number on each event necessary and is also what makes it
+            // enough: a stopped run's last lines have somewhere to go, and are recognised
+            // and dropped when they get there.
+            let (emitted, events) = async_channel::bounded::<(u64, RunEvent)>(RUN_EVENTS);
 
             std::thread::spawn(move || {
                 while let Ok(job) = jobs.recv_blocking() {
@@ -5395,25 +5534,86 @@ fn use_scratchpad_with(
                                 reopen_binary(states, executable);
                             }
                         }
+                        PadAnswer::Started(run, started) => {
+                            let mut next = pad.peek().clone();
+                            // A handle for a run the reader has already left -- they
+                            // pressed Stop or Run again inside the fork. It is stopped
+                            // here and nowhere else, because this is the first moment
+                            // anything in the app is holding it: dropping it instead would
+                            // leave a process running that nothing could ever name again.
+                            let mine =
+                                next.run == run && matches!(next.run_state, RunState::Starting);
+                            match started {
+                                Ok(running) if mine => next.run_state = RunState::Going(running),
+                                Ok(running) => running.stop(),
+                                Err(failure) if mine => {
+                                    next.run_state =
+                                        RunState::Over(Ended::Failed(failure.to_string()))
+                                }
+                                Err(_) => {}
+                            }
+                            pad.set(next);
+                        }
                     }
                 }
             });
 
-            requests
+            // What a running program is saying. A task of its own beside the answers,
+            // since the two channels are answering different questions and a program that
+            // never ends would otherwise be sharing a loop with every save.
+            spawn(async move {
+                while let Ok(first) = events.recv().await {
+                    // Everything else already queued, taken in one go. A program printing
+                    // in a tight loop would otherwise wake this task per line, and each
+                    // wake is a state write and so a render: coalescing makes the cost one
+                    // render per batch, which is the same "drain the queue" the analysis
+                    // worker does for the same reason.
+                    let mut batch = vec![first];
+                    while let Ok(more) = events.try_recv() {
+                        batch.push(more);
+                    }
+
+                    let mut next = pad.peek().clone();
+                    let mut changed = false;
+                    for (run, event) in batch {
+                        // A run the reader has left. Its lines are not this run's output
+                        // and its ending is not this run's ending.
+                        if run != next.run {
+                            continue;
+                        }
+                        changed = true;
+                        match event {
+                            RunEvent::Wrote(line) => Arc::make_mut(&mut next.output).push(line),
+                            RunEvent::Ended(ended) => next.run_state = RunState::Over(ended),
+                        }
+                    }
+
+                    if changed {
+                        pad.set(next);
+                    }
+                }
+            });
+
+            PadJobs {
+                jobs: requests,
+                events: emitted,
+            }
         }
     });
 
     // How the pane asks for a build. A context rather than an argument, because the
     // button that asks is inside a dockable view that is handed nothing, and returned as
     // well so that a test can ask without going through a button.
-    let jobs = use_provide_context(|| PadJobs(requests.clone()));
+    let jobs = use_provide_context(|| requests.clone());
 
     // What is on disk, asked for once. `use_hook` runs on mount and never again, which is
     // what makes this the app's one reading of the scratchpad.
     use_hook({
         let requests = requests.clone();
         move || {
-            let _ = requests.try_send(PadJob::Open(pad.peek().scratchpad.clone()));
+            let _ = requests
+                .jobs
+                .try_send(PadJob::Open(pad.peek().scratchpad.clone()));
         }
     });
 
@@ -5440,7 +5640,7 @@ fn use_scratchpad_with(
         let mut sent = sent.borrow_mut();
         if sent.as_ref() != Some(&state.scratchpad) {
             *sent = Some(state.scratchpad.clone());
-            let _ = requests.try_send(PadJob::Save(state.scratchpad));
+            let _ = requests.jobs.try_send(PadJob::Save(state.scratchpad));
         }
     });
 
@@ -5470,8 +5670,83 @@ fn request_build(mut pad: State<PadState>, jobs: &PadJobs) {
         return;
     }
 
+    // **A rebuild stops what the last one started.** Three reasons and each is sufficient:
+    // cargo is about to write over the very file this process is running, which on some
+    // systems is refused outright and on the rest silently makes the running program a
+    // different program from the one on screen; `reopen_binary` is about to close the
+    // objects that describe those bytes, so the listing the reader would go back to is
+    // gone; and there is one Run button for one scratchpad, so a build that left a program
+    // going would leave the reader with an output pane belonging to a build they can no
+    // longer see. Editing stops nothing, deliberately -- a run is of an executable and not
+    // of the buffer, and a keystroke that killed the reader's program would make it
+    // impossible to take a note about what it printed.
+    stop_run(pad);
+
     pad.write().building = true;
-    let _ = jobs.0.try_send(PadJob::Build(state.scratchpad));
+    let _ = jobs.jobs.try_send(PadJob::Build(state.scratchpad));
+}
+
+/// Run what the last build made.
+///
+/// Nothing happens without an executable, which is why the button is unavailable until a
+/// build has succeeded: the alternative -- Run building first -- makes one press mean two
+/// things, and puts a page of diagnostics on screen in answer to a request to run.
+///
+/// Whatever was running is stopped first. One scratchpad, one program: two generations of
+/// output arriving into one list is a pane with no answer to "what is this", and the
+/// second run's own first line would sit under the first run's last.
+fn request_run(mut pad: State<PadState>, jobs: &PadJobs) {
+    let state = pad.peek().clone();
+    let Some(executable) = state.executable().map(Path::to_path_buf) else {
+        return;
+    };
+
+    stop_run(pad);
+
+    // The output starts empty and the run is numbered: everything still on its way from
+    // the run before this one is now for a number nobody is listening to.
+    let run = state.run + 1;
+    let mut next = pad.peek().clone();
+    next.run = run;
+    next.run_state = RunState::Starting;
+    next.output = Arc::new(RunOutput::default());
+    pad.set(next);
+
+    let events = jobs.events.clone();
+    let _ = jobs.jobs.try_send(PadJob::Run {
+        run,
+        scratchpad: state.scratchpad,
+        executable,
+        // `send_blocking` and not `try_send`: a full channel has to *stop* the thread
+        // reading the pipe, which is what puts the brakes on the program itself. Dropping
+        // the line instead would be an output with silent holes in it.
+        emit: Box::new(move |event| {
+            let _ = events.send_blocking((run, event));
+        }),
+    });
+}
+
+/// Stop the program, for real.
+///
+/// The `Going` case is the whole of it: `Running::stop` kills the process, and the state
+/// is *not* set to `Over` here -- the run's own `Ended` event is what says it, and it is
+/// emitted only once the process has been reaped. So the pane says "Stopped" when the
+/// program is actually gone rather than when the button was pressed.
+///
+/// `Starting` is the case a `bool` would have lost: the fork has been asked for and has
+/// not come back, so there is nothing to kill yet. Leaving `Starting` behind is what makes
+/// the handle unwanted when it arrives, and the answer handler stops it there.
+fn stop_run(mut pad: State<PadState>) {
+    let state = pad.peek().clone();
+    match &state.run_state {
+        RunState::Going(running) => running.stop(),
+        RunState::Starting => {
+            let mut next = state;
+            next.run_state = RunState::Over(Ended::Stopped);
+            pad.set(next);
+        }
+        RunState::Idle | RunState::Over(_) => {}
+    }
 }
 
 /// Open the binary at `path` in place of whatever the app already had from it.
@@ -5821,6 +6096,52 @@ impl Component for SourceEditor {
     }
 }
 
+/// The lines a running program has written, as the row builder is handed them.
+///
+/// A wrapper for the identity: `PartialEq` here is `Arc::ptr_eq`, the app's rule
+/// everywhere, and it is load-bearing rather than an optimisation -- deriving it would
+/// compare thousands of strings on every render of a pane that is being appended to
+/// several times a second.
+#[derive(Clone)]
+struct OutputRows(Arc<RunOutput>);
+
+impl PartialEq for OutputRows {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// One line, in the colour of the stream it came from.
+///
+/// **stdout and stderr are told apart by colour and by nothing else**, and the colour is
+/// deliberately not the red every invalid thing in the app wears: a program writing to
+/// stderr is not a program in error -- logs, progress and prompts all go there -- so it
+/// takes `string_fg`, the palette's one warm hue and the colour a warning already is. Both
+/// are palette fields, so both are answered in the dark theme by the same contrast floor
+/// every other foreground is held to.
+fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
+    let color = match line.stream {
+        Stream::Out => palette().text_fg,
+        Stream::Err => palette().string_fg,
+    };
+
+    rect()
+        .width(Size::fill())
+        .height(Size::px(row_height()))
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .padding(Gaps::new_symmetric(0.0, 12.0))
+        .overflow(Overflow::Clip)
+        .child(
+            label()
+                .text(line.text.to_string())
+                .assembly_font()
+                .color(color)
+                .max_lines(1),
+        )
+        .into_element()
+}
+
 /// The Scratchpad pane: a source file the reader edits, the crates it asks for, a build,
 /// and what the compiler said about it.
 ///
@@ -5867,6 +6188,78 @@ impl Component for ScratchpadTab {
             None => "nowhere to keep a scratchpad".to_owned(),
         };
 
+        // **One button, because there is one program.** While something is running the
+        // only thing to want from it is to stop it, and a Run beside a Stop would be two
+        // controls whose combined meaning has to be worked out. It is never both disabled
+        // and hiding something: with nothing built there is nothing to run, and the status
+        // line above says whether a build has happened.
+        let running = state.is_running();
+        let run_jobs = jobs.clone();
+        let run = Button::new()
+            .enabled(running || (state.executable().is_some() && !state.building))
+            .on_press(move |_| match running {
+                true => stop_run(pad),
+                false => request_run(pad, &run_jobs),
+            })
+            .child(match running {
+                true => "Stop",
+                false => "Run",
+            })
+            .into_element();
+
+        let output = state.run_status().map(|(text, bad)| {
+            let lines = state.output.clone();
+            let length = lines.len();
+
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .background(palette().asm_pane_bg)
+                .border(bottom_hairline())
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .height(Size::px(row_height()))
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .padding(Gaps::new_symmetric(0.0, 12.0))
+                        .spacing(8.0)
+                        .content(Content::Flex)
+                        .overflow(Overflow::Clip)
+                        .child(label().text("Output").font_weight(FontWeight::BOLD))
+                        .child(
+                            label()
+                                .text(text)
+                                .width(Size::flex(1.0))
+                                .color(match bad {
+                                    true => palette().invalid_fg,
+                                    false => palette().address_fg,
+                                })
+                                .max_lines(1),
+                        ),
+                )
+                .child(
+                    // The lines go through `new_with_data` and are not captured, which is
+                    // the gotcha this list would otherwise walk straight into: the builder
+                    // closure is never compared across renders, so a captured `Arc` would
+                    // draw the first batch of output for ever.
+                    VirtualScrollView::new_with_data(
+                        OutputRows(lines),
+                        |index, rows: &OutputRows| match rows.0.line(index) {
+                            Some(line) => output_row(line),
+                            // Only reachable if the list shortened between the length
+                            // being read and the row being asked for, which the cap cannot
+                            // do -- it drops from the front and keeps the count. An empty
+                            // row rather than an index that panics all the same.
+                            None => rect().height(Size::px(row_height())).into_element(),
+                        },
+                    )
+                    .length(length)
+                    .item_size(row_height()),
+                )
+                .into_element()
+        });
+
         rect()
             .expanded()
             .content(Content::Flex)
@@ -5879,17 +6272,25 @@ impl Component for ScratchpadTab {
                     .child(section_heading(
                         "Scratchpad",
                         Some(
-                            Button::new()
-                                // The whole of "two builds cannot be started at once", on
-                                // the control as well as in `request_build`: a build takes
-                                // seconds, and a button that goes on looking pressable
-                                // through them is a button that gets pressed again.
-                                .enabled(!state.building)
-                                .on_press(move |_| request_build(pad, &jobs))
-                                .child(match state.building {
-                                    true => "Building...",
-                                    false => "Build",
-                                })
+                            rect()
+                                .horizontal()
+                                .cross_align(Alignment::Center)
+                                .spacing(6.0)
+                                .child(
+                                    Button::new()
+                                        // The whole of "two builds cannot be started at
+                                        // once", on the control as well as in
+                                        // `request_build`: a build takes seconds, and a
+                                        // button that goes on looking pressable through
+                                        // them is a button that gets pressed again.
+                                        .enabled(!state.building)
+                                        .on_press(move |_| request_build(pad, &jobs))
+                                        .child(match state.building {
+                                            true => "Building...",
+                                            false => "Build",
+                                        }),
+                                )
+                                .child(run)
                                 .into_element(),
                         ),
                     ))
@@ -5992,6 +6393,12 @@ impl Component for ScratchpadTab {
                     )
                     .into_element()
             }))
+            // Under the diagnostics rather than over them: what the compiler said is about
+            // the source directly above it, and what the program said is the newest thing
+            // in the pane. Both are `flex(1)` against the editor's `flex(2)`, so a run in a
+            // pane that is already showing warnings costs the editor a third of its height
+            // and not all of it.
+            .maybe_child(output)
     }
 }
 
@@ -8612,6 +9019,7 @@ mod tests {
         Open,
         Save(String),
         Build(String),
+        Run,
     }
 
     /// The scratchpad wiring and nothing else: no pane, since what is under test is which
@@ -8663,6 +9071,7 @@ mod tests {
                     PadJob::Open(_) => Asked::Open,
                     PadJob::Save(scratchpad) => Asked::Save(scratchpad.source.clone()),
                     PadJob::Build(scratchpad) => Asked::Build(scratchpad.source.clone()),
+                    PadJob::Run { .. } => Asked::Run,
                 };
                 let _ = asked.send_blocking(recorded);
                 answer(job)
@@ -8722,6 +9131,7 @@ mod tests {
                 PadJob::Open(_) => PadAnswer::Opened(answering.clone()),
                 PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
                 PadJob::Build(_) => unreachable!("this test never builds"),
+                PadJob::Run { .. } => unreachable!("this test never runs"),
             });
 
         pump(&mut test, || pad.peek().opened);
@@ -8755,6 +9165,7 @@ mod tests {
                 // `manifest` fails on, the manifest being what it refuses to generate.
                 PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
                 PadJob::Build(_) => unreachable!("this test never builds"),
+                PadJob::Run { .. } => unreachable!("this test never runs"),
             });
 
         pump(&mut test, || pad.peek().opened);
@@ -8822,6 +9233,7 @@ mod tests {
                     executable: built.clone(),
                     diagnostics: Vec::new(),
                 }),
+                PadJob::Run { .. } => unreachable!("this test never runs"),
             });
 
         pump(&mut test, || pad.peek().opened);
@@ -8885,6 +9297,7 @@ mod tests {
                 PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
                 PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
                 PadJob::Build(_) => unreachable!("this test never builds"),
+                PadJob::Run { .. } => unreachable!("this test never runs"),
             });
 
         pump(&mut test, || pad.peek().opened);
@@ -8913,5 +9326,189 @@ mod tests {
 
         assert_eq!(pad.peek().scratchpad.dependencies.len(), 1);
         assert_eq!(pad.peek().scratchpad.dependencies[0].name(), "rand");
+    }
+
+    /// A directory of this test's own, named after the line that asked for it -- the shape
+    /// `scratchpad.rs`'s own file tests use, so a failing test leaves something
+    /// identifiable behind.
+    fn run_directory(line: u32) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "assembly-viewer-run-test-{}-{line}",
+            std::process::id()
+        ))
+    }
+
+    /// Build a program that says something and then never exits, and say where it is.
+    ///
+    /// A real `cargo build`, for `scratchpad.rs`'s reason: it is hermetic (no dependencies
+    /// means no registry, so it is one rustc invocation) and it is the only way to have an
+    /// executable that behaves the way the hazard this sub-step is about behaves. Nothing
+    /// short of a real process can say whether a stop actually killed anything.
+    fn looping_program(directory: &Path) -> PathBuf {
+        let mut scratchpad = Scratchpad::new("looper").expect("a name");
+        scratchpad.source = "fn main() {\n\
+             \x20   println!(\"from the program\");\n\
+             \x20   loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n\
+             }\n"
+        .to_owned();
+
+        let build = scratchpad.build_in(directory);
+        let Build::Built { executable, .. } = &build else {
+            panic!("a build, got {build:?}");
+        };
+        executable.clone()
+    }
+
+    /// What a build left behind, put where a build would have put it.
+    ///
+    /// Written into the state rather than answered through `PadJob::Build`, so the
+    /// artifact does not go through `reopen_binary` on the way: what that does with a
+    /// rebuilt binary is `a_build_runs_once_and_replaces_what_the_last_one_opened`'s
+    /// question, and it would cost these tests a parse of a real executable for nothing.
+    fn already_built(mut pad: State<PadState>, executable: PathBuf) {
+        pad.write().built = Some(Build::Built {
+            executable,
+            diagnostics: Vec::new(),
+        });
+    }
+
+    /// The two things 10d exists to make true, and only a real process can say either.
+    ///
+    /// A program that prints and then loops for ever has **said something**, and it is on
+    /// screen while it is still going -- which is the whole difference between this and
+    /// `build_in`'s collect-the-output-and-return-it shape, since this program has no exit
+    /// for such a shape to answer at. And asking it to stop **really kills it**: the state
+    /// reaches `Over(Stopped)` only when the run's own `Ended` event arrives, and that is
+    /// emitted after the process has been reaped -- so this waits for the process to be
+    /// gone rather than for the button to have been pressed.
+    #[test]
+    fn a_run_streams_while_it_is_going_and_a_stop_really_ends_it() {
+        let directory = run_directory(line!());
+        let executable = looping_program(&directory);
+        let cwd = directory.clone();
+
+        let (mut test, _states, pad, _text, asking, _asks) =
+            mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+                PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+                PadJob::Save(_) => PadAnswer::Saved(None),
+                // Nothing about the run is faked: the real spawn, the real pipes and the
+                // real kill, reached through the same job the button sends.
+                PadJob::Run {
+                    run,
+                    executable,
+                    emit,
+                    ..
+                } => PadAnswer::Started(run, crate::scratchpad::run_in(&executable, &cwd, emit)),
+                PadJob::Build(_) => unreachable!("this test never builds"),
+            });
+
+        pump(&mut test, || pad.peek().opened);
+        already_built(pad, executable);
+        test.sync_and_update();
+
+        let jobs = asking.peek().clone().expect("the wiring handed one back");
+        request_run(pad, &jobs);
+
+        pump(&mut test, || pad.peek().output.len() > 0);
+        let state = pad.peek().clone();
+        assert_eq!(
+            state
+                .output
+                .line(0)
+                .map(|line| (line.stream, line.text.to_string())),
+            Some((Stream::Out, "from the program".to_owned()))
+        );
+        assert!(state.is_running(), "it ended by itself");
+
+        stop_run(pad);
+        pump(&mut test, || !pad.peek().is_running());
+        let state = pad.peek().clone();
+        assert!(
+            matches!(state.run_state, RunState::Over(Ended::Stopped)),
+            "{:?}",
+            state.run_status()
+        );
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A rebuild stops the program the last one started.
+    ///
+    /// cargo is about to write over the executable this process *is*, and `reopen_binary`
+    /// is about to close the objects describing those bytes -- so a program left going
+    /// across a build would be output arriving into a pane belonging to a build the reader
+    /// can no longer see. Asserted through `request_build` rather than through the button,
+    /// because the guard belongs to the request for the reason the two-builds-at-once one
+    /// does: it has to be a property of asking, not of one control's disabled state.
+    #[test]
+    fn a_rebuild_stops_the_program_the_last_one_started() {
+        let directory = run_directory(line!());
+        let executable = looping_program(&directory);
+        let cwd = directory.clone();
+
+        let (mut test, _states, pad, _text, asking, _asks) =
+            mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+                PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+                PadJob::Save(_) => PadAnswer::Saved(None),
+                PadJob::Run {
+                    run,
+                    executable,
+                    emit,
+                    ..
+                } => PadAnswer::Started(run, crate::scratchpad::run_in(&executable, &cwd, emit)),
+                // What the build itself answers does not matter here: the run is stopped
+                // on the way to sending the job, before cargo would have been asked
+                // anything at all.
+                PadJob::Build(_) => PadAnswer::Built(Build::Unavailable(Failure::NoArtifact)),
+            });
+
+        pump(&mut test, || pad.peek().opened);
+        already_built(pad, executable);
+        test.sync_and_update();
+
+        let jobs = asking.peek().clone().expect("the wiring handed one back");
+        request_run(pad, &jobs);
+        pump(&mut test, || pad.peek().output.len() > 0);
+        assert!(pad.peek().is_running());
+
+        request_build(pad, &jobs);
+        pump(&mut test, || !pad.peek().is_running());
+        let state = pad.peek().clone();
+        assert!(
+            matches!(state.run_state, RunState::Over(Ended::Stopped)),
+            "{:?}",
+            state.run_status()
+        );
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A program that will not start is a sentence, not a pane that sits on "Starting..."
+    /// for ever. No subprocess: what is under test is that the failure the worker answers
+    /// with reaches the line the reader reads.
+    #[test]
+    fn a_run_that_cannot_start_says_why() {
+        let (mut test, _states, pad, _text, asking, _asks) =
+            mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+                PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+                PadJob::Save(_) => PadAnswer::Saved(None),
+                PadJob::Run { run, .. } => PadAnswer::Started(
+                    run,
+                    Err(Failure::NoProgram("No such file or directory".to_owned())),
+                ),
+                PadJob::Build(_) => unreachable!("this test never builds"),
+            });
+
+        pump(&mut test, || pad.peek().opened);
+        already_built(pad, fixture_artifact());
+        test.sync_and_update();
+
+        let jobs = asking.peek().clone().expect("the wiring handed one back");
+        request_run(pad, &jobs);
+        pump(&mut test, || !pad.peek().is_running());
+
+        let (text, bad) = pad.peek().run_status().expect("a status");
+        assert!(text.contains("No such file or directory"), "{text}");
+        assert!(bad);
     }
 }
