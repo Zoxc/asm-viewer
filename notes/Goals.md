@@ -187,7 +187,8 @@ one item per part, so the unfinished half stays visible.
   file. Clicking a chip switches; the × closes it and moves to the neighbour; closing the
   last one goes back to the placeholder. They are chips rather than dock tabs deliberately
   — the dock tree is the layout, and a layout must survive documents opening and closing
-  (`notes/Plan.md`, 6c). Not persisted yet: that is *Projects*' "saves with tabs".
+  (`notes/Plan.md`, 6c). Both strips are saved with the session and come back on a
+  rerun.
 - [ ] Two kinds of tab, assembly-driven and source-driven, told apart by an icon. The
   left-most pane is the one the tab is *about*, and it drives what the right-hand pane
   shows: an assembly-driven tab has the function on the left and the source it came from on
@@ -213,9 +214,24 @@ one item per part, so the unfinished half stays visible.
 - [ ] Has an associated directory.
 - [x] Can have multiple tabs with different function assemblies / source files open. Within
   a session: the content area's strip holds the open functions and objects, the Source
-  pane's holds the open files. Carrying them across a restart is the "saves with tabs" item
-  below.
-- [ ] Saves with tabs / hashes of binaries, open tabs and viewing positions.
+  pane's holds the open files. They are carried across a restart by the "saves the open
+  tabs" item below.
+- [x] Saves the open tabs. Both strips are in `project.toml`: the content area's as the
+  same `SavedSelection` the history and the selection already use, the Source pane's as the
+  paths themselves plus which one was shown. Coming back goes through the five functions
+  that hold the tab invariants rather than writing either list, and the ordering is
+  load-bearing — the tabs are opened before the selection, or `activate` appends it at the
+  end of the strip instead of finding it in place. A content tab that no longer resolves is
+  dropped, the way a history entry is; a source file that is no longer on disk still comes
+  back, because the pane's own "Source file not found" is the right answer and dropping it
+  would silently lose a file the reader had open.
+- [ ] Saves a viewing position per tab. The two scroll controllers live in `InstructionList`
+  and `SourceList` and are reused across selections, so nothing keeps a per-tab offset even
+  in memory yet — which is the same missing piece as "Selecting another symbol should put
+  the source pane on that symbol's own lines" under *Navigation*.
+- [ ] Saves hashes of the binaries, so a restore can tell the same file from one that has
+  been rebuilt underneath it. Today a rebuilt binary resolves by name and address and comes
+  back on whatever now sits there.
 - [ ] Can have an LSP server (like rust-analyzer) / cargo integration so it can build for you and find binaries.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [ ] A main view where you can see all project info.

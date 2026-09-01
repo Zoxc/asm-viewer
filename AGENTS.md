@@ -161,11 +161,14 @@ migrated, and `#[serde(default)]` is added only when it earns its place on its o
 
 The session is `project.toml` under `dirs::state_dir()` (falling back to `data_local_dir()`) +
 `assembly-viewer/`, written atomically via `.tmp` + rename. `Project` holds the opened `binaries`,
-the `selection` and the `history`, all as **path + object name + symbol name + address**, never
-pointers; that mapping lives in exactly two places, `SavedSelection::from_selection` and
-`::resolve`. **Field order within these structs is load-bearing**: TOML emits plain values before
-tables, so `binaries` must precede `selection`/`history` and `SavedHistory::cursor` must precede
-its `entries`. Getting it wrong fails at *runtime*, not at compile time.
+the content area's open `tabs`, the `selection` and the `history`, all as **path + object name +
+symbol name + address**, never pointers; that mapping lives in exactly two places,
+`SavedSelection::from_selection` and `::resolve`. Beside them sit the Source pane's open
+`sources` — plain `String`s, since they are what the debug info said rather than paths this
+filesystem was asked about — and the `shown` index into them. **Field order within these structs
+is load-bearing**: TOML emits plain values before tables, so `binaries`/`sources`/`shown` must
+precede `selection`/`tabs`/`history` and `SavedHistory::cursor` must precede its `entries`.
+Getting it wrong fails at *runtime*, not at compile time.
 
 Coming back, the **selection degrades** (symbol -> its object -> nothing, since there is one of it
 and the app must open somewhere) while **history entries are dropped** (a list of places the reader
@@ -176,16 +179,26 @@ and a file-close go through, carrying the cursor to the last survivor at or befo
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
 two of the three things driving it sit outside the component tree. `record(project)` is called on
 every state change: a change to `binaries` writes **immediately**, carrying anything pending with
-it; a change to only the selection or history marks it **pending**. `flush()` writes what is
-pending — on a 30s timer and from the window's close hook, which is the one exit hook freya 0.4
-offers (`WindowConfig::with_on_close`, a `Send` callback that cannot read any `State`, which is
-exactly why the policy is a static). `Saves::written` starts as `Project::default()`, **not** as
-the project loaded at startup, so nothing is pending before something is actually opened — seeding
-it from the loaded project would write an empty project over a good one.
+it; a change to only the selection, a tab or the history marks it **pending** — a tab because it
+is expressed against the binaries rather than the other way round, costs one click to remake, and
+arrives on every navigation, `activate` opening one on the way to each selection change.
+`flush()` writes what is pending — on a 30s timer and from the window's close hook, which is the
+one exit hook freya 0.4 offers (`WindowConfig::with_on_close`, a `Send` callback that cannot read
+any `State`, which is exactly why the policy is a static). `Saves::written` starts as
+`Project::default()`, **not** as the project loaded at startup, so nothing is pending before
+something is actually opened — seeding it from the loaded project would write an empty project
+over a good one.
 
-The tab lists are deliberately **not** persisted, so a restore comes back with one tab:
-`use_restore_on_startup` sets the history and then calls `activate` rather than setting the
-selection.
+Both tab strips are restored, and **through the five functions that hold the invariants** rather
+than by writing either list: `use_restore_on_startup` sets the history, `activate`s each content
+tab and then the selection, and `open_file`s each source file and then the shown one. Two
+orderings are load-bearing. Tabs before the selection, because `activate` opens what it cannot
+find and would otherwise append the restored selection at the end of the strip instead of finding
+it in place (the other direction is safe: a selection that degraded to its object while the strip
+holds the symbol simply opens a tab). And the shown file last, because `open_file` puts the pane
+on whatever it opens. A content tab that no longer resolves is **dropped**, like a history entry;
+a source file is never resolved at all, so one that has been deleted comes back as a tab over the
+pane's own "Source file not found" rather than silently vanishing.
 
 ## UI (freya 0.4)
 

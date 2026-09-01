@@ -3783,32 +3783,45 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 /// Tell the save policy what the session looks like, whenever it changes.
 ///
 /// `use_side_effect` re-runs its callback whenever a `State` that was `read()` inside
-/// it changes (`freya-core/src/lifecycle/effect.rs`), so reading the three state
-/// contexts here makes this one observer the single choke point every mutation flows
-/// through: the three `selection.set(..)` sites, the toolbar's `objects.write()` and
-/// `use_record_history`'s push know nothing about persistence, and neither will any
-/// future one.
+/// it changes (`freya-core/src/lifecycle/effect.rs`), so reading the state contexts
+/// here makes this one observer the single choke point every mutation flows through:
+/// the three `selection.set(..)` sites, the toolbar's `objects.write()`,
+/// `use_record_history`'s push and the two tab lists know nothing about persistence,
+/// and neither will any future one. The subscriptions *are* the `read()` calls, which
+/// is the whole of what makes adding a persisted field to `Project::from_state` also
+/// add the state behind it to what wakes this.
 ///
 /// Whether a change reaches the disk now or at the next `use_periodic_save` tick is
 /// `project::record`'s decision, not this one's: opening a binary is written at once,
-/// a selection or a history entry is left pending. That policy is framework-free and
-/// unit-tested in `project.rs`; all this hook owns is *when to look*.
+/// a selection, a tab or a history entry is left pending. That policy is framework-free
+/// and unit-tested in `project.rs`; all this hook owns is *when to look*.
 ///
 /// A selection change wakes this twice -- once for `Sel`, and again when
 /// `use_record_history` pushes the entry that follows from it -- which costs two
 /// derivations and two comparisons and, since neither is a binaries change, no write
-/// at all.
+/// at all. A selection change onto a symbol that was not open wakes it a third time,
+/// for the tab `activate` opened, and that one is free for the same reason.
 fn use_save_on_change(
     objects: State<Vec<Arc<Object>>>,
+    open: State<Tabs<Selection>>,
     selection: State<Selection>,
     history: State<History>,
+    files: State<Tabs<Arc<str>>>,
+    shown: State<Option<Arc<str>>>,
 ) {
     use_side_effect(move || {
-        // Reading these subscribes the effect to them: any change re-runs it.
+        // Reading these subscribes the effect to them: any change re-runs it. Each
+        // guard lives to the end of the statement it is created in, which is the one
+        // `record` call, and nothing here writes anything, so holding six at once is
+        // the safe half of the `peek`/`write` gotcha rather than the dangerous one.
+        let shown = shown.read();
         project::record(Project::from_state(
             &objects.read(),
+            open.read().tabs(),
             &selection.read(),
             &history.read(),
+            files.read().tabs(),
+            shown.as_deref(),
         ));
     });
 }
@@ -4036,7 +4049,7 @@ fn navigate(
     }
 }
 
-/// Reopen the previous session's binaries and selection, once, at startup.
+/// Reopen the previous session's binaries, tabs and selection, once, at startup.
 ///
 /// `use_hook` runs its initializer on mount and never again, which is what makes this
 /// happen exactly once; `spawn` is freya's own task spawner and is callable during
@@ -4049,19 +4062,43 @@ fn navigate(
 /// Every step degrades silently: no state file or a corrupt one is `None`, a path that
 /// no longer exists or no longer parses just contributes no `Object` (`open_files`
 /// swallows its own failures), `Project::resolve` falls back from a vanished symbol to
-/// its object and from a vanished object to nothing, and `Project::resolve_history`
-/// drops the entries that no longer point anywhere while keeping the cursor on the
-/// right one.
+/// its object and from a vanished object to nothing, and `Project::resolve_history` and
+/// `Project::resolve_tabs` drop what no longer points anywhere -- the history keeping
+/// its cursor on the right one.
 ///
-/// The tab list is deliberately *not* restored -- it is not saved, that being Step 8's
-/// "saves with tabs / open tabs and viewing positions". Going through [`activate`] rather
-/// than setting the selection is what gives the restored session its one tab, so the app
-/// comes back with exactly the place it was left on open and no others.
+/// **Both strips are rebuilt through the functions that hold the app's invariants**,
+/// never by writing either list directly, so a restored session is in a state the app
+/// could have got into by hand: every content tab through [`activate`], every source
+/// file through [`open_file`]. Two orderings follow from that and are the only
+/// genuinely new rules here:
+///
+/// - The **tabs before the selection**. `activate` opens what it cannot find, so
+///   restoring the selection first would leave its chip at the end of the strip instead
+///   of in the place the reader left it. The other direction is safe: the selection can
+///   have degraded to its object while the strip still holds the symbol, and `activate`
+///   simply opens a tab for it, which is also what the reader would see had they closed
+///   that tab themselves.
+/// - The **shown source file last**, since `open_file` puts the pane on whatever it just
+///   opened. It is asked for by name and answers with the copy already in the list, so
+///   the second call moves the pane and adds nothing.
+///
+/// The one thing the restore cannot promise is that the pane *stays* on that file:
+/// `use_open_source_file` follows the selection, so the moment `Lines` resolves for the
+/// restored symbol the pane moves to that symbol's own file. That is the pane's rule and
+/// not a lost restore -- clicking the same symbol in a running session does the same --
+/// and the strip it moves within is the restored one either way.
+///
+/// Every write below happens in one go, before the frame can end: freya's effects are
+/// woken by an async notify (`Effect::create`) rather than run at the write, so
+/// `use_record_history` and `use_save_on_change` see the settled result once and not
+/// each intermediate `Sel` the tab loop passes through.
 fn use_restore_on_startup(
     open: State<Tabs<Selection>>,
     objects: State<Vec<Arc<Object>>>,
     selection: State<Selection>,
     history: State<History>,
+    files: State<Tabs<Arc<str>>>,
+    shown: State<Option<Arc<str>>>,
 ) {
     use_hook(move || {
         let Some(project) = Project::load() else {
@@ -4091,12 +4128,16 @@ fn use_restore_on_startup(
             objects.write().extend(parsed);
 
             // Resolved against everything now loaded rather than just `parsed`, so
-            // this stays correct if the user managed to open something first. Both
-            // are computed before either is set so the read guard is long gone by
-            // the time anything is notified.
-            let (restored_history, restored_selection) = {
+            // this stays correct if the user managed to open something first. All
+            // three are computed before any of them is set so the read guard is long
+            // gone by the time anything is notified.
+            let (restored_history, restored_tabs, restored_selection) = {
                 let loaded = objects.read();
-                (project.resolve_history(&loaded), project.resolve(&loaded))
+                (
+                    project.resolve_history(&loaded),
+                    project.resolve_tabs(&loaded),
+                    project.resolve(&loaded),
+                )
             };
 
             // The history first, so that when `use_record_history` observes the
@@ -4107,7 +4148,24 @@ fn use_restore_on_startup(
             // the cursor entry was dropped, or the selection degraded, that the two
             // differ, and then a push is exactly right: the app is somewhere new.
             history.set(restored_history);
+
+            // The strip, oldest chip first, and then the one that was active. Each of
+            // these is a `Sel` write that will be overwritten by the next, which is the
+            // price of there being exactly one way to open a content tab; the last one
+            // is the only one anything observes.
+            for tab in restored_tabs {
+                activate(open, selection, tab);
+            }
             activate(open, selection, restored_selection);
+
+            // The Source pane's strip, which needs no resolving: a path that is gone is
+            // still a tab, showing the pane's own "Source file not found".
+            for file in &project.sources {
+                open_file(files, shown, Arc::from(file.as_str()));
+            }
+            if let Some(file) = project.shown_source() {
+                open_file(files, shown, Arc::from(file));
+            }
         });
     });
 }
@@ -4139,8 +4197,8 @@ pub fn app() -> impl IntoElement {
     // source files open in the Source pane, of which `shown` is. Both lists are opened and
     // closed only through `activate`/`close_tab` and `open_file`/`close_file`, which is
     // what keeps "the selection is the active tab" and "a file is shown exactly when one
-    // is open" invariants rather than conventions. Neither list is persisted: that is Step
-    // 8's "saves with tabs / open tabs and viewing positions".
+    // is open" invariants rather than conventions -- for the startup restore as much as
+    // for a click, since both lists are now part of the saved session.
     let open = use_provide_context(|| Open(State::create(Tabs::default()))).0;
     let files = use_provide_context(|| Files(State::create(Tabs::default()))).0;
     let shown = use_provide_context(|| Shown(State::create(None))).0;
@@ -4158,15 +4216,15 @@ pub fn app() -> impl IntoElement {
     // two above: one selection for the whole app, in whichever pane last took one.
     let marked = use_provide_context(|| Marked(State::create(None))).0;
     let mut shift = use_provide_context(|| Shift(State::create(false))).0;
-    use_save_on_change(objects, selection, history);
+    use_save_on_change(objects, open, selection, history, files, shown);
     use_record_history(selection, history);
     use_clear_focus(selection, focused, pinned);
     use_clear_marks(selection, shown, marked);
     use_periodic_save();
     // After the save effect on purpose: the effect is in place, with the save policy's
-    // empty baseline, before the restore can put anything into any of the three states,
-    // so the restored session is seen by it as an ordinary change.
-    use_restore_on_startup(open, objects, selection, history);
+    // empty baseline, before the restore can put anything into any of the states it
+    // observes, so the restored session is seen by it as an ordinary change.
+    use_restore_on_startup(open, objects, selection, history, files, shown);
 
     // Rebuilt only when the object list changes, not on every selection change.
     let symbols = use_memo(move || {
