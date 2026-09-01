@@ -20,17 +20,22 @@ one item per part, so the unfinished half stays visible.
   and both panes keep it lit, in a stronger shade than the hover, until another click or
   another symbol.
 - [ ] Have a function to find all source / assembly locations that match, producing a list on the
-  other side. Needs cross-symbol search and a panel to put the result in, which is Step 6's
-  tabs and left panels.
-- [ ] A function to pick the generic instance of a source function. Same prerequisite: one
-  source function is many symbols, and nothing yet lists them.
+  other side. The crate's half is built: `Object::symbols_from_source` answers a file and a line
+  with the symbols compiled from it, out of a whole-object index built the first time an object
+  is asked. What is left is the UI's — asking it across every open object on the analysis
+  worker, and a panel to put the result in whose rows navigate. Note the scale before designing
+  the panel: one line answers with 9 374 symbols on this app's own binary.
+- [ ] A function to pick the generic instance of a source function. Same query, different
+  presentation — "all symbols for this function, pick one" against "all locations for this line,
+  list them" — so what is left is the picker and the rule for what choosing one does to each
+  kind of tab.
 - [x] An active navigation function where selection on one side moves the other side to the
   matching place — within one symbol. Clicking a source line scrolls the assembly to the
   first instruction it produced, clicking an instruction scrolls the source to its line, and
   neither is a navigation: the selection does not change and nothing is pushed onto the
   history.
 - [ ] The same across symbols, preferring recent history when a source line maps into several.
-  Needs the cross-symbol search above.
+  The mapping exists now; the tie-break and the navigation are what is left.
 - [x] Syntax highlighting for both sides. Assembly is coloured by span kind; source is
   tree-sitter, through the highlighter `freya-code-editor` exposes publicly.
 - [x] Use the assembly colour palette for the source side's syntax highlighting, so the two
@@ -332,10 +337,9 @@ one item per part, so the unfinished half stays visible.
   file". A source-driven tab is opened from the Source pane's companion header, which is the
   only door into one until the project explorer and the source search land.
 - [ ] The assembly side of a source-driven tab: clicking a line in the file shows the assembly
-  compiled from it. Needs the reverse mapping — source line to the symbols compiled from it —
-  which line info cannot answer today, and a rule for which symbol wins when a line maps into
-  several (recent history is the tie-break). It is the same prerequisite the two items under
-  *Source / assembly split view* wait on.
+  compiled from it. The reverse mapping it waited on is built — `Object::symbols_from_source`,
+  lazy and per object — so what is left is the UI: asking it off the worker and the rule for
+  which symbol wins when a line maps into several, where recent history is the tie-break.
 - [ ] Selecting a symbol in a view opens a "temporal" tab when the symbol is not already open
   in a tab: one preview tab reused by the next such selection, so walking down a list does
   not leave a tab behind per click. What promotes it into a tab that stays is a design
