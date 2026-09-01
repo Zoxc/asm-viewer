@@ -432,10 +432,22 @@ one item per part, so the unfinished half stays visible.
   is not a target, so a reader with an error still finds the line by counting. Both halves
   already exist: cargo's JSON carries the span's line and column, and the editor has a cursor
   that can be put on one.
-- [ ] More than one scratchpad. The storage already holds many — a scratchpad is a directory and
-  nothing about the model is singular — and the app opens exactly one because a picker is a
-  second document list, which the content strip deliberately is not (a chip there is a place in
-  a binary). Where that list lives is the decision to make before building it.
+- [ ] Scratchpads are a concept of their own, disjoint from projects, and there are many of them
+  saved. Today there is exactly one and it is implicit: the app opens `Scratchpad::default`,
+  fills it from whatever is on disk and never asks which pad it is looking at. Two halves of
+  the separation are already right and are what the rest should be built on — the pads live in
+  `scratchpads/` at the top of the state directory beside `projects/` and `settings.toml`,
+  never inside a project, and `Pad` is deliberately not one of the states a project switch
+  closes, because a scratchpad belongs to the app and not to whatever binary is being read.
+  What is missing is the rest of the concept: many pads kept side by side, each its own
+  directory the way each project is, each with a name the user can give it, a list of them that
+  outlives the session, and a way to move between them — a pad open in one project is the same
+  pad in the next, since nothing about it is about a binary. Two decisions to make before
+  building it. Where the list lives: a scratchpad list is a second document list, and the
+  content area's strip deliberately is not the place for one (a chip there is a *place in a
+  binary*), so it is the scratchpad view's own or a sidebar panel of its own. And which pad
+  opens at startup, which is the question `recents.toml` already answers for projects — an
+  order, most recent first, rather than a field saying "last".
 - [ ] Stop a run's grandchildren with it. `Running::stop` kills the process the app spawned, so a
   scratchpad that spawns a child of its own leaves it running with nothing that could ever find
   it again. The fix is starting the run in a process group of its own and killing the group —
