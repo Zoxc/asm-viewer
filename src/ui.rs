@@ -101,13 +101,6 @@ pub(crate) use parts::*;
 mod project_view;
 pub(crate) use project_view::*;
 mod settings_view;
-/// Named again explicitly because `freya::prelude` exports a `use_theme` too, and two globs
-/// offering one name is an ambiguity at every call site rather than a shadowing. An explicit
-/// import wins over a glob, so this line is what `use_theme` means under `ui` -- ours. Do not
-/// tidy it away as a duplicate of the glob below it; it is the disambiguation, and the `allow`
-/// is because it disambiguates for `tests.rs` alone, nothing else naming it through `ui`.
-#[allow(unused_imports)]
-pub(crate) use settings_view::use_theme;
 pub(crate) use settings_view::*;
 mod sidebar;
 pub(crate) use sidebar::*;

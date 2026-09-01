@@ -74,7 +74,7 @@ pub(crate) struct Active(pub(crate) Memo<Option<Document>>);
 /// wanted together and every one of the functions holding the invariants needs both.
 #[derive(Clone, Copy)]
 pub(crate) struct Open {
-    pub(super) dock: State<DockArea>,
+    pub(crate) dock: State<DockArea>,
     pub(crate) docs: State<Docs>,
 }
 
@@ -82,7 +82,7 @@ pub(crate) struct Open {
 ///
 /// Views are skipped: they are tabs in the same panel but they are not documents, and
 /// this is what the session writes down and what a closing binary is walked against.
-pub(super) fn open_documents(dock: &DockArea, docs: &Docs) -> Vec<Document> {
+pub(crate) fn open_documents(dock: &DockArea, docs: &Docs) -> Vec<Document> {
     let Some(panel) = dock.document_panel() else {
         return Vec::new();
     };
@@ -100,7 +100,7 @@ pub(super) fn open_documents(dock: &DockArea, docs: &Docs) -> Vec<Document> {
 ///
 /// The whole of [`Active`], and the reason it needs no memory. `None` for a view on top
 /// is deliberate -- see [`Active`].
-pub(super) fn active_document(dock: &DockArea, docs: &Docs) -> Option<Document> {
+pub(crate) fn active_document(dock: &DockArea, docs: &Docs) -> Option<Document> {
     match dock.document_panel()?.active_tab_id? {
         Tab::Document(id) => docs.get(id).cloned(),
         Tab::View(_) => None,
@@ -125,7 +125,7 @@ impl Open {
 /// The content area's dock, shared through context because the panel documents live in is
 /// part of what a project has open rather than only part of the layout.
 #[derive(Clone, Copy)]
-pub(crate) struct ContentDock(pub(super) State<DockArea>);
+pub(crate) struct ContentDock(pub(crate) State<DockArea>);
 
 /// How wide the assembly side of a document is, as a percentage, and the shared
 /// `ResizableContext` it is read back out of.

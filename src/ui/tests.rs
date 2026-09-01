@@ -17,6 +17,13 @@
 //! `resolve_capture_color` walking up the dotted name -- rather than the values
 //! themselves, which are a design and not an assertion.
 use super::*;
+// Named again, because `use super::*` offers two `use_theme`s -- ours, re-exported out of
+// `settings_view`, and freya's own out of the prelude -- and two globs offering one name is
+// an ambiguity at the call site rather than a shadowing. An explicit import wins over a
+// glob, so this is what the name means here: ours. It is spelled out in this file and not
+// in `ui.rs` because this file is the only one that calls it from outside the module that
+// defines it; a re-export up there would be unused by the build that is not running tests.
+use super::settings_view::use_theme;
 use freya_testing::TestingRunner;
 
 /// Three rows wired exactly the way the two panes are, and no more of them than that:
