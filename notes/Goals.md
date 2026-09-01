@@ -242,7 +242,9 @@ one item per part, so the unfinished half stays visible.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [ ] A main view where you can see all project info.
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
-- [ ] Split project storage into toml? for user given settings and another file for opened tabs / cached binary inspection data
+- [ ] Split project storage into toml? for user given settings and another file for opened tabs /
+  cached binary inspection data. Half done: the user-given settings are their own `settings.toml`
+  now. The session file still holds the opened tabs, and there is no cached inspection data yet.
 - [x] Save the navigation history.
 - [x] Opening binary files saves immediately.
 - [x] User project changes should save immediately. `project::record` writes at once when
@@ -269,7 +271,13 @@ one item per part, so the unfinished half stays visible.
   external process; its fixed-width half stays `Consolas`, Windows storing no desktop-wide
   monospace font to look up. Compile-checked for the Windows target, but only the decoding is
   tested — nothing here has been run on Windows.
-- [ ] Have a settings page where you can override (with a default being unspecified with clear visual distinction).
+- [ ] Have a settings page where you can override (with a default being unspecified with clear
+  visual distinction). The storage half is in: `settings.toml` sits beside the session file and
+  holds the font overrides and the theme choice, with "unspecified" as an absent key rather than
+  an empty string or the desktop's answer copied in, so the page has a real third state to draw.
+  What is left is the page itself, and the reactivity `fonts()` deliberately does not have — it
+  hands out a `&'static Font` that nothing subscribes to, so the fonts have to become a root
+  context before a change can repaint anything.
 
 ## Scratchpad
 

@@ -15,8 +15,18 @@
 //! Nothing here fails: a missing binary, a call that returns `FALSE`, a value in a shape
 //! nobody expected and a font size of zero all come back as "the desktop said nothing",
 //! which is what the platform defaults are for.
+//!
+//! **The user comes before the desktop.** `Settings` holds a family and a size for each
+//! of the two fonts, each independently unspecified, and [`resolve`] merges them over the
+//! desktop's answer *field by field*: an override wins, an unspecified field falls
+//! through to the desktop, and the platform's own family stands behind both. Merging by
+//! field rather than by font is what lets a reader take their editor's family at the
+//! desktop's size, or the desktop's family a little larger, without writing down a value
+//! they did not choose.
 
 use std::{borrow::Cow, sync::OnceLock};
+
+use crate::settings::{FontSetting, Settings};
 
 /// The platform's own interface and fixed-width families. These have to be named:
 /// freya's global fallbacks (`Segoe UI`, `Noto Sans`, `Arial`, ...) are all
@@ -54,19 +64,28 @@ pub struct Font {
 }
 
 impl Font {
-    fn new(queried: Option<(String, f32)>, default: &'static str, default_size: f32) -> Self {
-        let (family, size) = match queried {
-            Some((family, size)) => (Some(family), size),
-            None => (None, default_size),
-        };
-
+    /// A family to put in front of the platform's own, and a size in points -- either of
+    /// which may be missing, and separately.
+    ///
+    /// A family with no size keeps the family and takes the app's own size, which is
+    /// deliberately not "no answer at all": a family is the half of the setting that is
+    /// visible in every glyph on screen, and dropping it over a missing number would put
+    /// the chosen font back to `sans-serif`. `default_size` is already in logical pixels
+    /// -- it is this app's own number and not anybody's point size -- which is why only
+    /// the answered size goes through [`points_to_pixels`].
+    fn new(
+        family: Option<String>,
+        points: Option<f32>,
+        default: &'static str,
+        default_size: f32,
+    ) -> Self {
         Font {
             families: family
                 .map(Cow::Owned)
                 .into_iter()
                 .chain([Cow::Borrowed(default)])
                 .collect(),
-            size,
+            size: points.map_or(default_size, points_to_pixels),
         }
     }
 }
@@ -83,19 +102,6 @@ pub struct Fonts {
 enum Which {
     Ui,
     Fixed,
-}
-
-impl Which {
-    /// What a font is when the desktop named a family but no size. Keeping the family and
-    /// falling back on the size is deliberately not "no answer at all": a family is the
-    /// half of the setting that is visible in every glyph on screen, and dropping it over
-    /// a missing number would put the desktop's font back to `sans-serif`.
-    const fn default_size(self) -> f32 {
-        match self {
-            Which::Ui => DEFAULT_UI_SIZE,
-            Which::Fixed => DEFAULT_MONO_SIZE,
-        }
-    }
 }
 
 /// A font as a desktop wrote it down. The size is optional because Gnome's spec allows
@@ -117,12 +123,6 @@ impl Spec {
             family: family.to_owned(),
             points: points.filter(|points| points.is_finite() && *points > 0.0),
         })
-    }
-
-    fn sized(self, which: Which) -> (String, f32) {
-        let size = self.points.map_or(which.default_size(), points_to_pixels);
-
-        (self.family, size)
     }
 }
 
@@ -529,36 +529,122 @@ mod windows {
     }
 }
 
-/// The desktop's answer for one of the two fonts, in the shape [`Font::new`] wants:
-/// a family, and a size already in logical pixels.
-fn query(which: Which) -> Option<(String, f32)> {
+/// The desktop's answer for one of the two fonts, as the desktop wrote it down: a
+/// family, and a size still in points.
+fn query(which: Which) -> Option<Spec> {
     #[cfg(target_os = "windows")]
-    let spec = windows::query(which);
+    return windows::query(which);
     #[cfg(not(target_os = "windows"))]
-    let spec = desktop::query(which);
-
-    spec.map(|spec| spec.sized(which))
+    return desktop::query(which);
 }
 
+/// Whether the desktop has anything left to be asked. A font whose family *and* size the
+/// user has both chosen has no unanswered half, so a fully configured app spawns no
+/// process at startup at all -- which is the only reason this is a question rather than
+/// two unconditional lookups.
+fn needs_desktop(setting: &FontSetting) -> bool {
+    setting.family().is_none() || setting.size().is_none()
+}
+
+/// One font, merged: the user's overrides in front of the desktop's answer, field by
+/// field, with the platform's own family behind both.
+///
+/// Pure, and handed the desktop's answer rather than asking for it, so that the merge --
+/// the part with the rules in it -- is testable on a machine with no desktop at all.
+fn resolve_font(
+    setting: &FontSetting,
+    desktop: Option<Spec>,
+    default: &'static str,
+    default_size: f32,
+) -> Font {
+    let (family, points) = match desktop {
+        Some(desktop) => (Some(desktop.family), desktop.points),
+        None => (None, None),
+    };
+
+    Font::new(
+        setting.family().map(str::to_owned).or(family),
+        setting.size().or(points),
+        default,
+        default_size,
+    )
+}
+
+fn font(setting: &FontSetting, which: Which, default: &'static str, default_size: f32) -> Font {
+    let desktop = needs_desktop(setting).then(|| query(which)).flatten();
+
+    resolve_font(setting, desktop, default, default_size)
+}
+
+/// The two fonts these settings and this desktop come to.
+///
+/// Public and taking the settings by argument, rather than reading them itself, because
+/// this is the half of [`fonts`] that survives the settings page: a page that changes a
+/// font calls this with the new settings and has the answer, with no cache to invalidate
+/// and no process-wide state to write.
+///
 /// Off a desktop that has anything to say -- no `kreadconfig`, no `gsettings`, no
-/// registry entry -- both fonts are the platform's own at the floem-era sizes.
-fn load() -> Fonts {
+/// `SystemParametersInfo` -- and with nothing overridden, both fonts are the platform's
+/// own at the floem-era sizes.
+pub fn resolve(settings: &Settings) -> Fonts {
     Fonts {
-        ui: Font::new(query(Which::Ui), DEFAULT_UI, DEFAULT_UI_SIZE),
-        mono: Font::new(query(Which::Fixed), DEFAULT_MONO, DEFAULT_MONO_SIZE),
+        ui: font(&settings.interface, Which::Ui, DEFAULT_UI, DEFAULT_UI_SIZE),
+        mono: font(
+            &settings.fixed,
+            Which::Fixed,
+            DEFAULT_MONO,
+            DEFAULT_MONO_SIZE,
+        ),
     }
 }
 
+/// The fonts the UI draws with: the stored settings over the desktop's answer, worked out
+/// once and handed out as a `&'static`.
+///
+/// **This is a `OnceLock`, and a setting the user can change at runtime cannot stay one.**
+/// It is left as it is deliberately rather than papered over, because making *this*
+/// function re-readable is not the missing piece and would only look like a fix. Two
+/// things stand in the way, and both belong to the settings page:
+///
+/// - **Nothing subscribes to it.** freya re-renders a scope when a state it *read*
+///   changes, and a `&'static` is not a read of anything. A `fonts()` that could answer
+///   differently would therefore reach only the elements that happened to re-render for
+///   some other reason -- half the window in the new font and half in the old, which is
+///   worse than a window that is consistently stale. It is the same hole `palette()`
+///   records for dark mode, and it wants the same fix.
+/// - **`&'static Fonts` is in the signatures around it.** `FontExt::font` in `ui.rs`
+///   takes a `&'static Font` precisely because this hands one out, so a `Fonts` with a
+///   lifetime shorter than the program cannot be threaded through today without either
+///   leaking every rebuild or touching those call sites.
+///
+/// So what the settings page has to change, exactly:
+///
+/// 1. Provide the fonts at the root of `app()` as a context (a `State<Arc<Fonts>>` beside
+///    `Objects` and the rest), built with [`resolve`] from the settings it loads, and
+///    replace its value when the page writes a new [`Settings`].
+/// 2. Move the four readers onto it: `icon_size`, `FontExt::interface_font` and
+///    `::assembly_font` -- whose `font(&'static Font)` becomes `font(&Font)` -- and the
+///    tooltip's `font_size` in the root `use_init_theme`, which is a hook and so wants the
+///    fonts read before it rather than inside a closure that runs once.
+/// 3. Decide what happens to `ROW_HEIGHT`. It is a `const` that must equal every
+///    `VirtualScrollView`'s `item_size`, and it is sized against the fixed-width font --
+///    so a size the reader can change makes the row height a *value* rather than a
+///    constant, and the saved per-tab rows, the lane gutter and `reveal_row`'s
+///    `CONTEXT_ROWS` are all downstream of it. This is the reason a font change may end up
+///    wanting a restart even after the first two are done, and it is a decision, not an
+///    oversight to inherit silently.
+///
+/// [`resolve`] is what survives all of that; this function goes away with its last caller.
 pub fn fonts() -> &'static Fonts {
     static FONTS: OnceLock<Fonts> = OnceLock::new();
-    FONTS.get_or_init(load)
+    FONTS.get_or_init(|| resolve(&Settings::load()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::desktop::{order, parse_kde, parse_pango, Desktop};
     use super::windows::font_spec;
-    use super::{Spec, Which};
+    use super::*;
 
     /// What a parser is expected to have found, spelled out at the call site so the
     /// cases read as the specs they came from.
@@ -635,13 +721,108 @@ mod tests {
         assert_eq!(parse_pango("   "), None);
     }
 
-    #[test]
-    fn a_spec_takes_the_default_size_only_when_it_has_none() {
-        let sized = Spec::new("Cantarell", Some(12.0)).unwrap().sized(Which::Ui);
-        assert_eq!(sized, ("Cantarell".to_owned(), 16.0));
+    /// A font setting, spelled at the call site the way the two cases read: what the user
+    /// chose, and what they left alone.
+    fn setting(family: Option<&str>, size: Option<f32>) -> FontSetting {
+        FontSetting {
+            family: family.map(str::to_owned),
+            size,
+        }
+    }
 
-        let defaulted = Spec::new("Cantarell", None).unwrap().sized(Which::Fixed);
-        assert_eq!(defaulted, ("Cantarell".to_owned(), 14.0));
+    /// The mono defaults, since every case below is one font resolved: `monospace` behind
+    /// whatever is chosen, and 14 logical pixels when nothing names a size.
+    fn resolved(setting: &FontSetting, desktop: Option<Spec>) -> Font {
+        resolve_font(setting, desktop, DEFAULT_MONO, DEFAULT_MONO_SIZE)
+    }
+
+    #[test]
+    fn nothing_chosen_and_nothing_answered_is_the_platforms_own() {
+        let font = resolved(&setting(None, None), None);
+
+        assert_eq!(font.families, ["monospace"]);
+        assert_eq!(font.size, DEFAULT_MONO_SIZE);
+    }
+
+    #[test]
+    fn nothing_chosen_takes_the_desktops_answer() {
+        let font = resolved(
+            &setting(None, None),
+            Spec::new("Noto Sans Mono", Some(10.0)),
+        );
+
+        assert_eq!(font.families, ["Noto Sans Mono", "monospace"]);
+        assert_eq!(font.size, points_to_pixels(10.0));
+    }
+
+    #[test]
+    fn a_desktop_answer_with_no_size_keeps_its_family() {
+        let font = resolved(&setting(None, None), Spec::new("Noto Sans Mono", None));
+
+        assert_eq!(font.families, ["Noto Sans Mono", "monospace"]);
+        assert_eq!(font.size, DEFAULT_MONO_SIZE);
+    }
+
+    #[test]
+    fn an_override_wins_over_the_desktop() {
+        let chosen = setting(Some("Fira Code"), Some(12.0));
+        let font = resolved(&chosen, Spec::new("Noto Sans Mono", Some(10.0)));
+
+        // The desktop's family is not even a fallback: the reader named one, so the only
+        // thing behind it is the platform's own, which is there so that a family that
+        // resolves to nothing cannot leave the assembly view proportional.
+        assert_eq!(font.families, ["Fira Code", "monospace"]);
+        assert_eq!(font.size, points_to_pixels(12.0));
+    }
+
+    #[test]
+    fn an_override_stands_where_the_desktop_said_nothing() {
+        let font = resolved(&setting(Some("Fira Code"), Some(12.0)), None);
+
+        assert_eq!(font.families, ["Fira Code", "monospace"]);
+        assert_eq!(font.size, points_to_pixels(12.0));
+    }
+
+    /// The distinction the settings file exists to keep: unspecified is not a value, so
+    /// the half the reader left alone still follows the desktop -- and follows it *later*,
+    /// when the desktop changes its mind.
+    #[test]
+    fn an_unspecified_field_falls_through_to_the_desktop() {
+        let desktop = || Spec::new("Noto Sans Mono", Some(10.0));
+
+        // A family with no size: the desktop's size.
+        let family_only = resolved(&setting(Some("Fira Code"), None), desktop());
+        assert_eq!(family_only.families, ["Fira Code", "monospace"]);
+        assert_eq!(family_only.size, points_to_pixels(10.0));
+
+        // A size with no family: the desktop's family.
+        let size_only = resolved(&setting(None, Some(12.0)), desktop());
+        assert_eq!(size_only.families, ["Noto Sans Mono", "monospace"]);
+        assert_eq!(size_only.size, points_to_pixels(12.0));
+    }
+
+    /// And a value that is present but says nothing is not a choice either, so it falls
+    /// through exactly as an absent one does.
+    #[test]
+    fn a_setting_that_says_nothing_falls_through_too() {
+        let font = resolved(
+            &setting(Some("  "), Some(0.0)),
+            Spec::new("Noto Sans Mono", Some(10.0)),
+        );
+
+        assert_eq!(font.families, ["Noto Sans Mono", "monospace"]);
+        assert_eq!(font.size, points_to_pixels(10.0));
+    }
+
+    #[test]
+    fn only_an_unanswered_half_is_worth_a_process() {
+        assert!(needs_desktop(&setting(None, None)));
+        assert!(needs_desktop(&setting(Some("Fira Code"), None)));
+        assert!(needs_desktop(&setting(None, Some(12.0))));
+        // Both chosen: there is nothing left to ask.
+        assert!(!needs_desktop(&setting(Some("Fira Code"), Some(12.0))));
+        // Both merely present: there is.
+        assert!(needs_desktop(&setting(Some(""), Some(-1.0))));
     }
 
     #[test]

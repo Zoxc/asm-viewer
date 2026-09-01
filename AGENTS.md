@@ -57,6 +57,7 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `crates/analysis/src/lib.rs` — object parsing, disassembly, relocation resolution.
 - `crates/analysis/src/line.rs` — DWARF line info, lazy. The only part that knows `gimli`/`addr2line`.
 - `src/project.rs` — the persisted session (`project.toml`) and the save policy.
+- `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme choice.
 - `src/source.rs` — source files read off disk and cached by path, failures included.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
 - `src/tree.rs` — the Objects list's tree shape: which objects came from which file.
@@ -229,6 +230,32 @@ holds the symbol simply opens a tab). And the shown file last, because `open_fil
 on whatever it opens. A content tab that no longer resolves is **dropped**, like a history entry;
 a source file is never resolved at all, so one that has been deleted comes back as a tab over the
 pane's own "Source file not found" rather than silently vanishing.
+
+**The settings are a second file, not a section of the first** (`src/settings.rs`, `settings.toml`
+beside `project.toml`, same directory, same atomic `.tmp` + rename, same "a missing, unreadable or
+corrupt file is simply the default"). This is the *user-given settings* half of the storage split
+`notes/Goals.md` asks for under *Projects*: the session is what the app **noticed** and changes on
+every click, a setting is what the user **said** and changes when they say so, so they have
+different rates, different save policies and different consequences when one of them will not
+parse. `Settings` is the theme choice (`Theme`: light, dark or follow the desktop) and a
+`FontSetting` — a family and a size — for each of the interface and fixed-width fonts. **Every
+field is an `Option` and `None` is a real third state**: "the user has not said, ask the desktop",
+which is neither an empty string nor the desktop's current answer copied into the file. An
+unspecified field is therefore a key that is *absent* from the TOML (`skip_serializing_if`, since
+TOML has no null anyway), so nothing can later mistake an inherited value for a chosen one, and the
+settings page can show the difference. Sizes are stored in **points**, the unit the desktops answer
+in, so an override and the value it overrides are comparable; `fonts.rs` converts once at the end.
+Field order is load-bearing here too — `theme` is a plain value and the two fonts are tables — and
+the round-trip test is what holds it. There is **no `Saves`-shaped policy and deliberately no second
+autosave timer**: a settings change is already as rare as a deliberate action, so `Settings::save`
+is public and writes at once. `Theme::appearance()` asks the desktop which it prefers, in the spirit
+`fonts.rs` asks it for fonts (KDE's `Colors:Window/BackgroundNormal` luminance, then the scheme
+*name* only when the name says so; Gnome's `color-scheme`, whose `default` is *not* an answer;
+macOS's `AppleInterfaceStyle`; Windows is a named hole needing a `windows-sys` feature), and it is
+deliberately uncached, since "follow the desktop" is a question and not a value. `fonts()` merges
+the settings over the desktop's answer **field by field** (`fonts::resolve`, pure and tested), but
+is still a `OnceLock`: the doc comment on it says exactly what the settings page has to change and
+why a re-readable `fonts()` alone would not be the fix.
 
 ## UI (freya 0.4)
 
