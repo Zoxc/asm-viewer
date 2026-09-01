@@ -124,7 +124,10 @@ one item per part, so the unfinished half stays visible.
   something coloured. The highlighted-source cache is cleared inside the one function that can
   change the appearance, so it cannot be routed around. freya's own components get its
   `light_theme()`/`dark_theme()` alongside, a white text box on a dark pane not being a theme
-  switch. The light theme is byte-for-byte what it was.
+  switch. The light theme is byte-for-byte what it was. "Follow the desktop" is answered by the
+  windowing system rather than by asking a desktop tool: freya surfaces winit's `Window::theme()`
+  as a reactive `Platform::preferred_theme`, so no process is spawned and the app repaints when
+  the desktop switches theme while it is running, which a one-shot query could never do.
 - [x] Use freya's icon libraries where they suit, panel titles at least — an icon beside
   Objects / Symbols / Info / History / Assembly / Source in the tab bar. `freya`'s
   `icons-lucide` feature is on and `Tab::icon` names one glyph per view (`package`,

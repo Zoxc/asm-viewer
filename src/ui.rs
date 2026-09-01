@@ -23,7 +23,7 @@ use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 use crate::project::{self, Project, Selection};
 use crate::rows::RowSelection;
-use crate::settings::{Appearance, Settings};
+use crate::settings::{Appearance, Settings, Theme as ThemeChoice};
 use crate::source::{self, SourceFile};
 use crate::tabs::{Positions, Tabs};
 use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
@@ -513,6 +513,60 @@ fn set_appearance(next: Appearance) {
         let mut appearance = *appearance;
         appearance.set_if_modified_and_then(next, || highlighted().clear());
     });
+}
+
+/// Which appearance a stored choice comes to on a windowing system that prefers
+/// `preferred`.
+///
+/// The two enums are one distinction twice over -- a *choice* has three answers and a
+/// *preference* has two -- so this is a rule and not a lookup: a reader who named a theme
+/// is answered by their own answer, and `Desktop` is the only one of the three that is a
+/// question at all.
+///
+/// Pure, and handed the platform's answer rather than asking for it, exactly as
+/// `fonts.rs`'s `resolve_font` is handed the desktop's: the rule is then testable with no
+/// window anywhere, which is the whole reason the read and the rule are two functions.
+fn resolve_appearance(choice: ThemeChoice, preferred: PreferredTheme) -> Appearance {
+    match choice {
+        ThemeChoice::Light => Appearance::Light,
+        ThemeChoice::Dark => Appearance::Dark,
+        ThemeChoice::Desktop => match preferred {
+            PreferredTheme::Light => Appearance::Light,
+            PreferredTheme::Dark => Appearance::Dark,
+        },
+    }
+}
+
+/// The whole of the wiring between the stored choice and what is drawn: read both inputs,
+/// resolve them, and write the answer down through [`set_appearance`] -- the one function
+/// that may change the appearance, and so the one that empties `HIGHLIGHTED`. There is
+/// deliberately no second path: a switch that reached the palette without passing through
+/// there would leave the source pane's spans in the colours of the theme before it.
+///
+/// **Not a `use_hook`, and that is the point.** `Platform::preferred_theme` is a `State`
+/// freya keeps from the windowing system itself -- winit answers `Window::theme()` on
+/// Windows, macOS, X11 and Wayland alike, and freya re-sets the state on a `ThemeChanged`
+/// event -- so *reading* it here subscribes this scope to it, and a desktop that goes dark
+/// while the app is running re-runs this and repaints. That is a real gain over what this
+/// replaced: the old answer came from a subprocess (`kreadconfig`, `gsettings`,
+/// `defaults`) asked once at startup, which could not follow the desktop it was asking
+/// about and could not be asked at all from a window that had not been opened yet. A
+/// `use_hook` here would put that limitation back, one line at a time.
+///
+/// The *choice* is the half that is read once, because it is a file this process is the
+/// only writer of. It arrives as a closure rather than a value so the load stays inside
+/// the `use_hook` -- and so a test can hand this a choice without the machine's own
+/// settings file having a vote in what the test asserts.
+///
+/// Written from the render body rather than from an effect, deliberately: an effect lands
+/// a frame late, and a frame late on a dark desktop is a white window flashing at someone
+/// who asked for neither. The write is idempotent (`set_if_modified_and_then`), so the
+/// render this runs in and every render after it that resolves the same way cost nothing.
+fn use_theme(choice: impl FnOnce() -> ThemeChoice) {
+    let choice = use_hook(choice);
+    let preferred = *Platform::get().preferred_theme.read();
+
+    set_appearance(resolve_appearance(choice, preferred));
 }
 
 /// The sheet freya's own components read their colours from.
@@ -4593,12 +4647,13 @@ fn use_restore_on_startup(
 }
 
 pub fn app() -> impl IntoElement {
-    // The theme, asked for once and written down through the one function that also
-    // empties the highlighted-source cache. It happens here, in a hook, rather than
-    // lazily on the first `palette()` call, so that the subprocess the desktop is asked
-    // through (`Theme::appearance`) runs at a moment this file names -- and so that the
-    // startup path and the settings page's later switch are the same one line.
-    use_hook(|| set_appearance(Settings::load().theme.appearance()));
+    // The theme: the stored choice over what the windowing system says it prefers,
+    // written down through the one function that also empties the highlighted-source
+    // cache. Before `use_init_theme` below on purpose -- that builds its value in a
+    // `use_hook`, so the appearance has to be right by the time the first render reaches
+    // it or the first frame is drawn in freya's own light sheet. It is also a live wire
+    // and not a startup step: the OS switching theme re-runs it. See `use_theme`.
+    use_theme(|| Settings::load().theme);
     // freya's own components -- the filter boxes, the scrollbars, the resizable handle,
     // the tooltips -- take their colours from its `Theme` and not from the palette, so
     // the sheet has to follow the appearance too; `interface_theme` is also where the
@@ -5024,6 +5079,31 @@ mod tests {
         rect().expanded().child(ThemedRow)
     }
 
+    /// The same row, under the wiring that resolves the theme -- with the choice handed in
+    /// rather than loaded, so that the settings file on the machine running the tests has
+    /// no vote in what they assert.
+    ///
+    /// The root reads the appearance as well, which is not decoration: `app()` does the
+    /// same (twice, for freya's own theme sheet), so the write `use_theme` makes during the
+    /// render body wakes the very scope that made it. That settles only because the write
+    /// is idempotent, and a test that hangs here is what would say it is not.
+    fn desktop_theme_harness() -> impl IntoElement {
+        use_theme(|| ThemeChoice::Desktop);
+        let _ = appearance();
+
+        rect().expanded().child(ThemedRow)
+    }
+
+    /// The first background anything paints, which is the row's: the harness's own rect
+    /// has none, and a transparent background is what "none" is.
+    fn painted(test: &TestingRunner) -> Fill {
+        test.find(|_, element| {
+            let background = element.style().background.clone();
+            (background != Fill::Color(Color::TRANSPARENT)).then_some(background)
+        })
+        .expect("a painted row")
+    }
+
     /// `HIGHLIGHTED` is process-wide while the appearance is per-thread, so the two tests
     /// that switch themes have to be the only one doing it at a time -- cargo runs them on
     /// threads of their own, and one clearing the cache the other has just filled would be
@@ -5044,16 +5124,6 @@ mod tests {
 
         let (mut test, ()) = TestingRunner::new(theme_harness, (100., 100.).into(), |_| (), 1.);
         test.sync_and_update();
-
-        // The first background anything paints, which is the row's: the harness's own rect
-        // has none, and a transparent background is what "none" is.
-        let painted = |test: &TestingRunner| {
-            test.find(|_, element| {
-                let background = element.style().background.clone();
-                (background != Fill::Color(Color::TRANSPARENT)).then_some(background)
-            })
-            .expect("a painted row")
-        };
 
         assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
 
@@ -5103,6 +5173,92 @@ mod tests {
         set_appearance(Appearance::Light);
         highlighted().clear();
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The rule the two enums exist to express: a named theme is its own answer, and
+    /// `Desktop` is the only one of the three that asks the window anything.
+    ///
+    /// Pure, so the whole matrix is six lines and needs no window -- which is why
+    /// `resolve_appearance` takes the platform's answer as an argument instead of reading
+    /// it. What replaced the old subprocess is not testable at all on the machine running
+    /// this; the rule in front of it is entirely.
+    #[test]
+    fn only_following_the_desktop_asks_the_desktop() {
+        for preferred in [PreferredTheme::Light, PreferredTheme::Dark] {
+            assert_eq!(
+                resolve_appearance(ThemeChoice::Light, preferred),
+                Appearance::Light
+            );
+            assert_eq!(
+                resolve_appearance(ThemeChoice::Dark, preferred),
+                Appearance::Dark
+            );
+        }
+
+        assert_eq!(
+            resolve_appearance(ThemeChoice::Desktop, PreferredTheme::Light),
+            Appearance::Light
+        );
+        assert_eq!(
+            resolve_appearance(ThemeChoice::Desktop, PreferredTheme::Dark),
+            Appearance::Dark
+        );
+    }
+
+    /// The half of dark mode that the subprocess could never have: the windowing system
+    /// changing its mind about the theme, *after* the window is open, repaints it.
+    ///
+    /// freya keeps `Platform::preferred_theme` from winit's `Window::theme()` and re-sets
+    /// it on the OS's `ThemeChanged` event, so setting it here is exactly what that event
+    /// does -- and what this asserts is the path from there to `set_appearance` and out to
+    /// a component that reads no props and was woken by nothing else.
+    #[test]
+    fn a_desktop_that_changes_its_mind_repaints_the_window() {
+        let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
+        // Left on the wrong one on purpose, so that the mount below has to be a real write
+        // rather than a value that happened to already be there.
+        set_appearance(Appearance::Dark);
+
+        // `provide_root_context` runs its closure in the root scope, where freya-testing
+        // has already put the `Platform` -- so this is how a test gets hold of the states
+        // a renderer would otherwise be the only writer of.
+        let (mut test, platform) = TestingRunner::new(
+            desktop_theme_harness,
+            (100., 100.).into(),
+            |runner| runner.provide_root_context(Platform::get),
+            1.,
+        );
+        test.sync_and_update();
+
+        // freya-testing mounts on `PreferredTheme::Light`, and the choice is a question,
+        // so the answer arrived on the first render: the appearance the thread was left in
+        // is gone, and nothing had to be set by hand to do it.
+        assert_eq!(appearance(), Appearance::Light);
+        assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
+
+        // **Two passes, and the second is not padding.** The change reaches the window in
+        // two hops -- the platform state wakes the scope holding `use_theme`, and the write
+        // that scope makes wakes everything that drew a colour -- and a pass renders the
+        // dirty scopes it *began* with, so the second hop lands in the pass after the
+        // first. The renderer does the same thing on its own (a marked scope sends a
+        // message that brings its loop straight back round and requests a redraw), so the
+        // cost of resolving the theme in the render body rather than an effect is one
+        // frame, spelled out here rather than hidden behind a loop that polls until it
+        // likes the answer.
+        let mut preferred = platform.preferred_theme;
+        preferred.set(PreferredTheme::Dark);
+        test.sync_and_update();
+        assert_eq!(appearance(), Appearance::Dark);
+        test.sync_and_update();
+
+        assert_eq!(painted(&test), Fill::Color(Palette::DARK.pane_bg));
+
+        // And back again, both to prove the wire runs in both directions and to leave the
+        // thread as it was found.
+        preferred.set(PreferredTheme::Light);
+        test.sync_and_update();
+        test.sync_and_update();
+        assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
     }
 
     /// sRGB relative luminance, and the contrast ratio between two colours, both as WCAG

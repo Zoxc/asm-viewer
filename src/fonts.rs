@@ -610,8 +610,15 @@ pub fn resolve(settings: &Settings) -> Fonts {
 ///   changes, and a `&'static` is not a read of anything. A `fonts()` that could answer
 ///   differently would therefore reach only the elements that happened to re-render for
 ///   some other reason -- half the window in the new font and half in the old, which is
-///   worse than a window that is consistently stale. It is the same hole `palette()`
-///   records for dark mode, and it wants the same fix.
+///   worse than a window that is consistently stale. `palette()` had exactly this hole and
+///   no longer does, which is the pattern to copy: the appearance behind it is a `State`,
+///   so *asking for a colour is what subscribes the caller to the theme*, and a switch
+///   repaints every scope that drew one and no other. A `fonts()` shaped like that -- a
+///   function over a state rather than a handed-out `&'static` -- is what turns a font
+///   change from a restart into a repaint. Note where `palette()` keeps that state: a
+///   thread-local `State::create_global`, not a context, precisely because it is read from
+///   free functions and render callbacks that cannot run a hook, and `icon_size` and
+///   `FontExt` are the same kind of caller.
 /// - **`&'static Fonts` is in the signatures around it.** `FontExt::font` in `ui.rs`
 ///   takes a `&'static Font` precisely because this hands one out, so a `Fonts` with a
 ///   lifetime shorter than the program cannot be threaded through today without either
@@ -619,9 +626,11 @@ pub fn resolve(settings: &Settings) -> Fonts {
 ///
 /// So what the settings page has to change, exactly:
 ///
-/// 1. Provide the fonts at the root of `app()` as a context (a `State<Arc<Fonts>>` beside
-///    `Objects` and the rest), built with [`resolve`] from the settings it loads, and
-///    replace its value when the page writes a new [`Settings`].
+/// 1. Hold the fonts in a state, built with [`resolve`] from the settings that are loaded
+///    and replaced when the page writes a new [`Settings`]. A context (a `State<Arc<Fonts>>`
+///    beside `Objects` and the rest) if every reader turns out to be a component; a
+///    thread-local global, as the appearance is, if any of them stays a free function --
+///    which the bullet above is the reason to expect.
 /// 2. Move the four readers onto it: `icon_size`, `FontExt::interface_font` and
 ///    `::assembly_font` -- whose `font(&'static Font)` becomes `font(&Font)` -- and the
 ///    tooltip's `font_size` in the root `use_init_theme`, which is a hook and so wants the

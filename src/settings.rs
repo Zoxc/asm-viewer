@@ -111,6 +111,16 @@ impl FontSetting {
 /// Which theme the user asked for. Only the *choice* lives here; which colours that
 /// means is the palette's business (`notes/Goals.md`, *UI*: a dark mode in the same
 /// palette rather than a second design).
+///
+/// **Turning [`Theme::Desktop`] into an [`Appearance`] is deliberately not a method here**,
+/// and that is not a layering nicety. "Which theme does this desktop prefer" is a question
+/// the *windowing system* answers: winit reports it on Windows, macOS, X11 and Wayland
+/// alike, and freya keeps the answer in `Platform::preferred_theme` — a `State`, so a
+/// desktop that switches to dark at sunset repaints the window that is already open. This
+/// module is framework-free and holds no window, so the only answer it could work out on
+/// its own is the worse one: a subprocess, spawned once, whose answer would then be stale
+/// for the rest of the session. `ui.rs` is where the choice and the window's answer meet
+/// (`resolve_appearance`), which is also the only place that may change what is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Theme {
@@ -123,31 +133,13 @@ pub enum Theme {
     Dark,
 }
 
-impl Theme {
-    /// Which of the two palettes this actually means, now.
-    ///
-    /// Deliberately not cached. `Theme::Desktop` is a *question*, not a value: a desktop
-    /// that switches to dark at sunset changes the answer without this process
-    /// restarting, so the cheap thing to do (a `OnceLock`, the way `fonts.rs` caches
-    /// Gnome's text scaling) would bake in the answer that happened to be true at
-    /// startup. The call costs a subprocess, so the caller is expected to hold the result
-    /// for as long as it holds the palette rather than to ask per element.
-    ///
-    /// A desktop with nothing to say is light, which is the same default the platform
-    /// fonts are: it is the theme this app was designed in, and guessing dark on a
-    /// desktop that never answered would be a guess with a visible cost.
-    pub fn appearance(self) -> Appearance {
-        match self {
-            Theme::Light => Appearance::Light,
-            Theme::Dark => Appearance::Dark,
-            Theme::Desktop => desktop::appearance().unwrap_or(Appearance::Light),
-        }
-    }
-}
-
 /// A resolved theme: what the palette is actually asked for. [`Theme`] has three answers
 /// and this has two, which is the whole difference between them — "follow the desktop"
 /// is a choice a user can make and not a set of colours anything can be drawn in.
+///
+/// It lives here rather than in `ui.rs` because it is the *shape* of the answer and not
+/// the answer itself: this module owns the choice, and a choice with no vocabulary for
+/// what it resolves to could not say what `Theme::Light` even means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Appearance {
     Light,
@@ -232,168 +224,8 @@ impl Settings {
     }
 }
 
-/// Asking the desktop which theme it prefers, in the spirit `fonts.rs` asks it for its
-/// fonts: a tool is run, and everything that can go wrong — no such binary, an unset
-/// key, an answer in a shape nobody expected — is one `None` meaning "the desktop said
-/// nothing".
-///
-/// **The order the two are tried in needs no `XDG_CURRENT_DESKTOP` here**, unlike the
-/// font lookup, because both tools can say "no preference" and both are believed when
-/// they do: Gnome's key has a `default` value that is exactly that and is not treated as
-/// an answer, and KDE's colours are simply absent on a machine that has never run KDE.
-/// Two desktops that both really answer is a machine that has really configured both,
-/// and there is no sound way to pick between those two answers anyway.
-///
-/// Not used: the `org.freedesktop.portal.Settings` `color-scheme` key, which is the
-/// cross-desktop standard and would answer for all of them at once. It needs a DBus call,
-/// which means either a dependency or shelling out to `gdbus`, and this app already has
-/// the two tools it needs installed on the desktops it runs on.
-mod desktop {
-    use super::Appearance;
-    #[cfg(not(target_os = "windows"))]
-    use std::process::Command;
-
-    /// Run a tool and take its stdout, trimmed. `fonts.rs` has the same six lines, and
-    /// they are duplicated rather than shared on purpose: these two modules are each
-    /// meant to be liftable into a crate on their own, and the alternative is a
-    /// dependency from the settings to the fonts for a wrapper around `Command::output`.
-    #[cfg(not(target_os = "windows"))]
-    fn output(command: &mut Command) -> Option<String> {
-        let output = command.output().ok()?;
-
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-    }
-
-    /// KDE first, then Gnome — the tie-break `fonts.rs` already uses, and here it is only
-    /// a tie-break.
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    pub fn appearance() -> Option<Appearance> {
-        kde().or_else(gnome)
-    }
-
-    /// macOS writes the dark theme down and writes nothing at all for the light one, so
-    /// a failed read *is* the light answer — which is why this cannot distinguish "light"
-    /// from "no desktop", and does not need to: the default for no answer is light too.
-    #[cfg(target_os = "macos")]
-    pub fn appearance() -> Option<Appearance> {
-        let style = output(Command::new("defaults").args(["read", "-g", "AppleInterfaceStyle"]))?;
-
-        style
-            .eq_ignore_ascii_case("dark")
-            .then_some(Appearance::Dark)
-    }
-
-    /// Windows is the hole in this, named rather than half-built: the answer is
-    /// `AppsUseLightTheme` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\
-    /// Personalize` (a `DWORD`, `0` for dark), and reading it wants the
-    /// `Win32_System_Registry` feature turned on for the `windows-sys` this app already
-    /// depends on there. That is a manifest change, and the Windows half of `fonts.rs` is
-    /// compile-checked but has never been run on Windows either, so this waits for
-    /// whoever adds the dark palette on a machine that can be looked at. Until then a
-    /// Windows reader chooses their theme in the settings page, which is what that page
-    /// is for.
-    #[cfg(target_os = "windows")]
-    pub fn appearance() -> Option<Appearance> {
-        None
-    }
-
-    /// KDE writes no light/dark flag anywhere: what it has is a *colour scheme*, and a
-    /// scheme is a hundred colours with a name. So the question asked is the honest one —
-    /// what colour does this desktop paint a window with — and the name is only the
-    /// fallback for a machine whose `kdeglobals` names a scheme without spelling its
-    /// colours out.
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    fn kde() -> Option<Appearance> {
-        ["kreadconfig6", "kreadconfig5"]
-            .into_iter()
-            .find_map(|bin| {
-                let background = kreadconfig(bin, "Colors:Window", "BackgroundNormal")
-                    .and_then(|value| parse_background(&value));
-
-                background.or_else(|| {
-                    kreadconfig(bin, "General", "ColorScheme").and_then(|name| parse_scheme(&name))
-                })
-            })
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    fn kreadconfig(bin: &str, group: &str, key: &str) -> Option<String> {
-        output(Command::new(bin).args(["--group", group, "--key", key]))
-    }
-
-    /// Ask Gnome, through the GTK schema every GTK desktop shares — the same schema
-    /// `fonts.rs` reads the fonts out of.
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    fn gnome() -> Option<Appearance> {
-        let value = output(Command::new("gsettings").args([
-            "get",
-            "org.gnome.desktop.interface",
-            "color-scheme",
-        ]))?;
-
-        parse_color_scheme(&value)
-    }
-
-    /// A KDE window background, `239,240,241` or `27,30,32`: the three channels of
-    /// `[Colors:Window] BackgroundNormal`, sometimes with an alpha after them.
-    ///
-    /// Perceived luminance rather than a plain average, because green carries most of it
-    /// — an average would call a saturated blue scheme light. Half-way is the threshold,
-    /// which is not a fine judgement: every scheme anyone actually uses is nowhere near
-    /// it.
-    pub fn parse_background(value: &str) -> Option<Appearance> {
-        let mut channels = value
-            .split(',')
-            .map(|channel| channel.trim().parse::<f32>().ok());
-
-        let (red, green, blue) = (channels.next()??, channels.next()??, channels.next()??);
-        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-
-        Some(if luminance < 128.0 {
-            Appearance::Dark
-        } else {
-            Appearance::Light
-        })
-    }
-
-    /// A scheme *name*, `BreezeDark` or `BreezeLight`, which is only an answer when it
-    /// says so. A custom scheme called `Midnight` is dark and says nothing, so a name
-    /// that names neither is `None` and not a guess at light: the background colour above
-    /// is the reliable question, and this is what is left when it went unanswered.
-    pub fn parse_scheme(name: &str) -> Option<Appearance> {
-        let name = name.to_ascii_lowercase();
-
-        if name.contains("dark") {
-            Some(Appearance::Dark)
-        } else if name.contains("light") {
-            Some(Appearance::Light)
-        } else {
-            None
-        }
-    }
-
-    /// Gnome's `color-scheme`, as `gsettings` prints it: `'prefer-dark'`,
-    /// `'prefer-light'` or `'default'`, quoted because `gsettings get` prints the
-    /// GVariant rather than the string inside it.
-    ///
-    /// `default` is **not** an answer. It is the value of a key nobody has set, which on
-    /// a KDE machine that merely has GTK installed is every time — reading it as light
-    /// would have this decide the theme for a desktop it is not.
-    pub fn parse_color_scheme(value: &str) -> Option<Appearance> {
-        match value.trim().trim_matches('\'') {
-            "prefer-dark" => Some(Appearance::Dark),
-            "prefer-light" => Some(Appearance::Light),
-            _ => None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::desktop::{parse_background, parse_color_scheme, parse_scheme};
     use super::*;
 
     /// A directory of this test's own under the system temporary directory, named after
@@ -556,55 +388,5 @@ mod tests {
             assert!(text.contains(&format!("theme = \"{spelling}\"")), "{text}");
             assert_eq!(toml::from_str::<Settings>(&text).ok(), Some(settings));
         }
-    }
-
-    /// A choice is an answer on its own; only "follow the desktop" is a question, and
-    /// only it can come back light on a machine with nothing to ask.
-    #[test]
-    fn a_chosen_theme_asks_the_desktop_nothing() {
-        assert_eq!(Theme::Light.appearance(), Appearance::Light);
-        assert_eq!(Theme::Dark.appearance(), Appearance::Dark);
-    }
-
-    #[test]
-    fn gnome_prefers_dark_and_says_nothing_by_default() {
-        assert_eq!(parse_color_scheme("'prefer-dark'"), Some(Appearance::Dark));
-        assert_eq!(
-            parse_color_scheme("'prefer-light'"),
-            Some(Appearance::Light)
-        );
-        // The unset value, and anything else, is not an answer.
-        assert_eq!(parse_color_scheme("'default'"), None);
-        assert_eq!(parse_color_scheme(""), None);
-        assert_eq!(parse_color_scheme("'prefer-teal'"), None);
-    }
-
-    #[test]
-    fn a_kde_window_background_answers_by_its_luminance() {
-        // Breeze, and Breeze Dark.
-        assert_eq!(parse_background("239,240,241"), Some(Appearance::Light));
-        assert_eq!(parse_background("27,30,32"), Some(Appearance::Dark));
-        // An alpha channel after the three is ignored rather than refused.
-        assert_eq!(parse_background("27,30,32,255"), Some(Appearance::Dark));
-        // Green carries the luminance: a saturated blue is dark, an average would not
-        // have said so.
-        assert_eq!(parse_background("0,0,200"), Some(Appearance::Dark));
-    }
-
-    #[test]
-    fn a_background_that_is_not_three_numbers_is_no_answer() {
-        assert_eq!(parse_background(""), None);
-        assert_eq!(parse_background("27,30"), None);
-        assert_eq!(parse_background("27,30,blue"), None);
-    }
-
-    #[test]
-    fn a_kde_scheme_name_answers_only_when_it_says_so() {
-        assert_eq!(parse_scheme("BreezeDark"), Some(Appearance::Dark));
-        assert_eq!(parse_scheme("BreezeLight"), Some(Appearance::Light));
-        // Named neither: not a guess.
-        assert_eq!(parse_scheme("Breeze"), None);
-        assert_eq!(parse_scheme("Midnight"), None);
-        assert_eq!(parse_scheme(""), None);
     }
 }
