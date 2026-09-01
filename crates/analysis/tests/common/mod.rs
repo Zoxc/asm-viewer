@@ -212,6 +212,11 @@ pub struct DwarfSection<'a> {
     pub rows: &'a [DwarfRow],
     /// Where this section's sequence ends, as an offset into the section.
     pub length: u64,
+    /// One `DW_TAG_subprogram` per entry, as `(index into `symbols`, extent in bytes)`
+    /// — the compiler stating a function's `DW_AT_low_pc`/`DW_AT_high_pc` rather than
+    /// leaving `SymbolData::extent` to derive it from where the next symbol starts.
+    /// Empty is the shape every line-info fixture had before extents were read.
+    pub subprograms: &'a [(usize, u64)],
     /// When set, an index into this section's `symbols`: the sequence's
     /// `DW_LNE_set_address` (and the unit's range entry, where there is one) is written
     /// as zero with an absolute relocation against that symbol, exactly the way a
@@ -320,7 +325,32 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     }
     dwarf.unit.line_program = program;
 
+    // The subprogram DIEs, as children of the unit's root. Their `low_pc` is written
+    // through the same relocated `Address::Symbol` a compiler uses, so a relocatable
+    // fixture's extents are keyed the same way its line rows are.
     let root = dwarf.unit.root();
+    let mut first = 0;
+    for section in fixture.sections {
+        for &(symbol, extent) in section.subprograms {
+            let die = dwarf.unit.add(root, gimli::DW_TAG_subprogram);
+            let entry = dwarf.unit.get_mut(die);
+            entry.set(
+                gimli::DW_AT_name,
+                AttributeValue::String(section.symbols[symbol].name.as_bytes().to_vec()),
+            );
+            entry.set(
+                gimli::DW_AT_low_pc,
+                AttributeValue::Address(Address::Symbol {
+                    symbol: first + symbol,
+                    addend: 0,
+                }),
+            );
+            // The DWARF 4 spelling: a constant form on `DW_AT_high_pc` is a *length*.
+            entry.set(gimli::DW_AT_high_pc, AttributeValue::Udata(extent));
+        }
+        first += section.symbols.len();
+    }
+
     // Without a range on the unit, nothing will look inside it for an address.
     let unit_ranges = (fixture.sections.len() > 1)
         .then(|| dwarf.unit.ranges.add(RangeList(ranges)));
@@ -516,4 +546,321 @@ pub fn rip_relative_store_to_data() -> Vec<u8> {
     .expect("adding a relocation to .text");
 
     obj.write().expect("writing the fixture object")
+}
+
+/// One entry of a hand-built shared library's export/dynamic symbol table.
+pub struct ExportedSymbol<'a> {
+    pub name: &'a str,
+    /// An offset into the fixture's `.text`, not a virtual address: the builders below
+    /// place `.text` themselves, so a test never has to know where.
+    pub offset: u64,
+    /// What the declaration itself claims, which is 0 for a PE export — its table has no
+    /// room for a size — and whatever is asked for in an ELF `.dynsym`.
+    pub size: u64,
+    /// When false the symbol is written as data (ELF `STT_OBJECT`, or a PE export whose
+    /// address is in `.rdata`), which must **not** come out as a text symbol.
+    pub code: bool,
+}
+
+/// Where a hand-built image puts its code, chosen to look like something a linker
+/// produced rather than to be memorable: a page in, at a non-zero image base.
+pub const IMAGE_BASE: u64 = 0x1_4000_0000;
+pub const TEXT_RVA: u64 = 0x1000;
+/// The virtual address of the fixtures' `.text`, i.e. what an exported `offset` is
+/// relative to.
+pub const TEXT_ADDRESS: u64 = IMAGE_BASE + TEXT_RVA;
+
+/// A hand-built ELF shared object: what is in `.text`, what each of the two symbol
+/// tables declares, and whether the header names an entry point.
+pub struct SharedObject<'a> {
+    pub text: &'a [u8],
+    /// Written to `.dynsym`, which is the table a stripped library still has.
+    pub dynamic: &'a [ExportedSymbol<'a>],
+    /// Written to `.symtab`, which is the table `strip` removes. Leave it empty for the
+    /// stripped case; filling both is how a file declaring one function twice is built.
+    pub static_symbols: &'a [ExportedSymbol<'a>],
+    /// An offset into `.text`, or [`None`] for an image that declares no entry point.
+    pub entry: Option<u64>,
+}
+
+/// Build an x86-64 ELF **shared object** (`ET_DYN`) with the symbol tables asked for.
+///
+/// This one is assembled byte by byte rather than with `object`'s writer, which emits
+/// `ET_REL` relocatable objects and has no way to write a dynamic symbol table at all.
+/// That is precisely the shape being tested: a stripped `.so` has no `.symtab`, so
+/// `Object::symbols()` is empty and everything the file says about its own code it says
+/// through `.dynsym`.
+pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
+    const SHDR: usize = 64;
+    const EHDR: usize = 64;
+    const SYM: usize = 24;
+
+    // Section indices, in the order they are written below.
+    const TEXT: u16 = 1;
+    const DATA: u16 = 2;
+    const SHSTRTAB: u16 = 7;
+    const SECTIONS: u16 = 8;
+
+    let SharedObject {
+        text,
+        dynamic,
+        static_symbols,
+        entry,
+    } = fixture;
+
+    // `.data` exists only so a data symbol has somewhere to be that is not code.
+    let data = [0u8; 8];
+    let data_rva = TEXT_RVA + text.len() as u64 + 0x1000;
+
+    // One symbol table: the string table it names, and the entries themselves, which
+    // start with the null entry every ELF symbol table has.
+    let table = |symbols: &[ExportedSymbol]| {
+        let mut strings = vec![0u8];
+        let mut entries = vec![0u8; SYM];
+        for symbol in symbols {
+            let name = strings.len() as u32;
+            strings.extend_from_slice(symbol.name.as_bytes());
+            strings.push(0);
+
+            let (info, shndx, value) = if symbol.code {
+                // STB_GLOBAL << 4 | STT_FUNC
+                (0x12u8, TEXT, IMAGE_BASE + TEXT_RVA + symbol.offset)
+            } else {
+                // STB_GLOBAL << 4 | STT_OBJECT
+                (0x11u8, DATA, IMAGE_BASE + data_rva + symbol.offset)
+            };
+            entries.extend_from_slice(&name.to_le_bytes());
+            entries.push(info);
+            entries.push(0); // st_other
+            entries.extend_from_slice(&shndx.to_le_bytes());
+            entries.extend_from_slice(&value.to_le_bytes());
+            entries.extend_from_slice(&symbol.size.to_le_bytes());
+        }
+        (entries, strings)
+    };
+    let (dynsym, dynstr) = table(dynamic);
+    let (symtab, strtab) = table(static_symbols);
+
+    let mut shstrtab = vec![0u8];
+    let mut section_name = |name: &str| {
+        let offset = shstrtab.len() as u32;
+        shstrtab.extend_from_slice(name.as_bytes());
+        shstrtab.push(0);
+        offset
+    };
+    let names = [
+        section_name(".text"),
+        section_name(".data"),
+        section_name(".dynsym"),
+        section_name(".dynstr"),
+        section_name(".symtab"),
+        section_name(".strtab"),
+        section_name(".shstrtab"),
+    ];
+
+    // Contents laid out back to back after the header; addresses are their own thing.
+    let mut out = vec![0u8; EHDR];
+    let place = |out: &mut Vec<u8>, bytes: &[u8]| {
+        let offset = out.len() as u64;
+        out.extend_from_slice(bytes);
+        (offset, bytes.len() as u64)
+    };
+    let text_at = place(&mut out, text);
+    let data_at = place(&mut out, &data);
+    let dynsym_at = place(&mut out, &dynsym);
+    let dynstr_at = place(&mut out, &dynstr);
+    let symtab_at = place(&mut out, &symtab);
+    let strtab_at = place(&mut out, &strtab);
+    let shstrtab_at = place(&mut out, &shstrtab);
+    let shoff = out.len() as u64;
+
+    // sh_name, sh_type, sh_flags, sh_addr, (sh_offset, sh_size), sh_link, sh_entsize.
+    // sh_info is 1 for a symbol table (one local symbol, the null entry) and 0
+    // otherwise; sh_addralign is always 1 here.
+    let shdr = |name: u32, kind: u32, flags: u64, addr: u64, at: (u64, u64), link: u32, entsize: u64| {
+        let mut bytes = Vec::with_capacity(SHDR);
+        bytes.extend_from_slice(&name.to_le_bytes());
+        bytes.extend_from_slice(&kind.to_le_bytes());
+        bytes.extend_from_slice(&flags.to_le_bytes());
+        bytes.extend_from_slice(&addr.to_le_bytes());
+        bytes.extend_from_slice(&at.0.to_le_bytes());
+        bytes.extend_from_slice(&at.1.to_le_bytes());
+        bytes.extend_from_slice(&link.to_le_bytes());
+        bytes.extend_from_slice(&u32::from(entsize != 0).to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&entsize.to_le_bytes());
+        bytes
+    };
+
+    // SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_DYNSYM = 11.
+    // SHF_WRITE = 1, SHF_ALLOC = 2, SHF_EXECINSTR = 4.
+    out.extend_from_slice(&shdr(0, 0, 0, 0, (0, 0), 0, 0));
+    out.extend_from_slice(&shdr(names[0], 1, 2 | 4, IMAGE_BASE + TEXT_RVA, text_at, 0, 0));
+    out.extend_from_slice(&shdr(names[1], 1, 2 | 1, IMAGE_BASE + data_rva, data_at, 0, 0));
+    out.extend_from_slice(&shdr(names[2], 11, 2, 0, dynsym_at, 4, SYM as u64));
+    out.extend_from_slice(&shdr(names[3], 3, 2, 0, dynstr_at, 0, 0));
+    out.extend_from_slice(&shdr(names[4], 2, 0, 0, symtab_at, 6, SYM as u64));
+    out.extend_from_slice(&shdr(names[5], 3, 0, 0, strtab_at, 0, 0));
+    out.extend_from_slice(&shdr(names[6], 3, 0, 0, shstrtab_at, 0, 0));
+
+    // And the header, now that every offset is known. ET_DYN = 3, EM_X86_64 = 62.
+    let header = &mut out[..EHDR];
+    header[..4].copy_from_slice(b"\x7fELF");
+    header[4] = 2; // ELFCLASS64
+    header[5] = 1; // ELFDATA2LSB
+    header[6] = 1; // EV_CURRENT
+    header[16..18].copy_from_slice(&3u16.to_le_bytes()); // e_type
+    header[18..20].copy_from_slice(&62u16.to_le_bytes()); // e_machine
+    header[20..24].copy_from_slice(&1u32.to_le_bytes()); // e_version
+    let entry = entry.map_or(0, |offset| IMAGE_BASE + TEXT_RVA + offset);
+    header[24..32].copy_from_slice(&entry.to_le_bytes());
+    header[40..48].copy_from_slice(&shoff.to_le_bytes());
+    header[52..54].copy_from_slice(&(EHDR as u16).to_le_bytes()); // e_ehsize
+    header[54..56].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
+    header[58..60].copy_from_slice(&(SHDR as u16).to_le_bytes()); // e_shentsize
+    header[60..62].copy_from_slice(&SECTIONS.to_le_bytes());
+    header[62..64].copy_from_slice(&SHSTRTAB.to_le_bytes());
+
+    out
+}
+
+/// Build an x86-64 PE **DLL** with an export directory and **no COFF symbol table**,
+/// which is the shape of the repo's `LLVM-24-rust-dev.dll` sample: `Object::symbols()`
+/// is empty and the export table is the only thing that names any code.
+///
+/// Hand-assembled for the same reason the ELF above is — `object`'s writer emits COFF
+/// object files, not images, and has no export directory in it.
+///
+/// `entry` is an offset into `.text`, or [`None`] for a DLL with no entry point (which
+/// is a real thing: `AddressOfEntryPoint` is 0 in a resource-only DLL).
+pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Vec<u8> {
+    const FILE_ALIGNMENT: usize = 0x200;
+    const SECTION_ALIGNMENT: u64 = 0x1000;
+    /// DOS stub, `PE\0\0`, COFF header, PE32+ optional header, two section headers,
+    /// rounded up to one file-alignment unit — which everything below assumes fits.
+    const HEADERS: usize = FILE_ALIGNMENT;
+
+    let text_size = text.len();
+    let text_raw = text_size.next_multiple_of(FILE_ALIGNMENT);
+    let rdata_rva = TEXT_RVA + (text_size as u64).next_multiple_of(SECTION_ALIGNMENT);
+
+    // The export directory, then the three parallel arrays it points at, then the
+    // name strings — all inside `.rdata`, laid out in that order.
+    let named: Vec<&ExportedSymbol> = symbols.iter().collect();
+    let count = named.len() as u32;
+    const DIRECTORY: u64 = 40;
+    let functions_rva = rdata_rva + DIRECTORY;
+    let names_rva = functions_rva + 4 * count as u64;
+    let ordinals_rva = names_rva + 4 * count as u64;
+    let strings_rva = ordinals_rva + 2 * count as u64;
+
+    let mut strings = Vec::new();
+    // The library's own name comes first, as a linker writes it.
+    let mut string_rvas = Vec::new();
+    let library_rva = strings_rva;
+    strings.extend_from_slice(b"fixture.dll\0");
+    for symbol in &named {
+        string_rvas.push(strings_rva + strings.len() as u64);
+        strings.extend_from_slice(symbol.name.as_bytes());
+        strings.push(0);
+    }
+
+    // A data export points into `.rdata` — past everything the export table itself
+    // occupies — so it is an address in a section that is not code.
+    let data_rva = strings_rva + strings.len() as u64 + 0x10;
+
+    let mut rdata = Vec::new();
+    let put32 = |out: &mut Vec<u8>, value: u32| out.extend_from_slice(&value.to_le_bytes());
+    put32(&mut rdata, 0); // Characteristics
+    put32(&mut rdata, 0); // TimeDateStamp
+    put32(&mut rdata, 0); // Major/MinorVersion
+    put32(&mut rdata, library_rva as u32); // Name
+    put32(&mut rdata, 1); // Base (the first ordinal)
+    put32(&mut rdata, count); // NumberOfFunctions
+    put32(&mut rdata, count); // NumberOfNames
+    put32(&mut rdata, functions_rva as u32);
+    put32(&mut rdata, names_rva as u32);
+    put32(&mut rdata, ordinals_rva as u32);
+    assert_eq!(rdata.len() as u64, DIRECTORY);
+
+    for symbol in &named {
+        let rva = if symbol.code {
+            TEXT_RVA + symbol.offset
+        } else {
+            data_rva + symbol.offset
+        };
+        put32(&mut rdata, rva as u32);
+    }
+    for rva in &string_rvas {
+        put32(&mut rdata, *rva as u32);
+    }
+    for index in 0..count as u16 {
+        rdata.extend_from_slice(&index.to_le_bytes());
+    }
+    rdata.extend_from_slice(&strings);
+    // Room for the data export to point at.
+    rdata.resize(rdata.len() + 0x20, 0);
+
+    let rdata_size = rdata.len();
+    let rdata_raw = rdata_size.next_multiple_of(FILE_ALIGNMENT);
+    let image_size = (rdata_rva + rdata_size as u64).next_multiple_of(SECTION_ALIGNMENT);
+
+    let mut out = vec![0u8; HEADERS + text_raw + rdata_raw];
+    out[HEADERS..HEADERS + text_size].copy_from_slice(text);
+    out[HEADERS + text_raw..HEADERS + text_raw + rdata_size].copy_from_slice(&rdata);
+
+    out[..2].copy_from_slice(b"MZ");
+    out[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes()); // e_lfanew
+    out[0x40..0x44].copy_from_slice(b"PE\0\0");
+
+    // COFF header at 0x44: Machine, NumberOfSections, TimeDateStamp,
+    // PointerToSymbolTable, NumberOfSymbols, SizeOfOptionalHeader, Characteristics.
+    let coff = &mut out[0x44..0x58];
+    coff[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
+    coff[2..4].copy_from_slice(&2u16.to_le_bytes());
+    // PointerToSymbolTable and NumberOfSymbols stay 0: the point of the fixture.
+    coff[16..18].copy_from_slice(&240u16.to_le_bytes()); // SizeOfOptionalHeader
+    coff[18..20].copy_from_slice(&0x2022u16.to_le_bytes()); // EXECUTABLE | LARGE_ADDRESS | DLL
+
+    // PE32+ optional header at 0x58.
+    let opt = &mut out[0x58..0x58 + 240];
+    opt[0..2].copy_from_slice(&0x20bu16.to_le_bytes()); // PE32+
+    opt[16..20].copy_from_slice(&(entry.map_or(0, |o| TEXT_RVA + o) as u32).to_le_bytes());
+    opt[20..24].copy_from_slice(&(TEXT_RVA as u32).to_le_bytes()); // BaseOfCode
+    opt[24..32].copy_from_slice(&IMAGE_BASE.to_le_bytes());
+    opt[32..36].copy_from_slice(&(SECTION_ALIGNMENT as u32).to_le_bytes());
+    opt[36..40].copy_from_slice(&(FILE_ALIGNMENT as u32).to_le_bytes());
+    opt[56..60].copy_from_slice(&(image_size as u32).to_le_bytes());
+    opt[60..64].copy_from_slice(&(HEADERS as u32).to_le_bytes()); // SizeOfHeaders
+    opt[108..112].copy_from_slice(&16u32.to_le_bytes()); // NumberOfRvaAndSizes
+    // Data directory 0 is the export table.
+    opt[112..116].copy_from_slice(&(rdata_rva as u32).to_le_bytes());
+    opt[116..120].copy_from_slice(&(rdata_size as u32).to_le_bytes());
+
+    // Section headers at 0x58 + 240 = 0x148.
+    let headers = 0x148;
+    let section = |name: &[u8], rva: u64, virtual_size: usize, pointer: usize, raw: usize, characteristics: u32| {
+        let mut bytes = vec![0u8; 40];
+        bytes[..name.len()].copy_from_slice(name);
+        bytes[8..12].copy_from_slice(&(virtual_size as u32).to_le_bytes());
+        bytes[12..16].copy_from_slice(&(rva as u32).to_le_bytes());
+        bytes[16..20].copy_from_slice(&(raw as u32).to_le_bytes());
+        bytes[20..24].copy_from_slice(&(pointer as u32).to_le_bytes());
+        bytes[36..40].copy_from_slice(&characteristics.to_le_bytes());
+        bytes
+    };
+    // CNT_CODE | MEM_EXECUTE | MEM_READ, and CNT_INITIALIZED_DATA | MEM_READ.
+    let text_header = section(b".text", TEXT_RVA, text_size, HEADERS, text_raw, 0x6000_0020);
+    let rdata_header = section(
+        b".rdata",
+        rdata_rva,
+        rdata_size,
+        HEADERS + text_raw,
+        rdata_raw,
+        0x4000_0040,
+    );
+    out[headers..headers + 40].copy_from_slice(&text_header);
+    out[headers + 40..headers + 80].copy_from_slice(&rdata_header);
+
+    out
 }

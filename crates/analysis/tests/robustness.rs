@@ -5,8 +5,8 @@ mod common;
 
 use analysis::{parse_object, Object};
 use common::{
-    caller_and_target, elf_x86_64, elf_x86_64_with_dwarf, garbage, DwarfFixture, DwarfRow,
-    DwarfSection, TextRelocation, TextSymbol,
+    caller_and_target, elf_shared_object, elf_x86_64, elf_x86_64_with_dwarf, garbage, pe_dll,
+    DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SharedObject, TextRelocation, TextSymbol,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -20,6 +20,10 @@ fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
     for symbol in &object.symbols_sorted {
         let _ = symbol.estimate_size();
         let _ = symbol.data();
+        // The debug-info extent goes down the same DWARF path `line_info` does, and it
+        // is what `assembly` slices the symbol's bytes with.
+        let _ = symbol.extent(&object);
+        let _ = symbol.data_in(&object);
         if let Some(assembly) = symbol.assembly(&object) {
             for instruction in &assembly.instructions {
                 let _: String = instruction.format.iter().map(|(t, _)| t.as_str()).collect();
@@ -436,6 +440,7 @@ fn dwarf_fixture() -> Vec<u8> {
                 },
             ],
             length: 8,
+            subprograms: &[],
             base_symbol: Some(1),
         }],
     })
@@ -720,6 +725,77 @@ fn corrupted_debug_sections_of_a_real_object_do_not_panic() {
                 let noise = garbage(seed, range.len());
                 data[range.clone()].copy_from_slice(&noise);
                 cases.push((format!("{name}: {range:?} = garbage({seed})"), data));
+            }
+        }
+
+        let failures = survivors(cases.iter().map(|(label, data)| (label.clone(), &data[..])));
+        assert!(failures.is_empty(), "panicked on: {failures:?}");
+    }
+}
+
+/// The images `declared_code` reads: a stripped ELF `.so` whose only symbol table is
+/// `.dynsym`, and a PE DLL whose only declaration of anything is its export directory.
+///
+/// The relocatable fixtures above never reach that code at all — an `.o` declares no
+/// exports and no entry point, so the pass returns before it looks at anything — which
+/// means everything the export and entry paths do with a file's own numbers (an address
+/// looked up in a section's range, a name read out of a string table, an ordinal
+/// indexing an address array) is unexercised by every other sweep in this file.
+fn images() -> Vec<(&'static str, Vec<u8>)> {
+    const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3];
+    const SYMBOLS: &[ExportedSymbol] = &[
+        ExportedSymbol {
+            name: "first",
+            offset: 0,
+            size: 4,
+            code: true,
+        },
+        ExportedSymbol {
+            name: "a_global",
+            offset: 0,
+            size: 8,
+            code: false,
+        },
+    ];
+
+    vec![
+        (
+            "elf .so",
+            elf_shared_object(SharedObject {
+                text: TEXT,
+                dynamic: SYMBOLS,
+                static_symbols: &[],
+                entry: Some(4),
+            }),
+        ),
+        ("pe dll", pe_dll(TEXT, SYMBOLS, Some(4))),
+    ]
+}
+
+#[test]
+fn truncated_images_do_not_panic() {
+    for (kind, valid) in images() {
+        // Sanity check that the fixture is a fixture: an image the parse can read, with
+        // the declared code in it.
+        let object = parse_and_walk(&valid).expect("the image parses");
+        assert_eq!(object.symbols_sorted.len(), 2, "{kind}");
+
+        let failures = survivors(
+            (0..valid.len()).map(|len| (format!("{kind} truncated to {len}"), &valid[..len])),
+        );
+        assert!(failures.is_empty(), "panicked on: {failures:?}");
+    }
+}
+
+#[test]
+fn corrupted_images_do_not_panic() {
+    for (kind, valid) in images() {
+        let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
+        for offset in 0..valid.len() {
+            for mask in [0xFFu8, 0x01, 0x80] {
+                let mut data = valid.clone();
+                data[offset] ^= mask;
+                cases.push((format!("{kind} byte {offset} ^ {mask:#04x}"), data));
             }
         }
 

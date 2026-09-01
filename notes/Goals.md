@@ -276,18 +276,27 @@ one item per part, so the unfinished half stays visible.
 - [x] Rely on declared functions in binaries. Don't assume things can be code — only declared
   text symbols are disassembled, nothing is scanned for.
 - [x] Rely on debug info: DWARF line info is read (lazily, per section).
-- [ ] Rely on debug info for function extents too, rather than estimating from the next symbol's
-  address (`estimate_size`), since declared sizes are often 0 in COFF/ELF.
-- [ ] Take entry points and exported DLL / dylib functions as symbols too. Only the symbol
-  table's `SymbolKind::Text` entries are kept today, so a stripped shared library is a file
-  with nothing in it — `LLVM-24-rust-dev.dll` has no COFF symbol table at all and lists zero
-  functions, which is a whole sample the app cannot open in any useful sense. The image
-  declares its code in two other places the `object` crate already reads: the entry point
-  (`Object::entry`) and the export table (`Object::exports`, plus `dynamic_symbols` for an
-  ELF `.so`), and both are *declared* functions in the sense the goal above means — nothing
-  is being guessed at or scanned for. Both need a size, which they do not carry, so
-  `estimate_size` has to derive it the way it does for a declared size of 0.
-- [ ] Find unwind targets.
+- [x] Rely on debug info for function extents too, rather than estimating from the next symbol's
+  address (`estimate_size`), since declared sizes are often 0 in COFF/ELF. `SymbolData::extent`
+  takes a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc` where there is one, and the
+  *smaller* of it and the estimate: the estimate over-reaches into padding, but `high_pc`
+  describes the function, so an alias or a split cold part inside one subprogram would otherwise
+  swallow the next function. It stays lazy, behind the same cache, bias and `catch_unwind` the
+  line rows go through. On `libanalysis-sample.rlib` 3 704 of 3 705 symbols answer from DWARF;
+  on `viewer-sample` half do, the rest being C++ dependencies built without it.
+- [x] Take entry points and exported DLL / dylib functions as symbols too. `declared_code`
+  reads `dynamic_symbols`, `exports` and `entry` for a **linked image** — all declared, so
+  nothing is guessed at or scanned for — and `LLVM-24-rust-dev.dll` goes from zero functions to
+  22 918. One symbol per address, earliest source winning, since a repeated address makes the
+  sorted list `estimate_size` searches answer 0; the section is found by looking the address up
+  in the kept text sections, which is also what keeps exported *data* out. A relocatable object
+  is skipped, 0 being a real function's first byte there rather than "no entry point".
+- [ ] Find unwind targets. Now also the honest fix for the other half of the above: a stripped
+  PE's export table is sparse, so an exported function's extent is derived across every
+  unexported function between it and the next export — megabytes, in nine cases in the DLL, and
+  3.7 MB in the worst. `estimate_size` is capped at 1 MiB to stop that costing seconds per
+  redraw, but an x86-64 image carries a `RUNTIME_FUNCTION` in `.pdata` stating both ends of
+  every function with unwind info, which would make the gaps the cap exists for stop existing.
 - [?] PDB / CodeView line info. DWARF is read today; the PE sample has no debug sections at all
   and a rustc `.rlib` member is COFF with CodeView (`.debug$S`/`.debug$T`), so on Windows output
   there is no source view without this.

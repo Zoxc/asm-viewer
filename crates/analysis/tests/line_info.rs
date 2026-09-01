@@ -59,6 +59,7 @@ fn two_files(base_symbol: Option<usize>) -> Vec<u8> {
                 },
             ],
             length: 8,
+            subprograms: &[],
             base_symbol,
         }],
     })
@@ -238,6 +239,7 @@ fn two_sections() -> Vec<u8> {
                     },
                 ],
                 length: 6,
+                subprograms: &[],
                 base_symbol: Some(0),
             },
             DwarfSection {
@@ -253,6 +255,7 @@ fn two_sections() -> Vec<u8> {
                     column: 7,
                 }],
                 length: 2,
+                subprograms: &[],
                 base_symbol: Some(0),
             },
         ],

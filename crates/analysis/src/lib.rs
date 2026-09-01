@@ -1,9 +1,17 @@
 use iced_x86::Formatter;
 use object::{
-    read::archive::ArchiveFile, CompressionFormat, Object as _, ObjectSection, ObjectSymbol,
-    Relocation, RelocationTarget, SymbolIndex, SymbolKind,
+    read::archive::ArchiveFile, CompressionFormat, Object as _, ObjectKind, ObjectSection,
+    ObjectSymbol, Relocation, RelocationTarget, SectionKind, SymbolIndex, SymbolKind,
 };
-use std::{cell::RefCell, collections::HashMap, fs, ops::Range, path::PathBuf, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    fs,
+    ops::Range,
+    path::PathBuf,
+    rc::Rc,
+    sync::Arc,
+};
 use symbolic_demangle::{Demangle, DemangleOptions};
 
 mod line;
@@ -141,6 +149,30 @@ pub struct Section {
     pub symbols: Vec<u64>,
 }
 
+/// How far [`SymbolData::estimate_size`]'s derivation is allowed to reach before it is
+/// treated as having said nothing.
+///
+/// The derivation is "up to the next declaration", which is a tight bound only while the
+/// declarations are dense. A symbol table is dense — the largest function in any of the
+/// repo's sample objects is 181 KB, and the 99.9th percentile is under 10 KB — but an
+/// **export table is not**: `LLVM-24-rust-dev.dll` declares 22 918 functions in 78 MB of
+/// `.text`, so the thousands of unexported functions between two exports all land inside
+/// the first one's derived extent. Nine of them come out over a megabyte and the worst
+/// over three, which is 772 302 instructions to decode and format for a listing whose
+/// first screenful is the only part anyone will read.
+///
+/// 1 MiB is therefore not a claim about how long a function can be; it is the point past
+/// which the derivation is certainly describing something other than this function, and
+/// past which believing it costs seconds per redraw. It is five times the largest real
+/// function measured across every sample in the repo, so nothing with a symbol table
+/// notices it at all.
+///
+/// The honest fix for a stripped PE is more declarations, not a bigger cap: an x86-64
+/// image carries a `RUNTIME_FUNCTION` in `.pdata` for every function with unwind info,
+/// stating both ends of it. That is `notes/Goals.md`'s separate "Find unwind targets"
+/// item; when it lands, the gaps this cap exists for largely stop existing.
+const MAX_DERIVED_SIZE: u64 = 1 << 20;
+
 #[derive(Debug)]
 pub struct SymbolData {
     pub name: String,
@@ -161,29 +193,94 @@ impl SymbolData {
 
     /// Object files frequently report a size of 0, so derive the extent from the next
     /// symbol in the section (or the section end).
+    ///
+    /// This is the answer that costs nothing and needs nothing but the object's own
+    /// symbol table. It is an *upper* bound rather than a measurement: the bytes between
+    /// one function's last instruction and the next function's first are alignment
+    /// padding, and a declaration the symbol table never mentioned — an export, an entry
+    /// point ([`declared_code`]) — has no size of its own at all. See
+    /// [`extent`](Self::extent) for the answer debug info gives when there is any, and
+    /// [`MAX_DERIVED_SIZE`] for where the bound stops meaning anything.
     pub fn estimate_size(&self) -> Option<u64> {
         let section = self.section.as_ref()?;
         let i = section.symbols.binary_search(&self.address).ok()?;
-        if i + 1 == section.symbols.len() {
+        let size = if i + 1 == section.symbols.len() {
             section
                 .address
                 .checked_add(section.data.len().try_into().ok()?)?
-                .checked_sub(self.address)
+                .checked_sub(self.address)?
         } else {
-            section.symbols[i + 1].checked_sub(self.address)
+            section.symbols[i + 1].checked_sub(self.address)?
+        };
+        Some(size.min(MAX_DERIVED_SIZE))
+    }
+
+    /// How many bytes of code this symbol is, taking DWARF's word for it where DWARF has
+    /// one and falling back on [`estimate_size`](Self::estimate_size) where it does not.
+    ///
+    /// A `DW_TAG_subprogram` carries `DW_AT_low_pc`/`DW_AT_high_pc`, which is the
+    /// compiler stating the function's extent rather than this crate inferring it from
+    /// where the *next* function starts. The two differ by the alignment padding between
+    /// them — a run of `int3`/`nop` that the estimate hands to the disassembler and DWARF
+    /// does not — and they differ by much more wherever a symbol is missing between two
+    /// functions, which is the whole reason [`declared_code`] exists.
+    ///
+    /// **The smaller of the two wins**, rather than DWARF winning outright. Each bounds
+    /// the other in a case the other gets wrong, and neither case is exotic:
+    ///
+    /// * The estimate over-reaches into padding, and into a whole function whenever one
+    ///   has no symbol. DWARF is right there.
+    /// * DWARF over-reaches when two symbols share one subprogram — an alias, a local
+    ///   label the assembler emitted as a text symbol, a cold part split out — because
+    ///   `DW_AT_high_pc` describes the *function*, not the symbol that was asked about.
+    ///   Running past the next symbol would put another function's instructions in this
+    ///   one's listing, which is exactly the confusion the estimate exists to avoid.
+    ///
+    /// A zero estimate is treated as no estimate: two text symbols at one address (an
+    /// alias) make the next-address derivation answer 0, and 0 bytes of code is not an
+    /// answer any caller can use.
+    ///
+    /// **Cost.** [`None`] from the DWARF half is cached per object the same way
+    /// [`line_info`](Self::line_info) is, so an object without debug info pays one
+    /// section-table scan ever; with debug info it is one DIE walk per compilation unit
+    /// visited, and a hash lookup afterwards. See [`Object::subprogram_extent`].
+    pub fn extent(&self, object: &Object) -> Option<u64> {
+        let estimate = self.estimate_size().filter(|&size| size != 0);
+        match (self.dwarf_extent(object), estimate) {
+            (Some(dwarf), Some(estimate)) => Some(dwarf.min(estimate)),
+            (dwarf, estimate) => dwarf.or(estimate),
         }
     }
 
+    /// This symbol's bytes, as far as [`estimate_size`](Self::estimate_size) reaches.
+    ///
+    /// Deliberately *not* the debug-info extent: a symbol does not own the file it came
+    /// from, so this cannot ask for one. Anything with an [`Object`] in hand should call
+    /// [`data_in`](Self::data_in) instead, which is what [`assembly`](Self::assembly)
+    /// does. What is left for this one is the caller that only wants a rough size to put
+    /// on screen.
     pub fn data(&self) -> Option<&[u8]> {
+        self.bytes(self.estimate_size()?)
+    }
+
+    /// This symbol's bytes over [`extent`](Self::extent) — the same range
+    /// [`assembly`](Self::assembly) decodes and [`line_info`](Self::line_info) asks about.
+    pub fn data_in(&self, object: &Object) -> Option<&[u8]> {
+        self.bytes(self.extent(object)?)
+    }
+
+    /// `size` bytes of the section starting at this symbol, or [`None`] when that runs
+    /// off the end of what was decompressed.
+    fn bytes(&self, size: u64) -> Option<&[u8]> {
         let section = self.section.as_ref()?;
-        let size: usize = self.estimate_size()?.try_into().ok()?;
+        let size: usize = size.try_into().ok()?;
         let offset: usize = self.address.checked_sub(section.address)?.try_into().ok()?;
         let end = offset.checked_add(size)?;
         section.data.get(offset..end)
     }
 
     pub fn assembly(&self, object: &Object) -> Option<Arc<Assembly>> {
-        let bytes = self.data()?;
+        let bytes = self.data_in(object)?;
         let mut decoder =
             iced_x86::Decoder::with_ip(64, bytes, self.address, iced_x86::DecoderOptions::NONE);
 
@@ -645,6 +742,148 @@ pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Optio
     Some(compressed.decompress().ok()?.into_owned())
 }
 
+/// A function the file **declares** somewhere other than its symbol table.
+///
+/// See [`declared_code`] for where these come from and why they are not a departure from
+/// the "only declared functions, nothing is scanned for" rule.
+struct DeclaredCode {
+    /// [`None`] for the entry point, which is an address the image names no name for.
+    name: Option<String>,
+    address: u64,
+    /// What the declaration itself said the size was, which is 0 for everything but a
+    /// dynamic symbol. Kept for display exactly like [`SymbolData::size`]; the extent
+    /// actually used comes from [`SymbolData::extent`].
+    size: u64,
+    /// The code section containing `address`, worked out by [`declared_code`] — an
+    /// export table and an entry point name an address and nothing else.
+    section: SectionIndex,
+}
+
+/// The name given to the entry point, which is the one declaration that carries none.
+///
+/// The angle brackets are the point: no assembler, linker or mangling scheme produces a
+/// name with them, so this cannot be mistaken for something that was in the file and
+/// cannot collide with something that was.
+const ENTRY_POINT_NAME: &str = "<entry point>";
+
+/// The code a file declares outside its symbol table: its **entry point** and its
+/// **exports**.
+///
+/// A stripped shared library is otherwise a file with nothing in it. `LLVM-24-rust-dev.dll`
+/// (a repo sample) has no COFF symbol table at all, so `file.symbols()` is empty and the
+/// viewer lists zero functions for 137 MB of code — while the image states in its export
+/// directory exactly where several thousand of those functions begin. An ELF `.so` stripped
+/// of `.symtab` still has `.dynsym`, which says the same thing.
+///
+/// This does **not** loosen the standing rule that only declared functions are
+/// disassembled and nothing is scanned for (`notes/Goals.md`, *Binary inspection design*).
+/// Every address here is one the file states outright, in a table a loader reads:
+///
+/// * `dynamic_symbols()` — the ELF `.dynsym`, which declares a kind ([`SymbolKind::Text`]
+///   is required here) and a size, so it is read like the symbol table it is rather than
+///   through `exports()`, which flattens it to name-and-address and keeps the data
+///   definitions too.
+/// * `exports()` — the PE export directory (and the Mach-O export trie), which is
+///   name-and-address only. Forwarders are already dropped by `object`.
+/// * `entry()` — the one address the image header names.
+///
+/// Three decisions, each of which the caller depends on:
+///
+/// **Only in a code section.** An address is looked up in the sections that were kept and
+/// are [`SectionKind::Text`], and that section becomes the symbol's own — an export table
+/// gives no section and neither does an entry point, and a symbol with no section has no
+/// bytes, no size and no line info. It doubles as the filter that keeps exported *data*
+/// out: a PE exports its globals from the same table as its functions and an ELF
+/// `.dynsym` definition may be an object, and neither lands in `.text`.
+///
+/// **One symbol per address, and the earliest source wins.** A file can declare the same
+/// function in several of these places at once — the symbol table *and* the export table,
+/// an export *and* the entry point — and the order above is the order of how much each
+/// says. The symbol table wins over everything (it carries a size and the internal name),
+/// a named export wins over the unnamed entry point. This is not cosmetic: `Section::symbols`
+/// is a sorted list of addresses that [`SymbolData::estimate_size`] binary-searches, and a
+/// repeated address there makes the next-address derivation answer 0.
+///
+/// **Nothing for a relocatable object.** An `.o` has no exports and no entry point, but
+/// `entry()` answers 0 for one all the same — and 0 is a perfectly ordinary address there,
+/// the first byte of the first section, so believing it would invent an `<entry point>`
+/// symbol on top of a real function in every object file the viewer opens.
+fn declared_code(
+    file: &object::File<'_>,
+    sections: &HashMap<SectionIndex, Section>,
+    known: &mut HashSet<u64>,
+) -> Vec<DeclaredCode> {
+    let mut declared = Vec::new();
+    if file.kind() == ObjectKind::Relocatable {
+        return declared;
+    }
+
+    // The address ranges code can be in, as `(range, index)`. Only sections that were
+    // kept: one whose bytes would not decompress has nothing to disassemble either.
+    let code: Vec<(Range<u64>, SectionIndex)> = file
+        .sections()
+        .filter(|section| section.kind() == SectionKind::Text)
+        .filter_map(|section| {
+            let kept = sections.get(&section.index())?;
+            let length: u64 = kept.data.len().try_into().ok()?;
+            let end = kept.address.checked_add(length)?;
+            (length > 0).then_some((kept.address..end, section.index()))
+        })
+        .collect();
+
+    let mut take = |name: Option<String>, address: u64, size: u64| {
+        let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
+            return;
+        };
+        if !known.insert(address) {
+            return;
+        }
+        declared.push(DeclaredCode {
+            name,
+            address,
+            size,
+            section: *section,
+        });
+    };
+
+    for symbol in file.dynamic_symbols() {
+        if symbol.kind() != SymbolKind::Text {
+            continue;
+        }
+        let Ok(name) = symbol.name_bytes() else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        take(
+            Some(String::from_utf8_lossy(name).into_owned()),
+            symbol.address(),
+            symbol.size(),
+        );
+    }
+
+    for export in file.exports().unwrap_or_default() {
+        if export.name().is_empty() {
+            continue;
+        }
+        take(
+            Some(String::from_utf8_lossy(export.name()).into_owned()),
+            export.address(),
+            0,
+        );
+    }
+
+    // 0 is "this image has no entry point", which is how a DLL built without one states
+    // it; it is also what a file too damaged to have one reads as.
+    let entry = file.entry();
+    if entry != 0 {
+        take(None, entry, 0);
+    }
+
+    declared
+}
+
 /// Parse `data` as a single object file. `name` is the display name (an archive member
 /// name or the file name) and `path` the file it came from. Anything that fails to
 /// parse yields [`None`].
@@ -675,18 +914,33 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                 })
                 .collect();
 
-            // Insert symbol addresses into sections
+            // Insert symbol addresses into sections. The addresses are collected as they
+            // go, because that set is what tells `declared_code` which of the file's
+            // exports are already in the symbol table under their own name.
+            let mut known: HashSet<u64> = HashSet::new();
             file.symbols().for_each(|symbol| {
                 if symbol.kind() != SymbolKind::Text {
                     return;
                 }
 
+                known.insert(symbol.address());
                 symbol
                     .section()
                     .index()
                     .and_then(|index| sections.get_mut(&index))
                     .map(|section| section.symbols.push(symbol.address()));
             });
+
+            // What the file declares elsewhere: exports and the entry point. Their
+            // addresses go into the sections' sorted lists alongside the symbol table's,
+            // because that list is what `SymbolData::estimate_size` derives an extent
+            // from and a declaration carries none.
+            let declared = declared_code(&file, &sections, &mut known);
+            for code in &declared {
+                if let Some(section) = sections.get_mut(&code.section) {
+                    section.symbols.push(code.address);
+                }
+            }
 
             let section_map: HashMap<SectionIndex, Arc<Section>> = sections
                 .into_iter()
@@ -698,7 +952,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
             let sections = section_map.values().cloned().collect();
 
-            let symbols: HashMap<_, _> = file
+            let mut symbols: HashMap<_, _> = file
                 .symbols()
                 .filter_map(|symbol| {
                     // Filter out non-text symbols
@@ -725,6 +979,45 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                     ))
                 })
                 .collect();
+
+            // The declared code joins the same map rather than living in a list beside
+            // it, so `symbols_sorted` stays derived from one place and the object's
+            // symbol count is the number of functions it can show. The keys are indices
+            // *past* the file's own symbol table, which is the only honest thing they can
+            // be: these symbols are not in it. Nothing can reach them by relocation —
+            // relocation targets are indices the file itself wrote, and a file that
+            // declares exports is a linked image whose text sections carry no symbol
+            // relocations at all.
+            if !declared.is_empty() {
+                let next = file
+                    .symbols()
+                    .map(|symbol| symbol.index().0)
+                    .max()
+                    .map_or(0, |index| index + 1);
+                for (offset, code) in declared.into_iter().enumerate() {
+                    let name = code.name.unwrap_or_else(|| ENTRY_POINT_NAME.to_owned());
+                    // The entry point's name is this crate's own invention, so there is
+                    // nothing in it to demangle; an export's is the file's, and on a
+                    // Windows DLL it is very often MSVC-mangled.
+                    let demangled = (name != ENTRY_POINT_NAME)
+                        .then(|| {
+                            symbolic_common::Name::from(&name)
+                                .demangle(DemangleOptions::complete())
+                        })
+                        .flatten();
+
+                    symbols.insert(
+                        SymbolIndex(next + offset),
+                        Arc::new(SymbolData {
+                            name,
+                            demangled,
+                            section: section_map.get(&code.section).cloned(),
+                            address: code.address,
+                            size: code.size,
+                        }),
+                    );
+                }
+            }
 
             let mut symbols_sorted: Vec<_> = symbols.values().cloned().collect();
             symbols_sorted.sort_unstable_by(|a, b| a.name.cmp(&b.name));

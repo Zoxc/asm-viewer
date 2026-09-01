@@ -61,6 +61,13 @@ pub(crate) struct Dwarf {
     /// Where each code section was placed in the address space the context reads in.
     /// See [`section_biases`]; empty for a linked image, which needs none.
     biases: HashMap<SectionIndex, u64>,
+
+    /// Every compilation unit that has been asked about, and the extent of each
+    /// `DW_TAG_subprogram` in it, keyed by the unit's `.debug_info` offset and then by
+    /// the subprogram's `DW_AT_low_pc`. Both keys are in the biased address space this
+    /// context reads in. Built one unit at a time, on demand; see
+    /// [`Object::subprogram_extent`].
+    extents: Mutex<HashMap<u64, HashMap<u64, u64>>>,
 }
 
 impl Dwarf {
@@ -95,6 +102,7 @@ impl Dwarf {
         Some(Dwarf {
             context: Mutex::new(addr2line::Context::from_dwarf(dwarf).ok()?),
             biases,
+            extents: Mutex::default(),
         })
     }
 
@@ -206,6 +214,99 @@ impl Dwarf {
         // are the same answer to a caller, so give it the same shape.
         (!rows.is_empty()).then(|| Arc::new(LineInfo { rows, files }))
     }
+
+    /// The extent of the `DW_TAG_subprogram` that begins at `address`, or [`None`] when
+    /// no unit covers the address or the subprogram that does begins elsewhere. `bias` is
+    /// what the address's section was moved by, exactly as in [`line_info`](Self::line_info).
+    fn extent(&self, bias: u64, address: u64) -> Option<u64> {
+        without_panicking(|| self.extent_inner(bias, address)).flatten()
+    }
+
+    fn extent_inner(&self, bias: u64, address: u64) -> Option<u64> {
+        let probe = address.checked_add(bias)?;
+
+        let context = self.context.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Which unit to walk, from the range index the context already built at load
+        // time — so an address no unit covers costs a binary search and nothing else.
+        // `skip_all_loads` declines to fetch split DWARF, which this crate does not read
+        // anywhere else either.
+        let (sections, unit) = context.find_dwarf_and_unit(probe).skip_all_loads()?;
+        let key = unit.header.offset().as_debug_info_offset()?.0 as u64;
+
+        // Nested under the context's lock, and only ever in that order — this is the one
+        // place either is taken.
+        let mut extents = self.extents.lock().unwrap_or_else(|e| e.into_inner());
+        let extents = extents
+            .entry(key)
+            .or_insert_with(|| subprogram_extents(sections, unit));
+
+        extents.get(&probe).copied()
+    }
+}
+
+/// Every `DW_TAG_subprogram` in one unit that states where it begins and ends, as
+/// `low_pc -> size`.
+///
+/// A whole-unit walk rather than a search for the one address asked about, because the
+/// answer is cached per unit: a reader clicking down a function list asks about symbol
+/// after symbol out of the same compilation unit, and walking its DIEs once for each of
+/// them would be the same work again every time.
+///
+/// What is skipped is as important as what is kept. A subprogram with no `DW_AT_low_pc`
+/// is a declaration and not code; one with `DW_AT_ranges` instead of `DW_AT_high_pc` is
+/// discontiguous, so it has no single extent and the next-symbol estimate is the better
+/// answer; one claiming zero bytes says nothing a caller can use. `DW_AT_high_pc` is an
+/// *end address* when its form is an address and a *length* when its form is a constant,
+/// which is DWARF 4's change and not a producer quirk — both spellings are in the wild.
+///
+/// Abstract origins are deliberately not followed: this asks where a function's bytes
+/// are, and only the DIE carrying `low_pc` knows that.
+fn subprogram_extents(
+    sections: &gimli::Dwarf<Reader>,
+    unit: &gimli::Unit<Reader>,
+) -> HashMap<u64, u64> {
+    let mut extents = HashMap::new();
+
+    let mut entries = unit.entries();
+    // A malformed unit stops the walk where it goes wrong rather than discarding what
+    // was read before it, which is the same bargain the rest of this module strikes.
+    while let Ok(Some((_, entry))) = entries.next_dfs() {
+        if entry.tag() != gimli::DW_TAG_subprogram {
+            continue;
+        }
+
+        let low = match entry.attr_value(gimli::DW_AT_low_pc) {
+            Ok(Some(value)) => match sections.attr_address(unit, value) {
+                Ok(Some(low)) => low,
+                _ => continue,
+            },
+            _ => continue,
+        };
+
+        let size = match entry.attr_value(gimli::DW_AT_high_pc) {
+            Ok(Some(gimli::AttributeValue::Udata(length))) => length,
+            Ok(Some(value)) => match sections.attr_address(unit, value) {
+                Ok(Some(high)) => match high.checked_sub(low) {
+                    Some(size) => size,
+                    None => continue,
+                },
+                _ => continue,
+            },
+            _ => continue,
+        };
+
+        if size == 0 {
+            continue;
+        }
+
+        // Two subprograms at one address is a concrete instance beside its abstract
+        // root, or a unit that was included twice; the first one read keeps the address,
+        // the way overlapping line rows are resolved above.
+        extents.entry(low).or_insert(size);
+    }
+
+    extents
 }
 
 /// Run DWARF parsing with a net under it, turning a panic into "no line info".
@@ -555,6 +656,23 @@ impl Object {
         dwarf.line_info(dwarf.bias(section.index), range)
     }
 
+    /// How many bytes of code the debug info says the function starting at `address`
+    /// **within one section** is, or [`None`] when it does not say.
+    ///
+    /// Same shape and the same reasons as [`line_info`](Self::line_info): the section is
+    /// half the identity in a relocatable object, [`None`] covers every way of not
+    /// knowing at once, and the DWARF context is built at most once and shared. On top of
+    /// that it is one DIE walk per compilation unit *visited* — units nothing was asked
+    /// about are never walked — so an object with no debug info still costs one
+    /// section-table scan for its whole lifetime and nothing more.
+    ///
+    /// This is what [`SymbolData::extent`] prefers over the next-symbol estimate; see
+    /// there for why the two bound each other rather than one simply winning.
+    pub fn subprogram_extent(&self, section: &Section, address: u64) -> Option<u64> {
+        let dwarf = self.dwarf()?;
+        dwarf.extent(dwarf.bias(section.index), address)
+    }
+
     /// This object's DWARF context, built at most once — including the "there is none"
     /// answer, so an object without debug info is not re-examined on every query.
     fn dwarf(&self) -> Option<&Dwarf> {
@@ -575,7 +693,13 @@ impl SymbolData {
     /// does not own the file it came from.
     pub fn line_info(&self, object: &Object) -> Option<Arc<LineInfo>> {
         let section = self.section.as_ref()?;
-        let end = self.address.checked_add(self.estimate_size()?)?;
+        let end = self.address.checked_add(self.extent(object)?)?;
         object.line_info(section, self.address..end)
+    }
+
+    /// What DWARF says this symbol's extent is, [`None`] when it says nothing. The
+    /// half of [`extent`](Self::extent) that needs the object; see there.
+    pub fn dwarf_extent(&self, object: &Object) -> Option<u64> {
+        object.subprogram_extent(self.section.as_ref()?, self.address)
     }
 }

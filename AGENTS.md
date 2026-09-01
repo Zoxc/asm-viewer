@@ -79,7 +79,17 @@ parsing run on a `std::thread` and come back over an `async_channel`, so a large
 freeze the UI.
 
 **Data model** — built once at open time, shared via `Arc`. Only `SymbolKind::Text` symbols are
-kept. `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target
+kept — plus, for a **linked image only**, the code it declares elsewhere: `dynamic_symbols`,
+`exports` and `entry` (`declared_code`). All three are *declared*, so this keeps the "nothing is
+scanned for" rule; `LLVM-24-rust-dev.dll` has no COFF symbol table at all and goes from zero
+functions to 22 918 on the strength of it. One symbol per address, earliest source winning
+(symbol table > dynamic symbol > export > entry point), because `Section::symbols` is the sorted
+list `estimate_size` searches and a repeated address makes it answer 0. The section comes from
+looking the address up in the kept **text** sections, which doubles as the filter keeping exported
+*data* out. A relocatable object is skipped entirely: `entry()` answers 0 for a `.o`, and 0 there
+is a real function's first byte. The entry point has no name and is called `<entry point>` — angle
+brackets because no assembler, linker or mangling scheme emits them, so it cannot collide with a
+real one. `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target
 lookup) and `symbols_sorted` (name-sorted, for the UI list). `Object::data` is an `ObjectData` —
 an `Arc<[u8]>` of the whole file plus a `Range` — kept for the object's lifetime, because parsing
 keeps decompressed bytes only for sections holding text symbols and the lazy line-info pass needs
@@ -87,9 +97,19 @@ the rest; every object from one file shares that one allocation, so an archive c
 once. `Section` owns decompressed bytes, relocations keyed by address, and a sorted list of its
 text symbols' addresses. `SymbolData::estimate_size` derives a symbol's extent from the *next*
 address in that list, because declared sizes are frequently 0 in ELF/COFF; the declared size is
-kept separately and only displayed.
+kept separately and only displayed. `SymbolData::extent` is the answer that is actually used, and
+prefers DWARF — a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc` — where the object has any,
+taking the **smaller** of the two: the estimate over-reaches into padding, but `high_pc` describes
+the *function*, so a second symbol inside one subprogram (an alias, an assembler label, a split
+cold part) would otherwise swallow the next function. The derivation is capped at
+`MAX_DERIVED_SIZE` (1 MiB) — not a claim about how long a function can be, but the point past
+which it is certainly describing something else: a stripped PE's export table is sparse, so nine
+of the DLL's exports derived megabytes and one derived 3.7 MB, which is 772 302 instructions
+decoded *per render*. `.pdata`/`RUNTIME_FUNCTION` is the real fix and is its own Goals item.
 
-**Line info** (`line.rs`) is lazy and never touched at parse time. `Object::dwarf` is a
+**Line info** (`line.rs`) is lazy and never touched at parse time. It answers two questions under
+one set of rules — the rows covering a range, and a subprogram's extent (`Object::subprogram_extent`,
+one DIE walk per unit visited, cached by unit offset) — so everything below holds for both. `Object::dwarf` is a
 `DwarfCache` caching *both* answers — the built `addr2line::Context` and the fact that there is
 none — so an object without debug info costs one section-table scan ever. `None` from `line_info`
 means "no line info" for every reason at once: no DWARF, foreign debug info (CodeView), DWARF that
