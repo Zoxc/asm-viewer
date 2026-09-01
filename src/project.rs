@@ -644,7 +644,7 @@ pub fn flush() {
 mod tests {
     use std::collections::HashMap;
 
-    use analysis::{BinaryFormat, ObjectData, Section, SectionIndex, SymbolData};
+    use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData};
 
     use super::*;
 
@@ -678,6 +678,7 @@ mod tests {
             path: PathBuf::from(path),
             name: name.to_owned(),
             format: BinaryFormat::Elf,
+            architecture: Architecture::X86_64,
             symbols: HashMap::new(),
             symbols_sorted,
             sections: vec![section],

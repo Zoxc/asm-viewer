@@ -301,7 +301,7 @@ impl History {
 mod tests {
     use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-    use analysis::{BinaryFormat, Object, ObjectData};
+    use analysis::{Architecture, BinaryFormat, Object, ObjectData};
 
     use super::*;
 
@@ -313,6 +313,7 @@ mod tests {
             path: PathBuf::from("/tmp/lib.a"),
             name: name.to_owned(),
             format: BinaryFormat::Elf,
+            architecture: Architecture::X86_64,
             symbols: HashMap::new(),
             symbols_sorted: Vec::new(),
             sections: Vec::new(),

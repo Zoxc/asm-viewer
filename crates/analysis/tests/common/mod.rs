@@ -104,7 +104,22 @@ pub struct TextRelocation {
 /// back to back, each declared with `st_size == 0` — the common case that
 /// `SymbolData::estimate_size` exists to work around.
 pub fn elf_x86_64(symbols: &[TextSymbol], relocations: &[TextRelocation]) -> Vec<u8> {
-    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    elf_text(Architecture::X86_64, symbols, relocations)
+}
+
+/// The same fixture for any architecture, which is what makes "the decoder comes from the
+/// file" testable: the *bytes* of a `.text` section say nothing about how to read
+/// themselves, so the only difference between an object that decodes as 32-bit x86 and
+/// one that decodes as aarch64 is the `e_machine` in its header.
+///
+/// `relocations` are written with x86's branch encoding, so anything but x86 has to pass
+/// none — which is no loss, since what a non-x86 fixture is for is the decode itself.
+pub fn elf_text(
+    architecture: Architecture,
+    symbols: &[TextSymbol],
+    relocations: &[TextRelocation],
+) -> Vec<u8> {
+    let mut obj = write::Object::new(BinaryFormat::Elf, architecture, Endianness::Little);
     let text = obj.section_id(write::StandardSection::Text);
 
     let mut offsets = Vec::new();

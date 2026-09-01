@@ -234,7 +234,7 @@ pub const ARCHIVE_TAG: &str = "AR";
 mod tests {
     use std::collections::HashMap;
 
-    use analysis::{DwarfCache, ObjectData};
+    use analysis::{Architecture, DwarfCache, ObjectData};
 
     use crate::filter::Filter;
 
@@ -247,6 +247,7 @@ mod tests {
             path: PathBuf::from(path),
             name: name.to_owned(),
             format: BinaryFormat::Elf,
+            architecture: Architecture::X86_64,
             symbols: HashMap::new(),
             symbols_sorted: Vec::new(),
             sections: Vec::new(),

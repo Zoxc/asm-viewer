@@ -282,7 +282,11 @@ one item per part, so the unfinished half stays visible.
 ## Scratchpad
 
 - [ ] A scratchpad function which allows creating single file rust projects where you can build with cargo and view assembly output.
-- [ ] Allow `#[crates(version = "3.4.6") extern crate dfsh;` to use specific versions from crates.io (require a specific version).
+- [ ] Let a scratchpad depend on crates.io crates, as a **list of crates edited in the UI** —
+  name and required version per row — rather than as a convention inside the source. The list
+  is what generates the `[dependencies]` of the scratchpad's `Cargo.toml`. A version is
+  required rather than optional, so a scratchpad builds the same way twice; a row whose crate
+  or version does not resolve is the reader's error to see, not a silently different build.
 - [ ] Allow these files to run with output viewable
 
 ## Binary inspection design
@@ -316,7 +320,23 @@ one item per part, so the unfinished half stays visible.
   and a rustc `.rlib` member is COFF with CodeView (`.debug$S`/`.debug$T`), so on Windows output
   there is no source view without this.
 - [ ] Binary inspection should be light weight and multi threaded. Result saves in project info.
-- [ ] Binary inspection should be designed to be portable, allowing different disassembly libraries to be used.
+- [x] Binary inspection should be designed to be portable, allowing different disassembly
+  libraries to be used. `disasm.rs` holds `Assembly`/`Instruction`/`SpanKind`/`BranchEdge` and
+  names no backend; `disasm/x86.rs` is the only `iced-x86` in the crate. The trait is one call
+  wide and shaped by what `Assembly` needs — bytes, an address, and one question per
+  instruction about whether a relocation covers it — so a second backend is an impl and not a
+  rewrite. The four x86 spellings that have no cross-architecture answer live behind it: the
+  `SymbolResolver` substitution, the per-instruction `rip+` flip, the flow-control judgement
+  and the `FormatterTextKind` mapping. Only iced-x86 sits behind the seam today, which is the
+  point rather than a gap.
+- [x] Decode as the architecture the object declares, rather than as x86-64 whatever it is.
+  `Object::architecture` comes from the file, and the bitness comes from the architecture and
+  not from `is_64()` — x32 is 64-bit code with 32-bit pointers, the one case the file's class
+  gets backwards. An architecture no backend claims is now a third answer (`Assembly::
+  undecodable`) rather than a confident page of nonsense.
+- [ ] Say so in the UI when an architecture cannot be decoded. `Assembly::undecodable` names
+  the reason, but `AssemblyView` does not read it yet, so such an object draws an empty pane
+  instead of "no disassembler for aarch64".
 - [x] Should never panic on any file input. Errors doing analysis should allow inspecting
   functions without errors. Searched for rather than asserted: a seeded, bounded mutation sweep
   (`tests/mutations.rs`) truncates every corpus file at every length, poisons every count, offset

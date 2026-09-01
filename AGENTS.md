@@ -56,6 +56,7 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 
 - `crates/analysis/src/lib.rs` — object parsing, disassembly, relocation resolution.
 - `crates/analysis/src/line.rs` — DWARF line info, lazy. The only part that knows `gimli`/`addr2line`.
+- `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
 - `src/project.rs` — the persisted session (`project.toml`) and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme choice.
 - `src/source.rs` — source files read off disk and cached by path, failures included.
@@ -164,19 +165,39 @@ is a subtract-with-overflow panic on a file the user merely opened; and a unit's
 What is *not* left to the guard is the third one: `find_units` asks about `probe + 1` unchecked,
 so `subprogram_extent` declines `u64::MAX` outright rather than catching the panic afterwards.
 
-**Disassembly** (`SymbolData::assembly`) is hardcoded to 64-bit x86 via
-`Decoder::with_ip(64, ..)`, so non-x86 objects decode as garbage rather than erroring. Each
-instruction is formatted into an `Instruction` implementing `iced_x86::FormatterOutput`, capturing
-`(String, SpanKind)` spans for the UI to colour. `SpanKind` is the backend-independent stand-in for
-`FormatterTextKind`; the app has no `iced-x86` or `object` dependency (`BinaryFormat` and
-`SectionIndex` are re-exported from `analysis` for that reason). The decode loop's own arithmetic
+**Disassembly** (`SymbolData::assembly`) goes through a seam — `disasm.rs` defines everything a
+caller sees and names no backend, `disasm/x86.rs` is the only module in the crate that mentions
+`iced-x86`. **Which decoder is used is a property of the file, not of this crate**:
+`Object::architecture` comes out of the header and `disasm::disassembler` maps it to a backend —
+`I386` at 32 bits, `X86_64`/`X86_64_X32` at 64. Bitness comes from the architecture and not from
+`is_64()`, because the x32 ABI is 64-bit *code* with 32-bit pointers and is the one case the file's
+class gets backwards. An architecture no backend claims is a **third answer**, not an empty listing:
+`Assembly::undecodable` carries the architecture's name. It has to be *said*, because there is no
+byte sequence a decoder could refuse on — the same bytes that are an aarch64 function are a
+confident page of x86 nonsense, which is what this used to print, and an empty listing on its own
+reads as a symbol that holds no code. `assembly` still answers `None` for one thing only: a symbol
+with no bytes at all. Nothing in `ui.rs` reads `undecodable` yet, so such an object currently draws
+an empty pane rather than the reason.
+
+The trait is **one call wide** (`Disassembler::disassemble(&Code) -> Decoded`) and is shaped by what
+`Assembly` needs rather than by what a disassembler library offers. `Code` is the bytes, the address
+they sit at, and one question — `Code::relocation`, asked per instruction, because a relocation
+names a byte range and never an operand number. `Decoded` is the rows plus each branch's *address*;
+turning those into row indices is `Assembly::decode`'s binary search, so `edges`' drop rules hold
+for every backend rather than once per backend. What stays *behind* the seam is everything x86
+spells its own way: the `SymbolResolver` substitution, the per-instruction `rip_relative_addresses`
+flip, `branch_target`'s flow-control judgement and `FormatterTextKind -> SpanKind`. Each instruction
+is formatted into an `Instruction` implementing `iced_x86::FormatterOutput`, capturing `(String,
+SpanKind)` spans for the UI to colour. `SpanKind` is the backend-independent stand-in for
+`FormatterTextKind`; the app has no `iced-x86` or `object` dependency (`BinaryFormat`, `Architecture`
+and `SectionIndex` are re-exported from `analysis` for that reason). The decode loop's own arithmetic
 is checked: the instruction pointer is the symbol's address plus what has been decoded, both of
 them the file's numbers, so a section placed at the end of the address space wraps it and the
 offset derived from it is a slice index. The listing stops at the wrap rather than indexing past
 the symbol.
 
-**Relocation handling** is the subtle part. A relocation whose address falls anywhere in the
-instruction's byte range is resolved to an `Arc<SymbolData>`, and the target's name is printed *in
+**Relocation handling** is the subtle part, and all of it is x86's (`disasm/x86.rs`). A relocation
+whose address falls anywhere in the instruction's byte range is resolved to an `Arc<SymbolData>`, and the target's name is printed *in
 place of* the placeholder operand through iced-x86's `SymbolResolver` hook — not by suppressing the
 number, which left the brackets the formatter had already opened empty (`call qword ptr []`).
 Nothing maps a relocation back to an operand number, so the resolver is armed once per instruction
@@ -191,7 +212,10 @@ override of `write_symbol`; that is what lets `InstructionRow` render the run be
 
 **Branch edges** (`Assembly::edges`) are the branches staying inside one symbol, for the arrow
 gutter. Both ends are **indices into `instructions`**, not addresses, because that is what a row
-can be asked about and it makes the answer independent of where the symbol sits. `from`/`to` are in
+can be asked about and it makes the answer independent of where the symbol sits. A backend hands
+back the *address* each branch names — a forward branch names one no instruction has been decoded
+at yet — and `Assembly::decode` resolves them, which is what keeps the four rules below one
+decision rather than one per backend. `from`/`to` are in
 *execution* order (a backward branch has `from > to`); `first()`/`last()`/`is_backward()` sit on
 top. A **call is not an edge** even when it lands inside the symbol, because control comes straight
 back. Four things are dropped rather than drawn, each of which would be a line to a place it does
