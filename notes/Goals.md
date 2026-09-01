@@ -448,19 +448,40 @@ one item per part, so the unfinished half stays visible.
 - [?] PDB / CodeView line info. DWARF is read today; the PE sample has no debug sections at all
   and a rustc `.rlib` member is COFF with CodeView (`.debug$S`/`.debug$T`), so on Windows output
   there is no source view without this.
-- [x] Binary inspection should be multi threaded — nothing is analysed on the UI thread any
-  more. Disassembly, line info and the arrow gutter's lane layout moved together onto one
-  worker for the app's lifetime, which drains its queue to the newest request so the clicks a
-  reader passed are dropped before being started rather than pushed through the most expensive
-  call in the crate. An answer carries the symbol it is about and is kept only if that symbol
-  is still selected, so a stale answer is discarded by a comparison rather than by a counter.
-  Measured on `viewer-sample`: the first symbol clicked cost **1.42 s** on the UI thread in a
-  debug build (589 ms in release), and now costs a channel send.
+- [x] Binary inspection is off the UI thread. Disassembly, line info and the arrow gutter's
+  lane layout moved together onto one worker for the app's lifetime, which drains its queue to
+  the newest request so the clicks a reader passed are dropped before being started rather than
+  pushed through the most expensive call in the crate. An answer carries the symbol it is about
+  and is kept only if that symbol is still selected, so a stale answer is discarded by a
+  comparison rather than by a counter. The first symbol clicked on `viewer-sample` cost 589 ms
+  on the UI thread and now costs a channel send.
+- [ ] Binary inspection should be multi threaded — in the sense of using more than one core,
+  which it does not. Everything above is *off* the UI thread but still sequential: `demangled`
+  is one `map` per object and `open_files_streaming` walks objects in order, so an archive's 196
+  members demangle one after another. Both levels are embarrassingly parallel, and demangling is
+  the whole of what is left to parallelise (281 ms of `viewer-sample`'s 1 437 ms open). Note the
+  constraint before starting: long names are demangled on a thread with a 64 MiB stack because
+  the demanglers recurse per pointer, so a parallel version wants a bounded pool of big-stack
+  threads rather than one per object.
+- [D] Cache the demangled names between runs. **Built, measured and then thrown away** — it is
+  not in this repo's history, deliberately, so this item is the whole record of it. The gain did
+  not justify what it cost to carry. What it bought, per file, release, cold open
+  against warm: `viewer-sample` 1 589 → 1 174 ms (-26%), `libanalysis-sample.rlib` 111 → 31 ms
+  (-72%), `LLVM-24-rust-dev.dll` 542 → 479 ms (-12%), `librustc_data_structures` 5 → 1 ms (too
+  small to mean anything). **An average of roughly 37% across the three samples big enough to
+  measure**, and about 25% weighted by the time actually spent rather than by file.
+  Against that: a fourth place on disk outside both the project and the settings, an eviction
+  budget, a hand-rolled binary format with its own version and checksum (TOML cannot express an
+  `Option<String>`), and two defects the format's own corruption sweep found — a short document
+  silently truncating the symbol table, and a well-formed one able to hold a wrong name. That is
+  a lot of machinery, and a wrong function name on screen is a bad failure, for a second and a
+  half on the largest sample here.
+  Undeferred by the open getting slower or the saving getting larger — parallel demangling above
+  attacks the same cost without persisting anything, and is the thing to try first.
 - [ ] Cache inspection results in the project info. Neither `assembly()` nor `line_info()`
   memoizes, so leaving a listing and coming back re-derives it — 4–8 ms on `viewer-sample`,
   which is cheap enough that a keyed cache was deliberately not added on the way past: it would
-  be an unbounded pile of `Assembly`s for listings the reader has left. Saving them with the
-  project is the other half, and wants the storage split first.
+  be an unbounded pile of `Assembly`s for listings the reader has left.
 - [x] Binary inspection should be designed to be portable, allowing different disassembly
   libraries to be used. `disasm.rs` holds `Assembly`/`Instruction`/`SpanKind`/`BranchEdge` and
   names no backend; `disasm/x86.rs` is the only `iced-x86` in the crate. The trait is one call

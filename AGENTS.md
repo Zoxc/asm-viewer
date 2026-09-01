@@ -154,6 +154,25 @@ object is under `SHORT_MANGLED_NAME` (64), which is every fixture in the test su
 caller's own stack's business. A name no demangler will take is displayed exactly as the file
 wrote it, which is what an unrecognised name already did.
 
+**Demangling is single-threaded, and it is the last of the open-time cost.** After the lazy
+line info, the lazy DWARF context, the lazy subprogram extents and the worker-thread
+disassembly, it is the only expensive thing left at open time that is not simply reading the
+file: 281 ms of `viewer-sample`'s 1 437 ms, 78 ms of `libanalysis-sample.rlib`'s 181 ms
+(release; debug numbers overstate every one of these and are not worth quoting). What is left
+beside it — the read and the walk of the symbol table — *is* the objects and symbols lists.
+
+`demangled` is one sequential `map` per object and `open_files_streaming` walks the objects in
+order, so an archive's 196 members demangle one after another on one core. Both levels are
+embarrassingly parallel and neither is exploited; that is `notes/Goals.md`'s open
+"multi threaded" item, and the constraint on it is the 64 MiB stack long names need, so a
+parallel version wants a bounded pool of big-stack threads rather than one per object.
+
+**Persisting the demangled names was built and thrown away** — it is not in the history, and the
+`[D]` item in `notes/Goals.md` is the whole record of it. It worked and it was measured (a 37% average open, best on archives, worst on
+the export-heavy DLL), but it cost a fourth place on disk, an eviction budget and a hand-rolled
+binary format with its own checksum, and its corruption sweep found two ways for it to be wrong
+including a plausible wrong function name on screen. Parallel demangling attacks the same cost
+without persisting anything, and is the thing to try first.
 **Line info** (`line.rs`) is lazy and never touched at parse time. It answers two questions under
 one set of rules — the rows covering a range, and a subprogram's extent (`Object::subprogram_extent`,
 one DIE walk per unit visited, cached by unit offset) — so everything below holds for both. `Object::dwarf` is a
