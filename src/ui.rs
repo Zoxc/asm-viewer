@@ -1,6 +1,8 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    rc::Rc,
     sync::{Arc, LazyLock, Mutex, MutexGuard},
     time::Duration,
 };
@@ -22,7 +24,7 @@ use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 use crate::project::{self, Project, Selection};
 use crate::rows::RowSelection;
 use crate::source::{self, SourceFile};
-use crate::tabs::Tabs;
+use crate::tabs::{Positions, Tabs};
 use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
 
 /// Height of every row in the object, symbol and instruction lists. This must stay
@@ -424,6 +426,30 @@ struct Files(State<Tabs<Arc<str>>>);
 #[derive(Clone, Copy)]
 struct Shown(State<Option<Arc<str>>>);
 
+/// Which row each open content tab was left on, shared through context.
+///
+/// Beside [`Open`] rather than inside it, and beside it rather than inside
+/// [`InstructionList`], for one reason each. Inside `Tabs` it would be a field of what
+/// the strip draws, so a scroll of the reader's would re-render every chip; inside the
+/// pane it would live and die with the component, which is precisely the bug this fixes —
+/// one scroll controller is reused for every symbol, so a tab switch used to leave the
+/// new function at the offset the old one was at. Here it outlives both the component and
+/// any one selection, which is what a *tab's* position has to do.
+///
+/// Keyed by `Selection`, which is compared by `Arc` pointer identity — the same identity
+/// [`Open`] keys by, so an entry means "this tab" for exactly as long as that tab is in
+/// the list, and never accidentally means a second symbol of the same name in another
+/// object. It is also why the persisted form cannot reuse the key and identifies its tabs
+/// by path and name instead (`project.rs`).
+#[derive(Clone, Copy)]
+struct AsmAt(State<Positions<Selection>>);
+
+/// Which line each open source file was left on, shared through context. [`AsmAt`] for
+/// the Source pane, keyed by the file the pane shows rather than by the selection: the
+/// pane's tabs are files, and two symbols compiled from one file are one tab.
+#[derive(Clone, Copy)]
+struct SrcAt(State<Positions<Arc<str>>>);
+
 /// Where the selection has been, shared through context. Named `Hist` because
 /// `History` is the type it holds, the same way `Sel` holds a `Selection`.
 #[derive(Clone, Copy)]
@@ -651,6 +677,134 @@ fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
     }
 
     controller.scroll_to_y(-((row - margin).max(0.0) as i32));
+}
+
+/// The row at the top of a pane scrolled to `offset`, and the offset that puts `row`
+/// there — the one place the two units meet.
+///
+/// A `VirtualScrollView`'s offset counts *down* from zero, so the arithmetic is a
+/// negation and a divide by `ROW_HEIGHT`, which is every list's `item_size`. Rounded
+/// *down*, which is the half-row a position in rows gives up and the direction to give it
+/// up in: the row at the top edge is the one the reader is looking at even when it is only
+/// half on screen, and coming back to the one below it would lose the half they could see.
+fn row_at(offset: i32) -> usize {
+    ((-offset).max(0) as f32 / ROW_HEIGHT) as usize
+}
+
+fn row_offset(row: usize) -> i32 {
+    -((row as f32 * ROW_HEIGHT) as i32)
+}
+
+/// Keep `controller` pointed at the row `tab` was last left at, and keep [`Positions`]
+/// told where it is now.
+///
+/// Both panes' halves of "a viewing position per tab", from the one place: a pane holds
+/// one scroll controller and shows one tab at a time, so switching tab means writing the
+/// outgoing tab's row down and putting the incoming tab's row back. `length` is what the
+/// pane is holding *now*, which is what makes the answer a row of this listing rather
+/// than of the one it was saved from.
+///
+/// Two things make it work, and both are about *when* rather than what:
+///
+/// - **The effect is subscribed to the pane's own scroll**, because reading the
+///   controller's position is a `State::read` inside it (`ScrollController`'s
+///   `From<..> for (i32, i32)`, which is the only way to ask). So every scroll the reader
+///   makes wakes this and is written down as it happens, rather than only on the way out
+///   of the tab — which is what makes the position survive the window simply being closed,
+///   and what makes it survive the pane unmounting (which the assembly pane does whenever
+///   the selection is an object, taking its controller with it).
+/// - **The tab the controller is *holding* is tracked here**, in a plain `Rc<RefCell<..>>`
+///   rather than a `State`, and is not the same thing as the tab the app is showing. The
+///   two differ for exactly one run of this effect — the one that has to move the view —
+///   and every other write goes under the held tab, so a scroll that lands between a tab
+///   switch and this effect cannot be written down against the tab it is not from. It is
+///   not a `State` because nothing renders from it and writing one here would cost the
+///   pane a second render on every switch. `open` is what keeps that from resurrecting a
+///   tab that has just been closed: the run after a close is holding one, and the three
+///   closing functions have already forgotten it.
+///
+/// **A [`Pin::reveal`] wins over a remembered position, and needs nothing to make it.**
+/// The two never ask at the same moment: this moves the view only when the tab changes,
+/// and a reveal is asked for by a click in the *other* pane, which changes no tab —
+/// while a selection change, which does, drops the pin outright (`use_clear_focus`).
+/// When a reveal does scroll, this effect wakes on the scroll it made and records it, so
+/// the last thing the reader was shown is what the tab is remembered at. The memory
+/// follows the reveal rather than fighting it.
+fn use_kept_position<T: Clone + PartialEq + 'static>(
+    mut positions: State<Positions<T>>,
+    open: State<Tabs<T>>,
+    mut controller: ScrollController,
+    tab: &T,
+    length: usize,
+) {
+    // Not `use_state`: see above. `use_hook` runs its initializer once per component, so
+    // this is the pane's own memory of which tab its controller is scrolled for.
+    let held = use_hook(|| Rc::new(RefCell::new(None::<T>)));
+
+    // With deps and not a bare `use_side_effect`, whose callback is built in a `use_hook`
+    // and would hold the first tab this pane ever showed for as long as it lived.
+    use_side_effect_with_deps(&(tab.clone(), length), move |(tab, length): &(T, usize)| {
+        // Reading the controller's position is what subscribes this effect to the pane's
+        // scroll, so it has to happen before anything can return early.
+        let (_, offset) = <(i32, i32)>::from(controller);
+        let row = row_at(offset);
+
+        // Cloned out of the borrow rather than held across the `borrow_mut` below, which
+        // panics exactly the way a `State` guard held across a write does.
+        let holding = held.borrow().clone();
+        let switching = holding.as_ref() != Some(tab);
+        let known = positions.peek().at(tab);
+        let back_to = positions.peek().row(tab, *length);
+
+        // Whose row the offset above is, and where this run has to move the view to.
+        let (owner, moving) = match (&holding, known) {
+            // Still showing the tab the controller is scrolled for -- a scroll, a resize,
+            // a re-render. The offset is that tab's own and nothing moves.
+            (Some(held), _) if held == tab => (Some(tab.clone()), None),
+            // A switch, with a row for the tab arriving: the offset belongs to the one
+            // being left, and the one arriving goes back to where it was.
+            (Some(out), Some(_)) => (Some(out.clone()), Some(back_to)),
+            // A switch onto a tab never seen: the top, and pointedly not wherever the tab
+            // before it had got to, which is the whole bug this hook exists for.
+            (Some(out), None) => (Some(out.clone()), Some(0)),
+            // This pane's first run, on a tab it has a row for: a remount, or a session
+            // just restored. Nothing to write down -- a fresh controller sits at the top,
+            // which is not where this tab was -- and everything to put back.
+            (None, Some(_)) => (None, Some(back_to)),
+            // First run with nothing remembered: leave the view where it is. It is at the
+            // top already, and this runs a beat *after* the pane's first render, so a
+            // scroll to the top here would undo a wheel that got in before it.
+            (None, None) => (Some(tab.clone()), None),
+        };
+
+        if let Some(owner) = owner {
+            // Only for a tab that is still open, which is why the list is an argument
+            // here at all: `close_tab` forgets a tab's position and then moves to a
+            // neighbour, so the run that follows is holding a tab that has gone -- and
+            // writing its row down would put it straight back, keyed by a `Selection`
+            // that holds a whole `Object`. That the last scroll before a close is lost
+            // with it is the right answer twice over: there is no tab to bring it back
+            // for, and the file it pointed into may be being let go of in the same
+            // breath (`close_binary`).
+            let still_open = open.peek().find(&owner).is_some();
+            // And only when it has actually moved. `State::write` notifies whether or not
+            // the value changes, and this runs on every scroll event, so writing back what
+            // is already there would wake the save observer for a pointer sitting still.
+            let at = positions.peek().at(&owner);
+            if still_open && at != Some(row) {
+                positions.write().remember(owner, row);
+            }
+        }
+        if switching {
+            *held.borrow_mut() = Some(tab.clone());
+        }
+        if let Some(row) = moving {
+            // A no-op when the view is there already, and otherwise a write this effect
+            // is subscribed to: it wakes once more, finds the tab it is holding is the
+            // tab it is showing, and writes the row down.
+            controller.scroll_to_y(row_offset(row));
+        }
+    });
 }
 
 /// The run of rows a reader has picked out to be copied, and which pane it is in.
@@ -1480,9 +1634,19 @@ fn activate(mut open: State<Tabs<Selection>>, mut selection: State<Selection>, t
 /// Landing on the neighbour is an ordinary selection change, so it is recorded in the
 /// history like any other: the reader is now somewhere else, and the way back to it is
 /// the way back to anywhere else.
-fn close_tab(mut open: State<Tabs<Selection>>, selection: State<Selection>, entry: &Selection) {
+///
+/// Where the tab was left goes with it. A closed tab is not a tab, so a position kept for
+/// one is both a lie — reopening it from the sidebar is a fresh tab, which starts at the
+/// top — and a leak, since a [`Selection`] holds the `Arc<Object>` it points into.
+fn close_tab(
+    mut open: State<Tabs<Selection>>,
+    selection: State<Selection>,
+    mut at: State<Positions<Selection>>,
+    entry: &Selection,
+) {
     let was_showing = *selection.peek() == *entry;
     let next = open.write().close(entry);
+    at.write().forget(entry);
 
     if was_showing {
         // Through `activate` like everything else, even though the neighbour is by
@@ -1517,10 +1681,12 @@ fn open_file(mut files: State<Tabs<Arc<str>>>, mut shown: State<Option<Arc<str>>
 fn close_file(
     mut files: State<Tabs<Arc<str>>>,
     mut shown: State<Option<Arc<str>>>,
+    mut at: State<Positions<Arc<str>>>,
     file: &Arc<str>,
 ) {
     let was_showing = shown.peek().as_ref() == Some(file);
     let next = files.write().close(file);
+    at.write().forget(file);
 
     if was_showing {
         shown.set(next);
@@ -1540,7 +1706,7 @@ fn close_file(
 /// objects list holds both copies, `Object::path` cannot tell them apart, and neither
 /// could the file it would be written to.
 ///
-/// What each of the four things pointing at those objects does with the news:
+/// What each of the five things pointing at those objects does with the news:
 ///
 /// - The **tabs** whose selection was in the file are closed, all of them at once
 ///   ([`Tabs::close_all`]), which is what closing the one tab the reader was on would
@@ -1555,6 +1721,10 @@ fn close_file(
 /// - The **history** drops its entries rather than degrading them ([`History::retaining`]),
 ///   which is the same walk and the same reasoning as a restore whose binaries have
 ///   changed: a list of places the reader cannot get back to is worse than a short list.
+/// - The **viewing positions** of the tabs that closed go with them ([`Positions`]), which
+///   is not tidiness: every entry is keyed by a [`Selection`], which holds the
+///   `Arc<Object>` it points into, so one left behind would hold the file's bytes -- 331 MB
+///   of them, for `viewer-sample` -- for as long as the app ran.
 /// - **`Project::binaries`** needs nothing here at all. It is derived from the objects by
 ///   `Project::from_state`, so removing them removes the path, and `project::record` sees
 ///   a *binaries* change and writes it to disk at once rather than marking it pending --
@@ -1573,6 +1743,7 @@ fn close_binary(
     mut objects: State<Vec<Arc<Object>>>,
     mut open: State<Tabs<Selection>>,
     selection: State<Selection>,
+    mut at: State<Positions<Selection>>,
     mut history: State<History>,
     path: &Path,
 ) {
@@ -1580,6 +1751,10 @@ fn close_binary(
     // alive when the next write -- or `activate` at the end -- is reached.
     let showing = selection.peek().clone();
     let next = open.write().close_all(&showing, |tab| tab.in_file(path));
+
+    // The same walk over the same rule, so the positions cannot outlive the tabs they
+    // belong to.
+    at.write().forgetting(|tab| !tab.in_file(path));
 
     let remaining = history.peek().retaining(|entry| !entry.in_file(path));
     history.set(remaining);
@@ -1606,12 +1781,13 @@ fn close_menu(
     objects: State<Vec<Arc<Object>>>,
     open: State<Tabs<Selection>>,
     selection: State<Selection>,
+    at: State<Positions<Selection>>,
     history: State<History>,
     path: PathBuf,
 ) -> Menu {
     Menu::new().child(
         MenuButton::new()
-            .on_press(move |_| close_binary(objects, open, selection, history, &path))
+            .on_press(move |_| close_binary(objects, open, selection, at, history, &path))
             // "file" and not "object", because the row a reader right-clicks may be one
             // object of one file or the archive above 196 of them, and the same word has
             // to be true of both.
@@ -1706,11 +1882,12 @@ impl Component for ArchiveRow {
         let mut expanded = self.expanded;
         let group = self.group;
         let expansion = self.expansion;
-        // The four states closing a file has to answer for. Consumed here, in the
+        // The five states closing a file has to answer for. Consumed here, in the
         // render, because the handler that uses them may not run a hook.
         let objects = use_consume::<Objects>().0;
         let selection = use_consume::<Sel>().0;
         let open = use_consume::<Open>().0;
+        let at = use_consume::<AsmAt>().0;
         let history = use_consume::<Hist>().0;
         let path = self.path.clone();
 
@@ -1758,7 +1935,7 @@ impl Component for ArchiveRow {
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(
                         &e,
-                        close_menu(objects, open, selection, history, path.clone()),
+                        close_menu(objects, open, selection, at, history, path.clone()),
                     );
                 })
                 .child(
@@ -1822,6 +1999,7 @@ impl Component for ObjectRow {
         let objects = use_consume::<Objects>().0;
         let selection = use_consume::<Sel>().0;
         let open = use_consume::<Open>().0;
+        let at = use_consume::<AsmAt>().0;
         let history = use_consume::<Hist>().0;
         let object = self.object.clone();
         let path = self.object.path.clone();
@@ -1865,7 +2043,7 @@ impl Component for ObjectRow {
                     row.on_secondary_down(move |e: Event<PressEventData>| {
                         ContextMenu::open_from_event(
                             &e,
-                            close_menu(objects, open, selection, history, path.clone()),
+                            close_menu(objects, open, selection, at, history, path.clone()),
                         );
                     })
                 })
@@ -2686,6 +2864,7 @@ impl Component for TabChip {
         let hovering = use_state(|| false);
         let selection = use_consume::<Sel>().0;
         let open = use_consume::<Open>().0;
+        let at = use_consume::<AsmAt>().0;
         let text = entry_text(&self.entry);
         let (activated, closed) = (self.entry.clone(), self.entry.clone());
 
@@ -2695,7 +2874,7 @@ impl Component for TabChip {
             self.active,
             hovering,
             move |_| activate(open, selection, activated.clone()),
-            move |_| close_tab(open, selection, &closed),
+            move |_| close_tab(open, selection, at, &closed),
         )
     }
 
@@ -2774,6 +2953,7 @@ impl Component for FileChip {
         let hovering = use_state(|| false);
         let files = use_consume::<Files>().0;
         let shown = use_consume::<Shown>().0;
+        let at = use_consume::<SrcAt>().0;
         let (activated, closed) = (self.file.clone(), self.file.clone());
 
         chip(
@@ -2785,7 +2965,7 @@ impl Component for FileChip {
             self.active,
             hovering,
             move |_| open_file(files, shown, activated.clone()),
-            move |_| close_file(files, shown, &closed),
+            move |_| close_file(files, shown, at, &closed),
         )
     }
 
@@ -2849,7 +3029,7 @@ impl Component for AssemblyView {
             .background(palette().asm_pane_bg)
             .child(InstructionList {
                 assembly,
-                object: self.symbol.object.clone(),
+                symbol: self.symbol.clone(),
                 lanes,
             })
     }
@@ -2867,14 +3047,17 @@ impl Component for AssemblyView {
 #[derive(Clone)]
 struct InstructionList {
     assembly: Arc<Assembly>,
-    object: Arc<Object>,
+    /// The whole symbol and not just its object, because these rows answer to a *tab*
+    /// as well as to a disassembly: `Selection::Symbol(symbol)` is the key its viewing
+    /// position is kept under, and it is the one the strip and the session key by too.
+    symbol: Symbol,
     lanes: Arc<Lanes>,
 }
 
 impl PartialEq for InstructionList {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.assembly, &other.assembly)
-            && Arc::ptr_eq(&self.object, &other.object)
+            && self.symbol == other.symbol
             && Arc::ptr_eq(&self.lanes, &other.lanes)
     }
 }
@@ -2916,11 +3099,22 @@ impl Component for InstructionList {
 
         let data = AsmData {
             assembly: self.assembly.clone(),
-            object: self.object.clone(),
+            object: self.symbol.object.clone(),
             lanes: self.lanes.clone(),
             lines,
         };
         let length = data.assembly.instructions.len();
+        // Where this tab was left, put back when it is switched to and written down as it
+        // is scrolled. Beside the reveal effect below rather than inside it, because the
+        // two answer to different things: a reveal is a click asking for a row, this is a
+        // tab remembering one.
+        use_kept_position(
+            use_consume::<AsmAt>().0,
+            use_consume::<Open>().0,
+            controller,
+            &Selection::Symbol(self.symbol.clone()),
+            length,
+        );
         let touching = hover()
             .map(|row| data.lanes.touching(row))
             .unwrap_or_default();
@@ -3035,6 +3229,16 @@ impl Component for SourceList {
         let pin = pinned.read().as_ref().and_then(|pin| line_here(&pin.at));
 
         let length = self.source.0.lines;
+        // The Source pane's tab is the file it is showing, so that is what the position
+        // is kept under: two symbols compiled from one file share the tab, and so share
+        // where it was left.
+        use_kept_position(
+            use_consume::<SrcAt>().0,
+            use_consume::<Files>().0,
+            controller,
+            &self.file,
+            length,
+        );
 
         let on_key_down = {
             let source = self.source.clone();
@@ -3801,26 +4005,36 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 /// derivations and two comparisons and, since neither is a binaries change, no write
 /// at all. A selection change onto a symbol that was not open wakes it a third time,
 /// for the tab `activate` opened, and that one is free for the same reason.
+///
+/// Scrolling a pane wakes it too, which is the one input here that a reader can produce
+/// continuously. It costs no more than the three above, and it is bounded by the unit the
+/// position is kept in: a viewing position is a *row*, so a scroll writes nothing until
+/// the pane has moved a whole `ROW_HEIGHT`, and `use_kept_position` compares before it
+/// writes.
 fn use_save_on_change(
     objects: State<Vec<Arc<Object>>>,
     open: State<Tabs<Selection>>,
+    asm_at: State<Positions<Selection>>,
     selection: State<Selection>,
     history: State<History>,
     files: State<Tabs<Arc<str>>>,
+    src_at: State<Positions<Arc<str>>>,
     shown: State<Option<Arc<str>>>,
 ) {
     use_side_effect(move || {
         // Reading these subscribes the effect to them: any change re-runs it. Each
         // guard lives to the end of the statement it is created in, which is the one
-        // `record` call, and nothing here writes anything, so holding six at once is
+        // `record` call, and nothing here writes anything, so holding eight at once is
         // the safe half of the `peek`/`write` gotcha rather than the dangerous one.
         let shown = shown.read();
         project::record(Project::from_state(
             &objects.read(),
             open.read().tabs(),
+            &asm_at.read(),
             &selection.read(),
             &history.read(),
             files.read().tabs(),
+            &src_at.read(),
             shown.as_deref(),
         ));
     });
@@ -4094,10 +4308,12 @@ fn navigate(
 /// each intermediate `Sel` the tab loop passes through.
 fn use_restore_on_startup(
     open: State<Tabs<Selection>>,
+    mut asm_at: State<Positions<Selection>>,
     objects: State<Vec<Arc<Object>>>,
     selection: State<Selection>,
     history: State<History>,
     files: State<Tabs<Arc<str>>>,
+    mut src_at: State<Positions<Arc<str>>>,
     shown: State<Option<Arc<str>>>,
 ) {
     use_hook(move || {
@@ -4153,15 +4369,34 @@ fn use_restore_on_startup(
             // these is a `Sel` write that will be overwritten by the next, which is the
             // price of there being exactly one way to open a content tab; the last one
             // is the only one anything observes.
-            for tab in restored_tabs {
+            //
+            // Where each tab was left goes in *before* the tab is opened, and this is the
+            // one place either map is written from outside a pane. A pane restores its
+            // position when it notices the tab it is showing has changed, so a row that
+            // arrived after the `activate` would arrive after the only moment it is
+            // looked at.
+            {
+                let mut at = asm_at.write();
+                for (tab, row) in &restored_tabs {
+                    at.remember(tab.clone(), *row);
+                }
+            }
+            for (tab, _) in restored_tabs {
                 activate(open, selection, tab);
             }
             activate(open, selection, restored_selection);
 
             // The Source pane's strip, which needs no resolving: a path that is gone is
             // still a tab, showing the pane's own "Source file not found".
-            for file in &project.sources {
-                open_file(files, shown, Arc::from(file.as_str()));
+            let restored_sources = project.resolve_sources();
+            {
+                let mut at = src_at.write();
+                for (file, row) in &restored_sources {
+                    at.remember(file.clone(), *row);
+                }
+            }
+            for (file, _) in &restored_sources {
+                open_file(files, shown, file.clone());
             }
             if let Some(file) = project.shown_source() {
                 open_file(files, shown, Arc::from(file));
@@ -4202,6 +4437,12 @@ pub fn app() -> impl IntoElement {
     let open = use_provide_context(|| Open(State::create(Tabs::default()))).0;
     let files = use_provide_context(|| Files(State::create(Tabs::default()))).0;
     let shown = use_provide_context(|| Shown(State::create(None))).0;
+    // Where each of those tabs was left, which is a view of the two lists rather than a
+    // second copy of them: an entry appears when a pane is scrolled and goes when the tab
+    // it belongs to is closed, so the same five functions hold this true as hold the
+    // lists themselves.
+    let asm_at = use_provide_context(|| AsmAt(State::create(Positions::default()))).0;
+    let src_at = use_provide_context(|| SrcAt(State::create(Positions::default()))).0;
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     // Where the pointer is pointing, which the assembly and source panes answer for each
     // other. A plain state like the three above rather than something derived from them:
@@ -4216,7 +4457,9 @@ pub fn app() -> impl IntoElement {
     // two above: one selection for the whole app, in whichever pane last took one.
     let marked = use_provide_context(|| Marked(State::create(None))).0;
     let mut shift = use_provide_context(|| Shift(State::create(false))).0;
-    use_save_on_change(objects, open, selection, history, files, shown);
+    use_save_on_change(
+        objects, open, asm_at, selection, history, files, src_at, shown,
+    );
     use_record_history(selection, history);
     use_clear_focus(selection, focused, pinned);
     use_clear_marks(selection, shown, marked);
@@ -4224,7 +4467,9 @@ pub fn app() -> impl IntoElement {
     // After the save effect on purpose: the effect is in place, with the save policy's
     // empty baseline, before the restore can put anything into any of the states it
     // observes, so the restored session is seen by it as an ordinary change.
-    use_restore_on_startup(open, objects, selection, history, files, shown);
+    use_restore_on_startup(
+        open, asm_at, objects, selection, history, files, src_at, shown,
+    );
 
     // Rebuilt only when the object list changes, not on every selection change.
     let symbols = use_memo(move || {
@@ -4427,6 +4672,139 @@ mod tests {
             .child(row(0))
             .child(row(1))
             .child(row(2))
+    }
+
+    /// The five states [`scrolling_harness`] is wired to, as context types of their own
+    /// so that three `State<usize>`s cannot be confused for one another.
+    #[derive(Clone, Copy)]
+    struct KeptTab(State<String>);
+    #[derive(Clone, Copy)]
+    struct KeptAt(State<Positions<String>>);
+    /// The tabs that are open, which is what a position is only kept for.
+    #[derive(Clone, Copy)]
+    struct KeptOpen(State<Tabs<String>>);
+    #[derive(Clone, Copy)]
+    struct KeptLength(State<usize>);
+    /// The last row the pointer was over, which is how the test asks where the view
+    /// actually is rather than believing what the map says about it.
+    #[derive(Clone, Copy)]
+    struct KeptTop(State<usize>);
+
+    /// A scroll view wired the way both panes are: one `ScrollController` reused across
+    /// every tab the pane shows, and `use_kept_position` between them.
+    fn scrolling_harness() -> impl IntoElement {
+        let tab = use_consume::<KeptTab>().0;
+        let at = use_consume::<KeptAt>().0;
+        let open = use_consume::<KeptOpen>().0;
+        let length = use_consume::<KeptLength>().0;
+        let mut top = use_consume::<KeptTop>().0;
+
+        let controller = use_scroll_controller(ScrollConfig::default);
+        let showing = tab.read().clone();
+        let rows = *length.read();
+        use_kept_position(at, open, controller, &showing, rows);
+
+        rect().expanded().child(
+            VirtualScrollView::new_with_data_controlled(
+                rows,
+                move |index, _: &usize| {
+                    rect()
+                        .width(Size::fill())
+                        .height(Size::px(ROW_HEIGHT))
+                        .on_pointer_over(move |_| top.set(index))
+                        .key(index)
+                        .into()
+                },
+                controller,
+            )
+            .length(rows)
+            .item_size(ROW_HEIGHT),
+        )
+    }
+
+    /// Switching tab puts the pane back where that tab was left, and a tab seen for the
+    /// first time opens at the top rather than at the last one's offset.
+    ///
+    /// Headless because none of it is visible to any other kind of test: the position is
+    /// read out of a `ScrollController` inside an effect that a scroll wakes, and what it
+    /// is asserted against is which row a real `VirtualScrollView` put under the pointer.
+    #[test]
+    fn a_tab_comes_back_to_the_row_it_was_left_at() {
+        let (mut test, (tab, at, open, _length, top)) = TestingRunner::new(
+            scrolling_harness,
+            (100., 100.).into(),
+            |runner| {
+                let mut tabs = Tabs::default();
+                tabs.open("a".to_owned());
+                tabs.open("b".to_owned());
+                (
+                    runner
+                        .provide_root_context(|| KeptTab(State::create("a".to_owned())))
+                        .0,
+                    runner
+                        .provide_root_context(|| KeptAt(State::create(Positions::default())))
+                        .0,
+                    runner
+                        .provide_root_context(|| KeptOpen(State::create(tabs)))
+                        .0,
+                    runner
+                        .provide_root_context(|| KeptLength(State::create(100)))
+                        .0,
+                    runner.provide_root_context(|| KeptTop(State::create(0))).0,
+                )
+            },
+            1.,
+        );
+        let mut tab = tab;
+        test.sync_and_update();
+
+        // Where the top of the view is, asked the only way a pane can be asked: the
+        // pointer is moved away first, or entering the same row twice is no event at all.
+        let top_row = |test: &mut TestingRunner| {
+            // Settled first: an effect is a spawned task, so the scroll it asks for lands
+            // a poll after the state change that asked for it, and a view that moves under
+            // a pointer already sitting still sends no `pointerover` to say so.
+            for _ in 0..4 {
+                test.sync_and_update();
+            }
+            test.move_cursor((50., 90.));
+            test.sync_and_update();
+            test.move_cursor((50., 5.));
+            test.sync_and_update();
+            *top.peek()
+        };
+
+        test.scroll((50., 50.), (0., -300.));
+        test.sync_and_update();
+        let left_at = top_row(&mut test);
+        assert!(left_at > 0, "the wheel moved nothing");
+        // The scroll was written down as it happened, which is what makes the position
+        // survive the pane being left in any way at all -- including the window closing.
+        assert_eq!(at.peek().at(&"a".to_owned()), Some(left_at));
+
+        // A tab this pane has never shown starts at the top, and pointedly not at the
+        // offset the tab before it was at: that is the bug this hook exists for.
+        tab.set("b".to_owned());
+        test.sync_and_update();
+        assert_eq!(top_row(&mut test), 0);
+        // And the tab left behind is remembered, not overwritten by where the new one is.
+        assert_eq!(at.peek().at(&"a".to_owned()), Some(left_at));
+
+        tab.set("a".to_owned());
+        test.sync_and_update();
+        assert_eq!(top_row(&mut test), left_at);
+
+        // And closing the tab on screen does not put it back. `close_tab` forgets the
+        // position and then moves to a neighbour, so the run that follows is holding a
+        // tab that is gone -- which is a `Selection` holding a whole `Object` in the app.
+        let (mut open, mut at) = (open, at);
+        open.write().close(&"a".to_owned());
+        at.write().forget(&"a".to_owned());
+        tab.set("b".to_owned());
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        assert_eq!(at.peek().at(&"a".to_owned()), None);
     }
 
     #[test]

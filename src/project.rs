@@ -27,6 +27,7 @@ use analysis::{Object, Symbol};
 use serde::{Deserialize, Serialize};
 
 use crate::history::History;
+use crate::tabs::Positions;
 
 /// The directory this app keeps its state in, under the platform's state directory
 /// (falling back to its local data directory).
@@ -78,29 +79,14 @@ impl PartialEq for Selection {
 /// **The field order is load-bearing.** TOML has no way to reopen a table once a later
 /// one has begun, so a serializer must emit every plain value of a table before the
 /// first sub-table of it; a `Vec<PathBuf>` written after `selection` fails at runtime
-/// with "values must be emitted before tables". The three plain values here —
-/// `binaries` and `sources`, both arrays of strings, and the `shown` index — therefore
-/// come first, and everything table-valued follows: `selection` is a table, and `tabs`
-/// and `history.entries` are arrays of them.
+/// with "values must be emitted before tables". The two plain values here — `binaries`,
+/// an array of strings, and the `shown` index — therefore come first, and everything
+/// table-valued follows: `selection` is a table, and `tabs`, `sources` and
+/// `history.entries` are arrays of them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     /// The paths that were opened, deduplicated, in the order they were opened.
     pub binaries: Vec<PathBuf>,
-    /// The Source pane's open files, in strip order.
-    ///
-    /// `String` rather than `PathBuf` because these are what the debug info said and not
-    /// something this filesystem was asked about: they are the strings `LineInfo` handed
-    /// the pane, they may well name a machine that compiled the binary rather than this
-    /// one, and writing them as paths would only invite `save_to`'s non-UTF-8 refusal on
-    /// a value that was UTF-8 all along.
-    ///
-    /// A file that has since been deleted still comes back as a tab. The pane already
-    /// draws "Source file not found" for one, which is the true answer and a visible
-    /// one; dropping the tab instead would lose a file the reader had open without ever
-    /// saying so. Nothing here is therefore resolved against anything — unlike `tabs`,
-    /// these come back exactly as they went out.
-    #[serde(default)]
-    pub sources: Vec<String>,
     /// An index into `sources`, and `0` — meaning nothing — while it is empty, exactly
     /// as [`SavedHistory::cursor`] indexes its own entries.
     ///
@@ -121,12 +107,66 @@ pub struct Project {
     /// `Tabs` refuses to hold in memory. The restore's only extra rule is an ordering,
     /// tabs before selection, and it lives at the call site.
     #[serde(default)]
-    pub tabs: Vec<SavedSelection>,
+    pub tabs: Vec<SavedTab>,
+    /// The Source pane's open files, in strip order.
+    #[serde(default)]
+    pub sources: Vec<SavedSource>,
     /// `serde(default)` so a partial file — one written by hand, or trimmed — loads with
     /// an empty history rather than failing and taking the binaries and the selection
     /// down with it. The three fields above carry it for the same reason.
     #[serde(default)]
     pub history: SavedHistory,
+}
+
+/// One of the content area's open tabs: a place, and the row the reader left it at.
+///
+/// The row travels *with* the tab it belongs to rather than in a list of its own beside
+/// `Project::tabs`, and that is the whole of why this type exists. A parallel array of
+/// rows would be a second list to keep in step with the first, and it could not survive
+/// the one thing that certainly happens to the first: [`Project::resolve_tabs`] drops the
+/// tabs that no longer resolve, which would silently shift every later row onto the wrong
+/// tab.
+///
+/// The field order is load-bearing here too: `row` is a plain value and `selection` an
+/// externally tagged enum, which TOML writes as a sub-table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedTab {
+    /// Which row was at the top of the assembly pane, `0` being the first instruction.
+    ///
+    /// A row and not a pixel offset, for [`crate::tabs::Positions`]' reasons — and one
+    /// more that is only true of a saved one: `ROW_HEIGHT` is a compile-time constant of
+    /// the UI, so a build that changes it would move every saved pixel offset while every
+    /// saved row still names the instruction it named.
+    ///
+    /// `serde(default)` because it is a hint and not a fact: a hand-written or trimmed
+    /// file that names a tab without saying where in it simply opens that tab at the top.
+    #[serde(default)]
+    pub row: usize,
+    pub selection: SavedSelection,
+}
+
+/// One of the Source pane's open files: its path, and the row the reader left it at.
+///
+/// The path is a `String` rather than a `PathBuf` because it is what the debug info said
+/// and not something this filesystem was asked about: it is the string `LineInfo` handed
+/// the pane, it may well name the machine that compiled the binary rather than this one,
+/// and writing it as a path would only invite `save_to`'s non-UTF-8 refusal on
+/// a value that was UTF-8 all along.
+///
+/// A file that has since been deleted still comes back as a tab. The pane already draws
+/// "Source file not found" for one, which is the true answer and a visible one; dropping
+/// the tab instead would lose a file the reader had open without ever saying so. Nothing
+/// here is therefore resolved against anything — unlike a [`SavedTab`], these come back
+/// exactly as they went out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedSource {
+    /// Which line was at the top of the Source pane, `0` being the file's first line.
+    /// A hint like [`SavedTab::row`] and defaulted for the same reason — and a file that
+    /// has been edited shorter since is exactly what the clamp in
+    /// [`crate::tabs::Positions::row`] is for.
+    #[serde(default)]
+    pub row: usize,
+    pub path: String,
 }
 
 /// The navigation history in saved form: the index of the entry that was on screen, and
@@ -274,23 +314,26 @@ impl Project {
     pub const fn new() -> Project {
         Project {
             binaries: Vec::new(),
-            sources: Vec::new(),
             shown: 0,
             selection: None,
             tabs: Vec::new(),
+            sources: Vec::new(),
             history: SavedHistory::new(),
         }
     }
 
     /// The project described by the state the app is currently in: the loaded `objects`,
     /// the content area's open `tabs` and the active one (`selection`), the `history`,
-    /// and the Source pane's open `sources` with the one it is `shown`. The binaries are
-    /// the objects' paths, deduplicated, in order.
+    /// and the Source pane's open `sources` with the one it is `shown` — each strip
+    /// beside the `rows` its panes were left at.
     ///
     /// The one place the app's state is turned into what would be saved, so the save
     /// policy in [`Saves`] never has to know where any of it came from. It takes the two
     /// tab lists as plain slices rather than a `Tabs<T>` for exactly that reason: this is
-    /// a mapping over what is open, not a party to how the lists are kept.
+    /// a mapping over what is open, not a party to how the lists are kept. The positions
+    /// come as a [`Positions`] rather than a slice only because that is the shape of the
+    /// question — "where was this tab left" — and a tab that was never scrolled has no
+    /// entry in one at all, which is written out as row `0`.
     ///
     /// A `shown` naming a file that is not in `sources` cannot happen — `open_file` puts
     /// it there — and lands on `0` rather than being reported, because there is nothing
@@ -298,9 +341,11 @@ impl Project {
     pub fn from_state(
         objects: &[Arc<Object>],
         tabs: &[Selection],
+        tab_rows: &Positions<Selection>,
         selection: &Selection,
         history: &History,
         sources: &[Arc<str>],
+        source_rows: &Positions<Arc<str>>,
         shown: Option<&str>,
     ) -> Project {
         let mut binaries: Vec<PathBuf> = Vec::new();
@@ -311,7 +356,6 @@ impl Project {
         }
         Project {
             binaries,
-            sources: sources.iter().map(|file| file.to_string()).collect(),
             shown: shown
                 .and_then(|file| sources.iter().position(|open| &**open == file))
                 .unwrap_or(0),
@@ -321,7 +365,19 @@ impl Project {
             // never a tab, so nothing is actually dropped here.
             tabs: tabs
                 .iter()
-                .filter_map(SavedSelection::from_selection)
+                .filter_map(|tab| {
+                    Some(SavedTab {
+                        row: tab_rows.at(tab).unwrap_or(0),
+                        selection: SavedSelection::from_selection(tab)?,
+                    })
+                })
+                .collect(),
+            sources: sources
+                .iter()
+                .map(|file| SavedSource {
+                    row: source_rows.at(file).unwrap_or(0),
+                    path: file.to_string(),
+                })
                 .collect(),
             history: SavedHistory::from_history(history),
         }
@@ -349,10 +405,26 @@ impl Project {
     /// Duplicates need no attention here: `Tabs::open` already refuses to open a second
     /// tab for something that is open, so two saved tabs that degrade onto one live
     /// selection could not both be opened even if they got this far.
-    pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<Selection> {
+    ///
+    /// Each surviving tab comes back with the row it was left at, which is why the row is
+    /// a field of the tab rather than a list beside it: the dropping here is exactly what
+    /// a parallel array could not have survived.
+    pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<(Selection, usize)> {
         self.tabs
             .iter()
-            .filter_map(|saved| saved.resolve(objects))
+            .filter_map(|saved| Some((saved.selection.resolve(objects)?, saved.row)))
+            .collect()
+    }
+
+    /// The Source pane's open files with the row each was left at, in strip order.
+    ///
+    /// Nothing is resolved and nothing is dropped — see [`SavedSource`] — so this is only
+    /// the change of type, done here rather than at the call site because the mapping
+    /// between what is saved and what the app holds belongs to this module.
+    pub fn resolve_sources(&self) -> Vec<(Arc<str>, usize)> {
+        self.sources
+            .iter()
+            .map(|saved| (Arc::from(saved.path.as_str()), saved.row))
             .collect()
     }
 
@@ -366,7 +438,7 @@ impl Project {
         self.sources
             .get(self.shown)
             .or_else(|| self.sources.first())
-            .map(String::as_str)
+            .map(|saved| saved.path.as_str())
     }
 
     /// Turn the saved history back into a live one against the objects that are now
@@ -616,16 +688,19 @@ mod tests {
         })
     }
 
-    /// [`Project::from_state`] over a session whose only open tab is the selection and
-    /// whose Source pane has nothing open — the state the tests written before there were
-    /// tabs to save were already describing, now spelt out.
+    /// [`Project::from_state`] over a session whose only open tab is the selection, whose
+    /// Source pane has nothing open and whose panes are at the top of what they show — the
+    /// state the tests written before there were tabs to save were already describing, now
+    /// spelt out.
     fn from_state(objects: &[Arc<Object>], selection: &Selection, history: &History) -> Project {
         Project::from_state(
             objects,
             std::slice::from_ref(selection),
+            &Positions::default(),
             selection,
             history,
             &[],
+            &Positions::default(),
             None,
         )
     }
@@ -1230,6 +1305,29 @@ mod tests {
         files.iter().map(|file| Arc::from(*file)).collect()
     }
 
+    /// Where the panes were left, in the map the UI keeps it in.
+    fn positions<T: Clone + PartialEq>(at: &[(&T, usize)]) -> Positions<T> {
+        let mut positions = Positions::default();
+        for (tab, row) in at {
+            positions.remember((*tab).clone(), *row);
+        }
+        positions
+    }
+
+    fn saved_tab(object_name: &str, row: usize) -> SavedTab {
+        SavedTab {
+            row,
+            selection: saved_object(object_name),
+        }
+    }
+
+    fn saved_source(path: &str, row: usize) -> SavedSource {
+        SavedSource {
+            row,
+            path: path.to_owned(),
+        }
+    }
+
     /// A strip goes out in order and comes back in it, through the very mapping the
     /// history already uses — which is the whole reason a saved tab costs no new one.
     #[test]
@@ -1244,23 +1342,41 @@ mod tests {
             Selection::Object(objects[1].clone()),
         ];
 
-        let project =
-            Project::from_state(&objects, &tabs, &tabs[2], &History::default(), &[], None);
+        let project = Project::from_state(
+            &objects,
+            &tabs,
+            &Positions::default(),
+            &tabs[2],
+            &History::default(),
+            &[],
+            &Positions::default(),
+            None,
+        );
 
         assert_eq!(
             project.tabs,
             [
-                saved_object("a.o"),
-                SavedSelection::Symbol {
-                    path: PathBuf::from("/tmp/lib.a"),
-                    object_name: "a.o".into(),
-                    symbol_name: "target".into(),
-                    address: 6,
+                saved_tab("a.o", 0),
+                SavedTab {
+                    row: 0,
+                    selection: SavedSelection::Symbol {
+                        path: PathBuf::from("/tmp/lib.a"),
+                        object_name: "a.o".into(),
+                        symbol_name: "target".into(),
+                        address: 6,
+                    },
                 },
-                saved_object("b.o"),
+                saved_tab("b.o", 0),
             ]
         );
-        assert!(project.resolve_tabs(&objects) == tabs);
+        assert!(
+            project.resolve_tabs(&objects)
+                == [
+                    (tabs[0].clone(), 0),
+                    (tabs[1].clone(), 0),
+                    (tabs[2].clone(), 0),
+                ]
+        );
     }
 
     /// The active tab is not written twice: it is the selection, and a saved session
@@ -1269,11 +1385,19 @@ mod tests {
     fn the_active_tab_is_only_the_selection() {
         let objects = objects();
         let tabs = [Selection::Object(objects[0].clone())];
-        let project =
-            Project::from_state(&objects, &tabs, &tabs[0], &History::default(), &[], None);
+        let project = Project::from_state(
+            &objects,
+            &tabs,
+            &Positions::default(),
+            &tabs[0],
+            &History::default(),
+            &[],
+            &Positions::default(),
+            None,
+        );
 
         assert_eq!(project.selection, Some(saved_object("a.o")));
-        assert_eq!(project.tabs, [saved_object("a.o")]);
+        assert_eq!(project.tabs, [saved_tab("a.o", 0)]);
     }
 
     /// A tab is dropped exactly where the selection would degrade. There is one
@@ -1281,24 +1405,31 @@ mod tests {
     /// places that are no longer there is worse than a shorter strip — and degrading
     /// would be worse still, since two symbols of one object would degrade onto the
     /// same tab and `Tabs::open` would collapse them into one.
+    ///
+    /// The rows go with the tabs they belong to, which is the whole reason a row is a
+    /// field of one: the second and third tabs here are dropped, and a parallel array of
+    /// rows would have handed `b.o` the row of the tab that vanished before it.
     #[test]
     fn open_tabs_that_no_longer_resolve_are_dropped() {
         let objects = objects();
         let project = Project {
             binaries: vec![PathBuf::from("/tmp/lib.a")],
             tabs: vec![
-                saved_object("a.o"),
+                saved_tab("a.o", 3),
                 // A member that is no longer in the archive.
-                saved_object("c.o"),
+                saved_tab("c.o", 4),
                 // The object is still there; the symbol is not. The selection would
                 // fall back to `a.o` here, and a tab must not.
-                SavedSelection::Symbol {
-                    path: PathBuf::from("/tmp/lib.a"),
-                    object_name: "a.o".into(),
-                    symbol_name: "gone".into(),
-                    address: 12,
+                SavedTab {
+                    row: 5,
+                    selection: SavedSelection::Symbol {
+                        path: PathBuf::from("/tmp/lib.a"),
+                        object_name: "a.o".into(),
+                        symbol_name: "gone".into(),
+                        address: 12,
+                    },
                 },
-                saved_object("b.o"),
+                saved_tab("b.o", 6),
             ],
             ..Project::new()
         };
@@ -1306,10 +1437,99 @@ mod tests {
         assert!(
             project.resolve_tabs(&objects)
                 == [
-                    Selection::Object(objects[0].clone()),
-                    Selection::Object(objects[1].clone()),
+                    (Selection::Object(objects[0].clone()), 3),
+                    (Selection::Object(objects[1].clone()), 6),
                 ]
         );
+    }
+
+    /// Where each pane was left goes out with the tab it belongs to, and a tab that was
+    /// never scrolled is written as the top rather than left out.
+    #[test]
+    fn saves_the_row_each_tab_was_left_at() {
+        let objects = objects();
+        let tabs = vec![
+            Selection::Object(objects[0].clone()),
+            Selection::Object(objects[1].clone()),
+        ];
+        let files = sources(&["/src/main.rs", "/src/lib.rs"]);
+
+        let project = Project::from_state(
+            &objects,
+            &tabs,
+            &positions(&[(&tabs[1], 42)]),
+            &tabs[0],
+            &History::default(),
+            &files,
+            &positions(&[(&files[0], 7)]),
+            Some("/src/main.rs"),
+        );
+
+        assert_eq!(project.tabs, [saved_tab("a.o", 0), saved_tab("b.o", 42)]);
+        assert_eq!(
+            project.sources,
+            [
+                saved_source("/src/main.rs", 7),
+                saved_source("/src/lib.rs", 0)
+            ]
+        );
+    }
+
+    /// The round trip the app actually makes: out of the two maps, through TOML, and back
+    /// into them the way `use_restore_on_startup` does it.
+    #[test]
+    fn the_rows_come_back_against_the_tabs_they_belong_to() {
+        let objects = objects();
+        let tabs = vec![
+            Selection::Object(objects[0].clone()),
+            Selection::Object(objects[1].clone()),
+        ];
+        let files = sources(&["/src/main.rs"]);
+
+        let project = Project::from_state(
+            &objects,
+            &tabs,
+            &positions(&[(&tabs[0], 12), (&tabs[1], 900)]),
+            &tabs[0],
+            &History::default(),
+            &files,
+            &positions(&[(&files[0], 4)]),
+            Some("/src/main.rs"),
+        );
+        let project: Project = toml::from_str(&round_trip(&project)).expect("reading back");
+
+        let mut restored: Positions<Selection> = Positions::default();
+        for (tab, row) in project.resolve_tabs(&objects) {
+            restored.remember(tab, row);
+        }
+        assert_eq!(restored.at(&tabs[0]), Some(12));
+        assert_eq!(restored.at(&tabs[1]), Some(900));
+        // And a hint it is: a listing that has since shrunk clamps to what it holds now.
+        assert_eq!(restored.row(&tabs[1], 100), 99);
+
+        assert_eq!(project.resolve_sources(), [(files[0].clone(), 4)]);
+    }
+
+    /// A row is a hint and not a fact, so a saved tab that does not name one is a tab at
+    /// the top rather than a file that will not load.
+    #[test]
+    fn a_saved_tab_with_no_row_opens_at_the_top() {
+        let text = r#"
+            binaries = ["/tmp/lib.a"]
+
+            [[tabs]]
+            [tabs.selection.Object]
+            path = "/tmp/lib.a"
+            object_name = "a.o"
+
+            [[sources]]
+            path = "/src/main.rs"
+        "#;
+        let project: Project = toml::from_str(text).expect("deserializing");
+
+        let objects = objects();
+        assert!(project.resolve_tabs(&objects) == [(Selection::Object(objects[0].clone()), 0)]);
+        assert_eq!(project.resolve_sources(), [(Arc::from("/src/main.rs"), 0)]);
     }
 
     #[test]
@@ -1319,13 +1539,21 @@ mod tests {
         let project = Project::from_state(
             &objects,
             &[],
+            &Positions::default(),
             &Selection::None,
             &History::default(),
             &files,
+            &Positions::default(),
             Some("/src/lib.rs"),
         );
 
-        assert_eq!(project.sources, ["/src/main.rs", "/src/lib.rs"]);
+        assert_eq!(
+            project.sources,
+            [
+                saved_source("/src/main.rs", 0),
+                saved_source("/src/lib.rs", 0)
+            ]
+        );
         assert_eq!(project.shown, 1);
         assert_eq!(project.shown_source(), Some("/src/lib.rs"));
     }
@@ -1342,13 +1570,15 @@ mod tests {
         let project = Project::from_state(
             &objects(),
             &[],
+            &Positions::default(),
             &Selection::None,
             &History::default(),
             &sources(&[path]),
+            &Positions::default(),
             Some(path),
         );
 
-        assert_eq!(project.sources, [path]);
+        assert_eq!(project.sources, [saved_source(path, 0)]);
         assert_eq!(project.shown_source(), Some(path));
     }
 
@@ -1358,7 +1588,10 @@ mod tests {
         // one is open" leaves no room for a fourth answer, so this clamps rather than
         // reporting nothing.
         let project = Project {
-            sources: vec!["/src/main.rs".into(), "/src/lib.rs".into()],
+            sources: vec![
+                saved_source("/src/main.rs", 0),
+                saved_source("/src/lib.rs", 0),
+            ],
             shown: 99,
             ..Project::new()
         };
@@ -1374,19 +1607,21 @@ mod tests {
         let project = Project::from_state(
             &objects(),
             &[],
+            &Positions::default(),
             &Selection::None,
             &History::default(),
             &sources(&["/src/main.rs"]),
+            &Positions::default(),
             None,
         );
         assert_eq!(project.shown, 0);
         assert_eq!(project.shown_source(), Some("/src/main.rs"));
     }
 
-    /// The field-order trap, which only a real serialization catches: `sources` and the
-    /// `shown` index are plain values and have to reach the file before the first table
-    /// opens, so a project with every field set at once is the one that fails when they
-    /// do not.
+    /// The field-order trap, which only a real serialization catches: `binaries` and the
+    /// `shown` index are the plain values and have to reach the file before the first
+    /// table opens, and a saved tab's own `row` before the `selection` sub-table under
+    /// it. A project with every field set at once is the one that fails when they do not.
     #[test]
     fn a_full_project_round_trips_through_toml() {
         let objects = objects();
@@ -1397,23 +1632,35 @@ mod tests {
                 data: objects[0].symbols_sorted[1].clone(),
             }),
         ];
+        let files = sources(&["/src/main.rs", "/src/lib.rs"]);
         let project = Project::from_state(
             &objects,
             &tabs,
+            &positions(&[(&tabs[0], 12), (&tabs[1], 34)]),
             &tabs[1],
             &history(&objects, 1),
-            &sources(&["/src/main.rs", "/src/lib.rs"]),
+            &files,
+            &positions(&[(&files[1], 56)]),
             Some("/src/lib.rs"),
         );
 
         let text = round_trip(&project);
         assert!(text.contains("[[tabs]]"), "{text}");
+        assert!(text.contains("[[sources]]"), "{text}");
 
         let first_table = text.find("\n[").expect("a table");
-        for plain in ["binaries = ", "sources = ", "shown = "] {
-            let at = text.find(plain).unwrap_or_else(|| panic!("{plain}\n{text}"));
+        for plain in ["binaries = ", "shown = "] {
+            let at = text
+                .find(plain)
+                .unwrap_or_else(|| panic!("{plain}\n{text}"));
             assert!(at < first_table, "{plain} after a table\n{text}");
         }
+        // And inside a tab, the row before the table its selection is written as.
+        let row = text.find("row = 12").expect("the first tab's row");
+        let selection = text
+            .find("[tabs.selection")
+            .expect("the first tab's selection");
+        assert!(row < selection, "row after its selection\n{text}");
     }
 
     #[test]
@@ -1550,7 +1797,7 @@ mod tests {
         saves.record(project_with(&["/tmp/lib.a"], None));
 
         let mut project = project_with(&["/tmp/lib.a"], Some("a.o"));
-        project.tabs = vec![saved_object("a.o")];
+        project.tabs = vec![saved_tab("a.o", 0)];
         assert_eq!(saves.record(project.clone()), None);
         assert_eq!(saves.flush(), Some(project));
         assert_eq!(saves.flush(), None);
@@ -1564,7 +1811,10 @@ mod tests {
         saves.record(project_with(&["/tmp/lib.a"], None));
 
         let mut project = project_with(&["/tmp/lib.a"], None);
-        project.sources = vec!["/src/main.rs".into(), "/src/lib.rs".into()];
+        project.sources = vec![
+            saved_source("/src/main.rs", 0),
+            saved_source("/src/lib.rs", 0),
+        ];
         project.shown = 1;
         assert_eq!(saves.record(project.clone()), None);
         assert_eq!(saves.flush(), Some(project));
@@ -1579,7 +1829,7 @@ mod tests {
     fn closing_a_binary_carries_the_tabs_it_closed_with_it() {
         let mut saves = Saves::new();
         let mut opened = project_with(&["/tmp/lib.a", "/tmp/some.dll"], Some("a.o"));
-        opened.tabs = vec![saved_object("a.o")];
+        opened.tabs = vec![saved_tab("a.o", 0)];
         saves.record(opened);
 
         let closed = project_with(&["/tmp/lib.a"], None);

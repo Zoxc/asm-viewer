@@ -184,11 +184,18 @@ The session is `project.toml` under `dirs::state_dir()` (falling back to `data_l
 the content area's open `tabs`, the `selection` and the `history`, all as **path + object name +
 symbol name + address**, never pointers; that mapping lives in exactly two places,
 `SavedSelection::from_selection` and `::resolve`. Beside them sit the Source pane's open
-`sources` — plain `String`s, since they are what the debug info said rather than paths this
-filesystem was asked about — and the `shown` index into them. **Field order within these structs
-is load-bearing**: TOML emits plain values before tables, so `binaries`/`sources`/`shown` must
-precede `selection`/`tabs`/`history` and `SavedHistory::cursor` must precede its `entries`.
-Getting it wrong fails at *runtime*, not at compile time.
+`sources` — `String`s, since they are what the debug info said rather than paths this filesystem
+was asked about — and the `shown` index into them. Each open tab also carries **the row it was
+left at**: a `tabs` entry is a `SavedTab` (`row` + `selection`) and a `sources` entry a
+`SavedSource` (`row` + `path`), rather than either list having an array of rows beside it. The row
+travels with its tab because `resolve_tabs` *drops* the tabs that no longer resolve, which would
+shift every later row of a parallel array onto the wrong tab. It is a row and not a pixel offset
+so that a later `ROW_HEIGHT` (Step 9's fonts) does not move every saved position, and it is a
+hint and not a fact — `#[serde(default)]`, and clamped to what the tab holds *now* by
+`Positions::row`. **Field order within these structs is load-bearing**: TOML emits plain values
+before tables, so `binaries`/`shown` must precede `selection`/`tabs`/`sources`/`history`,
+`SavedTab::row` must precede its `selection`, and `SavedHistory::cursor` its `entries`. Getting it
+wrong fails at *runtime*, not at compile time.
 
 Coming back, the **selection degrades** (symbol -> its object -> nothing, since there is one of it
 and the app must open somewhere) while **history entries are dropped** (a list of places the reader
@@ -211,10 +218,13 @@ over a good one.
 
 Both tab strips are restored, and **through the five functions that hold the invariants** rather
 than by writing either list: `use_restore_on_startup` sets the history, `activate`s each content
-tab and then the selection, and `open_file`s each source file and then the shown one. Two
-orderings are load-bearing. Tabs before the selection, because `activate` opens what it cannot
-find and would otherwise append the restored selection at the end of the strip instead of finding
-it in place (the other direction is safe: a selection that degraded to its object while the strip
+tab and then the selection, and `open_file`s each source file and then the shown one. Three
+orderings are load-bearing. Each strip's **rows go into its `Positions` map before its tabs are
+opened** — that map is the one thing the restore writes directly, and a pane puts its view back
+when it notices the tab it is showing has changed, so a row arriving after the `activate` arrives
+after the only moment anything looks at it. Tabs before the selection, because `activate` opens
+what it cannot find and would otherwise append the restored selection at the end of the strip
+instead of finding it in place (the other direction is safe: a selection that degraded to its object while the strip
 holds the symbol simply opens a tab). And the shown file last, because `open_file` puts the pane
 on whatever it opens. A content tab that no longer resolves is **dropped**, like a history entry;
 a source file is never resolved at all, so one that has been deleted comes back as a tab over the
@@ -228,7 +238,8 @@ describes the older API and does not apply.
 
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`, `Sel` (the active `Selection`), `Open`/`Files`/`Shown` (open tabs),
-`Hist`, `Focused`, `Pinned`, `Marked`/`Shift`, plus the memos `Symbols` and `Lines`.
+`AsmAt`/`SrcAt` (where each of those tabs was left), `Hist`, `Focused`, `Pinned`, `Marked`/`Shift`,
+plus the memos `Symbols` and `Lines`.
 
 **`Sel` is the active tab.** `Open(State<Tabs<Selection>>)` is the *list* of open tabs and holds no
 cursor: the active one is whichever entry equals `Sel`, which is well defined because no two tabs
@@ -267,6 +278,27 @@ persists. A chip's name is elided **by character count in Rust**, where every ot
 width: a `maximum_width` anywhere inside a chip makes it shrinkable, and a horizontal scroll view
 measures children against the space *left*, so chips past the edge get no width and draw as a bare
 ×. Do not "fix" that back into a width.
+
+**Each tab remembers where it was left.** A pane has one `ScrollController` and shows one tab at a
+time, so left alone it hands the tab arriving whatever offset the one leaving had. `AsmAt`/`SrcAt`
+are two root `Positions` maps beside `Open`/`Files`, keyed by the very values those lists hold — so
+an entry means "this tab" for exactly as long as the tab is open — and `use_kept_position` is the
+whole of the behaviour, called once by `InstructionList` (keyed by the `Selection`) and once by
+`SourceList` (keyed by the file it is showing). What is kept is a **row**, clamped to what the tab
+holds *now*, so a rebuilt binary or a shortened file cannot come back past the end. Three things are
+load-bearing. Reading the controller's position (`<(i32, i32)>::from`) is a `State::read`, which is
+what **subscribes the effect to the pane's own scroll**: every position is written down as it
+happens rather than on the way out, which is what survives the window merely being closed. The tab
+the controller is *holding* is tracked in the hook — an `Rc<RefCell>`, not a `State`, since nothing
+renders from it — because it is not the tab the app is showing during the one run that has to move
+the view, and every write goes under the held one. And a `Pin::reveal` **wins** over a remembered
+position with nothing written to make it: the two are never owed at once, since this moves the view
+only when the tab changes while a click asking for a reveal changes no tab (and a selection change,
+which does, drops the pin), and when a reveal scrolls, the effect wakes on that scroll and records
+where it landed. `close_tab`/`close_file`/`close_binary` forget a tab's position with the tab, which
+is not tidiness: a `Selection` key holds the `Arc<Object>` it points into — and the hook is handed
+the tab list precisely so that the run *after* a close, still holding the tab that has gone, cannot
+put it straight back.
 
 **The Source pane** shows one of its open files, chosen by `Shown`, and follows the selection:
 `use_open_source_file` opens the file the active symbol was compiled from — only the symbol's *own*

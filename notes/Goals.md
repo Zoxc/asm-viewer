@@ -55,8 +55,12 @@ one item per part, so the unfinished half stays visible.
   nothing, since nothing maps a source identifier to the symbol it names.
 - [x] Navigating in assembly should also navigate source, within a symbol: clicking an
   instruction scrolls the source pane to the line it was compiled from.
-- [ ] Selecting another symbol should put the source pane on that symbol's own lines. It opens
-  the right file, but keeps whatever scroll position the symbol before it left behind.
+- [ ] Selecting another symbol should put the source pane on that symbol's own lines. Half
+  answered: the pane no longer inherits the offset the *previous* symbol left, each open file
+  now remembering its own row. But the pane is keyed by file, so two symbols in one file share
+  that file's position and a file opened for the first time opens at the top rather than at
+  the symbol's lines. The rest is a reveal on a selection change, which is a different rule
+  from "a tab comes back where it was left" and was deliberately not folded into it.
 - [x] Mouse buttons can navigate history so you can go back and forth.
 - [ ] Add `<`, `>` navigation buttons to the top bar.
 
@@ -225,10 +229,12 @@ one item per part, so the unfinished half stays visible.
   dropped, the way a history entry is; a source file that is no longer on disk still comes
   back, because the pane's own "Source file not found" is the right answer and dropping it
   would silently lose a file the reader had open.
-- [ ] Saves a viewing position per tab. The two scroll controllers live in `InstructionList`
-  and `SourceList` and are reused across selections, so nothing keeps a per-tab offset even
-  in memory yet — which is the same missing piece as "Selecting another symbol should put
-  the source pane on that symbol's own lines" under *Navigation*.
+- [x] Saves a viewing position per tab. Each open tab carries the row it was left at, in
+  memory and in `project.toml`, so switching to a tab puts its pane back where it was and a
+  tab seen for the first time opens at the top. A row rather than a pixel offset, so a later
+  change to the row height does not move every saved position, and a hint rather than a fact:
+  it is clamped to what the tab holds now, so a rebuilt binary or a shortened file cannot come
+  back past the end.
 - [ ] Saves hashes of the binaries, so a restore can tell the same file from one that has
   been rebuilt underneath it. Today a rebuilt binary resolves by name and address and comes
   back on whatever now sits there.
