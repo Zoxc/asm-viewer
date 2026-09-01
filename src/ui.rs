@@ -2349,19 +2349,53 @@ impl Filtered {
 // Open tabs
 // ---------------------------------------------------------------------------
 
-/// Make `target` the active document, opening a tab for it if it has none.
+/// Why a document is becoming the active one, which is the whole of what decides whether
+/// the history records it.
+///
+/// **The push follows the cause and not the state**, which is the rule Step 1e settled:
+/// the history is where the reader *went*, and moving between places they already have
+/// open is not going anywhere. Until then a single effect observed the active document
+/// and pushed on every change, which could not tell the two apart — a strip click and a
+/// symbol-list click look identical from there — so the answer has to come from the call
+/// site, where it is known.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Visit {
+    /// The reader went somewhere: a sidebar row, a relocation link, the Source pane's
+    /// companion header, or a restored session landing the app on a document. Recorded,
+    /// unless the history's cursor is on it already.
+    Went,
+    /// The reader moved between places already open, or something moved them: a tab in
+    /// the strip, the neighbour a close lands on, a tab the restore is merely reopening,
+    /// and [`navigate`], which moves the cursor itself. Recorded nowhere.
+    Moved,
+}
+
+/// Make `target` the active document, opening a tab for it if it has none, and record the
+/// visit when there was one.
 ///
 /// The one path by which [`Active`] ever changes, which is what makes "the active
 /// document is the active tab" an invariant rather than a convention: the sidebar's
 /// object and symbol rows, an assembly relocation link, the Source pane's companion
 /// header, the history panel and the back/forward buttons (both through [`navigate`]) and
 /// the startup restore all come through here, so none of them has to know that tabs
-/// exist. `None` opens nothing and is how the content area goes back to its placeholder.
+/// exist. `None` opens nothing and is how the content area goes back to its placeholder;
+/// it is never a visit, having nowhere to be a visit to.
 ///
 /// **One function for both kinds of tab**, where until Step 1 there were two — `activate`
 /// for the content area's functions and `open_file` for the Source pane's files, each
 /// holding its own strip's invariant. The strips are one, so the rule is one, and opening
 /// a file and opening a function differ in nothing but the value handed over.
+///
+/// **And one function for the history too**, where until Step 1e that was an effect
+/// observing the active document from the root. The effect was the wrong shape rather
+/// than merely in the wrong place: it saw *that* the document had changed and could not
+/// see *why*, so a click on a tab in the strip was indistinguishable from a click on a
+/// symbol in the list. `visit` is that missing half, and it is why the recording moved to
+/// the one place every change already goes through rather than to each caller.
+///
+/// `History::would_push` is still asked, and it is what keeps [`navigate`] honest without
+/// a "we are navigating" flag: back and forward land the cursor on the entry they moved
+/// to, so a push would dedup away even if one were attempted.
 ///
 /// Re-focusing a tab that is already open writes nothing: `State::write` notifies its
 /// subscribers whether or not the value changes, so both the list and the active document
@@ -2369,7 +2403,9 @@ impl Filtered {
 fn activate(
     mut open: State<Tabs<Document>>,
     mut active: State<Option<Document>>,
+    mut history: State<History>,
     target: Option<Document>,
+    visit: Visit,
 ) {
     // The copy that is *in the list* where there is one, so the identity a position is
     // keyed by does not change when the same file is reached again through a different
@@ -2386,15 +2422,25 @@ fn activate(
         (None, None) => None,
     };
 
-    active.set_if_modified(target);
+    active.set_if_modified(target.clone());
+
+    // `write()` notifies its subscribers before it hands the value over, whether or not
+    // anything changes, so ask first: a push that would dedup away must not wake the
+    // history panel. The guard from `peek` is gone before the write is reached.
+    let Some(target) = target.filter(|_| visit == Visit::Went) else {
+        return;
+    };
+    if history.peek().would_push(&target) {
+        history.write().push(target);
+    }
 }
 
 /// Close the tab showing `entry`, moving to a neighbouring one when it was the tab on
 /// screen and to the placeholder when it was the last one open.
 ///
-/// Landing on the neighbour is an ordinary change of active document, so it is recorded
-/// in the history like any other: the reader is now somewhere else, and the way back to
-/// it is the way back to anywhere else.
+/// Landing on the neighbour is a [`Visit::Moved`] and records nothing: it is a place the
+/// reader already had open, which is exactly what the strip is, and closing a tab is not
+/// a way of visiting the one beside it.
 ///
 /// Where the tab was left goes with it, **both sides of it**. A closed tab is not a tab,
 /// so a position kept for one is both a lie — reopening it from the sidebar is a fresh
@@ -2403,6 +2449,7 @@ fn activate(
 fn close_tab(
     mut open: State<Tabs<Document>>,
     active: State<Option<Document>>,
+    history: State<History>,
     mut asm_at: State<Positions<Document>>,
     mut src_at: State<Positions<Document>>,
     entry: &Document,
@@ -2415,8 +2462,8 @@ fn close_tab(
     if was_showing {
         // Through `activate` like everything else, even though the neighbour is by
         // construction already open: this is a change of active document and there is one
-        // way to make one. The write guard above is released before it is reached.
-        activate(open, active, next);
+        // way to make one. The write guards above are released before it is reached.
+        activate(open, active, history, next, Visit::Moved);
     }
 }
 
@@ -2452,7 +2499,8 @@ fn close_tab(
 /// - The **history** drops its entries rather than degrading them ([`History::retaining`]),
 ///   which is the same walk and the same reasoning as a restore whose binaries have
 ///   changed: a list of places the reader cannot get back to is worse than a short list.
-///   A visited source file is kept, by the same rule its tab is.
+///   A visited source file is kept, by the same rule its tab is. It is *read* here too,
+///   since the tab this lands on goes through `activate`.
 /// - The **viewing positions** of the tabs that closed go with them, both sides of each
 ///   ([`Positions`]), which is not tidiness: every entry is keyed by a [`Document`], which
 ///   for an assembly-driven one holds the `Arc<Object>` it points into, so one left behind
@@ -2505,9 +2553,9 @@ fn close_binary(
 
     if showing.is_some_and(|showing| showing.in_file(path)) {
         // Through `activate` like every other change of active document, even though the
-        // tab it lands on is by construction already open. Landing there is an ordinary
-        // move, so `use_record_history` records it exactly as it records closing one tab.
-        activate(open, active, next);
+        // tab it lands on is by construction already open — which is what makes it a
+        // [`Visit::Moved`], exactly as closing one tab by hand is.
+        activate(open, active, history, next, Visit::Moved);
     }
 }
 
@@ -2893,7 +2941,7 @@ impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let states = use_project_states();
-        let (open, active) = (states.open, states.active);
+        let (open, active, history) = (states.open, states.active, states.history);
         let object = self.object.clone();
         let path = self.object.path.clone();
 
@@ -2928,7 +2976,9 @@ impl Component for ObjectRow {
                     activate(
                         open,
                         active,
+                        history,
                         Some(Document::Assembly(Selection::Object(object.clone()))),
+                        Visit::Went,
                     );
                 })
                 // A lone object *is* the file it came out of, so it closes like one. A
@@ -2986,6 +3036,7 @@ impl Component for SymbolRow {
         let mut hovering = use_state(|| false);
         let active = use_consume::<Active>().0;
         let open = use_consume::<Open>().0;
+        let history = use_consume::<Hist>().0;
         let symbol = self.symbols.0[self.index].clone();
         let text = symbol
             .data
@@ -3016,7 +3067,9 @@ impl Component for SymbolRow {
                     activate(
                         open,
                         active,
+                        history,
                         Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
+                        Visit::Went,
                     );
                 })
                 .child(label().text(text).max_lines(1)),
@@ -3202,6 +3255,7 @@ impl Component for RelocationLabel {
         let mut hovering = use_state(|| false);
         let active = use_consume::<Active>().0;
         let open = use_consume::<Open>().0;
+        let history = use_consume::<Hist>().0;
         let symbol = Symbol {
             object: self.object.clone(),
             data: self.target.clone(),
@@ -3237,7 +3291,9 @@ impl Component for RelocationLabel {
                     activate(
                         open,
                         active,
+                        history,
                         Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
+                        Visit::Went,
                     );
                 })
                 .child(label().text(text).max_lines(1).color(if hovering() {
@@ -3826,6 +3882,7 @@ impl Component for TabChip {
         let hovering = use_state(|| false);
         let active = use_consume::<Active>().0;
         let open = use_consume::<Open>().0;
+        let history = use_consume::<Hist>().0;
         let asm_at = use_consume::<AsmAt>().0;
         let src_at = use_consume::<SrcAt>().0;
         let (activated, closed) = (self.entry.clone(), self.entry.clone());
@@ -3836,8 +3893,11 @@ impl Component for TabChip {
             entry_tooltip(&self.entry),
             self.active,
             hovering,
-            move |_| activate(open, active, Some(activated.clone())),
-            move |_| close_tab(open, active, asm_at, src_at, &closed),
+            // A tab in the strip is a place the reader already has open, so switching to
+            // it is a move and records nothing. That is Step 1e's rule and the whole
+            // reason `activate` is told why it is being called.
+            move |_| activate(open, active, history, Some(activated.clone()), Visit::Moved),
+            move |_| close_tab(open, active, history, asm_at, src_at, &closed),
         )
     }
 
@@ -4704,6 +4764,7 @@ impl Component for AssemblyTab {
 fn companion_header(
     open: State<Tabs<Document>>,
     active: State<Option<Document>>,
+    history: State<History>,
     file: Arc<str>,
 ) -> Element {
     let document = Document::Source(file.clone());
@@ -4719,7 +4780,7 @@ fn companion_header(
             .spacing(6.0)
             .background(palette().header_bg)
             .border(bottom_hairline())
-            .on_press(move |_| activate(open, active, Some(document.clone())))
+            .on_press(move |_| activate(open, active, history, Some(document.clone()), Visit::Went))
             .child(entry_icon(&Document::Source(file.clone())))
             .child(label().text(file_name(&file)).max_lines(1)),
     )
@@ -4734,6 +4795,7 @@ impl Component for SourceTab {
     fn render(&self) -> impl IntoElement {
         let active = use_consume::<Active>().0;
         let open = use_consume::<Open>().0;
+        let history = use_consume::<Hist>().0;
         // Consumed unconditionally, hooks having to run on every render, and read here
         // because the companion file comes out of it -- and because reading it is what
         // subscribes this tab to it, so the pane fills in when a newly selected symbol's
@@ -4775,7 +4837,9 @@ impl Component for SourceTab {
             .content(Content::Flex)
             .background(palette().pane_bg)
             .maybe_child(match &side {
-                SourceSide::Companion(file) => Some(companion_header(open, active, file.clone())),
+                SourceSide::Companion(file) => {
+                    Some(companion_header(open, active, history, file.clone()))
+                }
                 SourceSide::Subject(_) => None,
             })
             .child(
@@ -6993,22 +7057,19 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
 /// `use_side_effect` re-runs its callback whenever a `State` that was `read()` inside
 /// it changes (`freya-core/src/lifecycle/effect.rs`), so reading the state contexts
 /// here makes this one observer the single choke point every mutation flows through:
-/// the three `selection.set(..)` sites, the toolbar's `objects.write()`,
-/// `use_record_history`'s push and the two tab lists know nothing about persistence,
-/// and neither will any future one. The subscriptions *are* the `read()` calls, which
+/// `activate`, the toolbar's `objects.write()`, the history push inside `activate` and
+/// the tab list know nothing about persistence, and neither will any future one. The subscriptions *are* the `read()` calls, which
 /// is the whole of what makes adding a persisted field to `Session::from_state` also
 /// add the state behind it to what wakes this.
 ///
 /// Whether a change reaches the disk now or at the next `use_periodic_save` tick is
 /// `project::record`'s decision, not this one's: opening a binary is written at once,
-/// a selection, a tab or a history entry is left pending. That policy is framework-free
+/// a document, a tab or a history entry is left pending. That policy is framework-free
 /// and unit-tested in `project.rs`; all this hook owns is *when to look*.
 ///
-/// A selection change wakes this twice -- once for `Sel`, and again when
-/// `use_record_history` pushes the entry that follows from it -- which costs two
-/// derivations and two comparisons and, since neither is a binaries change, no write
-/// at all. A selection change onto a symbol that was not open wakes it a third time,
-/// for the tab `activate` opened, and that one is free for the same reason.
+/// One visit wakes this up to three times -- for `Active`, for the tab `activate` opened
+/// and for the history entry it pushed -- which costs three derivations and three
+/// comparisons and, since none of them is a binaries change, no write at all.
 ///
 /// Scrolling a pane wakes it too, which is the one input here that a reader can produce
 /// continuously. It costs no more than the three above, and it is bounded by the unit the
@@ -7079,49 +7140,9 @@ fn use_periodic_save() {
     });
 }
 
-/// Record every selection in the navigation history.
+/// Forget the cross-view focus and the pin whenever the active document changes.
 ///
-/// Deliberately its own effect rather than a second job inside `use_save_on_change`,
-/// even though both observe `Sel`: this one has no business subscribing to `Objects`,
-/// and if it did, opening a binary -- which changes the objects and nothing else --
-/// would run the history code for a selection it has already recorded. Two effects
-/// with one subscription each also keep the two concerns separable, since only one of
-/// them touches the disk. The choke-point property is untouched: this is still the
-/// single observer of `Sel`, so every `selection.set(..)` site, present and future,
-/// lands here without knowing it.
-///
-/// The history holds `Selection`s, which are `Arc`s compared by pointer, so an entry
-/// is a refcount bump and no copy of any object data.
-///
-/// Nothing here pushes on navigation: back/forward (the next slice) move the cursor and
-/// then set `Sel` to the entry they landed on, this effect runs as it does for any other
-/// change, and `would_push` is false because that entry is exactly what the cursor is
-/// now on. Navigation therefore costs no entry, and no separate "we are navigating"
-/// flag is needed to make that true.
-fn use_record_history(active: State<Option<Document>>, history: State<History>) {
-    use_side_effect(move || {
-        // Reading subscribes the effect to the active document; `peek` on the history
-        // does not, because the effect must not subscribe to the state it writes.
-        let active = active.read().clone();
-        let Some(active) = active else {
-            // Nothing open is not a place to come back to; it is the state the app boots
-            // into and the one an emptied strip leaves it in.
-            return;
-        };
-
-        // `write()` notifies its subscribers before it hands the value over, whether or
-        // not anything changes, so ask first: a push that would dedup away must not
-        // wake the history panel.
-        if history.peek().would_push(&active) {
-            let mut history = history;
-            history.write().push(active);
-        }
-    });
-}
-
-/// Forget the cross-view focus and the pin whenever the selection changes.
-///
-/// Both are positions inside the selected symbol's line info, so they mean nothing once
+/// Both are positions inside the drawn symbol's line info, so they mean nothing once
 /// that symbol is gone -- and the ordinary way the focus goes away, the pointer leaving the
 /// row that set it, need never happen: clicking a relocation label navigates from an
 /// assembly row the pointer is still sitting on, and the symbol it lands in was very often
@@ -7130,8 +7151,8 @@ fn use_record_history(active: State<Option<Document>>, history: State<History>) 
 /// all -- staying is the whole of what makes it one -- so this is the only thing that ends
 /// it short of another click.
 ///
-/// Its own effect for the reason `use_record_history` is: it has no business subscribing
-/// to anything but `Sel`, and the two concerns stay separable.
+/// Its own effect rather than a line inside the save observer: it has no business
+/// subscribing to anything but the active document, and the two concerns stay separable.
 fn use_clear_focus(
     active: State<Option<Document>>,
     focused: State<Option<LineFocus>>,
@@ -7412,9 +7433,8 @@ impl Nav {
 ///
 /// The one place navigation happens, so the input handler below and the history panel
 /// share the same two steps: move the cursor, then make the entry it landed on the active
-/// tab. Nothing is pushed -- `use_record_history` sees the selection change like any other
-/// and `would_push` is false for it, because that entry is exactly what the cursor now
-/// sits on.
+/// tab. Nothing is pushed -- it is a [`Visit::Moved`], and `would_push` would be false for
+/// it in any case, that entry being exactly what the cursor now sits on.
 ///
 /// It goes through [`activate`] rather than setting the selection itself because the
 /// history and the open tabs are two different lists: the history is everywhere the reader
@@ -7435,10 +7455,10 @@ fn navigate(
     }
 
     // The guard is released at the end of this statement, before the selection is set
-    // and `use_record_history` peeks the history back.
+    // and `activate` peeks the history back.
     let entry = nav.step(&mut history.write());
     if entry.is_some() {
-        activate(open, active, entry);
+        activate(open, active, history, entry, Visit::Moved);
     }
 }
 
@@ -7507,8 +7527,8 @@ fn use_restore_on_startup(states: ProjectStates) {
 ///
 /// Every write below happens in one go, before the frame can end: freya's effects are
 /// woken by an async notify (`Effect::create`) rather than run at the write, so
-/// `use_record_history` and `use_save_on_change` see the settled result once and not
-/// each intermediate `Active` the tab loop passes through.
+/// `use_save_on_change` sees the settled result once and not each intermediate `Active`
+/// the tab loop passes through.
 fn restore_project(states: ProjectStates, project: Project, session: Session) {
     let ProjectStates {
         objects,
@@ -7554,13 +7574,8 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
             )
         };
 
-        // The history first, so that when `use_record_history` observes the active
-        // document there is already a cursor to dedup against. The saved cursor entry is
-        // the saved active document -- that is what put it there -- and the two resolve
-        // through the same lookup to the same `Arc`s, so `would_push` is false and the
-        // restored session costs no duplicate entry. It is only when the cursor entry was
-        // dropped, or the active document degraded, that the two differ, and then a push
-        // is exactly right: the app is somewhere new.
+        // The history first, so that the `Visit::Went` at the end of this has a cursor to
+        // dedup against.
         history.set(restored_history);
 
         // Where each side of each tab was left goes in *before* the tab is opened; see
@@ -7576,9 +7591,17 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
             }
         }
         for (tab, _, _) in restored_tabs {
-            activate(open, active, Some(tab));
+            // Reopening a tab is not visiting it: the reader had it open, and the history
+            // this restore has just set is the record of where they went.
+            activate(open, active, history, Some(tab), Visit::Moved);
         }
-        activate(open, active, restored_active);
+        // The one exception, and it is what keeps the cursor and the app in step: the
+        // document the app *lands on* is a place it went. `would_push` makes it free in
+        // the ordinary case — the saved cursor entry is the saved active document, and
+        // the two resolve through the same lookup to the same `Arc`s — and records it
+        // exactly when they differ, which is when the cursor entry was dropped or the
+        // active document degraded and the app really is somewhere new.
+        activate(open, active, history, restored_active, Visit::Went);
     });
 }
 
@@ -7591,6 +7614,11 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
 /// tabs it deliberately leaves standing are then closed one by one ([`close_tab`]).
 /// Writing the list directly would be shorter and would be the one place in the app where
 /// "the active document is the active tab" was held by hand.
+///
+/// The **history** is then emptied outright, which is the one thing here that no walk
+/// reaches: `close_binary` drops only the entries into the file it closes and `close_tab`
+/// drops none at all, so a visited source file — which belongs to no binary — would
+/// otherwise survive into the project that comes next.
 ///
 /// The source tabs go here where a closing *binary* deliberately leaves them alone: a
 /// file tab outlives the binary that led the reader to it because the text stands on its
@@ -7624,8 +7652,16 @@ fn clear_project(states: ProjectStates) {
 
     let remaining = open.peek().tabs().to_vec();
     for tab in &remaining {
-        close_tab(open, active, asm_at, src_at, tab);
+        close_tab(open, active, history, asm_at, src_at, tab);
     }
+
+    // And the history outright, which the two walks above deliberately do not do for it.
+    // `close_binary` drops only the entries into the file it is closing, and `close_tab`
+    // drops none at all -- a history entry outlives its tab, which is the whole point of
+    // there being two lists. Neither reaches a visited *source file*, which belongs to no
+    // binary; and the history belongs to the project, whose session is what recorded it.
+    let mut history = history;
+    history.set(History::default());
 }
 
 /// Leave the project on screen and open the one `id` names in its place.
@@ -7740,7 +7776,6 @@ pub fn app() -> impl IntoElement {
         history,
     };
     use_save_on_change(states);
-    use_record_history(active, history);
     use_clear_focus(active, focused, pinned);
     use_periodic_save();
     // After the save effect on purpose: the effect is in place, with the save policy's
@@ -8205,21 +8240,29 @@ mod tests {
         // The app as a session leaves it: a binary open, two of its functions in the
         // strip with a row remembered for one of them, a source file open beside them and
         // somewhere to go back to.
-        let (mut objects, mut history, mut asm_at, mut src_at) =
-            (states.objects, states.history, states.asm_at, states.src_at);
+        let (mut objects, mut asm_at, mut src_at) = (states.objects, states.asm_at, states.src_at);
         objects.write().push(object.clone());
         let tab = |symbol: &Symbol| Document::Assembly(Selection::Symbol(symbol.clone()));
-        activate(states.open, states.active, Some(tab(&first)));
-        activate(states.open, states.active, Some(tab(&second)));
-        activate(states.open, states.active, Some(source.clone()));
-        history.write().push(tab(&first));
-        history.write().push(tab(&second));
+        let went = |target: Document| {
+            activate(
+                states.open,
+                states.active,
+                states.history,
+                Some(target),
+                Visit::Went,
+            )
+        };
+        went(tab(&first));
+        went(tab(&second));
+        went(source.clone());
         asm_at.write().remember(tab(&first), 12);
         src_at.write().remember(source.clone(), 7);
         test.sync_and_update();
 
         assert_eq!(states.open.peek().tabs().len(), 3);
-        assert_eq!(states.history.peek().entries().len(), 2);
+        // Three visits, the source file included: the history records documents, which is
+        // what lets its panel list a file at all.
+        assert_eq!(states.history.peek().entries().len(), 3);
 
         clear_project(states);
         test.sync_and_update();
@@ -8255,6 +8298,77 @@ mod tests {
         );
     }
 
+    /// The history records where the reader *went* and not what is on screen.
+    ///
+    /// The rule Step 1e settled, and the reason `activate` is told why it is being called:
+    /// opening a document is a visit, switching to a tab that is already open is not, and
+    /// the neighbour a close lands on is not either. An effect observing the active
+    /// document could not tell any of these apart, which is why the recording is no longer
+    /// one.
+    #[test]
+    fn switching_to_an_open_tab_is_not_a_visit() {
+        let symbols = fixture_symbols();
+        let object = symbols[0].object.clone();
+        let (first, second) = (
+            Document::Assembly(Selection::Symbol(symbols[0].clone())),
+            Document::Assembly(Selection::Symbol(symbols[1].clone())),
+        );
+
+        let (mut test, states) =
+            TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+        test.sync_and_update();
+
+        let mut objects = states.objects;
+        objects.write().push(object);
+        let go = |target: &Document, visit| {
+            activate(
+                states.open,
+                states.active,
+                states.history,
+                Some(target.clone()),
+                visit,
+            )
+        };
+
+        go(&first, Visit::Went);
+        go(&second, Visit::Went);
+        test.sync_and_update();
+        assert!(states.history.peek().entries() == [first.clone(), second.clone()]);
+
+        // Back to the first through the strip: it is already open, so the reader has gone
+        // nowhere and the cursor stays where it was.
+        go(&first, Visit::Moved);
+        test.sync_and_update();
+        assert!(*states.active.peek() == Some(first.clone()));
+        assert!(
+            states.history.peek().entries() == [first.clone(), second.clone()],
+            "a strip click was recorded as a visit"
+        );
+        assert_eq!(states.history.peek().cursor(), Some(1));
+
+        // Going there deliberately *is* one, and bumps it to the newest position.
+        go(&first, Visit::Went);
+        test.sync_and_update();
+        assert!(states.history.peek().entries() == [second, first.clone()]);
+
+        // And closing the tab lands on the neighbour without recording it.
+        close_tab(
+            states.open,
+            states.active,
+            states.history,
+            states.asm_at,
+            states.src_at,
+            &first,
+        );
+        test.sync_and_update();
+        assert_eq!(states.open.peek().tabs().len(), 1);
+        assert_eq!(
+            states.history.peek().entries().len(),
+            2,
+            "closing a tab recorded the neighbour it landed on"
+        );
+    }
+
     /// Closing a binary takes its own tabs and leaves a source-driven one standing.
     ///
     /// The rule the one strip inherited from the two: a file tab outlives the binary that
@@ -8277,8 +8391,17 @@ mod tests {
 
         let mut objects = states.objects;
         objects.write().push(object);
-        activate(states.open, states.active, Some(source.clone()));
-        activate(states.open, states.active, Some(function.clone()));
+        let went = |target: Document| {
+            activate(
+                states.open,
+                states.active,
+                states.history,
+                Some(target),
+                Visit::Went,
+            )
+        };
+        went(source.clone());
+        went(function.clone());
         test.sync_and_update();
         assert_eq!(states.open.peek().tabs().len(), 2);
 
@@ -8545,7 +8668,13 @@ mod tests {
         // Through `activate`, which is the only way anything opens a tab -- a partially
         // read file is not a special case for it.
         let opened = Document::Assembly(Selection::Object(objects[0].clone()));
-        activate(states.open, states.active, Some(opened.clone()));
+        activate(
+            states.open,
+            states.active,
+            states.history,
+            Some(opened.clone()),
+            Visit::Went,
+        );
         test.sync_and_update();
 
         for object in &objects[1..] {
