@@ -41,3 +41,8 @@ devtools = ["freya/devtools"]
 
 [profile.release]
 debug = true
+
+# Only for the one headless UI test in `ui.rs`: a gesture that ends in a `State` write is
+# a runtime borrow the compiler is happy with, so it takes freya's own runner to catch.
+[dev-dependencies]
+freya-testing = "0.4.3"

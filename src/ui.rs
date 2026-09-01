@@ -724,8 +724,19 @@ fn mark_drag(mut marked: State<Option<Marks>>, pane: Pane, row: usize) {
 
 /// End the gesture, wherever in the window the button came up. The run stays: letting go
 /// is the end of the drag and not the end of the selection.
+///
+/// The read is a `let` of its own and not the scrutinee of an `if let`, which is the shape
+/// this was written in first and which panicked on every mouse-up: a `State`'s `peek`
+/// hands back a guard borrowing the state, and the temporary holding an `if let`'s
+/// scrutinee lives until the end of its *body*, so the write inside was a mutable borrow
+/// taken while that one was still out (`writable_utils.rs:96`). `mark_drag`'s `let ...
+/// else` and `mark_press`'s `match` end their temporaries with the statement, which is
+/// why the same code was fine there and why nothing about it is visible at the call site.
+/// `Marks` is `Copy`, so binding it first costs nothing at all.
 fn mark_release(mut marked: State<Option<Marks>>) {
-    if let Some(marks) = *marked.peek() {
+    let current = *marked.peek();
+
+    if let Some(marks) = current {
         marked.set_if_modified(Some(Marks {
             rows: marks.rows.released(),
             ..marks
@@ -764,7 +775,8 @@ fn on_listing_key(
 
         match &e.key {
             Key::Character(character) if command && character == "c" => {
-                if let Some(picked) = (*marked.peek()).filter(|marks| marks.pane == pane) {
+                let picked = (*marked.peek()).filter(|marks| marks.pane == pane);
+                if let Some(picked) = picked {
                     // Failing silently is the only answer there is: the clipboard is a
                     // root context freya-winit fills in from the window's display handle,
                     // so a platform that gave it none has none, and there is nowhere in a
@@ -4314,4 +4326,78 @@ pub fn app() -> impl IntoElement {
                 .height(Size::flex(1.0))
                 .child(split),
         )
+}
+
+/// The one test in this file that runs the UI rather than the logic under it.
+///
+/// Everything decided by cases lives in a framework-free module with its own tests
+/// ([`crate::rows`] here), and this is deliberately not a second home for that. It exists
+/// for the one class of bug those tests are blind to by construction: a `State` borrow
+/// that is legal to the compiler and panics at the moment a gesture ends. `mark_release`
+/// shipped holding a `peek` guard across its own write, so *every* mouse-up on a run
+/// brought the window down, and no amount of testing `RowSelection` would have said a
+/// word about it. A press, a sweep and a release through freya's own headless runner is
+/// the smallest thing that would have.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use freya_testing::TestingRunner;
+
+    /// Three rows wired exactly the way the two panes are, and no more of them than that:
+    /// the press that starts a run, the `pointer_over` that sweeps it, and the release
+    /// watched globally at the root, because the button very often comes up somewhere the
+    /// run does not reach.
+    fn harness() -> impl IntoElement {
+        let marked = use_consume::<Marked>().0;
+
+        let row = |index: usize| {
+            rect()
+                .width(Size::fill())
+                .height(Size::px(20.0))
+                .on_pointer_down(move |e: Event<PointerEventData>| {
+                    if e.button() == Some(MouseButton::Left) {
+                        mark_press(marked, false, Pane::Assembly, index);
+                    }
+                })
+                .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, index))
+                .into_element()
+        };
+
+        rect()
+            .expanded()
+            .on_global_pointer_press(move |_| mark_release(marked))
+            .child(row(0))
+            .child(row(1))
+            .child(row(2))
+    }
+
+    #[test]
+    fn a_swept_run_survives_the_button_coming_up() {
+        let (mut test, marked) = TestingRunner::new(
+            harness,
+            (100., 100.).into(),
+            |runner| {
+                runner.provide_root_context(|| Shift(State::create(false)));
+                runner.provide_root_context(|| Marked(State::create(None))).0
+            },
+            1.,
+        );
+        test.sync_and_update();
+
+        test.press_cursor((10., 10.));
+        test.move_cursor((10., 30.));
+        test.sync_and_update();
+        assert_eq!(marked.peek().unwrap().rows.rows(), 0..=1);
+
+        // The line that panicked, and the assertion that it no longer does is the test
+        // getting this far at all.
+        test.release_cursor((10., 30.));
+        assert_eq!(marked.peek().unwrap().rows.rows(), 0..=1);
+
+        // And the gesture really is over: a row entered afterwards is the pointer passing
+        // over it, which is the panes' hover and not a sweep.
+        test.move_cursor((10., 50.));
+        test.sync_and_update();
+        assert_eq!(marked.peek().unwrap().rows.rows(), 0..=1);
+    }
 }

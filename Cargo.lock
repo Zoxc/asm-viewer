@@ -1666,6 +1666,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "freya-testing"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd8833ff1d9b38dce335cf4aca0958a7bdb4f7c79b08b94c7c9f1031db473552"
+dependencies = [
+ "accesskit",
+ "freya-clipboard",
+ "freya-components",
+ "freya-core",
+ "freya-engine",
+ "futures-channel",
+ "ragnarok",
+ "torin",
+]
+
+[[package]]
 name = "freya-winit"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4430,6 +4446,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "freya",
+ "freya-testing",
  "log",
  "regex",
  "rfd",
