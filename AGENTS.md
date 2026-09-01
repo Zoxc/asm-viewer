@@ -3,6 +3,12 @@
 Standing instructions from the user.
 
 - Committing. Whatever is uncommitted when you start stays uncommitted.
+- Run rustfmt over every file you modified, before committing it. Format **only those files** —
+  `rustfmt --edition 2021 <paths>` — and not the workspace: a bare `cargo fmt` reformats
+  everything, and much of this repo predates anyone running it, so it drags unrelated reflow into
+  a diff that then has to be picked apart by hand. The `--edition 2021` is load-bearing; plain
+  `rustfmt` parses as 2015 and will mangle what it cannot read. Nothing here needs a
+  `rustfmt.toml`: the defaults are what the formatted files already follow.
 - Don't reference an uncommitted file from a committed one.
 - Keep `notes/Goals.md` current. It is the checklist of planned features.
 - Prefer TOML for files, not JSON.
