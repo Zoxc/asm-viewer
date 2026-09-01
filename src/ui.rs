@@ -3344,10 +3344,16 @@ fn symbol_info(symbol: &Symbol) -> impl IntoElement {
                 .as_ref()
                 .map(|section| info_line(format!("Section: `{}`", section.name))),
         )
-        .child(info_line(format!("Size: {} bytes", data.size)))
+        .child(info_line(format!("Declared size: {} bytes", data.size)))
+        // The declared size above is frequently 0 and is only ever displayed; what the
+        // app actually reads is `extent`, so that is the number worth showing beside it.
+        // `data_in` rather than `data`: the latter is the next-symbol estimate on its own,
+        // which is not the range `assembly` decodes or `line_info` is asked about.
         .child(info_line(format!(
-            "Data Length: `{:?}`",
-            data.data().map(|d| d.len()).unwrap_or_default()
+            "Extent: {} bytes",
+            data.data_in(&symbol.object)
+                .map(|bytes| bytes.len())
+                .unwrap_or_default()
         )))
 }
 
