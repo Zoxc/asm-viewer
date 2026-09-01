@@ -34,8 +34,12 @@ one item per part, so the unfinished half stays visible.
   first instruction it produced, clicking an instruction scrolls the source to its line, and
   neither is a navigation: the selection does not change and nothing is pushed onto the
   history.
-- [ ] The same across symbols, preferring recent history when a source line maps into several.
-  The mapping exists now; the tie-break and the navigation are what is left.
+- [x] The same across symbols, preferring recent history when a source line maps into several.
+  It lands **only where source is driving**, which is the whole of where it lands: a
+  source-driven tab's line click resolves across every open object and puts the assembly side on
+  the symbol it picks, while an assembly-driven tab's source side keeps the within-symbol reveal
+  above exactly — selection unchanged, nothing pushed onto the history. The tie-break is
+  `compiled::pick`: most recently visited, with the symbol on screen at the head of that list.
 - [x] Syntax highlighting for both sides. Assembly is coloured by span kind; source is
   tree-sitter, through the highlighter `freya-code-editor` exposes publicly.
 - [x] Use the assembly colour palette for the source side's syntax highlighting, so the two
@@ -336,10 +340,20 @@ one item per part, so the unfinished half stays visible.
   changed with it: "a document is a place in a binary" became "a place in a binary *or* a
   file". A source-driven tab is opened from the Source pane's companion header, which is the
   only door into one until the project explorer and the source search land.
-- [ ] The assembly side of a source-driven tab: clicking a line in the file shows the assembly
-  compiled from it. The reverse mapping it waited on is built — `Object::symbols_from_source`,
-  lazy and per object — so what is left is the UI: asking it off the worker and the rule for
-  which symbol wins when a line maps into several, where recent history is the tie-break.
+- [x] The assembly side of a source-driven tab: clicking a line in the file shows the assembly
+  compiled from it. The tab is driven from a line, and the click in its own file is the only
+  thing that writes one — a click in the assembly pane never does, so a listing cannot re-drive
+  itself. The question goes to the one analysis worker, which now takes a question rather than a
+  symbol; which symbol wins is the most recently visited, **with the symbol already on screen at
+  the head of that list**, since nothing is pushed onto the history between two clicks in one
+  function and reading down a generic function would otherwise walk across its instantiations.
+  Below the tie-break the order is the crate's own and is arbitrary; picking deliberately is the
+  generic-instance item above. A line no object holds code from leaves the listing that is up and
+  loses only the pin's highlight, which is what says the click landed nowhere. Two things came out
+  of it that were not in the ask: an answer can now outlive the document that named it, a
+  source-driven tab surviving a binary close, so the analysis lets go of a closed binary; and the
+  reveal a click asks for is now looked at before it is taken, the listing that can answer it not
+  being the one that is up when the click is made.
 - [ ] Selecting a symbol in a view opens a "temporal" tab when the symbol is not already open
   in a tab: one preview tab reused by the next such selection, so walking down a list does
   not leave a tab behind per click. What promotes it into a tab that stays is a design

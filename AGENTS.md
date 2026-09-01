@@ -79,7 +79,9 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/rows.rs` — the run of rows a reader picks out to copy.
 - `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the document it stands for.
-- `src/tabs.rs` — `landing`, the rule a close obeys, and `Positions`, where each tab was left.
+- `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.
+- `src/tabs.rs` — `landing`, the rule a close obeys, `Positions`, where each tab was left, and
+  `Driven`, which line a source-driven tab's assembly side follows.
 - `src/history.rs` — back/forward navigation history.
 - `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API, merged
   under the user's own; in points until one conversion at the end.
@@ -98,7 +100,8 @@ asked for and no more, so the annotations *are* the list of what crosses a bound
 - `src/ui/palette.rs` — every colour, the theme it is resolved from, and the two compositing
   rules that turn a wash and a span kind into one.
 - `src/ui/state.rs` — the contexts provided once at the root and read with `use_consume`.
-- `src/ui/analyzed.rs` — the analysis worker, what it answers with, and the supersession rule.
+- `src/ui/analyzed.rs` — the question the analysis worker is asked, what it answers with, and
+  the supersession rule.
 - `src/ui/focus.rs` — the two panes pointing at each other, and where each side of each tab
   was left.
 - `src/ui/marks.rs` — the run of rows a reader picks out, and what Ctrl+C copies.
@@ -434,12 +437,18 @@ strip: the reader's own interleaved order is what comes back, and the one docume
 screen is `active` whichever kind it is — written out in full rather than as an index, since a tab
 that no longer resolves is *dropped* (which would shift the index) while the active one *degrades*.
 Each entry carries **the rows both of its sides were left at**: a `tabs` entry is a `SavedTab`
-(`asm_row` + `src_row` + `document`), rather than the list having arrays of rows beside it. The
+(`asm_row` + `src_row` + `line` + `document`), rather than the list having arrays of rows beside
+it. The
 rows travel with their tab because `resolve_tabs` drops the tabs that no longer resolve, which
 would shift every later row of a parallel array onto the wrong tab. They are rows and not pixel
 offsets so that the row height following the fonts (Step 9c) does not move every saved position,
 and they are hints and not facts — `#[serde(default)]`, and clamped to what the tab holds *now* by
-`Positions::row`. **Field order within these structs is load-bearing**: TOML emits plain values
+`Positions::row`. `line` is which line a **source-driven** tab's assembly side was driven from and
+is absent for every other kind. It is what makes such a tab's `asm_row` mean anything: without it
+the listing that row is a row of is not there to come back to. Nothing resolves it, being a number
+and not a place, so a rebuilt binary takes the two rows with it and leaves the line, which is
+simply asked again out of what is loaded now. `resolve_tabs` answers with a named `RestoredTab`
+rather than a tuple, the rows and the line no longer surviving the same things. **Field order within these structs is load-bearing**: TOML emits plain values
 before tables, so every field of `Project` being a plain value is what lets `binaries` sit beside
 the name, `SavedTab`'s two rows must precede its `document`, and `SavedHistory::cursor` its
 `entries`. Getting it wrong fails at *runtime*, not at compile time, and a round trip through real
@@ -508,10 +517,10 @@ entry is resolved against the objects by name, and resolving one against a half-
 drop the tabs whose object had not landed yet. The strip is then restored, and **through the two
 functions that hold the invariants** rather than by writing the list: `use_restore_on_startup`
 sets the history, then `activate`s each tab and then the active one. Two orderings are
-load-bearing. The **rows go into the two `Positions` maps before the tabs are opened** — those
-maps are the one thing the restore writes directly, and a pane puts its view back when it notices
-the tab it is showing has changed, so a row arriving after the `activate` arrives after the only
-moment anything looks at it. And tabs before the active document, because `activate` opens what it
+load-bearing. The **rows go into the two `Positions` maps, and the driven line into `Driven`,
+before the tabs are opened** — those three maps are the one thing the restore writes directly, and
+a pane puts its view back when it notices the tab it is showing has changed, so a row arriving
+after the `activate` arrives after the only moment anything looks at it. And tabs before the active document, because `activate` opens what it
 cannot find and would otherwise append it at the end of the strip instead of finding it in place
 (the other direction is safe: a document that degraded to its object while the strip holds the
 symbol simply opens a tab). An assembly-driven tab that no longer resolves is **dropped**, like a
@@ -769,7 +778,10 @@ shows one tab at a time, so left alone it hands the tab arriving whatever offset
 had. `AsmAt`/`SrcAt` are two root `Positions` maps beside `Open`, **both keyed by the `Document`**
 — so an entry means "this side of this tab" for exactly as long as the tab is open — and
 `use_kept_position` is the whole of the behaviour, called once by `InstructionList` and once by
-`SourceList`. Keying the source side by the *file*, which is what the Source pane's own strip did,
+`SourceList`. Which tab a listing's row is filed under is `asked_of` the question that listing
+answers, never the tab the app is showing: while the worker catches up the pane is drawing the one
+being left, and for a source-driven tab the question's tab is the file's and not the resolved
+symbol's, which is very likely not open at all. Keying the source side by the *file*, which is what the Source pane's own strip did,
 made two functions compiled from one file share a position they have no reason to share. What is
 kept is a **row**, clamped to what the tab holds *now*, so a rebuilt binary or a shortened file
 cannot come back past the end. Three things are
@@ -785,7 +797,8 @@ which does, drops the pin), and when a reveal scrolls, the effect wakes on that 
 where it landed. `close_tab`/`close_binary` forget both of a tab's positions with the tab, which is
 not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into — and the hook is
 handed the tab list precisely so that the run *after* a close, still holding the tab that has gone,
-cannot put it straight back.
+cannot put it straight back. `close_tab` forgets the tab's driven line with them, which *is*
+tidiness: a `Document::Source` key holds no object, so nothing is being held up.
 
 **Opening a binary is the one path in, and it streams.** `open_binaries` is `close_binary`'s
 opposite number and the only thing that ever adds to `Objects` — the toolbar's Open, a session
@@ -818,7 +831,7 @@ symbol, and `SymbolData::line_info` builds the object's entire DWARF context on 
 against it — 1.4 s together for the first symbol clicked in `viewer-sample` (debug build; 0.6 s in
 release), and both of them used to run in `render`. `use_analysis` moves them together, because
 they are asked for by the same click and the pane needs both: **one worker thread** for the app's
-lifetime, fed an `async_channel` of `Symbol`s, answering with a `Studied` (the `Assembly`, its
+lifetime, fed an `async_channel` of `Question`s, answering with a `Studied` (the `Assembly`, its
 `Lanes`, and the `SymbolLines`). One worker and not a thread per request or a pool, because
 requests *supersede*: a reader going down the symbol list issues one per row and wants the last
 one's answer, so the queue is drained to its newest entry each time round and the rest are dropped
@@ -827,17 +840,73 @@ call in the crate at once for one useful answer, and `DwarfCache` is a `OnceLock
 would block on the winner rather than race usefully. (The parallelism `notes/Goals.md` asks for is
 about parsing many objects at once and is a different job.)
 
-**A superseded answer is recognised, not prevented.** Every answer carries the `Symbol` it is
-about and is kept only if that symbol is the one selected *now* — a comparison and not a generation
-counter, since `Selection` already compares by `Arc` pointer identity, and since the answer for the
-first A of an A → B → A is a perfectly good answer for the third selection. A dropped answer is
+**The worker is asked a question, not handed a symbol.** An `Ask` is either the symbol an
+assembly-driven tab names outright or the source line a source-driven tab is driven from, where
+the symbol is whatever that line was compiled into — `compiled::compiled_from` over every open
+object, `compiled::pick` choosing among the many one line answers with. `ask(active, driven)` is
+the whole derivation and is a pure function; `Asked` is the pair of states it reads, and
+deliberately **not a `Memo`**, `Active` being one already and a memo over a memo being two beats
+behind — which matters because `peek_ask` is what decides whether an answer that has landed is
+still wanted. `asked_of(ask)` is the one definition of which tab an answer belongs to (the file's
+own tab for a source question, never the resolved symbol's, which is very likely not open), used
+by the assembly pane's kept position, by the run of rows a listing change drops, and by the rule
+below. Both kinds go to the one worker: a resolve builds the object's source index under the same
+non-reentrant mutex `line_info` and `extent` take, so a second thread would block in `get_or_init`
+rather than race, and two producers writing one `Analyzed` would break the single `shown`/`pending`
+the panes read.
+
+**A source question is asked of every open object, and that is the new worst case.** Each object's
+index is built on the first ask — 94 ms for all 196 members of `libanalysis-sample.rlib`, **2.2 s
+and about half a gigabyte for the one object in `viewer-sample`** — and every ask afterwards is two
+binary searches. One click on a source row can therefore cost more than any click before it, it is
+not superseded once started, and every symbol click behind it waits. That is what `Analysing…` past
+`SLOW_ANALYSIS` is for.
+
+**`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at
+its head.** The head is the load-bearing part: nothing is pushed onto the history between two
+clicks in one function, so without it reading down the lines of a generic function would walk
+across its instantiations. Below the tie-break the order is the crate's own — the lowest-addressed
+symbol of the first object that answered — which is arbitrary and is said to be arbitrary; Step 5's
+picker is where a reader says which instance they meant.
+
+**An answer can now outlive the document that named it, and one rule stops it.** A symbol question
+is a tab into one object and that tab closes with its file, so before this nothing in the analysis
+needed a rule here at all. A source-driven tab survives `close_binary` by doctrine, so its answer
+would go on being drawn — and a `Studied` holds a `Symbol` holds the `Arc<Object>` holds the whole
+file's bytes, which is `Positions::forget`'s leak in a second place. `Shown::still_open` is asked in
+the two places an answer is judged: by the effect, so a closed binary is a question asked again out
+of what is left, and by the task taking answers, so the one already in flight when the file closed
+is not taken either. It lives in `use_analysis_with` rather than in `close_binary` so that a close,
+a rebuild and a project switch are one line instead of three, and because no handler can reach the
+answer in flight. The effect therefore **reads** `Objects` where it only peeks the history: a
+question asked of a different set of objects is a different question, while the ranking is an input
+to an answer and a visit must not re-ask one. What is deliberately *not* covered: an answer is
+about the objects that were open when it was asked, so a line clicked while a file is still being
+read can answer with nothing a later object would have answered. It costs one more click, against a
+generation counter for a case only a restore-time race reaches.
+
+**A superseded answer is recognised, not prevented.** Every answer carries the `Ask` it is about
+and is kept only if that is the question being asked *now* — a comparison and not a generation
+counter, since an `Ask` already compares by identity, and since the answer for the first A of an
+A → B → A is a perfectly good answer for the third. It is identity of two kinds: `Ask::Symbol` by
+the `Arc` pointers `Symbol` compares, `Ask::Source` by `LinePos`, which is the one `Arc` in the UI
+compared by its text — so two allocations of one path are one question and a tab switch does not
+re-resolve. `Shown::answers` widens it in the one direction that is free: a source question that
+resolved to a symbol has already answered a later ask for that symbol outright, and the listing is
+retagged rather than worked out again. A dropped answer is
 what clicking twice quickly *means*, so nothing logs or retries. **What the panes show meanwhile**
-is the listing they already have: `Analyzed` holds `shown` (the symbol actually drawn, which is the
-one selected *before* this one for as long as the worker takes), `pending` and `slow`. A listing is
+is the listing they already have: `Analyzed` holds `shown` (the listing actually drawn and the
+question it answers, which is the one asked *before* this one for as long as the worker takes),
+`answered`, `pending` and `slow`. A listing is
 replaced by the next listing and never by a blank, or every click would flash the pane empty for a
 frame; only after `SLOW_ANALYSIS` (180 ms, started by the request and never polled) does the
 message displace it, which is the order of the arms in `Analyzed::showing` — the one place either
-pane decides what it is drawing, so the two cannot disagree. Two things follow
+pane decides what it is drawing, so the two cannot disagree. `showing` takes the **document** and
+not a word from its caller, which is what keeps that true: it spells "Click a source line" where a
+symbol tab says "No symbol selected". `answered` is the last question answered *whatever it
+answered with*, which is the one thing a listing cannot say for itself — a source line no object
+holds code from leaves the listing that is up, losing only the pin's highlight, which is what says
+the click landed nowhere, and it is kept only while that listing is `asked_of` the same tab. Two things follow
 from `shown` being the drawn symbol rather than the selected one: `InstructionList` is mounted only
 for a listing that exists, so `use_kept_position` cannot write a pending tab down at row 0 before a
 row of it has been seen; and the Source pane's companion file comes out of `Analysis` rather than
@@ -865,9 +934,17 @@ A companion wears a **header naming its file**, which a subject does not: the st
 a subject, and nothing else in the window would name a companion now that the Source pane has no
 strip of its own. Pressing that header opens the file as a source-driven tab, and until the project
 explorer and the source search land it is the only door into one. The **assembly** side of a
-source-driven tab is blank: which symbols a source line compiled into is Step 2's index and picking
-one of them is Step 1d, and until then the pane draws nothing rather than carrying over an answer
-from a tab where "no symbol selected" is true.
+source-driven tab draws the symbol the tab's driven line was compiled into, which is an ordinary
+`Analyzed::showing` like any other tab's; before a line has been clicked in it there is no
+question, so it says so.
+
+**A click in a source-driven tab's own file is the only writer of `Driven`.** A click in a
+companion file is a pin and nothing more, and a click in the *assembly* pane never reaches that
+handler at all — which is what stops a listing from re-driving itself. Nothing else changes: the
+active document does not, so nothing is pushed onto the history, the tab already being where the
+reader is. A line is kept per tab rather than one for the window, and it is a `u32` and holds no
+`Arc<Object>`, so it survives its binary being closed and the next ask simply answers out of what
+is left.
 
 The rows are the app's own (`SourceRow`, a `VirtualScrollView`), **not** freya's `CodeEditor`,
 which paints a line background only for the cursor's row and keeps its scroll state private —
@@ -890,9 +967,16 @@ load-bearing: **a position is a file and a line** (`LinePos`), since an inlined 
 not line 42 of the open file — the one `Arc` in the UI compared by *contents*; **a row cannot clear
 the focus unconditionally**, because `EventName::cmp` leaves the order of the leaving and entering
 rows' handlers undefined, so `release_focus` clears only what this row put there and `LineFocus`
-carries a `FocusOrigin`; and **the scroll is a request, taken once** — `take_reveal` *removes* it,
-so a repeat click is a second request, and `reveal_row` does nothing when the row is already on
-screen. None of this is a navigation: the selection does not change and nothing is pushed onto the
+carries a `FocusOrigin`; and **the scroll is a request, answered once** — `owed_reveal` only
+*looks*, `reveal_made` is what clears it, and `reveal_row` does nothing when the row is already on
+screen. The split is not tidiness: in a source-driven tab the click that pins is the click that
+asks for the listing, so the run it wakes is still holding the previous one, in which no row
+matches — a single take would spend the request there and the listing that can answer it would
+arrive to nothing owed. A request nothing matches stays owed until the next click replaces it or
+the tab changes. **And the ask is the pin** for a source-driven tab: `use_clear_focus` drops the
+pin with the tab, so both panes fall back to the line the tab is driven from, or coming back to one
+would show a listing with nothing lit and no reason given. None of this is a navigation: the
+selection does not change and nothing is pushed onto the
 history. `navigate` remains the only path for anything that does.
 
 **The arrow gutter** draws every branch staying inside the symbol, with the layout in `src/lanes.rs`
