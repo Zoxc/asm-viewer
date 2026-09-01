@@ -232,6 +232,22 @@ one item per part, so the unfinished half stays visible.
   predates the shared palette and is a surface rather than a syntax colour, so 5e left it
   alone; it is one line to unify, and the only real question is which of the two both panes
   should take.
+- [ ] Keep every expensive operation off the UI thread. A standing rule rather than a task that
+  finishes, since each new one arrives with whatever feature needed it. freya's executor *is* the
+  UI thread, so a `spawn` is not the answer: what is expensive goes onto a `std::thread` fed an
+  `async_channel`, the shape `use_analysis`, `open_binaries` and the scratchpad's worker already
+  share — one thread for the app's lifetime, a queue drained to its newest entry where requests
+  supersede, and a pane that goes on drawing what it has until an answer lands. Three things are
+  across already: binary inspection, reading and parsing a binary, and the scratchpad's build and
+  run. What is known not to be — `project::flush` writes both TOML files from a timer task on the
+  executor every thirty seconds, and again from the window's close hook; `fonts::resolve` spawns
+  `kreadconfig`/`gsettings` subprocesses, on the first frame and again on a settings change (the
+  answer is cached per process, so it is the first call that costs); startup reads
+  `settings.toml`, `recents.toml` and the open project's two files synchronously inside `app()`;
+  and reading and highlighting a source file, which is its own item under *Source / assembly
+  split view*. None of those four is measured, which is where this starts: the rule is worth
+  keeping, and an atomic write of a few hundred bytes may still be cheaper than the channel it
+  would take to move it.
 
 ## Panels and tabs
 
