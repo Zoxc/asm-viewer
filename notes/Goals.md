@@ -39,8 +39,13 @@ one item per part, so the unfinished half stays visible.
   fields the register's olive, literals the immediate's blue, function and module names the
   relocation target's near-black, punctuation the rest's grey, and comments and strings are
   two new entries of the palette's own.
-- [ ] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
-  each language is a `tree-sitter-<lang>` dependency and an arm in `language()`.
+- [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
+  each language is a `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and
+  deferred *per language* rather than as a whole: a grammar is a parser generator's worth of
+  generated C compiled into the binary, so wiring a list of them up front pays for parsers for
+  languages nobody here is reading, while adding the one language a reader turns out to want is
+  two lines and one dependency at the moment it is wanted. Undeferred by someone opening a
+  binary built from something else; `notes/Plan.md` 5d says exactly what to write.
 
 ## Navigation
 
