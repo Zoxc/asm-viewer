@@ -144,7 +144,11 @@ load-bearing:
   than making `Object` self-referential. Cost: one allocation per debug section on first query.
 - **`Sync` via a `Mutex`.** `addr2line::Context` caches parsed line programs in an `UnsafeCell`
   behind `&self`, so it is `Send` but not `Sync`. `lib.rs` holds a `const _` assertion that
-  `Object: Send + Sync` so this cannot regress silently.
+  `Object: Send + Sync` so this cannot regress silently — beside three more, `Symbol`,
+  `Assembly` and `LineInfo`, which are what crosses into the app's analysis worker and back
+  (`ui.rs`, `use_analysis`). A field that stops being shared-safe is then a compile error in
+  the crate rather than a borrow error in the UI, where the cheap fix would be to go back on
+  the UI thread.
 - **One query per symbol, not per instruction.** `SymbolData::line_info(&object)` returns an
   `Arc<LineInfo>` for the whole extent; the UI answers each instruction locally with
   `LineInfo::row_at`. Rows are ascending, non-overlapping, clipped to the range, and coalesced —
@@ -375,7 +379,7 @@ describes the older API and does not apply.
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`, `Sel` (the active `Selection`), `Open`/`Files`/`Shown` (open tabs),
 `AsmAt`/`SrcAt` (where each of those tabs was left), `Hist`, `Focused`, `Pinned`, `Marked`/`Shift`,
-plus the memos `Symbols` and `Lines`.
+`Analysis` (what the worker has to say about the selected symbol), plus the memo `Symbols`.
 
 **`Sel` is the active tab.** `Open(State<Tabs<Selection>>)` is the *list* of open tabs and holds no
 cursor: the active one is whichever entry equals `Sel`, which is well defined because no two tabs
@@ -436,12 +440,50 @@ is not tidiness: a `Selection` key holds the `Arc<Object>` it points into — an
 the tab list precisely so that the run *after* a close, still holding the tab that has gone, cannot
 put it straight back.
 
+**Nothing is analysed on the UI thread.** `SymbolData::assembly` decodes and formats the whole
+symbol, and `SymbolData::line_info` builds the object's entire DWARF context on the first query
+against it — 1.4 s together for the first symbol clicked in `viewer-sample` (debug build; 0.6 s in
+release), and both of them used to run in `render`. `use_analysis` moves them together, because
+they are asked for by the same click and the pane needs both: **one worker thread** for the app's
+lifetime, fed an `async_channel` of `Symbol`s, answering with a `Studied` (the `Assembly`, its
+`Lanes`, and the `SymbolLines`). One worker and not a thread per request or a pool, because
+requests *supersede*: a reader going down the symbol list issues one per row and wants the last
+one's answer, so the queue is drained to its newest entry each time round and the rest are dropped
+*before* being started. A thread each would put a whole run of clicks through the most expensive
+call in the crate at once for one useful answer, and `DwarfCache` is a `OnceLock`, so the losers
+would block on the winner rather than race usefully. (The parallelism `notes/Goals.md` asks for is
+about parsing many objects at once and is a different job.)
+
+**A superseded answer is recognised, not prevented.** Every answer carries the `Symbol` it is
+about and is kept only if that symbol is the one selected *now* — a comparison and not a generation
+counter, since `Selection` already compares by `Arc` pointer identity, and since the answer for the
+first A of an A → B → A is a perfectly good answer for the third selection. A dropped answer is
+what clicking twice quickly *means*, so nothing logs or retries. **What the panes show meanwhile**
+is the listing they already have: `Analyzed` holds `shown` (the symbol actually drawn, which is the
+one selected *before* this one for as long as the worker takes), `pending` and `slow`. A listing is
+replaced by the next listing and never by a blank, or every click would flash the pane empty for a
+frame; only after `SLOW_ANALYSIS` (180 ms, started by the request and never polled) does the
+message displace it, which is the order of the arms in `Analyzed::showing` — the one place either
+pane decides what it is drawing, so the two cannot disagree. Two things follow
+from `shown` being the drawn symbol rather than the selected one: `InstructionList` is mounted only
+for a listing that exists, so `use_kept_position` cannot write a pending tab down at row 0 before a
+row of it has been seen; and `use_open_source_file` reads `Sel` *and* `Analysis` and checks that
+the two name the same symbol, which is what `Studied` carrying its `Symbol` is for.
+
+**Nothing is cached in the UI, deliberately.** `SymbolData::assembly` does not memoize — it decodes
+afresh and hands back a new `Arc<Assembly>` — and `Object::line_info` caches the DWARF context and
+the subprogram extents but re-walks the covering units' line programs per call. What the `Analysis`
+state gives is the one thing a re-render needed: the answer is *held*, so a hover, a theme change or
+a resize costs nothing where the old shape re-decoded in `render`. A second, keyed cache would be an
+unbounded pile of `Assembly`s for listings the reader has left, to save a few milliseconds on a
+symbol they have already been shown.
+
 **The Source pane** shows one of its open files, chosen by `Shown`, and follows the selection:
 `use_open_source_file` opens the file the active symbol was compiled from — only the symbol's *own*
 file, never the rest of `LineInfo::files`, since a Rust function inlines dozens. Its other input is
-`Lines(Memo<SymbolLines>)`, which carries **both** the `LineInfo` and the file to open on; that
-pairing is load-bearing, because a `Memo` recomputes in a spawned task and an effect reading `Sel`
-and `Lines` together sees them disagree for one beat.
+`SymbolLines` inside `Studied`, which carries **both** the `LineInfo` and the file to open on; that
+pairing is load-bearing, because the analysis arrives from a worker thread and anything reading
+`Sel` and it separately sees them disagree for as long as the work takes.
 
 The rows are the app's own (`SourceRow`, a `VirtualScrollView`), **not** freya's `CodeEditor`,
 which paints a line background only for the cursor's row and keeps its scroll state private. What
@@ -468,8 +510,9 @@ history. `navigate` remains the only path for anything that does.
 
 **The arrow gutter** draws every branch staying inside the symbol, with the layout in `src/lanes.rs`
 because a `VirtualScrollView` builds row *n* knowing nothing but *n* — a row has to be *told* which
-lines pass through it. `Lanes::new` is called in `AssemblyView`, deliberately not in a `use_memo`,
-which would land a beat after the disassembly it belongs to. Lanes are assigned **greedily,
+lines pass through it. `Lanes::new` is called on the worker, inside `Studied::new` and beside the
+disassembly it is derived from, so a lane layout can never arrive a beat after the rows it is drawn
+over. Lanes are assigned **greedily,
 shortest span first**, which makes nesting a consequence rather than a rule; two branches sharing
 only a row still take two lanes, or a top half and a bottom half in one lane would read as a line
 passing through; and the gutter is capped at `MAX_LANES` (5) with the outermost lane **shared**

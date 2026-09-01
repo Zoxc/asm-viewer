@@ -343,7 +343,19 @@ one item per part, so the unfinished half stays visible.
 - [?] PDB / CodeView line info. DWARF is read today; the PE sample has no debug sections at all
   and a rustc `.rlib` member is COFF with CodeView (`.debug$S`/`.debug$T`), so on Windows output
   there is no source view without this.
-- [ ] Binary inspection should be light weight and multi threaded. Result saves in project info.
+- [x] Binary inspection should be multi threaded — nothing is analysed on the UI thread any
+  more. Disassembly, line info and the arrow gutter's lane layout moved together onto one
+  worker for the app's lifetime, which drains its queue to the newest request so the clicks a
+  reader passed are dropped before being started rather than pushed through the most expensive
+  call in the crate. An answer carries the symbol it is about and is kept only if that symbol
+  is still selected, so a stale answer is discarded by a comparison rather than by a counter.
+  Measured on `viewer-sample`: the first symbol clicked cost **1.42 s** on the UI thread in a
+  debug build (589 ms in release), and now costs a channel send.
+- [ ] Cache inspection results in the project info. Neither `assembly()` nor `line_info()`
+  memoizes, so leaving a listing and coming back re-derives it — 4–8 ms on `viewer-sample`,
+  which is cheap enough that a keyed cache was deliberately not added on the way past: it would
+  be an unbounded pile of `Assembly`s for listings the reader has left. Saving them with the
+  project is the other half, and wants the storage split first.
 - [x] Binary inspection should be designed to be portable, allowing different disassembly
   libraries to be used. `disasm.rs` holds `Assembly`/`Instruction`/`SpanKind`/`BranchEdge` and
   names no backend; `disasm/x86.rs` is the only `iced-x86` in the crate. The trait is one call

@@ -90,6 +90,18 @@ const TAG_FONT_SIZE: f32 = 10.0;
 /// the bar on its way somewhere else should not light up three of them.
 const TOOLTIP_DELAY: Duration = Duration::ZERO;
 
+/// How long a symbol may be under analysis before the panes admit they are waiting.
+///
+/// The number is a judgement about attention rather than about the work: under a fifth of
+/// a second a change reads as instantaneous, so a message that appeared inside it would
+/// be a flicker between two listings and nothing else -- and on every one of the samples
+/// in this repo except `viewer-sample` every symbol comes back inside it. Past it the
+/// reader has noticed, and a pane that says nothing at all is a pane that looks broken.
+///
+/// It is only ever *started* by a selection change (`use_analysis`), never polled, so a
+/// wait that ends before it costs one timer task and no render at all.
+const SLOW_ANALYSIS: Duration = Duration::from_millis(180);
+
 /// How many characters of a tab chip's name are drawn before the rest is elided. A Rust
 /// symbol's demangled name runs to hundreds of them, and a strip is only useful while
 /// every tab in it is still a tab.
@@ -704,10 +716,146 @@ impl PartialEq for SymbolList {
     }
 }
 
-/// The selected symbol's line info, shared through context so every pane that maps
-/// between source and assembly reads the same rows.
+/// Everything the analysis crate has to say about the selected symbol, shared through
+/// context so every pane that maps between source and assembly reads the same answer --
+/// and worked out on a thread of its own, so no pane waits for it.
+///
+/// See [`use_analysis`] for where the work runs, how an answer nobody wants any more is
+/// dropped, and why the state has three fields rather than one.
 #[derive(Clone, Copy)]
-struct Lines(Memo<SymbolLines>);
+struct Analysis(State<Analyzed>);
+
+/// What the two panes are drawing, and what is being worked out for them.
+///
+/// Three fields and not "the answer for the current selection", because the answer for
+/// the current selection is exactly what there is not while it is being worked out, and
+/// the panes have to draw *something* in the meantime.
+#[derive(Clone, Default)]
+struct Analyzed {
+    /// The symbol the panes are drawing and everything they draw it from.
+    ///
+    /// It is the selected symbol whenever the worker has caught up, and the one selected
+    /// *before* it while it has not: a listing is replaced by the next listing, never by
+    /// a blank pane. That ordering is the whole of the "quiet" requirement -- a symbol
+    /// that decodes in two milliseconds still costs a frame or two to come back over a
+    /// channel, and clearing the pane first would be a flash of empty on every single
+    /// click. `None` is the selection not being a symbol at all, which is answered on the
+    /// spot and never waits for anything.
+    shown: Option<Studied>,
+    /// The symbol the worker is working on, or `None` when it is idle. It is what tells
+    /// the panes apart the two ways `shown` can be `None`: nothing selected, and nothing
+    /// *yet*.
+    pending: Option<Symbol>,
+    /// Whether `pending` has been outstanding for [`SLOW_ANALYSIS`], and the only thing
+    /// that ever puts a message on screen. A wait worth naming is one the reader has
+    /// already noticed; anything shorter is noise, and a spinner that appears for one
+    /// frame per click is worse than the wait it is describing.
+    slow: bool,
+}
+
+impl PartialEq for Analyzed {
+    fn eq(&self, other: &Self) -> bool {
+        self.shown == other.shown && self.pending == other.pending && self.slow == other.slow
+    }
+}
+
+/// What a pane draws, which is one decision and not two panes' worth of `if`s.
+enum Showing<'a> {
+    /// This analysis, which is the only state that has one.
+    Listing(&'a Studied),
+    /// Nothing to draw and a word for why.
+    Message(&'static str),
+    /// Nothing to draw and nothing worth saying: a wait too short to name, with no
+    /// previous listing to leave up. Only reachable before the first symbol of a session
+    /// has been analysed, since after that there always is one.
+    Nothing,
+}
+
+impl Analyzed {
+    /// What the panes draw. One answer for both of them, so they cannot disagree about
+    /// which of the "nothing here" states the app is in.
+    ///
+    /// The order of the arms is the design. A wait long enough to name wins over the
+    /// listing still on screen, because leaving the previous function up for a second
+    /// under the next function's tab is a lie the reader would read; anything shorter
+    /// loses to it, because replacing a listing with a blank for one frame is a flash of
+    /// white on every click.
+    fn showing(&self) -> Showing<'_> {
+        match (&self.shown, &self.pending, self.slow) {
+            (_, Some(_), true) => Showing::Message("Analysing..."),
+            (Some(shown), _, _) => Showing::Listing(shown),
+            (None, Some(_), false) => Showing::Nothing,
+            (None, None, _) => Showing::Message("No symbol selected"),
+        }
+    }
+}
+
+/// Everything worked out about one symbol, in one value because it is worked out in one
+/// go.
+///
+/// The disassembly and the line info travel together deliberately: they are asked for at
+/// the same moment, they are read by the same two panes, and `AsmData` needs both to say
+/// which source position an instruction came from. Handing them over separately is what
+/// the `Lines` memo used to do, and it cost every selection change a second render -- the
+/// disassembly arriving in one and the line info in the next.
+#[derive(Clone)]
+struct Studied {
+    /// Which symbol this is the analysis of. The panes key their viewing position, their
+    /// rows and their chip on it, so it travels with the answer rather than being read
+    /// back out of `Sel`, which by then may be somewhere else entirely.
+    symbol: Symbol,
+    /// [`None`] for a symbol with no bytes to decode at all; the pane says so.
+    assembly: Option<Arc<Assembly>>,
+    /// Where this symbol's branches are drawn in the gutter. Derived from `assembly` and
+    /// from nothing else, and built here beside it -- a lane layout that arrived a beat
+    /// after the disassembly it belongs to would be drawn over the wrong rows.
+    lanes: Arc<Lanes>,
+    lines: SymbolLines,
+}
+
+impl PartialEq for Studied {
+    fn eq(&self, other: &Self) -> bool {
+        let same_assembly = match (&self.assembly, &other.assembly) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+
+        self.symbol == other.symbol
+            && same_assembly
+            && Arc::ptr_eq(&self.lanes, &other.lanes)
+            && self.lines == other.lines
+    }
+}
+
+impl Studied {
+    /// The whole of the expensive work, in the order it costs: `assembly` decodes and
+    /// formats every instruction of the symbol, `line_info` builds this object's DWARF
+    /// context on the first call against it (267 MB of it for `viewer-sample`) and walks
+    /// the line program of every unit covering the symbol on each one.
+    ///
+    /// Nothing in here touches any UI state, which is what lets it run on a plain
+    /// `std::thread`: it is handed a [`Symbol`] and hands back a value. See
+    /// [`use_analysis`].
+    fn new(symbol: Symbol) -> Studied {
+        let assembly = symbol.data.assembly(&symbol.object);
+        // An `Assembly`-less symbol has no rows to draw a gutter over, and `Lanes` is
+        // built from the edges rather than from the assembly, so this needs no branch of
+        // its own beyond the one that gets the edges.
+        let lanes = Arc::new(match &assembly {
+            Some(assembly) => Lanes::new(&assembly.edges, assembly.instructions.len()),
+            None => Lanes::new(&[], 0),
+        });
+        let lines = SymbolLines::new(&symbol);
+
+        Studied {
+            symbol,
+            assembly,
+            lanes,
+            lines,
+        }
+    }
+}
 
 /// What DWARF says about the selected symbol's instructions, or `None` when it says
 /// nothing, and which of the files it names the Source pane should open on.
@@ -717,11 +865,11 @@ struct Lines(Memo<SymbolLines>);
 /// though the DWARF context itself is built only once.
 ///
 /// The file is worked out *here*, beside the info it comes from, rather than by whoever
-/// wants it. A `Memo` recomputes in a spawned task, so anything reading `Sel` and this
-/// together sees them disagree for one beat after a selection change — and asking the
-/// previous symbol's `LineInfo` where the new symbol starts answers with the previous
-/// symbol's file, which would open a tab for a file that has nothing to do with what was
-/// clicked. Inside the memo the two cannot disagree.
+/// wants it. The answer arrives from a worker thread, so anything reading `Sel` and this
+/// together sees them disagree for as long as the work takes -- and asking the previous
+/// symbol's `LineInfo` where the new symbol starts answers with the previous symbol's
+/// file, which would open a tab for a file that has nothing to do with what was clicked.
+/// Inside one value the two cannot disagree.
 #[derive(Clone)]
 struct SymbolLines {
     info: Option<Arc<LineInfo>>,
@@ -748,15 +896,8 @@ impl PartialEq for SymbolLines {
 }
 
 impl SymbolLines {
-    /// The line info for `selection`, with the file the Source pane should open on.
-    fn new(selection: &Selection) -> SymbolLines {
-        let Selection::Symbol(symbol) = selection else {
-            return SymbolLines {
-                info: None,
-                file: None,
-            };
-        };
-
+    /// The line info for `symbol`, with the file the Source pane should open on.
+    fn new(symbol: &Symbol) -> SymbolLines {
         let info = symbol.data.line_info(&symbol.object);
         let file = info.as_ref().and_then(|info| {
             info.row_at(symbol.data.address)
@@ -3234,51 +3375,20 @@ fn file_name(file: &str) -> String {
 // Panes
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, PartialEq)]
-struct AssemblyView {
-    symbol: Symbol,
-}
-
-impl Component for AssemblyView {
-    fn render(&self) -> impl IntoElement {
-        let assembly = self.symbol.data.assembly(&self.symbol.object);
-
-        let Some(assembly) = assembly else {
-            return rect()
-                .padding(5.0)
-                .child(label().text("Assembly unavailable"));
-        };
-
-        // Worked out here rather than in a memo of its own, which is what "beside the
-        // disassembly" means: it is one pass over the branches of the symbol that was
-        // just decoded, in the one component that re-renders exactly when a symbol is
-        // selected. A memo would recompute it in a spawned task and so land a beat after
-        // the disassembly it belongs to, which is the second reason `InstructionList`
-        // exists at all.
-        let lanes = Arc::new(Lanes::new(&assembly.edges, assembly.instructions.len()));
-
-        rect()
-            .width(Size::fill())
-            .height(Size::fill())
-            .padding(5.0)
-            .background(palette().asm_pane_bg)
-            .child(InstructionList {
-                assembly,
-                symbol: self.symbol.clone(),
-                lanes,
-            })
-    }
-}
-
 /// The instruction rows themselves, a component of their own rather than part of
-/// `AssemblyView` because they follow two things the disassembly must not follow.
+/// `AssemblyTab` because they follow two things the analysis must not follow.
 ///
-/// `SymbolData::assembly` decodes and formats the whole symbol on every call, so whatever
-/// reads the cross-view focus has to be something that does not disassemble, or every
-/// pointer move across a row boundary would decode the function again. The line info is
-/// read here for a second reason: freya's `Memo` recomputes in a spawned task, so the
-/// `Lines` context updates a beat after the selection it follows, and a pane taking it as
-/// a prop renders twice per selection change rather than once.
+/// The pointer focus and the picked-out run change on every pointer move across a row
+/// boundary, and the tab above them changes only when a symbol is analysed. Nothing here
+/// disassembles any more — `Studied` arrives decoded from the worker (`use_analysis`) —
+/// but the split is still what keeps a hover from re-rendering the pane that would have
+/// to *ask* for a disassembly, and it is what keeps `AssemblyTab` a plain dispatch over
+/// the three things `Analyzed` can be saying.
+///
+/// The line info comes down as a prop, where it used to be read out of a `Lines` memo
+/// here. That memo landed a beat after the disassembly it belonged to, so a pane taking
+/// it as a prop rendered twice per selection change; the two now arrive in one value and
+/// one write, which is the whole reason they are analysed together.
 #[derive(Clone)]
 struct InstructionList {
     assembly: Arc<Assembly>,
@@ -3287,6 +3397,7 @@ struct InstructionList {
     /// position is kept under, and it is the one the strip and the session key by too.
     symbol: Symbol,
     lanes: Arc<Lanes>,
+    lines: SymbolLines,
 }
 
 impl PartialEq for InstructionList {
@@ -3294,12 +3405,12 @@ impl PartialEq for InstructionList {
         Arc::ptr_eq(&self.assembly, &other.assembly)
             && self.symbol == other.symbol
             && Arc::ptr_eq(&self.lanes, &other.lanes)
+            && self.lines == other.lines
     }
 }
 
 impl Component for InstructionList {
     fn render(&self) -> impl IntoElement {
-        let lines = use_consume::<Lines>().0.read().clone();
         // Only the position, not the origin the focus also carries: the rows are told
         // whether they match it, so a focus that moves from one instruction to another
         // compiled from the same line leaves this data equal and the whole list untouched.
@@ -3336,7 +3447,7 @@ impl Component for InstructionList {
             assembly: self.assembly.clone(),
             object: self.symbol.object.clone(),
             lanes: self.lanes.clone(),
-            lines,
+            lines: self.lines.clone(),
         };
         let length = data.assembly.instructions.len();
         // Where this tab was left, put back when it is switched to and written down as it
@@ -3426,8 +3537,8 @@ impl Component for InstructionList {
 }
 
 /// The source rows themselves, split out of `SourceTab` the way `InstructionList` is out
-/// of `AssemblyView` -- here not because the pane above is expensive to render, which it is
-/// not, but because it has three early returns before it knows which file it is showing.
+/// of `AssemblyTab` -- here not because the pane above is expensive to render, which it is
+/// not, but because it has several early returns before it knows which file it is showing.
 /// Hooks have to run on every render, and the scroll controller these rows are driven by
 /// cannot be armed before the file it would scroll through is known.
 #[derive(Clone)]
@@ -3883,20 +3994,46 @@ impl Component for HistoryTab {
     }
 }
 
+/// The Assembly pane: a dispatch over the three things [`Analyzed`] can be saying, and
+/// no work of its own at all.
+///
+/// It reads the analysis and not `Sel`, which is what keeps the listing and the rows that
+/// draw it in step: while the worker is catching up the two disagree, and it is the
+/// analysis — the symbol whose disassembly is actually in hand — that everything from the
+/// gutter to the kept scroll position is keyed by.
 #[derive(PartialEq)]
 struct AssemblyTab;
 
 impl Component for AssemblyTab {
     fn render(&self) -> impl IntoElement {
-        let current = use_consume::<Sel>().0.read().clone();
+        let analysis = use_consume::<Analysis>().0.read().clone();
 
-        match &current {
-            Selection::Symbol(symbol) => AssemblyView {
-                symbol: symbol.clone(),
+        let studied = match analysis.showing() {
+            Showing::Listing(studied) => studied,
+            Showing::Message(text) => return placeholder(text),
+            Showing::Nothing => {
+                return rect().expanded().background(palette().asm_pane_bg).into()
             }
-            .into_element(),
-            _ => placeholder("No symbol selected"),
-        }
+        };
+        let Some(assembly) = studied.assembly.clone() else {
+            return rect()
+                .padding(5.0)
+                .child(label().text("Assembly unavailable"))
+                .into();
+        };
+
+        rect()
+            .width(Size::fill())
+            .height(Size::fill())
+            .padding(5.0)
+            .background(palette().asm_pane_bg)
+            .child(InstructionList {
+                assembly,
+                symbol: studied.symbol.clone(),
+                lanes: studied.lanes.clone(),
+                lines: studied.lines.clone(),
+            })
+            .into()
     }
 }
 
@@ -3908,23 +4045,27 @@ impl Component for SourceTab {
         let files = use_consume::<Files>().0;
         let shown = use_consume::<Shown>().0;
         // Consumed unconditionally, hooks having to run on every render, but only read in
-        // the branch that needs them: which of the three reasons nothing is open comes
-        // from the selection, since the strip has nothing to say about it. Reading the
-        // memo there also subscribes this tab to it, so the pane fills in when the line
-        // info for a newly selected symbol is worked out, without the root re-rendering.
-        let selection = use_consume::<Sel>().0;
-        let lines = use_consume::<Lines>().0;
+        // the branch that needs it: which of the reasons nothing is open comes from the
+        // analysis, since the strip has nothing to say about it. Reading it there also
+        // subscribes this tab to it, so the pane fills in when a newly selected symbol's
+        // line info is worked out, without the root re-rendering.
+        let analysis = use_consume::<Analysis>().0;
 
         let open: Vec<Arc<str>> = files.read().tabs().to_vec();
         let file = shown.read().clone();
 
         let Some(file) = file else {
-            let current = selection.read().clone();
-            let lines = lines.read().clone();
-            return match (&current, &lines.info) {
-                (Selection::Symbol(_), Some(_)) => placeholder("No source file open"),
-                (Selection::Symbol(_), None) => placeholder("No line info"),
-                _ => placeholder("No symbol selected"),
+            let analysis = analysis.read().clone();
+            // The same answer the assembly pane gives, from the same place, so the two
+            // panes cannot disagree about whether anything is selected -- with one more
+            // case of its own, since a symbol can be analysed and still name no file.
+            return match analysis.showing() {
+                Showing::Message(text) => placeholder(text),
+                Showing::Nothing => rect().expanded().background(palette().pane_bg).into(),
+                Showing::Listing(studied) if studied.lines.info.is_some() => {
+                    placeholder("No source file open")
+                }
+                Showing::Listing(_) => placeholder("No line info"),
             };
         };
 
@@ -4418,22 +4559,204 @@ fn use_clear_marks(
 /// showing whatever was open, which is what tabs mean, and the assembly side already says
 /// that nothing is mapped by lighting no rows.
 ///
-/// It reads only [`Lines`], not the selection, and that is load-bearing: a `Memo`
-/// recomputes in a spawned task, so an effect reading both would see the new symbol beside
-/// the previous symbol's `LineInfo` for one beat and open a tab for a file belonging to
-/// neither. `SymbolLines` carries the file for exactly this reason.
+/// It reads the selection *and* the analysis, and checks that the two agree rather than
+/// trusting them to. The analysis of a symbol arrives from a worker thread, so for as long
+/// as it takes the panes are still drawing the symbol before it -- and opening a file
+/// named by the previous symbol's `LineInfo` would put the Source pane on a function
+/// nobody selected. [`Studied`] carries the symbol it is about for exactly this reason,
+/// and `SymbolLines` carries the file for the same one a step further down.
+///
+/// Both reads are also what it answers to. On the analysis, so a file opens the moment the
+/// worker has said which; on the selection, so that clicking the symbol already on screen
+/// brings the Source pane back to its file after the reader has switched to another chip
+/// by hand.
 fn use_open_source_file(
-    lines: Memo<SymbolLines>,
+    selection: State<Selection>,
+    analysis: State<Analyzed>,
     files: State<Tabs<Arc<str>>>,
     shown: State<Option<Arc<str>>>,
 ) {
     use_side_effect(move || {
-        // Reading subscribes the effect to the line info; the two states it writes are
-        // never read here, so it cannot wake itself.
-        let file = lines.read().file.clone();
-        if let Some(file) = file {
+        // Both cloned out of their guards before anything is written: a `State` read
+        // hands back a guard, and one still alive across a write panics.
+        let current = selection.read().clone();
+        let studied = analysis.read().shown.clone();
+
+        let Some(studied) = studied else {
+            return;
+        };
+        if !matches!(&current, Selection::Symbol(symbol) if *symbol == studied.symbol) {
+            return;
+        }
+        if let Some(file) = studied.lines.file.clone() {
             open_file(files, shown, file);
         }
+    });
+}
+
+/// Work the selected symbol out on a thread of its own, and hand the answer to the panes
+/// through [`Analysis`].
+///
+/// **Where the work runs: one worker thread, for the app's lifetime.** Not a thread per
+/// request and not a pool, because requests here *supersede* each other rather than
+/// accumulating: a reader holding the down-arrow through a symbol list issues one per
+/// row and wants exactly the last one's answer. A thread per request would put the whole
+/// run of them through the most expensive call in the crate at once — the first
+/// `line_info` against an object builds its entire DWARF context — with every answer but
+/// one thrown away, and `DwarfCache` is a `OnceLock`, so the losers would not even be
+/// racing usefully: they block on the winner. A pool has the same shape with a bound on
+/// it. One worker instead, with the queue drained to its newest entry each time round, so
+/// the requests the reader clicked past are dropped *before* they are started rather than
+/// after. It also gives the answers an order — request order — which is what makes a stale
+/// answer always an old one and never a new one.
+///
+/// This is deliberately not the multi-threading `notes/Goals.md` asks for under
+/// "lightweight and multi threaded": that one is about parsing many objects at once and
+/// is Step 11d's. This is one reader looking at one function, where the useful number of
+/// threads is one and the point is only that it is not the one drawing the window.
+///
+/// **How a superseded answer is dropped.** Every answer carries the [`Symbol`] it is
+/// about, and it is kept only when that symbol is the one selected *now* — a comparison,
+/// not a generation counter, because `Selection` compares by `Arc` pointer identity and so
+/// already answers this exactly. A counter would be a second identity to keep in step with
+/// the first, and would get the ordinary A → B → A case wrong: the answer for the first A
+/// is a perfectly good answer for the third selection, and this shows it rather than
+/// working it out again. A dropped answer is the normal case and not an error — it is what
+/// clicking twice quickly *means* — so nothing logs, warns or retries.
+///
+/// **What the panes show meanwhile** is in [`Analyzed`]: the listing they already have,
+/// until either the next one arrives or [`SLOW_ANALYSIS`] passes.
+fn use_analysis(selection: State<Selection>, analysis: State<Analyzed>) {
+    use_analysis_with(selection, analysis, Studied::new);
+}
+
+/// The whole of [`use_analysis`], with the work itself as an argument so a test can hold
+/// it still. Superseding is a race by construction — the answer that has to be dropped is
+/// the one that arrives while the reader has already clicked on — and nothing can assert
+/// it against a worker that answers as fast as it is asked.
+fn use_analysis_with(
+    selection: State<Selection>,
+    mut analysis: State<Analyzed>,
+    study: impl Fn(Symbol) -> Studied + Send + 'static,
+) {
+    // The worker and the task that listens to it, started once and never restarted. Both
+    // channels are unbounded, which costs nothing here: the request side holds at most
+    // what the reader has clicked since the worker last looked, and the answer side at
+    // most one per request.
+    let requests = use_hook(move || {
+        let (requests, jobs) = async_channel::unbounded::<Symbol>();
+        let (answered, answers) = async_channel::unbounded::<Studied>();
+
+        // A `std::thread` and not a spawned task, exactly as `open_files` is: this is
+        // seconds of decoding and DWARF parsing, and freya's executor is the UI thread.
+        std::thread::spawn(move || {
+            while let Ok(symbol) = jobs.recv_blocking() {
+                // Everything the reader clicked past while the last job ran, dropped
+                // without being started. Only the newest is wanted, and finding that out
+                // here rather than after the fact is the difference between a stale
+                // answer costing a comparison and costing a second of decoding.
+                let mut symbol = symbol;
+                while let Ok(newer) = jobs.try_recv() {
+                    symbol = newer;
+                }
+
+                // A send that fails is the app shutting down and taking the receiver
+                // with it.
+                if answered.send_blocking(study(symbol)).is_err() {
+                    return;
+                }
+            }
+        });
+
+        spawn(async move {
+            let mut analysis = analysis;
+            while let Ok(studied) = answers.recv().await {
+                // The superseding rule. Cloned out of the guard first, since everything
+                // below it writes.
+                let current = selection.peek().clone();
+                if !matches!(&current, Selection::Symbol(symbol) if *symbol == studied.symbol) {
+                    continue;
+                }
+
+                let mut next = analysis.peek().clone();
+                if next.pending.as_ref() == Some(&studied.symbol) {
+                    next.pending = None;
+                    next.slow = false;
+                }
+                // Already on screen: the same symbol answered twice, which happens when
+                // the reader clicks away and straight back before the worker has looked
+                // at the queue. Keeping the listing that is up rather than replacing it
+                // with an identical one saves re-rendering every row for nothing.
+                if !next
+                    .shown
+                    .as_ref()
+                    .is_some_and(|shown| shown.symbol == studied.symbol)
+                {
+                    next.shown = Some(studied);
+                }
+                analysis.set_if_modified(next);
+            }
+        });
+
+        requests
+    });
+
+    use_side_effect(move || {
+        // Reading subscribes this to the selection, which is the only thing it answers
+        // to; the state it writes is `peek`ed, so it cannot wake itself.
+        let current = selection.read().clone();
+
+        let Selection::Symbol(symbol) = current else {
+            // Not a symbol. There is nothing to work out and so nothing to wait for, and
+            // the panes are told at once — clearing is instant even though replacing is
+            // not. Anything still in flight is for a place the reader has left and is
+            // dropped when it lands.
+            analysis.set_if_modified(Analyzed::default());
+            return;
+        };
+
+        let state = analysis.peek().clone();
+
+        if state
+            .shown
+            .as_ref()
+            .is_some_and(|shown| shown.symbol == symbol)
+        {
+            // Already drawn. Nothing to ask for — and nothing left to wait for either:
+            // whatever the worker is still chewing on is for somewhere the reader has
+            // since come back from, so the pane must not go on to say it is waiting for
+            // it.
+            if state.pending.is_some() {
+                let mut next = state;
+                next.pending = None;
+                next.slow = false;
+                analysis.set(next);
+            }
+            return;
+        }
+        if state.pending.as_ref() == Some(&symbol) {
+            return;
+        }
+
+        let mut next = state;
+        next.pending = Some(symbol.clone());
+        next.slow = false;
+        analysis.set(next);
+        // Unbounded, so this cannot fail for any reason but the worker being gone.
+        let _ = requests.try_send(symbol.clone());
+
+        // The wait, started by the request and by nothing else. A timer per request
+        // rather than something polled: a symbol that comes back inside `SLOW_ANALYSIS`
+        // — which is nearly all of them — costs one task that wakes up, finds the request
+        // it belongs to already answered, and writes nothing.
+        spawn(async move {
+            Timer::after(SLOW_ANALYSIS).await;
+            let mut analysis = analysis;
+            let still = analysis.peek().pending.as_ref() == Some(&symbol);
+            if still {
+                analysis.write().slow = true;
+            }
+        });
     });
 }
 
@@ -4731,24 +5054,16 @@ pub fn app() -> impl IntoElement {
     });
     use_provide_context(move || Symbols(symbols));
 
-    // The selected symbol's line info, worked out once for every pane that wants it.
-    // `use_memo` re-runs on a change to anything read inside it, so this follows the
-    // selection whether or not the Source tab is on screen -- which costs nothing in the
-    // default layout, where it is. The query itself is the expensive part and runs here,
-    // on the UI thread, against `line.rs`'s own note that it is worker-thread work: the
-    // first one against a big binary builds the whole DWARF context (267 MB for
-    // `viewer-sample`) and will visibly stall the frame. Moving it off is Step 11's item,
-    // and it should move `assembly()` with it rather than one of the two alone.
-    let lines = use_memo(move || {
-        // Cloned out rather than held: the read guard would otherwise be alive for the
-        // whole of a query that can take a second.
-        let selection = selection.read().clone();
-        SymbolLines::new(&selection)
-    });
-    use_provide_context(move || Lines(lines));
-    // Reads that memo and nothing else, so it cannot see a symbol beside another symbol's
-    // line info. Registered after the memo it follows, for the obvious reason.
-    use_open_source_file(lines, files, shown);
+    // The selected symbol's disassembly and line info, worked out once on a worker thread
+    // for every pane that wants them. Both used to run in `render` -- the disassembly in
+    // the Assembly pane and the line info in a `use_memo` here -- which is worker-thread
+    // work by the analysis crate's own note on it: the first line-info query against a big
+    // binary builds the whole DWARF context (267 MB for `viewer-sample`) and stalled the
+    // frame that asked for it.
+    let analysis = use_provide_context(|| Analysis(State::create(Analyzed::default()))).0;
+    use_analysis(selection, analysis);
+    // Registered after the state it follows, for the obvious reason.
+    use_open_source_file(selection, analysis, files, shown);
 
     // One docking area per resizable pane: the left one a column of Objects, then
     // Symbols with Info tabbed beside it, then History at the bottom -- which is
@@ -5061,6 +5376,285 @@ mod tests {
             test.sync_and_update();
         }
         assert_eq!(at.peek().at(&"a".to_owned()), None);
+    }
+
+    /// The analysis worker's work, handed in through a context so a test can substitute
+    /// one that stops when it is told to. `Arc<dyn Fn>` and not a generic, because a
+    /// context value is one concrete type.
+    #[derive(Clone)]
+    struct Study(Arc<dyn Fn(Symbol) -> Studied + Send + Sync>);
+
+    /// Every distinct symbol the panes were told to draw, in order. The assertion the
+    /// superseding rule is really about is not what is on screen at the end but what was
+    /// *never* on screen, and only a recording can say that.
+    #[derive(Clone, Copy)]
+    struct Seen(State<Vec<Symbol>>);
+
+    /// The analysis wiring and nothing else: no panes, since what is under test is which
+    /// answers reach them rather than what they draw.
+    fn analysis_harness() -> impl IntoElement {
+        let selection = use_consume::<Sel>().0;
+        let analysis = use_consume::<Analysis>().0;
+        let study = use_consume::<Study>().0;
+        let mut seen = use_consume::<Seen>().0;
+
+        use_analysis_with(selection, analysis, move |symbol| study(symbol));
+
+        use_side_effect(move || {
+            let shown = analysis.read().shown.clone();
+            let Some(shown) = shown else {
+                return;
+            };
+            // `peek` on the state it writes, or the effect would wake itself for ever.
+            let repeat = seen
+                .peek()
+                .last()
+                .is_some_and(|last| *last == shown.symbol);
+            if !repeat {
+                seen.write().push(shown.symbol);
+            }
+        });
+
+        rect().expanded()
+    }
+
+    /// Run the test runner until `ready` answers, and then a little further so that
+    /// whatever the answer woke has run too.
+    ///
+    /// A worker thread and two channels sit between a selection change and the state it
+    /// ends in, so how many turns of the loop that takes is not something a test can know
+    /// -- only that it is finite. Failing loudly rather than asserting on what happened to
+    /// have arrived, since "the answer never came" and "the answer was wrong" are
+    /// different bugs.
+    fn pump(test: &mut TestingRunner, ready: impl Fn() -> bool) {
+        for _ in 0..200 {
+            test.sync_and_update();
+            if ready() {
+                for _ in 0..4 {
+                    test.sync_and_update();
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("the analysis never landed");
+    }
+
+    /// The committed gcc fixture the analysis crate is pinned against, parsed the way the
+    /// app parses it. Small, real DWARF, three functions -- so a `Studied` built from one
+    /// of its symbols has both halves and neither is empty.
+    fn fixture_symbols() -> Vec<Symbol> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/analysis/tests/fixtures/line_fixture.o");
+        let objects = open_files(vec![path]);
+        let object = objects.first().expect("the fixture parses").clone();
+
+        object
+            .symbols_sorted
+            .iter()
+            .cloned()
+            .map(|data| Symbol {
+                object: object.clone(),
+                data,
+            })
+            .collect()
+    }
+
+    /// The central correctness question of Step 11c: an answer for a symbol the reader has
+    /// already clicked past must never reach the panes.
+    ///
+    /// Staged rather than raced. The worker is a real thread running the real
+    /// `use_analysis_with` machinery, but the work it does is a gate the test opens one
+    /// job at a time, which is the only way to be *sure* the stale answer was produced,
+    /// delivered and then dropped rather than merely being slow. That the test can set the
+    /// selection twice while the worker sits blocked is itself the other half of the
+    /// sub-step: the UI thread is not waiting for any of this.
+    ///
+    /// It also pins the hazard the per-tab viewing position brings: while a symbol is
+    /// pending, `shown` is not it, so no pane is ever mounted for a tab whose listing does
+    /// not exist yet -- which is what keeps `use_kept_position` from writing that tab down
+    /// at row 0 before the reader has seen a single row of it.
+    #[test]
+    fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
+        let symbols = fixture_symbols();
+        let (first, second) = (symbols[0].clone(), symbols[1].clone());
+
+        // The worker announces each job as it takes it and then waits to be let go.
+        // `async_channel` on both sides and not `std::sync::mpsc`, whose `Receiver` is not
+        // `Sync` and so cannot sit inside a shared `Fn`.
+        let (started, starts) = async_channel::unbounded::<Symbol>();
+        let (gate, gated) = async_channel::unbounded::<()>();
+        let study = move |symbol: Symbol| {
+            let _ = started.send_blocking(symbol.clone());
+            let _ = gated.recv_blocking();
+            Studied::new(symbol)
+        };
+
+        let (mut test, (selection, analysis, seen)) = TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            move |runner| {
+                runner.provide_root_context(|| Study(Arc::new(study)));
+                (
+                    runner.provide_root_context(|| Sel(State::create(Selection::None))).0,
+                    runner
+                        .provide_root_context(|| Analysis(State::create(Analyzed::default())))
+                        .0,
+                    runner.provide_root_context(|| Seen(State::create(Vec::new()))).0,
+                )
+            },
+            1.,
+        );
+        let mut selection = selection;
+        let settle = |test: &mut TestingRunner| {
+            for _ in 0..8 {
+                test.sync_and_update();
+            }
+        };
+        settle(&mut test);
+
+        // The first click. The worker takes it and stops inside it.
+        selection.set(Selection::Symbol(first.clone()));
+        pump(&mut test, || !starts.is_empty());
+        assert!(starts.recv_blocking().expect("the worker started") == first);
+        assert!(
+            analysis.peek().shown.is_none(),
+            "the pane was handed a listing the worker has not produced"
+        );
+
+        // The second click, while the first is still being worked on. That the UI takes
+        // it at all is the other half of what this sub-step is for.
+        selection.set(Selection::Symbol(second.clone()));
+        settle(&mut test);
+
+        // Let the first one finish. Its answer is on the channel by the time the worker
+        // announces the second job, so what follows is not a race with it.
+        gate.send_blocking(()).expect("the gate");
+        assert!(starts.recv_blocking().expect("the worker started") == second);
+        settle(&mut test);
+
+        assert!(
+            analysis.peek().shown.is_none(),
+            "an answer for a symbol the reader had left was put on screen"
+        );
+        assert!(analysis.peek().pending.as_ref() == Some(&second));
+
+        // And the answer that is wanted lands.
+        gate.send_blocking(()).expect("the gate");
+        pump(&mut test, || analysis.peek().shown.is_some());
+
+        let state = analysis.peek().clone();
+        let shown = state.shown.expect("the second symbol was analysed");
+        assert!(shown.symbol == second);
+        assert!(state.pending.is_none());
+        assert!(!state.slow);
+        assert_eq!(seen.peek().len(), 1, "a superseded listing reached the panes");
+        assert!(seen.peek()[0] == second);
+    }
+
+    /// The happy path, over the real work rather than a gate: a symbol selected comes back
+    /// disassembled, with the line info and the file the Source pane opens on beside it,
+    /// and with the panes told about it exactly once.
+    #[test]
+    fn a_selected_symbol_comes_back_disassembled_and_mapped() {
+        let symbol = fixture_symbols()
+            .into_iter()
+            .find(|symbol| symbol.data.name == "sum_to")
+            .expect("the fixture holds sum_to");
+
+        let (mut test, (selection, analysis, seen)) = TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| {
+                runner.provide_root_context(|| Study(Arc::new(Studied::new)));
+                (
+                    runner.provide_root_context(|| Sel(State::create(Selection::None))).0,
+                    runner
+                        .provide_root_context(|| Analysis(State::create(Analyzed::default())))
+                        .0,
+                    runner.provide_root_context(|| Seen(State::create(Vec::new()))).0,
+                )
+            },
+            1.,
+        );
+        let mut selection = selection;
+        test.sync_and_update();
+
+        selection.set(Selection::Symbol(symbol.clone()));
+        pump(&mut test, || analysis.peek().shown.is_some());
+
+        let state = analysis.peek().clone();
+        let shown = state.shown.expect("the symbol was analysed");
+        assert!(shown.symbol == symbol);
+        assert!(state.pending.is_none());
+        let assembly = shown.assembly.expect("sum_to holds code");
+        assert!(!assembly.instructions.is_empty());
+        let lines = shown.lines.info.expect("the fixture has DWARF");
+        assert!(!lines.files().is_empty());
+        assert!(shown
+            .lines
+            .file
+            .as_deref()
+            .is_some_and(|file| file.ends_with("line_fixture.c")));
+        assert_eq!(seen.peek().len(), 1);
+
+        // Selecting something that is not a symbol is answered on the spot: clearing does
+        // not wait on the worker, only replacing does.
+        selection.set(Selection::None);
+        test.sync_and_update();
+        assert!(analysis.peek().clone() == Analyzed::default());
+    }
+
+    /// What the panes are told to say, which is a rule about honesty rather than about
+    /// pixels: a listing is replaced by the next listing and never by a blank, a wait is
+    /// only named once it is long enough to have been noticed, and "no symbol selected" is
+    /// said only when none is.
+    #[test]
+    fn nothing_is_said_until_the_wait_is_worth_saying() {
+        let symbol = fixture_symbols().into_iter().next().expect("a symbol");
+        let studied = Studied::new(symbol.clone());
+
+        let idle = Analyzed::default();
+        assert!(matches!(
+            idle.showing(),
+            Showing::Message("No symbol selected")
+        ));
+
+        // Nothing analysed yet and something on its way: an empty pane, not a message.
+        let opening = Analyzed {
+            pending: Some(symbol.clone()),
+            ..Analyzed::default()
+        };
+        assert!(matches!(opening.showing(), Showing::Nothing));
+
+        // The same wait, once it has gone on long enough to name.
+        let slow = Analyzed {
+            slow: true,
+            ..opening.clone()
+        };
+        assert!(matches!(slow.showing(), Showing::Message("Analysing...")));
+
+        // A listing in hand is drawn, and goes on being drawn while the next one is worked
+        // out -- which is what keeps a click from flashing the pane empty.
+        let showing = Analyzed {
+            shown: Some(studied),
+            ..idle
+        };
+        assert!(matches!(showing.showing(), Showing::Listing(_)));
+        let replacing = Analyzed {
+            pending: Some(symbol),
+            ..showing
+        };
+        assert!(matches!(replacing.showing(), Showing::Listing(_)));
+        // Until the wait is worth naming, and then the stale listing gives way to it.
+        let dragging = Analyzed {
+            slow: true,
+            ..replacing
+        };
+        assert!(matches!(
+            dragging.showing(),
+            Showing::Message("Analysing...")
+        ));
     }
 
     /// A component with no props at all, which is what every view in this file is: the

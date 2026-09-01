@@ -28,9 +28,19 @@ pub use object::{Architecture, BinaryFormat, SectionIndex};
 /// holds — the lazily built DWARF context above all, whose `addr2line::Context` is `Send`
 /// but not `Sync` on its own — has to be shared-safe. Assert it here rather than find out
 /// at a call site.
+///
+/// The other three are what a worker thread is *handed* and what it hands back: the app
+/// analyses a symbol off its UI thread (`src/ui.rs`, `use_analysis`), so a [`Symbol`] has
+/// to cross into the worker and an [`Assembly`] and a [`LineInfo`] have to cross back.
+/// None of them is anything but plain data and `Arc`s today; asserting it means a field
+/// that stops being so is a compile error here rather than a borrow-checker error in the
+/// UI, where the fix would be to give up and go back on-thread.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Object>();
+    assert_send_sync::<Symbol>();
+    assert_send_sync::<Assembly>();
+    assert_send_sync::<LineInfo>();
 };
 
 pub struct Object {
