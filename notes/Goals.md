@@ -358,10 +358,13 @@ one item per part, so the unfinished half stays visible.
   rather than a second guess at it. Sizes are a stepper and not a text box deliberately: with
   settings applying live, a box means typing `1` on the way to `12` and getting a 1pt window,
   and a third "not a number" state that nothing else here has.
-  Fonts became reactive the way colours did — asking for a font subscribes you to it — so the
-  row height now follows the fonts instead of being a constant. Every `item_size`, every row
-  height and the arrow gutter's geometry come from one place, which is what keeps a scroll view
-  and its rows from disagreeing; saved viewing positions are rows, so they survive the change.
+  Fonts became reactive the way colours did — asking for a font subscribes you to it — so a row's
+  height now follows the font it is drawn in instead of being a constant. There are two heights,
+  not one: the sidebar's rows are interface-font rows and the code panes' are fixed-width ones,
+  and no row mixes the two, so a single height over the larger of the fonts meant raising the
+  assembly font silently padded the sidebar. Each `item_size` comes from the height its own rows
+  draw at, which is what keeps a scroll view and its rows from disagreeing; saved viewing
+  positions are rows, so they survive a font change naming the same instruction.
 
 ## Scratchpad
 

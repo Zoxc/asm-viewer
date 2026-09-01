@@ -821,18 +821,39 @@ is not a theme switch.
 in `ui.rs` reads a thread-local `State<Arc<Fonts>>` exactly as `palette()` reads the appearance, so
 *asking for a font is what subscribes a scope to it*; `set_fonts` is the one writer, and unlike
 `set_appearance` it has nothing to invalidate beside it, a cached `SyntaxBlocks` carrying colours
-and no font. The four readers are `icon_size`, `FontExt::interface_font`/`::assembly_font` and the
+and no font. The readers are the two row heights, `icon_size`,
+`FontExt::interface_font`/`::assembly_font` and the
 tooltip's `font_size` in the root's `Theme` — that last one is the only place a change has to be
 *carried* rather than picked up, freya's theme sheet being a value, so the root's effect has the
-interface size in its deps beside the appearance. `ROW_HEIGHT` went the same way and became
-`row_height()`: the larger of the two font sizes plus `ROW_LEADING` (12, which is exactly what the
-old constant's 26 was over the 14px fixed-width default, so nothing moved). That was 9c's real
+interface size in its deps beside the appearance. `ROW_HEIGHT` went the same way and became a
+function: one font's size plus `ROW_LEADING` (12, which is exactly what the old constant's 26 was
+over the 14px fixed-width default). That was 9c's real
 decision, and the alternative — a page offering a 20pt assembly font and drawing it clipped inside
 a 26px row — was worse than the work. It is safe because the scroll view's `item_size` and its
 rows' own height are read in the **same render pass**, so they cannot see different numbers, and
 because the per-tab positions 8b saves are *rows* rather than pixel offsets. The floor
 (`MIN_ROW_HEIGHT`) is against a hand-edited `settings.toml`, where a size of 0.1 is positive enough
 to pass `FontSetting::size` and would make `item_size` a fraction of a pixel.
+
+**And it is two functions, because no row mixes the two fonts.** `list_row_height` follows
+`fonts().ui` and `code_row_height` follows `fonts().mono`; both are `row_height_for`, so they can
+differ only in which font they ask about. It was one number — the *larger* of the two sizes — and
+the `max` read as a constraint while being nothing of the kind: every row in the code panes sets
+`assembly_font()` on itself and on each of its spans, every sidebar row sets nothing and inherits
+the interface font from the root, and no row anywhere draws in both. So the one number was two
+lists sharing an answer, and raising either font padded the rows drawn in the other — an 18pt
+assembly font made the objects tree, the symbol list, the tab bars and the chips 36px tall for a
+12px font. Which height a site takes is decided by **the font its rows are actually drawn in**, and
+getting one wrong is a misalignment that reads as a rendering glitch: the code height goes to the
+instruction and source rows, the editor's line height, a run's output rows and the `item_size` of
+those views; the list height to everything else, `filter_height`, `toggle_size` and `icon_size`'s
+cap included, since a filter bar sits over a sidebar list and there is no filter over a code pane.
+`row_at`/`row_offset` are the **code** panes' conversion alone — `use_kept_position` and
+`reveal_row` are called by `InstructionList` and `SourceList` and by nothing else — so the old
+"one conversion for every pane" argument for a single height went with the `max`. One thing did
+move: at the app's own defaults (9pt interface, 10.5pt fixed-width) a sidebar row is 24px where it
+was 26, because 26 was the *mono* font's number and had never been anything else. No floor holds it
+at 26; that would be the same coupling under another name.
 
 **The Settings page** (`Tab::Settings`) is where the theme choice and the two font overrides are
 edited. `Prefs` holds an `EditedSettings` — `OpenProject`'s shape, and for its reason: a family is
@@ -870,7 +891,7 @@ preedit and an incremental tree-sitter re-parse per keystroke. Two things stay o
 mapped onto the palette (`EditorTheme` beside the `EditorSyntaxTheme` `Palette::syntax` already
 answers for), and the font — the component takes **one** family where everything else takes a
 chain, and the rest of the chain arrives by inheritance from the box around it, since freya appends
-a parent's families behind an element's own. Its line height is `row_height()` reached through the
+a parent's families behind an element's own. Its line height is `code_row_height()` reached through the
 multiplier it wants, with half a pixel of slack because it multiplies and floors. The editor's
 `SyntaxBlocks` is `HIGHLIGHTED`'s hazard in a second place — colours resolved in at parse time, and
 `set_appearance`'s clear cannot reach inside a `CodeEditorData` — so an effect keyed on the
@@ -965,10 +986,12 @@ an `Arc<T>` field would deep-compare on every parent render.
   keeps the highlight).
 - `VirtualScrollView`'s builder closure is never compared across renders, so anything the rows
   depend on must go through `new_with_data`, not be captured.
-- `row_height()` must equal the `item_size` given to each `VirtualScrollView`, or scrolling
-  misaligns. It is a function of the fonts and no longer a `const`, so never write a literal row
-  height anywhere; the two halves are safe only because both are read in the same render pass.
-  This is also why variable-height rows are not free.
+- A row's height must equal the `item_size` given to the `VirtualScrollView` over it, or scrolling
+  misaligns. There are **two** of them — `list_row_height()` for rows in the interface font and
+  `code_row_height()` for rows in the fixed-width one — so a view and its rows have to agree about
+  *which*, as well as about the number. Both are functions of the fonts and no longer a `const`, so
+  never write a literal row height anywhere; the two halves are safe only because both are read in
+  the same render pass. This is also why variable-height rows are not free.
 - `Size` has no `From<f32>` — write `Size::px(300.)`. But `.padding`, `.spacing`, `.margin` and
   `.corner_radius` do take plain `f32`.
 - `label()` and `paragraph()` do not implement `StyleExt`, so they have no `.background()` /

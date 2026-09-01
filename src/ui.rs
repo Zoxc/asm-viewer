@@ -33,58 +33,85 @@ use crate::source::{self, SourceFile};
 use crate::tabs::{Positions, Tabs};
 use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
 
-/// The leading a row adds to the taller of the two fonts, and the floor under the answer.
+/// The leading a row adds to the font it is drawn in, and the floor under the answer.
 ///
 /// Additive and not a multiple, because leading is what it is: twelve logical pixels of
 /// air is legible above an 11px line and above a 30px one, where a ratio that reads well
 /// at one of those is cramped or cavernous at the other. Twelve is also the number the app
 /// already had -- it is exactly what `ROW_HEIGHT`'s 26 was over the 14px fixed-width
-/// default -- so nothing on screen moved when this stopped being a constant. The floor is
+/// default. One leading and not one per kind of row: a row is a line of text with air
+/// above and below it wherever it is drawn, and two numbers here would be two answers to
+/// a question the fonts already differ on. The floor is
 /// against a hand-edited `settings.toml`: `FontSetting::size` refuses a size that is not
 /// positive, but 0.1 is positive, and a list whose `item_size` is a fraction of a pixel is
 /// a division nothing recovers from.
 const ROW_LEADING: f32 = 12.0;
 const MIN_ROW_HEIGHT: f32 = 14.0;
 
-/// Height of every row in the object, symbol and instruction lists, and the `item_size`
-/// given to every `VirtualScrollView`. **The two must be equal or scrolling misaligns**,
-/// which is why this is one function and not a number each site repeats.
+/// A row's height from the size of the font written in it: the one derivation, so that
+/// the two heights below can differ only in which font they ask about.
+fn row_height_for(font_size: f32) -> f32 {
+    (font_size + ROW_LEADING).round().max(MIN_ROW_HEIGHT)
+}
+
+/// Height of a row drawn in the **interface** font -- the objects tree, the symbol and
+/// history lists, the tab strips and chips, the project and settings rows -- and the
+/// `item_size` of the scroll views over them. **A view's `item_size` and the height its
+/// rows actually draw at must be equal or scrolling misaligns**, which is why each of
+/// these is one function and not a number every site repeats.
 ///
 /// **It follows the fonts, which is 9c's decision and the one that was actually open.**
-/// It was a `const`, and the settings page makes the fixed-width size something a reader
-/// can change -- so the alternative was a page that offers a 20pt assembly font and draws
-/// it clipped inside a 26px row, with a sentence somewhere admitting it. That is a worse
-/// answer than the work: every consumer of the number already goes through one of four
-/// places (`item_size`, a row's own `height`, the gutter's stroke geometry, and
+/// It was a `const`, and the settings page makes both sizes something a reader can change
+/// -- so the alternative was a page that offers a 20pt assembly font and draws it clipped
+/// inside a 26px row, with a sentence somewhere admitting it. That is a worse answer than
+/// the work: every consumer of the number already goes through one of four places
+/// (`item_size`, a row's own `height`, the gutter's stroke geometry, and
 /// `row_at`/`row_offset`), and a function is what keeps them from being able to disagree.
 /// What made it *safe* is that the two halves are read in the same render pass: the state
 /// under `fonts()` is written before anything is re-rendered, so a scroll view and the
 /// rows it builds cannot see different heights, and the per-tab positions 8b saves are
 /// **rows** rather than pixel offsets precisely so that a change here does not move any of
 /// them.
-///
-/// The larger of the two fonts and not the fixed-width one alone: the sidebar's rows are
-/// drawn in the interface font and the code panes' in the fixed-width one, and there is
-/// one height because `row_at` and `row_offset` are one conversion for every pane.
-fn row_height() -> f32 {
-    let fonts = fonts();
+fn list_row_height() -> f32 {
+    row_height_for(fonts().ui.size())
+}
 
-    (fonts.ui.size().max(fonts.mono.size()) + ROW_LEADING)
-        .round()
-        .max(MIN_ROW_HEIGHT)
+/// Height of a row drawn in the **fixed-width** font -- the instruction and source rows,
+/// the editor's own lines, a run's output -- and the `item_size` of the views over those.
+///
+/// **Two heights and not one, because no row mixes the two fonts.** Every row in the code
+/// panes sets `assembly_font()` on itself and on every span it draws; the sidebar's rows
+/// set nothing and inherit the interface font from the root. So the larger of the two
+/// sizes was never a constraint either kind of row was under -- it was one number serving
+/// two lists, where raising the assembly font padded the sidebar and raising the interface
+/// font padded the disassembly. The heights are independent because the fonts are, which
+/// is what the settings page already implies by offering them separately.
+///
+/// This is also the height `row_at`/`row_offset` convert against, and they are the code
+/// panes' alone: `use_kept_position` and `reveal_row` are called by `InstructionList` and
+/// `SourceList` and by nothing else, the sidebar's lists keeping no per-tab position and
+/// having nothing to reveal.
+fn code_row_height() -> f32 {
+    row_height_for(fonts().mono.size())
 }
 
 /// The height of the strip a filter bar's text box sits in. Taller than a row by the room
 /// an `Input`'s border and its own inner margin need; it is a bar and not a row, and
 /// nothing lines up with it.
+///
+/// The **list** height, because a filter bar sits over one of the three sidebar lists and
+/// is drawn in the interface font like the rows under it -- there is no filter over a code
+/// pane, and a bar following the assembly font would grow over a list it has nothing to do
+/// with.
 fn filter_height() -> f32 {
-    row_height() + 6.0
+    list_row_height() + 6.0
 }
 
 /// The side of one of the three square toggle buttons: a row less the air around it, so
 /// the `Aa` and `.*` written inside them follow the interface font like everything else.
+/// `filter_height`'s height for `filter_height`'s reason -- they are two parts of one bar.
 fn toggle_size() -> f32 {
-    row_height() - 4.0
+    list_row_height() - 4.0
 }
 
 /// How much bigger than the interface font a tab bar's icon is drawn. A Lucide glyph
@@ -101,7 +128,7 @@ const ICON_SCALE: f32 = 1.25;
 fn icon_size() -> f32 {
     (fonts().ui.size() * ICON_SCALE)
         .round()
-        .min(row_height() - 8.0)
+        .min(list_row_height() - 8.0)
 }
 
 /// The column a file row's disclosure triangle sits in, and the width every row of the
@@ -726,7 +753,7 @@ thread_local! {
     /// scope that drew a glyph and no other, wherever in the tree it sits.
     ///
     /// Thread-local and global rather than a context, for the reason the appearance is:
-    /// `row_height`, `icon_size` and `FontExt` are free functions and trait methods called
+    /// the two row heights, `icon_size` and `FontExt` are free functions and trait methods called
     /// from `if` arms, render callbacks and free functions, none of which may run a hook.
     /// A `State` is `!Send`, only the UI thread draws, and nothing off it may ask.
     ///
@@ -1363,7 +1390,7 @@ fn take_reveal(mut pinned: State<Option<Pin>>, pane: Pane) -> Option<LinePos> {
 fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
     let (_, scrolled) = <(i32, i32)>::from(*controller);
     let top = -scrolled as f32;
-    let height = row_height();
+    let height = code_row_height();
     let row = index as f32 * height;
     let margin = CONTEXT_ROWS * height;
 
@@ -1374,20 +1401,24 @@ fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
     controller.scroll_to_y(-((row - margin).max(0.0) as i32));
 }
 
-/// The row at the top of a pane scrolled to `offset`, and the offset that puts `row`
+/// The row at the top of a code pane scrolled to `offset`, and the offset that puts `row`
 /// there — the one place the two units meet.
 ///
+/// [`code_row_height`] and not the list's: both callers are the two code panes
+/// (`use_kept_position`, and `reveal_row` above), a sidebar list neither keeping a
+/// per-tab position nor having a row to reveal.
+///
 /// A `VirtualScrollView`'s offset counts *down* from zero, so the arithmetic is a
-/// negation and a divide by [`row_height`], which is every list's `item_size`. Rounded
+/// negation and a divide by [`code_row_height`], which is those panes' `item_size`. Rounded
 /// *down*, which is the half-row a position in rows gives up and the direction to give it
 /// up in: the row at the top edge is the one the reader is looking at even when it is only
 /// half on screen, and coming back to the one below it would lose the half they could see.
 fn row_at(offset: i32) -> usize {
-    ((-offset).max(0) as f32 / row_height()) as usize
+    ((-offset).max(0) as f32 / code_row_height()) as usize
 }
 
 fn row_offset(row: usize) -> i32 {
-    -((row as f32 * row_height()) as i32)
+    -((row as f32 * code_row_height()) as i32)
 }
 
 /// Keep `controller` pointed at the row `tab` was last left at, and keep [`Positions`]
@@ -2619,7 +2650,7 @@ impl Component for ArchiveRow {
                 // beside it leave, which torin only works out under `Content::Flex`.
                 .content(Content::Flex)
                 .width(Size::fill())
-                .height(Size::px(row_height()))
+                .height(Size::px(list_row_height()))
                 .padding(Gaps::new_symmetric(0.0, 5.0))
                 .background(background)
                 .overflow(Overflow::Clip)
@@ -2729,7 +2760,7 @@ impl Component for ObjectRow {
                 .cross_align(Alignment::Center)
                 .content(Content::Flex)
                 .width(Size::fill())
-                .height(Size::px(row_height()))
+                .height(Size::px(list_row_height()))
                 .padding(Gaps::new_symmetric(0.0, 5.0))
                 .background(background)
                 .overflow(Overflow::Clip)
@@ -2816,7 +2847,7 @@ impl Component for SymbolRow {
             text.clone(),
             rect()
                 .width(Size::fill())
-                .height(Size::px(row_height()))
+                .height(Size::px(list_row_height()))
                 .padding(5.0)
                 .background(background)
                 .overflow(Overflow::Clip)
@@ -2916,7 +2947,7 @@ impl Component for HistoryRow {
             text.clone(),
             rect()
                 .width(Size::fill())
-                .height(Size::px(row_height()))
+                .height(Size::px(list_row_height()))
                 .padding(5.0)
                 .background(background)
                 .overflow(Overflow::Clip)
@@ -3011,7 +3042,7 @@ impl Component for RelocationLabel {
 /// the row's own top and bottom edges, or the gutter would come out dashed with one gap
 /// per row.
 fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
-    let height = row_height();
+    let height = code_row_height();
     let middle = height / 2.0;
     // Where an arrowhead points, and where a horizontal run ends. Lane 0 is the innermost,
     // so the lanes are laid out leftwards from here.
@@ -3037,7 +3068,7 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
 
     rect()
         .width(Size::px(tip + GUTTER_PAD))
-        .height(Size::px(row_height()))
+        .height(Size::px(code_row_height()))
         .children((0..width).filter_map(move |lane| {
             let vertical = arrows.lanes.lanes[lane];
             let (top, tall) = match (vertical.top, vertical.bottom) {
@@ -3217,7 +3248,7 @@ impl Component for InstructionRow {
             .horizontal()
             .cross_align(Alignment::Center)
             .width(Size::fill())
-            .height(Size::px(row_height()))
+            .height(Size::px(code_row_height()))
             // Horizontally only, where it used to be on all four sides: the gutter's lines
             // run to the row's own top and bottom edges, and three pixels of padding at
             // each of them would break every line in the column once per row. Nothing else
@@ -3382,7 +3413,7 @@ impl Component for SourceRow {
             .horizontal()
             .cross_align(Alignment::Center)
             .width(Size::fill())
-            .height(Size::px(row_height()))
+            .height(Size::px(code_row_height()))
             .padding(3.0)
             .assembly_font()
             .background(row_background(
@@ -3480,7 +3511,7 @@ fn chip(
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .height(Size::px(row_height()))
+            .height(Size::px(list_row_height()))
             .padding(Gaps::new_symmetric(0.0, 8.0))
             .spacing(6.0)
             .background(background)
@@ -3517,7 +3548,7 @@ fn chip(
 fn chip_strip(chips: Vec<Element>) -> Element {
     rect()
         .width(Size::fill())
-        .height(Size::px(row_height()))
+        .height(Size::px(list_row_height()))
         .background(palette().header_bg)
         .border(bottom_hairline())
         .child(
@@ -3860,7 +3891,7 @@ impl Component for InstructionList {
                     controller,
                 )
                 .length(length)
-                .item_size(row_height()),
+                .item_size(code_row_height()),
             )
     }
 }
@@ -3997,7 +4028,7 @@ impl Component for SourceList {
                             controller,
                         )
                         .length(length)
-                        .item_size(row_height()),
+                        .item_size(code_row_height()),
                     ),
             )
     }
@@ -4218,7 +4249,7 @@ impl Component for ObjectsTab {
                 },
             )
             .length(length)
-            .item_size(row_height()),
+            .item_size(list_row_height()),
         )
     }
 }
@@ -4265,7 +4296,7 @@ impl Component for SymbolsTab {
                 },
             )
             .length(length)
-            .item_size(row_height()),
+            .item_size(list_row_height()),
         )
     }
 }
@@ -4529,7 +4560,7 @@ fn binary_row(path: &Path, objects: usize) -> Element {
         text.clone(),
         rect()
             .width(Size::fill())
-            .height(Size::px(row_height()))
+            .height(Size::px(list_row_height()))
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(8.0)
@@ -4591,7 +4622,7 @@ impl Component for RecentRow {
             recent.id.as_str().to_owned(),
             rect()
                 .width(Size::fill())
-                .height(Size::px(row_height()))
+                .height(Size::px(list_row_height()))
                 .horizontal()
                 .cross_align(Alignment::Center)
                 .padding(Gaps::new_symmetric(0.0, 4.0))
@@ -4853,7 +4884,7 @@ fn setting_row(
 ) -> impl IntoElement {
     rect()
         .width(Size::fill())
-        .height(Size::px(row_height() + 8.0))
+        .height(Size::px(list_row_height() + 8.0))
         .horizontal()
         .cross_align(Alignment::Center)
         .content(Content::Flex)
@@ -5096,13 +5127,18 @@ impl Component for SettingsTab {
                             move |size| prefs.write().fixed.size = size,
                         ))
                         // Said here rather than left to be discovered, because it is the
-                        // one consequence of a font change that is not a font: `row_height`
-                        // is the larger of the two sizes plus its leading, and it is every
-                        // list's `item_size`, so the lists get taller with the fonts rather
-                        // than clipping them.
+                        // one consequence of a font change that is not a font: a row is
+                        // its own font's size plus `ROW_LEADING`, and that is the
+                        // `item_size` of the views over it, so a list gets taller with the
+                        // font it is drawn in rather than clipping it. Two numbers and not
+                        // one blended answer, because each half of the page above moves
+                        // exactly one of them -- which is the whole of what a reader wants
+                        // to know before stepping a size.
                         .child(info_line(format!(
-                            "Rows follow the larger of the two fonts: {} pixels.",
-                            points_text(row_height())
+                            "Rows follow the font they are drawn in: {} pixels in the \
+                             lists, {} in the code panes.",
+                            points_text(list_row_height()),
+                            points_text(code_row_height())
                         ))),
                 ),
             )
@@ -5886,7 +5922,7 @@ fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
         .child(
             rect()
                 .width(Size::fill())
-                .height(Size::px(row_height()))
+                .height(Size::px(list_row_height()))
                 .horizontal()
                 .cross_align(Alignment::Center)
                 .spacing(6.0)
@@ -5972,7 +6008,7 @@ impl Component for DependencyRow {
             .child(
                 rect()
                     .width(Size::fill())
-                    .height(Size::px(row_height() + 8.0))
+                    .height(Size::px(list_row_height() + 8.0))
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .content(Content::Flex)
@@ -6061,9 +6097,9 @@ impl Component for SourceEditor {
             .map(|family| family.to_string())
             .unwrap_or_default();
         // The editor multiplies its font size by this and floors the answer, and what is
-        // wanted is `row_height()` exactly -- so half a pixel of slack is what makes the
+        // wanted is `code_row_height()` exactly -- so half a pixel of slack is what makes the
         // product land on it rather than one below it.
-        let line_height = (row_height() + 0.5) / size;
+        let line_height = (code_row_height() + 0.5) / size;
 
         rect()
             .expanded()
@@ -6127,7 +6163,7 @@ fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
 
     rect()
         .width(Size::fill())
-        .height(Size::px(row_height()))
+        .height(Size::px(code_row_height()))
         .horizontal()
         .cross_align(Alignment::Center)
         .padding(Gaps::new_symmetric(0.0, 12.0))
@@ -6219,7 +6255,7 @@ impl Component for ScratchpadTab {
                 .child(
                     rect()
                         .width(Size::fill())
-                        .height(Size::px(row_height()))
+                        .height(Size::px(list_row_height()))
                         .horizontal()
                         .cross_align(Alignment::Center)
                         .padding(Gaps::new_symmetric(0.0, 12.0))
@@ -6251,11 +6287,11 @@ impl Component for ScratchpadTab {
                             // being read and the row being asked for, which the cap cannot
                             // do -- it drops from the front and keeps the count. An empty
                             // row rather than an index that panics all the same.
-                            None => rect().height(Size::px(row_height())).into_element(),
+                            None => rect().height(Size::px(code_row_height())).into_element(),
                         },
                     )
                     .length(length)
-                    .item_size(row_height()),
+                    .item_size(code_row_height()),
                 )
                 .into_element()
         });
@@ -6559,7 +6595,7 @@ impl DockingModel for DockArea {
 /// reads like the old header strip.
 fn tab_label(tab: Tab, background: Color) -> impl IntoElement {
     rect()
-        .height(Size::px(row_height()))
+        .height(Size::px(list_row_height()))
         .horizontal()
         .cross_align(Alignment::Center)
         .padding(Gaps::new_symmetric(0.0, 8.0))
@@ -6595,7 +6631,7 @@ fn tab_drag(tab: Tab) -> Element {
 fn tab_bar(ctx: TabBarContext<PanelId>) -> Element {
     rect()
         .width(Size::fill())
-        .height(Size::px(row_height()))
+        .height(Size::px(list_row_height()))
         .horizontal()
         .background(palette().header_bg)
         .border(bottom_hairline())
@@ -7707,8 +7743,10 @@ mod tests {
     #[derive(Clone, Copy)]
     struct KeptTop(State<usize>);
 
-    /// A scroll view wired the way both panes are: one `ScrollController` reused across
-    /// every tab the pane shows, and `use_kept_position` between them.
+    /// A scroll view wired the way both **code** panes are: one `ScrollController` reused
+    /// across every tab the pane shows, `use_kept_position` between them, and
+    /// [`code_row_height`] on both halves of the view -- which is what those panes are,
+    /// and the only kind of list that keeps a position at all.
     fn scrolling_harness() -> impl IntoElement {
         let tab = use_consume::<KeptTab>().0;
         let at = use_consume::<KeptAt>().0;
@@ -7727,7 +7765,7 @@ mod tests {
                 move |index, _: &usize| {
                     rect()
                         .width(Size::fill())
-                        .height(Size::px(row_height()))
+                        .height(Size::px(code_row_height()))
                         .on_pointer_over(move |_| top.set(index))
                         .key(index)
                         .into()
@@ -7735,7 +7773,28 @@ mod tests {
                 controller,
             )
             .length(rows)
-            .item_size(row_height()),
+            .item_size(code_row_height()),
+        )
+    }
+
+    /// A sidebar list's shape: the same view over [`list_row_height`], and no kept
+    /// position, because the Objects and Symbols lists have none. It exists so that the
+    /// agreement between an `item_size` and its rows is asserted for *both* heights rather
+    /// than for one and assumed for the other.
+    fn list_scrolling_harness() -> impl IntoElement {
+        let mut top = use_consume::<KeptTop>().0;
+
+        rect().expanded().child(
+            VirtualScrollView::new_with_data(0usize, move |index, _: &usize| {
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(list_row_height()))
+                    .on_pointer_over(move |_| top.set(index))
+                    .key(index)
+                    .into()
+            })
+            .length(100usize)
+            .item_size(list_row_height()),
         )
     }
 
@@ -8698,9 +8757,11 @@ mod tests {
         }
     }
 
-    /// A component with no props at all, drawing one row at whatever the fonts come to.
-    /// `ThemedRow`'s twin, and for the same reason: nothing about it changes across a font
-    /// change, so freya has no reason to re-render it except that it read the state.
+    /// Two components with no props at all, one row at each of the two heights.
+    /// `ThemedRow`'s twins, and for the same reason: nothing about either changes across a
+    /// font change, so freya has no reason to re-render them except that they read the
+    /// state. Their backgrounds differ so that `painted_height` can ask for one of them by
+    /// name rather than by which came first.
     #[derive(PartialEq)]
     struct FontedRow;
 
@@ -8708,34 +8769,48 @@ mod tests {
         fn render(&self) -> impl IntoElement {
             rect()
                 .width(Size::fill())
-                .height(Size::px(row_height()))
+                .height(Size::px(list_row_height()))
                 .background(palette().pane_bg)
         }
     }
 
-    fn font_harness() -> impl IntoElement {
-        rect().expanded().child(FontedRow)
+    #[derive(PartialEq)]
+    struct FontedCodeRow;
+
+    impl Component for FontedCodeRow {
+        fn render(&self) -> impl IntoElement {
+            rect()
+                .width(Size::fill())
+                .height(Size::px(code_row_height()))
+                .background(palette().asm_pane_bg)
+        }
     }
 
-    /// The height of the first thing that painted anything, as it was actually laid out --
-    /// not as it was asked for. That distinction is the test: `row_height` returning a new
+    fn font_harness() -> impl IntoElement {
+        rect().expanded().child(FontedRow).child(FontedCodeRow)
+    }
+
+    /// The height of the row painted in `fill`, as it was actually laid out -- not as it
+    /// was asked for. That distinction is the test: a row height function returning a new
     /// number proves nothing on its own, since a component that was never re-rendered is
     /// still the old height on screen.
-    fn painted_height(test: &TestingRunner) -> f32 {
+    fn painted_height(test: &TestingRunner, fill: Color) -> f32 {
         test.find(|node, element| {
             let background = element.style().background.clone();
-            (background != Fill::Color(Color::TRANSPARENT)).then(|| node.layout().area.height())
+            (background == Fill::Color(fill)).then(|| node.layout().area.height())
         })
         .expect("a painted row")
     }
 
     /// The reactivity half of 9c, and the direct analogue of the theme's: a font change
-    /// repaints a component nothing else woke, *and* moves it, since the row height is
-    /// derived from the fonts rather than being a constant beside them.
+    /// repaints a component nothing else woke, *and* moves it, since the row heights are
+    /// derived from the fonts rather than being constants beside them.
     ///
-    /// 9pt and 10.5pt are the app's own defaults, and 26 is the `ROW_HEIGHT` this replaced
-    /// -- which is the assertion that the constant became a function without moving
-    /// anything. 18pt is 24 logical pixels, so the row is 36.
+    /// It is also where the two heights are asserted to be **independent**, which is the
+    /// whole of the split: no row mixes the fonts, so a size the reader steps must move
+    /// the rows drawn in *that* font and no others. 9pt and 10.5pt are the app's own
+    /// defaults -- 12 and 14 logical pixels, so 24 and 26 -- and each of the two changes
+    /// below leaves the other row exactly where it was.
     #[test]
     fn a_font_change_repaints_and_resizes_a_component_nothing_else_woke() {
         set_fonts(fixed_fonts(9.0, 10.5));
@@ -8743,20 +8818,28 @@ mod tests {
         let (mut test, ()) = TestingRunner::new(font_harness, (200., 200.).into(), |_| (), 1.);
         test.sync_and_update();
 
-        assert_eq!(row_height(), 26.0);
-        assert_eq!(painted_height(&test), 26.0);
+        let list = palette().pane_bg;
+        let code = palette().asm_pane_bg;
 
+        assert_eq!((list_row_height(), code_row_height()), (24.0, 26.0));
+        assert_eq!(painted_height(&test, list), 24.0);
+        assert_eq!(painted_height(&test, code), 26.0);
+
+        // 18pt is 24 logical pixels, so the code row is 36 -- and the list row is still
+        // the 24 it was, the assembly font having nothing to say about it.
         set_fonts(fixed_fonts(9.0, 18.0));
         test.sync_and_update();
-        assert_eq!(row_height(), 36.0);
-        assert_eq!(painted_height(&test), 36.0);
+        assert_eq!((list_row_height(), code_row_height()), (24.0, 36.0));
+        assert_eq!(painted_height(&test, list), 24.0);
+        assert_eq!(painted_height(&test, code), 36.0);
 
-        // The interface font counts too: there is one row height for every pane, and the
-        // sidebar's rows are drawn in the other font from the code panes'.
+        // And the other way: 21pt is 28 pixels, so the list row is 40 and the code row is
+        // back to the 26 its own unchanged font asks for.
         set_fonts(fixed_fonts(21.0, 10.5));
         test.sync_and_update();
-        assert_eq!(row_height(), 40.0);
-        assert_eq!(painted_height(&test), 40.0);
+        assert_eq!((list_row_height(), code_row_height()), (40.0, 26.0));
+        assert_eq!(painted_height(&test, list), 40.0);
+        assert_eq!(painted_height(&test, code), 26.0);
     }
 
     /// The invariant that made `ROW_HEIGHT` a `const` in the first place: a
@@ -8764,48 +8847,98 @@ mod tests {
     /// the same number, or scrolling misaligns -- silently, and looking like a rendering
     /// glitch rather than a bug.
     ///
-    /// Asserted through a real scroll view over the real hook, by asking which row is under
-    /// a given y: at the top of the list row *k* covers `[k*h, (k+1)*h)`, so a pointer at 90
-    /// is row 3 at 26px and row 2 at 36px. If the two numbers came apart, the rows would
-    /// drift by one per row down the pane and this would answer something else.
+    /// **It is two claims since the height was split in two**, so it is asserted over both
+    /// kinds of list: a code pane, whose rows and `item_size` are [`code_row_height`] and
+    /// which is the only kind with a kept position, and a sidebar list at
+    /// [`list_row_height`]. A view handed the *other* height would misalign exactly as one
+    /// handed a stale one would, and only a view of each kind can catch that.
+    ///
+    /// Asserted through real scroll views, by asking which row is under a given y: at the
+    /// top of the list row *k* covers `[k*h, (k+1)*h)`, so a pointer at 90 is row 3 at 26px
+    /// and row 2 at 36px. If the two numbers came apart, the rows would drift by one per
+    /// row down the pane and this would answer something else. Each half also steps the
+    /// font it is *not* drawn in and asserts that nothing moved.
     #[test]
     fn a_scroll_view_and_its_rows_agree_at_every_font_size() {
         set_fonts(fixed_fonts(9.0, 10.5));
 
-        let (mut test, top) = TestingRunner::new(
-            scrolling_harness,
-            (200., 200.).into(),
-            |runner| {
-                let mut tabs = Tabs::default();
-                tabs.open("a".to_owned());
-                runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
-                runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
-                runner.provide_root_context(|| KeptOpen(State::create(tabs)));
-                runner.provide_root_context(|| KeptLength(State::create(100)));
-                runner.provide_root_context(|| KeptTop(State::create(0))).0
-            },
-            1.,
-        );
-        test.sync_and_update();
-
-        let row_under = |test: &mut TestingRunner, y: f64| {
-            // Away and back, or entering the same row twice is no event at all.
+        // Away and back, or entering the same row twice is no event at all.
+        fn row_under(test: &mut TestingRunner, top: State<usize>, y: f64) -> usize {
             test.move_cursor((50., 5.));
             test.sync_and_update();
             test.move_cursor((50., y));
             test.sync_and_update();
             *top.peek()
-        };
-
-        assert_eq!(row_height(), 26.0);
-        assert_eq!(row_under(&mut test, 90.), 3);
-
-        set_fonts(fixed_fonts(9.0, 18.0));
-        for _ in 0..4 {
-            test.sync_and_update();
         }
-        assert_eq!(row_height(), 36.0);
-        assert_eq!(row_under(&mut test, 90.), 2);
+
+        // A font change wakes the rows through the state they read, and the view they sit
+        // in re-measures behind them; several passes because the scroll view answers the
+        // new item size on the render after the one that moved its rows.
+        fn settle(test: &mut TestingRunner) {
+            for _ in 0..4 {
+                test.sync_and_update();
+            }
+        }
+
+        {
+            let (mut test, top) = TestingRunner::new(
+                scrolling_harness,
+                (200., 200.).into(),
+                |runner| {
+                    let mut tabs = Tabs::default();
+                    tabs.open("a".to_owned());
+                    runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
+                    runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
+                    runner.provide_root_context(|| KeptOpen(State::create(tabs)));
+                    runner.provide_root_context(|| KeptLength(State::create(100)));
+                    runner.provide_root_context(|| KeptTop(State::create(0))).0
+                },
+                1.,
+            );
+            test.sync_and_update();
+
+            assert_eq!(code_row_height(), 26.0);
+            assert_eq!(row_under(&mut test, top, 90.), 3);
+
+            // The interface font is not this pane's font, so stepping it moves nothing.
+            set_fonts(fixed_fonts(21.0, 10.5));
+            settle(&mut test);
+            assert_eq!(code_row_height(), 26.0);
+            assert_eq!(row_under(&mut test, top, 90.), 3);
+
+            set_fonts(fixed_fonts(9.0, 18.0));
+            settle(&mut test);
+            assert_eq!(code_row_height(), 36.0);
+            assert_eq!(row_under(&mut test, top, 90.), 2);
+        }
+
+        set_fonts(fixed_fonts(9.0, 10.5));
+
+        {
+            let (mut test, top) = TestingRunner::new(
+                list_scrolling_harness,
+                (200., 200.).into(),
+                |runner| runner.provide_root_context(|| KeptTop(State::create(0))).0,
+                1.,
+            );
+            test.sync_and_update();
+
+            // 24 rather than 26: a sidebar row is the interface font's 12 pixels plus the
+            // leading, and 90 is three of them down.
+            assert_eq!(list_row_height(), 24.0);
+            assert_eq!(row_under(&mut test, top, 90.), 3);
+
+            // And the fixed-width font is not this list's font.
+            set_fonts(fixed_fonts(9.0, 18.0));
+            settle(&mut test);
+            assert_eq!(list_row_height(), 24.0);
+            assert_eq!(row_under(&mut test, top, 90.), 3);
+
+            set_fonts(fixed_fonts(21.0, 10.5));
+            settle(&mut test);
+            assert_eq!(list_row_height(), 40.0);
+            assert_eq!(row_under(&mut test, top, 90.), 2);
+        }
     }
 
     /// What the settings page's four boxes mean, which is the one place its `String`s and
@@ -8877,7 +9010,10 @@ mod tests {
             saved.write().push(settings.clone())
         });
 
-        rect().expanded().child(FontedRow)
+        // The **code** row, because what this test steps is the fixed-width size: it is
+        // the one whose consequences reach a file, a theme and a row all at once, and a
+        // row drawn in the other font would now sit still through the whole of it.
+        rect().expanded().child(FontedCodeRow)
     }
 
     /// The wiring 9c is: one state, and the theme, the fonts and the file all following
@@ -8927,7 +9063,7 @@ mod tests {
         // `PreferredTheme::Light`, and the fonts are the ones the state holds.
         assert_eq!(appearance(), Appearance::Light);
         assert_eq!(fonts().mono.points, 10.5);
-        assert_eq!(painted_height(&test), 26.0);
+        assert_eq!(painted_height(&test, palette().asm_pane_bg), 26.0);
 
         // A theme chosen. Two passes, for `a_desktop_that_changes_its_mind_repaints_the_window`'s
         // reason: the write the root makes wakes the scopes that drew a colour in the pass
@@ -8947,7 +9083,7 @@ mod tests {
             test.sync_and_update();
         }
         assert_eq!(fonts().mono.points, 18.0);
-        assert_eq!(painted_height(&test), 36.0);
+        assert_eq!(painted_height(&test, palette().asm_pane_bg), 36.0);
         assert_eq!(saved.peek().len(), 2);
         assert_eq!(saved.peek()[1].fixed.size, Some(18.0));
 
@@ -8960,7 +9096,7 @@ mod tests {
         }
         assert_eq!(saved.peek().len(), 3);
         assert_eq!(saved.peek()[2].fixed.size, Some(10.5));
-        assert_eq!(painted_height(&test), 26.0);
+        assert_eq!(painted_height(&test, palette().asm_pane_bg), 26.0);
 
         // And the thread is left as it was found.
         set_appearance(Appearance::Light);
