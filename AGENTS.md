@@ -73,7 +73,8 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
   which files are still being read into it.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/rows.rs` — the run of rows a reader picks out to copy.
-- `src/tabs.rs` — `Tabs<T>`, the open-tab list, with no cursor of its own.
+- `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the document it stands for.
+- `src/tabs.rs` — `landing`, the rule a close obeys, and `Positions`, where each tab was left.
 - `src/history.rs` — back/forward navigation history.
 - `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API, merged
   under the user's own; in points until one conversion at the end.
@@ -529,9 +530,10 @@ describes the older API and does not apply.
 `AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `Hist`, `Proj` (which project
 all of that belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Pinned`,
 `Marked`/`Shift`, `Analysis` (what the worker has to say about
-the selected symbol), `Pad`/`PadText` (the scratchpad, and the buffer being typed into it), plus
-the memo `Symbols`. The eight that a project *owns* travel together as a
-`ProjectStates`, since a project switch closes all of them and reopens all of them.
+the selected symbol), `Pad`/`PadText` (the scratchpad, and the buffer being typed into it),
+`SplitRatio`/`Splits` (how wide a document's assembly side is), plus the memos `Symbols` and
+`Active`. The seven that a project *owns* travel together as a `ProjectStates`, since a project
+switch closes all of them and reopens all of them.
 
 **One strip, two kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**:
 `Document::Assembly(Selection)` — an object or a function — or `Document::Source(Arc<str>)`, the
@@ -539,57 +541,127 @@ string the debug info said and never a path this filesystem was asked about. A t
 assembly and source, and the variant says which side the tab is *about* and therefore which drives
 the other. So opening a file from a directory panel and opening a function from the symbol list
 produce the same kind of thing, differing only in which way the mapping runs. Each tab wears the
-one glyph that tells the two apart, which is the same glyph the dock's Assembly and Source views
-wear. Until Step 1 this was two strips with two notions of what was open — `Open`/`Sel` for
+one glyph that tells the two apart — the same pair the Assembly and Source views wore before those
+two became a document's left and right halves. Until Step 1 this was two strips with two notions of what was open — `Open`/`Sel` for
 functions and `Files`/`Shown` for files — and the merge is what made the history able to record a
 visited file and the session able to keep the strip's interleaved order.
 
-**`Active` is the active tab.** `Open(State<Tabs<Document>>)` is the *list* of open tabs and holds
-no cursor: the active one is whichever entry equals `Active`, which is well defined because no two
-tabs are equal (each variant compares by its own rule — `Arc` pointer identity for a selection,
-text for a file — and never across the two). `Document` is what the history records and the session
-saves, and a list with a second answer to "what is on screen" would be two states to keep in step.
-The invariant — the active document is one of the open tabs, or `None`, which is exactly "nothing
-open" — is held by three functions and nothing else: `activate`, `close_tab`, `close_binary`.
-**Every** site that would change the active document calls `activate`, `navigate` included, because
-the history keeps an entry long after its tab was closed. `Selection` itself has **no "nothing"
-variant**: having none open is an absent one, which is the only spelling that stays honest once a
-selection is something a tab can hold.
+**`Active` is a derivation, not a state.** What is open is `Open { dock, docs }`: the content
+area's dock, whose **document panel**'s `tabs` vec *is* the list of open documents in the reader's
+own order, and `Docs`, the table saying which `Document` each tab's `DocId` stands for. There is no
+second list and no cursor — the active document is that panel's active tab read through the table,
+which is the whole of `active_document`, and `open_documents` is the same walk for the list. `Docs`
+holds no order at all; membership is the one thing the two share, and it is an invariant the three
+functions keep and a test asserts: a document's tab and its table entry are made together and
+closed together.
+
+`Active` is a `Memo` over the two, because the dock notifies on every layout change and a reader
+dragging a split must not re-render every pane that draws a document — `Memo` writes with
+`set_if_modified`, so a drag that changed no document wakes nothing. It is therefore **a beat
+behind**, a memo being recomputed by a task woken on a notify. That is right for anything that
+*renders* and wrong for anything that must be true inside one event handler, so `activate`,
+`close_tab`, `close_binary` and the save observer call `active_document` on the states directly and
+never read the memo. `use_kept_position` asks `Docs` for the same reason: it decides whether to
+write a row down for a tab that may have just been closed, and a memo could still be reporting it
+open during exactly that run.
+
+`Active` being `None` means two things and deliberately does not distinguish them: nothing is open,
+or **the tab on top of the document panel is a view**. Making Settings the active tab therefore
+means there is no active document — the analysis clears, `session.toml` writes `active = None`, and
+a restart with a view on top restores every tab and shows none of them. That is the price of the
+derivation, and it was taken over the alternative, which is remembering the last document that was
+active there: memory rather than a reading of the dock, and the second source of truth back again.
+
+The invariant — the active document is one of the open tabs, or `None` — is held by three functions
+and nothing else: `activate`, `close_tab`, `close_binary`. **Every** site that would *open* a
+document calls `activate`, `navigate` included, because the history keeps an entry long after its
+tab was closed; pressing a tab needs none of them, freya's own header wrapper setting the panel's
+active tab, which *is* the change. `Selection` itself has **no "nothing" variant**: having none open
+is an absent one, which is the only spelling that stays honest once a selection is something a tab
+can hold.
 
 **Layout** is a toolbar over a `ResizableContainer`: a `PanelSize::px(300.)` sidebar and a
 `PanelSize::percent(100.)` content pane, mixing the two sizing modes deliberately so the sidebar
 keeps a fixed width and the content takes the rest, with freya's 4px `ResizableHandle` between
 them. `ResizableContainer` renders itself `.expanded()`, so it needs a parent already sized —
-`Size::flex(..)` only works under a parent with `.content(Content::Flex)`. The content panel is a
-flex column of `TabStrip` over the `DockingArea`, so the open documents sit above **both**
-panes: the active tab is what the assembly *and* the source show, and a strip inside one of them
-would follow that pane wherever it was docked.
+`Size::flex(..)` only works under a parent with `.content(Content::Flex)`. The content panel holds
+the `DockingArea` and nothing else: the open documents are tabs *in* it, so the bar over them is
+the document panel's own tab bar rather than a strip of the app's.
 
-Inside each panel is a `DockingArea` over a `DockArea` model; the nine views are dockable tabs
-draggable between the two areas (both use `Tab` as the payload, and `use_drag` keeps one
-`DockDrag<Tab>` at the root). The outer split stays a `ResizableContainer` because docking cannot
-express a literal 300px. A drag carries only the tab, so the area receiving a drop evicts it from
-the other through a wired-up `other: Option<State<DockArea>>`. `root()` never returns `None` — an
-area losing its last tab collapses to a single *empty* panel (`DockArea::tidy`) so tabs can be
-dragged back in. A tab is a **persistent view**, not a slot the selection drives: each of the nine
-is a unit `Component` that consumes context and renders off the state it is about, so a
-selection change re-renders only the tabs that read it and never the root. Project, Settings and Scratchpad
-start tabbed beside Assembly and behind it, since the app is for reading disassembly and each of
-those is what a reader looks at once.
+Inside each panel is a `DockingArea` over a `DockArea` model. A `Tab` is two-kinded —
+`Tab::View(View)` for one of the seven views, `Tab::Document(DocId)` for an open document — because
+`DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. Both areas
+use `Tab` as the payload and `use_drag` keeps one `DockDrag<Tab>` at the root. The outer split stays
+a `ResizableContainer` because docking cannot express a literal 300px. A drag carries only the tab,
+so the area receiving a drop evicts it from the other through a wired-up
+`other: Option<State<DockArea>>`. A view is a **persistent pane**, not a slot the selection drives:
+each is a unit `Component` that consumes context and renders off the state it is about, so a
+selection change re-renders only the panes that read it and never the root.
 
-**The tab strip is not the dock's tabs.** The nine `Tab`s are *views*; the entries in the strip
-are the *documents* open in them. Open documents are not dock tabs because the dock tree is the
-*layout* (closing the last one would fold the split away), because a per-panel active tab gives two
-answers to "which document is active", and because the list would then be inseparable from a layout
-nothing persists. A tab's name is elided **by character count in Rust**, where every other
-truncation is a width: a `maximum_width` anywhere inside one makes it shrinkable, and a horizontal
-scroll view measures children against the space *left*, so tabs past the edge get no width and draw
-as a bare ×. Do not "fix" that back into a width.
+**One panel is designated, and the reason is the opening rather than the placeholder.** A click in
+the symbol list opens a document, and that document has to land *somewhere*; a dock has many panels
+and freya has no notion of "the panel documents belong to", so `DockArea::documents` names one.
+Three rules follow. `on_drop` refuses a document into any other panel — one visible document is what
+lets `Analysis`, `Marked`, `Focused` and `Pinned` each hold one answer for the window — and refuses
+a `DocId` the table no longer knows, which is a drag that outlived its document and is the whole
+payoff of **ids never being reused**. A **view**, by contrast, may go anywhere, that panel included:
+Project, Settings and the Scratchpad start tabbed in it, to the left of the documents, where they
+are always visible. And `tidy` exempts it from the folding sweep, so closing the last document
+cannot fold the content area away.
+
+`tidy` is freya's `close_empty_panels` **written out rather than called**, because that sweep retains
+every non-empty child with no exemption and has to be replaced rather than followed — a panel
+re-created after it would come back somewhere else in the tree. The two behaviours of freya's that
+are kept: a split left with one child collapses into it, and a lone panel at the root is never
+removed. Likewise a close never goes through `DockNode::remove_tab_except`, which sets a panel's
+active tab to `tabs.first()`; landing on the **neighbour** is a rule of this app, so `close_tab`
+removes the tab by hand and chooses with `tabs::landing`.
+
+**Open documents *are* dock tabs.** This supersedes 6c's "the tab strip is not the dock's tabs",
+which argued three things. Two are answered by the designated panel: there is one answer to "which
+document is active" — that panel's active tab — and closing the last document folds nothing away,
+the panel being exempt from `tidy`. The third stands and is the price: the layout and the list of
+open documents are no longer separable, and the arrangement survives a close because a rule says so
+rather than because the shape makes it impossible to break. What it buys is that a reader arranges
+their documents the way they already arrange the views, and that Steps 9, 12, 19 and 33 each have
+one kind of tab to change instead of two.
+
+A document's header is `chip` — the same element the content area's own strip drew, hover state and
+× included. **Nothing in it activates the tab**: freya wraps a header in a `DropZone` around a
+`rect().on_press(set_active)` around a `DragZone`, so pressing it makes it the panel's active tab
+and therefore the active document. That is also why the × must `stop_propagation`, or a close would
+first switch to the tab it is closing. The × is drawn for documents only — the views are furniture,
+one of a kind, with no way back once closed, where a document is always reachable again from the
+symbol list or the history.
+
+The document panel's tab bar is the horizontally scrolling one the strip used to be (`chip_strip`),
+because documents are opened by the dozen; a view panel's stays a plain row, seven views always
+fitting. Two things bite there. freya appends one child more than there are tabs — a
+`rect().expanded()` drop zone for "past the last tab" — and `expanded()` is meaningless inside a
+horizontal scroll view, so it is given a width of its own. And a tab's name is elided **by character
+count in Rust**, where every other truncation is a width: a `maximum_width` anywhere inside one makes
+it shrinkable, and a horizontal scroll view measures children against the space *left*, so tabs past
+the edge get no width and draw as a bare ×. Do not "fix" that back into a width.
+
+**A document's two sides live inside its tab.** `Tab::Document` renders `AssemblyPane` beside
+`SourcePane` in a `ResizableContainer` — not a nested `DockingArea`, which is a great deal of
+machinery for a two-way split. The cost is real and was taken deliberately: **the Source pane is no
+longer independently dockable**, since it is inside a document rather than beside one. Each pane
+takes its `Document` as a prop rather than reading `Active`, which is both synchronous and honest —
+only the active tab's content is mounted, so a pane is only ever built for the tab it belongs to.
+
+That unmounting is why the split ratio is held at the root (`SplitRatio`, with `Splits` the shared
+`ResizableContext` it is read back out of). A `ResizablePanel` registers at its `initial_size` in a
+`use_hook` and *removes* its entry in a `use_drop`, so even a shared context comes back holding the
+initial sizes under new panel ids; what survives is a number the app keeps, fed in as `initial_size`
+and written back out while the split is on screen. One number for the app and not one per document:
+per-document would be a third `Positions`-shaped map to forget in `close_tab`, for a number nobody
+asked to differ per document.
 
 **A document is a place in a binary or a file; everything else is a view.** This is 8e's rule with
 Step 1's amendment — it used to end at "in a binary" — and everything below it is unchanged, so
-decide nothing about it again. The strip holds `Document`s and never anything else, and that is
-what lets five separate things work without a case each: the Assembly *and* Source panes both
+decide nothing about it again. The document panel holds `Document`s and never anything else, and
+that is what lets five separate things work without a case each: the Assembly *and* Source panes both
 render "the active tab", the history records it, `SavedDocument::from_document`/`::resolve` write
 it down and find it again after a restart, `close_binary` knows which tabs a closing file takes
 with it, and `entry_text` knows what to call it. A project view, the settings page and a
@@ -1081,7 +1153,7 @@ one output pane. The **next run** stops it because two generations of output arr
 is a pane with no answer to "what is this". An **edit** stops nothing, deliberately: a run is of an
 executable and not of the buffer, and a keystroke that killed the reader's program would make it
 impossible to take a note about what it printed. A **project switch** stops nothing either, and for
-a reason that is already settled — `Pad` is not one of the nine states in `ProjectStates`, because
+a reason that is already settled — `Pad` is not one of the states in `ProjectStates`, because
 there is one scratchpad and it belongs to the app rather than to a project, so a switch never
 touches it.
 

@@ -1,3 +1,4 @@
+mod docs;
 mod filter;
 mod fonts;
 mod history;

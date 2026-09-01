@@ -72,16 +72,42 @@ one item per part, so the unfinished half stays visible.
   the first open: a tab seen for the first time opens its source side at the top of the file
   rather than at the symbol's own lines.
 - [x] Mouse buttons can navigate history so you can go back and forth.
+- [ ] Back and forward should be **per tab**, the way a browser's are: each tab keeps its own
+  trail, the mouse buttons walk the trail of the tab on screen, and going back in one tab does
+  not move another. With it, two rules that only make sense together: a click that navigates —
+  a relocation target in the assembly, a row in a sidebar list — **stays inside the current
+  tab**, replacing what it shows, and **Ctrl+click opens a new tab** instead; and the History
+  panel stays **global**, one record of everywhere the reader has been across every tab, since
+  that is what makes it a way of finding somewhere you were rather than a second copy of a
+  tab's own trail.
+  What is in the way is that today **a tab *is* its document**. `Docs` maps a tab's id to one
+  `Document`, the active document is that table read through the panel's active tab, and both
+  viewing-position maps are keyed by the document. A tab that shows several documents in turn
+  means the table holds a *trail and a cursor* per tab, with the document becoming the trail's
+  current entry. The tab id itself survives that unchanged, which is the one piece already
+  built: a dock tab has been a handle rather than a document since documents moved into the
+  dock.
+  Four things to decide before starting, none of them obvious. What the two `Positions` maps
+  are keyed by once one tab shows many documents — per tab, or per tab *and* document, which is
+  the difference between a tab remembering one scroll position and remembering one per place it
+  has been. What `session.toml` saves per tab: the current entry alone, which is what it holds
+  now, or the whole trail, which makes back work across a restart and makes the file bigger by
+  a factor of however far the reader wandered. What `close_binary` does with a tab whose trail
+  is *partly* in the closing file, where today the tab simply goes with its document. And what
+  a click in the History panel means once tabs have trails — go there in the current tab, or
+  raise the tab that already shows it.
+  It also settles the temporal-tab item under *Panels and tabs* from the other direction: that
+  one exists because walking a symbol list leaves a tab behind per click, and a click that
+  navigates in place leaves none. Decide the two together rather than building both.
 - [ ] Add `<`, `>` navigation buttons to the top bar.
 
 ## Assembly viewer
 
 - [ ] Bar under the Assembly tab with the full demangled + mangled symbol name.
 - [ ] Name the Assembly tab after the function — just `namespace/module::fn_name`, without the
-  extra generics, mangling, etc. (for Rust / C++). Half answered from the other side: the
-  content area's tab strip names every open function, so the dock tab itself stays
-  "Assembly". What is missing either way is the shortening — a chip shows the whole
-  demangled name cut at 40 characters, not `module::fn_name`.
+  extra generics, mangling, etc. (for Rust / C++). Answered from the other side: there is no
+  Assembly tab any more, a document's tab *is* named after its function. What is missing is the
+  shortening — a tab shows the whole demangled name cut at 40 characters, not `module::fn_name`.
 - [ ] An expanding section under the Assembly tab to show more symbol info, replacing the Info
   tab.
 - [x] Keep the `rip+` visible in a relocated rip-relative operand — `mov dword ptr [rip+<target>], 7`
@@ -247,12 +273,27 @@ one item per part, so the unfinished half stays visible.
 - [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter
   box, and matches come back in the list's own name order rather than by how well they match.
 - [ ] Left panel for project directory / source search.
-- [x] Tabs for assembly functions / source files. One strip over the content area, one tab
-  per open document — a function, an object or a source file. Clicking a tab switches; the ×
-  closes it and moves to the neighbour; closing the last one goes back to the placeholder.
-  They are their own strip rather than dock tabs deliberately — the dock tree is the layout,
-  and a layout must survive documents opening and closing. The strip is saved with the session
-  and comes back on a rerun, in the order the reader left it.
+- [x] Tabs for assembly functions / source files. One tab per open document — a function, an
+  object or a source file. Clicking a tab switches; the × closes it and moves to the neighbour;
+  closing the last one goes back to the placeholder. The list is saved with the session and comes
+  back on a rerun, in the order the reader left it.
+- [x] Open documents are tabs in the dock, beside Project / Settings / Scratchpad, rather than a
+  strip of the app's own over it. This reverses the earlier decision, whose argument was that the
+  dock tree is the layout and a layout must survive documents opening and closing. Two thirds of
+  that are answered by **designating** one panel: it is exempt from the folding sweep, so closing
+  the last document folds nothing away, and it gives one answer to "which document is active" —
+  its own active tab, from which `Active` is now *derived* rather than kept beside the list. The
+  remaining third is a real cost and is accepted: the layout and the list of open documents are no
+  longer separable, so the arrangement survives a close because a rule says so rather than because
+  the shape makes it impossible to break. What it buys is that a reader arranges documents the way
+  they already arrange the views — tabbed together, split, or dragged aside — and that there is one
+  kind of tab header to change instead of two. A document may only ever live in that panel, since
+  one visible document is what lets the analysis, the picked-out rows and the two panes' focus each
+  hold one answer for the window; a view may go anywhere, that panel included. The Source pane
+  stops being independently dockable in return, being inside a document rather than beside one.
+  A view being the tab on top means there is *no* active document, which is what keeps the
+  derivation honest and is the one visible edge: the analysis clears and the session records
+  nothing active until a document is on top again.
 - [x] Two kinds of tab, assembly-driven and source-driven, told apart by an icon. The two
   independent strips (one for functions, one for files, each with its own notion of what is
   open) are one strip of `Document`s, each of which is a place in a binary or a file, and the
@@ -270,10 +311,32 @@ one item per part, so the unfinished half stays visible.
   in a tab: one preview tab reused by the next such selection, so walking down a list does
   not leave a tab behind per click. What promotes it into a tab that stays is a design
   decision for the step that builds it.
-- [ ] A larger close icon on a tab, with a highlight under the pointer. The × on a chip is
+- [x] Reach a tab that has scrolled off the end of the bar. Documents are opened by the dozen
+  and the bar scrolls, so a tab past the right-hand edge used to be reachable only by scrolling
+  to it — and a reader had no way of seeing what was out there. A control at the right of the
+  document bar lists **every** open document, with the one on screen marked, and picking one
+  activates it. All of them rather than only the hidden ones: which tabs are off-screen means
+  measuring the bar's content against its viewport, and a list that changes length as the bar is
+  dragged is worse to use than a complete one. The popup is positioned by the app rather than
+  through `ContextMenu`, which pins a menu to the pointer and clamps to nothing — from a button
+  at the right-hand edge that would draw off the side of the window.
+- [ ] A tab should open immediately even while its binary is still being read, with a loading
+  message inside it rather than nothing. Today a tab can only exist once the object it names
+  does: a document is resolved against the objects list by path, object name and symbol name, so
+  the startup restore deliberately waits for the *whole* load before opening any tab — resolving
+  against a half-filled list would drop the tabs whose object had not landed yet. The objects
+  themselves already stream into the sidebar as they parse, so a reader watches a file's symbols
+  appear while the strip above them stays empty, and on a 331 MB binary that is seconds of a
+  window with nothing open in it. What it needs is a tab that can be *unresolved*: opened from
+  the saved document, drawn as itself with "Loading…" in its panes, and resolved when the object
+  it names arrives — which also means deciding what such a tab does if the load finishes and the
+  object never comes, where the answer is probably the same drop the restore does now, only
+  later and visibly.
+- [ ] A larger close icon on a tab, with a highlight under the pointer. The × on a tab is
   small enough to be a target you aim at rather than one you hit, and nothing distinguishes
-  the pointer being over the × from being over the chip — so the only feedback that you are
-  about to close a tab rather than switch to it arrives after the tab is gone.
+  the pointer being over the × from being over the tab — so the only feedback that you are
+  about to close a tab rather than switch to it arrives after the tab is gone. Cheaper now that
+  documents are dock tabs: there is one kind of header to change rather than two.
 - [ ] Reach the panels from the keyboard. Only the two code panes have key handlers at all: the
   tab chips are pointer targets, the sidebar lists have no cursor, and there is no way in to a
   filter box — which is the ranked-search item above seen from the other side. Note what it

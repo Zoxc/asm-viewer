@@ -22,6 +22,7 @@ use analysis::{
     SymbolData,
 };
 
+use crate::docs::{DocId, Docs};
 use crate::filter::{Filter, Matcher};
 use crate::fonts::{self, Font, Fonts};
 use crate::history::History;
@@ -34,7 +35,7 @@ use crate::scratchpad::{
 };
 use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 use crate::source::{self, SourceFile};
-use crate::tabs::{Positions, Tabs};
+use crate::tabs::{self, Positions};
 use crate::tree::{format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG};
 
 /// The leading a row adds to the font it is drawn in, and the floor under the answer.
@@ -832,23 +833,124 @@ struct Loading(State<Loads>);
 /// `Shown`, the Source pane's own answer to the same question for its own strip, and the
 /// two strips are now one.
 ///
-/// `None` is nothing open, which is exactly an empty [`Open`].
+/// `None` is nothing open *and* a view being the tab on top -- see below.
+///
+/// **A derivation and not a state.** Since documents became dock tabs there is nothing to
+/// keep in step: the active document is the document panel's active tab, read through
+/// [`Docs`], and [`active_document`] is that sentence. A `State` beside it would be a
+/// second answer to a question the dock already answers, which is the thing
+/// [`Open`] exists to prevent.
+///
+/// A [`Memo`] and not a bare read of the two states, because the dock notifies on every
+/// layout change: a reader dragging a split would otherwise re-render every pane that
+/// draws the active document. `Memo` writes with `set_if_modified`, so a drag that did not
+/// change which document is active wakes nothing.
+///
+/// **It is therefore a beat behind**, a memo being recomputed by a task that wakes on a
+/// notify rather than at the write. That is right for anything that *renders* and wrong
+/// for anything that has to be true inside one event handler, which is why the three
+/// functions holding the invariants call [`active_document`] on the states directly
+/// instead of reading this.
+///
+/// `None` means two different things and deliberately does not distinguish them: nothing
+/// is open, or the tab on top of the document panel is a view. Making Settings the active
+/// tab therefore means there is no active document, which is what keeps this a derivation
+/// -- the alternative is remembering the last document that was active there, which is
+/// memory rather than a reading of the dock.
 #[derive(Clone, Copy)]
-struct Active(State<Option<Document>>);
+struct Active(Memo<Option<Document>>);
 
-/// The tabs open in the content area, shared through context.
+/// What is open: the panel the reader's document tabs are in, and the table saying what
+/// each of those tabs stands for.
 ///
-/// The list only; the active one is [`Active`]. Every entry is a place in a binary — an
-/// object or a function — or a source file, and there is no "nothing" entry: having
-/// nothing open is an empty list, which is the placeholder state.
+/// **One source of truth, in two states that cannot disagree.** The panel's `tabs` vec
+/// *is* the list of open documents, in the reader's own order -- there is no second list.
+/// [`Docs`] holds no order at all, only the mapping a dock tab id needs; membership is the
+/// one thing the two share, and the three functions below are what keep it true: a
+/// document's tab and its table entry are made together and closed together.
 ///
-/// Objects are in here alongside functions on purpose. A tab is a place the reader has
-/// open, the sidebar's object rows have always *been* a selection, and giving them a tab
-/// is what keeps `Active` equal to the active tab without a second "selected but not
-/// open" state beside it. The tab for an object is named after the object and the
-/// Assembly and Source panes show the same placeholders they always did for one.
+/// A plain `Copy` bundle rather than a context of its own, because the two are always
+/// wanted together and every one of the functions holding the invariants needs both.
 #[derive(Clone, Copy)]
-struct Open(State<Tabs<Document>>);
+struct Open {
+    dock: State<DockArea>,
+    docs: State<Docs>,
+}
+
+/// Every open document, in the order the reader's tabs are in.
+///
+/// Views are skipped: they are tabs in the same panel but they are not documents, and
+/// this is what the session writes down and what a closing binary is walked against.
+fn open_documents(dock: &DockArea, docs: &Docs) -> Vec<Document> {
+    let Some(panel) = dock.document_panel() else {
+        return Vec::new();
+    };
+    panel
+        .tabs
+        .iter()
+        .filter_map(|tab| match tab {
+            Tab::Document(id) => docs.get(*id).cloned(),
+            Tab::View(_) => None,
+        })
+        .collect()
+}
+
+/// The active document: the document panel's active tab, when that tab is a document.
+///
+/// The whole of [`Active`], and the reason it needs no memory. `None` for a view on top
+/// is deliberate -- see [`Active`].
+fn active_document(dock: &DockArea, docs: &Docs) -> Option<Document> {
+    match dock.document_panel()?.active_tab_id? {
+        Tab::Document(id) => docs.get(id).cloned(),
+        Tab::View(_) => None,
+    }
+}
+
+impl Open {
+    /// The active document as of *now*, for the event handlers that cannot wait a beat
+    /// for [`Active`] to catch up. `peek`, so asking does not subscribe anything.
+    fn active(&self) -> Option<Document> {
+        let (dock, docs) = (self.dock.peek(), self.docs.peek());
+        active_document(&dock, &docs)
+    }
+
+    /// Every open document as of now, in tab order. `peek`, for the same reason.
+    fn documents(&self) -> Vec<Document> {
+        let (dock, docs) = (self.dock.peek(), self.docs.peek());
+        open_documents(&dock, &docs)
+    }
+}
+
+/// The content area's dock, shared through context because the panel documents live in is
+/// part of what a project has open rather than only part of the layout.
+#[derive(Clone, Copy)]
+struct ContentDock(State<DockArea>);
+
+/// How wide the assembly side of a document is, as a percentage, and the shared
+/// `ResizableContext` it is read back out of.
+///
+/// **One number for the app rather than one per document**, and it has to be held out here
+/// because "the container remembers it" is not on offer. Only the active tab's content is
+/// mounted, so a document's split is torn down on every switch of document; a
+/// `ResizablePanel` registers itself at its `initial_size` in a `use_hook` and *removes*
+/// its entry in a `use_drop`, so even a `ResizableContext` shared through
+/// `.controller(..)` comes back holding the initial sizes and a pair of brand-new panel
+/// ids. What does survive is a value the app keeps: fed in as `initial_size`, which is
+/// exactly what a remount reads, and written back out of the shared context while the
+/// split is on screen.
+///
+/// Per-document would be a third [`Positions`]-shaped map to forget in `close_tab`, for a
+/// number nobody has asked to differ per document.
+#[derive(Clone, Copy)]
+struct SplitRatio(State<f32>);
+
+/// The `ResizableContext` the document's two panels register into, so a drag on the handle
+/// can be read back out. See [`SplitRatio`].
+#[derive(Clone, Copy)]
+struct Splits(State<ResizableContext>);
+
+/// What the assembly side starts at, before the reader has dragged anything.
+const DEFAULT_SPLIT: f32 = 50.0;
 
 /// Which row each open tab's **assembly** side was left on, shared through context.
 ///
@@ -866,6 +968,14 @@ struct Open(State<Tabs<Document>>);
 /// cannot reuse the key and identifies its tabs by path and name instead (`project.rs`).
 #[derive(Clone, Copy)]
 struct AsmAt(State<Positions<Document>>);
+
+/// The documents the dock's tabs are handles into, and nothing about their order.
+///
+/// See [`Docs`]: it exists because a dock tab id must be `Copy + Hash` and a [`Document`]
+/// is neither. The order the reader put their tabs in is the document panel's own list,
+/// so this is deliberately a table and not a second copy of it.
+#[derive(Clone, Copy)]
+struct OpenDocs(State<Docs>);
 
 /// Which row each open tab's **source** side was left on. [`AsmAt`]'s other half, and
 /// keyed by the same document rather than by the file the pane happens to be showing:
@@ -1034,24 +1144,33 @@ struct ProjectStates {
     /// files that have produced nothing yet and so are not in `objects` to be closed one
     /// by one.
     loading: State<Loads>,
-    open: State<Tabs<Document>>,
+    /// The document panel and the id table: what is open, and in what order. Two states
+    /// where there used to be a list and an active document, and one fewer answer to
+    /// "which document is on screen" -- see [`Open`] and [`Active`].
+    open: Open,
     asm_at: State<Positions<Document>>,
     src_at: State<Positions<Document>>,
-    active: State<Option<Document>>,
     history: State<History>,
 }
 
-/// The eight states as a component sees them: through the contexts the root provides, so
+/// What is open, as a component sees it: the document panel and the id table together.
+fn use_open() -> Open {
+    Open {
+        dock: use_consume::<ContentDock>().0,
+        docs: use_consume::<OpenDocs>().0,
+    }
+}
+
+/// The seven states as a component sees them: through the contexts the root provides, so
 /// a view that switches projects needs none of them handed down to it.
 fn use_project_states() -> ProjectStates {
     ProjectStates {
         proj: use_consume::<Proj>().0,
         objects: use_consume::<Objects>().0,
         loading: use_consume::<Loading>().0,
-        open: use_consume::<Open>().0,
+        open: use_open(),
         asm_at: use_consume::<AsmAt>().0,
         src_at: use_consume::<SrcAt>().0,
-        active: use_consume::<Active>().0,
         history: use_consume::<Hist>().0,
     }
 }
@@ -1467,7 +1586,7 @@ fn row_offset(row: usize) -> i32 {
 /// follows the reveal rather than fighting it.
 fn use_kept_position<T: Clone + PartialEq + 'static>(
     mut positions: State<Positions<T>>,
-    open: State<Tabs<T>>,
+    is_open: impl Fn(&T) -> bool + 'static,
     mut controller: ScrollController,
     tab: &T,
     length: usize,
@@ -1513,7 +1632,7 @@ fn use_kept_position<T: Clone + PartialEq + 'static>(
         };
 
         if let Some(owner) = owner {
-            // Only for a tab that is still open, which is why the list is an argument
+            // Only for a tab that is still open, which is why `is_open` is an argument
             // here at all: `close_tab` forgets a tab's position and then moves to a
             // neighbour, so the run that follows is holding a tab that has gone -- and
             // writing its row down would put it straight back, keyed by a `Document`
@@ -1521,7 +1640,13 @@ fn use_kept_position<T: Clone + PartialEq + 'static>(
             // with it is the right answer twice over: there is no tab to bring it back
             // for, and the file it pointed into may be being let go of in the same
             // breath (`close_binary`).
-            let still_open = open.peek().find(&owner).is_some();
+            //
+            // **It has to be asked of the states themselves, never of a `Memo` over
+            // them.** A memo is recomputed by a task woken on a notify, so it can still
+            // be reporting a just-closed tab as open during exactly the run this guard
+            // exists for, and the resurrection would be back. The two real call sites
+            // ask `Docs`, which the close has already written.
+            let still_open = is_open(&owner);
             // And only when it has actually moved. `State::write` notifies whether or not
             // the value changes, and this runs on every scroll event, so writing back what
             // is already there would wake the save observer for a pointer sitting still.
@@ -2400,29 +2525,44 @@ enum Visit {
 /// Re-focusing a tab that is already open writes nothing: `State::write` notifies its
 /// subscribers whether or not the value changes, so both the list and the active document
 /// are asked before they are touched.
-fn activate(
-    mut open: State<Tabs<Document>>,
-    mut active: State<Option<Document>>,
-    mut history: State<History>,
-    target: Option<Document>,
-    visit: Visit,
-) {
-    // The copy that is *in the list* where there is one, so the identity a position is
-    // keyed by does not change when the same file is reached again through a different
-    // symbol's `LineInfo`: two of them naming one path hold two `Arc<str>`s of it.
-    let existing = target
-        .as_ref()
-        .and_then(|target| open.peek().find(target).cloned());
-    let target = match (existing, target) {
-        (Some(open), _) => Some(open),
-        (None, Some(target)) => {
-            open.write().open(target.clone());
-            Some(target)
+fn activate(open: Open, mut history: State<History>, target: Option<Document>, visit: Visit) {
+    let Open { mut dock, mut docs } = open;
+
+    let Some(target) = target else {
+        // Nothing to show. With views tabbed in the same panel there is usually still a
+        // tab to be on, and falling to the first of them is what keeps a panel that has
+        // tabs from having none of them active; an empty panel draws its own ground.
+        let mut dock = dock.write();
+        if let Some(panel) = dock.document_panel_mut() {
+            let first = panel.tabs.first().copied();
+            panel.active_tab_id = first;
         }
-        (None, None) => None,
+        return;
     };
 
-    active.set_if_modified(target.clone());
+    // The copy that is *in the table* where there is one, so the identity a position is
+    // keyed by does not change when the same file is reached again through a different
+    // symbol's `LineInfo`: two of them naming one path hold two `Arc<str>`s of it. The
+    // read is bound and dropped before the write below, never held across it.
+    let existing = docs.peek().id_of(&target);
+    let id = match existing {
+        Some(id) => id,
+        None => docs.write().open(target.clone()),
+    };
+    let target = docs.peek().get(id).cloned();
+
+    // Asked before it is written, which is what keeps re-focusing the tab that is
+    // already on top from waking every pane that draws a document: `State::write`
+    // notifies its subscribers whether or not the value it hands over changes. This is
+    // `set_if_modified`'s job, done by hand because the value is a tree.
+    let tab = Tab::Document(id);
+    let settled = dock
+        .peek()
+        .document_panel()
+        .is_some_and(|panel| panel.active_tab_id == Some(tab) && panel.tabs.contains(&tab));
+    if !settled {
+        dock.write().show_document(tab);
+    }
 
     // `write()` notifies its subscribers before it hands the value over, whether or not
     // anything changes, so ask first: a push that would dedup away must not wake the
@@ -2447,23 +2587,57 @@ fn activate(
 /// tab, which starts at the top — and a leak, since a [`Document::Assembly`] holds the
 /// `Arc<Object>` it points into.
 fn close_tab(
-    mut open: State<Tabs<Document>>,
-    active: State<Option<Document>>,
+    open: Open,
     history: State<History>,
     mut asm_at: State<Positions<Document>>,
     mut src_at: State<Positions<Document>>,
     entry: &Document,
 ) {
-    let was_showing = active.peek().as_ref() == Some(entry);
-    let next = open.write().close(entry);
+    let Open { mut dock, mut docs } = open;
+    let Some(id) = docs.peek().id_of(entry) else {
+        return;
+    };
+    let tab = Tab::Document(id);
+
+    // Worked out before anything is removed, which is what [`tabs::landing`] wants, and
+    // in a scope of its own so no read guard is alive when the writes below start.
+    let (was_showing, next) = {
+        let dock = dock.peek();
+        let Some(panel) = dock.document_panel() else {
+            return;
+        };
+        (
+            panel.active_tab_id == Some(tab),
+            tabs::landing(&panel.tabs, panel.active_tab_id.as_ref(), |open| {
+                *open == tab
+            }),
+        )
+    };
+
+    {
+        // Removed by hand rather than through freya's `remove_tab_except`, which sets the
+        // panel's active tab to `tabs.first()` when it takes the active one out. Landing
+        // on the *neighbour* is a rule of this app, older than the list it is written
+        // against, and letting the removal choose would quietly replace it.
+        let mut dock = dock.write();
+        if let Some(panel) = dock.document_panel_mut() {
+            panel.tabs.retain(|open| *open != tab);
+            if was_showing {
+                panel.active_tab_id = next;
+            }
+        }
+    }
+    docs.write().close(id);
     asm_at.write().forget(entry);
     src_at.write().forget(entry);
 
-    if was_showing {
-        // Through `activate` like everything else, even though the neighbour is by
-        // construction already open: this is a change of active document and there is one
-        // way to make one. The write guards above are released before it is reached.
-        activate(open, active, history, next, Visit::Moved);
+    // A document landed on goes through `activate`, even though it is by construction
+    // already open: it is a change of active document and there is one way to make one.
+    // A *view* landed on is not a document at all, and the write above has already put
+    // the panel on it.
+    if let (true, Some(Tab::Document(next))) = (was_showing, next) {
+        let document = docs.peek().get(next).cloned();
+        activate(open, history, document, Visit::Moved);
     }
 }
 
@@ -2523,19 +2697,58 @@ fn close_tab(
 fn close_binary(
     mut objects: State<Vec<Arc<Object>>>,
     mut loading: State<Loads>,
-    mut open: State<Tabs<Document>>,
-    active: State<Option<Document>>,
+    open: Open,
     mut asm_at: State<Positions<Document>>,
     mut src_at: State<Positions<Document>>,
     mut history: State<History>,
     path: &Path,
 ) {
-    // Every guard below is taken out of its own statement, so none of them is still
-    // alive when the next write -- or `activate` at the end -- is reached.
-    let showing = active.peek().clone();
-    let next = open
-        .write()
-        .close_all(showing.as_ref(), |tab| tab.in_file(path));
+    let Open { mut dock, mut docs } = open;
+    // Every guard below is taken out of its own statement or its own scope, so none of
+    // them is still alive when the next write -- or `activate` at the end -- is reached.
+    let showing = open.active();
+
+    // Which tabs go, and what is left to be on, both worked out before anything is
+    // removed. `closing` is asked of a *tab*: a view is never in a file, so the same walk
+    // that closes a binary's functions leaves Project, Settings and the Scratchpad alone
+    // for the same reason it leaves a source-driven tab alone.
+    let (closing, next) = {
+        let dock_ref = dock.peek();
+        let docs_ref = docs.peek();
+        let Some(panel) = dock_ref.document_panel() else {
+            return;
+        };
+        let in_file = |tab: &Tab| match tab {
+            Tab::Document(id) => docs_ref
+                .get(*id)
+                .is_some_and(|document| document.in_file(path)),
+            Tab::View(_) => false,
+        };
+        let closing: Vec<Tab> = panel.tabs.iter().copied().filter(in_file).collect();
+        let next = tabs::landing(&panel.tabs, panel.active_tab_id.as_ref(), in_file);
+        (closing, next)
+    };
+
+    let was_showing = showing
+        .as_ref()
+        .is_some_and(|showing| showing.in_file(path));
+    {
+        let mut dock = dock.write();
+        if let Some(panel) = dock.document_panel_mut() {
+            panel.tabs.retain(|tab| !closing.contains(tab));
+            if was_showing {
+                panel.active_tab_id = next;
+            }
+        }
+    }
+    {
+        let mut docs = docs.write();
+        for tab in &closing {
+            if let Tab::Document(id) = tab {
+                docs.close(*id);
+            }
+        }
+    }
 
     // The same walk over the same rule, so the positions cannot outlive the tabs they
     // belong to.
@@ -2551,11 +2764,13 @@ fn close_binary(
     // dropped and the worker itself stop; see `take_load`.
     loading.write().cancel(path);
 
-    if showing.is_some_and(|showing| showing.in_file(path)) {
-        // Through `activate` like every other change of active document, even though the
-        // tab it lands on is by construction already open — which is what makes it a
-        // [`Visit::Moved`], exactly as closing one tab by hand is.
-        activate(open, active, history, next, Visit::Moved);
+    // Through `activate` like every other change of active document, even though the tab
+    // it lands on is by construction already open — which is what makes it a
+    // [`Visit::Moved`], exactly as closing one tab by hand is. A view landed on is not a
+    // document and the write above has already put the panel on it.
+    if let (true, Some(Tab::Document(next))) = (was_showing, next) {
+        let document = docs.peek().get(next).cloned();
+        activate(open, history, document, Visit::Moved);
     }
 }
 
@@ -2574,18 +2789,13 @@ fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
         open,
         asm_at,
         src_at,
-        active,
         history,
         ..
     } = states;
 
     Menu::new().child(
         MenuButton::new()
-            .on_press(move |_| {
-                close_binary(
-                    objects, loading, open, active, asm_at, src_at, history, &path,
-                )
-            })
+            .on_press(move |_| close_binary(objects, loading, open, asm_at, src_at, history, &path))
             // "file" and not "object", because the row a reader right-clicks may be one
             // object of one file or the archive above 196 of them, and the same word has
             // to be true of both.
@@ -2941,7 +3151,7 @@ impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let states = use_project_states();
-        let (open, active, history) = (states.open, states.active, states.history);
+        let (open, history) = (states.open, states.history);
         let object = self.object.clone();
         let path = self.object.path.clone();
 
@@ -2975,7 +3185,6 @@ impl Component for ObjectRow {
                 .on_press(move |_| {
                     activate(
                         open,
-                        active,
                         history,
                         Some(Document::Assembly(Selection::Object(object.clone()))),
                         Visit::Went,
@@ -3034,8 +3243,7 @@ impl KeyExt for SymbolRow {
 impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let active = use_consume::<Active>().0;
-        let open = use_consume::<Open>().0;
+        let open = use_open();
         let history = use_consume::<Hist>().0;
         let symbol = self.symbols.0[self.index].clone();
         let text = symbol
@@ -3066,7 +3274,6 @@ impl Component for SymbolRow {
                 .on_press(move |_| {
                     activate(
                         open,
-                        active,
                         history,
                         Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
                         Visit::Went,
@@ -3196,8 +3403,7 @@ impl KeyExt for HistoryRow {
 impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let active = use_consume::<Active>().0;
-        let open = use_consume::<Open>().0;
+        let open = use_open();
         // Consuming does not subscribe -- only reading would, and this row never reads
         // the history; it only hands an index back to `navigate`.
         let history = use_consume::<Hist>().0;
@@ -3225,7 +3431,7 @@ impl Component for HistoryRow {
                 .overflow(Overflow::Clip)
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |_| navigate(open, history, active, Nav::To(index)))
+                .on_press(move |_| navigate(open, history, Nav::To(index)))
                 .child(entry_icon(&self.entry))
                 .child(label().text(text).max_lines(1)),
         )
@@ -3253,8 +3459,7 @@ impl PartialEq for RelocationLabel {
 impl Component for RelocationLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let active = use_consume::<Active>().0;
-        let open = use_consume::<Open>().0;
+        let open = use_open();
         let history = use_consume::<Hist>().0;
         let symbol = Symbol {
             object: self.object.clone(),
@@ -3290,7 +3495,6 @@ impl Component for RelocationLabel {
 
                     activate(
                         open,
-                        active,
                         history,
                         Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
                         Visit::Went,
@@ -3759,9 +3963,14 @@ impl Component for SourceRow {
 // The tab strip
 // ---------------------------------------------------------------------------
 
-/// One tab in the strip: the icon naming its kind, what it is called, an × that closes it,
-/// and the pane's own white when it is the one on screen -- the same thing a dock tab
-/// header does, so the two bars read as bars of the same kind.
+/// One document's tab header: the icon naming its kind, what it is called, an × that
+/// closes it, and the pane's own white when it is the one on screen.
+///
+/// **Nothing here activates the tab.** freya wraps whatever a tab header returns in a
+/// `DropZone` around a `rect().on_press(set_active)` around a `DragZone`, so pressing this
+/// makes it the panel's active tab -- and since the active document is *derived* from
+/// that, pressing it is what switches document. Which is also why the × must
+/// `stop_propagation`: without it a close would first switch to the tab it is closing.
 ///
 /// A stateless helper rather than a component, the hover state belonging to the component
 /// that called this, so no hook runs here.
@@ -3771,7 +3980,6 @@ fn chip(
     tooltip: String,
     active: bool,
     mut hovering: State<bool>,
-    on_activate: impl FnMut(Event<PressEventData>) + 'static,
     mut on_close: impl FnMut(Event<PressEventData>) + 'static,
 ) -> impl IntoElement {
     // White for the active one, the way a dock tab header is: it reads as the top edge of
@@ -3798,13 +4006,12 @@ fn chip(
             .border(right_hairline())
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
-            .on_press(on_activate)
             .child(icon)
             .child(label().text(elide(&text)).max_lines(1))
             .child(
                 rect()
-                    // The press bubbles, and the chip under this one activates the tab.
-                    // Closing a tab is not a way of first switching to it.
+                    // The press bubbles into freya's own wrapper, which activates the
+                    // tab. Closing a tab is not a way of first switching to it.
                     .on_press(move |e: Event<PressEventData>| {
                         e.stop_propagation();
                         on_close(e);
@@ -3826,14 +4033,204 @@ fn chip(
 /// and a chip that has fallen off the right-hand edge would be unreachable. The scrollbar
 /// itself is off: it would eat a third of a one-row bar, and the wheel and a drag
 /// both still move it.
-fn chip_strip(chips: Vec<Element>) -> Element {
+/// The control that opens a list of every open document, pinned at the **right** of the
+/// document panel's bar so it never scrolls away with the tabs it is there to reach.
+///
+/// The overflow answer. A tab past the right-hand edge of a scrolling bar is reachable
+/// only by scrolling to it, and a reader who has opened thirty functions has no idea what
+/// is out there -- so the bar carries one control that lists them all. **All of them, not
+/// only the hidden ones**: which tabs are off-screen means measuring the bar's content
+/// against its viewport, and a list that changes length as the reader drags the bar is
+/// worse to use than a complete one. It is what every browser's tab list does.
+///
+/// **The popup is positioned here rather than through `ContextMenu`**, which is what every
+/// other menu in the app uses. `ContextMenu` pins a menu's top-left corner to the pointer
+/// and clamps to nothing, so opened from a button at the right-hand edge it would draw off
+/// the side of the window. An absolute `right(0.)` inside this button's own box aligns the
+/// popup's right edge with the button's and lets it open leftward, into the window.
+///
+/// The one thing that has to be copied from `ContextMenu` is its opening dance: `Menu`
+/// closes itself on **any** global press, and the press that opens it is one, so the first
+/// close request is swallowed.
+#[derive(PartialEq)]
+struct DocumentMenuButton;
+
+impl Component for DocumentMenuButton {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let mut showing = use_state(|| false);
+        let open = use_open();
+        let history = use_consume::<Hist>().0;
+
+        // Every tab in the panel and its active one, both read here so the menu is built
+        // from one look at the dock. Views are in the list beside the documents: they are
+        // tabs in the same bar and scroll off the same edge, so a list that left them out
+        // would be a list of *some* of what is up there.
+        let (tabs, active) = {
+            let dock = open.dock.read();
+            match dock.document_panel() {
+                Some(panel) => (panel.tabs.clone(), panel.active_tab_id),
+                None => (Vec::new(), None),
+            }
+        };
+        if tabs.is_empty() {
+            return rect().into_element();
+        }
+
+        let side = icon_size();
+        let button = row_tooltip(
+            "Open tabs".to_owned(),
+            rect()
+                .width(Size::px(DOCUMENT_MENU_WIDTH))
+                .height(Size::px(list_row_height()))
+                .main_align(Alignment::Center)
+                .cross_align(Alignment::Center)
+                .background(if showing() || hovering() {
+                    palette().toggle_hover_bg
+                } else {
+                    Color::TRANSPARENT
+                })
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                // No guard against `Menu`'s own close-on-any-global-press, and none is
+                // needed: the listeners for a global event are snapshotted when it is
+                // *measured*, before any handler runs, and this opens on `on_press`, which
+                // is derived from the same `MouseUp` that emits the global press. The menu
+                // does not exist yet when that batch is built, so its close handler cannot
+                // be in it. A popup opened from a `*_down` handler is the other case --
+                // `ContextMenu`'s right-click menus are, which is why *they* carry the
+                // swallow. Copying it here cost a click: the first press outside the menu
+                // was eaten and dismissing it took two.
+                .on_press(move |_| {
+                    let was = showing();
+                    showing.set(!was);
+                })
+                .child(
+                    SvgViewer::new(("chevron-down", lucide::chevron_down()))
+                        .width(Size::px(side))
+                        .height(Size::px(side))
+                        .color(palette().icon_fg)
+                        .show_loader(false),
+                ),
+        );
+
+        rect()
+            .width(Size::px(DOCUMENT_MENU_WIDTH))
+            .height(Size::px(list_row_height()))
+            .child(button)
+            .maybe_child(showing().then(|| {
+                rect()
+                    // Under the bar and aligned to its right-hand edge, so the list opens
+                    // leftward into the window instead of off the side of it.
+                    .position(Position::new_absolute().top(list_row_height()))
+                    .child(
+                        tabs_menu(open, history, &tabs, active, showing)
+                            .on_close(move |_| showing.set(false))
+                            // Keyed by how many rows it holds, so a list that grows while
+                            // the menu is open remounts it. `MenuContainer` measures itself
+                            // *once* and keeps the offset it worked out then, so a menu
+                            // that widens after that keeps an offset for the width it used
+                            // to be and hangs off the side of the window. Remounting is
+                            // what makes it measure the size it actually is.
+                            .key(tabs.len()),
+                    )
+                    .into_element()
+            }))
+            .into_element()
+    }
+}
+
+/// The menu [`DocumentMenuButton`] opens: one row per tab in the document panel, in the
+/// bar's own order, with the one on screen marked.
+///
+/// **Both kinds of tab**, since both scroll off the same edge — a view is reached from
+/// here exactly as a document is, and each row wears the glyph its tab wears. The rows go
+/// through `Tab::title`/`Tab::icon`, so neither kind needs a case here.
+///
+/// Built per press rather than kept, for `close_menu`'s reason: there is nothing to hold
+/// on to between presses, and the list is a handful of rows.
+fn tabs_menu(
+    open: Open,
+    history: State<History>,
+    tabs: &[Tab],
+    active: Option<Tab>,
+    mut close: State<bool>,
+) -> Menu {
+    // Names and glyphs resolved in one pass, so the read guard on the table is gone
+    // before any row's handler can run and write to it.
+    let rows: Vec<(Tab, String, Element)> = {
+        let docs = open.docs.read();
+        tabs.iter()
+            .map(|tab| (*tab, elide(&tab.title(&docs)), tab.icon(&docs)))
+            .collect()
+    };
+
+    rows.into_iter()
+        .fold(Menu::new(), |menu, (tab, title, icon)| {
+            menu.child(
+                // `MenuItem` and not `MenuButton`, which is what the file row's menu uses:
+                // this one has a *current* row, and `selected` is freya's own way of drawing
+                // it, so the marking follows the menu's theme instead of being a character
+                // pushed in front of the name.
+                MenuItem::new()
+                    .selected(Some(tab) == active)
+                    .on_press(move |_| {
+                        match tab {
+                            // A document already open is a place the reader has, so going to
+                            // it is a move and records nothing -- the same rule pressing its
+                            // tab obeys, and the reason `activate` is told why it is called.
+                            Tab::Document(id) => {
+                                let document = open.docs.peek().get(id).cloned();
+                                activate(open, history, document, Visit::Moved);
+                            }
+                            // A view is not a document and never goes through `activate`:
+                            // making it the panel's tab on top is the whole of showing it,
+                            // and it is what pressing its header does too.
+                            Tab::View(_) => {
+                                let mut dock = open.dock;
+                                let mut dock = dock.write();
+                                if let Some(panel) = dock.document_panel_mut() {
+                                    panel.active_tab_id = Some(tab);
+                                }
+                            }
+                        }
+                        close.set(false);
+                    })
+                    .child(
+                        rect()
+                            .horizontal()
+                            .cross_align(Alignment::Center)
+                            .spacing(6.0)
+                            .child(icon)
+                            // `max_lines(1)`, or a name longer than the menu is wide wraps
+                            // onto a second line and the row grows to hold it. The names are
+                            // already cut to `CHIP_NAME_CHARS`, so one line is all any of
+                            // them needs.
+                            .child(label().text(title).max_lines(1)),
+                    ),
+            )
+        })
+}
+
+fn chip_strip(mut chips: Vec<Element>, tab_count: usize) -> Element {
+    // freya appends one more child than there are tabs: a `rect().expanded()` inside a
+    // drop zone that drops past the last tab. `expanded()` is meaningless inside a
+    // horizontal scroll view -- there is no leftover space to expand into -- so it is
+    // given a width of its own and scrolls along with the tabs, staying the target it was
+    // meant to be instead of collapsing to nothing.
+    let filler = (chips.len() > tab_count).then(|| chips.split_off(tab_count));
     rect()
         .width(Size::fill())
         .height(Size::px(list_row_height()))
+        .horizontal()
+        // The button takes its own width and the tabs are given the rest, which torin
+        // only works out for a `flex` child of a `Content::Flex` parent.
+        .content(Content::Flex)
         .background(palette().header_bg)
         .border(bottom_hairline())
         .child(
             ScrollView::new()
+                .width(Size::flex(1.0))
                 .direction(Direction::Horizontal)
                 .show_scrollbar(false)
                 // The chips sit in a box of their own, whose width is `Inner`. The
@@ -3848,108 +4245,80 @@ fn chip_strip(chips: Vec<Element>) -> Element {
                         .horizontal()
                         .height(Size::fill())
                         .children(chips)
+                        .maybe_child(filler.map(|filler| {
+                            rect()
+                                .width(Size::px(DROP_PAST_LAST_TAB))
+                                .height(Size::fill())
+                                .children(filler)
+                                .into_element()
+                        }))
                         .into_element(),
                 ),
         )
+        .child(DocumentMenuButton)
         .into_element()
 }
 
-/// One open document: a function, an object or a source file.
+/// How wide the "drop past the last tab" target is in the document panel's bar. Enough to
+/// aim at, narrow enough not to look like an empty tab.
+const DROP_PAST_LAST_TAB: f32 = 24.0;
+
+/// How wide [`DocumentMenuButton`] is. A square-ish target for one glyph.
+const DOCUMENT_MENU_WIDTH: f32 = 26.0;
+
+/// One open document's tab header, as the dock draws it.
+///
+/// A component and not a plain function because it has a hover state of its own, which is
+/// what tells "about to close this tab" from "about to switch to it" -- the one piece of
+/// feedback the dock's own view headers have never needed, there being no × on them.
 #[derive(Clone)]
-struct TabChip {
-    entry: Document,
-    /// Whether this is the tab the content area is showing, i.e. whether it is [`Active`].
+struct DocumentHeader {
+    id: DocId,
+    /// Whether this is the tab its panel is showing.
     active: bool,
     key: DiffKey,
 }
 
-impl PartialEq for TabChip {
+impl PartialEq for DocumentHeader {
     fn eq(&self, other: &Self) -> bool {
-        // `Document`'s own `PartialEq`: `Arc::ptr_eq` for a place in a binary, text for a
-        // file.
-        self.entry == other.entry && self.active == other.active
+        self.id == other.id && self.active == other.active
     }
 }
 
-impl KeyExt for TabChip {
+impl KeyExt for DocumentHeader {
     fn write_key(&mut self) -> &mut DiffKey {
         &mut self.key
     }
 }
 
-impl Component for TabChip {
+impl Component for DocumentHeader {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
-        let active = use_consume::<Active>().0;
-        let open = use_consume::<Open>().0;
+        let open = use_open();
         let history = use_consume::<Hist>().0;
         let asm_at = use_consume::<AsmAt>().0;
         let src_at = use_consume::<SrcAt>().0;
-        let (activated, closed) = (self.entry.clone(), self.entry.clone());
+
+        // A tab whose document has gone draws nothing rather than panicking in a render.
+        // It should not be reachable -- a tab and its table entry are closed together.
+        let Some(document) = open.docs.read().get(self.id).cloned() else {
+            return rect().into_element();
+        };
+        let closed = document.clone();
 
         chip(
-            entry_icon(&self.entry),
-            entry_text(&self.entry),
-            entry_tooltip(&self.entry),
+            entry_icon(&document),
+            entry_text(&document),
+            entry_tooltip(&document),
             self.active,
             hovering,
-            // A tab in the strip is a place the reader already has open, so switching to
-            // it is a move and records nothing. That is Step 1e's rule and the whole
-            // reason `activate` is told why it is being called.
-            move |_| activate(open, active, history, Some(activated.clone()), Visit::Moved),
-            move |_| close_tab(open, active, history, asm_at, src_at, &closed),
+            move |_| close_tab(open, history, asm_at, src_at, &closed),
         )
+        .into_element()
     }
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
-    }
-}
-
-/// The strip of open tabs over the content area.
-///
-/// **One strip and not two.** Until Step 1 there was a second one inside the Source pane,
-/// over its own list of open files, and the two had two notions of what was open. A tab
-/// decides what *both* panes show -- the assembly of a function beside the source it came
-/// from, or a file beside the assembly for a line in it -- so there is one list of them,
-/// and each chip's icon says which of its two sides is the one in charge.
-///
-/// Over the whole content area rather than inside either pane, which is where the plan's
-/// sketch put it: a strip inside one of them would go wherever that pane was dragged,
-/// taking the only way of switching documents into a 300px sidebar with it. In the default
-/// layout the two are the same thing: the strip is the bar directly above the assembly.
-///
-/// Nothing at all when no tab is open, so an app with nothing loaded looks exactly as it
-/// did before there were tabs.
-#[derive(PartialEq)]
-struct TabStrip;
-
-impl Component for TabStrip {
-    fn render(&self) -> impl IntoElement {
-        let open = use_consume::<Open>().0;
-        // Reading both subscribes the strip to them, so a tab opened or closed and a
-        // change of which one is active each re-render this bar and nothing else.
-        let active = use_consume::<Active>().0.read().clone();
-        let entries = open.read().tabs().to_vec();
-
-        if entries.is_empty() {
-            return rect().into_element();
-        }
-
-        chip_strip(
-            entries
-                .iter()
-                .map(|entry| {
-                    TabChip {
-                        entry: entry.clone(),
-                        active: Some(entry) == active.as_ref(),
-                        key: DiffKey::None,
-                    }
-                    .key(entry_key(entry))
-                    .into()
-                })
-                .collect(),
-        )
     }
 }
 
@@ -4058,9 +4427,10 @@ impl Component for InstructionList {
         // is scrolled. Beside the reveal effect below rather than inside it, because the
         // two answer to different things: a reveal is a click asking for a row, this is a
         // tab remembering one.
+        let docs = use_consume::<OpenDocs>().0;
         use_kept_position(
             use_consume::<AsmAt>().0,
-            use_consume::<Open>().0,
+            move |document: &Document| docs.peek().id_of(document).is_some(),
             controller,
             &Document::Assembly(Selection::Symbol(self.symbol.clone())),
             length,
@@ -4188,9 +4558,10 @@ impl Component for SourceList {
 
         let length = self.source.0.lines;
         // The tab and not the file: see `SourceList::document`.
+        let docs = use_consume::<OpenDocs>().0;
         use_kept_position(
             use_consume::<SrcAt>().0,
-            use_consume::<Open>().0,
+            move |document: &Document| docs.peek().id_of(document).is_some(),
             controller,
             &self.document,
             length,
@@ -4317,46 +4688,95 @@ fn symbol_info(symbol: &Symbol) -> impl IntoElement {
 // Tabs
 // ---------------------------------------------------------------------------
 
-/// One of the nine dockable views. A tab is a persistent view rather than a slot the
+/// What can be a tab in the dock: one of the app's views, or one open document.
+///
+/// Two-kinded because the dock is now where *both* live. It is a handle and not the thing
+/// itself in either arm, which is a type bound rather than a preference: freya's
+/// `DockingModel::TabId` is `Copy + PartialEq + Hash + 'static`, and a [`Document`] holds
+/// `Arc`s, compares by pointer identity and hashes by nothing at all. So a document is
+/// carried as the [`DocId`] [`Docs`] knows it by.
+///
+/// The asymmetry between the two arms is deliberate and is enforced in
+/// [`DockArea::on_drop`]: **a document may only ever be in the designated document panel,
+/// while a view may be anywhere, that panel included.** One visible document is what lets
+/// `Analysis`, `Marked`, `Focused` and `Pinned` each hold one answer for the window
+/// instead of one per document; a view has no such constraint, so Project, Settings and
+/// the Scratchpad stay tabbed beside the documents exactly as they were tabbed beside the
+/// Assembly pane before.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Tab {
+    View(View),
+    Document(DocId),
+}
+
+impl Tab {
+    /// The label shown in the tab bar.
+    ///
+    /// A `String` and not a `&'static str` because a document is named after what it
+    /// shows. `elide` is not applied here -- the header decides how much of a name it has
+    /// room for.
+    fn title(self, docs: &Docs) -> String {
+        match self {
+            Tab::View(view) => view.title().to_owned(),
+            // A tab whose document has gone names nothing. It should not be reachable --
+            // a tab and its `Docs` entry are closed together -- and drawing an empty
+            // header is a better answer than panicking in a render.
+            Tab::Document(id) => docs.get(id).map(entry_text).unwrap_or_default(),
+        }
+    }
+
+    /// The Lucide glyph drawn before the title.
+    ///
+    /// A document wears the glyph its kind wears everywhere else, which is deliberately
+    /// the same pair the Assembly and Source views wore: that is how the two kinds of tab
+    /// are told apart, and it is the one thing that survived those two views being folded
+    /// into a document's two sides.
+    fn icon(self, docs: &Docs) -> Element {
+        match self {
+            Tab::View(view) => view.icon(),
+            Tab::Document(id) => match docs.get(id) {
+                Some(document) => entry_icon(document),
+                None => rect().into_element(),
+            },
+        }
+    }
+}
+
+/// One of the app's dockable views. A view is a persistent pane rather than a slot the
 /// active document drives, so each one renders itself off the state it is about and
 /// subscribes to it on its own -- which also keeps a change of document from re-rendering
 /// the whole tree.
 ///
-/// **This, and not the content area's tab strip, is where a view that is not a document
-/// belongs.** A tab in that strip is a [`Document`] -- a place in a binary, or a source
-/// file -- which is what makes the Assembly and Source panes able to render "the active
-/// tab", the history able to record it and the session able to write it down. A project,
-/// the settings and a scratchpad's editor are none of those: there is one of each, they
+/// **This is where a pane that is not a document belongs.** A document is a place in a
+/// binary or a source file, which is what makes the two code panes able to render it, the
+/// history able to record it and the session able to write it down. A project, the
+/// settings and a scratchpad's editor are none of those: there is one of each, they
 /// resolve against no object and are no file on disk the panes could open, and neither
-/// pane could draw one. So they are views here, where a singleton with its own state
+/// code pane could draw one. So they are views, where a singleton with its own state
 /// already fits, rather than a third `Document` variant that every one of those five
 /// places would need an answer for.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Tab {
+enum View {
     Objects,
     Symbols,
     Info,
     History,
-    Assembly,
-    Source,
     Project,
     Settings,
     Scratchpad,
 }
 
-impl Tab {
+impl View {
     /// The label shown in the tab bar.
     fn title(self) -> &'static str {
         match self {
-            Tab::Objects => "Objects",
-            Tab::Symbols => "Symbols",
-            Tab::Info => "Info",
-            Tab::History => "History",
-            Tab::Assembly => "Assembly",
-            Tab::Source => "Source",
-            Tab::Project => "Project",
-            Tab::Settings => "Settings",
-            Tab::Scratchpad => "Scratchpad",
+            View::Objects => "Objects",
+            View::Symbols => "Symbols",
+            View::Info => "Info",
+            View::History => "History",
+            View::Project => "Project",
+            View::Settings => "Settings",
+            View::Scratchpad => "Scratchpad",
         }
     }
 
@@ -4385,15 +4805,13 @@ impl Tab {
     /// than hashing nine SVGs.
     fn icon(self) -> Element {
         let (name, svg) = match self {
-            Tab::Objects => ("package", lucide::package()),
-            Tab::Symbols => ("square-function", lucide::square_function()),
-            Tab::Info => ("info", lucide::info()),
-            Tab::History => ("history", lucide::history()),
-            Tab::Assembly => ("binary", lucide::binary()),
-            Tab::Source => ("file-code", lucide::file_code()),
-            Tab::Project => ("folder-open", lucide::folder_open()),
-            Tab::Settings => ("settings", lucide::settings()),
-            Tab::Scratchpad => ("notebook-pen", lucide::notebook_pen()),
+            View::Objects => ("package", lucide::package()),
+            View::Symbols => ("square-function", lucide::square_function()),
+            View::Info => ("info", lucide::info()),
+            View::History => ("history", lucide::history()),
+            View::Project => ("folder-open", lucide::folder_open()),
+            View::Settings => ("settings", lucide::settings()),
+            View::Scratchpad => ("notebook-pen", lucide::notebook_pen()),
         };
 
         let side = icon_size();
@@ -4413,15 +4831,13 @@ impl Tab {
 
     fn view(self) -> Element {
         match self {
-            Tab::Objects => ObjectsTab.into_element(),
-            Tab::Symbols => SymbolsTab.into_element(),
-            Tab::Info => InfoTab.into_element(),
-            Tab::History => HistoryTab.into_element(),
-            Tab::Assembly => AssemblyTab.into_element(),
-            Tab::Source => SourceTab.into_element(),
-            Tab::Project => ProjectTab.into_element(),
-            Tab::Settings => SettingsTab.into_element(),
-            Tab::Scratchpad => ScratchpadTab.into_element(),
+            View::Objects => ObjectsTab.into_element(),
+            View::Symbols => SymbolsTab.into_element(),
+            View::Info => InfoTab.into_element(),
+            View::History => HistoryTab.into_element(),
+            View::Project => ProjectTab.into_element(),
+            View::Settings => SettingsTab.into_element(),
+            View::Scratchpad => ScratchpadTab.into_element(),
         }
     }
 }
@@ -4695,15 +5111,22 @@ fn source_side(active: Option<&Document>, analysis: &Analyzed) -> Option<SourceS
 /// put in it yet: which symbols a source line compiled into is Step 2's index, and picking
 /// one of them is Step 1d. Until then this pane is empty for such a tab, rather than
 /// carrying the analysis' "No symbol selected" over from a tab where that is the answer.
-#[derive(PartialEq)]
-struct AssemblyTab;
+#[derive(Clone)]
+struct AssemblyPane {
+    document: Document,
+}
 
-impl Component for AssemblyTab {
+impl PartialEq for AssemblyPane {
+    fn eq(&self, other: &Self) -> bool {
+        self.document == other.document
+    }
+}
+
+impl Component for AssemblyPane {
     fn render(&self) -> impl IntoElement {
-        let active = use_consume::<Active>().0;
         let analysis = use_consume::<Analysis>().0;
 
-        let source_driven = matches!(&*active.read(), Some(Document::Source(_)));
+        let source_driven = matches!(self.document, Document::Source(_));
         if source_driven {
             return rect().expanded().background(palette().asm_pane_bg).into();
         }
@@ -4761,12 +5184,7 @@ impl Component for AssemblyTab {
 ///
 /// The two states come in as arguments and are not consumed here: this is called from
 /// inside a `match`, and a hook may only run unconditionally in a component's body.
-fn companion_header(
-    open: State<Tabs<Document>>,
-    active: State<Option<Document>>,
-    history: State<History>,
-    file: Arc<str>,
-) -> Element {
+fn companion_header(open: Open, history: State<History>, file: Arc<str>) -> Element {
     let document = Document::Source(file.clone());
 
     row_tooltip(
@@ -4780,7 +5198,7 @@ fn companion_header(
             .spacing(6.0)
             .background(palette().header_bg)
             .border(bottom_hairline())
-            .on_press(move |_| activate(open, active, history, Some(document.clone()), Visit::Went))
+            .on_press(move |_| activate(open, history, Some(document.clone()), Visit::Went))
             .child(entry_icon(&Document::Source(file.clone())))
             .child(label().text(file_name(&file)).max_lines(1)),
     )
@@ -4788,20 +5206,30 @@ fn companion_header(
 }
 
 /// The Source pane: the tab's source side, whichever of the two sides that is.
-#[derive(PartialEq)]
-struct SourceTab;
+#[derive(Clone)]
+struct SourcePane {
+    document: Document,
+}
 
-impl Component for SourceTab {
+impl PartialEq for SourcePane {
+    fn eq(&self, other: &Self) -> bool {
+        self.document == other.document
+    }
+}
+
+impl Component for SourcePane {
     fn render(&self) -> impl IntoElement {
-        let active = use_consume::<Active>().0;
-        let open = use_consume::<Open>().0;
+        let open = use_open();
         let history = use_consume::<Hist>().0;
         // Consumed unconditionally, hooks having to run on every render, and read here
         // because the companion file comes out of it -- and because reading it is what
         // subscribes this tab to it, so the pane fills in when a newly selected symbol's
         // line info is worked out, without the root re-rendering.
         let analysis = use_consume::<Analysis>().0.read().clone();
-        let side = source_side(active.read().as_ref(), &analysis);
+        // The tab's own document and not `Active`: this pane is only ever mounted for the
+        // tab it belongs to, and the document is in hand synchronously where `Active` is
+        // a memo that catches up a beat later.
+        let side = source_side(Some(&self.document), &analysis);
 
         let Some(side) = side else {
             // The same answer the assembly pane gives, from the same place, so the two
@@ -4837,9 +5265,7 @@ impl Component for SourceTab {
             .content(Content::Flex)
             .background(palette().pane_bg)
             .maybe_child(match &side {
-                SourceSide::Companion(file) => {
-                    Some(companion_header(open, active, history, file.clone()))
-                }
+                SourceSide::Companion(file) => Some(companion_header(open, history, file.clone())),
                 SourceSide::Subject(_) => None,
             })
             .child(
@@ -6184,7 +6610,6 @@ fn reopen_binary(states: ProjectStates, path: PathBuf) {
         states.objects,
         states.loading,
         states.open,
-        states.active,
         states.asm_at,
         states.src_at,
         states.history,
@@ -6806,6 +7231,10 @@ impl Component for ScratchpadTab {
 /// each area numbers its own panels from zero.
 type PanelId = u32;
 
+/// The content area's panel that documents live in. The first one `DockArea::row` builds,
+/// so it is where the reader's eye already is; see [`DockArea::documents`].
+const DOCUMENT_PANEL: PanelId = 0;
+
 /// One docking area: the tree of splits and tabbed panels filling one of the two
 /// resizable panes. The nine tabs are shared between the two areas, so a drop
 /// here has to take the tab out of `other` -- which is safe to write from
@@ -6817,6 +7246,21 @@ struct DockArea {
     tree: DockNode<Tab, PanelId>,
     next_panel_id: PanelId,
     other: Option<State<DockArea>>,
+    /// The panel documents live in, for the area that has one -- `Some` for the content
+    /// area, `None` for the sidebar.
+    ///
+    /// **Not for the placeholder: for the opening.** A click in the symbol list opens a
+    /// document, and that document has to land *somewhere*. A dock has many panels, the
+    /// reader can drag things anywhere, and freya's `DockingModel` has no notion of "the
+    /// panel documents belong to" -- so this names one. Everything else about it follows:
+    /// it is exempt from [`DockArea::tidy`] so closing the last document cannot fold the
+    /// content area away, it is the only panel [`DockArea::on_drop`] will let a document
+    /// into, and it draws the app's own empty ground rather than "Drag a tab here".
+    documents: Option<PanelId>,
+    /// The side table, for the one question [`DockArea::on_drop`] has to ask about a
+    /// document: whether it is still open. `Option` because it is wired up after the
+    /// state exists, the way `other` is.
+    docs: Option<State<Docs>>,
 }
 
 impl DockArea {
@@ -6837,7 +7281,15 @@ impl DockArea {
                     .collect(),
             },
             other: None,
+            documents: None,
+            docs: None,
         }
+    }
+
+    /// Name `panel_id` the panel documents live in. See the field.
+    fn with_documents(mut self, panel_id: PanelId) -> Self {
+        self.documents = Some(panel_id);
+        self
     }
 
     /// The groups stacked top to bottom, which is what the sidebar looks like.
@@ -6854,6 +7306,37 @@ impl DockArea {
         let panel_id = self.next_panel_id;
         self.next_panel_id += 1;
         panel_id
+    }
+
+    /// The panel documents live in, for the area that has one.
+    fn document_panel(&self) -> Option<&DockPanel<Tab, PanelId>> {
+        self.tree.panel(&self.documents?)
+    }
+
+    /// The same panel, to write into. Every change to what is open goes through one of
+    /// the three functions that hold the invariants, never through here directly.
+    fn document_panel_mut(&mut self) -> Option<&mut DockPanel<Tab, PanelId>> {
+        let documents = self.documents?;
+        self.tree.panel_mut(&documents)
+    }
+
+    /// Put `tab` in the document panel if it is not there, and make it the tab on top.
+    ///
+    /// Documents are **appended after the views**, so Project, Settings and the Scratchpad
+    /// keep the left of the bar and stay where the reader can always see them. The other
+    /// order was tried -- documents first, where the content area's own strip used to be
+    /// -- and a restored session's dozen tabs pushed all three views off the right-hand
+    /// edge, which is a control that vanishes rather than a tab that scrolls. Documents
+    /// are reachable from the symbol list and the history besides; the three views are
+    /// reachable from nowhere else.
+    fn show_document(&mut self, tab: Tab) {
+        let Some(panel) = self.document_panel_mut() else {
+            return;
+        };
+        if !panel.tabs.contains(&tab) {
+            panel.tabs.push(tab);
+        }
+        panel.active_tab_id = Some(tab);
     }
 
     /// Whether `tab` is the one on top in whichever panel holds it.
@@ -6888,14 +7371,84 @@ impl DockArea {
         }
     }
 
-    /// Fold away the panels a move emptied. An area that loses its last tab keeps
-    /// one empty panel rather than going to `None`, so its pane stays on screen as
-    /// a drop target and tabs can be dragged back into it.
+    /// Fold away the panels a move emptied, **except the document panel**. An area that
+    /// loses its last tab keeps one empty panel rather than going to `None`, so its pane
+    /// stays on screen as a drop target and tabs can be dragged back into it.
+    ///
+    /// This is freya's `close_empty_panels` written out rather than called, and the
+    /// exemption is why. That sweep retains every non-empty child with no way to spare
+    /// one, so the document panel would fold away the moment the last document was closed
+    /// -- the one thing it exists not to do. It has to *replace* the call rather than
+    /// follow it: a panel re-created after the sweep would come back somewhere else in
+    /// the tree, having lost the place the reader put it.
+    ///
+    /// The two behaviours that are freya's and are kept: a split left with one child
+    /// collapses into that child, and a lone panel at the root is never removed.
     fn tidy(&mut self) {
-        self.tree.close_empty_panels();
+        Self::prune(&mut self.tree, self.documents);
         if self.tree.is_empty() && !matches!(self.tree, DockNode::Panel(_)) {
             let panel_id = self.take_panel_id();
             self.tree = DockNode::Panel(DockPanel::new(panel_id, Vec::new()));
+        }
+    }
+
+    /// [`DockArea::tidy`]'s walk: drop every empty child that is not, and does not hold,
+    /// the document panel, then collapse a split down to its only survivor.
+    fn prune(node: &mut DockNode<Tab, PanelId>, documents: Option<PanelId>) {
+        let DockNode::Split { children, .. } = node else {
+            return;
+        };
+        children
+            .iter_mut()
+            .for_each(|child| Self::prune(child, documents));
+        children.retain(|child| !child.is_empty() || Self::spares(child, documents));
+        if children.len() == 1 {
+            *node = children.remove(0);
+        }
+    }
+
+    /// Whether `node` is, or contains, the panel documents live in.
+    fn spares(node: &DockNode<Tab, PanelId>, documents: Option<PanelId>) -> bool {
+        let Some(documents) = documents else {
+            return false;
+        };
+        match node {
+            DockNode::Panel(panel) => panel.panel_id == documents,
+            DockNode::Split { children, .. } => children
+                .iter()
+                .any(|child| Self::spares(child, Some(documents))),
+        }
+    }
+
+    /// Whether `tab` may land where a drop is aiming it.
+    ///
+    /// The asymmetry the two kinds of tab have: **a view may go anywhere, the document
+    /// panel included; a document may only ever be in the document panel.** The first
+    /// half is what keeps Project, Settings and the Scratchpad tabbed beside the
+    /// documents, where they have always been. The second is what keeps exactly one
+    /// document visible at a time, which is what lets `Analysis`, `Marked`, `Focused` and
+    /// `Pinned` each hold one answer for the window rather than one per document.
+    ///
+    /// A refused drop answers `false`, which leaves the drag where it started rather than
+    /// dropping the tab out of the app.
+    fn accepts(&self, tab: Tab, target: &DropTarget<PanelId>) -> bool {
+        let Tab::Document(id) = tab else {
+            return true;
+        };
+        // A drag begun before its document was closed carries an id that stands for
+        // nothing. Ids are never reused, so this can only ever be a dead one -- never
+        // some other document that took its number -- and refusing it is the whole
+        // payoff of that rule.
+        if self.docs.is_some_and(|docs| docs.peek().get(id).is_none()) {
+            return false;
+        }
+        match target {
+            DropTarget::Tab { panel_id, .. } | DropTarget::Center(panel_id) => {
+                self.documents == Some(*panel_id)
+            }
+            // A split always makes a *new* panel, which by construction is not the one
+            // documents live in.
+            DropTarget::Split { .. } => false,
         }
     }
 }
@@ -6910,6 +7463,10 @@ impl DockingModel for DockArea {
     }
 
     fn on_drop(&mut self, tab: Tab, target: DropTarget<PanelId>) -> bool {
+        if !self.accepts(tab, &target) {
+            return false;
+        }
+
         let dropped = match target {
             DropTarget::Tab { panel_id, position } => self.place(panel_id, tab, Some(position)),
             DropTarget::Center(panel_id) => self.place(panel_id, tab, None),
@@ -6953,7 +7510,8 @@ impl DockingModel for DockArea {
 
 /// One tab header. The same shape the pane headers used to have, so a bar of them
 /// reads like the old header strip.
-fn tab_label(tab: Tab, background: Color) -> impl IntoElement {
+fn tab_label(tab: Tab, docs: State<Docs>, background: Color) -> impl IntoElement {
+    let docs = docs.read();
     rect()
         .height(Size::px(list_row_height()))
         .horizontal()
@@ -6963,32 +7521,57 @@ fn tab_label(tab: Tab, background: Color) -> impl IntoElement {
         .background(background)
         .border(right_hairline())
         .overflow(Overflow::Clip)
-        .child(tab.icon())
-        .child(label().text(tab.title()).max_lines(1))
+        .child(tab.icon(&docs))
+        .child(label().text(elide(&tab.title(&docs))).max_lines(1))
 }
 
-fn tab_header(ctx: TabContext<Tab>, area: State<DockArea>) -> Element {
-    let background = if ctx.is_drop_target {
-        palette().selected_bg
-    } else if area.read().is_active(ctx.tab_id) {
-        palette().pane_bg
-    } else {
-        Color::TRANSPARENT
-    };
+fn tab_header(ctx: TabContext<Tab>, area: State<DockArea>, docs: State<Docs>) -> Element {
+    let active = area.read().is_active(ctx.tab_id);
 
-    tab_label(ctx.tab_id, background).into_element()
+    match ctx.tab_id {
+        // A document wears the chip the content area's own strip used to draw: the same
+        // icon, the same elided name, the same ×. It is a component of its own because it
+        // has a hover state; a view header has none, having nothing to close.
+        Tab::Document(id) => DocumentHeader {
+            id,
+            active,
+            key: DiffKey::None,
+        }
+        .into_element(),
+        Tab::View(_) => {
+            let background = if ctx.is_drop_target {
+                palette().selected_bg
+            } else if active {
+                palette().pane_bg
+            } else {
+                Color::TRANSPARENT
+            };
+            tab_label(ctx.tab_id, docs, background).into_element()
+        }
+    }
 }
 
 /// The copy of the tab that follows the cursor while it is being dragged.
-fn tab_drag(tab: Tab) -> Element {
+fn tab_drag(tab: Tab, docs: State<Docs>) -> Element {
     rect()
         .interactive(false)
         .border(right_hairline())
-        .child(tab_label(tab, palette().selected_bg))
+        .child(tab_label(tab, docs, palette().selected_bg))
         .into_element()
 }
 
-fn tab_bar(ctx: TabBarContext<PanelId>) -> Element {
+/// The bar a panel's tab headers sit in.
+///
+/// Two shapes, and the difference is how many tabs a panel can come to hold. A view panel
+/// holds at most the seven views and always fits, so it is a plain row. The document panel
+/// is opened into by the dozen, and a tab that has fallen off the right-hand edge would be
+/// unreachable, so it gets the horizontally scrolling bar the content area's own strip
+/// used to be -- which is where [`chip_strip`] came from and why it is still here.
+fn tab_bar(ctx: TabBarContext<PanelId>, area: State<DockArea>) -> Element {
+    if area.peek().documents == Some(ctx.panel_id) {
+        return chip_strip(ctx.tab_children, ctx.tab_count);
+    }
+
     rect()
         .width(Size::fill())
         .height(Size::px(list_row_height()))
@@ -6999,20 +7582,105 @@ fn tab_bar(ctx: TabBarContext<PanelId>) -> Element {
         .into_element()
 }
 
-fn tab_content(tab: Option<Tab>) -> Element {
-    match tab {
-        Some(tab) => tab.view(),
+/// One document, drawn: its assembly beside the source it was compiled from.
+///
+/// **The two panes are inside the document rather than beside it**, which is the trade the
+/// whole change is built on. It buys documents that the reader arranges the way they
+/// already arrange the views, and it costs the Source pane being dockable on its own --
+/// it can no longer be put below the assembly or dragged into the sidebar.
+///
+/// A `ResizableContainer` and not a nested `DockingArea`: a dock inside a dock tab is a
+/// great deal of machinery for a two-way split, and nothing here wants the second one's
+/// tabs, drops or drags.
+///
+/// Only the *active* tab's content is mounted, so this whole subtree -- both panes, both
+/// scroll controllers -- is built afresh on every switch of document. That is what
+/// `use_kept_position` is for, and it is why its "first run, on a tab it has a row for"
+/// arm went from the rare case to the ordinary one.
+#[derive(Clone, PartialEq)]
+struct DocumentBody {
+    id: DocId,
+}
+
+impl Component for DocumentBody {
+    fn render(&self) -> impl IntoElement {
+        let docs = use_consume::<OpenDocs>().0;
+        let mut ratio = use_consume::<SplitRatio>().0;
+        let splits = use_consume::<Splits>().0;
+
+        // Where the reader last left the handle, written back as they drag it. Reading
+        // the context is what subscribes this to the drag; `set_if_modified` is what
+        // keeps the mount's own registration -- which writes the initial size back
+        // unchanged -- from waking anything.
+        use_side_effect(move || {
+            let live = splits.read().panels.first().map(|panel| panel.size);
+            if let Some(live) = live {
+                ratio.set_if_modified(live);
+            }
+        });
+
+        // `peek` and not `read`: `initial_size` is consulted once, in the panel's own
+        // `use_hook` at mount, so subscribing this component to a number it can only act
+        // on by being remounted would be a subscription to nothing -- and a loop with the
+        // effect above.
+        let assembly = ratio.peek().clamp(1.0, 99.0);
+
+        // A tab whose document has gone draws nothing. Not reachable -- the tab and the
+        // table entry are closed together -- but a render is no place to panic.
+        let Some(document) = docs.read().get(self.id).cloned() else {
+            return rect()
+                .expanded()
+                .background(palette().asm_pane_bg)
+                .into_element();
+        };
+
+        ResizableContainer::new()
+            .direction(Direction::Horizontal)
+            .controller(splits)
+            .panel(
+                // `min_size` given rather than left to default: freya's default is a
+                // quarter of the initial size, so it would move with the reader's own
+                // drag instead of staying the floor.
+                ResizablePanel::new(PanelSize::percent(assembly))
+                    .min_size(10.0)
+                    .child(AssemblyPane {
+                        document: document.clone(),
+                    }),
+            )
+            .panel(
+                ResizablePanel::new(PanelSize::percent(100.0 - assembly))
+                    .min_size(10.0)
+                    .child(SourcePane { document }),
+            )
+            .into_element()
+    }
+}
+
+/// What a panel draws: its active tab, or -- with no tabs at all -- an empty ground.
+///
+/// The empty ground differs by panel, which is why this is handed the whole context
+/// rather than just the tab. "Drag a tab here" is right for a view panel, which is empty
+/// only because the reader dragged everything out of it and can drag something back. It
+/// is wrong for the document panel, which is empty because nothing is open -- so that one
+/// draws what the app draws with nothing selected.
+fn tab_content(ctx: ContentContext<Tab, PanelId>, area: State<DockArea>) -> Element {
+    match ctx.tab_id {
+        Some(Tab::View(view)) => view.view(),
+        Some(Tab::Document(id)) => DocumentBody { id }.into_element(),
+        // `peek` and not `read`: which panel holds documents is fixed when the area is
+        // built, so subscribing to it would be a subscription to nothing.
+        None if area.peek().documents == Some(ctx.panel_id) => placeholder("Nothing selected"),
         None => placeholder("Drag a tab here"),
     }
 }
 
-fn docking_area(area: State<DockArea>) -> impl IntoElement {
+fn docking_area(area: State<DockArea>, docs: State<Docs>) -> impl IntoElement {
     DockingArea::new(
         area,
-        |ctx: ContentContext<Tab, PanelId>| tab_content(ctx.tab_id),
-        move |ctx: TabContext<Tab>| tab_header(ctx, area),
-        tab_drag,
-        tab_bar,
+        move |ctx: ContentContext<Tab, PanelId>| tab_content(ctx, area),
+        move |ctx: TabContext<Tab>| tab_header(ctx, area, docs),
+        move |tab: Tab| tab_drag(tab, docs),
+        move |ctx: TabBarContext<PanelId>| tab_bar(ctx, area),
     )
     .preview_element(
         rect()
@@ -7088,7 +7756,6 @@ fn use_save_on_change(states: ProjectStates) {
         open,
         asm_at,
         src_at,
-        active,
         history,
     } = states;
 
@@ -7105,14 +7772,22 @@ fn use_save_on_change(states: ProjectStates) {
             // same observer that records everything else.
             proj.read().details(),
             project::binaries(&objects),
-            Session::from_state(
-                &objects,
-                open.read().tabs(),
-                &asm_at.read(),
-                &src_at.read(),
-                active.read().as_ref(),
-                &history.read(),
-            ),
+            {
+                // The dock and the table rather than `Active`: this has to write down
+                // what is open *now*, and `Active` is a memo that catches up a beat
+                // later. Reading the dock here is also what wakes this on a layout drag
+                // -- `record` compares against its baselines and writes nothing, so that
+                // is a wasted wake rather than a wasted write.
+                let (dock, docs) = (open.dock.read(), open.docs.read());
+                Session::from_state(
+                    &objects,
+                    &open_documents(&dock, &docs),
+                    &asm_at.read(),
+                    &src_at.read(),
+                    active_document(&dock, &docs).as_ref(),
+                    &history.read(),
+                )
+            },
         );
     });
 }
@@ -7154,7 +7829,7 @@ fn use_periodic_save() {
 /// Its own effect rather than a line inside the save observer: it has no business
 /// subscribing to anything but the active document, and the two concerns stay separable.
 fn use_clear_focus(
-    active: State<Option<Document>>,
+    active: Memo<Option<Document>>,
     focused: State<Option<LineFocus>>,
     pinned: State<Option<Pin>>,
 ) {
@@ -7187,7 +7862,7 @@ fn use_clear_focus(
 /// info and go when *it* does, while the source pane's run is a range of lines in a file
 /// that a change of symbol very often leaves open.
 fn use_clear_marks(
-    active: State<Option<Document>>,
+    active: Memo<Option<Document>>,
     analysis: State<Analyzed>,
     marked: State<Option<Marks>>,
 ) {
@@ -7258,7 +7933,40 @@ fn use_clear_marks(
 ///
 /// **What the panes show meanwhile** is in [`Analyzed`]: the listing they already have,
 /// until either the next one arrives or [`SLOW_ANALYSIS`] passes.
-fn use_analysis(active: State<Option<Document>>, analysis: State<Analyzed>) {
+/// What [`use_analysis_with`] needs of the active document: a **read**, which subscribes
+/// the effect to it, and a **peek**, which does not. The distinction is load-bearing --
+/// the effect must wake on a change of document and must not wake on its own writes -- so
+/// it cannot collapse into one closure.
+///
+/// A trait so the hook can be driven by the [`Active`] memo in the app and by a plain
+/// state in the tests, which are about the worker rather than about the tabs and have no
+/// business building a dock to say which symbol is selected.
+trait ReadsActive: Copy + 'static {
+    fn read_active(self) -> Option<Document>;
+    fn peek_active(self) -> Option<Document>;
+}
+
+impl ReadsActive for Memo<Option<Document>> {
+    fn read_active(self) -> Option<Document> {
+        self.read().clone()
+    }
+
+    fn peek_active(self) -> Option<Document> {
+        self.peek().clone()
+    }
+}
+
+impl ReadsActive for State<Option<Document>> {
+    fn read_active(self) -> Option<Document> {
+        self.read().clone()
+    }
+
+    fn peek_active(self) -> Option<Document> {
+        self.peek().clone()
+    }
+}
+
+fn use_analysis(active: Memo<Option<Document>>, analysis: State<Analyzed>) {
     use_analysis_with(active, analysis, Studied::new);
 }
 
@@ -7267,7 +7975,7 @@ fn use_analysis(active: State<Option<Document>>, analysis: State<Analyzed>) {
 /// the one that arrives while the reader has already clicked on — and nothing can assert
 /// it against a worker that answers as fast as it is asked.
 fn use_analysis_with(
-    active: State<Option<Document>>,
+    active: impl ReadsActive,
     mut analysis: State<Analyzed>,
     study: impl Fn(Symbol) -> Studied + Send + 'static,
 ) {
@@ -7305,7 +8013,7 @@ fn use_analysis_with(
             while let Ok(studied) = answers.recv().await {
                 // The superseding rule. Cloned out of the guard first, since everything
                 // below it writes.
-                let current = active.peek().clone();
+                let current = active.peek_active();
                 if !current
                     .as_ref()
                     .and_then(Document::symbol)
@@ -7340,7 +8048,7 @@ fn use_analysis_with(
     use_side_effect(move || {
         // Reading subscribes this to the active document, which is the only thing it
         // answers to; the state it writes is `peek`ed, so it cannot wake itself.
-        let current = active.read().clone();
+        let current = active.read_active();
 
         let Some(symbol) = current.as_ref().and_then(Document::symbol).cloned() else {
             // Not a function: an object, a source file, or nothing open at all. There
@@ -7440,12 +8148,7 @@ impl Nav {
 /// history and the open tabs are two different lists: the history is everywhere the reader
 /// has been and keeps entries long after their tab was closed, so going back to one has to
 /// be able to open a tab for it again.
-fn navigate(
-    open: State<Tabs<Document>>,
-    mut history: State<History>,
-    active: State<Option<Document>>,
-    nav: Nav,
-) {
+fn navigate(open: Open, mut history: State<History>, nav: Nav) {
     // Ask before writing. `State::write` notifies its subscribers whether or not the
     // value it hands over changes, so back at the oldest entry -- or forward at the
     // newest -- must not reach for it at all: a no-op has to leave the history alone,
@@ -7458,7 +8161,7 @@ fn navigate(
     // and `activate` peeks the history back.
     let entry = nav.step(&mut history.write());
     if entry.is_some() {
-        activate(open, active, history, entry, Visit::Moved);
+        activate(open, history, entry, Visit::Moved);
     }
 }
 
@@ -7536,7 +8239,6 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         open,
         mut asm_at,
         mut src_at,
-        active,
         history,
         ..
     } = states;
@@ -7593,7 +8295,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         for (tab, _, _) in restored_tabs {
             // Reopening a tab is not visiting it: the reader had it open, and the history
             // this restore has just set is the record of where they went.
-            activate(open, active, history, Some(tab), Visit::Moved);
+            activate(open, history, Some(tab), Visit::Moved);
         }
         // The one exception, and it is what keeps the cursor and the app in step: the
         // document the app *lands on* is a place it went. `would_push` makes it free in
@@ -7601,7 +8303,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         // the two resolve through the same lookup to the same `Arc`s — and records it
         // exactly when they differ, which is when the cursor entry was dropped or the
         // active document degraded and the app really is somewhere new.
-        activate(open, active, history, restored_active, Visit::Went);
+        activate(open, history, restored_active, Visit::Went);
     });
 }
 
@@ -7631,7 +8333,6 @@ fn clear_project(states: ProjectStates) {
         open,
         asm_at,
         src_at,
-        active,
         history,
         ..
     } = states;
@@ -7645,14 +8346,12 @@ fn clear_project(states: ProjectStates) {
     // also the plain iteration rule: `close_binary` writes the very list being walked.
     let binaries = project::binaries(&objects.peek());
     for path in binaries {
-        close_binary(
-            objects, loading, open, active, asm_at, src_at, history, &path,
-        );
+        close_binary(objects, loading, open, asm_at, src_at, history, &path);
     }
 
-    let remaining = open.peek().tabs().to_vec();
+    let remaining = open.documents();
     for tab in &remaining {
-        close_tab(open, active, history, asm_at, src_at, tab);
+        close_tab(open, history, asm_at, src_at, tab);
     }
 
     // And the history outright, which the two walks above deliberately do not do for it.
@@ -7731,17 +8430,64 @@ pub fn app() -> impl IntoElement {
     // still-being-read rows from. Beside `objects` because it is the same list seen a
     // moment earlier.
     let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;
-    let active = use_provide_context(|| Active(State::create(None))).0;
-    // The places open in the content area, of which `active` is the one on screen. The
-    // list is opened and closed only through `activate`/`close_tab`, which is what keeps
-    // "the active document is the active tab" an invariant rather than a convention --
-    // for the startup restore as much as for a click, since the list is part of the saved
-    // session.
-    let open = use_provide_context(|| Open(State::create(Tabs::default()))).0;
-    // Where each side of each tab was left, which is a view of that list rather than a
+    // The id side table the dock's document tabs are handles into. Not the list of open
+    // documents -- that is the document panel's own `tabs` vec -- only the mapping from
+    // the handle a tab can hold to the document it stands for.
+    let docs = use_provide_context(|| OpenDocs(State::create(Docs::default()))).0;
+    let sidebar_dock = use_state(|| {
+        DockArea::column(vec![
+            vec![Tab::View(View::Objects)],
+            vec![Tab::View(View::Symbols), Tab::View(View::Info)],
+            vec![Tab::View(View::History)],
+        ])
+    });
+    // Panel 0 of the content area is where documents live. Project, Settings and the
+    // Scratchpad are tabbed in it beside them, which is where they have always been --
+    // behind the Assembly pane, which is now a document's left-hand side rather than a
+    // view of its own.
+    let content_dock = use_state(|| {
+        DockArea::row(vec![vec![
+            Tab::View(View::Project),
+            Tab::View(View::Settings),
+            Tab::View(View::Scratchpad),
+        ]])
+        .with_documents(DOCUMENT_PANEL)
+    });
+    use_hook(move || {
+        let (mut sidebar_dock, mut content_dock) = (sidebar_dock, content_dock);
+        sidebar_dock.write().other = Some(content_dock);
+        content_dock.write().other = Some(sidebar_dock);
+        sidebar_dock.write().docs = Some(docs);
+        content_dock.write().docs = Some(docs);
+    });
+    let content_dock = use_provide_context(move || ContentDock(content_dock)).0;
+    let open = Open {
+        dock: content_dock,
+        docs,
+    };
+    // The active document, *derived* from the two above rather than kept beside them:
+    // it is the document panel's active tab. See `Active` for why it is a memo and why
+    // being a beat behind is right for everything that renders and wrong for the three
+    // functions that hold the invariants.
+    let active = use_provide_context(move || {
+        Active(Memo::create(move || {
+            active_document(&content_dock.read(), &docs.read())
+        }))
+    })
+    .0;
+    // Where each side of each tab was left, which is a view of what is open rather than a
     // second copy of it: an entry appears when a pane is scrolled and goes when the tab
-    // it belongs to is closed, so the same functions hold this true as hold the list
-    // itself.
+    // it belongs to is closed, so the same functions hold this true as hold the tabs
+    // themselves.
+    // The assembly/source split, kept out here because a document's panes are unmounted
+    // on every tab switch and take their sizes with them. See `SplitRatio`.
+    use_provide_context(|| SplitRatio(State::create(DEFAULT_SPLIT)));
+    use_provide_context(|| {
+        Splits(State::create(ResizableContext {
+            direction: Direction::Horizontal,
+            ..Default::default()
+        }))
+    });
     let asm_at = use_provide_context(|| AsmAt(State::create(Positions::default()))).0;
     let src_at = use_provide_context(|| SrcAt(State::create(Positions::default()))).0;
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
@@ -7772,7 +8518,6 @@ pub fn app() -> impl IntoElement {
         open,
         asm_at,
         src_at,
-        active,
         history,
     };
     use_save_on_change(states);
@@ -7837,24 +8582,6 @@ pub fn app() -> impl IntoElement {
     // `use_drag` keeps at the root, so a tab can be dragged from either area into
     // the other; each area is told about the other so the one taking a tab can evict
     // it from the one losing it.
-    let sidebar_dock = use_state(|| {
-        DockArea::column(vec![
-            vec![Tab::Objects],
-            vec![Tab::Symbols, Tab::Info],
-            vec![Tab::History],
-        ])
-    });
-    let content_dock = use_state(|| {
-        DockArea::row(vec![
-            vec![Tab::Assembly, Tab::Project, Tab::Settings, Tab::Scratchpad],
-            vec![Tab::Source],
-        ])
-    });
-    use_hook(move || {
-        let (mut sidebar_dock, mut content_dock) = (sidebar_dock, content_dock);
-        sidebar_dock.write().other = Some(content_dock);
-        content_dock.write().other = Some(sidebar_dock);
-    });
 
     // The split is freya's own `ResizableContainer`: the sidebar panel keeps the
     // original fixed 300px (`PanelSize::px`, so the initial width is unchanged) and
@@ -7868,28 +8595,16 @@ pub fn app() -> impl IntoElement {
         .panel(
             ResizablePanel::new(PanelSize::px(300.0))
                 .min_size(120.0)
-                .child(docking_area(sidebar_dock)),
+                .child(docking_area(sidebar_dock, docs)),
         )
         .panel(
             ResizablePanel::new(PanelSize::percent(100.0))
                 .min_size(10.0)
-                // The open-tab strip sits over the whole content area rather than inside
-                // the Assembly pane: the active tab is what *both* panes show, and a bar
-                // inside one of them would follow that pane wherever it was docked. The
-                // docking area below it needs a parent that has been given the leftover
-                // height, `DockingArea` rendering itself `.expanded()`.
-                .child(
-                    rect()
-                        .expanded()
-                        .content(Content::Flex)
-                        .child(TabStrip)
-                        .child(
-                            rect()
-                                .width(Size::fill())
-                                .height(Size::flex(1.0))
-                                .child(docking_area(content_dock)),
-                        ),
-                ),
+                // No strip of its own any more: the open documents *are* tabs in the
+                // dock's document panel, so the bar over them is that panel's own tab
+                // bar. `DockingArea` renders itself `.expanded()`, so it needs a parent
+                // that has been given the height.
+                .child(docking_area(content_dock, docs)),
         );
 
     rect()
@@ -7913,8 +8628,8 @@ pub fn app() -> impl IntoElement {
         // stopping propagation. The rows are unaffected -- `on_press` is left-button
         // only -- and so is `on_secondary_down`, which asks for the right button.
         .on_global_pointer_down(move |e: Event<PointerEventData>| match e.button() {
-            Some(MouseButton::Back) => navigate(open, history, active, Nav::Back),
-            Some(MouseButton::Forward) => navigate(open, history, active, Nav::Forward),
+            Some(MouseButton::Back) => navigate(open, history, Nav::Back),
+            Some(MouseButton::Forward) => navigate(open, history, Nav::Forward),
             _ => {}
         })
         // A row selection is swept out with the button down and ends wherever the button
@@ -8017,9 +8732,11 @@ mod tests {
     struct KeptTab(State<String>);
     #[derive(Clone, Copy)]
     struct KeptAt(State<Positions<String>>);
-    /// The tabs that are open, which is what a position is only kept for.
+    /// The tabs that are open, which is what a position is only kept for. A plain list
+    /// here where the app asks `Docs`: what the hook wants is an answer that is true
+    /// *now*, and both of these are.
     #[derive(Clone, Copy)]
-    struct KeptOpen(State<Tabs<String>>);
+    struct KeptOpen(State<Vec<String>>);
     #[derive(Clone, Copy)]
     struct KeptLength(State<usize>);
     /// The last row the pointer was over, which is how the test asks where the view
@@ -8041,7 +8758,13 @@ mod tests {
         let controller = use_scroll_controller(ScrollConfig::default);
         let showing = tab.read().clone();
         let rows = *length.read();
-        use_kept_position(at, open, controller, &showing, rows);
+        use_kept_position(
+            at,
+            move |tab: &String| open.peek().contains(tab),
+            controller,
+            &showing,
+            rows,
+        );
 
         rect().expanded().child(
             VirtualScrollView::new_with_data_controlled(
@@ -8094,9 +8817,7 @@ mod tests {
             scrolling_harness,
             (100., 100.).into(),
             |runner| {
-                let mut tabs = Tabs::default();
-                tabs.open("a".to_owned());
-                tabs.open("b".to_owned());
+                let tabs = vec!["a".to_owned(), "b".to_owned()];
                 (
                     runner
                         .provide_root_context(|| KeptTab(State::create("a".to_owned())))
@@ -8158,13 +8879,99 @@ mod tests {
         // position and then moves to a neighbour, so the run that follows is holding a
         // tab that is gone -- which is a `Selection` holding a whole `Object` in the app.
         let (mut open, mut at) = (open, at);
-        open.write().close(&"a".to_owned());
+        open.write().retain(|tab| tab != "a");
         at.write().forget(&"a".to_owned());
         tab.set("b".to_owned());
         for _ in 0..4 {
             test.sync_and_update();
         }
         assert_eq!(at.peek().at(&"a".to_owned()), None);
+    }
+
+    // --- the dock's document panel -----------------------------------------
+    //
+    // Plain data, so no runner: a `DockArea` is a tree and three rules over it.
+
+    fn area(groups: Vec<Vec<Tab>>) -> DockArea {
+        DockArea::row(groups).with_documents(DOCUMENT_PANEL)
+    }
+
+    fn panels(area: &DockArea) -> Vec<PanelId> {
+        fn walk(node: &DockNode<Tab, PanelId>, into: &mut Vec<PanelId>) {
+            match node {
+                DockNode::Panel(panel) => into.push(panel.panel_id),
+                DockNode::Split { children, .. } => {
+                    children.iter().for_each(|child| walk(child, into))
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&area.tree, &mut found);
+        found
+    }
+
+    /// The whole reason the panel is designated. freya's own sweep retains every
+    /// non-empty child with no exemption, so the panel documents live in would fold away
+    /// the moment the reader closed the last one -- and the content area would come back
+    /// as whatever was left beside it.
+    #[test]
+    fn the_document_panel_survives_being_emptied() {
+        let mut dock = area(vec![vec![], vec![Tab::View(View::Settings)]]);
+        dock.tidy();
+        assert_eq!(panels(&dock), [DOCUMENT_PANEL, 1]);
+    }
+
+    /// A view panel is not spared: emptying one folds it away, which is what keeps the
+    /// layout from filling up with the ghosts of panels the reader dragged out of.
+    #[test]
+    fn an_emptied_view_panel_folds_away() {
+        let mut dock = area(vec![vec![Tab::View(View::Project)], vec![]]);
+        dock.tidy();
+        assert_eq!(panels(&dock), [DOCUMENT_PANEL]);
+    }
+
+    /// A document goes in the document panel and nowhere else. The drop is refused rather
+    /// than redirected, so the drag springs back to where it started.
+    #[test]
+    fn a_document_may_only_be_dropped_into_the_document_panel() {
+        let mut dock = area(vec![vec![], vec![Tab::View(View::Settings)]]);
+        let tab = Tab::Document(Docs::default().open(Document::Source(Arc::from("a.rs"))));
+
+        assert!(!dock.accepts(tab, &DropTarget::Center(1)));
+        assert!(!dock.accepts(
+            tab,
+            &DropTarget::Tab {
+                panel_id: 1,
+                position: 0
+            }
+        ));
+        // A split always makes a new panel, which is never the designated one.
+        assert!(!dock.accepts(
+            tab,
+            &DropTarget::Split {
+                panel_id: DOCUMENT_PANEL,
+                side: Side::Right
+            }
+        ));
+        assert!(dock.accepts(tab, &DropTarget::Center(DOCUMENT_PANEL)));
+        assert!(!dock.on_drop(tab, DropTarget::Center(1)));
+    }
+
+    /// And a view goes anywhere, the document panel included -- which is what keeps
+    /// Project, Settings and the Scratchpad tabbed beside the documents.
+    #[test]
+    fn a_view_may_be_dropped_anywhere() {
+        let dock = area(vec![vec![], vec![Tab::View(View::Settings)]]);
+        let tab = Tab::View(View::Project);
+        assert!(dock.accepts(tab, &DropTarget::Center(DOCUMENT_PANEL)));
+        assert!(dock.accepts(tab, &DropTarget::Center(1)));
+        assert!(dock.accepts(
+            tab,
+            &DropTarget::Split {
+                panel_id: 1,
+                side: Side::Right
+            }
+        ));
     }
 
     /// Nothing on screen: what a project switch does is to the states, and the states are
@@ -8185,7 +8992,27 @@ mod tests {
         () => {
             |runner: &mut _| project_states!(runner)
         };
-        ($runner:expr) => {
+        ($runner:expr) => {{
+            // The two states that are what is open, and the derivation over them, in the
+            // same order and by the same rule `app()` uses -- so a test drives exactly
+            // what the app does. `Active` is provided but not returned: it is not one of
+            // the project's states, it is a reading of two of them.
+            let dock = $runner
+                .provide_root_context(|| {
+                    ContentDock(State::create(
+                        DockArea::row(vec![vec![]]).with_documents(DOCUMENT_PANEL),
+                    ))
+                })
+                .0;
+            let docs = $runner
+                .provide_root_context(|| OpenDocs(State::create(Docs::default())))
+                .0;
+            $runner.provide_root_context(move || {
+                Active(Memo::create(move || {
+                    active_document(&dock.read(), &docs.read())
+                }))
+            });
+
             ProjectStates {
                 proj: $runner
                     .provide_root_context(|| Proj(State::create(OpenProject::default())))
@@ -8196,23 +9023,18 @@ mod tests {
                 loading: $runner
                     .provide_root_context(|| Loading(State::create(Loads::default())))
                     .0,
-                open: $runner
-                    .provide_root_context(|| Open(State::create(Tabs::default())))
-                    .0,
+                open: Open { dock, docs },
                 asm_at: $runner
                     .provide_root_context(|| AsmAt(State::create(Positions::default())))
                     .0,
                 src_at: $runner
                     .provide_root_context(|| SrcAt(State::create(Positions::default())))
                     .0,
-                active: $runner
-                    .provide_root_context(|| Active(State::create(None)))
-                    .0,
                 history: $runner
                     .provide_root_context(|| Hist(State::create(History::default())))
                     .0,
             }
-        };
+        }};
     }
 
     /// Leaving a project leaves nothing of it behind: no object, no tab of either kind,
@@ -8243,15 +9065,8 @@ mod tests {
         let (mut objects, mut asm_at, mut src_at) = (states.objects, states.asm_at, states.src_at);
         objects.write().push(object.clone());
         let tab = |symbol: &Symbol| Document::Assembly(Selection::Symbol(symbol.clone()));
-        let went = |target: Document| {
-            activate(
-                states.open,
-                states.active,
-                states.history,
-                Some(target),
-                Visit::Went,
-            )
-        };
+        let went =
+            |target: Document| activate(states.open, states.history, Some(target), Visit::Went);
         went(tab(&first));
         went(tab(&second));
         went(source.clone());
@@ -8259,7 +9074,7 @@ mod tests {
         src_at.write().remember(source.clone(), 7);
         test.sync_and_update();
 
-        assert_eq!(states.open.peek().tabs().len(), 3);
+        assert_eq!(states.open.documents().len(), 3);
         // Three visits, the source file included: the history records documents, which is
         // what lets its panel list a file at all.
         assert_eq!(states.history.peek().entries().len(), 3);
@@ -8271,10 +9086,7 @@ mod tests {
             states.objects.peek().is_empty(),
             "an object was left behind"
         );
-        assert!(
-            states.open.peek().tabs().is_empty(),
-            "a tab was left behind"
-        );
+        assert!(states.open.documents().is_empty(), "a tab was left behind");
         assert!(
             states.history.peek().entries().is_empty(),
             "a history entry was left behind"
@@ -8293,9 +9105,375 @@ mod tests {
             "a source position was left behind"
         );
         assert!(
-            states.active.peek().is_none(),
+            states.open.active().is_none(),
             "the app still points into the project just left"
         );
+    }
+
+    /// Nothing but the overflow control, so the press has one thing to land on.
+    fn menu_harness() -> impl IntoElement {
+        rect()
+            .expanded()
+            .horizontal()
+            .content(Content::Flex)
+            .child(rect().width(Size::flex(1.0)).height(Size::px(25.0)))
+            .child(DocumentMenuButton)
+    }
+
+    /// And it stays hanging from that edge when the list grows underneath it.
+    ///
+    /// `MenuContainer` measures itself once and keeps the offset it worked out then
+    /// (`menu.rs:236`), so a menu that widens after that is placed for the width it used to
+    /// be and hangs off the side of the window -- by 315px here. The menu is keyed by its
+    /// row count so a change remounts it, which is what makes it measure the size it is.
+    ///
+    /// Not a contrived case: the tab list fills in from a worker, so a menu opened while a
+    /// binary is still being read is open while rows arrive.
+    #[test]
+    fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
+        let (mut test, states) =
+            TestingRunner::new(menu_harness, (600., 300.).into(), project_states!(), 1.);
+        test.sync_and_update();
+
+        // The app's panel always holds the three views, so the button is there before any
+        // document is -- which is exactly how the menu comes to be open while rows arrive.
+        {
+            let mut dock = states.open.dock;
+            let mut dock = dock.write();
+            let panel = dock.document_panel_mut().expect("the document panel");
+            panel.tabs.push(Tab::View(View::Project));
+            panel.active_tab_id = Some(Tab::View(View::Project));
+        }
+        test.sync_and_update();
+
+        let button = test
+            .find(|node, _| {
+                let area = node.layout().area;
+                (area.width() == DOCUMENT_MENU_WIDTH).then_some(area)
+            })
+            .expect("the button is in the bar");
+        let button_right = button.origin.x + button.width();
+
+        let at = ((button.origin.x + 10.0) as f64, 10.0);
+        test.move_cursor(at);
+        test.press_cursor(at);
+        test.release_cursor(at);
+        test.sync_and_update();
+        test.sync_and_update();
+
+        // A row far wider than the three-view menu, arriving after it is on screen.
+        activate(
+            states.open,
+            states.history,
+            Some(Document::Source(Arc::from(
+                "/x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.rs",
+            ))),
+            Visit::Went,
+        );
+        for _ in 0..6 {
+            test.sync_and_update();
+        }
+
+        let popup: Vec<_> = test.find_many(|node, _| {
+            let area = node.layout().area;
+            (area.origin.y == list_row_height()).then_some(area)
+        });
+        let left = popup
+            .iter()
+            .map(|area| area.origin.x)
+            .fold(f32::MAX, f32::min);
+        let width = popup
+            .iter()
+            .map(|area| area.width())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            width > DOCUMENT_MENU_WIDTH * 4.0,
+            "the menu did not grow to hold the new row"
+        );
+        assert_eq!(
+            left + width,
+            button_right,
+            "the widened menu hangs {} off the button's right edge",
+            left + width - button_right
+        );
+    }
+
+    /// The menu hangs from the button's right-hand edge rather than off the side of the
+    /// window.
+    ///
+    /// It is positioned *vertically only*, and this is what says why. `MenuContainer`
+    /// corrects its own overflow -- and latches the first position it is measured at
+    /// (`menu.rs:236`, `measured` is written once) -- so a `right(0.)` of ours lands it on
+    /// the button's edge and freya's correction then shifts it a whole menu-width further
+    /// left, which is the misalignment this asserts against. Dropping our half and letting
+    /// freya pull it back into the window is what puts the two edges together.
+    ///
+    /// The harness puts the button hard against the right edge, which is where the tab bar
+    /// really puts it and the only place the correction fires at all.
+    #[test]
+    fn the_tab_menu_hangs_from_the_buttons_right_edge() {
+        let symbols = fixture_symbols();
+        let object = symbols[0].object.clone();
+        let (mut test, states) =
+            TestingRunner::new(menu_harness, (600., 300.).into(), project_states!(), 1.);
+        test.sync_and_update();
+        let mut objects = states.objects;
+        objects.write().push(object);
+        for symbol in symbols.iter().take(2) {
+            activate(
+                states.open,
+                states.history,
+                Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
+                Visit::Went,
+            );
+        }
+        test.sync_and_update();
+
+        // The button is the only thing in the bar, so it is the one box of its own width.
+        let button = test
+            .find(|node, _| {
+                let area = node.layout().area;
+                (area.width() == DOCUMENT_MENU_WIDTH).then_some(area)
+            })
+            .expect("the button is in the bar");
+        let button_right = button.origin.x + button.width();
+
+        let at = ((button.origin.x + 10.0) as f64, 10.0);
+        test.move_cursor(at);
+        test.press_cursor(at);
+        test.release_cursor(at);
+        test.sync_and_update();
+        test.sync_and_update();
+
+        // Everything the popup is made of hangs below the bar. The leftmost of those is
+        // the container as it was actually placed, corrections included.
+        let popup: Vec<_> = test.find_many(|node, _| {
+            let area = node.layout().area;
+            (area.origin.y == list_row_height()).then_some(area)
+        });
+        assert!(!popup.is_empty(), "the press did not open the menu");
+
+        let left = popup
+            .iter()
+            .map(|area| area.origin.x)
+            .fold(f32::MAX, f32::min);
+        let width = popup
+            .iter()
+            .map(|area| area.width())
+            .fold(0.0_f32, f32::max);
+        assert_eq!(
+            left + width,
+            button_right,
+            "the menu is {} off the button's right edge",
+            button_right - (left + width)
+        );
+    }
+
+    /// The overflow menu opens on a press and closes on the next one.
+    ///
+    /// The assertion is that the element tree *grew*, rather than that some particular row
+    /// exists: what is being checked is that the control does anything at all, and a menu
+    /// that shut in the frame it opened would look exactly like a button that does not
+    /// work.
+    ///
+    /// That it *cannot* shut in the frame it opened is the reason there is no guard against
+    /// `Menu`'s close-on-any-global-press here, where `ContextMenu` has one. The listeners
+    /// for a global event are collected when it is measured, before a single handler runs,
+    /// and this opens on `on_press` -- derived from the very `MouseUp` that emits the global
+    /// press -- so the menu is not in the tree to be asked. A menu opened from a `*_down`
+    /// handler is the case that needs the swallow, which is what `ContextMenu`'s is for:
+    /// a right-click menu opens on `on_secondary_down`, and the `MouseUp` ending that same
+    /// gesture *is* measured against a tree that holds it.
+    #[test]
+    fn the_document_menu_opens_and_closes() {
+        let symbols = fixture_symbols();
+        let object = symbols[0].object.clone();
+
+        let (mut test, states) =
+            TestingRunner::new(menu_harness, (400., 200.).into(), project_states!(), 1.);
+        test.sync_and_update();
+
+        let mut objects = states.objects;
+        objects.write().push(object);
+        for symbol in symbols.iter().take(2) {
+            activate(
+                states.open,
+                states.history,
+                Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
+                Visit::Went,
+            );
+        }
+        test.sync_and_update();
+
+        let nodes = |test: &TestingRunner| test.find_many(|_, _| Some(())).len();
+        let shut = nodes(&test);
+
+        // The button sits at the right-hand end of the bar, where the tab bar puts it.
+        let button = test
+            .find(|node, _| {
+                let area = node.layout().area;
+                (area.width() == DOCUMENT_MENU_WIDTH).then_some(area)
+            })
+            .expect("the button is in the bar");
+        let at = ((button.origin.x + 10.0) as f64, 10.0);
+        test.move_cursor(at);
+        test.press_cursor(at);
+        test.release_cursor(at);
+        test.sync_and_update();
+        let open = nodes(&test);
+        assert!(
+            open > shut,
+            "the press did not open the menu: {shut} nodes before, {open} after"
+        );
+
+        // And the next press shuts it, which is the other half of the same guard.
+        test.press_cursor(at);
+        test.release_cursor(at);
+        test.sync_and_update();
+        assert_eq!(nodes(&test), shut, "the menu did not close");
+    }
+
+    /// The invariant the whole two-state arrangement rests on: a document has a tab in the
+    /// panel exactly while it has an entry in the table.
+    ///
+    /// It is what makes "the panel's `tabs` vec is the list of open documents" true
+    /// without a second list, and `use_kept_position` leans on it directly -- it asks
+    /// `Docs` whether a tab is still open in order to decide whether to write its row
+    /// down, and would resurrect a just-closed tab's position if the two could drift.
+    #[test]
+    fn the_panel_and_the_table_hold_the_same_documents() {
+        let symbols = fixture_symbols();
+        let object = symbols[0].object.clone();
+        let documents: Vec<Document> = symbols
+            .iter()
+            .take(2)
+            .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+            .chain([Document::Source(Arc::from("/src/main.rs"))])
+            .collect();
+
+        let (mut test, states) =
+            TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+        test.sync_and_update();
+        let mut objects = states.objects;
+        objects.write().push(object);
+
+        let agree = |states: &ProjectStates| {
+            let open = states.open.documents();
+            assert_eq!(
+                open.len(),
+                states.open.docs.peek().len(),
+                "the panel and the table hold different numbers of documents"
+            );
+            open
+        };
+
+        for document in &documents {
+            activate(
+                states.open,
+                states.history,
+                Some(document.clone()),
+                Visit::Went,
+            );
+        }
+        test.sync_and_update();
+        assert!(agree(&states) == documents);
+
+        // Opening one that is already open adds neither a tab nor an entry.
+        activate(
+            states.open,
+            states.history,
+            Some(documents[0].clone()),
+            Visit::Went,
+        );
+        test.sync_and_update();
+        assert!(agree(&states) == documents);
+
+        for document in &documents {
+            close_tab(
+                states.open,
+                states.history,
+                states.asm_at,
+                states.src_at,
+                document,
+            );
+        }
+        test.sync_and_update();
+        assert!(agree(&states).is_empty());
+    }
+
+    /// Closing a tab lands on the one to its right, and freya would land on the leftmost.
+    ///
+    /// `DockNode::remove_tab_except` sets a panel's active tab to `tabs.first()` when it
+    /// removes the active one, so the removal is done by hand and the landing chosen with
+    /// [`tabs::landing`]. This is the assertion that says the app's rule won.
+    #[test]
+    fn closing_a_document_lands_on_its_right_hand_neighbour() {
+        let symbols = fixture_symbols();
+        let object = symbols[0].object.clone();
+        let documents: Vec<Document> = symbols
+            .iter()
+            .take(3)
+            .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+            .collect();
+
+        let (mut test, states) =
+            TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+        test.sync_and_update();
+        let mut objects = states.objects;
+        objects.write().push(object);
+
+        for document in &documents {
+            activate(
+                states.open,
+                states.history,
+                Some(document.clone()),
+                Visit::Went,
+            );
+        }
+        // On the middle one, whose neighbours are on both sides -- the only arrangement
+        // in which "the right-hand one" and "the leftmost one" are different answers.
+        activate(
+            states.open,
+            states.history,
+            Some(documents[1].clone()),
+            Visit::Moved,
+        );
+        test.sync_and_update();
+
+        close_tab(
+            states.open,
+            states.history,
+            states.asm_at,
+            states.src_at,
+            &documents[1],
+        );
+        test.sync_and_update();
+        assert!(
+            states.open.active() == Some(documents[2].clone()),
+            "a close landed on the leftmost tab rather than the neighbour"
+        );
+
+        // And closing the last one moves left, there being nothing to its right.
+        close_tab(
+            states.open,
+            states.history,
+            states.asm_at,
+            states.src_at,
+            &documents[2],
+        );
+        test.sync_and_update();
+        assert!(states.open.active() == Some(documents[0].clone()));
+
+        // Closing the only one left leaves nothing active at all.
+        close_tab(
+            states.open,
+            states.history,
+            states.asm_at,
+            states.src_at,
+            &documents[0],
+        );
+        test.sync_and_update();
+        assert!(states.open.active().is_none());
     }
 
     /// The history records where the reader *went* and not what is on screen.
@@ -8321,13 +9499,7 @@ mod tests {
         let mut objects = states.objects;
         objects.write().push(object);
         let go = |target: &Document, visit| {
-            activate(
-                states.open,
-                states.active,
-                states.history,
-                Some(target.clone()),
-                visit,
-            )
+            activate(states.open, states.history, Some(target.clone()), visit)
         };
 
         go(&first, Visit::Went);
@@ -8339,7 +9511,7 @@ mod tests {
         // nowhere and the cursor stays where it was.
         go(&first, Visit::Moved);
         test.sync_and_update();
-        assert!(*states.active.peek() == Some(first.clone()));
+        assert!(states.open.active() == Some(first.clone()));
         assert!(
             states.history.peek().entries() == [first.clone(), second.clone()],
             "a strip click was recorded as a visit"
@@ -8354,14 +9526,13 @@ mod tests {
         // And closing the tab lands on the neighbour without recording it.
         close_tab(
             states.open,
-            states.active,
             states.history,
             states.asm_at,
             states.src_at,
             &first,
         );
         test.sync_and_update();
-        assert_eq!(states.open.peek().tabs().len(), 1);
+        assert_eq!(states.open.documents().len(), 1);
         assert_eq!(
             states.history.peek().entries().len(),
             2,
@@ -8391,25 +9562,17 @@ mod tests {
 
         let mut objects = states.objects;
         objects.write().push(object);
-        let went = |target: Document| {
-            activate(
-                states.open,
-                states.active,
-                states.history,
-                Some(target),
-                Visit::Went,
-            )
-        };
+        let went =
+            |target: Document| activate(states.open, states.history, Some(target), Visit::Went);
         went(source.clone());
         went(function.clone());
         test.sync_and_update();
-        assert_eq!(states.open.peek().tabs().len(), 2);
+        assert_eq!(states.open.documents().len(), 2);
 
         close_binary(
             states.objects,
             states.loading,
             states.open,
-            states.active,
             states.asm_at,
             states.src_at,
             states.history,
@@ -8418,11 +9581,11 @@ mod tests {
         test.sync_and_update();
 
         assert!(
-            states.open.peek().tabs() == [source.clone()],
+            states.open.documents() == [source.clone()],
             "the file tab went with the binary"
         );
         assert!(
-            *states.active.peek() == Some(source),
+            states.open.active() == Some(source),
             "closing the binary did not land on the tab that survived it"
         );
     }
@@ -8594,7 +9757,6 @@ mod tests {
             states.objects,
             states.loading,
             states.open,
-            states.active,
             states.asm_at,
             states.src_at,
             states.history,
@@ -8670,7 +9832,6 @@ mod tests {
         let opened = Document::Assembly(Selection::Object(objects[0].clone()));
         activate(
             states.open,
-            states.active,
             states.history,
             Some(opened.clone()),
             Visit::Went,
@@ -8689,10 +9850,10 @@ mod tests {
         pump(&mut test, || !states.loading.peek().is_loading(&path));
 
         assert!(
-            *states.active.peek() == Some(opened),
+            states.open.active() == Some(opened),
             "the active document moved while the rest of the file was arriving"
         );
-        assert_eq!(states.open.peek().tabs().len(), 1);
+        assert_eq!(states.open.documents().len(), 1);
         assert_eq!(states.objects.peek().len(), 3);
     }
 
@@ -8749,10 +9910,20 @@ mod tests {
     #[derive(Clone, Copy)]
     struct Seen(State<Vec<Symbol>>);
 
+    /// The active document as the analysis tests drive it.
+    ///
+    /// Deliberately not [`Active`], which in the app is a memo over the dock: these tests
+    /// are about the worker -- which answers reach the panes, and which are dropped -- and
+    /// have no business building a dock and a document panel to say which symbol is
+    /// selected. `use_analysis_with` takes anything that reads and peeks, which is what
+    /// lets them.
+    #[derive(Clone, Copy)]
+    struct Selected(State<Option<Document>>);
+
     /// The analysis wiring and nothing else: no panes, since what is under test is which
     /// answers reach them rather than what they draw.
     fn analysis_harness() -> impl IntoElement {
-        let active = use_consume::<Active>().0;
+        let active = use_consume::<Selected>().0;
         let analysis = use_consume::<Analysis>().0;
         let study = use_consume::<Study>().0;
         let mut seen = use_consume::<Seen>().0;
@@ -8853,7 +10024,7 @@ mod tests {
                 runner.provide_root_context(|| Study(Arc::new(study)));
                 (
                     runner
-                        .provide_root_context(|| Active(State::create(None)))
+                        .provide_root_context(|| Selected(State::create(None)))
                         .0,
                     runner
                         .provide_root_context(|| Analysis(State::create(Analyzed::default())))
@@ -8933,7 +10104,7 @@ mod tests {
                 runner.provide_root_context(|| Study(Arc::new(Studied::new)));
                 (
                     runner
-                        .provide_root_context(|| Active(State::create(None)))
+                        .provide_root_context(|| Selected(State::create(None)))
                         .0,
                     runner
                         .provide_root_context(|| Analysis(State::create(Analyzed::default())))
@@ -9568,8 +10739,7 @@ mod tests {
                 scrolling_harness,
                 (200., 200.).into(),
                 |runner| {
-                    let mut tabs = Tabs::default();
-                    tabs.open("a".to_owned());
+                    let tabs = vec!["a".to_owned()];
                     runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
                     runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
                     runner.provide_root_context(|| KeptOpen(State::create(tabs)));
