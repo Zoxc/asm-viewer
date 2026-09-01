@@ -54,6 +54,19 @@ one item per part, so the unfinished half stays visible.
   the capture kind carried through beside the colour, or the bold dropped from the assembly
   side instead. Deferred at the Goals → Steps split: either fix is real plumbing for an
   emphasis nit, and neither is wanted yet.
+- [ ] Read and highlight source files on a background thread. Everything a *binary* costs is off
+  the UI thread already; the source side is not. `source_text` reads the file off disk
+  (`source::load`) and runs the whole tree-sitter parse (`Highlighted::new`) inside a render, so
+  the frame that first shows a file pays for both, and a large file pays for them visibly. Two
+  caches keep it to once per file — `source.rs`'s own and `HIGHLIGHTED` — but that once is a
+  frame, and one of them is emptied deliberately: the spans carry the palette's colours baked
+  into them, so `set_appearance` clears `HIGHLIGHTED` and a theme switch re-parses every file on
+  screen at the moment the window is repainting. `use_analysis`'s shape is what this wants — one
+  worker for the app's lifetime, a channel, and a pane that goes on drawing what it has until the
+  answer lands. Two things to check before starting, since neither is a move: whether what
+  crosses is `Send` at all (a `Highlighted` is a `Rope` and a `SyntaxBlocks`, and the highlighter
+  is `freya-code-editor`'s), and which palette a parse off the thread resolves its colours
+  against, the answer having to be the one the rows are drawn in when it arrives.
 
 ## Navigation
 
