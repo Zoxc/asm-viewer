@@ -21,7 +21,7 @@ use crate::filter::{Filter, Matcher};
 use crate::fonts::{fonts, Font};
 use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
-use crate::project::{self, Selection, Session};
+use crate::project::{self, Details, Project, ProjectId, Recent, Selection, Session};
 use crate::rows::RowSelection;
 use crate::settings::{Appearance, Settings, Theme as ThemeChoice};
 use crate::source::{self, SourceFile};
@@ -66,6 +66,10 @@ const CHEVRON_WIDTH: f32 = 14.0;
 /// and into the tag column, so the nesting is legible in a 300px sidebar without the name
 /// starting halfway across it.
 const TREE_INDENT: f32 = 16.0;
+
+/// The column a project field's name is written in, so the values beside them line up
+/// whatever each is called -- `SourceRow`'s line-number gutter's reason.
+const FIELD_LABEL_WIDTH: f32 = 72.0;
 
 /// The column the short format tag is written in. Fixed, so the names to the right of it
 /// start at the same x whatever the tag says -- the reason `SourceRow`'s line-number
@@ -699,6 +703,105 @@ struct SrcAt(State<Positions<Arc<str>>>);
 /// `History` is the type it holds, the same way `Sel` holds a `Selection`.
 #[derive(Clone, Copy)]
 struct Hist(State<History>);
+
+/// The project the app is in, as the project view holds it.
+///
+/// Two of its three fields are `String`s where [`Details`] has `Option`s, because this is
+/// what is in two text boxes and a text box has no third state: an empty box *is* how a
+/// reader says "I have not said". [`OpenProject::details`] is the conversion and is the
+/// one place the two spellings meet, so nothing else in the app has to know that an
+/// unnamed project is an absent key rather than an empty string.
+///
+/// This is a state and not a value read out of `project.rs` on demand for the reason
+/// every other context here is one: something renders it, so a change to it has to
+/// re-render that something. Making it a state is also what let `Saves::given` stop being
+/// a value carried across the save calls and become an ordinary baseline — a rename is
+/// now a state change like any other, seen by the same observer, and written at once
+/// because `name` lives in `project.toml`.
+#[derive(Clone, Default, PartialEq)]
+struct OpenProject {
+    /// The directory the project is stored in, which is its identity. `None` until a
+    /// project exists on disk at all — a run in which nothing has been opened or named
+    /// has allocated none, deliberately.
+    id: Option<ProjectId>,
+    name: String,
+    directory: String,
+}
+
+impl OpenProject {
+    /// The project as it was found on disk.
+    fn opened(id: ProjectId, project: &Project) -> OpenProject {
+        OpenProject {
+            id: Some(id),
+            name: project.name.clone().unwrap_or_default(),
+            directory: project
+                .directory
+                .as_ref()
+                .map(|directory| directory.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// What of this reaches `project.toml`.
+    ///
+    /// A box holding nothing but spaces is a box holding nothing: the alternative is a
+    /// project named `" "`, which is anonymous everywhere it is drawn and named
+    /// everywhere it is compared. Trimmed rather than refused, so the reader is never
+    /// told off for a trailing space.
+    fn details(&self) -> Details {
+        Details {
+            name: given(&self.name).map(str::to_owned),
+            directory: given(&self.directory).map(PathBuf::from),
+        }
+    }
+}
+
+/// What a text box says, or `None` when it says nothing.
+fn given(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty()).then_some(text)
+}
+
+/// The open project, shared through context.
+#[derive(Clone, Copy)]
+struct Proj(State<OpenProject>);
+
+/// Every state a project owns.
+///
+/// One value because a project switch touches all of them at once — it closes everything
+/// that belonged to the project being left and restores everything that belongs to the
+/// one being entered — and because the two halves of that, [`clear_project`] and
+/// [`restore_project`], would otherwise be nine-argument functions called from three
+/// places. It is `Copy` and holds nothing but handles, so passing it is passing nine
+/// pointers.
+#[derive(Clone, Copy)]
+struct ProjectStates {
+    proj: State<OpenProject>,
+    objects: State<Vec<Arc<Object>>>,
+    open: State<Tabs<Selection>>,
+    asm_at: State<Positions<Selection>>,
+    selection: State<Selection>,
+    history: State<History>,
+    files: State<Tabs<Arc<str>>>,
+    src_at: State<Positions<Arc<str>>>,
+    shown: State<Option<Arc<str>>>,
+}
+
+/// The nine states as a component sees them: through the contexts the root provides, so a
+/// view that switches projects needs none of them handed down to it.
+fn use_project_states() -> ProjectStates {
+    ProjectStates {
+        proj: use_consume::<Proj>().0,
+        objects: use_consume::<Objects>().0,
+        open: use_consume::<Open>().0,
+        asm_at: use_consume::<AsmAt>().0,
+        selection: use_consume::<Sel>().0,
+        history: use_consume::<Hist>().0,
+        files: use_consume::<Files>().0,
+        src_at: use_consume::<SrcAt>().0,
+        shown: use_consume::<Shown>().0,
+    }
+}
 
 /// The flattened symbol list, shared through context so the Symbols tab does not
 /// have to rebuild it and the root does not have to re-render to hand it over.
@@ -3707,10 +3810,19 @@ fn symbol_info(symbol: &Symbol) -> impl IntoElement {
 // Tabs
 // ---------------------------------------------------------------------------
 
-/// One of the six dockable views. A tab is a persistent view rather than a slot
-/// the selection drives, so each one renders itself off the current `Selection`
-/// and subscribes to the state it needs on its own -- which also keeps a
+/// One of the seven dockable views. A tab is a persistent view rather than a slot
+/// the selection drives, so each one renders itself off the state it is about
+/// and subscribes to it on its own -- which also keeps a
 /// selection change from re-rendering the whole tree.
+///
+/// **This, and not the content area's tab strip, is where a view that is not a place in a
+/// binary belongs.** A chip in that strip is a [`Selection`] -- an object or a function --
+/// which is what makes the Assembly and Source panes able to render "the active tab", the
+/// history able to record it and the session able to write it down as a path and a name.
+/// A project, the settings and a scratchpad's editor are none of those: there is one of
+/// each, they resolve against no object, and neither pane could draw one. So they are
+/// views here, where a singleton with its own state already fits, rather than a fourth
+/// `Selection` variant that every one of those five places would need an answer for.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Tab {
     Objects,
@@ -3719,6 +3831,7 @@ enum Tab {
     History,
     Assembly,
     Source,
+    Project,
 }
 
 impl Tab {
@@ -3731,6 +3844,7 @@ impl Tab {
             Tab::History => "History",
             Tab::Assembly => "Assembly",
             Tab::Source => "Source",
+            Tab::Project => "Project",
         }
     }
 
@@ -3744,7 +3858,10 @@ impl Tab {
     /// for the two panes Lucide happens to have named after them; `binary` for **Assembly**,
     /// the one glyph in the set that says *machine code* where `code` and `terminal` say
     /// source and shell; and `file-code` for **Source**, a file rather than bare code
-    /// because the pane is a strip of files and shows one of them.
+    /// because the pane is a strip of files and shows one of them. **Project** is
+    /// `folder-open`, a project being a directory of the app's and pointing at one of the
+    /// reader's, and open because it is the one the app is in rather than one of the
+    /// several the pane also lists.
     ///
     /// The name is passed beside the bytes because `ImageSource` keys the raster cache on
     /// a hash of whatever it is given, and hashing six short names per render is cheaper
@@ -3757,6 +3874,7 @@ impl Tab {
             Tab::History => ("history", lucide::history()),
             Tab::Assembly => ("binary", lucide::binary()),
             Tab::Source => ("file-code", lucide::file_code()),
+            Tab::Project => ("folder-open", lucide::folder_open()),
         };
 
         let side = icon_size();
@@ -3782,6 +3900,7 @@ impl Tab {
             Tab::History => HistoryTab.into_element(),
             Tab::Assembly => AssemblyTab.into_element(),
             Tab::Source => SourceTab.into_element(),
+            Tab::Project => ProjectTab.into_element(),
         }
     }
 }
@@ -4112,6 +4231,327 @@ impl Component for SourceTab {
     }
 }
 
+/// The heading over one section of the project view, with whatever the section's own
+/// action is on the right of it.
+///
+/// A hairline under it rather than a weight or a colour of its own: the pane is a column
+/// of short sections, and a rule is what says where one ends without adding a fifth text
+/// size to a window that has four.
+fn section_heading(text: &str, action: Option<Element>) -> impl IntoElement {
+    rect()
+        .width(Size::fill())
+        // Padded rather than a fixed `ROW_HEIGHT`, unlike every other bar in the app: a
+        // section's action is a `Button`, which is taller than a row, and a fixed height
+        // would draw the rule through it.
+        .padding(Gaps::new_symmetric(2.0, 0.0))
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .content(Content::Flex)
+        .border(bottom_hairline())
+        .child(
+            label()
+                .text(text.to_owned())
+                .width(Size::flex(1.0))
+                .font_weight(FontWeight::BOLD)
+                .max_lines(1),
+        )
+        .maybe_child(action)
+}
+
+/// One labelled field: what it is on the left in a fixed column, what it says on the
+/// right taking the rest.
+///
+/// The column is fixed for `SourceRow`'s reason -- the values line up under one another
+/// whatever the labels turn out to be -- and it is a `flex` row so that a text box in the
+/// value position takes the width that is left rather than the width of its contents.
+fn field_row(name: &str, value: impl IntoElement) -> impl IntoElement {
+    rect()
+        .width(Size::fill())
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .content(Content::Flex)
+        .spacing(8.0)
+        .child(
+            label()
+                .text(name.to_owned())
+                .width(Size::px(FIELD_LABEL_WIDTH))
+                .color(palette().address_fg)
+                .max_lines(1),
+        )
+        .child(value)
+}
+
+/// One binary the project has open, and how many objects came out of it.
+///
+/// Read off the loaded objects rather than off the saved `binaries`, because that is what
+/// `project::binaries` derives the saved list *from*: what this row draws is therefore
+/// what the next write will say, and a file closed from the Objects panel leaves this
+/// list in the same instant it leaves that one.
+fn binary_row(path: &Path, objects: usize) -> Element {
+    let text = path.to_string_lossy().into_owned();
+    row_tooltip(
+        text.clone(),
+        rect()
+            .width(Size::fill())
+            .height(Size::px(ROW_HEIGHT))
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .spacing(8.0)
+            .content(Content::Flex)
+            .child(tree_name(text))
+            .child(
+                label()
+                    .text(match objects {
+                        1 => "1 object".to_owned(),
+                        many => format!("{many} objects"),
+                    })
+                    .color(palette().address_fg)
+                    .max_lines(1),
+            ),
+    )
+    .into_element()
+}
+
+/// One project in the recent list. Pressing it leaves the project on screen and opens
+/// this one in its place.
+#[derive(Clone, PartialEq)]
+struct RecentRow {
+    recent: Recent,
+    key: DiffKey,
+}
+
+impl KeyExt for RecentRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for RecentRow {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let states = use_project_states();
+        let id = self.recent.id.clone();
+        let recent = &self.recent;
+
+        // The id where there is no name, in the colour a tag is drawn in: a project is
+        // its directory, so the one thing it always has to be called is that directory's
+        // name -- and drawing it as a name would claim the reader chose it.
+        let (text, color) = match &recent.name {
+            Some(name) => (name.clone(), palette().text_fg),
+            None => (recent.id.as_str().to_owned(), palette().address_fg),
+        };
+        // What is known about it without opening it: where it points, and how much is in
+        // it. Both come out of that project's own file.
+        let about = match &recent.directory {
+            Some(directory) => directory.to_string_lossy().into_owned(),
+            None => match recent.binaries {
+                0 => "empty".to_owned(),
+                1 => "1 binary".to_owned(),
+                many => format!("{many} binaries"),
+            },
+        };
+
+        row_tooltip(
+            recent.id.as_str().to_owned(),
+            rect()
+                .width(Size::fill())
+                .height(Size::px(ROW_HEIGHT))
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .padding(Gaps::new_symmetric(0.0, 4.0))
+                .spacing(8.0)
+                .content(Content::Flex)
+                .background(match hovering() {
+                    true => palette().object_hover_bg,
+                    false => Color::TRANSPARENT,
+                })
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| switch_project(states, id.clone()))
+                .child(
+                    label()
+                        .text(text)
+                        .width(Size::flex(1.0))
+                        .color(color)
+                        .max_lines(1),
+                )
+                .child(label().text(about).color(palette().address_fg).max_lines(1)),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// The Project pane: everything the app knows about the project it is in, the two things
+/// about it the reader can say, and the other projects they can go to.
+///
+/// **One view and not two**, where `notes/Goals.md` asks for a project view and a
+/// recent-projects view separately. They are one question -- which project am I in, and
+/// what else is there -- and the recent list is how the reader *leaves* the project the
+/// rest of the pane describes, so a tab of its own would be a tab that is empty in every
+/// session where a project was reopened, which is all of them after the first. The goal's
+/// "if none was open" case is answered by the pane itself: with no project the top half
+/// says so and the list is the whole of what there is to do.
+///
+/// The recent list deliberately leaves out the project that is open. The pane above it is
+/// already describing that one, in more detail and from live state rather than from a
+/// file, so a row for it would be a second and staler copy of the name being typed three
+/// lines higher up.
+#[derive(PartialEq)]
+struct ProjectTab;
+
+impl Component for ProjectTab {
+    fn render(&self) -> impl IntoElement {
+        let states = use_project_states();
+        let mut proj = states.proj;
+        let objects = states.objects;
+
+        // Every row of the recent list is a small read of another project's own file, so
+        // it is read when this view is mounted and again when the open project changes --
+        // never per render, which a hover is. The effect also runs once on mount, which
+        // costs one extra reading of a handful of short files and buys the alternative
+        // not being a frame of "no recent projects" before the first one arrives.
+        let mut recents = use_state(project::recent_projects);
+        let open = proj.read().clone();
+        use_side_effect_with_deps(&open.id, move |_: &Option<ProjectId>| {
+            recents.set(project::recent_projects());
+        });
+
+        // What is open, grouped the way the saved list is: by path, in the order the
+        // files were opened.
+        let binaries: Vec<Element> = {
+            let objects = objects.read();
+            project::binaries(&objects)
+                .into_iter()
+                .map(|path| {
+                    let count = objects.iter().filter(|object| object.path == path).count();
+                    binary_row(&path, count)
+                })
+                .collect()
+        };
+
+        let others: Vec<Element> = recents
+            .read()
+            .iter()
+            .filter(|recent| Some(&recent.id) != open.id.as_ref())
+            .map(|recent| {
+                RecentRow {
+                    recent: recent.clone(),
+                    key: DiffKey::None,
+                }
+                .key(recent.id.as_str().to_owned())
+                .into()
+            })
+            .collect();
+
+        let on_choose = move |_| {
+            spawn(async move {
+                let Some(handle) = AsyncFileDialog::new()
+                    .set_title("Choose the project's directory...")
+                    .pick_folder()
+                    .await
+                else {
+                    return;
+                };
+                proj.write().directory = handle.path().to_string_lossy().into_owned();
+            });
+        };
+
+        rect()
+            .expanded()
+            .background(palette().pane_bg)
+            .child(
+                ScrollView::new().child(
+                    rect()
+                        .width(Size::fill())
+                        .padding(Gaps::new_symmetric(8.0, 12.0))
+                        .spacing(6.0)
+                        .child(section_heading("Project", None))
+                        // The two editable fields. Each writes straight into `Proj`, so a
+                        // keystroke is a state change the save observer sees like any
+                        // other -- and `name` and `directory` live in `project.toml`,
+                        // which is the file written at once, so a rename is on disk before
+                        // the next click. That is `Goals.md`'s "user project changes save
+                        // immediately" taken literally, and it costs a few hundred bytes
+                        // written atomically per keystroke of something typed once.
+                        .child(field_row(
+                            "Name",
+                            Input::new(
+                                proj.into_writable()
+                                    .map(|open| &open.name, |open| &mut open.name),
+                            )
+                            // An empty box is a project that has not been named, which is
+                            // what makes it anonymous -- so the placeholder says that
+                            // rather than inviting a name.
+                            .placeholder("Unnamed")
+                            .compact()
+                            .width(Size::flex(1.0)),
+                        ))
+                        .child(field_row(
+                            "Directory",
+                            rect()
+                                .width(Size::flex(1.0))
+                                .horizontal()
+                                .cross_align(Alignment::Center)
+                                .content(Content::Flex)
+                                .spacing(6.0)
+                                .child(
+                                    Input::new(
+                                        proj.into_writable().map(
+                                            |open| &open.directory,
+                                            |open| &mut open.directory,
+                                        ),
+                                    )
+                                    .placeholder("None")
+                                    .compact()
+                                    .width(Size::flex(1.0)),
+                                )
+                                .child(Button::new().on_press(on_choose).child("Choose...")),
+                        ))
+                        // The directory the project is *stored* in, which is its identity
+                        // and is never written inside either of the files in it. Shown
+                        // because it is what the recent list names a project by and what
+                        // a reader looking for these files on disk needs.
+                        .child(field_row(
+                            "Stored as",
+                            label()
+                                .text(match &open.id {
+                                    Some(id) => id.as_str().to_owned(),
+                                    // Not an error and not a missing project: a project
+                                    // directory is made by the first write that has
+                                    // something to put in it, so a run in which nothing
+                                    // has been opened or named has none yet.
+                                    None => "not saved yet".to_owned(),
+                                })
+                                .color(palette().address_fg)
+                                .max_lines(1),
+                        ))
+                        .child(section_heading("Binaries", None))
+                        .child(match binaries.is_empty() {
+                            true => info_line("Nothing open".to_owned()).into_element(),
+                            false => rect().width(Size::fill()).children(binaries).into_element(),
+                        })
+                        .child(section_heading(
+                            "Recent projects",
+                            Some(
+                                Button::new()
+                                    .on_press(move |_| new_project(states))
+                                    .child("New project")
+                                    .into_element(),
+                            ),
+                        ))
+                        .child(match others.is_empty() {
+                            true => info_line("No other projects".to_owned()).into_element(),
+                            false => rect().width(Size::fill()).children(others).into_element(),
+                        }),
+                ),
+            )
+            .into_element()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Docking
 // ---------------------------------------------------------------------------
@@ -4401,24 +4841,32 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 /// position is kept in: a viewing position is a *row*, so a scroll writes nothing until
 /// the pane has moved a whole `ROW_HEIGHT`, and `use_kept_position` compares before it
 /// writes.
-fn use_save_on_change(
-    objects: State<Vec<Arc<Object>>>,
-    open: State<Tabs<Selection>>,
-    asm_at: State<Positions<Selection>>,
-    selection: State<Selection>,
-    history: State<History>,
-    files: State<Tabs<Arc<str>>>,
-    src_at: State<Positions<Arc<str>>>,
-    shown: State<Option<Arc<str>>>,
-) {
+fn use_save_on_change(states: ProjectStates) {
+    let ProjectStates {
+        proj,
+        objects,
+        open,
+        asm_at,
+        selection,
+        history,
+        files,
+        src_at,
+        shown,
+    } = states;
+
     use_side_effect(move || {
         // Reading these subscribes the effect to them: any change re-runs it. Each
         // guard lives to the end of the statement it is created in, which is the one
-        // `record` call, and nothing here writes anything, so holding eight at once is
+        // `record` call, and nothing here writes anything, so holding nine at once is
         // the safe half of the `peek`/`write` gotcha rather than the dangerous one.
         let shown = shown.read();
         let objects = objects.read();
         project::record(
+            // The user-given half, which since 8e is a state like the rest rather than
+            // something the save policy had to carry: the project view holds it, so it
+            // arrives here the same way the binaries do and a rename is recorded by the
+            // same observer that records everything else.
+            proj.read().details(),
             project::binaries(&objects),
             Session::from_state(
                 &objects,
@@ -4839,20 +5287,43 @@ fn navigate(
     }
 }
 
-/// Reopen the last project -- its binaries, tabs and selection -- once, at startup.
+/// Reopen the last project -- its name, binaries, tabs and selection -- once, at startup.
 ///
 /// *Which* project that is, and what a project even is, is `project::reopen`'s: the app
-/// asks for the last one and is handed its two halves, or nothing. Nothing here knows
-/// where they came from, which is what keeps a project picker (`notes/Plan.md`, 8e) from
-/// having to reach into this hook.
+/// asks for the last one and is handed its id and its two halves, or nothing. Nothing
+/// here chooses, which is what keeps the recent-projects view and this hook from being
+/// two answers to the same question: that view goes through [`switch_project`], which
+/// ends in the same [`restore_project`] this does.
 ///
 /// `use_hook` runs its initializer on mount and never again, which is what makes this
-/// happen exactly once; `spawn` is freya's own task spawner and is callable during
-/// render (`use_future` is built out of the same two calls), so the reading and
-/// parsing is off the UI thread from the first frame. Beyond that this is the
-/// toolbar's `on_open` pattern verbatim -- CPU-bound `open_files` on a `std::thread`,
-/// the result back over an `async_channel` -- so a large binary parses with the window
-/// already up and interactive.
+/// happen exactly once.
+fn use_restore_on_startup(states: ProjectStates) {
+    use_hook(move || {
+        let Some((id, project, session)) = project::reopen() else {
+            return;
+        };
+
+        // Synchronously, and before anything else here: `project::reopen` has just seeded
+        // the save policy's baseline from this same project, and the two have to agree by
+        // the time the first effect runs or the save observer would see the name as a
+        // change and write it straight back out -- with the binaries still empty, since
+        // those are restored a worker thread later. Hooks run during the parent's render
+        // and effects after it, which is what makes "before" a fact rather than a hope.
+        let mut proj = states.proj;
+        proj.set(OpenProject::opened(id, &project));
+
+        restore_project(states, project, session);
+    });
+}
+
+/// Put a project's binaries, tabs, selection, source files and history on screen.
+///
+/// The whole of what a restore *is*, and shared by the two things that do one -- the app
+/// starting and a switch to another project -- so that the second cannot drift from the
+/// first. It is the toolbar's `on_open` pattern verbatim for the parsing itself:
+/// CPU-bound `open_files` on a `std::thread`, the result back over an `async_channel`,
+/// `spawn` being freya's own task spawner and callable both during render and from an
+/// event handler. So a large binary parses with the window already up and interactive.
 ///
 /// Every step degrades silently: no project or an unreadable one is `None`, a path that
 /// no longer exists or no longer parses just contributes no `Object` (`open_files`
@@ -4887,103 +5358,174 @@ fn navigate(
 /// woken by an async notify (`Effect::create`) rather than run at the write, so
 /// `use_record_history` and `use_save_on_change` see the settled result once and not
 /// each intermediate `Sel` the tab loop passes through.
-fn use_restore_on_startup(
-    open: State<Tabs<Selection>>,
-    mut asm_at: State<Positions<Selection>>,
-    objects: State<Vec<Arc<Object>>>,
-    selection: State<Selection>,
-    history: State<History>,
-    files: State<Tabs<Arc<str>>>,
-    mut src_at: State<Positions<Arc<str>>>,
-    shown: State<Option<Arc<str>>>,
-) {
-    use_hook(move || {
-        let Some((project, session)) = project::reopen() else {
+fn restore_project(states: ProjectStates, project: Project, session: Session) {
+    let ProjectStates {
+        objects,
+        open,
+        mut asm_at,
+        selection,
+        history,
+        files,
+        mut src_at,
+        shown,
+        ..
+    } = states;
+
+    if project.binaries.is_empty() {
+        return;
+    }
+
+    spawn(async move {
+        let (sender, receiver) = async_channel::bounded(1);
+        let paths = project.binaries.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(open_files(paths));
+        });
+
+        let Ok(parsed) = receiver.recv().await else {
             return;
         };
-        if project.binaries.is_empty() {
+        // Nothing opened: leave the app empty *and* leave the file alone, so a
+        // binary that is only temporarily missing is not forgotten.
+        if parsed.is_empty() {
             return;
         }
 
-        spawn(async move {
-            let (sender, receiver) = async_channel::bounded(1);
-            let paths = project.binaries.clone();
-            std::thread::spawn(move || {
-                let _ = sender.send_blocking(open_files(paths));
-            });
+        let (mut objects, mut history) = (objects, history);
+        objects.write().extend(parsed);
 
-            let Ok(parsed) = receiver.recv().await else {
-                return;
-            };
-            // Nothing opened: leave the app empty *and* leave the file alone, so a
-            // binary that is only temporarily missing is not forgotten.
-            if parsed.is_empty() {
-                return;
-            }
+        // Resolved against everything now loaded rather than just `parsed`, so
+        // this stays correct if the user managed to open something first. All
+        // three are computed before any of them is set so the read guard is long
+        // gone by the time anything is notified.
+        let (restored_history, restored_tabs, restored_selection) = {
+            let loaded = objects.read();
+            (
+                session.resolve_history(&loaded),
+                session.resolve_tabs(&loaded),
+                session.resolve(&loaded),
+            )
+        };
 
-            let (mut objects, mut history) = (objects, history);
-            objects.write().extend(parsed);
+        // The history first, so that when `use_record_history` observes the
+        // selection there is already a cursor to dedup against. The saved cursor
+        // entry is the saved selection -- that is what put it there -- and the two
+        // resolve through the same lookup to the same `Arc`s, so `would_push` is
+        // false and the restored session costs no duplicate entry. It is only when
+        // the cursor entry was dropped, or the selection degraded, that the two
+        // differ, and then a push is exactly right: the app is somewhere new.
+        history.set(restored_history);
 
-            // Resolved against everything now loaded rather than just `parsed`, so
-            // this stays correct if the user managed to open something first. All
-            // three are computed before any of them is set so the read guard is long
-            // gone by the time anything is notified.
-            let (restored_history, restored_tabs, restored_selection) = {
-                let loaded = objects.read();
-                (
-                    session.resolve_history(&loaded),
-                    session.resolve_tabs(&loaded),
-                    session.resolve(&loaded),
-                )
-            };
+        // The strip, oldest chip first, and then the one that was active. Each of
+        // these is a `Sel` write that will be overwritten by the next, which is the
+        // price of there being exactly one way to open a content tab; the last one
+        // is the only one anything observes.
+        //
+        // Where each tab was left goes in *before* the tab is opened, and this is the
+        // one place either map is written from outside a pane. A pane restores its
+        // position when it notices the tab it is showing has changed, so a row that
+        // arrived after the `activate` would arrive after the only moment it is
+        // looked at.
+        {
+            let mut at = asm_at.write();
+            for (tab, row) in &restored_tabs {
+                at.remember(tab.clone(), *row);
+            }
+        }
+        for (tab, _) in restored_tabs {
+            activate(open, selection, tab);
+        }
+        activate(open, selection, restored_selection);
 
-            // The history first, so that when `use_record_history` observes the
-            // selection there is already a cursor to dedup against. The saved cursor
-            // entry is the saved selection -- that is what put it there -- and the two
-            // resolve through the same lookup to the same `Arc`s, so `would_push` is
-            // false and the restored session costs no duplicate entry. It is only when
-            // the cursor entry was dropped, or the selection degraded, that the two
-            // differ, and then a push is exactly right: the app is somewhere new.
-            history.set(restored_history);
-
-            // The strip, oldest chip first, and then the one that was active. Each of
-            // these is a `Sel` write that will be overwritten by the next, which is the
-            // price of there being exactly one way to open a content tab; the last one
-            // is the only one anything observes.
-            //
-            // Where each tab was left goes in *before* the tab is opened, and this is the
-            // one place either map is written from outside a pane. A pane restores its
-            // position when it notices the tab it is showing has changed, so a row that
-            // arrived after the `activate` would arrive after the only moment it is
-            // looked at.
-            {
-                let mut at = asm_at.write();
-                for (tab, row) in &restored_tabs {
-                    at.remember(tab.clone(), *row);
-                }
+        // The Source pane's strip, which needs no resolving: a path that is gone is
+        // still a tab, showing the pane's own "Source file not found".
+        let restored_sources = session.resolve_sources();
+        {
+            let mut at = src_at.write();
+            for (file, row) in &restored_sources {
+                at.remember(file.clone(), *row);
             }
-            for (tab, _) in restored_tabs {
-                activate(open, selection, tab);
-            }
-            activate(open, selection, restored_selection);
-
-            // The Source pane's strip, which needs no resolving: a path that is gone is
-            // still a tab, showing the pane's own "Source file not found".
-            let restored_sources = session.resolve_sources();
-            {
-                let mut at = src_at.write();
-                for (file, row) in &restored_sources {
-                    at.remember(file.clone(), *row);
-                }
-            }
-            for (file, _) in &restored_sources {
-                open_file(files, shown, file.clone());
-            }
-            if let Some(file) = session.shown_source() {
-                open_file(files, shown, Arc::from(file));
-            }
-        });
+        }
+        for (file, _) in &restored_sources {
+            open_file(files, shown, file.clone());
+        }
+        if let Some(file) = session.shown_source() {
+            open_file(files, shown, Arc::from(file));
+        }
     });
+}
+
+/// Empty the app of everything that belonged to the project being left.
+///
+/// **Through the five functions that hold the invariants and nothing else**, which is the
+/// same rule a restore goes through in the other direction: closing every binary takes
+/// its objects, its tabs, their viewing positions, the history entries into it and the
+/// selection with them ([`close_binary`]), and closing every source file takes the Source
+/// pane's strip ([`close_file`]). Writing the lists directly would be shorter and would
+/// be the one place in the app where "the selection is the active tab" was held by hand.
+///
+/// The Source pane is emptied here where a closing *binary* deliberately leaves it alone:
+/// a file chip outlives the binary that opened it because the text stands on its own, but
+/// it does not outlive the project, whose session is what recorded that it was open.
+fn clear_project(states: ProjectStates) {
+    let ProjectStates {
+        objects,
+        open,
+        asm_at,
+        selection,
+        history,
+        files,
+        src_at,
+        shown,
+        ..
+    } = states;
+
+    // Both reads are bound before anything writes, which is the `peek` guard rule and
+    // also the plain iteration rule: `close_binary` writes the very list being walked.
+    let binaries = project::binaries(&objects.peek());
+    for path in binaries {
+        close_binary(objects, open, selection, asm_at, history, &path);
+    }
+
+    let sources = files.peek().tabs().to_vec();
+    for file in &sources {
+        close_file(files, shown, src_at, file);
+    }
+}
+
+/// Leave the project on screen and open the one `id` names in its place.
+///
+/// Three steps, in an order that is the whole of why a switch is safe. `project::switch`
+/// goes first: it flushes what the old project had pending while the save policy still
+/// points at it, and re-points every baseline at the new one — empty, because the app is
+/// about to be empty. Only then is the app emptied, so the save observer, which is woken
+/// by a notify and runs after this handler rather than during it, sees one settled state
+/// that matches the baseline exactly and writes nothing at all. The restore then arrives
+/// as an ordinary change and is written into the new project the way any other is.
+///
+/// A project whose directory has gone since the list named it does nothing but leave the
+/// reader where they are; the row goes on the next reading of the list.
+fn switch_project(states: ProjectStates, id: ProjectId) {
+    let Some((project, session)) = project::switch(&id) else {
+        return;
+    };
+
+    clear_project(states);
+    let mut proj = states.proj;
+    proj.set(OpenProject::opened(id, &project));
+    restore_project(states, project, session);
+}
+
+/// Start a project nobody has named yet and go to it. [`switch_project`] with nothing to
+/// restore, an empty project being empty.
+fn new_project(states: ProjectStates) {
+    let Some(id) = project::start_new() else {
+        return;
+    };
+
+    clear_project(states);
+    let mut proj = states.proj;
+    proj.set(OpenProject::opened(id, &Project::default()));
 }
 
 pub fn app() -> impl IntoElement {
@@ -5040,9 +5582,25 @@ pub fn app() -> impl IntoElement {
     // two above: one selection for the whole app, in whichever pane last took one.
     let marked = use_provide_context(|| Marked(State::create(None))).0;
     let mut shift = use_provide_context(|| Shift(State::create(false))).0;
-    use_save_on_change(
-        objects, open, asm_at, selection, history, files, src_at, shown,
-    );
+    // Which project all of the above belongs to, and the two things the reader has said
+    // about it. A state rather than something read out of `project.rs` when it is drawn,
+    // because the project view both draws it and edits it -- which is also what let the
+    // save policy stop carrying the name across its own calls.
+    let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
+    // The nine of them together, since a project switch closes all of them and reopens
+    // all of them.
+    let states = ProjectStates {
+        proj,
+        objects,
+        open,
+        asm_at,
+        selection,
+        history,
+        files,
+        src_at,
+        shown,
+    };
+    use_save_on_change(states);
     use_record_history(selection, history);
     use_clear_focus(selection, focused, pinned);
     use_clear_marks(selection, shown, marked);
@@ -5050,9 +5608,7 @@ pub fn app() -> impl IntoElement {
     // After the save effect on purpose: the effect is in place, with the save policy's
     // empty baseline, before the restore can put anything into any of the states it
     // observes, so the restored session is seen by it as an ordinary change.
-    use_restore_on_startup(
-        open, asm_at, objects, selection, history, files, src_at, shown,
-    );
+    use_restore_on_startup(states);
 
     // Rebuilt only when the object list changes, not on every selection change.
     let symbols = use_memo(move || {
@@ -5100,7 +5656,8 @@ pub fn app() -> impl IntoElement {
             vec![Tab::History],
         ])
     });
-    let content_dock = use_state(|| DockArea::row(vec![vec![Tab::Assembly], vec![Tab::Source]]));
+    let content_dock =
+        use_state(|| DockArea::row(vec![vec![Tab::Assembly, Tab::Project], vec![Tab::Source]]));
     use_hook(move || {
         let (mut sidebar_dock, mut content_dock) = (sidebar_dock, content_dock);
         sidebar_dock.write().other = Some(content_dock);
@@ -5393,6 +5950,172 @@ mod tests {
             test.sync_and_update();
         }
         assert_eq!(at.peek().at(&"a".to_owned()), None);
+    }
+
+    /// Nothing on screen: what a project switch does is to the states, and the states are
+    /// what this asserts. A runner all the same, because a `State` needs a runtime and
+    /// because the bug being looked for is a borrow held across a write, which is a
+    /// runtime panic and not a compile error.
+    fn project_harness() -> impl IntoElement {
+        rect().expanded()
+    }
+
+    /// The nine contexts `app()` provides, in one `ProjectStates`, so a test can drive a
+    /// switch exactly as the recent list's press does.
+    ///
+    /// A macro and not a function: the runner's type is `freya_core::integration::Runner`,
+    /// which freya's prelude does not re-export, so naming it here would mean naming a
+    /// crate the app does not depend on.
+    macro_rules! project_states {
+        () => {
+            |runner: &mut _| ProjectStates {
+                proj: runner
+                    .provide_root_context(|| Proj(State::create(OpenProject::default())))
+                    .0,
+                objects: runner
+                    .provide_root_context(|| Objects(State::create(Vec::new())))
+                    .0,
+                open: runner
+                    .provide_root_context(|| Open(State::create(Tabs::default())))
+                    .0,
+                asm_at: runner
+                    .provide_root_context(|| AsmAt(State::create(Positions::default())))
+                    .0,
+                selection: runner
+                    .provide_root_context(|| Sel(State::create(Selection::None)))
+                    .0,
+                history: runner
+                    .provide_root_context(|| Hist(State::create(History::default())))
+                    .0,
+                files: runner
+                    .provide_root_context(|| Files(State::create(Tabs::default())))
+                    .0,
+                src_at: runner
+                    .provide_root_context(|| SrcAt(State::create(Positions::default())))
+                    .0,
+                shown: runner.provide_root_context(|| Shown(State::create(None))).0,
+            }
+        };
+    }
+
+    /// Leaving a project leaves nothing of it behind: no object, no tab, no viewing
+    /// position, no history entry, no source file and no selection.
+    ///
+    /// Headless for the reason the swept run below is. `clear_project` goes through
+    /// `close_binary` and `close_file`, and each of those reads a state and then writes
+    /// it -- which is legal to the compiler and panics at the moment it runs if the read
+    /// is still borrowed. Asserting the emptiness is half of it; the other half is that
+    /// the whole walk happens at all.
+    #[test]
+    fn leaving_a_project_leaves_nothing_of_it_behind() {
+        let symbols = fixture_symbols();
+        let (first, second) = (symbols[0].clone(), symbols[1].clone());
+        let object = first.object.clone();
+
+        let (mut test, states) =
+            TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+        test.sync_and_update();
+
+        // The app as a session leaves it: a binary open, two of its functions in the
+        // strip with a row remembered for one of them, a source file open and somewhere
+        // to go back to.
+        let (mut objects, mut history, mut asm_at) =
+            (states.objects, states.history, states.asm_at);
+        objects.write().push(object.clone());
+        activate(
+            states.open,
+            states.selection,
+            Selection::Symbol(first.clone()),
+        );
+        activate(
+            states.open,
+            states.selection,
+            Selection::Symbol(second.clone()),
+        );
+        history.write().push(Selection::Symbol(first.clone()));
+        history.write().push(Selection::Symbol(second.clone()));
+        asm_at
+            .write()
+            .remember(Selection::Symbol(first.clone()), 12);
+        open_file(states.files, states.shown, Arc::from("/src/main.rs"));
+        test.sync_and_update();
+
+        assert_eq!(states.open.peek().tabs().len(), 2);
+        assert_eq!(states.history.peek().entries().len(), 2);
+        assert_eq!(states.files.peek().tabs().len(), 1);
+
+        clear_project(states);
+        test.sync_and_update();
+
+        assert!(
+            states.objects.peek().is_empty(),
+            "an object was left behind"
+        );
+        assert!(
+            states.open.peek().tabs().is_empty(),
+            "a tab was left behind"
+        );
+        assert!(
+            states.history.peek().entries().is_empty(),
+            "a history entry was left behind"
+        );
+        assert!(
+            states.files.peek().tabs().is_empty(),
+            "a source file was left behind"
+        );
+        assert!(states.shown.peek().is_none(), "a file is still shown");
+        // Not tidiness: a `Selection` key holds the `Arc<Object>` it points into, so a
+        // position left here would hold the whole binary of the project just left.
+        assert_eq!(
+            states.asm_at.peek().at(&Selection::Symbol(first)),
+            None,
+            "a viewing position was left behind"
+        );
+        assert!(
+            *states.selection.peek() == Selection::None,
+            "the selection still points into the project just left"
+        );
+    }
+
+    /// What the two text boxes mean, which is the one place the project view's `String`s
+    /// and `project.toml`'s absent keys meet. An empty box is not a project named the
+    /// empty string: it is a project the reader has not named, which is what anonymous
+    /// *is*, and a box holding spaces says exactly as much.
+    #[test]
+    fn an_empty_box_is_a_project_that_has_not_been_named() {
+        assert_eq!(OpenProject::default().details(), Details::default());
+
+        let blank = OpenProject {
+            id: None,
+            name: "   ".to_owned(),
+            directory: String::new(),
+        };
+        assert_eq!(blank.details(), Details::default());
+
+        let named = OpenProject {
+            id: None,
+            name: " kernel ".to_owned(),
+            directory: "/src/kernel".to_owned(),
+        };
+        assert_eq!(
+            named.details(),
+            Details {
+                name: Some("kernel".to_owned()),
+                directory: Some(PathBuf::from("/src/kernel")),
+            }
+        );
+    }
+
+    /// And back the other way, which is what a restore and a switch both do: a project
+    /// with no name comes back as an empty box rather than as the word "None".
+    #[test]
+    fn an_unnamed_project_comes_back_as_an_empty_box() {
+        let id = ProjectId::new("project-1").expect("an id");
+        let open = OpenProject::opened(id.clone(), &Project::default());
+        assert_eq!(open.id, Some(id));
+        assert!(open.name.is_empty() && open.directory.is_empty());
+        // And a round trip through the two spellings changes nothing.
+        assert_eq!(open.details(), Details::default());
     }
 
     /// The analysis worker's work, handed in through a context so a test can substitute

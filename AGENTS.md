@@ -68,7 +68,7 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/tabs.rs` — `Tabs<T>`, the open-tab list, with no cursor of its own.
 - `src/history.rs` — back/forward navigation history.
 - `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API.
-- `src/ui.rs` — the entire freya UI (~4400 lines, in commented sections).
+- `src/ui.rs` — the entire freya UI (~6800 lines, in commented sections).
 
 Everything except `ui.rs` is framework-free and unit-tested rather than eyeballed.
 
@@ -289,8 +289,9 @@ the list would be a second answer the order already gives. It is an *order* and 
 what exists (the directories are that), which is why `MAX_RECENTS` (50) is safe and why nothing
 prunes an id whose directory has gone: repairing it on load would write a file on a startup where
 the reader did nothing. `Recents::touch` answers whether anything moved, so reopening the project
-already at the front writes nothing. The recent-projects *view* is 8e's and will read each row's
-name out of that project's own `project.toml`, never out of this file.
+already at the front writes nothing. The recent-projects view reads each row's
+name out of that project's own `project.toml`, never out of this file: a name copied in here would
+be a second copy to keep in step with the one the user edits.
 
 Inside those files, identity is **path + object name + symbol name + address**, never pointers;
 that mapping lives in exactly two places, `SavedSelection::from_selection` and `::resolve`. The
@@ -325,24 +326,41 @@ and a file-close go through, carrying the cursor to the last survivor at or befo
 `History::restored` also collapses duplicates and trims to the newest `MAX_ENTRIES` (200).
 
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
-two of the three things driving it sit outside the component tree. `record(binaries, session)` is
-called on every state change: a change to the `binaries` writes **both files immediately**; a
-change to only the session marks it **pending** — a tab because it is expressed against the
-binaries rather than the other way round, costs one click to remake, and arrives on every
-navigation, `activate` opening one on the way to each selection change. Nothing in `record` has to
-*say* which is which: which file a field lives in is what decides it. `flush()` writes the pending
+two of the three things driving it sit outside the component tree. `record(details, binaries,
+session)` is called on every state change and compares each against its baseline: a change to the
+`binaries` writes **both files immediately**; a change to the user-given `details` — the name and
+the directory — writes **`project.toml` alone**, since a rename lets go of no binary and so cannot
+leave the two files disagreeing; a change to only the session marks it **pending** — a tab because
+it is expressed against the binaries rather than the other way round, costs one click to remake,
+and arrives on every navigation, `activate` opening one on the way to each selection change.
+Nothing in `record` has to *say* which is which: which file a field lives in is what decides it,
+and `Written` is how it says which half it decided. `flush()` writes the pending
 session — on a 30s timer and from the window's close hook, which is the one exit hook freya 0.4
 offers (`WindowConfig::with_on_close`, a `Send` callback that cannot read any `State`, which is
 exactly why the policy is a static).
 
-Two things about the baselines. They start **empty** and pointedly not as the project loaded at
-startup, so nothing is pending before something is actually opened — seeding them from the loaded
-project would make the first comparison see the still-empty boot state as a change and write an
-empty project over a good one. But `Saves::given` — the loaded project's `name` and `directory` —
-*is* seeded by `reopen`, because it is the one thing no `record` can derive from what is on screen:
-nothing in the UI says what a project is called, so forgetting it would write it back as absent and
-erase it. `Saves` is where a rename will land (8e), and it is where the open `ProjectId` lives too;
-neither is a UI context because nothing renders from either yet.
+**Every baseline is the state the app boots into**, which is why two of them start empty and one
+does not. The binaries and the session are restored *asynchronously* — the app boots holding
+nothing and fills in when the parse lands — so seeding them from the loaded project would make the
+first comparison see the still-empty boot state as a change and write an empty project over a good
+one. `Saves::given` *is* seeded by `reopen`, because the name and directory are restored
+*synchronously*, into the state the project view renders, before a single effect has run. Until 8e
+that field was a value `Saves` **carried** across the calls rather than a baseline, for want of
+anything on screen holding a name; the project view holds one now (`Proj`), so a rename arrives
+through `record` like everything else and the special case is gone. `Saves::listed` is the one
+piece of bookkeeping that grew out of it: it is what `project.toml` currently *says* the binaries
+are, and a write that is not about the binaries writes that back rather than the app's own list —
+otherwise a rename during the startup parse, or after a restore that opened none of them, would
+forget a file through a change that had nothing to do with it.
+
+**Which project is open is `Saves`' too**, and changing it at runtime is `switch(id)` or
+`start_new()`: both `flush` the project being left while the policy still points at it, `remember`
+the one being entered at the front of `recents.toml`, and re-point every baseline through
+`Saves::opened` — empty, because the app is about to be emptied. Emptying it is the caller's half
+and stays in `ui.rs`, the states being the UI's. `recent_projects()` is the list a view draws:
+`recents.toml`'s order, each row described by reading *that project's own* `project.toml`, with an
+id whose directory has gone dropped here — the list never prunes itself on load, and this is the
+point of use where the repair is free.
 
 Startup reopens the **last project** — `project::reopen`, the front of `recents.toml`, both halves
 of it — and `use_restore_on_startup` knows nothing about where they came from, which is what keeps
@@ -422,8 +440,10 @@ describes the older API and does not apply.
 
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`, `Sel` (the active `Selection`), `Open`/`Files`/`Shown` (open tabs),
-`AsmAt`/`SrcAt` (where each of those tabs was left), `Hist`, `Focused`, `Pinned`, `Marked`/`Shift`,
-`Analysis` (what the worker has to say about the selected symbol), plus the memo `Symbols`.
+`AsmAt`/`SrcAt` (where each of those tabs was left), `Hist`, `Proj` (which project all of that
+belongs to), `Focused`, `Pinned`, `Marked`/`Shift`, `Analysis` (what the worker has to say about
+the selected symbol), plus the memo `Symbols`. The nine that a project *owns* travel together as a
+`ProjectStates`, since a project switch closes all of them and reopens all of them.
 
 **`Sel` is the active tab.** `Open(State<Tabs<Selection>>)` is the *list* of open tabs and holds no
 cursor: the active one is whichever entry equals `Sel`, which is well defined because no two tabs
@@ -444,15 +464,17 @@ flex column of `TabStrip` over the `DockingArea`, so the open-document chips sit
 panes: the active tab is what the assembly *and* the source show, and a strip inside one of them
 would follow that pane wherever it was docked.
 
-Inside each panel is a `DockingArea` over a `DockArea` model; the six views are dockable tabs
+Inside each panel is a `DockingArea` over a `DockArea` model; the seven views are dockable tabs
 draggable between the two areas (both use `Tab` as the payload, and `use_drag` keeps one
 `DockDrag<Tab>` at the root). The outer split stays a `ResizableContainer` because docking cannot
 express a literal 300px. A drag carries only the tab, so the area receiving a drop evicts it from
 the other through a wired-up `other: Option<State<DockArea>>`. `root()` never returns `None` — an
 area losing its last tab collapses to a single *empty* panel (`DockArea::tidy`) so tabs can be
-dragged back in. A tab is a **persistent view**, not a slot the selection drives: each of the six
-is a unit `Component` that consumes context and renders off the current `Selection` itself, so a
-selection change re-renders only the tabs that read it and never the root.
+dragged back in. A tab is a **persistent view**, not a slot the selection drives: each of the seven
+is a unit `Component` that consumes context and renders off the state it is about, so a
+selection change re-renders only the tabs that read it and never the root. Project starts tabbed
+beside Assembly and behind it, since the app is for reading disassembly and the project is what a
+reader looks at once.
 
 **Tab strips are not dock tabs.** The six `Tab`s are *views*; the chips in a strip are the
 *documents* open in them. Open functions are not dock tabs because the dock tree is the *layout*
@@ -462,6 +484,26 @@ persists. A chip's name is elided **by character count in Rust**, where every ot
 width: a `maximum_width` anywhere inside a chip makes it shrinkable, and a horizontal scroll view
 measures children against the space *left*, so chips past the edge get no width and draw as a bare
 ×. Do not "fix" that back into a width.
+
+**A document is a place in a binary; everything else is a view.** This is the rule 8e settled and
+9c and 10c inherit, so decide nothing about it again. The content-area strip holds `Selection`s —
+an object or a function — and never anything else, and that is what lets five separate things work
+without a case each: the Assembly *and* Source panes both render "the active tab", the history
+records it, `SavedSelection::from_selection`/`::resolve` write it down as a path plus a name and
+find it again after a restart, `close_binary` knows which chips a closing file takes with it, and
+`entry_text` knows what to call it. A project view, a settings page (9c) and a scratchpad's editor
+(10c) are none of that: they resolve against no object, there is one of each rather than many, and
+neither pane could draw one. So they are **dockable views** — a `Tab` — which is the mechanism the
+app already has for "a pane with its own state that the reader can put where they like", and which
+`InfoTab` was already an instance of. A fourth `Selection` variant was the alternative and buys a
+chip in a strip nothing else would put a second entry in, at the price of five answers nobody
+wants: what `resolve` does with it after a restart, what `Selection::in_file` says when a binary
+closes, what the assembly pane draws for it, what the history means by a "place" that is not one,
+and what the session file spells it as. Persistence follows from the same sentence: a `Tab` is
+layout, and the dock layout is deliberately not persisted, so a view is **explicitly excluded**
+from the saved tabs 8a/8b write and `SavedSelection` needs no answer for it. What a scratchpad
+*builds* needs no rule at all — the artifact goes through `open_files` like any other binary, and
+its functions are ordinary chips.
 
 **Each tab remembers where it was left.** A pane has one `ScrollController` and shows one tab at a
 time, so left alone it hands the tab arriving whatever offset the one leaving had. `AsmAt`/`SrcAt`
@@ -613,6 +655,38 @@ composed of three rules from the modules that own them — `Selection::in_file`,
 rather than degrading (a file takes its objects and their symbols together, so there is nothing to
 fall back to); the history **drops** through the same `History::rebuilt` walk a restore uses, so
 the two cannot drift; and the unit is the **path**, so one file opened twice closes once.
+
+**The Project view** (`Tab::Project`) is what a project's `name` and `directory` are finally set
+from — two fields that round-tripped since 8d with nothing to write them. It is **one view and not
+two**, where `notes/Goals.md` asks for a project view and a recent-projects view separately: they
+are one question — which project am I in, and what else is there — the recent list is how a reader
+*leaves* the project the rest of the pane describes, and a tab of its own would be empty in every
+session where a project was reopened, which is all of them after the first. The goal's "if none was
+open" case is the pane answering for itself. The list leaves the open project *out*, the pane above
+it being a better and fresher description of that one than a row read off a file could be.
+
+`OpenProject` is the value `Proj` holds, and its two editable fields are `String`s where
+`Details` has `Option`s: this is what is in two text boxes, and a text box has no third state —
+an empty box *is* how a reader says "I have not said". `OpenProject::details` is the one place the
+two spellings meet, and it trims, so a box of spaces is a box of nothing rather than a project
+named `" "`. Each box writes straight into `Proj`, so a keystroke is a state change the save
+observer sees like any other and `record` writes `project.toml` at once — `Goals.md`'s "user
+project changes save immediately" taken literally, at a few hundred atomically-written bytes per
+keystroke of something typed once a project. The binaries it lists come from `Objects` through
+`project::binaries`, which is what the saved list is *derived from*, so what the pane draws is what
+the next write will say.
+
+**A project switch is a close and a restore, through the same five functions.** `switch_project`
+is `project::switch` (flush, re-point, remember), then `clear_project`, then `restore_project` —
+and `clear_project` is a `close_binary` per path and a `close_file` per open file, never a write to
+either list, so a project is left in a state the reader could have reached by hand. `restore_project`
+is the body the startup restore was, extracted so the two cannot drift. The Source pane is emptied
+here where a closing *binary* deliberately leaves it alone: a file chip outlives the binary that
+opened it because the text stands on its own, but it does not outlive the project whose session
+recorded that it was open. The ordering is what makes it safe — `project::switch` empties the
+baselines *before* the app is emptied, and freya wakes an effect by a notify rather than at the
+write, so the save observer runs once after the whole handler and sees a settled state that matches
+the baseline exactly. `new_project` is the same thing with nothing to restore.
 
 **Tooltips** are how a truncated row is read, so `row_tooltip` sets the delay to `Duration::ZERO` —
 freya's 500ms default makes sweeping down a list useless. The filter toggles keep the default

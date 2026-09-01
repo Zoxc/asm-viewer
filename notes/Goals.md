@@ -232,8 +232,10 @@ one item per part, so the unfinished half stays visible.
   created by the first write that has something to say, so a run in which nothing was opened
   leaves nothing behind.
 - [x] Each project can have multiple binaries loaded.
-- [ ] Has an associated directory. The field is there and round-trips, but nothing sets it —
-  that needs somewhere to set it from, which is the project view below.
+- [x] Has an associated directory, set from the project view — a text box and a folder picker.
+  Editing it writes `project.toml` at once, the way opening a binary does: a rename or a
+  re-association is a deliberate user action, and it lets go of no binary, so it writes that
+  file alone and leaves the session pending.
 - [x] Can have multiple tabs with different function assemblies / source files open. Within
   a session: the content area's strip holds the open functions and objects, the Source
   pane's holds the open files. They are carried across a restart by the "saves the open
@@ -267,7 +269,10 @@ one item per part, so the unfinished half stays visible.
   saved digest is a third state rather than a mismatch, so existing sessions load unchanged.
 - [ ] Can have an LSP server (like rust-analyzer) / cargo integration so it can build for you and find binaries.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
-- [ ] A main view where you can see all project info.
+- [x] A main view where you can see all project info: the project's name and directory, both
+  editable, the id it is stored as, and every open binary with how many objects it contributed.
+  It is a dockable view rather than a chip in the content strip, for the reason now written into
+  `AGENTS.md`: a document there is a *place in a binary*, and a project is not one.
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
 - [x] Split project storage into toml? for user given settings and another file for opened tabs /
   cached binary inspection data. Three files now: `settings.toml` for the user's own preferences,
@@ -295,9 +300,15 @@ one item per part, so the unfinished half stays visible.
   and the project to reopen is its first entry rather than a field of its own — the order already
   answers that, and a second answer would be one to keep in step. The directories are what say
   which projects exist, so the list needs no pruning.
-- [ ] Have a view of recent projects if none was open. The list is kept; the view is not built.
-  It should read each row's own `project.toml` for the name rather than have one copied into the
-  list, which would be a second copy to keep in step with the one the user edits.
+- [x] Have a view of recent projects if none was open — a section of the project view rather
+  than a view of its own, since the recent list is how you *leave* the project the rest of the
+  pane describes, and a separate tab would be empty in every session where a project was
+  reopened. Each row is named from its own `project.toml` rather than from a name copied into
+  the list, ids whose directory is gone are dropped, and the open project is left out because
+  the pane above already describes it more freshly. Clicking a row switches project at runtime:
+  the old one is flushed while the save policy still points at it, every binary and source file
+  is closed through the five functions that hold the tab invariants, and the new one is restored
+  through the same body the startup restore uses.
 
 ## Fonts and settings
 

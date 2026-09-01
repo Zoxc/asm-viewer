@@ -45,6 +45,11 @@
 //! from a timer every [`AUTOSAVE_INTERVAL`], and [`flush`] once more when the window is
 //! closed.
 //!
+//! *Which* project is open is [`Saves`]' too, and changing it is [`switch`] or
+//! [`start_new`]: both flush the project being left, remember the one being entered and
+//! re-point every baseline at it. Emptying the app of what belonged to the old project is
+//! the caller's half of that, since the states are the UI's.
+//!
 //! There is no published version of this app, so a schema change is just a schema change:
 //! a file that no longer parses is the default, not a migration.
 
@@ -215,12 +220,12 @@ impl ProjectId {
 /// The two things a user can give a project that are not files: what to call it, and
 /// which directory it is about.
 ///
-/// A type of its own because it is the part of [`Project`] that no [`record`] can derive
-/// from what is on screen. The binaries follow from the objects that are open; a name
-/// does not follow from anything, so it has to be *carried* — by [`Saves`], which is
-/// already the thing that knows which project the app is writing into. A view that
-/// *shows* a project's name is `notes/Plan.md`'s 8e, and it will want this somewhere a
-/// render can subscribe to; today nothing draws it, so nothing needs to.
+/// A type of its own because it is the half of [`Project`] that is *said* rather than
+/// derived. The binaries follow from the objects that happen to be open; a name follows
+/// from nothing at all, so until something on screen held one there was nowhere for
+/// [`record`] to read it from and [`Saves`] had to carry it across the calls. The project
+/// view holds one now, which is what lets this arrive at `record` like everything else —
+/// and what makes [`Saves::given`] an ordinary baseline rather than a carried value.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Details {
     pub name: Option<String>,
@@ -471,9 +476,9 @@ impl SavedHistory {
 /// gone — a listing that repaired itself on load would write a file on a startup where the
 /// reader did nothing, and the repair is free at the point of use anyway.
 ///
-/// The recent-projects *view* `notes/Goals.md` asks for is 8e's, and it will read a name
-/// per row out of each project's own `project.toml` rather than out of this file: a name
-/// copied in here would be a second copy to keep in step with the one the user edits.
+/// The recent-projects view reads a name per row out of each project's own
+/// `project.toml` ([`recent_projects`]) rather than out of this file: a name copied in
+/// here would be a second copy to keep in step with the one the user edits.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Recents {
     #[serde(default)]
@@ -511,6 +516,62 @@ impl Recents {
     fn save_to(&self, path: &Path) -> std::io::Result<()> {
         write_atomically(path, self)
     }
+}
+
+/// One row of the recent-projects view: a project that can be switched to, described by
+/// its own `project.toml`.
+///
+/// Everything but the id is read out of that file at the moment the list is asked for,
+/// which is the whole point of the type — `recents.toml` is an *order* and says nothing
+/// about what any of these projects is called, and a name cached beside the order would
+/// be a second copy of the one the reader edits. The cost is a small read per row, paid
+/// when the view is opened and when the open project changes rather than per render.
+///
+/// A row is a project the reader can be *put into*, so a project whose file will not
+/// parse still gets one: it comes back as [`Project::default`], which is an unnamed
+/// project with no binaries — exactly what it will behave as once opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recent {
+    pub id: ProjectId,
+    pub name: Option<String>,
+    pub directory: Option<PathBuf>,
+    /// How many binaries it would open, which is the one thing about a project that says
+    /// how much is *in* it without opening it.
+    pub binaries: usize,
+}
+
+/// The projects the reader has had open, most recently first, each described by its own
+/// file — or an empty list on a system with nowhere to keep them.
+pub fn recent_projects() -> Vec<Recent> {
+    base()
+        .map(|base| recent_projects_in(&base))
+        .unwrap_or_default()
+}
+
+/// The whole of the above except finding the state directory, so a test can point it at
+/// one of its own.
+///
+/// An id whose directory has gone is **dropped here rather than repaired**: [`Recents`]
+/// deliberately never prunes itself on load, because that would write a file on a startup
+/// where the reader did nothing, and this is the point of use where the repair is free.
+fn recent_projects_in(base: &Path) -> Vec<Recent> {
+    Recents::load_from(&recents_in(base))
+        .projects
+        .into_iter()
+        .filter_map(|id| {
+            let directory = project_in(base, &id);
+            if !directory.is_dir() {
+                return None;
+            }
+            let project = Project::load_from(&directory.join(PROJECT_FILE)).unwrap_or_default();
+            Some(Recent {
+                id,
+                name: project.name,
+                directory: project.directory,
+                binaries: project.binaries.len(),
+            })
+        })
+        .collect()
 }
 
 /// The binaries that are no longer the files the session was saved against.
@@ -995,24 +1056,44 @@ pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(30);
 /// close hook cannot reach into it at all.
 static SAVES: Mutex<Saves> = Mutex::new(Saves::new());
 
+/// What one [`Saves::record`] decided has to reach the disk now, and which file each half
+/// of it goes in.
+///
+/// Two fields rather than a pair because the session is not always owed: a change to the
+/// user-given half of a project is a `project.toml` write and nothing else, while a
+/// binaries change is both files at once. Saying which is which here rather than at the
+/// call site keeps the decision in the one function that is allowed to make it.
+#[derive(Debug, PartialEq, Eq)]
+struct Written {
+    project: Project,
+    session: Option<Session>,
+}
+
 struct Saves {
     /// The project everything is written into, or `None` until one has been reopened or
     /// created. Set by [`reopen`] at startup and otherwise allocated on the first write
     /// that has anything to say, which is what makes a run where nothing was ever opened
     /// leave no directory behind.
     open: Option<ProjectId>,
-    /// The name and directory of that project — the two fields no [`record`] can derive,
-    /// so they are carried here rather than rebuilt from the UI's state. Seeded by
-    /// [`reopen`] and by nothing else today; a rename is 8e's, and this is the field it
-    /// will set.
+    /// The name and directory as last written — the baseline a rename is measured
+    /// against, exactly as `binaries` below is the baseline an open or a close is
+    /// measured against.
     ///
-    /// Note that this *is* seeded from the loaded project, where `binaries` and `session`
-    /// below deliberately are not. The difference is what each is for: those two are the
-    /// baseline a change is measured against and must therefore describe the state the app
-    /// booted into, while this is a value the app would otherwise forget and write back as
-    /// absent — erasing a name the reader gave.
+    /// **Every baseline here is the state the app boots into**, and that is why this one
+    /// is seeded from the loaded project while the two below are pointedly empty. The
+    /// binaries and the session are restored *asynchronously* — the app boots with
+    /// nothing open and fills in when the parse lands — so a baseline holding the loaded
+    /// values would read the boot state as a change and write an empty project over a
+    /// good one. The name and directory are restored *synchronously*, into the state the
+    /// project view renders, before a single effect has run; so the state the app boots
+    /// into is the loaded one, and the baseline has to say so or the first record would
+    /// write the name straight back out again.
+    ///
+    /// It used to be a value carried across the `record` calls rather than a baseline,
+    /// because nothing on screen held a name for one to derive. The project view does
+    /// (`ui.rs`, `Proj`), which is what collapsed the special case.
     given: Details,
-    /// The binaries as last written.
+    /// The binaries the app was last seen holding.
     ///
     /// Empty to start with — deliberately not the ones loaded at startup. The state the
     /// app boots into equals this baseline, so nothing is ever pending before something is
@@ -1022,6 +1103,20 @@ struct Saves {
     /// invert that, making the first comparison see the still-empty state as a change and
     /// write an empty project over a good one.
     binaries: Vec<PathBuf>,
+    /// What `project.toml` currently *says* the binaries are.
+    ///
+    /// The same list as `binaries` above in every state but one, and that one is the
+    /// reason this exists: between a project being reopened and its parse landing — or
+    /// for good, when every binary in it has been deleted or will not parse — the app
+    /// holds none while the file names several, and the restore deliberately writes
+    /// nothing so that a binary which is only temporarily missing is not forgotten. A
+    /// rename in that window is an immediate write, and writing the *app's* list would
+    /// forget them after all, through a change that had nothing to do with them. So a
+    /// write that is not about the binaries writes back the ones already in the file.
+    ///
+    /// Seeded by [`Saves::opened`] from the project just entered, and replaced by every
+    /// write that is about the binaries — which is the only kind that may replace it.
+    listed: Vec<PathBuf>,
     /// The session as last written, empty for the same reason.
     session: Session,
     /// A newer session that has not been written yet; `None` when there is nothing to
@@ -1036,6 +1131,7 @@ impl Saves {
             open: None,
             given: Details::new(),
             binaries: Vec::new(),
+            listed: Vec::new(),
             session: Session::new(),
             pending: None,
         }
@@ -1055,15 +1151,26 @@ impl Saves {
         }
     }
 
-    /// Note that `id` is the project the app is now in, without touching the baselines —
-    /// see [`Saves::binaries`] for why the contents must not be seeded and
-    /// [`Saves::given`] for why the name must.
+    /// Note that `id` is the project the app is now in, and set every baseline to the
+    /// state the app will be in the instant afterwards — see [`Saves::given`], which is
+    /// where the asymmetry between the three of them is written out.
+    ///
+    /// Called at startup by [`reopen`] and at runtime by [`switch`] and [`start_new`],
+    /// which is the reason the two empty baselines are *assigned* rather than assumed:
+    /// at startup they are already empty, but a project switched away from leaves its own
+    /// binaries and its own pending session behind, and neither of those describes the
+    /// project being entered. Anything the old one had left pending is [`switch`]'s to
+    /// flush before it gets here.
     fn opened(&mut self, id: ProjectId, project: &Project) {
         self.open = Some(id);
         self.given = project.details();
+        self.binaries = Vec::new();
+        self.listed = project.binaries.clone();
+        self.session = Session::new();
+        self.pending = None;
     }
 
-    /// Take note of the state the app is now in. Hands back the two halves to write right
+    /// Take note of the state the app is now in. Hands back what has to be written right
     /// now, or `None` when nothing changed or the change can wait for a [`Saves::flush`].
     ///
     /// Which binaries are open is a user project change: it is the result of a deliberate
@@ -1083,18 +1190,62 @@ impl Saves {
     /// every symbol the reader clicks, which is exactly the traffic the pending/flush
     /// split exists to collapse. Nothing in this function has to say so: which file a
     /// field lives in is what decides it.
-    fn record(&mut self, binaries: Vec<PathBuf>, session: Session) -> Option<(Project, Session)> {
-        if self.binaries == binaries {
+    ///
+    /// A rename is the other immediate write, and for the first of those three reasons
+    /// alone: naming a project or pointing it at a directory is exactly as deliberate as
+    /// opening a binary, and `notes/Goals.md` asks that a user project change be on disk
+    /// before the next click. It is immediate *per keystroke*, which is what "before the
+    /// next click" means for a text box — a few hundred bytes written atomically, against
+    /// a rename being something a reader does once a project.
+    ///
+    /// The one thing it does **not** do is write the session with it, which a binaries
+    /// change must. That rule exists so `session.toml` can never name a tab into a binary
+    /// `project.toml` has already let go of; a rename lets go of nothing, so the session
+    /// it was recorded beside stays exactly as pending as it was.
+    fn record(
+        &mut self,
+        details: Details,
+        binaries: Vec<PathBuf>,
+        session: Session,
+    ) -> Option<Written> {
+        let binaries_changed = self.binaries != binaries;
+        let details_changed = self.given != details;
+
+        if !binaries_changed && !details_changed {
             if *self.latest() != session {
                 self.pending = Some(session);
             }
             return None;
         }
 
+        self.given = details;
         self.binaries = binaries.clone();
-        self.session = session.clone();
-        self.pending = None;
-        Some((self.project(binaries), session))
+        // A write that is not about the binaries keeps the ones already in the file; see
+        // [`Saves::listed`], which is the whole of that rule.
+        let project = match binaries_changed {
+            true => {
+                self.listed = binaries.clone();
+                self.project(binaries)
+            }
+            false => self.project(self.listed.clone()),
+        };
+
+        if binaries_changed {
+            self.session = session.clone();
+            self.pending = None;
+            return Some(Written {
+                project,
+                session: Some(session),
+            });
+        }
+
+        if *self.latest() != session {
+            self.pending = Some(session);
+        }
+        Some(Written {
+            project,
+            session: None,
+        })
     }
 
     /// Take whatever was recorded but not written, or `None` when the two already agree.
@@ -1122,8 +1273,8 @@ fn saves() -> MutexGuard<'static, Saves> {
 /// failed save.
 ///
 /// The reopened case needs no [`remember`]: it *is* the front of the list, that being how
-/// it was chosen. A view that lets the reader pick a different one (8e) is the other caller
-/// this will grow, and that one does.
+/// it was chosen. [`switch`] and [`start_new`] are the two that pick a different one, and
+/// both of them do remember it — which is why neither goes through here.
 fn open_project(saves: &mut Saves, base: &Path) -> Option<ProjectId> {
     if let Some(id) = &saves.open {
         return Some(id.clone());
@@ -1160,10 +1311,10 @@ fn remember(base: &Path, id: &ProjectId) {
 /// neither file was written, is reopened as the empty project it is rather than orphaned
 /// while a second one is allocated beside it. Only "no recent project" and "that directory
 /// is gone" are `None`.
-pub fn reopen() -> Option<(Project, Session)> {
+pub fn reopen() -> Option<(ProjectId, Project, Session)> {
     let (id, project, session) = reopen_in(&base()?)?;
-    saves().opened(id, &project);
-    Some((project, session))
+    saves().opened(id.clone(), &project);
+    Some((id, project, session))
 }
 
 /// The whole of the above except telling [`Saves`], which is what makes it testable
@@ -1171,35 +1322,90 @@ pub fn reopen() -> Option<(Project, Session)> {
 fn reopen_in(base: &Path) -> Option<(ProjectId, Project, Session)> {
     let recents = Recents::load_from(&recents_in(base));
     let id = recents.first()?.clone();
-    let directory = project_in(base, &id);
+    let (project, session) = load_project(base, &id)?;
+    Some((id, project, session))
+}
+
+/// Both halves of the project `id` names, or `None` when its directory is gone.
+///
+/// The directory is the only thing that has to be there: either file being missing or
+/// unreadable is simply the default half, which is the storage split earning its keep.
+fn load_project(base: &Path, id: &ProjectId) -> Option<(Project, Session)> {
+    let directory = project_in(base, id);
     if !directory.is_dir() {
-        log::debug!("the last project {} is no longer there", id.as_str());
+        log::debug!("the project {} is no longer there", id.as_str());
         return None;
     }
 
     let project = Project::load_from(&directory.join(PROJECT_FILE)).unwrap_or_default();
     let session = Session::load_from(&directory.join(SESSION_FILE)).unwrap_or_default();
-    Some((id, project, session))
+    Some((project, session))
+}
+
+/// Leave the project the app is in and enter the one `id` names, handing back both halves
+/// for the caller to restore. `None` — and nothing changed at all — when its directory has
+/// gone since the recent list named it.
+///
+/// Three things happen in an order that matters. The project being left is **flushed
+/// first**, while [`Saves`] still points at it, because everything pending belongs to it
+/// and a moment later there will be nowhere to put it. The new project is then
+/// **remembered**, since it is now the one a restart should reopen — the one caller
+/// [`open_project`]'s doc anticipated. And [`Saves::opened`] **empties the baselines**,
+/// because the caller is about to empty the app: every binary, tab and history entry on
+/// screen belongs to the project being left, and a baseline still describing them would
+/// read that emptying as a change and write it into the project just entered.
+///
+/// What this cannot do is empty the app, which is the other half of a switch and is
+/// `ui.rs`'s: the states are the UI's and are put back through the same functions a
+/// restore goes through.
+pub fn switch(id: &ProjectId) -> Option<(Project, Session)> {
+    flush();
+    let base = base()?;
+    let (project, session) = load_project(&base, id)?;
+    remember(&base, id);
+    saves().opened(id.clone(), &project);
+    log::debug!("switched to the project {}", id.as_str());
+    Some((project, session))
+}
+
+/// Start a project nobody has named yet and enter it, handing back its id.
+///
+/// [`switch`] with nothing to load: an anonymous project is a directory and two files
+/// that do not exist yet, so entering one is claiming the directory and pointing the save
+/// policy at it. The two files appear when there is something to put in them, which is
+/// the same rule that governs the one the app allocates for itself.
+pub fn start_new() -> Option<ProjectId> {
+    flush();
+    let base = base()?;
+    let id = ProjectId::anonymous(&projects_in(&base))?;
+    remember(&base, &id);
+    saves().opened(id.clone(), &Project::default());
+    log::debug!("started the project {}", id.as_str());
+    Some(id)
 }
 
 /// Take note of the project the app is now in, writing it out immediately if it is a
 /// change that must not be lost and marking it pending otherwise.
 ///
 /// Cheap enough to call on every state change: an unchanged project does nothing at all.
-pub fn record(binaries: Vec<PathBuf>, session: Session) {
+pub fn record(details: Details, binaries: Vec<PathBuf>, session: Session) {
     // The write happens under the lock, so two writes can never reach the file out of
     // the order they were decided in. Everything that calls this is on the main thread
     // today, so nothing ever waits on it.
     let mut saves = saves();
-    let Some((project, session)) = saves.record(binaries, session) else {
+    let Some(written) = saves.record(details, binaries, session) else {
         return;
     };
     let Some(directory) = writing_into(&mut saves) else {
         log::warn!("no state directory to save the project in");
         return;
     };
-    write_or_warn(&directory.join(PROJECT_FILE), |path| project.save_to(path));
-    write_or_warn(&directory.join(SESSION_FILE), |path| session.save_to(path));
+    write_or_warn(&directory.join(PROJECT_FILE), |path| {
+        written.project.save_to(path)
+    });
+    if let Some(session) = written.session {
+        write_or_warn(&directory.join(SESSION_FILE), |path| session.save_to(path));
+    }
 }
 
 /// Write out anything recorded but not yet written. A no-op when nothing has changed,
@@ -2517,9 +2723,30 @@ mod tests {
         }
     }
 
-    /// What `record` hands back to be written: the two halves, or nothing.
-    fn written(saves: &mut Saves, binaries: &[&str], selection: Option<&str>) -> Option<(Project, Session)> {
-        saves.record(paths(binaries), session_with(selection))
+    /// What `record` hands back to be written: the project half, the session half where
+    /// one is owed, or nothing at all.
+    ///
+    /// The details handed in are the ones the project already has, so every test below
+    /// that uses this is asking about a change to the binaries or the session and nothing
+    /// else — which is what they were all asking before a rename could reach `record` at
+    /// all. The rename tests spell theirs out.
+    fn recorded(
+        saves: &mut Saves,
+        binaries: Vec<PathBuf>,
+        session: Session,
+    ) -> Option<(Project, Option<Session>)> {
+        let unchanged = saves.given.clone();
+        saves
+            .record(unchanged, binaries, session)
+            .map(|written| (written.project, written.session))
+    }
+
+    fn written(
+        saves: &mut Saves,
+        binaries: &[&str],
+        selection: Option<&str>,
+    ) -> Option<(Project, Option<Session>)> {
+        recorded(saves, paths(binaries), session_with(selection))
     }
 
     #[test]
@@ -2529,7 +2756,7 @@ mod tests {
         // is what it records. Nothing may come of it: the files on disk are the good
         // ones — and no project directory is allocated either, since only a write
         // allocates one.
-        assert_eq!(saves.record(Vec::new(), Session::new()), None);
+        assert_eq!(recorded(&mut saves, Vec::new(), Session::new()), None);
         assert_eq!(saves.flush(), None);
     }
 
@@ -2546,7 +2773,7 @@ mod tests {
                     directory: None,
                     binaries: paths(&["/tmp/lib.a"]),
                 },
-                session_with(None),
+                Some(session_with(None)),
             ))
         );
         // And is not written a second time by the next flush.
@@ -2565,8 +2792,14 @@ mod tests {
         // so `session.toml` never names a place inside a binary `project.toml` has
         // already let go of.
         let written = written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
-        assert_eq!(written.as_ref().map(|(project, _)| &project.binaries), Some(&paths(&["/tmp/lib.a"])));
-        assert_eq!(written.map(|(_, session)| session), Some(session_with(Some("a.o"))));
+        assert_eq!(
+            written.as_ref().map(|(project, _)| &project.binaries),
+            Some(&paths(&["/tmp/lib.a"]))
+        );
+        assert_eq!(
+            written.and_then(|(_, session)| session),
+            Some(session_with(Some("a.o")))
+        );
         assert_eq!(saves.flush(), None);
     }
 
@@ -2577,8 +2810,8 @@ mod tests {
         let mut saves = Saves::new();
         written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
 
-        let written = saves.record(Vec::new(), Session::new());
-        assert_eq!(written, Some((Project::default(), Session::new())));
+        let written = recorded(&mut saves, Vec::new(), Session::new());
+        assert_eq!(written, Some((Project::default(), Some(Session::new()))));
         assert_eq!(saves.flush(), None);
     }
 
@@ -2617,7 +2850,10 @@ mod tests {
 
         // The selection is pending; opening a second binary writes the lot.
         let written = written(&mut saves, &["/tmp/lib.a", "/tmp/some.dll"], Some("a.o"));
-        assert_eq!(written.map(|(_, session)| session), Some(session_with(Some("a.o"))));
+        assert_eq!(
+            written.and_then(|(_, session)| session),
+            Some(session_with(Some("a.o")))
+        );
         assert_eq!(saves.flush(), None);
     }
 
@@ -2632,7 +2868,10 @@ mod tests {
 
         let mut session = session_with(Some("a.o"));
         session.tabs = vec![saved_tab("a.o", 0)];
-        assert_eq!(saves.record(paths(&["/tmp/lib.a"]), session.clone()), None);
+        assert_eq!(
+            recorded(&mut saves, paths(&["/tmp/lib.a"]), session.clone()),
+            None
+        );
         assert_eq!(saves.flush(), Some(session));
         assert_eq!(saves.flush(), None);
     }
@@ -2650,7 +2889,10 @@ mod tests {
             saved_source("/src/lib.rs", 0),
         ];
         session.shown = 1;
-        assert_eq!(saves.record(paths(&["/tmp/lib.a"]), session.clone()), None);
+        assert_eq!(
+            recorded(&mut saves, paths(&["/tmp/lib.a"]), session.clone()),
+            None
+        );
         assert_eq!(saves.flush(), Some(session));
         assert_eq!(saves.flush(), None);
     }
@@ -2664,25 +2906,25 @@ mod tests {
         let mut saves = Saves::new();
         let mut opened = session_with(Some("a.o"));
         opened.tabs = vec![saved_tab("a.o", 0)];
-        saves.record(paths(&["/tmp/lib.a", "/tmp/some.dll"]), opened);
+        recorded(&mut saves, paths(&["/tmp/lib.a", "/tmp/some.dll"]), opened);
 
         let closed = session_with(None);
         assert_eq!(
-            saves.record(paths(&["/tmp/lib.a"]), closed.clone()),
+            recorded(&mut saves, paths(&["/tmp/lib.a"]), closed.clone()),
             Some((
                 Project {
                     binaries: paths(&["/tmp/lib.a"]),
                     ..Project::default()
                 },
-                closed
+                Some(closed)
             ))
         );
         assert_eq!(saves.flush(), None);
     }
 
-    /// The two things a `record` cannot derive survive one: nothing on screen says what a
-    /// project is called, so `Saves` carries the name and the directory across every write
-    /// rather than writing back the absence it was handed.
+    /// The name and the directory survive a record that is not about them: they are the
+    /// baseline, so a record handing back the same ones is handing back "unchanged" and
+    /// the write carries them rather than the absence a derived project would have.
     #[test]
     fn a_record_keeps_the_name_the_project_was_given() {
         let mut saves = Saves::new();
@@ -2701,10 +2943,12 @@ mod tests {
         assert_eq!(project.binaries, paths(&["/tmp/lib.a"]));
     }
 
-    /// The other half of that: a reopen seeds the *name* and not the contents. The app
-    /// boots empty, so a baseline holding the loaded binaries would read the boot state as
-    /// a change and write an empty project over a good one — which is the same reasoning
-    /// the empty baseline has always had, now with one field deliberately exempt.
+    /// The other half of that: a reopen seeds the *name* and not the contents. Both are
+    /// the same rule — a baseline is the state the app boots into — applied to two fields
+    /// that are restored at different moments. The name is put on screen synchronously,
+    /// so the baseline holds it; the binaries arrive when a worker thread has finished
+    /// parsing them, so a baseline holding them would read the still-empty boot state as a
+    /// change and write an empty project over a good one.
     #[test]
     fn reopening_seeds_the_name_but_not_the_baseline() {
         let mut saves = Saves::new();
@@ -2717,12 +2961,142 @@ mod tests {
 
         // The boot state, recorded by the observer's first run: it equals the baseline,
         // so nothing is written and the good files are left alone.
-        assert_eq!(saves.record(Vec::new(), Session::new()), None);
+        assert_eq!(recorded(&mut saves, Vec::new(), Session::new()), None);
         // And the restore that follows is an ordinary change, written at once.
-        let (project, _) = saves
-            .record(paths(&["/tmp/vmlinux"]), Session::new())
-            .expect("a write");
+        let (project, _) =
+            recorded(&mut saves, paths(&["/tmp/vmlinux"]), Session::new()).expect("a write");
         assert_eq!(project, loaded);
+    }
+
+    /// Naming a project is a user project change, so it is on disk before the next
+    /// click — and it is a `project.toml` write and nothing else, since a rename lets go
+    /// of no binary and so cannot leave the two files disagreeing.
+    #[test]
+    fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
+        let mut saves = Saves::new();
+        written(&mut saves, &["/tmp/lib.a"], None);
+        // A selection, pending as ever.
+        written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
+
+        let named = Details {
+            name: Some("kernel".into()),
+            directory: Some(PathBuf::from("/src/kernel")),
+        };
+        let written = saves
+            .record(
+                named.clone(),
+                paths(&["/tmp/lib.a"]),
+                session_with(Some("a.o")),
+            )
+            .expect("a write");
+        assert_eq!(
+            written.project,
+            Project {
+                name: named.name.clone(),
+                directory: named.directory.clone(),
+                binaries: paths(&["/tmp/lib.a"]),
+            }
+        );
+        // The session was not owed and so was not written — and is still pending, which
+        // is the half that says the rename did not quietly take it along.
+        assert_eq!(written.session, None);
+        assert_eq!(saves.flush(), Some(session_with(Some("a.o"))));
+
+        // And the same name recorded again is not a second write: `given` is a baseline
+        // like the binaries, so a re-render costs nothing.
+        assert_eq!(
+            saves.record(named, paths(&["/tmp/lib.a"]), session_with(Some("a.o"))),
+            None
+        );
+    }
+
+    /// Clearing a name is a change like any other, and writes the key away rather than
+    /// leaving the old one on disk.
+    #[test]
+    fn clearing_a_name_is_a_change_too() {
+        let mut saves = Saves::new();
+        saves.opened(
+            ProjectId::new("kernel-1").expect("an id"),
+            &Project {
+                name: Some("kernel".into()),
+                ..Project::default()
+            },
+        );
+
+        let written = saves
+            .record(Details::new(), Vec::new(), Session::new())
+            .expect("a write");
+        assert_eq!(written.project.name, None);
+        assert_eq!(written.session, None);
+    }
+
+    /// A rename while the binaries are still being parsed — or after a restore that
+    /// opened none of them at all — writes back the list the file already holds.
+    ///
+    /// The app holds no binary in that window and deliberately writes nothing to say so,
+    /// since a file that is only temporarily missing must not be forgotten. A rename is
+    /// an immediate write all the same, and writing the app's own empty list would forget
+    /// them through a change that had nothing to do with them.
+    #[test]
+    fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
+        let mut saves = Saves::new();
+        let loaded = Project {
+            name: None,
+            directory: None,
+            binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
+        };
+        saves.opened(ProjectId::new("kernel-1").expect("an id"), &loaded);
+
+        let named = Details {
+            name: Some("kernel".into()),
+            directory: None,
+        };
+        let written = saves
+            .record(named, Vec::new(), Session::new())
+            .expect("a write");
+        assert_eq!(written.project.name.as_deref(), Some("kernel"));
+        assert_eq!(written.project.binaries, loaded.binaries);
+
+        // And once the parse lands, the binaries are the app's own again: that write *is*
+        // about them, so it is the one kind that may replace the list.
+        let written = saves
+            .record(
+                saves.given.clone(),
+                paths(&["/tmp/vmlinux"]),
+                Session::new(),
+            )
+            .expect("a write");
+        assert_eq!(written.project.binaries, paths(&["/tmp/vmlinux"]));
+        // Closing the last one is still a real change and still empties the file.
+        let written = recorded(&mut saves, Vec::new(), Session::new()).expect("a write");
+        assert_eq!(written.0.binaries, Vec::<PathBuf>::new());
+    }
+
+    /// Entering another project empties every baseline, because the app is about to be
+    /// emptied of everything that belonged to the last one. A baseline still describing
+    /// those binaries would read that emptying as a change and write it into the project
+    /// just entered.
+    #[test]
+    fn entering_a_project_empties_every_baseline() {
+        let mut saves = Saves::new();
+        written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
+
+        let entered = Project {
+            name: Some("other".into()),
+            ..Project::default()
+        };
+        saves.opened(ProjectId::new("other-2").expect("an id"), &entered);
+
+        // The state a switch leaves the app in: nothing open, nothing selected, and the
+        // name of the project just entered. Every one of those is the baseline, so
+        // nothing is written into the new project before its own restore has run.
+        assert_eq!(
+            saves.record(entered.details(), Vec::new(), Session::new()),
+            None
+        );
+        // Nor is the old project's pending session waiting to be written into the new
+        // one: `switch` flushed it, and entering dropped whatever was left.
+        assert_eq!(saves.flush(), None);
     }
 
     // --- the two files, the ids and the recent list -------------------------
@@ -3038,6 +3412,60 @@ mod tests {
         let (_, reopened, session) = reopen_in(&base).expect("a project to reopen");
         assert_eq!(reopened, project);
         assert_eq!(session, Session::new());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// The recent-projects view reads each row's name out of that project's own file,
+    /// in the order the list keeps, and not out of the list — which holds ids and nothing
+    /// else precisely so there is one copy of a name.
+    #[test]
+    fn the_recent_view_names_each_project_from_its_own_file() {
+        let base = directory(line!());
+        for (id, name) in [("first-1", "kernel"), ("second-2", "loader")] {
+            let id = self::id(id);
+            Project {
+                name: Some(name.to_owned()),
+                directory: Some(PathBuf::from("/src").join(name)),
+                binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+            }
+            .save_to(&project_in(&base, &id).join(PROJECT_FILE))
+            .expect("saving the project");
+            remember(&base, &id);
+        }
+
+        let recents = recent_projects_in(&base);
+        assert_eq!(
+            recents
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["second-2", "first-1"]
+        );
+        assert_eq!(recents[0].name.as_deref(), Some("loader"));
+        assert_eq!(recents[0].directory, Some(PathBuf::from("/src/loader")));
+        assert_eq!(recents[0].binaries, 2);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Two things that are not errors and not empty rows. A project whose directory has
+    /// gone is dropped here — the list never prunes itself on load, and this is the point
+    /// of use where the repair is free — while one that has a directory and no readable
+    /// file at all is a real project the reader can be put into, so it keeps its row and
+    /// describes itself as the empty project it is.
+    #[test]
+    fn a_recent_project_that_is_gone_is_dropped_and_an_empty_one_is_not() {
+        let base = directory(line!());
+        let mut saves = Saves::new();
+        let empty = open_project(&mut saves, &base).expect("a project");
+        remember(&base, &id("gone-1"));
+
+        let recents = recent_projects_in(&base);
+        assert_eq!(recents.len(), 1);
+        assert_eq!(recents[0].id, empty);
+        assert_eq!(recents[0].name, None);
+        assert_eq!(recents[0].binaries, 0);
 
         let _ = fs::remove_dir_all(&base);
     }
