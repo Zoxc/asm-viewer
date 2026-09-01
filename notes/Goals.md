@@ -258,10 +258,11 @@ one item per part, so the unfinished half stays visible.
   `XDG_CURRENT_DESKTOP` only sorts the two Linux tools rather than choosing one — a tool that
   is not installed is already "the desktop said nothing" — so `kreadconfig` and `gsettings`
   are both tried, and Gnome's `text-scaling-factor` is applied to the point size because it
-  is where Gnome puts "make text bigger". Windows is read from `WindowMetrics` in the
-  registry with `reg.exe`, so it costs no dependency; its fixed-width half stays `Consolas`,
-  Windows storing no desktop-wide monospace font to look up. Compile-checked for the Windows
-  target, but only the parsers are tested — nothing here has been run on Windows.
+  is where Gnome puts "make text bigger". Windows goes through
+  `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)` over a target-gated `windows-sys`, with no
+  external process; its fixed-width half stays `Consolas`, Windows storing no desktop-wide
+  monospace font to look up. Compile-checked for the Windows target, but only the decoding is
+  tested — nothing here has been run on Windows.
 - [ ] Have a settings page where you can override (with a default being unspecified with clear visual distinction).
 
 ## Scratchpad

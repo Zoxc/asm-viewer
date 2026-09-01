@@ -64,7 +64,7 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/rows.rs` — the run of rows a reader picks out to copy.
 - `src/tabs.rs` — `Tabs<T>`, the open-tab list, with no cursor of its own.
 - `src/history.rs` — back/forward navigation history.
-- `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Windows registry.
+- `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API.
 - `src/ui.rs` — the entire freya UI (~4400 lines, in commented sections).
 
 Everything except `ui.rs` is framework-free and unit-tested rather than eyeballed.
@@ -384,11 +384,16 @@ and `fixed`, a comma-separated spec) against `gsettings` (Gnome's `font-name` an
 words), and the other is tried anyway: a tool that is not installed is already a `None` here.
 Gnome's `text-scaling-factor` multiplies the point size, because it is *how* Gnome says "make text
 bigger" — `font-name` keeps its nominal size and the accessibility slider moves this instead;
-winit's own display scale is separate and multiplying both would compound. Windows is read out of
-`HKCU\Control Panel\Desktop\WindowMetrics` with `reg.exe` (a `LOGFONTW` blob plus the `AppliedDPI`
-its height is in), which keeps the file's "ask the desktop's tool" shape and costs no dependency;
-the `SystemParametersInfo` route would need a direct `windows-sys`, and Windows stores no
-desktop-wide monospace font at all, so that half stays `Consolas`. Each font is then a *chain*:
+winit's own display scale is separate and multiplying both would compound. Windows is `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`
+for `lfMessageFont`, over a `windows-sys` pinned to the 0.61 the lock already holds transitively
+so no fourth copy of it appears (`cargo tree -d`). Its `lfHeight` is divided by the screen DC's
+`LOGPIXELSY` rather than by `SystemParametersInfoForDpi`, deliberately: that function and
+`GetDpiForSystem` only exist from Windows 10 1607, and `windows-sys` links its imports statically,
+so naming one would turn "no font setting" into a process that will not start — winit itself
+`GetProcAddress`es that family for the same reason. The pairing is also what makes it *correct*:
+both the metrics and the DC's DPI are virtualised into whatever DPI space the process is in, so
+they agree without this file knowing which that is. Windows stores no desktop-wide monospace font
+at all, so that half stays `Consolas`. Each font is then a *chain*:
 the desktop's answer in front of the platform's own (`Segoe UI`/`Consolas`,
 `.AppleSystemUIFont`/`Menlo`, else the generic `sans-serif`/`monospace` that skia resolves through
 fontconfig). A family named with no usable size keeps the family and takes the app's default size.

@@ -9,14 +9,14 @@
 //! two tools are tried in and the other one is tried anyway: a tool that is not installed
 //! is already a `None` here rather than an error, so asking both costs one failed `exec`
 //! on a desktop that has neither and gets an answer on the desktops that set the variable
-//! to something neither of them recognises. Windows has no such tool and is read out of
-//! the registry instead.
+//! to something neither of them recognises. Windows has no such tool and no such
+//! question: there is one shell, and `user32` is asked directly.
 //!
-//! Nothing here fails: a missing binary, a key that was never written, a value in a shape
+//! Nothing here fails: a missing binary, a call that returns `FALSE`, a value in a shape
 //! nobody expected and a font size of zero all come back as "the desktop said nothing",
 //! which is what the platform defaults are for.
 
-use std::{borrow::Cow, process::Command, sync::OnceLock};
+use std::{borrow::Cow, sync::OnceLock};
 
 /// The platform's own interface and fixed-width families. These have to be named:
 /// freya's global fallbacks (`Segoe UI`, `Noto Sans`, `Arial`, ...) are all
@@ -133,26 +133,26 @@ fn points_to_pixels(points: f32) -> f32 {
     points * 96.0 / 72.0
 }
 
-/// Run a tool and take its stdout, trimmed. Everything that can go wrong is one `None`:
-/// the binary is not installed (the ordinary case for whichever desktop this is not), it
-/// answered with a failure because the key does not exist, or it wrote something that is
-/// not text.
-fn output(command: &mut Command) -> Option<String> {
-    let output = command.output().ok()?;
-
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
 /// The desktop lookups, which are the whole of the story on everything that is not
 /// Windows. Compiled on Windows too, but only so its parsers stay under test there.
 #[cfg(any(not(target_os = "windows"), test))]
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 mod desktop {
-    use super::{output, Spec, Which};
+    use super::{Spec, Which};
     use std::{env, process::Command, sync::OnceLock};
+
+    /// Run a tool and take its stdout, trimmed. Everything that can go wrong is one
+    /// `None`: the binary is not installed (the ordinary case for whichever desktop this
+    /// is not), it answered with a failure because the key does not exist, or it wrote
+    /// something that is not text.
+    fn output(command: &mut Command) -> Option<String> {
+        let output = command.output().ok()?;
+
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
 
     /// The two desktops that can be asked. Nothing else is: every other desktop either
     /// answers to `gsettings` (it is the GTK setting, not a Gnome-only one) or has no
@@ -375,37 +375,40 @@ mod desktop {
     }
 }
 
-/// Windows, read through `reg.exe` rather than through `SystemParametersInfo`.
+/// Windows, asked through `user32` rather than through a tool: there is one shell here
+/// and it answers `SystemParametersInfo`, so nothing is shelled out to and nothing is
+/// read back out of another program's output.
 ///
-/// The API call would be the better answer -- `NONCLIENTMETRICS` is what the desktop
-/// actually uses, DPI-aware and always populated -- but it needs `windows-sys` as a
-/// *direct* dependency, and this crate has none: the three copies in the tree are
-/// winit's, accesskit's and skia's, and a dependency cannot be used through another
-/// crate's. Undoing this is one `[target.'cfg(windows)'.dependencies] windows-sys` line
-/// with the `Win32_UI_WindowsAndMessaging` and `Win32_Graphics_Gdi` features, and an
-/// `unsafe` call to `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, ..)` feeding the
-/// `lfMessageFont` into [`parse_logfont`], which is the half of this that is under test.
-///
-/// What the registry costs by comparison: `MessageFont` is only written once something
-/// has changed it, so a machine on its defaults answers nothing and gets `Segoe UI` at
-/// the floem-era size -- which is what it would have got anyway.
-///
-/// Compiled on Linux too, but only for its tests: the parsing is the half of this that
-/// can be checked from a machine that is not Windows, and a `cfg` that hid it from
-/// `cargo test` would leave it checked nowhere at all.
+/// Compiled on Linux too, but only for its tests: [`font_spec`] -- a `LOGFONTW`'s face
+/// name and height turned into a family and a point size -- is the half of this that can
+/// be checked from a machine that is not Windows, and a `cfg` that hid it from `cargo
+/// test` would leave it checked nowhere at all. Everything that touches the API sits
+/// behind a second `cfg` inside, because that half compiles nowhere else.
 #[cfg(any(target_os = "windows", test))]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod windows {
-    use super::{output, Spec, Which};
-    use std::process::Command;
+    use super::Spec;
 
-    const METRICS: &str = r"HKCU\Control Panel\Desktop\WindowMetrics";
+    #[cfg(target_os = "windows")]
+    use super::Which;
+    #[cfg(target_os = "windows")]
+    use windows_sys::Win32::{
+        Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSY},
+        UI::WindowsAndMessaging::{
+            SystemParametersInfoW, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS,
+        },
+    };
+
+    /// The DPI logical pixels are defined at, and so also the one to assume wherever the
+    /// real one cannot be had.
+    const NOMINAL_DPI: u32 = 96;
 
     /// Windows has a message font and no fixed-width font: nothing in the shell settings
     /// names one. The nearest thing is `HKCU\Console`'s `FaceName`, which is the console
     /// host's own choice, is often the raster `Terminal` face that skia cannot use for a
     /// UI, and carries its size as a packed cell in pixels rather than a point size --
     /// three reasons it is not the desktop answering, so `Consolas` stands.
+    #[cfg(target_os = "windows")]
     pub fn query(which: Which) -> Option<Spec> {
         match which {
             Which::Ui => message_font(),
@@ -413,80 +416,113 @@ mod windows {
         }
     }
 
-    /// The dialog font, as a `LOGFONTW` blob under `WindowMetrics`, whose sizes are
-    /// stored at whatever DPI they were last written at -- `AppliedDPI`, right beside it.
+    /// `SPI_GETNONCLIENTMETRICS` fills a `NONCLIENTMETRICSW` with the fonts and widths the
+    /// shell draws its own chrome with. `lfMessageFont` is the one dialogs and message
+    /// boxes use, which is what "the interface font" means on Windows -- and unlike the
+    /// registry copy of it, the API answers on a machine that has never changed a setting.
+    #[cfg(target_os = "windows")]
     fn message_font() -> Option<Spec> {
-        let font = registry(METRICS, "MessageFont")?;
-        let dpi = registry(METRICS, "AppliedDPI")
-            .as_deref()
-            .and_then(parse_dword)
-            .unwrap_or(96);
+        // `cbSize` is neither optional nor a formality: it is how `user32` tells the two
+        // layouts of this struct apart, and a call carrying neither of them returns
+        // `FALSE` having written nothing. The struct grew an `iPaddedBorderWidth` after
+        // XP, so code that had to run there passed the *old* size -- this one less an
+        // `i32` -- and got the short answer back. The whole struct is the right answer
+        // here: `windows-sys` declares only the post-XP layout, so the short size would
+        // leave a field this code can name uninitialised while gaining nothing, and the
+        // oldest Windows this app runs on is far past XP anyway (freya wants an OpenGL
+        // context XP's drivers do not give it). The rest is zeroed, which is what
+        // `Default` is here: `SPI_GETNONCLIENTMETRICS` writes every field of it.
+        let mut metrics = NONCLIENTMETRICSW {
+            cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
+            ..Default::default()
+        };
 
-        parse_logfont(&parse_hex(&font)?, dpi)
-    }
+        // SAFETY: `SPI_GETNONCLIENTMETRICS` is a read that writes `cbSize` bytes into
+        // `pvparam`. That is this stack `NONCLIENTMETRICSW`, which is exactly that many
+        // bytes long and already zeroed, and `uiparam` carries the same size; `fwinini`
+        // says what to do with a *changed* setting and is ignored by every `SPI_GET*`.
+        let read = unsafe {
+            SystemParametersInfoW(
+                SPI_GETNONCLIENTMETRICS,
+                std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
+                (&mut metrics as *mut NONCLIENTMETRICSW).cast(),
+                0,
+            )
+        };
 
-    /// The value of one registry entry, as `reg.exe` prints it.
-    fn registry(key: &str, value: &str) -> Option<String> {
-        let dump = output(Command::new("reg").args(["query", key, "/v", value]))?;
-
-        parse_registry(&dump).map(|(_, value)| value.to_owned())
-    }
-
-    /// `reg query` writes a blank line, the key's full name, and then the entry as three
-    /// columns: `    MessageFont    REG_BINARY    f5ffffff...`. The value is taken as the
-    /// rest of the line rather than as a third whitespace-separated word, because a
-    /// `REG_SZ` value contains spaces (`Lucida Console`) and the entry's name never does.
-    pub fn parse_registry(dump: &str) -> Option<(&str, &str)> {
-        dump.lines().find_map(|line| {
-            let (_, rest) = line.split_once("REG_")?;
-            let (kind, value) = rest.split_once(char::is_whitespace)?;
-
-            Some((kind, value.trim()))
-        })
-    }
-
-    /// A `REG_DWORD` prints as `0x60`.
-    pub fn parse_dword(value: &str) -> Option<u32> {
-        let digits = value.trim().strip_prefix("0x")?;
-
-        u32::from_str_radix(digits, 16).ok()
-    }
-
-    /// A `REG_BINARY` prints as one unbroken run of hex digits.
-    pub fn parse_hex(value: &str) -> Option<Vec<u8>> {
-        let value = value.trim();
-        if value.is_empty() || value.len() % 2 != 0 {
+        // A `BOOL`, and a `FALSE` is one more "the desktop said nothing": the reason is
+        // over in `GetLastError` and there is nothing this file would do differently for
+        // any of them.
+        if read == 0 {
             return None;
         }
 
-        (0..value.len() / 2)
-            .map(|byte| u8::from_str_radix(&value[byte * 2..byte * 2 + 2], 16).ok())
-            .collect()
+        let font = metrics.lfMessageFont;
+
+        font_spec(&font.lfFaceName, font.lfHeight, metrics_dpi())
     }
 
-    /// A `LOGFONTW`: five `LONG`s, eight `BYTE`s, and 32 UTF-16 code units of face name.
+    /// The DPI the metrics just read are in, which is the part of this that has to be got
+    /// right rather than merely written down.
     ///
-    /// `lfHeight` is negative for the character height and positive for the cell height
-    /// (which is taller by the font's internal leading). The sign is dropped rather than
-    /// corrected for: the difference is a point either way on a UI font, and every writer
-    /// of this value uses the negative form. It is in device units at `dpi`, which is why
-    /// the DPI has to come out of the registry with it -- the same font is `-12` on a
-    /// 96 DPI machine and `-18` on a 144 DPI one, and only one of them is 9pt.
-    pub fn parse_logfont(bytes: &[u8], dpi: u32) -> Option<Spec> {
-        const FACE_NAME: usize = 28;
-        const SIZE: usize = FACE_NAME + 64;
+    /// `SystemParametersInfoW` answers in whatever DPI space the *process* is in: 96 while
+    /// it is still DPI-unaware, the system DPI once winit has made it per-monitor aware.
+    /// `GetDeviceCaps(LOGPIXELSY)` on the screen DC is virtualised in exactly the same
+    /// way, so the two agree whichever of those two states this was called in -- which is
+    /// the reason to read the DPI here rather than to assume one.
+    ///
+    /// `SystemParametersInfoForDpi(.., 96)` would ask for the answer already in the units
+    /// this file works in and drop the division outright. It is deliberately not used:
+    /// `windows-sys` links its imports statically, and that entry point -- like
+    /// `GetDpiForSystem`, the other way to skip the DC -- exists only from Windows 10
+    /// 1607, so naming it turns "the desktop said nothing" into a process that will not
+    /// start at all on anything older. winit reaches that same family of functions through
+    /// `GetProcAddress` for precisely that reason, and a font setting is not worth
+    /// lowering the app's floor under winit's own.
+    ///
+    /// Dividing at all matters however the DPI arrives: 9pt is `-12` at 96 and `-18` at
+    /// 144, while freya is handed logical pixels at a nominal 96 with winit applying the
+    /// display's real scale factor on top of them. Passing the 144 DPI number straight
+    /// through would scale the font twice.
+    #[cfg(target_os = "windows")]
+    fn metrics_dpi() -> u32 {
+        // SAFETY: `GetDC(null)` is the documented way to ask for the screen's own DC and
+        // these three are the documented sequence; `GetDeviceCaps` only reads, and the DC
+        // is released on the one path that obtained it.
+        let dpi = unsafe {
+            let screen = GetDC(std::ptr::null_mut());
+            if screen.is_null() {
+                return NOMINAL_DPI;
+            }
 
-        let bytes = bytes.get(..SIZE)?;
-        let height = i32::from_le_bytes(bytes[..4].try_into().ok()?);
+            let dpi = GetDeviceCaps(screen, LOGPIXELSY as i32);
+            ReleaseDC(std::ptr::null_mut(), screen);
 
-        let name: Vec<u16> = bytes[FACE_NAME..]
-            .chunks_exact(2)
-            .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
-            .take_while(|unit| *unit != 0)
-            .collect();
+            dpi
+        };
+
+        u32::try_from(dpi)
+            .ok()
+            .filter(|dpi| *dpi > 0)
+            .unwrap_or(NOMINAL_DPI)
+    }
+
+    /// The family and the point size inside a `LOGFONTW`, which is the half of this a
+    /// machine that is not Windows can be asked about.
+    ///
+    /// `lfFaceName` is a fixed `[u16; 32]` and is NUL-terminated only when the name is
+    /// shorter than that, so the name runs to the first NUL *or* to the end of the array.
+    /// An empty one is not an answer, which [`Spec::new`] is already the judge of.
+    ///
+    /// `lfHeight` is in logical units at `dpi`: negative for the character height and
+    /// positive for the cell height, which is taller by the font's internal leading. The
+    /// sign is dropped rather than corrected for -- the difference is a point either way
+    /// on a UI font, and every writer of this value uses the negative form.
+    pub fn font_spec(face: &[u16; 32], height: i32, dpi: u32) -> Option<Spec> {
+        let name: Vec<u16> = face.iter().copied().take_while(|unit| *unit != 0).collect();
         let family = String::from_utf16(&name).ok()?;
 
-        let dpi = if dpi == 0 { 96 } else { dpi };
+        let dpi = if dpi == 0 { NOMINAL_DPI } else { dpi };
         let points = height.unsigned_abs() as f32 * 72.0 / dpi as f32;
 
         Spec::new(&family, Some(points))
@@ -521,7 +557,7 @@ pub fn fonts() -> &'static Fonts {
 #[cfg(test)]
 mod tests {
     use super::desktop::{order, parse_kde, parse_pango, Desktop};
-    use super::windows::{parse_dword, parse_hex, parse_logfont, parse_registry};
+    use super::windows::font_spec;
     use super::{Spec, Which};
 
     /// What a parser is expected to have found, spelled out at the call site so the
@@ -620,73 +656,61 @@ mod tests {
         assert_eq!(order("sway:wlroots"), [Desktop::Kde, Desktop::Gnome]);
     }
 
-    /// A `LOGFONTW` with `height` in its first field and `family` in its face name.
-    fn logfont(height: i32, family: &str) -> Vec<u8> {
-        let mut bytes = height.to_le_bytes().to_vec();
-        bytes.resize(28, 0);
-        for unit in family.encode_utf16() {
-            bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-        bytes.resize(92, 0);
+    /// A `LOGFONTW`'s `lfFaceName`: UTF-16, NUL-padded, and with no terminator at all
+    /// when the name fills all 32 units.
+    fn face(name: &str) -> [u16; 32] {
+        let mut units = [0u16; 32];
 
-        bytes
+        for (slot, unit) in units.iter_mut().zip(name.encode_utf16()) {
+            *slot = unit;
+        }
+
+        units
     }
 
     #[test]
     fn a_logfont_is_a_face_name_and_a_height_at_a_dpi() {
         assert_eq!(
-            parse_logfont(&logfont(-12, "Segoe UI"), 96),
+            font_spec(&face("Segoe UI"), -12, 96),
             spec("Segoe UI", Some(9.0))
         );
-        // The same font written by a 150% machine: the point size is what the two have
-        // in common, which is why the DPI is read out of the registry beside it.
+        // The same font on a 150% machine: the point size is what the two have in common,
+        // which is why the DPI the metrics came back in is read beside them.
         assert_eq!(
-            parse_logfont(&logfont(-18, "Segoe UI"), 144),
+            font_spec(&face("Segoe UI"), -18, 144),
             spec("Segoe UI", Some(9.0))
         );
         // A positive height is the cell height, taken as it stands.
         assert_eq!(
-            parse_logfont(&logfont(12, "Segoe UI"), 96),
+            font_spec(&face("Segoe UI"), 12, 96),
+            spec("Segoe UI", Some(9.0))
+        );
+        // No DPI is the nominal one, not a division by zero.
+        assert_eq!(
+            font_spec(&face("Segoe UI"), -12, 0),
             spec("Segoe UI", Some(9.0))
         );
     }
 
     #[test]
-    fn a_logfont_that_is_not_one_is_no_font() {
-        assert_eq!(parse_logfont(&[], 96), None);
-        assert_eq!(parse_logfont(&logfont(-12, "Segoe UI")[..91], 96), None);
-        assert_eq!(parse_logfont(&logfont(-12, ""), 96), None);
+    fn a_face_name_runs_to_the_first_nul_or_to_the_end() {
+        // The padding after a short name is not part of it.
         assert_eq!(
-            parse_logfont(&logfont(0, "Segoe UI"), 96),
-            spec("Segoe UI", None)
+            font_spec(&face("MS Shell Dlg 2"), -12, 96),
+            spec("MS Shell Dlg 2", Some(9.0))
         );
+        // 32 units with no room left for a terminator: the whole array is the name.
+        let full = "A".repeat(32);
+        assert_eq!(font_spec(&face(&full), -12, 96), spec(&full, Some(9.0)));
     }
 
     #[test]
-    fn a_registry_dump_is_read_by_its_type_column() {
-        let dump = "\r\nHKEY_CURRENT_USER\\Control Panel\\Desktop\\WindowMetrics\r\n    \
-                    MessageFont    REG_BINARY    f5ffffff00000000\r\n";
-        assert_eq!(parse_registry(dump), Some(("BINARY", "f5ffffff00000000")));
-
-        // A string value keeps its spaces: the value is the rest of the line.
-        let dump = "\r\n    FaceName    REG_SZ    Lucida Console\r\n";
-        assert_eq!(parse_registry(dump), Some(("SZ", "Lucida Console")));
-
-        // What `reg query` writes for a value that is not there.
-        assert_eq!(
-            parse_registry("ERROR: The system was unable to find the specified registry key"),
-            None
-        );
-    }
-
-    #[test]
-    fn registry_scalars() {
-        assert_eq!(parse_dword("0x60"), Some(96));
-        assert_eq!(parse_dword("96"), None);
-        assert_eq!(parse_hex("f5ff"), Some(vec![0xf5, 0xff]));
-        // An odd digit count, a stray character and an empty value are all no answer.
-        assert_eq!(parse_hex("f5f"), None);
-        assert_eq!(parse_hex("f5fg"), None);
-        assert_eq!(parse_hex(""), None);
+    fn a_logfont_that_names_nothing_is_no_font() {
+        // An all-NUL face name is a struct nobody filled in rather than a font.
+        assert_eq!(font_spec(&face(""), -12, 96), None);
+        // A height of zero asks for the font's default height, which is not a size this
+        // app can use. The family is still the desktop's answer, so it survives with the
+        // app's own size behind it.
+        assert_eq!(font_spec(&face("Segoe UI"), 0, 96), spec("Segoe UI", None));
     }
 }

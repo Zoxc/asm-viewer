@@ -34,6 +34,22 @@ serde = { version = "1", features = ["derive"] }
 dirs = "6"
 toml = "1.1.4"
 
+# Windows' own font settings, read through `SystemParametersInfo` rather than by shelling
+# out to `reg.exe` (`src/fonts.rs`). Target-gated, so the Linux and macOS builds are
+# exactly what they were. The version is pinned to what the tree already holds rather than
+# to the newest release: the lock has 0.52 (winit, glutin), 0.59 (rustix 0.38) and 0.61
+# (rfd, async-io, dirs-sys, rustix 1), all pulled in transitively, so asking for the
+# newest of the three turns two features on in a crate that is already being compiled
+# instead of adding a fourth copy of it. `cargo tree -d` is how that stays true.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    # `SystemParametersInfoW`, `SPI_GETNONCLIENTMETRICS`, `NONCLIENTMETRICSW`.
+    "Win32_UI_WindowsAndMessaging",
+    # `LOGFONTW` -- which is also what gates the `NONCLIENTMETRICSW` fields holding one --
+    # and the screen DC the metrics' DPI is read off: `GetDC`/`GetDeviceCaps`/`ReleaseDC`.
+    "Win32_Graphics_Gdi",
+] }
+
 [features]
 # Opt-in so the devtools server never ends up in a default or release build.
 # See `notes/DevTools.md`.

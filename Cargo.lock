@@ -4455,6 +4455,7 @@ dependencies = [
  "tree-sitter-c",
  "tree-sitter-cpp",
  "tree-sitter-rust",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
