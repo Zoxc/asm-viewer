@@ -70,9 +70,22 @@ one item per part, so the unfinished half stays visible.
 - [x] Don't zero-pad the target of a jump or a call. `jle short 000000000000004Bh` spent the
   width of a 64-bit address on a number nowhere near one; it now reads `jle short 4Bh`.
   Displacements and immediates are a separate `iced-x86` option and are left as they were.
-- [ ] Allow selection. Neither side has it: the source pane is hand-rolled rows rather than
-  freya's `CodeEditor` (which does have selection, but can only highlight the cursor's own line
-  and cannot be scrolled from outside — see `notes/Plan.md`, 5a).
+- [x] Allow selection, of rows. Both panes: click a row, shift-click or drag to reach out
+  to another, Ctrl+C copies the run as text, Ctrl+A takes the whole listing and Escape
+  drops it. One selection for the window rather than one per pane, so Ctrl+C has one
+  answer. The assembly copies what the row draws — the address column and the instruction
+  with the relocation target's name in its operand — and the source copies the file's own
+  lines.
+- [D] Allow selection, of characters — deferred, with the reason read out of the freya
+  sources (`notes/Plan.md`, 7c). A scroll view is *not* what stops it: freya's selection is
+  a range of char offsets into a rope held by the editor, and its own `CodeEditor` selects
+  across the rows of a `VirtualScrollView` happily. What stops it is that the model wants
+  one rope, one line per row and **one `paragraph()` per line**, and an assembly row is a
+  gutter of rects, an address label and up to three separate elements — the middle one
+  being the clickable relocation target, which could only survive as an inline child whose
+  placeholder character is not a character of any rope. Character selection in the assembly
+  pane is a rewrite of the relocation link and the arrow gutter; the source pane could have
+  it cheaply but would then behave unlike the pane beside it.
 - [ ] A gap or a line before a row something jumps to, so the listing reads as the basic
   blocks it is rather than as one run of instructions. The targets are already known —
   `Assembly::edges` names them, and 7b's gutter draws an arrowhead on each. Note the

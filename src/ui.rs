@@ -13,13 +13,14 @@ use freya::icons::lucide;
 use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
-use analysis::{open_files, Assembly, LineInfo, Object, SpanKind, Symbol, SymbolData};
+use analysis::{open_files, Assembly, Instruction, LineInfo, Object, SpanKind, Symbol, SymbolData};
 
 use crate::filter::{Filter, Matcher};
 use crate::fonts::{fonts, Font};
 use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 use crate::project::{self, Project, Selection};
+use crate::rows::RowSelection;
 use crate::source::{self, SourceFile};
 use crate::tabs::Tabs;
 use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
@@ -197,6 +198,12 @@ struct Palette {
     /// column's own, since a branch names a place in the listing exactly as an address
     /// does.
     branch_hover_fg: Color,
+    /// The run of rows a reader has picked out to copy. Translucent like the two washes
+    /// above and composited with them by `blend`, since a row can be selected, pointed at
+    /// and pinned at once -- and a *grey* where those two are blue, because it answers a
+    /// different question: the blues say what this row maps to on the other side, and this
+    /// says what would land on the clipboard.
+    row_select_bg: Color,
 
     // The code colours, shared by both panes. Which syntactic category takes which of
     // them is [`Palette::syntax`]; these names are the category rather than either pane's
@@ -248,6 +255,7 @@ impl Palette {
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
         branch_fg: Color::from_rgb(176, 188, 202),
         branch_hover_fg: Color::from_rgb(90, 116, 148),
+        row_select_bg: Color::from_argb(80, 96, 110, 128),
 
         address_fg: Color::from_rgb(118, 141, 169),
         keyword_fg: Color::from_rgb(116, 94, 147),
@@ -645,6 +653,159 @@ fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
     controller.scroll_to_y(-((row - margin).max(0.0) as i32));
 }
 
+/// The run of rows a reader has picked out to be copied, and which pane it is in.
+///
+/// One selection for the whole app rather than one per pane, and that is what the `pane`
+/// is for. Ctrl+C has to have exactly one answer, and the pane it belongs to is not
+/// something a reader can see: two runs lit at once in two panes, with the keyboard focus
+/// -- which nothing draws -- deciding which of them lands on the clipboard, is a coin
+/// flip dressed up as a feature. Picking a row in one pane therefore drops whatever the
+/// other had, the way selecting in one text field drops the selection in the next.
+#[derive(Clone, Copy, PartialEq)]
+struct Marks {
+    pane: Pane,
+    rows: RowSelection,
+}
+
+/// The picked-out rows, shared through context: written by the row the pointer is on and
+/// read by the list that draws it and copies it. `None` until something is picked, and
+/// again whenever the listing under it is replaced.
+#[derive(Clone, Copy)]
+struct Marked(State<Option<Marks>>);
+
+/// Whether Shift is held, which is what turns a click into "reach to here".
+///
+/// Its own state, and written from the root's *global* key handlers, because a pointer
+/// event carries no modifiers at all: `MouseEventData` is a location and a button
+/// (freya-core `events/data.rs`), so the only way to know what the keyboard was doing
+/// when a row was clicked is to have been watching it. freya-edit does the same thing for
+/// the same reason -- `TextDragging::shift`, fed by `EditableEvent::KeyDown` -- but from
+/// the focused editor's own handlers; global ones here so that the first shift-click
+/// after a pane is reached works, rather than only the ones after it has the focus.
+#[derive(Clone, Copy)]
+struct Shift(State<bool>);
+
+/// The rows picked out in `pane`, and nothing when the selection is the other pane's.
+///
+/// Reads rather than peeks: this is what a list calls to work out what its rows draw, so
+/// it is the subscription that repaints them as the run grows.
+fn marked_rows(marked: State<Option<Marks>>, pane: Pane) -> Option<RowSelection> {
+    (*marked.read())
+        .filter(|marks| marks.pane == pane)
+        .map(|marks| marks.rows)
+}
+
+/// Start a run at `row`, or -- with Shift held, in the pane the run is already in --
+/// reach out to it from wherever that run started.
+fn mark_press(mut marked: State<Option<Marks>>, shift: bool, pane: Pane, row: usize) {
+    let rows = match *marked.peek() {
+        Some(marks) if shift && marks.pane == pane => marks.rows.extended(row),
+        _ => RowSelection::at(row),
+    };
+
+    marked.set_if_modified(Some(Marks { pane, rows }));
+}
+
+/// Sweep the run out to `row`, which does nothing at all unless the button is still down
+/// on it -- the pointer crossing a row is the hover, and the hover is answered elsewhere.
+fn mark_drag(mut marked: State<Option<Marks>>, pane: Pane, row: usize) {
+    let Some(marks) = *marked.peek() else {
+        return;
+    };
+    if marks.pane != pane {
+        return;
+    }
+
+    marked.set_if_modified(Some(Marks {
+        rows: marks.rows.dragged_to(row),
+        ..marks
+    }));
+}
+
+/// End the gesture, wherever in the window the button came up. The run stays: letting go
+/// is the end of the drag and not the end of the selection.
+fn mark_release(mut marked: State<Option<Marks>>) {
+    if let Some(marks) = *marked.peek() {
+        marked.set_if_modified(Some(Marks {
+            rows: marks.rows.released(),
+            ..marks
+        }));
+    }
+}
+
+/// Drop `pane`'s selection, and leave the other pane's alone.
+///
+/// Called when the listing itself is replaced -- another symbol, another file -- because
+/// the run is a range of row *indices*, and rows 40 to 60 of the function the reader just
+/// left are not a thing to keep highlighted in the one they arrived at.
+fn unmark(mut marked: State<Option<Marks>>, pane: Pane) {
+    if marked.peek().is_some_and(|marks| marks.pane == pane) {
+        marked.set(None);
+    }
+}
+
+/// What Ctrl+C, Ctrl+A and Escape do to a listing's selection.
+///
+/// One handler for both panes, differing in the pane it answers for and in how a row of
+/// it reads as text. It goes on the pane's own focusable box rather than on a global key
+/// handler, which would fire while a filter bar had the keyboard: two things writing the
+/// clipboard from one Ctrl+C, with the global one sorting last (`EventName::cmp`) and so
+/// winning, would take a copy out of the filter box and give back a page of disassembly.
+fn on_listing_key(
+    marked: State<Option<Marks>>,
+    pane: Pane,
+    rows: usize,
+    line: impl Fn(usize) -> String + 'static,
+) -> impl FnMut(Event<KeyboardEventData>) + 'static {
+    let mut marked = marked;
+
+    move |e: Event<KeyboardEventData>| {
+        let command = e.modifiers.contains(Modifiers::ctrl_or_meta());
+
+        match &e.key {
+            Key::Character(character) if command && character == "c" => {
+                if let Some(picked) = (*marked.peek()).filter(|marks| marks.pane == pane) {
+                    // Failing silently is the only answer there is: the clipboard is a
+                    // root context freya-winit fills in from the window's display handle,
+                    // so a platform that gave it none has none, and there is nowhere in a
+                    // listing to say so.
+                    Clipboard::set(picked.rows.text(&line)).ok();
+                }
+            }
+            Key::Character(character) if command && character == "a" => {
+                if let Some(rows) = RowSelection::all(rows) {
+                    marked.set(Some(Marks { pane, rows }));
+                }
+            }
+            Key::Named(NamedKey::Escape) => unmark(marked, pane),
+            _ => {}
+        }
+    }
+}
+
+/// One instruction as one line of text, which is what the row draws and so what a copy of
+/// the row has to be: the address column, then the formatted instruction with the
+/// relocation target's name already substituted into its operand.
+///
+/// The arrow gutter is left out, being a picture of the branches rather than part of the
+/// listing. The trailing name is the one case where the row shows something the format
+/// spans do not hold -- a relocation the formatter offered no operand to substitute into
+/// is drawn as a label after the whole instruction, and is copied in the same place.
+fn asm_line(instruction: &Instruction) -> String {
+    let mut text = format!("{:016X} ", instruction.address);
+    text.extend(instruction.format.iter().map(|(span, _)| span.as_str()));
+
+    if instruction.relocation_span.is_none() {
+        if let Some(target) = &instruction.relocation {
+            text.push(' ');
+            text.push_str(target.display());
+        }
+    }
+
+    text.truncate(text.trim_end().len());
+    text
+}
+
 /// A loaded, highlighted source file, compared by pointer.
 #[derive(Clone)]
 struct SourceText(Arc<Highlighted>);
@@ -705,6 +866,9 @@ struct SourceData {
     file: Arc<str>,
     focus: Option<u32>,
     pin: Option<u32>,
+    /// The run of rows picked out to be copied, or `None` when the selection is the
+    /// assembly pane's or there is none.
+    rows: Option<RowSelection>,
 }
 
 impl PartialEq for SourceData {
@@ -713,6 +877,7 @@ impl PartialEq for SourceData {
             && Arc::ptr_eq(&self.file, &other.file)
             && self.focus == other.focus
             && self.pin == other.pin
+            && self.rows == other.rows
     }
 }
 
@@ -730,6 +895,9 @@ struct AsmRows {
     /// empty while the pointer is on no row at all -- the overwhelmingly common case, in
     /// which the gutter is drawn in one colour and this costs nothing.
     touching: Vec<PlacedEdge>,
+    /// The run of rows picked out to be copied, or `None` when the selection is the source
+    /// pane's or there is none.
+    rows: Option<RowSelection>,
 }
 
 /// What one row draws in the gutter: its own lanes, and how much of it belongs to a branch
@@ -756,6 +924,11 @@ impl AsmRows {
             self.focus.as_ref() == Some(&at),
             self.pin.as_ref() == Some(&at),
         )
+    }
+
+    /// Whether the row at `index` is one of the picked-out run.
+    fn marked(&self, index: usize) -> bool {
+        self.rows.is_some_and(|rows| rows.contains(index))
     }
 
     /// What the row at `index` draws in the gutter.
@@ -827,24 +1000,37 @@ fn blend(top: Color, bottom: Color) -> Color {
     )
 }
 
-/// The background of a code row: the pointer's own hover, the cross-view highlight it got
-/// from the other pane, the stronger one a click pinned there, or the hover over either.
+/// The background of a code row: the pointer's own hover, the run of rows picked out to be
+/// copied, the cross-view highlight it got from the other pane, the stronger one a click
+/// pinned there, or any of them over any of the others.
 ///
 /// A row that is both pinned and pointed at is painted as pinned, the stronger of the two
-/// saying everything the weaker would.
-fn row_background(hovering: bool, focused: bool, pinned: bool) -> Color {
+/// saying everything the weaker would. A selection is not one of that pair and does not
+/// replace either: the two say what this row maps to and this says what would be copied,
+/// so the three stack.
+fn row_background(hovering: bool, focused: bool, pinned: bool, selected: bool) -> Color {
     let cross = match (pinned, focused) {
         (true, _) => palette().line_pin_bg,
         (false, true) => palette().line_focus_bg,
         (false, false) => Color::TRANSPARENT,
     };
 
-    // `blend` over a transparent bottom is the top colour unchanged, so an unlit hovered
-    // row comes out as the hover alone without a case of its own.
-    if hovering {
+    // `blend` over a transparent bottom is the top colour unchanged, so a hovered row that
+    // is neither selected nor lit comes out as the hover alone without a case of its own.
+    let hovered = if hovering {
         blend(palette().code_row_hover_bg, cross)
     } else {
         cross
+    };
+
+    // The selection goes on top of the hover and not under it, the other way round from
+    // every other pair here. It is the only one of the three that says what a keystroke
+    // is about to act on, and a row swept over by the pointer -- which is every row of a
+    // drag, one after another -- would otherwise show the hover and almost none of it.
+    if selected {
+        blend(palette().row_select_bg, hovered)
+    } else {
+        hovered
     }
 }
 
@@ -2023,6 +2209,11 @@ struct InstructionRow {
     focused: bool,
     /// Whether the source line a click pinned is that same line.
     pinned: bool,
+    /// Whether this row is one of the run picked out to be copied. Worked out by the list
+    /// for the reason `focused` is: the answer is a range, and a row that read it itself
+    /// would re-render on every row the drag passes over rather than only when its own
+    /// membership changes.
+    selected: bool,
     key: DiffKey,
 }
 
@@ -2032,6 +2223,7 @@ impl PartialEq for InstructionRow {
             && self.index == other.index
             && self.focused == other.focused
             && self.pinned == other.pinned
+            && self.selected == other.selected
             && self.arrows == other.arrows
     }
 }
@@ -2047,6 +2239,8 @@ impl Component for InstructionRow {
         let mut hovering = use_state(|| false);
         let mut focused = use_consume::<Focused>().0;
         let mut pinned = use_consume::<Pinned>().0;
+        let marked = use_consume::<Marked>().0;
+        let shift = use_consume::<Shift>().0;
         let mut hover = self.hover;
         let index = self.index;
         let width = self.data.lanes.width();
@@ -2136,7 +2330,21 @@ impl Component for InstructionRow {
             // as tall as it is.
             .padding(Gaps::new_symmetric(0.0, 3.0))
             .assembly_font()
-            .background(row_background(hovering(), self.focused, self.pinned))
+            .background(row_background(
+                hovering(),
+                self.focused,
+                self.pinned,
+                self.selected,
+            ))
+            // Where a run of rows starts, and why it is the *down* and not the press: a
+            // drag is over by the time a press fires, so a selection swept out with the
+            // button held has to begin the moment it goes down. It is left-button only,
+            // like everything else a row answers to.
+            .on_pointer_down(move |e: Event<PointerEventData>| {
+                if e.button() == Some(MouseButton::Left) {
+                    mark_press(marked, *shift.peek(), Pane::Assembly, index);
+                }
+            })
             .on_pointer_over(move |_| {
                 hovering.set_if_modified(true);
                 // Two hovers, because they answer two questions. This one is local and is
@@ -2145,6 +2353,12 @@ impl Component for InstructionRow {
                 // nowhere near.
                 hover.set_if_modified(Some(index));
                 focused.set_if_modified(taken.clone());
+                // The third thing entering a row means, and the one that costs nothing
+                // unless a button is down on the run: sweeping the selection out to here.
+                // Added to the handler the cross-view focus already uses rather than to
+                // one of its own -- a second `pointer_over` would answer the same event
+                // twice.
+                mark_drag(marked, Pane::Assembly, index);
             })
             .on_pointer_out(move |_| {
                 hovering.set_if_modified(false);
@@ -2204,6 +2418,9 @@ struct SourceRow {
     focused: bool,
     /// Whether the instruction a click pinned was compiled from this line.
     pinned: bool,
+    /// Whether this row is one of the run picked out to be copied, told to it by the list
+    /// for the reason `InstructionRow`'s is.
+    selected: bool,
     key: DiffKey,
 }
 
@@ -2214,6 +2431,7 @@ impl PartialEq for SourceRow {
             && self.index == other.index
             && self.focused == other.focused
             && self.pinned == other.pinned
+            && self.selected == other.selected
     }
 }
 
@@ -2228,6 +2446,9 @@ impl Component for SourceRow {
         let mut hovering = use_state(|| false);
         let mut focused = use_consume::<Focused>().0;
         let mut pinned = use_consume::<Pinned>().0;
+        let marked = use_consume::<Marked>().0;
+        let shift = use_consume::<Shift>().0;
+        let index = self.index;
         let source = &self.source.0;
 
         // The position this row is, and so the one it points the assembly pane at: the
@@ -2269,10 +2490,24 @@ impl Component for SourceRow {
             .height(Size::px(ROW_HEIGHT))
             .padding(3.0)
             .assembly_font()
-            .background(row_background(hovering(), self.focused, self.pinned))
+            .background(row_background(
+                hovering(),
+                self.focused,
+                self.pinned,
+                self.selected,
+            ))
+            // The same gesture as the assembly pane's, in the same order and for the same
+            // reasons: the two panes show code and a reader picking lines out of one of
+            // them must not have to learn the other.
+            .on_pointer_down(move |e: Event<PointerEventData>| {
+                if e.button() == Some(MouseButton::Left) {
+                    mark_press(marked, *shift.peek(), Pane::Source, index);
+                }
+            })
             .on_pointer_over(move |_| {
                 hovering.set_if_modified(true);
                 focused.set_if_modified(taken.clone());
+                mark_drag(marked, Pane::Source, index);
             })
             .on_pointer_out(move |_| {
                 hovering.set_if_modified(false);
@@ -2645,6 +2880,14 @@ impl Component for InstructionList {
             .map(|focus| focus.at.clone());
         let pinned = use_consume::<Pinned>().0;
         let pin = pinned.read().as_ref().map(|pin| pin.at.clone());
+        let marked = use_consume::<Marked>().0;
+        let rows = marked_rows(marked, Pane::Assembly);
+        // The box the keyboard reaches this pane through. Focus is asked for by the
+        // pointer going down anywhere inside it -- `pointer_down` bubbles, so the rows
+        // need to know nothing about it -- and freya moves focus on nothing but such a
+        // request (`AccessibilityIdExt::request_focus`), so a click in the listing is
+        // what makes Ctrl+C mean this listing.
+        let a11y = use_a11y();
 
         let mut controller = use_scroll_controller(ScrollConfig::default);
         // How tall the list is, which `reveal_row` needs to know whether the row it was
@@ -2670,6 +2913,17 @@ impl Component for InstructionList {
             .map(|row| data.lanes.touching(row))
             .unwrap_or_default();
 
+        let on_key_down = {
+            let assembly = self.assembly.clone();
+            on_listing_key(marked, Pane::Assembly, length, move |index| {
+                assembly
+                    .instructions
+                    .get(index)
+                    .map(asm_line)
+                    .unwrap_or_default()
+            })
+        };
+
         // The deps are the disassembly and nothing the pointer touches, so this is armed
         // once per symbol; `use_side_effect`'s callback is built by a `use_hook` and would
         // otherwise still be holding the first symbol ever selected.
@@ -2693,6 +2947,10 @@ impl Component for InstructionList {
 
         rect()
             .expanded()
+            .a11y_id(a11y)
+            .a11y_focusable(true)
+            .on_pointer_down(move |_| a11y.request_focus())
+            .on_key_down(on_key_down)
             .on_sized(move |e: Event<SizedEventData>| viewport.set_if_modified(e.area.height()))
             .child(
                 VirtualScrollView::new_with_data_controlled(
@@ -2701,6 +2959,7 @@ impl Component for InstructionList {
                         focus,
                         pin,
                         touching,
+                        rows,
                     },
                     move |i, rows: &AsmRows| {
                         let (focused, pinned) = rows.lit(i);
@@ -2709,6 +2968,7 @@ impl Component for InstructionList {
                             index: i,
                             focused,
                             pinned,
+                            selected: rows.marked(i),
                             arrows: rows.arrows(i),
                             hover,
                             key: DiffKey::None,
@@ -2745,6 +3005,9 @@ impl Component for SourceList {
     fn render(&self) -> impl IntoElement {
         let focused = use_consume::<Focused>().0;
         let pinned = use_consume::<Pinned>().0;
+        let marked = use_consume::<Marked>().0;
+        let rows = marked_rows(marked, Pane::Source);
+        let a11y = use_a11y();
 
         let mut controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);
@@ -2760,6 +3023,25 @@ impl Component for SourceList {
         let pin = pinned.read().as_ref().and_then(|pin| line_here(&pin.at));
 
         let length = self.source.0.lines;
+
+        let on_key_down = {
+            let source = self.source.clone();
+            on_listing_key(marked, Pane::Source, length, move |index| {
+                // The file's own text and not the row's spans: what the reader wants
+                // pasted is the line as it is on disk, tabs and all, where the row draws
+                // a run of leading whitespace as the plain spaces the highlighter hands
+                // it over as. The newline is the join's business, not a line's.
+                source
+                    .0
+                    .rope
+                    .get_line(index)
+                    .map(|line| {
+                        let line = line.to_string();
+                        line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
+                    })
+                    .unwrap_or_default()
+            })
+        };
 
         use_side_effect_with_deps(self, move |list: &SourceList| {
             let Some(at) = take_reveal(pinned, Pane::Source) else {
@@ -2791,6 +3073,10 @@ impl Component for SourceList {
             .child(
                 rect()
                     .expanded()
+                    .a11y_id(a11y)
+                    .a11y_focusable(true)
+                    .on_pointer_down(move |_| a11y.request_focus())
+                    .on_key_down(on_key_down)
                     .on_sized(move |e: Event<SizedEventData>| {
                         viewport.set_if_modified(e.area.height())
                     })
@@ -2801,6 +3087,7 @@ impl Component for SourceList {
                                 file: self.file.clone(),
                                 focus,
                                 pin,
+                                rows,
                             },
                             |i, data: &SourceData| {
                                 let line = Some(i as u32 + 1);
@@ -2810,6 +3097,7 @@ impl Component for SourceList {
                                     index: i,
                                     focused: data.focus == line,
                                     pinned: data.pin == line,
+                                    selected: data.rows.is_some_and(|rows| rows.contains(i)),
                                     key: DiffKey::None,
                                 }
                                 .key(i)
@@ -3600,6 +3888,38 @@ fn use_clear_focus(
     });
 }
 
+/// Drop a pane's picked-out rows when the listing they index into is replaced: the
+/// assembly pane's when the selection moves to another symbol, the source pane's when
+/// another file is shown. Rows 40 to 60 of the function just left are not rows 40 to 60
+/// of the one arrived at.
+///
+/// Here, at the root, and keyed on the two states that say *which listing* -- and
+/// deliberately not on the listings themselves. The obvious version is a
+/// `use_side_effect_with_deps` inside each list, and it is wrong twice over: `AsmData`
+/// carries an `Arc<Lanes>` built fresh on every render (7b), so it compares unequal to
+/// itself and the effect would fire on every render, wiping the run the press had just
+/// started -- which is exactly what the headless check caught -- and a dep compared by
+/// pointer can be fooled by a new allocation landing where the old one was.
+///
+/// Its own effect rather than a third line in `use_clear_focus`, because the two answer
+/// to different things: a focus and a pin are positions in the selected symbol's line
+/// info and go when *it* does, while the source pane's run is a range of lines in a file
+/// that a change of symbol very often leaves open.
+fn use_clear_marks(
+    selection: State<Selection>,
+    shown: State<Option<Arc<str>>>,
+    marked: State<Option<Marks>>,
+) {
+    use_side_effect(move || {
+        let _ = selection.read();
+        unmark(marked, Pane::Assembly);
+    });
+    use_side_effect(move || {
+        let _ = shown.read();
+        unmark(marked, Pane::Source);
+    });
+}
+
 /// Open a tab for the file the active symbol was compiled from, and put the Source pane
 /// on it.
 ///
@@ -3821,9 +4141,15 @@ pub fn app() -> impl IntoElement {
     // asks the other pane to scroll. Beside the focus rather than inside it because the
     // two answer different questions and a row can be either, neither or both.
     let pinned = use_provide_context(|| Pinned(State::create(None))).0;
+    // The run of rows picked out to be copied, and whether the keyboard is holding Shift,
+    // which is what turns the next click into "reach to here". Both are inputs like the
+    // two above: one selection for the whole app, in whichever pane last took one.
+    let marked = use_provide_context(|| Marked(State::create(None))).0;
+    let mut shift = use_provide_context(|| Shift(State::create(false))).0;
     use_save_on_change(objects, selection, history);
     use_record_history(selection, history);
     use_clear_focus(selection, focused, pinned);
+    use_clear_marks(selection, shown, marked);
     use_periodic_save();
     // After the save effect on purpose: the effect is in place, with the save policy's
     // empty baseline, before the restore can put anything into any of the three states,
@@ -3947,6 +4273,31 @@ pub fn app() -> impl IntoElement {
             Some(MouseButton::Forward) => navigate(open, history, selection, Nav::Forward),
             _ => {}
         })
+        // A row selection is swept out with the button down and ends wherever the button
+        // comes up, which is very often not over the pane it started in -- so the end of
+        // the gesture is watched for here, at the root, rather than by either list.
+        .on_global_pointer_press(move |_| mark_release(marked))
+        // Shift, watched globally for the reason on `Shift` itself: a pointer event
+        // carries no modifiers, so the state of the key has to be known before the click
+        // that asks about it. Global rather than on the focused pane so that the first
+        // shift-click into a pane extends, instead of only the ones after it has the
+        // keyboard; and it is a bool being set, so it costs a listening pane nothing.
+        //
+        // The key itself is tested as well as the modifier mask, and freya-edit's
+        // `TextDragging` does the same: the press that turns Shift *on* is the one
+        // platforms disagree about, some reporting the mask before the key it names and
+        // some after. The mask is what keeps the two in step when a key event is missed
+        // -- the window losing focus mid-gesture, say.
+        .on_global_key_down(move |e: Event<KeyboardEventData>| {
+            shift.set_if_modified(
+                e.key == Key::Named(NamedKey::Shift) || e.modifiers.contains(Modifiers::SHIFT),
+            );
+        })
+        .on_global_key_up(move |e: Event<KeyboardEventData>| {
+            shift.set_if_modified(
+                e.key != Key::Named(NamedKey::Shift) && e.modifiers.contains(Modifiers::SHIFT),
+            );
+        })
         // The context menu the objects tree opens on a file row. It is the *viewer* that
         // has to be here: it provides the root state `ContextMenu::open_from_event` looks
         // up -- opening a menu without one in an ancestor scope panics -- and it draws
@@ -3964,5 +4315,3 @@ pub fn app() -> impl IntoElement {
                 .child(split),
         )
 }
-
-
