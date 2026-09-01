@@ -64,7 +64,7 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/rows.rs` — the run of rows a reader picks out to copy.
 - `src/tabs.rs` — `Tabs<T>`, the open-tab list, with no cursor of its own.
 - `src/history.rs` — back/forward navigation history.
-- `src/fonts.rs` — the desktop's font settings, queried from KDE via `kreadconfig`.
+- `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Windows registry.
 - `src/ui.rs` — the entire freya UI (~4400 lines, in commented sections).
 
 Everything except `ui.rs` is framework-free and unit-tested rather than eyeballed.
@@ -356,10 +356,23 @@ paints the child in the parent's colour. This is deliberately **not** freya's ow
 `ColorsSheet` names none of these roles, and the source pane's colours cannot be read from the
 element tree at all, being baked into a `SyntaxBlocks` when a file is *loaded*.
 
-**Fonts.** `fonts()` asks `kreadconfig` for KDE's `font` and `fixed` and converts points to pixels.
-Each font is a *chain*: KDE's answer in front of the platform's own (`Segoe UI`/`Consolas`,
+**Fonts.** `fonts()` asks the desktop for its interface and fixed-width fonts and converts points
+to pixels. **Which desktop to ask is a runtime question**, not a compile-time one — one Linux build
+runs on both — so `XDG_CURRENT_DESKTOP` only *sorts* `kreadconfig6`/`kreadconfig5` (KDE's `font`
+and `fixed`, a comma-separated spec) against `gsettings` (Gnome's `font-name` and
+`monospace-font-name`, a quoted Pango `Family Size` whose family can hold spaces and trailing style
+words), and the other is tried anyway: a tool that is not installed is already a `None` here.
+Gnome's `text-scaling-factor` multiplies the point size, because it is *how* Gnome says "make text
+bigger" — `font-name` keeps its nominal size and the accessibility slider moves this instead;
+winit's own display scale is separate and multiplying both would compound. Windows is read out of
+`HKCU\Control Panel\Desktop\WindowMetrics` with `reg.exe` (a `LOGFONTW` blob plus the `AppliedDPI`
+its height is in), which keeps the file's "ask the desktop's tool" shape and costs no dependency;
+the `SystemParametersInfo` route would need a direct `windows-sys`, and Windows stores no
+desktop-wide monospace font at all, so that half stays `Consolas`. Each font is then a *chain*:
+the desktop's answer in front of the platform's own (`Segoe UI`/`Consolas`,
 `.AppleSystemUIFont`/`Menlo`, else the generic `sans-serif`/`monospace` that skia resolves through
-fontconfig). The platform font must be named — freya's global fallbacks are all proportional, so a
+fontconfig). A family named with no usable size keeps the family and takes the app's default size.
+The platform font must be named — freya's global fallbacks are all proportional, so a
 chain resolving to nothing silently takes the assembly view out of a monospaced face — and must
 equally not name *another* platform's families, which had a Windows box rendering in DejaVu. The
 one font freya will not let an element set is the tooltip's, hardcoded in its theme, so `app()`
