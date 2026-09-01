@@ -346,6 +346,18 @@ one item per part, so the unfinished half stays visible.
   `SymbolResolver` substitution, the per-instruction `rip+` flip, the flow-control judgement
   and the `FormatterTextKind` mapping. Only iced-x86 sits behind the seam today, which is the
   point rather than a gap.
+- [ ] Make the architecture-specific analysis **generic rather than dynamically dispatched**.
+  The seam landed as `disassembler(architecture) -> Option<Box<dyn Disassembler>>`, so every
+  request boxes a zero-sized backend and calls it through a vtable. The set of architectures is
+  closed at compile time, so the dispatch wants to happen *once*, in a `match` that hands each
+  arm a concrete type, with the generic code monomorphised per backend. What that buys is not
+  the virtual call — the trait is one call wide per symbol, so a vtable lookup there is
+  nothing — but the allocation going away and the backend's formatting and span-mapping
+  becoming inlinable into the decode loop, which *is* per instruction. It also keeps the
+  crate's types nameable: a `dyn` in a public signature is a type the caller cannot spell.
+  Note the trade before doing it: `dyn` is what makes a backend list open-ended, and generics
+  mean every new architecture is a new arm rather than a new impl behind a registry. That is
+  the right trade here, the set being fixed at compile time either way.
 - [x] Decode as the architecture the object declares, rather than as x86-64 whatever it is.
   `Object::architecture` comes from the file, and the bitness comes from the architecture and
   not from `is_64()` — x32 is 64-bit code with 32-bit pointers, the one case the file's class
