@@ -193,6 +193,7 @@ dependencies = [
  "object",
  "symbolic-common",
  "symbolic-demangle",
+ "twox-hash",
 ]
 
 [[package]]

@@ -240,9 +240,18 @@ one item per part, so the unfinished half stays visible.
   change to the row height does not move every saved position, and a hint rather than a fact:
   it is clamped to what the tab holds now, so a rebuilt binary or a shortened file cannot come
   back past the end.
-- [ ] Saves hashes of the binaries, so a restore can tell the same file from one that has
-  been rebuilt underneath it. Today a rebuilt binary resolves by name and address and comes
-  back on whatever now sits there.
+- [x] Saves hashes of the binaries, so a restore can tell the same file from one that has
+  been rebuilt underneath it. An xxHash64 of the whole file, taken on the parse worker while
+  the bytes are already in hand — 31 ms on the 331 MB sample, 2% of its open — and one hash per
+  *file*, so an archive's 196 members share it. Size + mtime was rejected on correctness rather
+  than cost: mtime is not a property of the bytes, so a deterministic rebuild reads as changed
+  and a `cp -p` or a checkout reads as unchanged, which is the exact case this exists to catch.
+  Under a binary whose digest no longer matches, the **name becomes the identity and the address
+  only a tie-breaker** — a symbol that merely moved still resolves, but a name that names two
+  symbols and no longer names an address resolves to neither, a stale address being precisely
+  what lands a reader on a different function — and the saved viewing row is dropped, being a
+  claim about a listing this build no longer has. No dialog and no refusal. A binary with no
+  saved digest is a third state rather than a mismatch, so existing sessions load unchanged.
 - [ ] Can have an LSP server (like rust-analyzer) / cargo integration so it can build for you and find binaries.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [ ] A main view where you can see all project info.

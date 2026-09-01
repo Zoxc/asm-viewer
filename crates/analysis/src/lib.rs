@@ -4,7 +4,8 @@ use object::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    fs,
+    fmt, fs,
+    hash::Hasher as _,
     ops::Range,
     path::PathBuf,
     sync::Arc,
@@ -56,6 +57,66 @@ pub struct Object {
     pub dwarf: DwarfCache,
 }
 
+/// A digest of a whole file's bytes: what tells "the same binary" from "one that has been
+/// rebuilt underneath the session that named it" (`src/project.rs`, and `notes/Goals.md`'s
+/// "Saves hashes of the binaries"). Nothing in this crate reads one — it is computed here
+/// because this is where the bytes already are.
+///
+/// **Why the content, and not the size and the modification time.** A timestamp is not a
+/// property of the bytes, and it is wrong in both directions for the question being asked:
+/// a rebuild that lands on identical output still bumps it, so an unchanged binary would
+/// come back distrusted, while a file restored by a copy that preserves times, by a
+/// checkout, or out of a build cache carries an old one over new bytes — which is exactly
+/// the case a saved session must not believe. A length is weaker still; two builds of one
+/// crate land on the same one routinely.
+///
+/// **Why it is affordable.** [`open_files`] has already read the whole file into an
+/// `Arc<[u8]>` before anything is parsed, so this is one pass over memory rather than a
+/// second read, and it runs on the parse worker thread rather than the UI's. Measured on
+/// the repo's own samples, with the file in the page cache: `viewer-sample`, 331 MiB,
+/// reads in 334 ms and hashes in 31 ms; `LLVM-24-rust-dev.dll`, 137 MiB, 142 ms and 12 ms;
+/// `libanalysis-sample.rlib`, 19 MiB, 20 ms and 1.5 ms. Under a tenth of a read that is
+/// happening anyway, and a cold read off a disk is slower while the hash is not.
+///
+/// **Why xxHash64.** It is already in the tree (`object` -> `ruzstd` -> `twox-hash`), so
+/// it costs no new crate, and the algorithm is *specified*: its output is a property of
+/// the bytes and not of the build. `std`'s `DefaultHasher` is the tempting free answer and
+/// is the wrong one for something written to a file — its documentation reserves the right
+/// to change the algorithm between releases, which would quietly declare every saved binary
+/// rebuilt after a toolchain upgrade. Non-cryptographic is the right class: this answers
+/// "is this the same file", not "is this file trustworthy", and a reader who wants to fool
+/// it can point the session at another file anyway. The `crc32fast` also in the tree is a
+/// few milliseconds quicker over 331 MiB and half the width; a one-in-four-billion chance
+/// of calling a rebuilt binary unchanged is not worth those milliseconds, since missing a
+/// rebuild is the whole of what this is for.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileDigest(u64);
+
+impl FileDigest {
+    /// Hash `bytes`, in one pass.
+    pub fn of(bytes: &[u8]) -> FileDigest {
+        // Seeded with 0, which is xxHash64's own default: the seed is part of the
+        // algorithm's identity here, so it is written down rather than chosen per run.
+        let mut hasher = twox_hash::XxHash64::with_seed(0);
+        hasher.write(bytes);
+        FileDigest(hasher.finish())
+    }
+}
+
+/// Sixteen lowercase hex digits, which is the form the session writes and the only form
+/// anything outside this crate needs: a digest is compared, never counted with.
+impl fmt::Display for FileDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
+
+impl fmt::Debug for FileDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FileDigest({self})")
+    }
+}
+
 /// The bytes an [`Object`] was parsed from, held for as long as the object lives.
 ///
 /// Parsing keeps decompressed bytes only for the sections that hold text symbols, so an
@@ -90,25 +151,47 @@ pub struct Object {
 pub struct ObjectData {
     file: Arc<[u8]>,
     range: Range<usize>,
+    /// The digest of the **whole file**, not of `range`.
+    ///
+    /// The unit a session names is the file — `binaries` is a list of paths, and closing
+    /// one closes every object that came out of it — so the file is what a digest has to
+    /// answer for. It is also what makes an archive cost one hash rather than one per
+    /// member: [`ObjectData::member`] is derived from the file's own `ObjectData` and
+    /// copies this, so `libanalysis-sample.rlib`'s 196 members share the single pass
+    /// [`ObjectData::whole_file`] made.
+    digest: FileDigest,
 }
 
 impl ObjectData {
-    /// The whole file: a plain object file, or the archive file itself.
+    /// The whole file: a plain object file, or the archive file itself. **This is where a
+    /// file is hashed**, once, for every object that will come out of it.
     pub fn whole_file(file: Arc<[u8]>) -> Self {
         let range = 0..file.len();
-        Self { file, range }
+        let digest = FileDigest::of(&file);
+        Self {
+            file,
+            range,
+            digest,
+        }
     }
 
-    /// One archive member, as the `(offset, size)` its header declares. [`None`] when
-    /// that range does not lie inside the file, which is the same bounds check
+    /// One archive member of `file`, as the `(offset, size)` its header declares. [`None`]
+    /// when that range does not lie inside the file, which is the same bounds check
     /// `ArchiveMember::data` does — such a member is skipped, exactly as before.
-    pub fn member(file: &Arc<[u8]>, offset: u64, size: u64) -> Option<Self> {
+    ///
+    /// It takes the archive's own [`ObjectData`] rather than its bytes so that the member
+    /// inherits the file's [`digest`](ObjectData::digest) instead of prompting a second
+    /// pass over the archive: the offsets are into the file, and the file has already been
+    /// hashed by the [`whole_file`](ObjectData::whole_file) the caller built to parse the
+    /// archive with.
+    pub fn member(file: &ObjectData, offset: u64, size: u64) -> Option<Self> {
         let start: usize = offset.try_into().ok()?;
         let end = start.checked_add(size.try_into().ok()?)?;
-        file.get(start..end)?;
+        file.file.get(start..end)?;
         Some(Self {
-            file: file.clone(),
+            file: file.file.clone(),
             range: start..end,
+            digest: file.digest,
         })
     }
 
@@ -116,6 +199,12 @@ impl ObjectData {
     pub fn bytes(&self) -> &[u8] {
         // The range was bounds-checked when it was built.
         &self.file[self.range.clone()]
+    }
+
+    /// The digest of the file this object was parsed out of. See [`FileDigest`], and
+    /// note that every object from one file answers the same thing here.
+    pub fn digest(&self) -> FileDigest {
+        self.digest
     }
 }
 
@@ -125,6 +214,7 @@ impl std::fmt::Debug for ObjectData {
         f.debug_struct("ObjectData")
             .field("range", &self.range)
             .field("file_len", &self.file.len())
+            .field("digest", &self.digest)
             .finish()
     }
 }
@@ -841,9 +931,13 @@ pub fn open_files(paths: Vec<PathBuf>) -> Vec<Arc<Object>> {
         // One allocation per file, shared by every object parsed out of it and held for
         // as long as they live; see `ObjectData`. `fs::read` gives a `Vec`, so this
         // copies the bytes once more before dropping the original.
-        let file: Arc<[u8]> = Arc::from(file);
+        //
+        // The file's own `ObjectData` is built here rather than at the bottom where it is
+        // used, because it is what the members are cut from: the hash it takes is then one
+        // pass over the file however many objects come out of it.
+        let file = ObjectData::whole_file(Arc::from(file));
 
-        if let Ok(archive) = ArchiveFile::parse(&*file) {
+        if let Ok(archive) = ArchiveFile::parse(file.bytes()) {
             for member in archive.members() {
                 member
                     .map(|member| {
@@ -862,7 +956,7 @@ pub fn open_files(paths: Vec<PathBuf>) -> Vec<Arc<Object>> {
 
         open_object(
             &mut objects,
-            ObjectData::whole_file(file),
+            file,
             path.file_name()
                 .map(|name| name.to_string_lossy())
                 .unwrap_or_default()

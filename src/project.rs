@@ -17,13 +17,14 @@
 //! closed.
 
 use std::{
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
-use analysis::{Object, Symbol};
+use analysis::{Object, Symbol, SymbolData};
 use serde::{Deserialize, Serialize};
 
 use crate::history::History;
@@ -81,7 +82,7 @@ impl PartialEq for Selection {
 /// first sub-table of it; a `Vec<PathBuf>` written after `selection` fails at runtime
 /// with "values must be emitted before tables". The two plain values here — `binaries`,
 /// an array of strings, and the `shown` index — therefore come first, and everything
-/// table-valued follows: `selection` is a table, and `tabs`, `sources` and
+/// table-valued follows: `digests` and `selection` are tables, and `tabs`, `sources` and
 /// `history.entries` are arrays of them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
@@ -95,6 +96,28 @@ pub struct Project {
     /// disagree with the list.
     #[serde(default)]
     pub shown: usize,
+    /// What each opened binary's bytes hashed to when the session was saved, keyed by
+    /// the path `binaries` holds — the same identity every other saved thing is
+    /// expressed in.
+    ///
+    /// A map beside `binaries` rather than a field on a richer entry in it, because the
+    /// two are different jobs: `binaries` is the list of files to *open*, handed to
+    /// `open_files` as it stands, while a digest says nothing about what to open and
+    /// everything about what to believe once it is open. It is also not a parallel array
+    /// — the thing this module refuses everywhere else — since it is keyed rather than
+    /// positional, so a path dropped from one list cannot shift the other under it.
+    ///
+    /// The values are [`analysis::FileDigest`]'s own written form, sixteen lowercase hex
+    /// digits, compared as text: a digest is only ever asked whether it is the same one,
+    /// and text that this build did not write is simply not equal, which reads as
+    /// "changed" — the answer that assumes the least.
+    ///
+    /// A path with **no** entry here is a third state and not a mismatch: a session
+    /// written before digests existed, or a hand-edited file, says nothing about the
+    /// bytes, so nothing new is done with it and the restore behaves exactly as it did
+    /// before there was a digest to consult. See [`Rebuilt`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub digests: BTreeMap<PathBuf, String>,
     /// `skip_serializing_if` because the `toml` crate cannot write a bare `None` at all
     /// — there is no null in TOML — so an unselected session has to leave the key out,
     /// and `default` to read that file back.
@@ -209,6 +232,70 @@ impl SavedHistory {
     }
 }
 
+/// The binaries that are no longer the files the session was saved against.
+///
+/// This is the whole of what a digest *does*, and it is deliberately not much. A mismatch
+/// is not an error, not a dialog and not a refusal to open — the file the reader asked for
+/// is opened exactly as before — it only decides how much of a saved place may still be
+/// believed:
+///
+/// - **The name is believed.** A rebuild keeps most of its function names, so a session
+///   whose binary has moved on is mostly still valid and dropping it wholesale would throw
+///   away far more than it protects. A saved place names a function the reader was
+///   reading, and that name is what they meant by it.
+/// - **The address is not.** It is not part of what the reader meant; it is only how the
+///   symbol was found again, and it is the half a rebuild invalidates — the function is
+///   somewhere else now and something else is where it was. So under a rebuilt file the
+///   address stops being a *requirement*, which recovers every symbol that merely moved
+///   (today those silently degrade to their object), and stops being *evidence*, which is
+///   the half that fixes the bug: where a name is not unique in an object, a stale address
+///   is exactly what lands the reader on the wrong one of them. A name that names two
+///   symbols and no longer names an address therefore resolves to neither.
+/// - **The row is not either.** A saved viewing position is a claim about a listing —
+///   "row 57 of this function" — and a recompiled function has a different listing, so
+///   that row is a different instruction and the pane would come back pointing
+///   confidently at nothing. Such a tab opens at the top, where a tab opened for the
+///   first time already opens.
+///
+/// A path this does not hold is not the same claim as a path known to be unchanged: it may
+/// simply never have been hashed. Nothing here needs the difference, because both believe
+/// the address, which is what the app did before there were digests at all.
+#[derive(Debug, Default)]
+struct Rebuilt(HashSet<PathBuf>);
+
+impl Rebuilt {
+    /// Compare every saved digest against the file that is loaded under that path now.
+    ///
+    /// Only a digest present on both sides and *different* is a rebuild: a saved path
+    /// nothing was loaded for has nothing to compare against, and an object whose path
+    /// was never hashed is the third state [`Project::digests`] describes. The comparison
+    /// is per saved path rather than per object, so an archive's 196 members ask it once.
+    fn of(project: &Project, objects: &[Arc<Object>]) -> Rebuilt {
+        let mut rebuilt = HashSet::new();
+        for (path, digest) in &project.digests {
+            let Some(object) = objects.iter().find(|object| object.path == *path) else {
+                continue;
+            };
+            if object.data.digest().to_string() != *digest {
+                // Not a warning: a rebuilt binary is the normal thing to find after a
+                // build, and the reader is told by what the restore does rather than by
+                // being interrupted about it.
+                log::debug!(
+                    "{} has changed since the session was saved; matching by name",
+                    path.display()
+                );
+                rebuilt.insert(path.clone());
+            }
+        }
+        Rebuilt(rebuilt)
+    }
+
+    /// Whether the file at `path` has been rebuilt since the session named it.
+    fn changed(&self, path: &Path) -> bool {
+        self.0.contains(path)
+    }
+}
+
 /// A [`Selection`] expressed in terms that survive a restart.
 ///
 /// `object_name` is [`Object::name`] — the archive member name, or the file name for a
@@ -272,7 +359,11 @@ impl SavedSelection {
     /// This is what history entries want: an entry that no longer points where it did
     /// is dropped, rather than quietly turned into a different destination that the
     /// user never visited.
-    fn resolve(&self, objects: &[Arc<Object>]) -> Option<Selection> {
+    ///
+    /// `rebuilt` is what decides whether the saved address is a fact about this file or
+    /// only a memory of the one it was saved against; see [`Rebuilt`] and
+    /// [`SavedSelection::find_symbol`].
+    fn resolve(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Selection> {
         let object = self.find_object(objects)?;
         match self {
             SavedSelection::Object { .. } => Some(Selection::Object(object.clone())),
@@ -280,17 +371,75 @@ impl SavedSelection {
                 symbol_name,
                 address,
                 ..
-            } => object
+            } => SavedSelection::find_symbol(
+                object,
+                symbol_name,
+                *address,
+                rebuilt.changed(self.path()),
+            )
+            .map(|data| {
+                Selection::Symbol(Symbol {
+                    object: object.clone(),
+                    data: data.clone(),
+                })
+            }),
+        }
+    }
+
+    /// The symbol a saved place names, under a file that either is or is not the one it
+    /// was saved against.
+    ///
+    /// **Unchanged** (or never hashed): the name *and* the address, which is what this
+    /// has always done — the address is what tells two same-named symbols apart, and in a
+    /// file that has not moved it is exact.
+    ///
+    /// **Rebuilt**: the name, with the address as a tie-breaker only. The exact match is
+    /// still preferred where there is one, since a symbol that did not move is the same
+    /// symbol however much of the file around it changed. Failing that, a name that names
+    /// exactly one symbol *is* an identity and resolves to it — this is where a session
+    /// whose functions have all shifted comes back rather than collapsing onto its
+    /// objects. A name that names several and matches no address resolves to **nothing**:
+    /// the address that would have chosen between them describes a layout this file no
+    /// longer has, and picking one of them on the strength of it is precisely how a
+    /// reader ends up on a function they never opened.
+    ///
+    /// The unchanged case keeps the search it always was — a `find` that stops at the
+    /// symbol, over a `symbols_sorted` that is 115k entries on the repo's own binary and
+    /// is asked once per tab and once per history entry. Only a rebuilt file pays for the
+    /// whole pass, and only because "does this name name anything else" cannot be
+    /// answered by stopping at the first one.
+    fn find_symbol<'a>(
+        object: &'a Object,
+        name: &str,
+        address: u64,
+        rebuilt: bool,
+    ) -> Option<&'a Arc<SymbolData>> {
+        if !rebuilt {
+            return object
                 .symbols_sorted
                 .iter()
-                .find(|data| data.name == *symbol_name && data.address == *address)
-                .map(|data| {
-                    Selection::Symbol(Symbol {
-                        object: object.clone(),
-                        data: data.clone(),
-                    })
-                }),
+                .find(|data| data.name == name && data.address == address);
         }
+
+        let mut exact = None;
+        let mut named = None;
+        let mut names = 0usize;
+
+        for data in &object.symbols_sorted {
+            if data.name != name {
+                continue;
+            }
+            names += 1;
+            if data.address == address {
+                exact = Some(data);
+            }
+            named.get_or_insert(data);
+        }
+
+        exact.or(match names == 1 {
+            true => named,
+            false => None,
+        })
     }
 
     /// The same, degrading instead of failing: a symbol that is gone falls back to its
@@ -299,8 +448,8 @@ impl SavedSelection {
     /// This is what the *selection* wants. There is only one of it and it is where the
     /// app opens, so landing near the last session's place beats landing nowhere;
     /// a history entry, of which there are many, is better dropped.
-    fn resolve_or_degrade(&self, objects: &[Arc<Object>]) -> Selection {
-        self.resolve(objects).unwrap_or_else(|| {
+    fn resolve_or_degrade(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Selection {
+        self.resolve(objects, rebuilt).unwrap_or_else(|| {
             match self.find_object(objects) {
                 Some(object) => Selection::Object(object.clone()),
                 None => Selection::None,
@@ -315,6 +464,7 @@ impl Project {
         Project {
             binaries: Vec::new(),
             shown: 0,
+            digests: BTreeMap::new(),
             selection: None,
             tabs: Vec::new(),
             sources: Vec::new(),
@@ -349,16 +499,25 @@ impl Project {
         shown: Option<&str>,
     ) -> Project {
         let mut binaries: Vec<PathBuf> = Vec::new();
+        let mut digests: BTreeMap<PathBuf, String> = BTreeMap::new();
         for object in objects {
             if !binaries.contains(&object.path) {
                 binaries.push(object.path.clone());
             }
+            // Read off the object rather than computed here: the hash was taken once, on
+            // the parse worker thread, while the file's bytes were in hand, and every
+            // object out of one file answers the same thing — so an archive's members
+            // all write the same entry over each other rather than costing a pass each.
+            digests
+                .entry(object.path.clone())
+                .or_insert_with(|| object.data.digest().to_string());
         }
         Project {
             binaries,
             shown: shown
                 .and_then(|file| sources.iter().position(|open| &**open == file))
                 .unwrap_or(0),
+            digests,
             selection: SavedSelection::from_selection(selection),
             // `filter_map` for the same reason [`SavedHistory::from_history`] uses it and
             // with the same result: `Selection::None` is the app's placeholder state and
@@ -386,9 +545,12 @@ impl Project {
     /// Turn the saved selection back into a live one against the objects that are now
     /// loaded. Binaries change between runs, so this degrades silently: a symbol that
     /// is gone falls back to its object, and an object that is gone to nothing at all.
+    ///
+    /// A binary that has been *rebuilt* since it was saved changes what "is gone" means
+    /// — see [`Rebuilt`], which is where the digests are compared.
     pub fn resolve(&self, objects: &[Arc<Object>]) -> Selection {
         match &self.selection {
-            Some(saved) => saved.resolve_or_degrade(objects),
+            Some(saved) => saved.resolve_or_degrade(objects, &Rebuilt::of(self, objects)),
             None => Selection::None,
         }
     }
@@ -410,9 +572,20 @@ impl Project {
     /// a field of the tab rather than a list beside it: the dropping here is exactly what
     /// a parallel array could not have survived.
     pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<(Selection, usize)> {
+        let rebuilt = Rebuilt::of(self, objects);
         self.tabs
             .iter()
-            .filter_map(|saved| Some((saved.selection.resolve(objects)?, saved.row)))
+            .filter_map(|saved| {
+                let selection = saved.selection.resolve(objects, &rebuilt)?;
+                // A row is a claim about a listing, so a listing that has been rebuilt
+                // takes its rows with it; see [`Rebuilt`]. The tab itself survives —
+                // it is the function that is being read, not the offset into it.
+                let row = match rebuilt.changed(saved.selection.path()) {
+                    true => 0,
+                    false => saved.row,
+                };
+                Some((selection, row))
+            })
             .collect()
     }
 
@@ -453,16 +626,21 @@ impl Project {
     /// ([`History::retaining`]), which is what makes the two behave identically rather
     /// than merely alike.
     ///
+    /// A binary that has been rebuilt since it was saved is matched by name rather than
+    /// by name and address ([`Rebuilt`]), so a history over a recompiled file comes back
+    /// pointing at the functions it named rather than at their old offsets.
+    ///
     /// Duplicates are [`History::restored`]'s business, and neither this function's nor
     /// `rebuilt`'s: two saved entries naming the same destination resolve to the same
     /// `Arc` and so to equal entries, which a saved history written before entries were
     /// bumped rather than appended is full of.
     pub fn resolve_history(&self, objects: &[Arc<Object>]) -> History {
+        let rebuilt = Rebuilt::of(self, objects);
         History::rebuilt(
             self.history
                 .entries
                 .iter()
-                .map(|saved| saved.resolve(objects)),
+                .map(|saved| saved.resolve(objects, &rebuilt)),
             self.history.cursor,
         )
     }
@@ -652,6 +830,13 @@ mod tests {
     /// go through `parse_object`; here only the fields the mapping reads matter, and
     /// every one of them is public, so the objects are built directly.
     fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
+        built(path, name, symbols, b"the first build")
+    }
+
+    /// The same, out of a named build of the file. `bytes` is only ever hashed here —
+    /// these objects were not parsed from it — so "the file was rebuilt" is spelt as two
+    /// calls with different bytes.
+    fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<Object> {
         let section = Arc::new(Section {
             index: SectionIndex(0),
             name: ".text".into(),
@@ -682,9 +867,10 @@ mod tests {
             symbols: HashMap::new(),
             symbols_sorted,
             sections: vec![section],
-            // The mapping never looks at the bytes; these objects were never parsed
-            // from any.
-            data: ObjectData::from(&b""[..]),
+            // The mapping never looks at the bytes themselves; what it does look at is
+            // the digest they hash to, which is what says whether this is still the file
+            // the session was saved against.
+            data: ObjectData::from(bytes),
             dwarf: Default::default(),
         })
     }
@@ -1687,6 +1873,224 @@ mod tests {
         let objects = objects();
         assert!(project.resolve(&objects) == Selection::Object(objects[0].clone()));
         assert!(project.resolve_tabs(&objects).is_empty());
+    }
+
+    // --- the binaries' digests ---------------------------------------------
+
+    /// The digest of the objects the fixtures are built from, as it is written down.
+    fn digest_of(bytes: &[u8]) -> String {
+        analysis::FileDigest::of(bytes).to_string()
+    }
+
+    /// A saved session naming one binary at `row`, with the digest of `bytes` — what a
+    /// run that had this file open would have written.
+    fn saved_against(bytes: Option<&[u8]>, saved: SavedSelection, row: usize) -> Project {
+        Project {
+            binaries: vec![PathBuf::from("/tmp/lib.a")],
+            digests: bytes
+                .map(|bytes| {
+                    BTreeMap::from([(PathBuf::from("/tmp/lib.a"), digest_of(bytes))])
+                })
+                .unwrap_or_default(),
+            selection: Some(saved.clone()),
+            tabs: vec![SavedTab {
+                row,
+                selection: saved.clone(),
+            }],
+            history: SavedHistory {
+                cursor: 0,
+                entries: vec![saved],
+            },
+            ..Project::new()
+        }
+    }
+
+    fn saved_symbol(object_name: &str, symbol_name: &str, address: u64) -> SavedSelection {
+        SavedSelection::Symbol {
+            path: PathBuf::from("/tmp/lib.a"),
+            object_name: object_name.to_owned(),
+            symbol_name: symbol_name.to_owned(),
+            address,
+        }
+    }
+
+    /// One digest per *file*, however many objects came out of it: the members of an
+    /// archive share one `ObjectData` and so one hash, and the map is keyed by the path
+    /// the rest of the session is expressed in.
+    #[test]
+    fn saves_one_digest_per_binary_however_many_objects_it_holds() {
+        let objects = objects();
+        let project = from_state(&objects, &Selection::None, &History::default());
+
+        assert_eq!(project.binaries, vec![PathBuf::from("/tmp/lib.a")]);
+        assert_eq!(
+            project.digests,
+            BTreeMap::from([(
+                PathBuf::from("/tmp/lib.a"),
+                digest_of(b"the first build")
+            )])
+        );
+    }
+
+    /// The file is the one the session was saved against, so the saved address is a fact
+    /// about it: an exact match resolves, a symbol that is not where it was said to be
+    /// does not, and the row the tab was left at is still that tab's row. All of which is
+    /// what the app did before there were digests — an unchanged file changes nothing.
+    #[test]
+    fn an_unchanged_binary_is_still_matched_on_the_address() {
+        let objects = objects();
+
+        let project = saved_against(Some(b"the first build"), saved_symbol("a.o", "target", 6), 42);
+        assert!(
+            project.resolve(&objects)
+                == Selection::Symbol(Symbol {
+                    object: objects[0].clone(),
+                    data: objects[0].symbols_sorted[1].clone(),
+                })
+        );
+        assert_eq!(project.resolve_tabs(&objects).len(), 1);
+        assert_eq!(project.resolve_tabs(&objects)[0].1, 42);
+
+        // The same name at an address it is not at. Nothing about this file explains
+        // that, so it degrades exactly as it always has.
+        let moved = saved_against(Some(b"the first build"), saved_symbol("a.o", "target", 999), 42);
+        assert!(moved.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(moved.resolve_tabs(&objects).is_empty());
+        assert!(moved.resolve_history(&objects).entries().is_empty());
+    }
+
+    /// The file has been rebuilt under the session. The name is what the reader meant, so
+    /// a symbol that has merely moved comes back — where an unchanged file would have
+    /// dropped it — and the saved row goes, because it named a row of a listing this
+    /// build no longer has.
+    #[test]
+    fn a_rebuilt_binary_matches_by_name_and_forgets_the_row() {
+        let objects = vec![
+            built("/tmp/lib.a", "a.o", &[("caller", 0), ("target", 96)], b"the second build"),
+            built("/tmp/lib.a", "b.o", &[("caller", 0)], b"the second build"),
+        ];
+
+        // Saved when `target` was at 6; it is at 96 now.
+        let project = saved_against(Some(b"the first build"), saved_symbol("a.o", "target", 6), 42);
+
+        let expected = Selection::Symbol(Symbol {
+            object: objects[0].clone(),
+            data: objects[0].symbols_sorted[1].clone(),
+        });
+        assert!(project.resolve(&objects) == expected);
+        assert!(project.resolve_tabs(&objects) == [(expected.clone(), 0)]);
+        assert!(project.resolve_history(&objects).entries() == [expected]);
+    }
+
+    /// The half that is a refusal rather than a recovery: two symbols of one name in a
+    /// rebuilt object, and a saved address that is now neither of theirs. The address is
+    /// the only thing that could choose between them and it describes a layout this file
+    /// no longer has, so nothing is chosen — landing the reader on a function they never
+    /// opened is the failure this whole step exists to stop.
+    #[test]
+    fn a_rebuilt_binary_will_not_guess_between_two_symbols_of_one_name() {
+        let objects = vec![built(
+            "/tmp/lib.a",
+            "a.o",
+            &[("helper", 32), ("helper", 64)],
+            b"the second build",
+        )];
+
+        let project = saved_against(Some(b"the first build"), saved_symbol("a.o", "helper", 6), 42);
+        // The selection degrades to the object; the tab and the history entry drop.
+        assert!(project.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(project.resolve_tabs(&objects).is_empty());
+        assert!(project.resolve_history(&objects).entries().is_empty());
+
+        // And where the address still names one of them, it is still the tie-breaker.
+        let exact = saved_against(Some(b"the first build"), saved_symbol("a.o", "helper", 64), 42);
+        assert!(
+            exact.resolve(&objects)
+                == Selection::Symbol(Symbol {
+                    object: objects[0].clone(),
+                    data: objects[0].symbols_sorted[1].clone(),
+                })
+        );
+    }
+
+    /// A session that never wrote a digest — a hand-edited file, or one saved before
+    /// there were any — says nothing about the bytes, so nothing new is done with it.
+    /// "Not known to be unchanged" is not "known to have changed".
+    #[test]
+    fn a_binary_with_no_saved_digest_is_believed_exactly_as_before() {
+        let objects = vec![built(
+            "/tmp/lib.a",
+            "a.o",
+            &[("caller", 0), ("target", 96)],
+            b"the second build",
+        )];
+
+        let project = saved_against(None, saved_symbol("a.o", "target", 6), 42);
+        assert!(project.resolve(&objects) == Selection::Object(objects[0].clone()));
+        assert!(project.resolve_tabs(&objects).is_empty());
+    }
+
+    /// A digest for a path that is not loaded, and a loaded path with no digest, are both
+    /// "nothing to compare" rather than a mismatch.
+    #[test]
+    fn a_digest_for_a_binary_that_is_not_open_says_nothing() {
+        let objects = objects();
+        let mut project = saved_against(Some(b"the first build"), saved_symbol("a.o", "target", 6), 42);
+        project
+            .digests
+            .insert(PathBuf::from("/tmp/some.dll"), digest_of(b"whatever"));
+
+        assert_eq!(project.resolve_tabs(&objects)[0].1, 42);
+    }
+
+    /// The field-order trap once more, for the field this step adds: `digests` is a TOML
+    /// *table*, so it has to be emitted after the plain `binaries` and `shown` and before
+    /// nothing in particular — and a hex string is what it holds, since a `u64` digest
+    /// does not fit TOML's signed integers at all.
+    #[test]
+    fn the_digests_round_trip_through_toml() {
+        let objects = objects();
+        let tabs = vec![Selection::Object(objects[0].clone())];
+        let project = Project::from_state(
+            &objects,
+            &tabs,
+            &positions(&[(&tabs[0], 12)]),
+            &tabs[0],
+            &history(&objects, 1),
+            &sources(&["/src/main.rs"]),
+            &Positions::default(),
+            Some("/src/main.rs"),
+        );
+
+        let text = round_trip(&project);
+        assert!(text.contains("[digests]"), "{text}");
+        assert!(
+            text.contains(&format!("{}\"", digest_of(b"the first build"))),
+            "{text}"
+        );
+
+        let digests = text.find("[digests]").expect("the digests table");
+        for plain in ["binaries = ", "shown = "] {
+            let at = text.find(plain).unwrap_or_else(|| panic!("{plain}\n{text}"));
+            assert!(at < digests, "{plain} after the digests table\n{text}");
+        }
+    }
+
+    /// And a file with no digests at all still loads, the way one with no tabs does.
+    #[test]
+    fn a_file_with_no_digests_still_loads() {
+        let text = r#"
+            binaries = ["/tmp/lib.a"]
+
+            [selection.Object]
+            path = "/tmp/lib.a"
+            object_name = "a.o"
+        "#;
+        let project: Project = toml::from_str(text).expect("deserializing");
+        assert!(project.digests.is_empty());
+
+        let objects = objects();
+        assert!(project.resolve(&objects) == Selection::Object(objects[0].clone()));
     }
 
     // --- the save policy ---------------------------------------------------

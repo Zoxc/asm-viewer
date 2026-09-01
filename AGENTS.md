@@ -96,7 +96,12 @@ lookup) and `symbols_sorted` (name-sorted, for the UI list). `Object::data` is a
 an `Arc<[u8]>` of the whole file plus a `Range` — kept for the object's lifetime, because parsing
 keeps decompressed bytes only for sections holding text symbols and the lazy line-info pass needs
 the rest; every object from one file shares that one allocation, so an archive costs its bytes
-once. `Section` owns decompressed bytes, relocations keyed by address, and a sorted list of its
+once. It also carries the file's `FileDigest` — xxHash64 of the *whole file*, taken once in
+`ObjectData::whole_file` because the bytes are in hand there and an archive member is cut from that
+same value, so 196 members cost one pass (1.5 ms against the 129 ms `open_files` takes on
+`libanalysis-sample.rlib`; 32 ms against 1.6 s on the 331 MB `viewer-sample`). Nothing in the crate
+reads it: it exists so a restore can tell the file it saved from one rebuilt underneath it.
+`Section` owns decompressed bytes, relocations keyed by address, and a sorted list of its
 text symbols' addresses. `SymbolData::estimate_size` derives a symbol's extent from the *next*
 address in that list — **clipped to the section's own bytes**, since that list is numbers out of
 the file and one wild `st_value` in it would otherwise cost the symbol *above* it its listing
@@ -259,9 +264,19 @@ shift every later row of a parallel array onto the wrong tab. It is a row and no
 so that a later `ROW_HEIGHT` (Step 9's fonts) does not move every saved position, and it is a
 hint and not a fact — `#[serde(default)]`, and clamped to what the tab holds *now* by
 `Positions::row`. **Field order within these structs is load-bearing**: TOML emits plain values
-before tables, so `binaries`/`shown` must precede `selection`/`tabs`/`sources`/`history`,
+before tables, so `binaries`/`shown` must precede `digests`/`selection`/`tabs`/`sources`/`history`,
 `SavedTab::row` must precede its `selection`, and `SavedHistory::cursor` its `entries`. Getting it
 wrong fails at *runtime*, not at compile time.
+
+`Project::digests` is the digest each binary had when the session was saved, keyed by path — a map
+beside `binaries` and not a field in it, because `binaries` is the list to *open* and a digest is
+what to *believe* afterwards. A mismatch is not an error, a dialog or a refusal: `Rebuilt` collects
+the paths whose digest no longer matches, and under one of those the **name is the identity and the
+address is only a tie-breaker** (a symbol that merely moved resolves, where an unchanged file drops
+it; a name that names two symbols and no longer names an address resolves to neither, since a stale
+address is exactly what lands a reader on the wrong function), and the saved **row is dropped**,
+being a claim about a listing this build no longer has. A path with *no* saved digest is a third
+state, not a mismatch: it behaves as everything did before digests existed.
 
 Coming back, the **selection degrades** (symbol -> its object -> nothing, since there is one of it
 and the app must open somewhere) while **history entries are dropped** (a list of places the reader
@@ -313,11 +328,12 @@ in, so an override and the value it overrides are comparable; `fonts.rs` convert
 Field order is load-bearing here too — `theme` is a plain value and the two fonts are tables — and
 the round-trip test is what holds it. There is **no `Saves`-shaped policy and deliberately no second
 autosave timer**: a settings change is already as rare as a deliberate action, so `Settings::save`
-is public and writes at once. `Theme::appearance()` asks the desktop which it prefers, in the spirit
-`fonts.rs` asks it for fonts (KDE's `Colors:Window/BackgroundNormal` luminance, then the scheme
-*name* only when the name says so; Gnome's `color-scheme`, whose `default` is *not* an answer;
-macOS's `AppleInterfaceStyle`; Windows is a named hole needing a `windows-sys` feature), and it is
-deliberately uncached, since "follow the desktop" is a question and not a value. `fonts()` merges
+is public and writes at once. **Resolving `Theme::Desktop` is deliberately not this module's job**:
+"which theme does the desktop prefer" is a question for whatever owns the window, so `settings.rs`
+holds only the choice and stays framework-free, and `ui.rs` puts the two together
+(`resolve_appearance`). It once spawned a subprocess per platform to answer it and no longer does —
+the windowing system already knows, it answers on every platform this runs on, and its answer is
+live rather than a value baked in at startup. `fonts()` merges
 the settings over the desktop's answer **field by field** (`fonts::resolve`, pure and tested), but
 is still a `OnceLock`: the doc comment on it says exactly what the settings page has to change and
 why a re-readable `fonts()` alone would not be the fix.
@@ -528,9 +544,17 @@ to change it**, because the switch also has to `HIGHLIGHTED.clear()`: that cache
 `SyntaxBlocks` with colours already resolved into them, so its entries are not stale but the wrong
 theme, and nothing a re-render does would repaint them. The clear is inside the setter
 (`set_if_modified_and_then`) rather than at a call site, so it cannot be routed around. The
-appearance itself comes from `settings.rs` — the stored choice, resolved through the desktop for
-`Theme::Desktop` — and is written down once in a `use_hook` at the root of `app()`; there is no UI
-control for it yet, that being the settings page's (9c). The one thing `text_fg` adds is the
+appearance is resolved by `use_theme` at the root of `app()` from two inputs — the stored choice
+(`settings.rs`, read once: it is a file) and `Platform::preferred_theme`, which freya keeps from
+winit's `Window::theme()` and re-sets on the OS's `ThemeChanged` event — through the pure
+`resolve_appearance`, where only `Theme::Desktop` is a question at all. **Not a `use_hook`**: the
+preference is a `State`, so *reading* it subscribes the root and a desktop that goes dark while the
+app is running repaints, which the subprocess this replaced could never do. It resolves in the
+render body rather than in an effect, because an effect lands a frame late and a frame late on a
+dark desktop is a white window flashing; the write is idempotent, so the frame it costs is the one
+after an actual change, and the two-hop path (the platform wakes the root, the root's write wakes
+everything that drew a colour) is what the headless test spells out. There is no UI control for the
+choice yet, that being the settings page's (9c). The one thing `text_fg` adds is the
 interface text: set once on the root rect and *inherited*, since freya resolves an unset `color`
 from the parent's, and it is `BLACK` in the light palette because that was already the default.
 

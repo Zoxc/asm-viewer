@@ -17,6 +17,12 @@ iced-x86 = "1.20.0"
 # and `EndianArcSlice`, at the same version `addr2line` asks for.
 addr2line = { version = "0.21", default-features = false, features = ["std"] }
 gimli = { version = "0.28", default-features = false, features = ["read", "std", "endian-reader"] }
+# The file digest (`FileDigest`), and no new crate in the build: `object` already pulls
+# this exact version in through `ruzstd`, so naming it here compiles nothing extra.
+# `default-features = false` keeps it that way — the default `std` feature exists only to
+# add `rand` for a randomly seeded hasher, which would be the one crate this does add and
+# is the opposite of what a digest compared across runs needs.
+twox-hash = { version = "1.6.3", default-features = false }
 
 [dev-dependencies]
 # Test fixtures are built in memory with the writers rather than committed as blobs:
