@@ -65,12 +65,12 @@ one item per part, so the unfinished half stays visible.
   identifier names, rather than building name matching over demangled strings here.
 - [x] Navigating in assembly should also navigate source, within a symbol: clicking an
   instruction scrolls the source pane to the line it was compiled from.
-- [ ] Selecting another symbol should put the source pane on that symbol's own lines. Half
-  answered: the pane no longer inherits the offset the *previous* symbol left, each open file
-  now remembering its own row. But the pane is keyed by file, so two symbols in one file share
-  that file's position and a file opened for the first time opens at the top rather than at
-  the symbol's lines. The rest is a reveal on a selection change, which is a different rule
-  from "a tab comes back where it was left" and was deliberately not folded into it.
+- [ ] Selecting another symbol should put the source pane on that symbol's own lines. Most of
+  the way there: the pane no longer inherits the offset the *previous* symbol left, and since
+  the one strip landed a tab remembers a row for *each of its two sides*, keyed by the
+  document, so two symbols compiled from one file no longer share a position. What is left is
+  the first open: a tab seen for the first time opens its source side at the top of the file
+  rather than at the symbol's own lines.
 - [x] Mouse buttons can navigate history so you can go back and forth.
 - [ ] Add `<`, `>` navigation buttons to the top bar.
 
@@ -197,10 +197,11 @@ one item per part, so the unfinished half stays visible.
 ## Panels and tabs
 
 - [x] History panel on the bottom left with recent functions.
-- [ ] The history panel also lists recent source files. The Source pane has its own tab
-  strip now, so the open files are a list the history could draw from — but nothing records
-  when one was *visited*, only that it is open. Note: merely switching to an open tab is not
-  a visit and records nothing; a visit is opening a document or navigating to one.
+- [x] The history panel also lists recent source files. It falls out of the history recording
+  *documents*: a visited file is an entry like any function, spelt by its own name and wearing
+  the same kind icon its tab does. The recording rule changed with it — the push moved into
+  `activate`, which is told why it is being called, so opening a document or going to one is a
+  visit and switching to a tab that is already open is not.
 - [x] Don't insert duplicate history entries, bump existing ones instead.
 - [x] Tree view for objects, with an indicator per row for the file type. A file that
   contributed one object is one row; an archive is a parent row its members fold under,
@@ -246,22 +247,25 @@ one item per part, so the unfinished half stays visible.
 - [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter
   box, and matches come back in the list's own name order rather than by how well they match.
 - [ ] Left panel for project directory / source search.
-- [x] Tabs for assembly functions / source files. A strip of chips over the content area,
-  one per open function or object, and a second strip over the Source pane, one per open
-  file. Clicking a chip switches; the × closes it and moves to the neighbour; closing the
-  last one goes back to the placeholder. They are chips rather than dock tabs deliberately
-  — the dock tree is the layout, and a layout must survive documents opening and closing
-  (`notes/Plan.md`, 6c). Both strips are saved with the session and come back on a
-  rerun.
-- [ ] Two kinds of tab, assembly-driven and source-driven, told apart by an icon. The
-  left-most pane is the one the tab is *about*, and it drives what the right-hand pane
-  shows: an assembly-driven tab has the function on the left and the source it came from on
-  the right, a source-driven tab has the file on the left and the assembly for the line on
-  the right. Reading of the request, to confirm before building: this replaces the two
-  independent strips 6c produced (one for functions, one for files, each with its own
-  notion of what is open) with one strip whose chips each say which side is in charge — so
-  opening a file from a directory panel and opening a function from the symbol list produce
-  the same kind of thing, differing only in which way the mapping runs.
+- [x] Tabs for assembly functions / source files. One strip over the content area, one tab
+  per open document — a function, an object or a source file. Clicking a tab switches; the ×
+  closes it and moves to the neighbour; closing the last one goes back to the placeholder.
+  They are their own strip rather than dock tabs deliberately — the dock tree is the layout,
+  and a layout must survive documents opening and closing. The strip is saved with the session
+  and comes back on a rerun, in the order the reader left it.
+- [x] Two kinds of tab, assembly-driven and source-driven, told apart by an icon. The two
+  independent strips (one for functions, one for files, each with its own notion of what is
+  open) are one strip of `Document`s, each of which is a place in a binary or a file, and the
+  variant says which of the tab's two sides it is *about* and therefore which drives the
+  other. So opening a file and opening a function produce the same kind of thing. The doctrine
+  changed with it: "a document is a place in a binary" became "a place in a binary *or* a
+  file". A source-driven tab is opened from the Source pane's companion header, which is the
+  only door into one until the project explorer and the source search land.
+- [ ] The assembly side of a source-driven tab: clicking a line in the file shows the assembly
+  compiled from it. Needs the reverse mapping — source line to the symbols compiled from it —
+  which line info cannot answer today, and a rule for which symbol wins when a line maps into
+  several (recent history is the tie-break). It is the same prerequisite the two items under
+  *Source / assembly split view* wait on.
 - [ ] Selecting a symbol in a view opens a "temporal" tab when the symbol is not already open
   in a tab: one preview tab reused by the next such selection, so walking down a list does
   not leave a tab behind per click. What promotes it into a tab that stays is a design
@@ -300,21 +304,20 @@ one item per part, so the unfinished half stays visible.
   re-association is a deliberate user action, and it lets go of no binary, so it writes that
   file alone and leaves the session pending.
 - [x] Can have multiple tabs with different function assemblies / source files open. Within
-  a session: the content area's strip holds the open functions and objects, the Source
-  pane's holds the open files. They are carried across a restart by the "saves the open
-  tabs" item below.
-- [x] Saves the open tabs. Both strips are in `project.toml`: the content area's as the
-  same `SavedSelection` the history and the selection already use, the Source pane's as the
-  paths themselves plus which one was shown. Coming back goes through the five functions
-  that hold the tab invariants rather than writing either list, and the ordering is
-  load-bearing — the tabs are opened before the selection, or `activate` appends it at the
-  end of the strip instead of finding it in place. A content tab that no longer resolves is
-  dropped, the way a history entry is; a source file that is no longer on disk still comes
-  back, because the pane's own "Source file not found" is the right answer and dropping it
-  would silently lose a file the reader had open.
-- [x] Saves a viewing position per tab. Each open tab carries the row it was left at, in
-  memory and in `project.toml`, so switching to a tab puts its pane back where it was and a
-  tab seen for the first time opens at the top. A row rather than a pixel offset, so a later
+  a session: one strip holds them all, each tab being a place in a binary or a file. They are
+  carried across a restart by the "saves the open tabs" item below.
+- [x] Saves the open tabs. One ordered list in `session.toml`, of the same `SavedDocument` the
+  history and the active document already use, so the reader's own interleaving of functions
+  and files survives a restart. Coming back goes through the functions that hold the tab
+  invariants rather than writing the list, and the ordering is load-bearing — the tabs are
+  opened before the active one, or `activate` appends it at the end of the strip instead of
+  finding it in place. An assembly-driven tab that no longer resolves is dropped, the way a
+  history entry is; a source file that is no longer on disk still comes back, because the
+  pane's own "Source file not found" is the right answer and dropping it would silently lose
+  a file the reader had open.
+- [x] Saves a viewing position per tab. Each open tab carries the row *each of its two sides*
+  was left at, in memory and in `session.toml`, so switching to a tab puts both panes back
+  where they were and a tab seen for the first time opens at the top. A row rather than a pixel offset, so a later
   change to the row height does not move every saved position, and a hint rather than a fact:
   it is clamped to what the tab holds now, so a rebuilt binary or a shortened file cannot come
   back past the end.
@@ -369,9 +372,9 @@ one item per part, so the unfinished half stays visible.
   reopened. Each row is named from its own `project.toml` rather than from a name copied into
   the list, ids whose directory is gone are dropped, and the open project is left out because
   the pane above already describes it more freshly. Clicking a row switches project at runtime:
-  the old one is flushed while the save policy still points at it, every binary and source file
-  is closed through the five functions that hold the tab invariants, and the new one is restored
-  through the same body the startup restore uses.
+  the old one is flushed while the save policy still points at it, every binary and then every
+  remaining tab is closed through the functions that hold the tab invariants, and the new one
+  is restored through the same body the startup restore uses.
 
 ## Fonts and settings
 
