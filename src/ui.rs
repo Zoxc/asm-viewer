@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    ops::ControlFlow,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, LazyLock, Mutex, MutexGuard},
@@ -16,7 +17,10 @@ use freya::icons::lucide;
 use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
-use analysis::{open_files, Assembly, Instruction, LineInfo, Object, SpanKind, Symbol, SymbolData};
+use analysis::{
+    open_files_streaming, Assembly, Instruction, LineInfo, Object, Progress, SpanKind, Symbol,
+    SymbolData,
+};
 
 use crate::filter::{Filter, Matcher};
 use crate::fonts::{self, Font, Fonts};
@@ -31,7 +35,7 @@ use crate::scratchpad::{
 use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 use crate::source::{self, SourceFile};
 use crate::tabs::{Positions, Tabs};
-use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
+use crate::tree::{format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG};
 
 /// The leading a row adds to the font it is drawn in, and the floor under the answer.
 ///
@@ -810,6 +814,16 @@ impl<T: TextStyleExt + Sized> FontExt for T {}
 #[derive(Clone, Copy)]
 struct Objects(State<Vec<Arc<Object>>>);
 
+/// The files being read into [`Objects`] right now, shared through context so the sidebar
+/// can say so.
+///
+/// It is a state of its own and not a field of the objects list because it is about
+/// exactly what that list has *not* got: a file appears here when it is asked for and
+/// leaves when nothing more is coming out of it, whether or not it produced anything at
+/// all. See [`Loads`] for the model and [`open_binaries`] for what fills it in.
+#[derive(Clone, Copy)]
+struct Loading(State<Loads>);
+
 /// The current selection, shared through context.
 ///
 /// Since 6c this *is* the active tab: everything that is on screen in the content area is
@@ -1022,6 +1036,11 @@ struct Prefs(State<EditedSettings>);
 struct ProjectStates {
     proj: State<OpenProject>,
     objects: State<Vec<Arc<Object>>>,
+    /// The files on their way into `objects`. It belongs to the project for the reason
+    /// the objects do: leaving one abandons what was being read for it, including the
+    /// files that have produced nothing yet and so are not in `objects` to be closed one
+    /// by one.
+    loading: State<Loads>,
     open: State<Tabs<Selection>>,
     asm_at: State<Positions<Selection>>,
     selection: State<Selection>,
@@ -1031,12 +1050,13 @@ struct ProjectStates {
     shown: State<Option<Arc<str>>>,
 }
 
-/// The nine states as a component sees them: through the contexts the root provides, so a
+/// The ten states as a component sees them: through the contexts the root provides, so a
 /// view that switches projects needs none of them handed down to it.
 fn use_project_states() -> ProjectStates {
     ProjectStates {
         proj: use_consume::<Proj>().0,
         objects: use_consume::<Objects>().0,
+        loading: use_consume::<Loading>().0,
         open: use_consume::<Open>().0,
         asm_at: use_consume::<AsmAt>().0,
         selection: use_consume::<Sel>().0,
@@ -2460,6 +2480,11 @@ fn close_file(
 ///   is not tidiness: every entry is keyed by a [`Selection`], which holds the
 ///   `Arc<Object>` it points into, so one left behind would hold the file's bytes -- 331 MB
 ///   of them, for `viewer-sample` -- for as long as the app ran.
+/// - **The file's load**, if it is still being read, is cancelled ([`Loads::cancel`]) —
+///   which is not tidiness either: without it the objects still coming out of the worker
+///   would arrive after the close and put the file back, one member at a time. The unit
+///   there is the path for the same reason it is here, so one file opened twice closes
+///   once and stops loading once.
 /// - **The saved `binaries`** need nothing here at all. They are derived from the objects
 ///   by `project::binaries`, so removing them removes the path, and `project::record` sees
 ///   a *binaries* change and writes it to disk at once rather than marking it pending --
@@ -2476,6 +2501,7 @@ fn close_file(
 /// info neither opens nor closes one.
 fn close_binary(
     mut objects: State<Vec<Arc<Object>>>,
+    mut loading: State<Loads>,
     mut open: State<Tabs<Selection>>,
     selection: State<Selection>,
     mut at: State<Positions<Selection>>,
@@ -2495,6 +2521,10 @@ fn close_binary(
     history.set(remaining);
 
     objects.write().retain(|object| object.path != path);
+    // Whatever is still being parsed out of this file is for a file the app has just let
+    // go of. Dropping the entry is what makes the next batch of objects out of it be
+    // dropped and the worker itself stop; see `take_load`.
+    loading.write().cancel(path);
 
     if showing.in_file(path) {
         // Through `activate` like every other selection change, even though the tab it
@@ -2514,6 +2544,7 @@ fn close_binary(
 /// handler, where no hook may run.
 fn close_menu(
     objects: State<Vec<Arc<Object>>>,
+    loading: State<Loads>,
     open: State<Tabs<Selection>>,
     selection: State<Selection>,
     at: State<Positions<Selection>>,
@@ -2522,12 +2553,131 @@ fn close_menu(
 ) -> Menu {
     Menu::new().child(
         MenuButton::new()
-            .on_press(move |_| close_binary(objects, open, selection, at, history, &path))
+            .on_press(move |_| close_binary(objects, loading, open, selection, at, history, &path))
             // "file" and not "object", because the row a reader right-clicks may be one
             // object of one file or the archive above 196 of them, and the same word has
             // to be true of both.
             .child("Close file"),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Opening binaries
+// ---------------------------------------------------------------------------
+
+/// Read and parse `paths`, putting each object into the list **as it is parsed**.
+///
+/// The opposite number of [`close_binary`], and the one path by which anything is ever
+/// added to `objects`: the toolbar's Open, a session restore and a scratchpad's rebuild
+/// all come through here, so they cannot differ about what opening a file means.
+///
+/// **A worker thread and a channel**, which is the shape `use_analysis` and the
+/// scratchpad's worker already have and for the same reason: reading and parsing is
+/// seconds of CPU on a large file and freya's executor is the UI thread. What is new is
+/// that the answers come back one at a time (`analysis`'s `open_files_streaming`) rather
+/// than as one `Vec` at the end — which is the whole of "explore while a binary is
+/// processed". On `libanalysis-sample.rlib` that is 196 members arriving over the parse
+/// instead of after it; on the 331 MB `viewer-sample`, which is one object, it is the row
+/// in [`Loads`] appearing at once where the sidebar used to sit empty for the duration.
+///
+/// The channel is **unbounded and drained in batches**. Unbounded because backpressure
+/// would be exactly wrong here — the worker is the thing that should run flat out, and the
+/// objects it hands over are `Arc`s of bytes that already exist — and batched because a
+/// write per member is a re-render per member, which for an archive whose members parse in
+/// a millisecond is a hundred renders nobody sees. Draining what has already arrived
+/// collapses each burst into one write.
+async fn open_binaries(
+    objects: State<Vec<Arc<Object>>>,
+    loading: State<Loads>,
+    paths: Vec<PathBuf>,
+) {
+    // Registered before a byte is read, so the rows are on screen for the whole of the
+    // wait rather than from whenever the first answer lands.
+    let id = {
+        let mut loading = loading;
+        loading.write().begin(&paths)
+    };
+
+    let (sender, events) = async_channel::unbounded::<Progress>();
+    std::thread::spawn(move || {
+        open_files_streaming(paths, |progress| match sender.send_blocking(progress) {
+            Ok(()) => ControlFlow::Continue(()),
+            // The receiver has gone, which is `take_load` deciding that nothing more from
+            // this load is wanted. Stopping here is what keeps a closed 331 MB file from
+            // being parsed to the end into a value that will be dropped.
+            Err(_) => ControlFlow::Break(()),
+        });
+    });
+
+    take_load(objects, loading, id, events).await;
+}
+
+/// Take one load's answers until it has nothing left to say.
+///
+/// Split from [`open_binaries`] because it is the half with the rules in it, and because
+/// a test can feed it by hand: what has to be asserted is what happens to an answer that
+/// arrives *after* the reader has closed the file or left the project, which is a race
+/// against a real worker and a fact against a channel the test writes into.
+///
+/// **An object nobody asked for any more is dropped rather than prevented.** That is
+/// `use_analysis`'s rule in a second place, and it has to be: the worker is already
+/// parsing when the file is closed, so the answer exists whatever the app does. It is
+/// checked against [`Loads::holds`] — the load *and* the path, not the path alone, since a
+/// file closed and reopened while the first parse ran is two loads and only the second
+/// one's objects belong on screen.
+///
+/// Returning is what stops the worker: it drops the receiver, the next `send_blocking`
+/// fails, and the walk breaks where it stands.
+async fn take_load(
+    mut objects: State<Vec<Arc<Object>>>,
+    mut loading: State<Loads>,
+    id: LoadId,
+    events: async_channel::Receiver<Progress>,
+) {
+    while let Ok(first) = events.recv().await {
+        // Whatever else has arrived while the UI thread was elsewhere, taken in the same
+        // pass so a burst of members costs one write.
+        let mut batch = vec![first];
+        while let Ok(more) = events.try_recv() {
+            batch.push(more);
+        }
+
+        // Both lists are worked out under one read guard and the guard is gone before
+        // anything writes -- the `peek`/`write` rule, and the reason this is not a single
+        // loop that pushes and writes as it goes.
+        let (parsed, finished) = {
+            let held = loading.peek();
+            let mut parsed: Vec<Arc<Object>> = Vec::new();
+            let mut finished: Vec<PathBuf> = Vec::new();
+            for progress in batch {
+                match progress {
+                    Progress::Parsed(object) if held.holds(id, &object.path) => parsed.push(object),
+                    // An object for a file this load no longer holds: the reader closed
+                    // it, or left the project, while it was being parsed.
+                    Progress::Parsed(_) => {}
+                    Progress::Finished(path) => finished.push(path),
+                }
+            }
+            (parsed, finished)
+        };
+
+        if !parsed.is_empty() {
+            objects.write().extend(parsed);
+        }
+        if !finished.is_empty() {
+            let mut held = loading.write();
+            for path in finished {
+                held.finished(id, &path);
+            }
+        }
+
+        // Nothing left that this load could still be asked about, either because it is
+        // done or because everything it was reading has been closed. Returning drops the
+        // receiver, which is the only thing that tells the worker.
+        if !loading.peek().active(id) {
+            return;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2566,7 +2716,7 @@ fn tag_label(tag: &str) -> impl IntoElement {
 /// The label sits in a box of its own rather than being the `flex` child itself. A
 /// `flex` child is measured from its content first, so a label placed there directly
 /// takes the width of its whole name and pushes the count off the row.
-fn tree_name(text: String) -> impl IntoElement {
+fn tree_name(text: String, dim: bool) -> impl IntoElement {
     rect()
         .width(Size::flex(1.0))
         .overflow(Overflow::Clip)
@@ -2575,6 +2725,9 @@ fn tree_name(text: String) -> impl IntoElement {
                 .text(text)
                 .width(Size::fill())
                 .max_lines(1)
+                // Unset rather than `text_fg` when it is not dimmed, so the row goes on
+                // inheriting the interface colour from the root the way it always did.
+                .maybe(dim, |name| name.color(palette().address_fg))
                 .text_overflow(TextOverflow::Ellipsis),
         )
 }
@@ -2589,8 +2742,14 @@ struct ArchiveRow {
     path: PathBuf,
     members: usize,
     expansion: Expansion,
+    /// Whether objects may still be arriving out of this file, which is the whole of the
+    /// indicator: the tag column says so and the name is dimmed with it, rather than a
+    /// spinner, because a sidebar row is one of hundreds and none of the others move.
+    loading: bool,
     /// The group this row is, in the tab's set of the groups the reader has opened.
-    group: usize,
+    /// [`None`] for a file that has contributed nothing yet: there is nothing behind it to
+    /// fold, so there is nothing for the set to hold either.
+    group: Option<usize>,
     expanded: State<HashSet<usize>>,
     key: DiffKey,
 }
@@ -2601,6 +2760,7 @@ impl PartialEq for ArchiveRow {
             && self.path == other.path
             && self.members == other.members
             && self.expansion == other.expansion
+            && self.loading == other.loading
             && self.group == other.group
     }
 }
@@ -2620,6 +2780,7 @@ impl Component for ArchiveRow {
         // The five states closing a file has to answer for. Consumed here, in the
         // render, because the handler that uses them may not run a hook.
         let objects = use_consume::<Objects>().0;
+        let loading = use_consume::<Loading>().0;
         let selection = use_consume::<Sel>().0;
         let open = use_consume::<Open>().0;
         let at = use_consume::<AsmAt>().0;
@@ -2634,11 +2795,21 @@ impl Component for ArchiveRow {
 
         // `Forced` draws no triangle, only the space one would have taken: while the
         // filter is holding the file open, folding it would hide the very rows the filter
-        // put on screen, so there is nothing here to press. See `Expansion::Forced`.
+        // put on screen, so there is nothing here to press. See `Expansion::Forced`. A row
+        // with no group is the same answer for the other reason -- there is nothing behind
+        // it yet -- and the space keeps its tag lined up with the rest.
         let chevron = match expansion {
+            _ if self.group.is_none() => "",
             Expansion::Collapsed => "\u{25b8}",
             Expansion::Expanded => "\u{25be}",
             Expansion::Forced => "",
+        };
+        // Which format a file is is not known until it has been parsed, so one still being
+        // read wears the one tag that is true of it: it is being read.
+        let tag = if self.loading {
+            "\u{2026}"
+        } else {
+            ARCHIVE_TAG
         };
 
         row_tooltip(
@@ -2657,6 +2828,11 @@ impl Component for ArchiveRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
+                    // Nothing behind the row and nothing to fold: a file that has
+                    // contributed no object yet.
+                    let Some(group) = group else {
+                        return;
+                    };
                     if expansion == Expansion::Forced {
                         return;
                     }
@@ -2670,7 +2846,7 @@ impl Component for ArchiveRow {
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(
                         &e,
-                        close_menu(objects, open, selection, at, history, path.clone()),
+                        close_menu(objects, loading, open, selection, at, history, path.clone()),
                     );
                 })
                 .child(
@@ -2680,14 +2856,23 @@ impl Component for ArchiveRow {
                         .color(palette().address_fg)
                         .max_lines(1),
                 )
-                .child(tag_label(ARCHIVE_TAG))
-                .child(tree_name(self.name.clone()))
+                .child(tag_label(tag))
+                // Dimmed while it is being read, which is the second half of the
+                // indicator: the tag says what is happening and the colour says that the
+                // row is not yet the whole answer.
+                .child(tree_name(self.name.clone(), self.loading))
                 // How many objects came out of this file, which under a filter is how
                 // many of them matched. It is the one thing about an archive that is not
-                // visible while it is folded shut.
+                // visible while it is folded shut. A file that has produced nothing yet
+                // shows no count rather than a zero: the count says what is behind the
+                // row, and "nothing, so far" is what the rest of the row already says.
                 .child(
                     label()
-                        .text(self.members.to_string())
+                        .text(if self.members == 0 {
+                            String::new()
+                        } else {
+                            self.members.to_string()
+                        })
                         .font_size(TAG_FONT_SIZE)
                         .color(palette().address_fg)
                         .max_lines(1),
@@ -2732,6 +2917,7 @@ impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let objects = use_consume::<Objects>().0;
+        let loading = use_consume::<Loading>().0;
         let selection = use_consume::<Sel>().0;
         let open = use_consume::<Open>().0;
         let at = use_consume::<AsmAt>().0;
@@ -2778,7 +2964,15 @@ impl Component for ObjectRow {
                     row.on_secondary_down(move |e: Event<PressEventData>| {
                         ContextMenu::open_from_event(
                             &e,
-                            close_menu(objects, open, selection, at, history, path.clone()),
+                            close_menu(
+                                objects,
+                                loading,
+                                open,
+                                selection,
+                                at,
+                                history,
+                                path.clone(),
+                            ),
                         );
                     })
                 })
@@ -2791,7 +2985,7 @@ impl Component for ObjectRow {
                     CHEVRON_WIDTH
                 })))
                 .child(tag_label(format_tag(self.object.format)))
-                .child(tree_name(self.object.name.clone())),
+                .child(tree_name(self.object.name.clone(), false)),
         )
     }
 
@@ -4181,6 +4375,7 @@ struct ObjectsTab;
 impl Component for ObjectsTab {
     fn render(&self) -> impl IntoElement {
         let objects = use_consume::<Objects>().0;
+        let loading = use_consume::<Loading>().0;
         let filter = use_state(Filter::default);
         // Which files the reader has folded open. It belongs to the tab exactly the way
         // the filter does — a fold is a view of a list, not part of the session — so it
@@ -4194,8 +4389,16 @@ impl Component for ObjectsTab {
         // filter *and* on which files are open. It is tens of names rather than the
         // symbol list's hundred thousand, but the length has to come from somewhere and
         // that somewhere is the flattened tree.
+        // Reading `loading` here is what puts a file on screen the moment it is asked for
+        // and takes the indicator off it when the last of its objects has landed: the memo
+        // follows the list of files being read exactly as it follows the objects.
         let tree = use_memo(move || {
-            ObjectTree::new(&objects.read(), &filter.read().matcher(), &expanded.read())
+            ObjectTree::new(
+                &objects.read(),
+                &loading.read(),
+                &filter.read().matcher(),
+                &expanded.read(),
+            )
         });
         let tree = tree.read().clone();
         // The selected object as the address its rows are keyed by, rather than as the
@@ -4226,16 +4429,21 @@ impl Component for ObjectsTab {
                             group,
                             members,
                             expansion,
+                            loading,
                         } => ArchiveRow {
                             name: name.clone(),
                             path: path.clone(),
                             members: *members,
                             expansion: *expansion,
+                            loading: *loading,
                             group: *group,
                             expanded: *expanded,
                             key: DiffKey::None,
                         }
-                        .key(*group)
+                        // The path as well as the group, since a file with nothing behind
+                        // it yet has no group and the path is the only identity it has.
+                        // The two agree for every row that has both: one file is one row.
+                        .key((*group, path))
                         .into(),
                         TreeRow::Object { object, member } => ObjectRow {
                             object: object.clone(),
@@ -4565,7 +4773,7 @@ fn binary_row(path: &Path, objects: usize) -> Element {
             .cross_align(Alignment::Center)
             .spacing(8.0)
             .content(Content::Flex)
-            .child(tree_name(text))
+            .child(tree_name(text, false))
             .child(
                 label()
                     .text(match objects {
@@ -5804,35 +6012,29 @@ fn stop_run(mut pad: State<PadState>) {
 /// which is exactly what a session restore does for a rebuilt binary (`project.rs`'s
 /// `Rebuilt`) and is that machinery pointed at a live state rather than at a file.
 ///
-/// The parse happens first and the close after it, so the two writes settle inside one
-/// handler and the save observer -- woken by a notify rather than at the write -- sees one
-/// state in which the file is open, rather than a moment in which the project has let go
-/// of it.
+/// The close happens **first** and the parse after it, which is the one thing streaming
+/// turned around: objects arrive one at a time, so there is no moment at which the whole
+/// answer is in hand to be swapped in under a single handler. What that costs is a beat in
+/// which the project has let go of the file -- `record` writes `project.toml` without it
+/// and again with it once the first object lands -- and what it buys is that the two
+/// generations of one path can never be in the objects list together, which is the rule
+/// everything else here rests on. The row does not blink either way: `close_binary` takes
+/// the objects and `open_binaries` puts the file straight back as one being read.
 fn reopen_binary(states: ProjectStates, path: PathBuf) {
+    // Unconditionally, and before the new objects go in: whether or not the new build
+    // parses, the objects the app is holding describe bytes that are no longer there.
+    close_binary(
+        states.objects,
+        states.loading,
+        states.open,
+        states.selection,
+        states.asm_at,
+        states.history,
+        &path,
+    );
+
     spawn(async move {
-        let (sender, receiver) = async_channel::bounded(1);
-        let paths = vec![path.clone()];
-        std::thread::spawn(move || {
-            let _ = sender.send_blocking(open_files(paths));
-        });
-
-        let Ok(parsed) = receiver.recv().await else {
-            return;
-        };
-
-        // Unconditionally, and before the new objects go in: whether or not the new build
-        // parses, the objects the app is holding describe bytes that are no longer there.
-        close_binary(
-            states.objects,
-            states.open,
-            states.selection,
-            states.asm_at,
-            states.history,
-            &path,
-        );
-
-        let mut objects = states.objects;
-        objects.write().extend(parsed);
+        open_binaries(states.objects, states.loading, vec![path]).await;
     });
 }
 
@@ -6662,7 +6864,7 @@ fn docking_area(area: State<DockArea>) -> impl IntoElement {
     )
 }
 
-fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
+fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl IntoElement {
     let on_open = move |_| {
         spawn(async move {
             let Some(handles) = AsyncFileDialog::new()
@@ -6675,17 +6877,9 @@ fn toolbar(objects: State<Vec<Arc<Object>>>) -> impl IntoElement {
 
             let paths: Vec<PathBuf> = handles.iter().map(|h| h.path().to_path_buf()).collect();
 
-            // Reading and parsing is CPU bound and can take seconds on a large
-            // binary, so keep it off the UI thread and hand the result back.
-            let (sender, receiver) = async_channel::bounded(1);
-            std::thread::spawn(move || {
-                let _ = sender.send_blocking(open_files(paths));
-            });
-
-            if let Ok(parsed) = receiver.recv().await {
-                let mut objects = objects;
-                objects.write().extend(parsed);
-            }
+            // Off the UI thread, and one object at a time: the sidebar has a row per file
+            // from here on and fills it in as the objects arrive. See `open_binaries`.
+            open_binaries(objects, loading, paths).await;
         });
     };
 
@@ -6731,6 +6925,11 @@ fn use_save_on_change(states: ProjectStates) {
     let ProjectStates {
         proj,
         objects,
+        // What is still being read is deliberately not saved and deliberately does not
+        // wake this: `binaries` is derived from the objects, so a file joins the saved
+        // list when its first object lands and a file that never parses is never named,
+        // which is exactly what it did before anything streamed.
+        loading: _,
         open,
         asm_at,
         selection,
@@ -6957,9 +7156,10 @@ fn use_open_source_file(
 /// answer always an old one and never a new one.
 ///
 /// This is deliberately not the multi-threading `notes/Goals.md` asks for under
-/// "lightweight and multi threaded": that one is about parsing many objects at once and
-/// is Step 11d's. This is one reader looking at one function, where the useful number of
-/// threads is one and the point is only that it is not the one drawing the window.
+/// "lightweight and multi threaded": that one is about parsing many objects at once, which
+/// is [`open_binaries`]' worker and its own answer. This is one reader looking at one
+/// function, where the useful number of threads is one and the point is only that it is
+/// not the one drawing the window.
 ///
 /// **How a superseded answer is dropped.** Every answer carries the [`Symbol`] it is
 /// about, and it is kept only when that symbol is the one selected *now* — a comparison,
@@ -7247,6 +7447,7 @@ fn use_restore_on_startup(states: ProjectStates) {
 fn restore_project(states: ProjectStates, project: Project, session: Session) {
     let ProjectStates {
         objects,
+        loading,
         open,
         mut asm_at,
         selection,
@@ -7262,25 +7463,22 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
     }
 
     spawn(async move {
-        let (sender, receiver) = async_channel::bounded(1);
-        let paths = project.binaries.clone();
-        std::thread::spawn(move || {
-            let _ = sender.send_blocking(open_files(paths));
-        });
+        // The objects arrive as they are parsed and the sidebar fills in behind them, so
+        // the reader can be clicking through the first archive member before the last one
+        // exists. What waits for the whole load is the *session*: a tab, a selection or a
+        // history entry is resolved against the objects by name, and resolving one against
+        // a half-filled list would drop the tabs whose object had not landed yet.
+        open_binaries(objects, loading, project.binaries.clone()).await;
 
-        let Ok(parsed) = receiver.recv().await else {
-            return;
-        };
+        let (objects, mut history) = (objects, history);
         // Nothing opened: leave the app empty *and* leave the file alone, so a
         // binary that is only temporarily missing is not forgotten.
-        if parsed.is_empty() {
+        if objects.peek().is_empty() {
             return;
         }
 
-        let (mut objects, mut history) = (objects, history);
-        objects.write().extend(parsed);
-
-        // Resolved against everything now loaded rather than just `parsed`, so
+        // Resolved against everything now loaded rather than just what this load
+        // contributed, so
         // this stays correct if the user managed to open something first. All
         // three are computed before any of them is set so the read guard is long
         // gone by the time anything is notified.
@@ -7356,6 +7554,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
 fn clear_project(states: ProjectStates) {
     let ProjectStates {
         objects,
+        mut loading,
         open,
         asm_at,
         selection,
@@ -7366,11 +7565,16 @@ fn clear_project(states: ProjectStates) {
         ..
     } = states;
 
+    // Every load at once, and before the closes rather than through them: a file that has
+    // been asked for and has produced nothing yet is not in the objects list, so nothing
+    // below would reach it, and its objects would arrive into the project that comes next.
+    loading.write().clear();
+
     // Both reads are bound before anything writes, which is the `peek` guard rule and
     // also the plain iteration rule: `close_binary` writes the very list being walked.
     let binaries = project::binaries(&objects.peek());
     for path in binaries {
-        close_binary(objects, open, selection, asm_at, history, &path);
+        close_binary(objects, loading, open, selection, asm_at, history, &path);
     }
 
     let sources = files.peek().tabs().to_vec();
@@ -7442,6 +7646,10 @@ pub fn app() -> impl IntoElement {
     );
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
+    // The files on their way into it, which is what the Objects tree draws its
+    // still-being-read rows from. Beside `objects` because it is the same list seen a
+    // moment earlier.
+    let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;
     let selection = use_provide_context(|| Sel(State::create(Selection::None))).0;
     // The places open in the content area, of which `selection` is the active one, and the
     // source files open in the Source pane, of which `shown` is. Both lists are opened and
@@ -7477,11 +7685,12 @@ pub fn app() -> impl IntoElement {
     // because the project view both draws it and edits it -- which is also what let the
     // save policy stop carrying the name across its own calls.
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
-    // The nine of them together, since a project switch closes all of them and reopens
+    // The ten of them together, since a project switch closes all of them and reopens
     // all of them.
     let states = ProjectStates {
         proj,
         objects,
+        loading,
         open,
         asm_at,
         selection,
@@ -7665,7 +7874,7 @@ pub fn app() -> impl IntoElement {
         // inherits the interface font, as freya's own documentation asks, and it lays out
         // as nothing at all until a menu is open.
         .child(ContextMenuViewer::new())
-        .child(toolbar(objects))
+        .child(toolbar(objects, loading))
         // `ResizableContainer` renders itself `.expanded()`, so it needs a parent
         // that has already been given the leftover height under the toolbar.
         .child(
@@ -7891,7 +8100,7 @@ mod tests {
         rect().expanded()
     }
 
-    /// The nine contexts `app()` provides, in one `ProjectStates`, so a test can drive a
+    /// The ten contexts `app()` provides, in one `ProjectStates`, so a test can drive a
     /// switch exactly as the recent list's press does.
     ///
     /// A macro and not a function: the runner's type is `freya_core::integration::Runner`,
@@ -7908,6 +8117,9 @@ mod tests {
                     .0,
                 objects: $runner
                     .provide_root_context(|| Objects(State::create(Vec::new())))
+                    .0,
+                loading: $runner
+                    .provide_root_context(|| Loading(State::create(Loads::default())))
                     .0,
                 open: $runner
                     .provide_root_context(|| Open(State::create(Tabs::default())))
@@ -8011,6 +8223,268 @@ mod tests {
             *states.selection.peek() == Selection::None,
             "the selection still points into the project just left"
         );
+    }
+
+    /// The channel a load test feeds by hand, and the paths the harness registers as
+    /// being read. Standing in for `open_binaries`' worker thread: what has to be
+    /// asserted is what the app does with an answer that arrives after the reader has
+    /// moved on, which against a real worker is a race and against a channel is a fact.
+    /// The receiver is *taken* rather than cloned, because a clone left in the context
+    /// map would keep the channel open for ever and the test could never see the one
+    /// thing that stops a worker: `take_load` returning and dropping the last receiver.
+    #[derive(Clone)]
+    struct Feed(
+        Arc<Mutex<Option<async_channel::Receiver<Progress>>>>,
+        Arc<Vec<PathBuf>>,
+    );
+
+    /// The real `take_load` over the real Objects tree, with the worker replaced by
+    /// [`Feed`]. The tree is mounted rather than left out so that every one of these
+    /// tests also builds the rows for a file that is being read -- including the row with
+    /// no group behind it, which is the one shape no other test reaches.
+    fn load_harness() -> impl IntoElement {
+        let objects = use_consume::<Objects>().0;
+        let loading = use_consume::<Loading>().0;
+        let feed = use_consume::<Feed>().clone();
+
+        use_hook(move || {
+            let Feed(events, paths) = feed;
+            let events = events
+                .lock()
+                .expect("the feed is not poisoned")
+                .take()
+                .expect("the harness is mounted once");
+            // Bound out of its own statement, so the guard is gone before anything else
+            // touches the state.
+            let id = {
+                let mut loading = loading;
+                loading.write().begin(&paths)
+            };
+            spawn(async move { take_load(objects, loading, id, events).await });
+        });
+
+        rect().expanded().child(ObjectsTab)
+    }
+
+    /// `n` objects that all came out of one path, which is what an archive's members look
+    /// like to everything above the analysis crate. Parsed `n` times rather than cloned,
+    /// so they are `n` distinct `Arc`s exactly as real members are.
+    fn fixture_objects(n: usize) -> (PathBuf, Vec<Arc<Object>>) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/analysis/tests/fixtures/line_fixture.o");
+        let objects = (0..n)
+            .map(|_| {
+                analysis::open_files(vec![path.clone()])
+                    .first()
+                    .expect("the fixture parses")
+                    .clone()
+            })
+            .collect();
+        (path, objects)
+    }
+
+    /// Mount [`load_harness`] over one path, and hand back the states and the sender the
+    /// test plays the worker with.
+    fn mount_load(
+        path: &Path,
+    ) -> (
+        TestingRunner,
+        ProjectStates,
+        async_channel::Sender<Progress>,
+    ) {
+        let (sender, events) = async_channel::unbounded::<Progress>();
+        let paths = Arc::new(vec![path.to_path_buf()]);
+        let events = Arc::new(Mutex::new(Some(events)));
+        let (test, states) = TestingRunner::new(
+            load_harness,
+            (300., 300.).into(),
+            move |runner| {
+                runner.provide_root_context(|| Feed(events.clone(), paths.clone()));
+                project_states!(runner)
+            },
+            1.,
+        );
+        (test, states, sender)
+    }
+
+    /// How the Objects tree describes what is on screen, which is the one thing these
+    /// tests are really about: a file that is being read has a row before it has an
+    /// object, and stops saying so when the last of them has landed.
+    fn reading(states: &ProjectStates) -> Vec<(String, usize, bool)> {
+        let tree = ObjectTree::new(
+            &states.objects.peek(),
+            &states.loading.peek(),
+            &Filter::default().matcher(),
+            &HashSet::new(),
+        );
+        (0..tree.len())
+            .filter_map(|row| match tree.row(row) {
+                TreeRow::File {
+                    name,
+                    members,
+                    loading,
+                    ..
+                } => Some((name.clone(), *members, *loading)),
+                TreeRow::Object { .. } => None,
+            })
+            .collect()
+    }
+
+    /// The sub-step in one test: the objects of one file reach the sidebar one at a time,
+    /// and the row for that file is there before the first of them is.
+    #[test]
+    fn objects_reach_the_sidebar_as_they_are_parsed() {
+        let (path, objects) = fixture_objects(3);
+        let (mut test, states, sender) = mount_load(&path);
+        test.sync_and_update();
+
+        // Before a single byte has been parsed. This is the state `Goals.md` asks for an
+        // indicator for and which nothing could be in while the parse handed back one
+        // `Vec` at the end.
+        assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 0, true)]);
+        assert!(states.objects.peek().is_empty());
+
+        for (arrived, object) in objects.iter().enumerate() {
+            sender
+                .send_blocking(Progress::Parsed(object.clone()))
+                .expect("the app is still listening");
+            pump(&mut test, || states.objects.peek().len() == arrived + 1);
+            assert_eq!(
+                reading(&states),
+                [("line_fixture.o".to_owned(), arrived + 1, true)],
+                "the file stopped saying it was being read before it was finished"
+            );
+            // The save side: the path joins the binaries with its first object, so a
+            // session written half way through a parse names the file rather than a
+            // truncated version of it. There is nothing else in `binaries` to truncate --
+            // it is a list of paths.
+            assert_eq!(project::binaries(&states.objects.peek()), [path.clone()]);
+        }
+
+        sender
+            .send_blocking(Progress::Finished(path.clone()))
+            .expect("the app is still listening");
+        pump(&mut test, || !states.loading.peek().is_loading(&path));
+
+        // Done, so the ordinary rules take over again: three objects out of one file is
+        // an archive-shaped row, and nothing says it is still being read.
+        assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 3, false)]);
+    }
+
+    /// Closing a file half way through reading it takes the objects that have already
+    /// arrived *and* the ones that have not.
+    ///
+    /// The second half is what needs a test: the worker is already parsing when the row
+    /// is closed, so the answers exist whatever the app does, and without the check they
+    /// would put the file back one member at a time.
+    #[test]
+    fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
+        let (path, objects) = fixture_objects(2);
+        let (mut test, states, sender) = mount_load(&path);
+        test.sync_and_update();
+
+        sender
+            .send_blocking(Progress::Parsed(objects[0].clone()))
+            .expect("the app is still listening");
+        pump(&mut test, || states.objects.peek().len() == 1);
+
+        close_binary(
+            states.objects,
+            states.loading,
+            states.open,
+            states.selection,
+            states.asm_at,
+            states.history,
+            &path,
+        );
+        test.sync_and_update();
+        assert!(states.objects.peek().is_empty());
+        assert!(reading(&states).is_empty(), "a closed file is still a row");
+
+        // The answer that was already on its way.
+        sender
+            .send_blocking(Progress::Parsed(objects[1].clone()))
+            .expect("the worker has not been told yet");
+        for _ in 0..8 {
+            test.sync_and_update();
+        }
+        assert!(
+            states.objects.peek().is_empty(),
+            "an object arrived for a file that had been closed"
+        );
+
+        // And the worker is told, by the only thing that can tell it: the receiver is
+        // gone, so its next send fails and the walk stops rather than parsing the rest of
+        // a file nobody is waiting for.
+        assert!(sender.send_blocking(Progress::Finished(path)).is_err());
+    }
+
+    /// Leaving a project while one of its files is being read. The load is cancelled by
+    /// `clear_project` itself and not through `close_binary`, because a file that has
+    /// produced nothing yet is not in the objects list for the per-path walk to reach.
+    #[test]
+    fn leaving_a_project_while_a_file_is_read_drops_what_was_still_coming() {
+        let (path, objects) = fixture_objects(2);
+        let (mut test, states, sender) = mount_load(&path);
+        test.sync_and_update();
+
+        clear_project(states);
+        test.sync_and_update();
+        assert!(states.loading.peek().paths().is_empty());
+        assert!(reading(&states).is_empty());
+
+        sender
+            .send_blocking(Progress::Parsed(objects[0].clone()))
+            .expect("the worker has not been told yet");
+        for _ in 0..8 {
+            test.sync_and_update();
+        }
+        assert!(
+            states.objects.peek().is_empty(),
+            "the project just left got an object out of the load it abandoned"
+        );
+        assert!(sender
+            .send_blocking(Progress::Parsed(objects[1].clone()))
+            .is_err());
+    }
+
+    /// Reading a file that is still being read, which is the whole point of the sub-step:
+    /// an object that has arrived is an ordinary row, selecting it opens an ordinary tab,
+    /// and the members still landing behind it change none of that.
+    #[test]
+    fn a_file_still_being_read_can_be_explored() {
+        let (path, objects) = fixture_objects(3);
+        let (mut test, states, sender) = mount_load(&path);
+        test.sync_and_update();
+
+        sender
+            .send_blocking(Progress::Parsed(objects[0].clone()))
+            .expect("the app is still listening");
+        pump(&mut test, || states.objects.peek().len() == 1);
+
+        // Through `activate`, which is the only way anything opens a tab -- a partially
+        // read file is not a special case for it.
+        let opened = Selection::Object(objects[0].clone());
+        activate(states.open, states.selection, opened.clone());
+        test.sync_and_update();
+
+        for object in &objects[1..] {
+            sender
+                .send_blocking(Progress::Parsed(object.clone()))
+                .expect("the app is still listening");
+        }
+        pump(&mut test, || states.objects.peek().len() == 3);
+        sender
+            .send_blocking(Progress::Finished(path.clone()))
+            .expect("the app is still listening");
+        pump(&mut test, || !states.loading.peek().is_loading(&path));
+
+        assert!(
+            *states.selection.peek() == opened,
+            "the selection moved while the rest of the file was arriving"
+        );
+        assert_eq!(states.open.peek().tabs().len(), 1);
+        assert_eq!(states.objects.peek().len(), 3);
     }
 
     /// What the two text boxes mean, which is the one place the project view's `String`s
@@ -8119,7 +8593,7 @@ mod tests {
     fn fixture_symbols() -> Vec<Symbol> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("crates/analysis/tests/fixtures/line_fixture.o");
-        let objects = open_files(vec![path]);
+        let objects = analysis::open_files(vec![path]);
         let object = objects.first().expect("the fixture parses").clone();
 
         object
@@ -9407,10 +9881,10 @@ mod tests {
         // And again. The path is the same one, so what the first build left has to go
         // rather than sit beside it.
         request_build(pad, &jobs);
-        pump(&mut test, || !pad.peek().building);
-        for _ in 0..8 {
-            test.sync_and_update();
-        }
+        // Waited for on the *objects* and not on the build, because a rebuild is now a
+        // close followed by a streaming reopen: the build is over the moment cargo has
+        // answered, and the artifact's objects come back over the load after it.
+        pump(&mut test, || !pad.peek().building && opened(&states) > 0);
 
         assert_eq!(
             opened(&states),

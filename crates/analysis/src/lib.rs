@@ -6,8 +6,8 @@ use std::{
     collections::{HashMap, HashSet},
     fmt, fs,
     hash::Hasher as _,
-    ops::Range,
-    path::PathBuf,
+    ops::{ControlFlow, Range},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use symbolic_demangle::{Demangle, DemangleOptions};
@@ -924,56 +924,130 @@ struct ParsedObject {
     sections: Vec<Arc<Section>>,
 }
 
-fn open_object(out: &mut Vec<Arc<Object>>, data: ObjectData, name: String, path: PathBuf) {
-    out.extend(parse_object(data, name, path));
+/// What [`open_files_streaming`] has to say as it goes.
+///
+/// Two variants and not three: a *start* would be the caller telling itself something it
+/// already knows, since it supplied the paths and they are walked in order. What it
+/// cannot know is when one is done with — a file contributes anything from zero objects
+/// to an archive's two hundred — and that is [`Progress::Finished`].
+pub enum Progress {
+    /// One object, parsed and ready to be read. Every object between two
+    /// [`Finished`](Progress::Finished)es came out of the path the second of them names.
+    Parsed(Arc<Object>),
+    /// Nothing more will come out of this path.
+    ///
+    /// Emitted for **every** path the walk reaches, including one that could not be read
+    /// and one that yielded nothing at all: it is what says "stop waiting", and a caller
+    /// drawing a file it has asked for needs that said whether or not anything came of
+    /// it.
+    Finished(PathBuf),
 }
 
 /// Parse each path as an archive (contributing one [`Object`] per member) *and* as a
-/// plain object file. Anything that fails to read or parse is silently skipped.
-pub fn open_files(paths: Vec<PathBuf>) -> Vec<Arc<Object>> {
-    let mut objects = Vec::new();
-
+/// plain object file, handing each object to `emit` **as it is parsed** rather than
+/// collecting them. Anything that fails to read or parse is silently skipped.
+///
+/// This is the shape the app opens binaries in, and the streaming is the whole point of
+/// it: a 196-member archive is 196 answers arriving over the couple of hundred
+/// milliseconds it takes, so the reader can be reading the first member's symbols while
+/// the last one is still being parsed. A `Vec` returned at the end is the same work with
+/// the first 195 answers withheld.
+///
+/// **A callback, not a channel or an iterator.** The crate stays framework-free and this
+/// is the least it can know about its caller: a channel would make the crate choose one
+/// (and choose bounded or unbounded, which is a backpressure policy belonging to whoever
+/// is drawing the result), and an iterator would mean either self-borrowing the file's
+/// bytes across a yield or a generator. `open_files` is that same callback closing over a
+/// `Vec`.
+///
+/// **`emit` answers whether to go on**, which is how work nobody is waiting for stops:
+/// the app returns [`ControlFlow::Break`] when the reader has closed the file being
+/// parsed or left the project it belongs to, and the walk stops where it stands rather
+/// than parsing another 300 MB into a value that will be dropped. The one thing a single
+/// answer cannot express is "skip the rest of *this* file but go on to the next", so a
+/// multi-file request in which one file is closed goes on parsing that file's remaining
+/// members and drops them at the caller. That is deliberate: it costs a worker thread
+/// some work in the rarest case rather than a third answer every call site has to have an
+/// opinion about.
+///
+/// **The digest is one pass per file**, not per object: [`ObjectData::whole_file`] is
+/// built once at the top of each path and every member is cut from it
+/// ([`ObjectData::member`]), which is what streaming must not quietly turn into 196
+/// hashes of the same 20 MB.
+pub fn open_files_streaming(
+    paths: Vec<PathBuf>,
+    mut emit: impl FnMut(Progress) -> ControlFlow<()>,
+) {
     for path in paths {
-        let Ok(file) = fs::read(&path) else {
-            continue;
-        };
+        if open_one_file(&path, &mut emit).is_break() {
+            return;
+        }
+    }
+}
 
-        // One allocation per file, shared by every object parsed out of it and held for
-        // as long as they live; see `ObjectData`. `fs::read` gives a `Vec`, so this
-        // copies the bytes once more before dropping the original.
-        //
-        // The file's own `ObjectData` is built here rather than at the bottom where it is
-        // used, because it is what the members are cut from: the hash it takes is then one
-        // pass over the file however many objects come out of it.
-        let file = ObjectData::whole_file(Arc::from(file));
+/// One path's worth of [`open_files_streaming`]. Split out so that `?` on the caller's
+/// answer reads as what it is — abandon this file — rather than as a flag threaded
+/// through two nested loops.
+fn open_one_file(
+    path: &Path,
+    emit: &mut impl FnMut(Progress) -> ControlFlow<()>,
+) -> ControlFlow<()> {
+    let Ok(file) = fs::read(path) else {
+        // Unreadable is still an end. Whoever asked for this file is drawing it as
+        // pending until told otherwise, and "it was never there" is told exactly here.
+        return emit(Progress::Finished(path.to_path_buf()));
+    };
 
-        if let Ok(archive) = ArchiveFile::parse(file.bytes()) {
-            for member in archive.members() {
-                member
-                    .map(|member| {
-                        let name = String::from_utf8_lossy(member.name()).into_owned();
-                        // The same bytes `member.data(..)` would return, addressed as a
-                        // range into the archive so the member stays reachable from the
-                        // object without the archive having to be scanned again.
-                        let (offset, size) = member.file_range();
-                        if let Some(data) = ObjectData::member(&file, offset, size) {
-                            open_object(&mut objects, data, name, path.clone());
-                        }
-                    })
-                    .ok();
+    // One allocation per file, shared by every object parsed out of it and held for
+    // as long as they live; see `ObjectData`. `fs::read` gives a `Vec`, so this
+    // copies the bytes once more before dropping the original.
+    //
+    // The file's own `ObjectData` is built here rather than at the bottom where it is
+    // used, because it is what the members are cut from: the hash it takes is then one
+    // pass over the file however many objects come out of it.
+    let file = ObjectData::whole_file(Arc::from(file));
+
+    if let Ok(archive) = ArchiveFile::parse(file.bytes()) {
+        for member in archive.members() {
+            let Ok(member) = member else {
+                continue;
+            };
+            let name = String::from_utf8_lossy(member.name()).into_owned();
+            // The same bytes `member.data(..)` would return, addressed as a range into
+            // the archive so the member stays reachable from the object without the
+            // archive having to be scanned again.
+            let (offset, size) = member.file_range();
+            let Some(data) = ObjectData::member(&file, offset, size) else {
+                continue;
+            };
+            if let Some(object) = parse_object(data, name, path.to_path_buf()) {
+                emit(Progress::Parsed(object))?;
             }
         }
-
-        open_object(
-            &mut objects,
-            file,
-            path.file_name()
-                .map(|name| name.to_string_lossy())
-                .unwrap_or_default()
-                .into_owned(),
-            path.clone(),
-        );
     }
 
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default()
+        .into_owned();
+    if let Some(object) = parse_object(file, name, path.to_path_buf()) {
+        emit(Progress::Parsed(object))?;
+    }
+
+    emit(Progress::Finished(path.to_path_buf()))
+}
+
+/// [`open_files_streaming`] with the objects collected, for a caller with nowhere to put
+/// them one at a time — the crate's own tests, and anything that has no window to draw
+/// them in.
+pub fn open_files(paths: Vec<PathBuf>) -> Vec<Arc<Object>> {
+    let mut objects = Vec::new();
+    open_files_streaming(paths, |progress| {
+        if let Progress::Parsed(object) = progress {
+            objects.push(object);
+        }
+        ControlFlow::Continue(())
+    });
     objects
 }

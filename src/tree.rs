@@ -16,6 +16,15 @@
 //! members, the two runs being adjacent; that is the objects list holding a file twice
 //! showing through, and the row still says truthfully how many objects are under it.
 //!
+//! A file is also in this list *before* it has contributed anything. `open_files_streaming`
+//! hands objects over as they are parsed, so between the moment a file is asked for and
+//! the moment its last member lands there is a row with nothing behind it yet -- which is
+//! the state `notes/Goals.md` asks for an indicator for, and which nothing could be in
+//! while the parse handed back one `Vec` at the end. [`Loads`] is that half of the model:
+//! the files being read right now, which is a list only the app can keep (the crate is
+//! told the paths and hands back objects; it has no opinion about what a reader is
+//! looking at meanwhile).
+//!
 //! A file that contributed exactly **one** object is its own row and grows no parent: the
 //! parent would be named after the same file, carry the same tooltip, and fold away a
 //! single child. That rule is about the count and not about the archive-ness, so a
@@ -32,6 +41,101 @@ use std::{
 use analysis::{BinaryFormat, Object};
 
 use crate::filter::Matcher;
+
+/// Which load asked for a file, so that one abandoned load cannot speak for another.
+///
+/// A plain counter and not a path, because the same path can be loading twice -- a reader
+/// who opens a file, closes it and opens it again before the first parse has finished has
+/// two loads of it, and the first one's objects must not arrive into the second's row.
+/// Compare this with the analysis worker (`ui.rs`, `use_analysis`), which deliberately
+/// has *no* counter: an answer there is about a `Symbol` that already existed and so
+/// carries its own identity, while a load is about work that has not produced anything to
+/// be identified by.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LoadId(u64);
+
+/// The files being read and parsed right now.
+///
+/// One entry per (load, path) rather than per path, and a `Vec` rather than a set,
+/// because both questions asked of it are ordered ones: the rows are drawn in the order
+/// the files were asked for, and an arriving object has to be checked against the load
+/// that produced it rather than against the path alone.
+///
+/// **Cancelling is by path and never by load**, which is not an oversight: closing a file
+/// is `close_binary`'s business (in `ui.rs`) and its unit is the path, so a path that is
+/// closed stops loading however many loads happened to be producing it. Leaving *this*
+/// project is `clear`, which is every load at once.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct Loads {
+    entries: Vec<(LoadId, PathBuf)>,
+    /// The next id to hand out. Per-state rather than a process-wide counter: two states
+    /// never compare ids with each other, and a test wants to start from zero.
+    next: u64,
+}
+
+impl Loads {
+    /// Register `paths` as being read, and hand back the id the answers will be checked
+    /// against.
+    ///
+    /// Called by whoever is about to start the work and *before* it starts, so the row
+    /// saying "this file is being read" is on screen from the click rather than from the
+    /// first byte read -- which for a 331 MB file is a second and a half later.
+    pub fn begin(&mut self, paths: &[PathBuf]) -> LoadId {
+        let id = LoadId(self.next);
+        self.next += 1;
+        self.entries
+            .extend(paths.iter().map(|path| (id, path.clone())));
+        id
+    }
+
+    /// This load has nothing more to say about `path`.
+    pub fn finished(&mut self, id: LoadId, path: &Path) {
+        self.entries
+            .retain(|(entry, loading)| *entry != id || loading != path);
+    }
+
+    /// Whether this load's answers about `path` are still wanted. `false` for a file that
+    /// has since been closed, and for one whose project has been left.
+    pub fn holds(&self, id: LoadId, path: &Path) -> bool {
+        self.entries
+            .iter()
+            .any(|(entry, loading)| *entry == id && loading == path)
+    }
+
+    /// Whether this load has any path left at all, which is what tells the worker feeding
+    /// it to stop rather than to skip one answer.
+    pub fn active(&self, id: LoadId) -> bool {
+        self.entries.iter().any(|(entry, _)| *entry == id)
+    }
+
+    /// Whether anything is still producing objects for `path`, which is what a row draws.
+    pub fn is_loading(&self, path: &Path) -> bool {
+        self.entries.iter().any(|(_, loading)| loading == path)
+    }
+
+    /// Stop reading `path`, whoever asked for it. See the type's note on why the unit is
+    /// the path.
+    pub fn cancel(&mut self, path: &Path) {
+        self.entries.retain(|(_, loading)| loading != path);
+    }
+
+    /// Stop everything, which is a project being left.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// The paths still being read, in the order they were asked for and without repeats:
+    /// one file is one row however many loads are producing it.
+    pub fn paths(&self) -> Vec<&Path> {
+        let mut paths: Vec<&Path> = Vec::new();
+        for (_, path) in &self.entries {
+            if !paths.contains(&path.as_path()) {
+                paths.push(path);
+            }
+        }
+        paths
+    }
+}
 
 /// Whether a file row's members are on screen, and whether the reader decided that.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +164,11 @@ pub enum TreeRow {
     /// A file that contributed more than one object — an archive — and the row its
     /// members fold under. It is not an [`Object`] itself: an `.a`/`.lib` does not parse
     /// as one, so this row has a path and a count and nothing to select.
+    ///
+    /// It is also what a file being read is drawn as before anything has come out of it,
+    /// and what one stays as while it is still being read even if only one object has:
+    /// the alternative is a top-level object row that turns into a parent under the
+    /// reader the moment a second member lands.
     File {
         /// What the row is called: the file's name, without its directory.
         name: String,
@@ -69,11 +178,21 @@ pub enum TreeRow {
         /// first object the file contributed, which is `Arc` pointer identity the way the
         /// rest of the UI keys things — a path would collide with the same file opened
         /// twice, and an index would move under the reader as files are opened.
-        group: usize,
+        ///
+        /// [`None`] for a file that has contributed nothing yet: there is no object to
+        /// point at, and there is equally nothing to fold, so the row that has no key is
+        /// exactly the row that never needs one.
+        group: Option<usize>,
         /// How many objects are under this row *now*, which under a filter is how many
         /// of them matched.
         members: usize,
         expansion: Expansion,
+        /// Whether more objects may still arrive out of this file. It is the indicator
+        /// `notes/Goals.md` asks for, and it is a property of the **file** rather than of
+        /// an object because an object that has not been parsed does not exist: the unit
+        /// that is part-way through is the one the reader opened, the one `close_binary`
+        /// closes, and the one that already has a row.
+        loading: bool,
     },
     /// One object: an archive member indented under its file, or a file that contributed
     /// exactly one object and so is a row of its own.
@@ -116,7 +235,17 @@ impl ObjectTree {
     /// Matching is on the name each row shows — the file's own name, not the directory
     /// above it, and the member's name — for the reason the symbol list matches on the
     /// demangled name: a filter whose effect cannot be seen on screen is not one.
-    pub fn new(objects: &[Arc<Object>], matcher: &Matcher, expanded: &HashSet<usize>) -> Self {
+    /// **A file still being read is always a file row**, whatever it has contributed so
+    /// far — nothing, one object or fifty. The "one object is its own row" rule needs to
+    /// know that the one is all there will be, which is exactly what is not known yet,
+    /// and a row that promoted itself to a parent as the second member landed would move
+    /// the list under a reader who is already reading it.
+    pub fn new(
+        objects: &[Arc<Object>],
+        loads: &Loads,
+        matcher: &Matcher,
+        expanded: &HashSet<usize>,
+    ) -> Self {
         // Whether the filter is asking anything at all. Nothing may be forced open while
         // it is not: an untouched list is exactly the list, folded the way it was left.
         let filtering = !matches!(matcher, Matcher::Everything);
@@ -128,8 +257,12 @@ impl ObjectTree {
             let (group, tail) = rest.split_at(count);
             rest = tail;
 
-            // One object from this file: it *is* the row. See the module comment.
-            if let [object] = group {
+            let loading = loads.is_loading(&first.path);
+
+            // One object from this file: it *is* the row. See the module comment — and
+            // only once the file is done with, since "one" is not yet an answer while
+            // more may be coming.
+            if let ([object], false) = (group, loading) {
                 if matcher.matches(&object.name) {
                     rows.push(TreeRow::Object {
                         object: object.clone(),
@@ -161,9 +294,10 @@ impl ObjectTree {
             rows.push(TreeRow::File {
                 name,
                 path: first.path.clone(),
-                group,
+                group: Some(group),
                 members: members.len(),
                 expansion,
+                loading,
             });
 
             if expansion != Expansion::Collapsed {
@@ -172,6 +306,34 @@ impl ObjectTree {
                     member: true,
                 }));
             }
+        }
+
+        // The files that have been asked for and have produced nothing yet. They cannot
+        // come out of the walk above, which is over objects, and they are the whole
+        // difference between a window that says it is working and one that sits empty for
+        // the second and a half it takes to read 331 MB. Appended rather than interleaved:
+        // there is no object to place them next to, and a file's row moves into the walk
+        // above the moment its first one lands.
+        //
+        // The filter reads the file's name and nothing else here, there being no member
+        // names to match yet. A file nothing matches is simply not there, exactly as a
+        // loaded one is not.
+        for path in loads.paths() {
+            if objects.iter().any(|object| object.path == path) {
+                continue;
+            }
+            let name = file_name(path);
+            if !matcher.matches(&name) {
+                continue;
+            }
+            rows.push(TreeRow::File {
+                name,
+                path: path.to_path_buf(),
+                group: None,
+                members: 0,
+                expansion: Expansion::Collapsed,
+                loading: true,
+            });
         }
 
         ObjectTree(Arc::new(rows))
@@ -272,8 +434,12 @@ mod tests {
                     name,
                     members,
                     expansion,
+                    loading,
                     ..
-                } => format!("file {name} ({members}) {expansion:?}"),
+                } => {
+                    let reading = if *loading { " reading" } else { "" };
+                    format!("file {name} ({members}) {expansion:?}{reading}")
+                }
                 TreeRow::Object { object, member } => {
                     let indent = if *member { "  " } else { "" };
                     format!("{indent}object {}", object.name)
@@ -283,11 +449,29 @@ mod tests {
     }
 
     fn tree(objects: &[Arc<Object>], filter: &Filter, expanded: &[usize]) -> ObjectTree {
+        loading_tree(objects, &Loads::default(), filter, expanded)
+    }
+
+    fn loading_tree(
+        objects: &[Arc<Object>],
+        loads: &Loads,
+        filter: &Filter,
+        expanded: &[usize],
+    ) -> ObjectTree {
         ObjectTree::new(
             objects,
+            loads,
             &filter.matcher(),
             &expanded.iter().copied().collect(),
         )
+    }
+
+    /// A `Loads` with one load over `paths`, which is what every load in the app is
+    /// except the multi-file one the Open dialog can make.
+    fn reading(paths: &[&str]) -> Loads {
+        let mut loads = Loads::default();
+        loads.begin(&paths.iter().map(PathBuf::from).collect::<Vec<_>>());
+        loads
     }
 
     fn archive() -> Vec<Arc<Object>> {
@@ -427,6 +611,198 @@ mod tests {
             ..plain("foo(")
         };
         assert!(described(&tree(&objects, &filter, &[])).is_empty());
+    }
+
+    /// The row that could not exist before objects streamed: a file that has been asked
+    /// for and has produced nothing yet is still on screen, saying so. This is the whole
+    /// of `Goals.md`'s "an indicator for an object still being processed".
+    #[test]
+    fn a_file_being_read_is_a_row_before_it_has_an_object() {
+        assert_eq!(
+            described(&loading_tree(
+                &[],
+                &reading(&["/tmp/libfoo.rlib"]),
+                &Filter::default(),
+                &[]
+            )),
+            ["file libfoo.rlib (0) Collapsed reading"]
+        );
+    }
+
+    /// A file with nothing behind it has no group either, since the group is the first
+    /// object's pointer -- so nothing can fold it, and nothing draws a triangle inviting
+    /// the reader to try.
+    #[test]
+    fn a_file_with_nothing_behind_it_has_no_group() {
+        let tree = loading_tree(
+            &[],
+            &reading(&["/tmp/libfoo.rlib"]),
+            &Filter::default(),
+            &[],
+        );
+        assert!(matches!(tree.row(0), TreeRow::File { group: None, .. }));
+    }
+
+    /// While a file is being read, one object is not yet an answer: the row stays a file
+    /// row so that the second member landing does not turn a top-level row into a parent
+    /// under a reader who is already reading it.
+    #[test]
+    fn one_object_of_a_file_still_being_read_stays_under_its_file() {
+        let objects = vec![object("/tmp/libfoo.rlib", "foo.o")];
+        let loads = reading(&["/tmp/libfoo.rlib"]);
+        let group = Arc::as_ptr(&objects[0]).addr();
+
+        assert_eq!(
+            described(&loading_tree(
+                &objects,
+                &loads,
+                &Filter::default(),
+                &[group]
+            )),
+            ["file libfoo.rlib (1) Expanded reading", "  object foo.o"]
+        );
+
+        // And once the read is over it collapses into the one row the rule has always
+        // given it.
+        assert_eq!(
+            described(&tree(&objects, &Filter::default(), &[group])),
+            ["object foo.o"]
+        );
+    }
+
+    /// The members that have arrived are ordinary rows under an ordinary file row; only
+    /// the indicator says the rest are still coming.
+    #[test]
+    fn a_part_read_archive_shows_what_it_has() {
+        let objects = archive();
+        let loads = reading(&["/tmp/libfoo.rlib"]);
+        let group = Arc::as_ptr(&objects[0]).addr();
+
+        assert_eq!(
+            described(&loading_tree(
+                &objects,
+                &loads,
+                &Filter::default(),
+                &[group]
+            )),
+            [
+                "file libfoo.rlib (3) Expanded reading",
+                "  object foo.o",
+                "  object bar.o",
+                "  object baz.o",
+            ]
+        );
+        assert_eq!(
+            described(&tree(&objects, &Filter::default(), &[group])),
+            [
+                "file libfoo.rlib (3) Expanded",
+                "  object foo.o",
+                "  object bar.o",
+                "  object baz.o",
+            ]
+        );
+    }
+
+    /// A file being read is filtered like any other row, on the only name it has. It has
+    /// no members to match through, so its own name is the whole question.
+    #[test]
+    fn a_file_being_read_is_filtered_on_its_name() {
+        let loads = reading(&["/tmp/libfoo.rlib"]);
+        assert_eq!(
+            described(&loading_tree(&[], &loads, &plain("foo"), &[])),
+            ["file libfoo.rlib (0) Collapsed reading"]
+        );
+        assert!(described(&loading_tree(&[], &loads, &plain("bar"), &[])).is_empty());
+    }
+
+    /// Two files asked for at once are two rows, in the order they were asked for, and
+    /// the one that has started producing objects is drawn where its objects are.
+    #[test]
+    fn every_file_being_read_gets_a_row_of_its_own() {
+        let objects = vec![object("/tmp/hello", "hello")];
+        let loads = reading(&["/tmp/hello", "/tmp/libfoo.rlib"]);
+        assert_eq!(
+            described(&loading_tree(&objects, &loads, &Filter::default(), &[])),
+            [
+                "file hello (1) Collapsed reading",
+                "file libfoo.rlib (0) Collapsed reading",
+            ]
+        );
+    }
+
+    /// Closing a file stops every load of it, whoever asked: the unit is the path, which
+    /// is what `close_binary` closes by and what the saved binaries are a list of.
+    #[test]
+    fn cancelling_a_path_stops_every_load_of_it() {
+        let mut loads = Loads::default();
+        let first = loads.begin(&[PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]);
+        let second = loads.begin(&[PathBuf::from("/tmp/a")]);
+
+        loads.cancel(Path::new("/tmp/a"));
+
+        assert!(!loads.holds(first, Path::new("/tmp/a")));
+        assert!(!loads.holds(second, Path::new("/tmp/a")));
+        // The other path of the first load is untouched: one file closing is not the
+        // request closing.
+        assert!(loads.holds(first, Path::new("/tmp/b")));
+        assert!(loads.active(first));
+        assert!(!loads.active(second));
+    }
+
+    /// The reason a load has an id at all: a path closed and immediately reopened is two
+    /// loads, and the abandoned one's objects must not arrive into the new one's row.
+    #[test]
+    fn one_load_does_not_answer_for_another_over_the_same_path() {
+        let mut loads = Loads::default();
+        let first = loads.begin(&[PathBuf::from("/tmp/a")]);
+        loads.cancel(Path::new("/tmp/a"));
+        let second = loads.begin(&[PathBuf::from("/tmp/a")]);
+
+        assert!(!loads.holds(first, Path::new("/tmp/a")));
+        assert!(loads.holds(second, Path::new("/tmp/a")));
+        // The row does not care which load it is: the file is being read.
+        assert!(loads.is_loading(Path::new("/tmp/a")));
+    }
+
+    /// Finishing is per path, so a load over several files goes quiet one file at a time
+    /// — which is what lets each row stop saying it is being read at the right moment.
+    #[test]
+    fn finishing_one_path_leaves_the_rest_of_its_load() {
+        let mut loads = Loads::default();
+        let id = loads.begin(&[PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]);
+
+        loads.finished(id, Path::new("/tmp/a"));
+
+        assert!(!loads.is_loading(Path::new("/tmp/a")));
+        assert!(loads.is_loading(Path::new("/tmp/b")));
+        assert!(loads.active(id));
+
+        loads.finished(id, Path::new("/tmp/b"));
+        assert!(!loads.active(id));
+        assert!(loads.paths().is_empty());
+    }
+
+    /// One file is one row however many loads are producing it, and the order is the
+    /// order it was asked for in.
+    #[test]
+    fn the_paths_being_read_do_not_repeat() {
+        let mut loads = Loads::default();
+        loads.begin(&[PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]);
+        loads.begin(&[PathBuf::from("/tmp/a")]);
+
+        assert_eq!(loads.paths(), [Path::new("/tmp/a"), Path::new("/tmp/b")]);
+    }
+
+    /// Leaving a project abandons every load at once, including the ones whose files have
+    /// contributed nothing and so are not in the objects list to be closed one by one.
+    #[test]
+    fn clearing_abandons_every_load() {
+        let mut loads = Loads::default();
+        let id = loads.begin(&[PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]);
+        loads.clear();
+
+        assert!(!loads.active(id));
+        assert!(loads.paths().is_empty());
     }
 
     #[test]

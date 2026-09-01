@@ -182,10 +182,11 @@ one item per part, so the unfinished half stays visible.
   contributed one object is one row; an archive is a parent row its members fold under,
   and the type is a short tag (`ELF`, `PE`, `COFF`, `MACH`, `AR`) rather than a picture —
   freya's icon set is a dependency behind a feature and has no notion of an object format.
-- [ ] An indicator for an object still being processed. Nothing can be in that state yet:
-  `open_files` parses every object on its worker thread before the UI hears about any of
-  them, so this waits for "Can explore while binary is processed" under *Binary inspection
-  design*.
+- [x] An indicator for an object still being processed. The state belongs to the *file*, not to
+  an object — an object that has not been parsed does not exist, while the file is the thing the
+  reader opened and the thing that already has a row. A file being read wears `…` where its
+  format tag will go, since the format is not known yet, and its name is dimmed. Two static cues
+  rather than a spinner: a sidebar row is one of hundreds.
 - [x] Filter bar under objects / symbols / history, with icons for caps / full word / regex.
   One `FilterBar` in three places, each list keeping its own filter; the toggles are written
   as the regex they turn on (`Aa`, `\b`, `.*`) and a pattern that will not compile says so.
@@ -401,7 +402,12 @@ one item per part, so the unfinished half stays visible.
 
 ## Binary inspection design
 
-- [ ] Can explore while binary is processed to find all functions.
+- [x] Can explore while binary is processed to find all functions. Objects reach the sidebar as
+  they parse rather than all at once at the end, so a 196-member archive offers its first member
+  at 102 ms where the window used to show nothing for 685 ms, and everything already parsed is
+  explorable while the rest arrives. A single-object file gains no time — there is one answer and
+  it arrives when it arrives — but its row is on screen from the start rather than nothing being
+  there.
 - [x] Rely on declared functions in binaries. Don't assume things can be code — only declared
   text symbols are disassembled, nothing is scanned for.
 - [x] Rely on debug info: DWARF line info is read (lazily, per section).
@@ -494,7 +500,15 @@ one item per part, so the unfinished half stays visible.
   listing. Both fixed, each with a fixture of its own, since the sweep is the searcher and the
   fixture is the regression test. Two `addr2line` arithmetic bugs found with them: one is now
   declined before the call, one stays wrapped.
-- [ ] Don't run by default, make that opt-in as needed.
+- [D] Don't run by default, make that opt-in as needed. Measured and declined, with the numbers
+  in `AGENTS.md`: everything expensive is *already* deferred — line info and the DWARF context to
+  the first query, subprogram extents behind the same cache, disassembly to selection. What is
+  left at open time is reading the bytes and walking the symbol table, which is precisely what
+  the Objects and Symbols lists *are*, so there is nothing to opt out of without opting out of
+  the app. The only remaining lever is deferring demangling (21% of `viewer-sample`, 47% of the
+  rlib in release), and it only defers to the first click on that object while costing a second
+  async stage feeding the symbol list. Undeferred by a future eager pass — the code-discovery
+  goal above would be one.
 - [?] Prefer memory mapped files and minimal memory footprint, store locations into the mapped file?
 - [?] How to design an index to allow source files / assembly to map, without large memory footprint.
 - [x] Have this in its own crate. Use it for test cases.

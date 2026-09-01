@@ -62,7 +62,8 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/source.rs` — source files read off disk and cached by path, failures included.
 - `src/scratchpad.rs` — a scratchpad: the cargo package generated around one source file, and its build.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
-- `src/tree.rs` — the Objects list's tree shape: which objects came from which file.
+- `src/tree.rs` — the Objects list's tree shape: which objects came from which file, and
+  which files are still being read into it.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/rows.rs` — the run of rows a reader picks out to copy.
 - `src/tabs.rs` — `Tabs<T>`, the open-tab list, with no cursor of its own.
@@ -75,12 +76,28 @@ Everything except `ui.rs` is framework-free and unit-tested rather than eyeballe
 
 ## Analysis
 
-**Parse pipeline** (`open_files` -> `parse_object`): each selected file is first tried as an
-`ArchiveFile` and every member parsed as a separate `Object`, then the file itself is *also* parsed
-as a plain object — so a non-archive contributes one `Object` and an archive one per member.
+**Parse pipeline** (`open_files_streaming` -> `parse_object`): each selected file is first tried as
+an `ArchiveFile` and every member parsed as a separate `Object`, then the file itself is *also*
+parsed as a plain object — so a non-archive contributes one `Object` and an archive one per member.
 Failures are swallowed (`.ok()`), so a file that will not parse just never appears. Reading and
 parsing run on a `std::thread` and come back over an `async_channel`, so a large binary does not
 freeze the UI.
+
+**Objects are handed over as they are parsed, not collected.** `open_files_streaming(paths, emit)`
+calls `emit` with a `Progress` per event — `Parsed(object)` and, once per path *whatever* came of
+it, `Finished(path)` — and there is deliberately no *start*: the caller supplied the paths and they
+are walked in order, so the only thing it cannot already know is when one is done with. A callback
+and not a channel or an iterator, because the crate stays framework-free: a channel would make it
+pick one and pick bounded or unbounded, which is a backpressure policy belonging to whoever draws
+the result, and an iterator would mean self-borrowing the file's bytes across a yield. `emit`
+answers a `ControlFlow`, which is how a walk nobody is waiting for stops where it stands — a closed
+331 MB file is not parsed to the end into a value that will be dropped. Its one honest limit: a
+single answer cannot say "skip the rest of *this* file but go on to the next", so a multi-file
+request in which one file is closed goes on parsing that file and drops the rest at the caller.
+`open_files` is that same callback closing over a `Vec`, for the tests and anything with nowhere to
+put objects one at a time. The digest stays **one pass per file** — `ObjectData::whole_file` is
+built once at the top of each path and every member is cut from it — which is the thing streaming
+must not quietly turn into 196 hashes of the same 20 MB.
 
 **Data model** — built once at open time, shared via `Arc`. Only `SymbolKind::Text` symbols are
 kept — plus, for a **linked image only**, the code it declares elsewhere: `dynamic_symbols`,
@@ -365,7 +382,10 @@ point of use where the repair is free.
 
 Startup reopens the **last project** — `project::reopen`, the front of `recents.toml`, both halves
 of it — and `use_restore_on_startup` knows nothing about where they came from, which is what keeps
-a project picker out of it. Both tab strips are then restored, and **through the five functions that hold the invariants** rather
+a project picker out of it. The binaries stream in the way any other open does, so the sidebar
+fills in behind them, but the **session waits for the whole load**: a tab, a selection or a history
+entry is resolved against the objects by name, and resolving one against a half-filled list would
+drop the tabs whose object had not landed yet. Both tab strips are then restored, and **through the five functions that hold the invariants** rather
 than by writing either list: `use_restore_on_startup` sets the history, `activate`s each content
 tab and then the selection, and `open_file`s each source file and then the shown one. Three
 orderings are load-bearing. Each strip's **rows go into its `Positions` map before its tabs are
@@ -475,9 +495,10 @@ describes the older API and does not apply.
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`, `Sel` (the active `Selection`), `Open`/`Files`/`Shown` (open tabs),
 `AsmAt`/`SrcAt` (where each of those tabs was left), `Hist`, `Proj` (which project all of that
-belongs to), `Focused`, `Pinned`, `Marked`/`Shift`, `Analysis` (what the worker has to say about
+belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Pinned`,
+`Marked`/`Shift`, `Analysis` (what the worker has to say about
 the selected symbol), `Pad`/`PadText` (the scratchpad, and the buffer being typed into it), plus
-the memo `Symbols`. The nine that a project *owns* travel together as a
+the memo `Symbols`. The ten that a project *owns* travel together as a
 `ProjectStates`, since a project switch closes all of them and reopens all of them.
 
 **`Sel` is the active tab.** `Open(State<Tabs<Selection>>)` is the *list* of open tabs and holds no
@@ -560,6 +581,32 @@ where it landed. `close_tab`/`close_file`/`close_binary` forget a tab's position
 is not tidiness: a `Selection` key holds the `Arc<Object>` it points into — and the hook is handed
 the tab list precisely so that the run *after* a close, still holding the tab that has gone, cannot
 put it straight back.
+
+**Opening a binary is the one path in, and it streams.** `open_binaries` is `close_binary`'s
+opposite number and the only thing that ever adds to `Objects` — the toolbar's Open, a session
+restore and a scratchpad's rebuild all go through it, so they cannot differ about what opening a
+file means. A `std::thread` and an `async_channel`, `use_analysis`' shape, but the answers come back
+one at a time: `Loads::begin` registers the paths **before a byte is read**, so the sidebar has a
+row for the whole of the wait rather than from whenever the first answer lands, and `take_load`
+writes each batch of objects in as it arrives. The channel is **unbounded and drained in batches** —
+unbounded because backpressure is exactly wrong here (the worker is the thing that should run flat
+out) and batched because a write per member is a re-render per member, which for an archive whose
+members parse in a millisecond is a hundred renders nobody sees. **An object nobody asked for any
+more is dropped, not prevented**, which is `use_analysis`' rule in a second place and has to be: the
+worker is already parsing when the file is closed. It is checked against `Loads::holds` — the load
+*and* the path, since a file closed and reopened while the first parse ran is two loads and only the
+second one's objects belong on screen, which is the whole reason a load has an id where an analysis
+answer needs none (an answer is about a `Symbol` that already existed; a load is about work that has
+produced nothing to be identified by). `take_load` **returning** is what stops the worker: it drops
+the receiver, the next send fails, and the walk breaks. What streaming buys is not uniform:
+`libanalysis-sample.rlib`'s first member is offered at 102 ms against the 685 ms the whole file
+takes (debug build), while `viewer-sample` is one object and gains no object earlier at all — there
+the win is the row, on screen from the click instead of an empty list for six seconds. **Nothing
+further is opt-in**, and measuring says why: of a file's parse, the whole of what is left after
+line info, the DWARF context and the disassembly were already made lazy is reading the bytes and
+walking the symbol table, which is what the Objects and Symbols lists *are*. On `viewer-sample`
+(release) that is 1.38 s of which 766 ms is the read and 286 ms the demangling; deferring the
+demangling is the only lever there is, and it defers work until the first click on the object.
 
 **Nothing is analysed on the UI thread.** `SymbolData::assembly` decodes and formats the whole
 symbol, and `SymbolData::line_info` builds the object's entire DWARF context on the first query
@@ -685,11 +732,28 @@ state, drawing no disclosure triangle) since a search that folds its results awa
 nothing. Each row wears a text tag (`ELF`/`PE`/`COFF`/`MACH`/`AR`) rather than an icon, because
 nothing in Lucide's 1640 icons names an object format.
 
+**A file being read is a row before it has an object**, which is `notes/Goals.md`'s "an indicator
+for an object still being processed" — and the state is on the **file**, not on an object, because
+an object that has not been parsed does not exist: the unit part-way through is the one the reader
+opened, the one `close_binary` closes, and the one that already has a row. `Loads` (in `tree.rs`,
+the state behind the `Loading` context) is the files being read, one entry per (load, path); the
+tree draws a `TreeRow::File` for each that has produced nothing yet and marks the ones that have
+`loading`. Three rules come with it. A file still being read is **always** a file row even at one
+object, since "one object is its own row" needs to know the one is all there will be and a row that
+promoted itself to a parent as the second member landed would move the list under a reader already
+reading it. A row with nothing behind it has **no group** (`group: Option<usize>`, the group being
+the first object's pointer), which is exactly the row that can never be folded, so it draws no
+triangle. And it wears `…` rather than a format tag, since which format a file is is not known
+until it has been parsed; the name is dimmed to `address_fg` beside it, two static cues rather than
+a spinner, because a sidebar row is one of hundreds and none of the others move.
+
 **A file row is also how a binary is closed** — right-click opens a `ContextMenu` (which needs the
 `ContextMenuViewer` mounted at the root of `app()`; opening one without it panics) on a single
 "Close file". A member row offers nothing: the unit that closes is the file. `close_binary` is
 composed of three rules from the modules that own them — `Selection::in_file`, `Tabs::close_all`,
-`History::retaining` — and three decisions inside it matter: the selection **follows the tabs**
+`History::retaining` — plus a fourth for a file that is still arriving (`Loads::cancel`, without
+which the objects still coming out of the worker would put the file back one member at a time), and
+three decisions inside it matter: the selection **follows the tabs**
 rather than degrading (a file takes its objects and their symbols together, so there is nothing to
 fall back to); the history **drops** through the same `History::rebuilt` walk a restore uses, so
 the two cannot drift; and the unit is the **path**, so one file opened twice closes once.
@@ -717,7 +781,10 @@ the next write will say.
 **A project switch is a close and a restore, through the same five functions.** `switch_project`
 is `project::switch` (flush, re-point, remember), then `clear_project`, then `restore_project` —
 and `clear_project` is a `close_binary` per path and a `close_file` per open file, never a write to
-either list, so a project is left in a state the reader could have reached by hand. `restore_project`
+either list, so a project is left in a state the reader could have reached by hand. Its one extra
+line is `Loads::clear`, which cannot go through the per-path walk: a file that has been asked for
+and has produced nothing yet is not in the objects list for that walk to reach, and its objects
+would otherwise arrive into the project that comes next. `restore_project`
 is the body the startup restore was, extracted so the two cannot drift. The Source pane is emptied
 here where a closing *binary* deliberately leaves it alone: a file chip outlives the binary that
 opened it because the text stands on its own, but it does not outlive the project whose session

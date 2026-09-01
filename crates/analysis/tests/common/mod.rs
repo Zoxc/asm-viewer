@@ -957,3 +957,29 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
 
     out
 }
+
+/// A GNU `ar` archive holding `members`, built by hand: the writers this crate's fixtures
+/// use can write object files but not the archive around them.
+pub fn archive(members: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut file = b"!<arch>\n".to_vec();
+    for (name, data) in members {
+        file.extend_from_slice(
+            format!(
+                "{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n",
+                format!("{name}/"),
+                0,
+                0,
+                0,
+                644,
+                data.len()
+            )
+            .as_bytes(),
+        );
+        file.extend_from_slice(data);
+        // Members are two-byte aligned.
+        if data.len() % 2 == 1 {
+            file.push(b'\n');
+        }
+    }
+    file
+}

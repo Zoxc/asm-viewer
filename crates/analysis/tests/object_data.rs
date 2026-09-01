@@ -4,7 +4,7 @@
 mod common;
 
 use analysis::{open_files, parse_object, FileDigest, ObjectData};
-use common::caller_and_target;
+use common::{archive, caller_and_target};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -106,32 +106,6 @@ fn the_digest_is_of_the_bytes_and_nothing_else() {
     assert_ne!(FileDigest::of(&bytes), FileDigest::of(&rebuilt));
     // Written as sixteen hex digits, which is the form the session file holds.
     assert_eq!(FileDigest::of(&bytes).to_string().len(), 16);
-}
-
-/// A GNU `ar` archive holding `members`, built by hand: the writers this crate's fixtures
-/// use can write object files but not the archive around them.
-fn archive(members: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut file = b"!<arch>\n".to_vec();
-    for (name, data) in members {
-        file.extend_from_slice(
-            format!(
-                "{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n",
-                format!("{name}/"),
-                0,
-                0,
-                0,
-                644,
-                data.len()
-            )
-            .as_bytes(),
-        );
-        file.extend_from_slice(data);
-        // Members are two-byte aligned.
-        if data.len() % 2 == 1 {
-            file.push(b'\n');
-        }
-    }
-    file
 }
 
 /// The archive case the whole design turns on: 196 members must cost one hash, not 196,
