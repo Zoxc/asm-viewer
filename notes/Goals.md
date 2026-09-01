@@ -102,10 +102,16 @@ one item per part, so the unfinished half stays visible.
   and `ROW_HEIGHT` must equal it or scrolling misaligns, so a real *gap* means variable row
   heights (or a spacer row of its own in the list), while a hairline drawn inside the row's
   own top edge costs nothing and cannot desynchronise anything.
-- [ ] A unified **section** view of code rather than one function at a time: the whole `.text`
-  as one endless scroll, with the symbols drawn as labels *inside* the listing where they start
-  — what `objdump -d` reads like. It is how you see what sits between two functions, what the
-  padding is, and code no symbol claims at all.
+- [ ] A unified **section** view of code: the whole `.text` as one endless scroll, with the
+  symbols drawn as labels *inside* the listing where they start — what `objdump -d` reads like.
+  It is how you see what sits between two functions, what the padding is, and code no symbol
+  claims at all.
+  It is a **separate viewing mode beside the function/symbol assembly view, not a replacement
+  for it**. Both stay: reading one function is the common case and is what the panes, the
+  history and the saved session are all built around, while the section view is for the times
+  you need the surroundings. That is the deciding constraint for everything below — the
+  symbol-keyed machinery is not migrated, it stays exactly as it is, and the section mode brings
+  its own address-keyed answers alongside.
   Three things in the way, all of them real and worth knowing before starting. **Length**: a
   `VirtualScrollView` is told a row count up front, and x86 is variable-length, so instruction
   *n* of a section cannot be found without decoding from a known start — the sorted symbol
@@ -113,8 +119,11 @@ one item per part, so the unfinished half stays visible.
   is probably the concatenation of its symbols' listings plus the gaps between them, decoded
   lazily per symbol and counted as it goes. **Identity**: `Assembly::edges`, `Lanes`, the
   per-tab viewing row and the copy-a-run selection are all indices into *one symbol's*
-  instructions today; a section view makes the address the identity again, which is what those
-  were deliberately moved away from. **Scale**: `viewer-sample`'s `.text` is far past what
+  instructions. Being a separate mode is what makes that affordable — none of it has to change
+  — but the section mode needs the same four answers keyed by address instead, so the question
+  is whether those are generalised over what indexes them or written twice. Note that indices
+  were deliberately chosen over addresses in the first place, so that a symbol's edges are
+  independent of where it sits; a section listing has no such need. **Scale**: `viewer-sample`'s `.text` is far past what
   decoding eagerly on the analysis worker would answer in one go, so this wants the worker to
   answer for a *window* of the section rather than for a whole symbol.
   Note what it would make easy in return: the "gap or line before a jump target" item below, and
