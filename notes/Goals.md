@@ -115,11 +115,16 @@ one item per part, so the unfinished half stays visible.
 - [x] Docking panels: a `DockingArea` inside each half of the split, with Objects, Symbols, Info
   and Assembly as tabs that can be dragged between the two areas, stacked into one panel as real
   tabs, or split further.
-- [ ] A dark mode, in the same palette rather than a second one — the light colours carried
-  over at dark-mode lightness (inverted?), so the two themes are recognisably one design.
-  The groundwork is in: every colour is a field of one `Palette` in `ui.rs` and every call
-  site reads it through `palette()`, so what is left is a second `const`, something that
-  re-renders when the choice changes, and clearing the highlighted-source cache on a switch.
+- [x] A dark mode, in the same palette rather than a second one — the light colours carried
+  over at dark-mode lightness, so the two themes are recognisably one design. Every relationship
+  in the light palette is preserved through the dark one; the translucent washes were re-judged
+  as what they *composite to* rather than inverted, since the same alpha over a dark ground is a
+  fraction of the step it was over white. Asking for a colour is what subscribes a component to
+  the theme, so no call site changed and a switch repaints exactly the scopes that draw
+  something coloured. The highlighted-source cache is cleared inside the one function that can
+  change the appearance, so it cannot be routed around. freya's own components get its
+  `light_theme()`/`dark_theme()` alongside, a white text box on a dark pane not being a theme
+  switch. The light theme is byte-for-byte what it was.
 - [x] Use freya's icon libraries where they suit, panel titles at least — an icon beside
   Objects / Symbols / Info / History / Assembly / Source in the tab bar. `freya`'s
   `icons-lucide` feature is on and `Tab::icon` names one glyph per view (`package`,

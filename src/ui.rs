@@ -23,6 +23,7 @@ use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 use crate::project::{self, Project, Selection};
 use crate::rows::RowSelection;
+use crate::settings::{Appearance, Settings};
 use crate::source::{self, SourceFile};
 use crate::tabs::{Positions, Tabs};
 use crate::tree::{format_tag, Expansion, ObjectTree, TreeRow, ARCHIVE_TAG};
@@ -134,12 +135,24 @@ const CONTEXT_ROWS: f32 = 3.0;
 
 /// Every colour the app draws, in one place.
 ///
-/// There is one instance, [`Palette::LIGHT`], and [`palette`] is how anything reaches it.
-/// The indirection is more of the point than the struct is: a dark mode is asked for in
-/// *this* palette rather than as a second design (`Goals.md`, *UI*), so it is one more
-/// `const` beside this one and a `palette()` that picks between them, instead of an edit
-/// to every call site that names a colour. What it deliberately is not yet is reactive --
-/// see the note on `palette`.
+/// There are two instances, [`Palette::LIGHT`] and [`Palette::DARK`], and [`palette`] is
+/// how anything reaches whichever is current. The indirection was more of the point than
+/// the struct was: the dark mode `Goals.md` asks for under *UI* is the same design at
+/// dark-mode lightness rather than a second one, so it is one more `const` beside the
+/// first and no edit at all to the call sites that name a colour.
+///
+/// **The dark values are the light ones carried over, not chosen again.** Every
+/// relationship in the light palette is a relationship in the dark one: the header sits
+/// one step off the pane on both (below it in light, above it in dark, which is the same
+/// step through the same background), the pin is the focus at more alpha, the branch
+/// hover is the branch line brightened towards the address column's hue, and each of the
+/// eight code colours keeps its hue and its place in the ordering. What could *not* be
+/// carried over literally are the translucent washes: `blend` composites them over the
+/// pane, so the same alpha over a dark ground is a fraction of the contrast it had over
+/// white, and each of them was re-judged against what it comes out as rather than
+/// inverted. The tests below are what hold both halves of that -- a contrast floor for
+/// every foreground on the surface it is drawn on, and a visible-difference floor for
+/// every wash over the row under it.
 ///
 /// It is also not freya's own theming (`Theme` / `ColorsSheet` / `define_theme!`).
 /// `ColorsSheet` has a fixed set of fields naming none of these roles, a `define_theme!`
@@ -147,12 +160,21 @@ const CONTEXT_ROWS: f32 = 3.0;
 /// ever styles, and -- the part that settles it -- the half of the palette this step is
 /// about cannot be read from the element tree at all: the source pane's colours are baked
 /// into a `SyntaxBlocks` by a highlighter that runs when a file is *loaded*, so they have
-/// to be plain values available outside any component. See [`Palette::syntax`].
+/// to be plain values available outside any component. See [`Palette::syntax`]. freya's
+/// own theme is still given the matching *sheet* (`interface_theme`), because the handful
+/// of freya components in the window -- the filter boxes, the scrollbars, the tooltips --
+/// read their colours from it and nowhere else.
 struct Palette {
     // Surfaces and chrome, carried over from the original floem styling.
     /// A pane's own body, and the tab header above the active one, which is white so
     /// that it reads as the top edge of that body rather than as part of the tab bar.
     pane_bg: Color,
+    /// The interface text: every label that does not ask for a colour of its own. Set
+    /// once on the root and *inherited* -- freya resolves an unset `color` from the
+    /// parent's (`freya-core`'s `TextStyleState::from_data`), so the whole chrome follows
+    /// from one call there. It is black in the light palette, which is exactly what the
+    /// default was, so the light theme is unchanged by this field existing.
+    text_fg: Color,
     header_bg: Color,
     hairline: Color,
     selected_bg: Color,
@@ -240,6 +262,7 @@ struct Palette {
 impl Palette {
     const LIGHT: Palette = Palette {
         pane_bg: Color::WHITE,
+        text_fg: Color::BLACK,
         header_bg: Color::from_rgb(245, 245, 245), // WHITE_SMOKE
         hairline: Color::from_rgb(211, 211, 211),  // LIGHT_GRAY
         selected_bg: Color::from_rgb(211, 211, 211),
@@ -276,6 +299,73 @@ impl Palette {
         invalid_fg: Color::from_rgb(176, 0, 32),
     };
 
+    /// The same palette at dark-mode lightness.
+    ///
+    /// Read it beside `LIGHT` rather than on its own: every value here is the one above it
+    /// turned through the background, and where a light value is a step *down* from the
+    /// surface it sits on, the dark one is the same step *up*. The ground is 30/30/32, a
+    /// hair cooler than neutral the way white is not, and the pane relationships are the
+    /// light ones reflected -- the header a step off the body, the assembly pane a step
+    /// off the header, the symbol pane the one faintly warm surface it already was.
+    ///
+    /// The eight code colours keep their hue and their ordering: purple for what is being
+    /// done, olive for what it is done to, blue for a value written out, terracotta for a
+    /// string, sage for a comment, grey for the glue, near-white for a name and the slate
+    /// blue for an address. They move to where a dark ground can carry them -- lightness
+    /// up, saturation down a little, since a colour that is legible on white at 40%
+    /// lightness is a glare at 40% on black -- and the *relative* order of their weights
+    /// is unchanged, which is what keeps an instruction and a statement reading at the
+    /// same density (5e).
+    const DARK: Palette = Palette {
+        pane_bg: Color::from_rgb(30, 30, 32),
+        text_fg: Color::from_rgb(232, 232, 232),
+        header_bg: Color::from_rgb(40, 40, 43),
+        hairline: Color::from_rgb(62, 62, 66),
+        selected_bg: Color::from_rgb(66, 66, 72),
+        // The one hue in the chrome, and the one the light palette states loudest: a row
+        // the pointer is over in the objects tree. Carried over means the same green at
+        // the same distance from its surface, which on a dark ground is a deep one.
+        object_hover_bg: Color::from_rgb(48, 92, 52),
+        symbol_pane_bg: Color::from_rgb(38, 38, 33),
+        symbol_hover_bg: Color::from_rgb(52, 52, 44),
+        asm_pane_bg: Color::from_rgb(34, 34, 36),
+        // The four translucent ones. Each is stated as what it should come out as over
+        // the pane rather than as the light value with its channels flipped: `blend` puts
+        // 30/30/32 under them, so an alpha that lightened white by a little darkens a dark
+        // ground by nothing at all. The colour under the alpha is therefore *lighter* than
+        // the ground here where it is darker than white there, and the alphas are up.
+        code_row_hover_bg: Color::from_argb(110, 120, 160, 110),
+        line_focus_bg: Color::from_argb(80, 130, 170, 230),
+        line_pin_bg: Color::from_argb(140, 130, 170, 230),
+        drop_preview_bg: Color::from_argb(90, 150, 130, 190),
+        icon_fg: Color::from_rgb(160, 160, 160),
+        toggle_on_bg: Color::from_rgb(88, 88, 92),
+        toggle_hover_bg: Color::from_rgb(60, 60, 64),
+        // A wash that *lightens* the row under it, exactly as in the light palette --
+        // "raised" is lighter on both grounds -- but a quarter of the way to white rather
+        // than three fifths of it, which over a row background of 30 is the same step of
+        // about fifty levels that 0.6 over white was.
+        link_hover_bg: Color::from_af32rgb(0.25, 255, 255, 255),
+        branch_fg: Color::from_rgb(96, 108, 124),
+        branch_hover_fg: Color::from_rgb(150, 178, 210),
+        row_select_bg: Color::from_argb(90, 150, 165, 185),
+
+        address_fg: Color::from_rgb(132, 156, 186),
+        keyword_fg: Color::from_rgb(178, 150, 214),
+        operand_fg: Color::from_rgb(158, 180, 120),
+        literal_fg: Color::from_rgb(130, 175, 214),
+        string_fg: Color::from_rgb(214, 150, 120),
+        comment_fg: Color::from_rgb(128, 158, 128),
+        punctuation_fg: Color::from_rgb(150, 150, 150),
+        // A step *below* the interface text, as the light `name_fg` is a step above black:
+        // the code panes are what the eye rests on and the chrome around them names
+        // itself once.
+        name_fg: Color::from_rgb(216, 216, 216),
+        name_hover_fg: Color::from_rgb(190, 168, 224),
+
+        invalid_fg: Color::from_rgb(240, 110, 120),
+    };
+
     /// This palette in the shape `freya-code-editor`'s highlighter wants, so that the
     /// source pane is coloured from here rather than by `EditorSyntaxTheme::light()` --
     /// a GitHub-ish theme with no relationship to the colours the assembly pane beside it
@@ -309,7 +399,10 @@ impl Palette {
     /// Nothing below is caught by it -- every field equal to `name_fg`, which is `text`
     /// here, has a parent equal to it as well, so the walk ends where it started -- but
     /// giving, say, `punctuation_bracket` the text colour while `punctuation` keeps the
-    /// grey would silently paint brackets grey.
+    /// grey would silently paint brackets grey. What decides that is which fields *share*
+    /// a value and not what the values are, so it is a property a second palette can
+    /// break by accident -- a dark `punctuation_fg` that happened to land on the dark
+    /// `name_fg` would do it -- and `captures_do_not_walk_up` asserts it for both.
     fn syntax(&self) -> EditorSyntaxTheme {
         EditorSyntaxTheme {
             text: self.name_fg,
@@ -353,16 +446,102 @@ impl Palette {
     }
 }
 
-/// The colours to draw with.
-///
-/// A `&'static` rather than anything a component subscribes to, which is what keeps this
-/// step to the palette itself. Step 9's dark mode is a second `const` and a `palette()`
-/// that chooses, plus the two things a *switch* needs that this does not have: something
-/// that re-renders the tree when the choice changes -- freya re-renders a scope when the
-/// state it read changes, and nothing reads anything here -- and a clear of `HIGHLIGHTED`,
-/// where the source colours are already baked into the cached spans.
+thread_local! {
+    /// Which of the two palettes the window is currently drawn in.
+    ///
+    /// A `State` and not a plain value, and this is the whole of how a theme switch repaints:
+    /// `State::read` subscribes the reactive context that is running, so **asking for a
+    /// colour is what subscribes a component to the theme**. A scope that draws nothing
+    /// coloured is not woken; every scope that does is, exactly once, wherever in the tree it
+    /// sits and whatever built it -- a row a `VirtualScrollView` recycles as much as a tab.
+    ///
+    /// The two answers that were weighed against it, and why they lose:
+    ///
+    /// - **A context read threaded through the call sites.** freya's own components do this
+    ///   (`use_applied_theme!` is a `use_consume` of its `State<Theme>`), and it is the
+    ///   idiomatic answer -- but a hook must run unconditionally in a component body, and
+    ///   `palette()` is called from `row_background`, `kind_color`, `hairline_border` and a
+    ///   dozen other free functions, from inside `if` arms and render callbacks, and from
+    ///   `Highlighted::new`, which is not a component at all. So it would be a hook line in
+    ///   each of the twenty-one components *plus* the free functions left reading a static
+    ///   anyway, and a component whose line was forgotten would be a patch of the old theme
+    ///   that nothing points at.
+    /// - **Re-rendering the tree from the root.** This does not work: freya marks a child
+    ///   scope dirty only when its props change (`freya-core`'s `runner.rs`), and every view
+    ///   here is a unit `Component` whose props never do -- that is the same memoisation that
+    ///   makes a selection change cost only the tabs that read it. Forcing it with a `key`
+    ///   that changes with the theme would work by *remounting*, which resets the scope
+    ///   storage below it: the three filters, the objects tree's folds, every hover and every
+    ///   scroll controller. A theme switch is not a reason to lose the reader's search.
+    ///
+    /// What it costs, honestly: `palette()` was a `&'static` and is now a thread-local
+    /// lookup, a subscribe and a generational-box read -- some tens of nanoseconds, against
+    /// perhaps a thousand calls in a full render of both panes. The reference it hands back is
+    /// still `'static`, because the two palettes are `const`s and only the *choice* is state.
+    ///
+    /// It is thread-local because a `State` is `!Send` (freya's storage is `Rc`-based) and
+    /// created global because it must outlive every scope that reads it -- including, in the
+    /// tests, a `TestingRunner`'s whole tree. Only the UI thread draws, so only the UI thread
+    /// ever touches this one; a second thread would silently get a second copy of it, which is
+    /// why nothing off the UI thread may ask for a colour.
+    static APPEARANCE: State<Appearance> = State::create_global(Appearance::Light);
+}
+
+/// The colours to draw with, and a subscription to the theme for whoever asks.
 fn palette() -> &'static Palette {
-    &Palette::LIGHT
+    match appearance() {
+        Appearance::Light => &Palette::LIGHT,
+        Appearance::Dark => &Palette::DARK,
+    }
+}
+
+/// The same subscription, for the two things that want the choice itself rather than a
+/// colour: freya's own theme sheet, and the effect that keeps it in step.
+fn appearance() -> Appearance {
+    APPEARANCE.with(|appearance| *appearance.read())
+}
+
+/// Draw in this appearance from now on. **The only way to change it**, deliberately: the
+/// source pane's spans are cached with the palette's colours already resolved into them,
+/// so a switch has to empty `HIGHLIGHTED` as well, and that clear lives here rather than
+/// at the call site that happens to switch the theme today. `set_if_modified_and_then` is
+/// what makes the pair one step -- the cache is emptied exactly when the value really
+/// changed, so setting the appearance it is already in costs nothing and re-highlights
+/// nothing.
+fn set_appearance(next: Appearance) {
+    APPEARANCE.with(|appearance| {
+        let mut appearance = *appearance;
+        appearance.set_if_modified_and_then(next, || highlighted().clear());
+    });
+}
+
+/// The sheet freya's own components read their colours from.
+///
+/// The palette above is deliberately *not* moved into freya's theming -- `ColorsSheet`
+/// names none of these roles, and half the palette is consumed outside the element tree
+/// entirely. But the window does hold a few freya components (the filter boxes, the
+/// scrollbars, the resizable handle, the tooltips, the context menu), they read their
+/// colours from this and from nothing else, and a white text box on a dark pane is not a
+/// theme switch. So the base sheet follows the appearance, and the one override this app
+/// has always made -- the tooltip's font size, which its theme hardcodes and no element
+/// can set -- is applied on top of whichever it is.
+fn interface_theme(appearance: Appearance) -> Theme {
+    let mut theme = match appearance {
+        Appearance::Light => light_theme(),
+        Appearance::Dark => dark_theme(),
+    };
+
+    if let Some(tooltip) = theme.get::<TooltipThemePreference>("tooltip").cloned() {
+        theme.set(
+            "tooltip",
+            TooltipThemePreference {
+                font_size: Preference::Specific(fonts().ui.size),
+                ..tooltip
+            },
+        );
+    }
+
+    theme
 }
 
 /// Applying one of the two fonts. freya takes font families one at a time, pushing
@@ -1291,11 +1470,13 @@ fn language(path: &Path) -> Option<EditorLanguage> {
 ///
 /// What is cached is not just the parse: `SyntaxBlocks` holds a `Color` per span, resolved
 /// against `palette().syntax()` when the file was loaded, so an entry here is spans in the
-/// palette that was current at the time. That is free while there is one palette. When
-/// Step 9 adds a second, switching it has to `clear()` this map -- the entries are not
-/// stale, they are the wrong theme, and nothing else in the app would repaint them.
-/// Re-highlighting every open file is what a switch costs, which is why the parse belongs
-/// where it is rather than in `source::load`: `source`'s cache of the *text* survives it.
+/// palette that was current at the time. **A theme switch therefore has to empty this
+/// map** -- the entries are not stale, they are the wrong theme, and nothing else in the
+/// app would repaint them, a `SyntaxBlocks` being the one thing here a re-render does not
+/// rebuild. That clear is [`set_appearance`], which is the only way the appearance can
+/// change at all, so it cannot be routed around by a later call site. Re-highlighting
+/// every open file is what a switch costs, which is why the parse belongs where it is
+/// rather than in `source::load`: `source`'s cache of the *text* survives it.
 static HIGHLIGHTED: LazyLock<Mutex<HashMap<PathBuf, Arc<Highlighted>>>> =
     LazyLock::new(Mutex::default);
 
@@ -4412,24 +4593,25 @@ fn use_restore_on_startup(
 }
 
 pub fn app() -> impl IntoElement {
-    // The tooltip is a freya component whose theme hardcodes a 14px font, and the
-    // theme is the only way in: its `theme` override field is private. floem's
-    // tooltip was a plain label that inherited the interface font, so hand the theme
-    // the interface size; the family it does inherit from the row it is attached to.
-    use_init_theme(|| {
-        let mut theme = Theme::default();
-
-        if let Some(tooltip) = theme.get::<TooltipThemePreference>("tooltip").cloned() {
-            theme.set(
-                "tooltip",
-                TooltipThemePreference {
-                    font_size: Preference::Specific(fonts().ui.size),
-                    ..tooltip
-                },
-            );
-        }
-
-        theme
+    // The theme, asked for once and written down through the one function that also
+    // empties the highlighted-source cache. It happens here, in a hook, rather than
+    // lazily on the first `palette()` call, so that the subprocess the desktop is asked
+    // through (`Theme::appearance`) runs at a moment this file names -- and so that the
+    // startup path and the settings page's later switch are the same one line.
+    use_hook(|| set_appearance(Settings::load().theme.appearance()));
+    // freya's own components -- the filter boxes, the scrollbars, the resizable handle,
+    // the tooltips -- take their colours from its `Theme` and not from the palette, so
+    // the sheet has to follow the appearance too; `interface_theme` is also where the
+    // tooltip's font size is set, which is the one thing freya's theme is used for that
+    // has nothing to do with colours.
+    //
+    // Two calls and not one: `use_init_theme` builds its value in a `use_hook`, so it
+    // answers for the first render only, and the effect is what carries a later switch
+    // into it. The effect's dep is the appearance, so it runs on mount and then once per
+    // change -- never per render.
+    let mut interface = use_init_theme(|| interface_theme(appearance()));
+    use_side_effect_with_deps(&appearance(), move |appearance: &Appearance| {
+        interface.set(interface_theme(*appearance));
     });
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
@@ -4578,6 +4760,11 @@ pub fn app() -> impl IntoElement {
         .expanded()
         .content(Content::Flex)
         .interface_font()
+        // The interface text, set once here and inherited: freya resolves an element's
+        // unset `color` from its parent's, so every label in the chrome that does not ask
+        // for a colour of its own follows this one. In the light palette it is the black
+        // that was already the default, so this changes nothing until the theme does.
+        .color(palette().text_fg)
         .background(palette().pane_bg)
         // The mouse's own back and forward buttons drive the history. freya does
         // deliver them: winit turns X11 buttons 8 and 9, and Wayland's BTN_BACK/
@@ -4637,16 +4824,24 @@ pub fn app() -> impl IntoElement {
         )
 }
 
-/// The one test in this file that runs the UI rather than the logic under it.
+/// The tests in this file that run the UI rather than the logic under it, and the
+/// palette's, which have nowhere else to live.
 ///
 /// Everything decided by cases lives in a framework-free module with its own tests
-/// ([`crate::rows`] here), and this is deliberately not a second home for that. It exists
-/// for the one class of bug those tests are blind to by construction: a `State` borrow
-/// that is legal to the compiler and panics at the moment a gesture ends. `mark_release`
-/// shipped holding a `peek` guard across its own write, so *every* mouse-up on a run
-/// brought the window down, and no amount of testing `RowSelection` would have said a
-/// word about it. A press, a sweep and a release through freya's own headless runner is
-/// the smallest thing that would have.
+/// ([`crate::rows`] here), and this is deliberately not a second home for that. What is
+/// here is what those modules cannot hold. The runner tests exist for the one class of
+/// bug they are blind to by construction: a `State` borrow that is legal to the compiler
+/// and panics at the moment a gesture ends. `mark_release` shipped holding a `peek` guard
+/// across its own write, so *every* mouse-up on a run brought the window down, and no
+/// amount of testing `RowSelection` would have said a word about it. A press, a sweep and
+/// a release through freya's own headless runner is the smallest thing that would have.
+///
+/// The palette's tests are here because a `Color` is a freya type and the palette cannot
+/// move out of this file. They assert the properties a second set of values can silently
+/// break -- a foreground that has gone invisible against its own surface, a translucent
+/// wash that says nothing over a dark ground, a capture colour that sends
+/// `resolve_capture_color` walking up the dotted name -- rather than the values
+/// themselves, which are a design and not an assertion.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4811,6 +5006,287 @@ mod tests {
             test.sync_and_update();
         }
         assert_eq!(at.peek().at(&"a".to_owned()), None);
+    }
+
+    /// A component with no props at all, which is what every view in this file is: the
+    /// six dock tabs, every row of every list. Its parent reads nothing coloured, so
+    /// freya has no reason to re-render it -- the theme has to reach it on its own.
+    #[derive(PartialEq)]
+    struct ThemedRow;
+
+    impl Component for ThemedRow {
+        fn render(&self) -> impl IntoElement {
+            rect().expanded().background(palette().pane_bg)
+        }
+    }
+
+    fn theme_harness() -> impl IntoElement {
+        rect().expanded().child(ThemedRow)
+    }
+
+    /// `HIGHLIGHTED` is process-wide while the appearance is per-thread, so the two tests
+    /// that switch themes have to be the only one doing it at a time -- cargo runs them on
+    /// threads of their own, and one clearing the cache the other has just filled would be
+    /// a failure that comes and goes.
+    static SWITCHING: Mutex<()> = Mutex::new(());
+
+    /// The reactivity half of dark mode: a switch repaints a component that did not change
+    /// and whose parent did not either.
+    ///
+    /// This is the assertion the design is for. Nothing about `ThemedRow` differs across
+    /// the switch -- same type, same (absent) props, same parent element -- so freya will
+    /// not re-render it for any reason except that it read the state that changed. Asking
+    /// for a colour is that read.
+    #[test]
+    fn a_theme_switch_repaints_a_component_nothing_else_woke() {
+        let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
+        set_appearance(Appearance::Light);
+
+        let (mut test, ()) = TestingRunner::new(theme_harness, (100., 100.).into(), |_| (), 1.);
+        test.sync_and_update();
+
+        // The first background anything paints, which is the row's: the harness's own rect
+        // has none, and a transparent background is what "none" is.
+        let painted = |test: &TestingRunner| {
+            test.find(|_, element| {
+                let background = element.style().background.clone();
+                (background != Fill::Color(Color::TRANSPARENT)).then_some(background)
+            })
+            .expect("a painted row")
+        };
+
+        assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
+
+        set_appearance(Appearance::Dark);
+        test.sync_and_update();
+        assert_eq!(painted(&test), Fill::Color(Palette::DARK.pane_bg));
+
+        // And back, so the thread is left as it was found.
+        set_appearance(Appearance::Light);
+        test.sync_and_update();
+        assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
+    }
+
+    /// The other half: the source pane's spans are cached with the palette resolved into
+    /// them, so a switch has to throw the cache away and parse again in the new colours.
+    /// Nothing re-renders a `SyntaxBlocks`, which is why this cannot be left to the
+    /// reactivity above.
+    #[test]
+    fn a_theme_switch_empties_the_highlighted_cache() {
+        let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
+        set_appearance(Appearance::Light);
+
+        let directory =
+            std::env::temp_dir().join(format!("assembly-viewer-theme-test-{}", std::process::id()));
+        let path = directory.join("themed.rs");
+        std::fs::create_dir_all(&directory).expect("creating the test directory");
+        std::fs::write(&path, b"fn main() {}\n").expect("writing the source file");
+
+        // A keyword, which is the one span whose colour is a palette entry rather than the
+        // text colour -- and the reason this is a `.rs` file and not any file at all.
+        let keyword = |path: &Path| {
+            let text = source_text(path).expect("the file");
+            let line = text.0.blocks.get_line(0);
+            line.first().expect("a first span").0
+        };
+
+        assert_eq!(keyword(&path), Palette::LIGHT.keyword_fg);
+        assert!(!highlighted().is_empty());
+
+        set_appearance(Appearance::Dark);
+        assert!(
+            highlighted().is_empty(),
+            "the switch left the old theme's spans behind"
+        );
+        assert_eq!(keyword(&path), Palette::DARK.keyword_fg);
+
+        set_appearance(Appearance::Light);
+        highlighted().clear();
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// sRGB relative luminance, and the contrast ratio between two colours, both as WCAG
+    /// defines them. Written out rather than pulled in: it is eight lines, and a
+    /// dependency for eight lines used by two tests is not a trade.
+    fn luminance(color: Color) -> f32 {
+        let channel = |value: u8| {
+            let value = value as f32 / 255.0;
+            if value <= 0.03928 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+
+        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    }
+
+    fn contrast(a: Color, b: Color) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Every foreground is legible on the surface it is actually drawn on, in both
+    /// palettes.
+    ///
+    /// The floor is 3.0 and not WCAG AA's 4.5 on purpose. Two of the light palette's own
+    /// colours sit between 3 and 3.5 -- the address column and comments, both of which are
+    /// *meant* to recede -- and this test is not here to redesign the light theme that has
+    /// been on screen since 5e. It is here so that a value carried over to a dark ground
+    /// cannot land on top of it: a foreground that came out at 1.5 would be a colour
+    /// nobody can read, and that is what a second palette gets wrong.
+    #[test]
+    fn every_foreground_is_legible_on_its_own_surface() {
+        for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
+            // The code colours, on the pane each is drawn on: the assembly pane has no
+            // comments and no strings, and the source pane is the plain one.
+            let both = [
+                ("address_fg", palette.address_fg),
+                ("keyword_fg", palette.keyword_fg),
+                ("operand_fg", palette.operand_fg),
+                ("literal_fg", palette.literal_fg),
+                ("punctuation_fg", palette.punctuation_fg),
+                ("name_fg", palette.name_fg),
+                ("name_hover_fg", palette.name_hover_fg),
+            ];
+            for (name, color) in both {
+                for (surface, background) in [
+                    ("asm_pane_bg", palette.asm_pane_bg),
+                    ("pane_bg", palette.pane_bg),
+                ] {
+                    let ratio = contrast(color, background);
+                    assert!(ratio >= 3.0, "{theme} {name} on {surface}: {ratio:.2}");
+                }
+            }
+
+            for (name, color) in [
+                ("string_fg", palette.string_fg),
+                ("comment_fg", palette.comment_fg),
+            ] {
+                let ratio = contrast(color, palette.pane_bg);
+                assert!(ratio >= 3.0, "{theme} {name} on pane_bg: {ratio:.2}");
+            }
+
+            // The chrome, on all three of the surfaces it is written over.
+            for (name, color) in [
+                ("text_fg", palette.text_fg),
+                ("icon_fg", palette.icon_fg),
+                ("invalid_fg", palette.invalid_fg),
+            ] {
+                for (surface, background) in [
+                    ("pane_bg", palette.pane_bg),
+                    ("header_bg", palette.header_bg),
+                    ("symbol_pane_bg", palette.symbol_pane_bg),
+                ] {
+                    let ratio = contrast(color, background);
+                    assert!(ratio >= 3.0, "{theme} {name} on {surface}: {ratio:.2}");
+                }
+            }
+
+            // The branch gutter is a diagram and is drawn quiet deliberately -- 1.8 in the
+            // light palette -- so its floor is only against a line that has disappeared
+            // into the pane altogether, and the hovered one has to be the louder of the
+            // two or hovering a row says nothing.
+            let line = contrast(palette.branch_fg, palette.asm_pane_bg);
+            let lit = contrast(palette.branch_hover_fg, palette.asm_pane_bg);
+            assert!(line >= 1.5, "{theme} branch_fg: {line:.2}");
+            assert!(lit > line, "{theme} branch_hover_fg: {lit:.2} vs {line:.2}");
+        }
+    }
+
+    /// Every translucent wash still says something once it is composited.
+    ///
+    /// This is the half of a palette that cannot be carried over by turning its channels
+    /// through the background: `blend` puts the pane under these, so the same alpha over a
+    /// dark ground is a fraction of the step it was over white. Each is asserted as what
+    /// it comes out as -- and the pin, which is the focus said louder, has to stay louder.
+    #[test]
+    fn every_wash_reads_against_the_pane_under_it() {
+        // How far a wash moves the surface it is over, in the channel it moves most.
+        let step = |wash: Color, ground: Color| {
+            let over = blend(wash, ground);
+            let channel = |top: u8, bottom: u8| (top as i32 - bottom as i32).unsigned_abs();
+            channel(over.r(), ground.r())
+                .max(channel(over.g(), ground.g()))
+                .max(channel(over.b(), ground.b()))
+        };
+
+        for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
+            for (name, wash, ground) in [
+                (
+                    "code_row_hover_bg",
+                    palette.code_row_hover_bg,
+                    palette.asm_pane_bg,
+                ),
+                ("line_focus_bg", palette.line_focus_bg, palette.asm_pane_bg),
+                ("line_pin_bg", palette.line_pin_bg, palette.asm_pane_bg),
+                ("row_select_bg", palette.row_select_bg, palette.asm_pane_bg),
+                ("drop_preview_bg", palette.drop_preview_bg, palette.pane_bg),
+            ] {
+                let step = step(wash, ground);
+                assert!(step >= 10, "{theme} {name}: {step} levels");
+            }
+
+            let focus = step(palette.line_focus_bg, palette.asm_pane_bg);
+            let pin = step(palette.line_pin_bg, palette.asm_pane_bg);
+            assert!(pin > focus, "{theme} pin {pin} vs focus {focus}");
+        }
+    }
+
+    /// The `resolve_capture_color` trap, in both palettes.
+    ///
+    /// It decides a capture is unmapped by comparing its colour to `text` and then walks
+    /// *up* the dotted name, so a child field holding the text colour while its parent
+    /// holds another is silently painted in the parent's. Nothing in either mapping is
+    /// caught by it -- but that is a fact about which fields share a value, so a second
+    /// palette can break it by landing two colours on each other by accident.
+    #[test]
+    fn captures_do_not_walk_up() {
+        for (name, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
+            let theme = palette.syntax();
+            let dotted = [
+                ("function.macro", theme.function_macro, theme.function),
+                ("function.method", theme.function_method, theme.function),
+                (
+                    "punctuation.bracket",
+                    theme.punctuation_bracket,
+                    theme.punctuation,
+                ),
+                (
+                    "punctuation.delimiter",
+                    theme.punctuation_delimiter,
+                    theme.punctuation,
+                ),
+                (
+                    "punctuation.special",
+                    theme.punctuation_special,
+                    theme.punctuation,
+                ),
+                ("string.escape", theme.string_escape, theme.string),
+                ("string.special", theme.string_special, theme.string),
+                // A `text.*` capture's parent is `text` itself, which `capture_color`
+                // answers for with the text colour, so these can only ever agree.
+                ("text.literal", theme.text_literal, theme.text),
+                ("text.reference", theme.text_reference, theme.text),
+                ("text.title", theme.text_title, theme.text),
+                ("text.uri", theme.text_uri, theme.text),
+                ("text.emphasis", theme.text_emphasis, theme.text),
+                ("variable.builtin", theme.variable_builtin, theme.variable),
+                (
+                    "variable.parameter",
+                    theme.variable_parameter,
+                    theme.variable,
+                ),
+            ];
+
+            for (capture, child, parent) in dotted {
+                assert!(
+                    child != theme.text || parent == theme.text,
+                    "{name}: {capture} takes the text colour while its parent does not, \
+                     so it would be painted in the parent's",
+                );
+            }
+        }
     }
 
     #[test]

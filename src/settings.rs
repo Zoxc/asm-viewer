@@ -24,13 +24,6 @@
 //! There is no published version of this app, so a schema change here is just a schema
 //! change: a file that no longer parses is the default, not a migration.
 
-// The settings page is what writes a settings file and the dark palette is what asks for
-// an appearance, so `save`, `Theme` and the desktop lookup have no caller in the app yet
-// — only the tests below. The allow sits on the module rather than on each item because
-// dead code is transitive (`save`'s `path` would be reported too), and it comes off with
-// the settings page.
-#![allow(dead_code)]
-
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -191,6 +184,13 @@ impl Settings {
     /// by whoever changed one, and *no second autosave timer* — a timer here would be a
     /// tick that finds nothing to do on every run of the app in which the user never
     /// opened the settings page, which is nearly all of them.
+    ///
+    /// Nothing *writes* a settings file yet: dark mode reads the theme choice, `fonts.rs`
+    /// reads the two fonts, and the settings page is what will change one. So this is the
+    /// last of the module's dead code and the allow is on it alone — `save_to` with it,
+    /// being reachable only from here and from the tests — rather than on the module,
+    /// where it would go on covering everything the app now really uses.
+    #[allow(dead_code)]
     pub fn save(&self) {
         let Some(path) = Settings::path() else {
             log::warn!("no state directory to save the settings in");
