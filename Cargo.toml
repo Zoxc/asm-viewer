@@ -11,7 +11,7 @@ analysis = { path = "crates/analysis" }
 # `code-editor` is on not for its editor component -- the source pane is hand-rolled --
 # but for the tree-sitter syntax highlighter that crate exposes on its own
 # (`SyntaxHighlighter`, `SyntaxBlocks`, `EditorSyntaxTheme`). See `notes/Plan.md`, 5a.
-freya = { version = "0.4", features = ["code-editor"] }
+freya = { version = "0.4", features = ["code-editor", "icons-lucide"] }
 # The grammars the highlighter parses with; that crate deliberately ships none. Their
 # `tree-sitter-language` must be the one `freya-code-editor`'s `tree-sitter` 0.26 uses,
 # or the `Language` handed over is a different type.

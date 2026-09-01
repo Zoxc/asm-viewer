@@ -206,10 +206,12 @@ fn file_name(path: &Path) -> String {
 /// The short tag a row wears to say what kind of file it is.
 ///
 /// Text and not a picture, which is the answer the filter toggles' glyphs already gave
-/// for the same question: freya's icon set is a Lucide dependency behind a feature of its
-/// own, and Lucide has no notion of an object file format, so the honest icon for an ELF
-/// would be a generic page that says exactly nothing. Four characters of the format's own
-/// name say all of it.
+/// for the same question. The dependency half of that reasoning is gone -- the dock tab
+/// bar draws Lucide icons now -- and the other half was checked again against all 1640 of
+/// them: nothing in the set names an object file format, so every row would wear one
+/// generic page and the column would stop answering the question it exists to answer.
+/// Four characters of the format's own name say all of it, and say it differently for
+/// each format.
 pub fn format_tag(format: BinaryFormat) -> &'static str {
     match format {
         BinaryFormat::Elf => "ELF",

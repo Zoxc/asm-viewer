@@ -1435,6 +1435,7 @@ dependencies = [
  "freya-devtools",
  "freya-edit",
  "freya-engine",
+ "freya-icons",
  "freya-performance-plugin",
  "freya-winit",
  "torin",
@@ -1591,6 +1592,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c86b6b25e8ecdb7f588170263609c8c593041a6af74d01dc4fa31f9cffeb5da"
 dependencies = [
  "freya-skia-safe",
+]
+
+[[package]]
+name = "freya-icons"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a910109cb0191f3200d52602d7b4eb17ddd8e12ed9a4dfa29caf3b92e1a571e9"
+dependencies = [
+ "bytes",
 ]
 
 [[package]]

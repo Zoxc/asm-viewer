@@ -98,13 +98,16 @@ one item per part, so the unfinished half stays visible.
   The groundwork is in: every colour is a field of one `Palette` in `ui.rs` and every call
   site reads it through `palette()`, so what is left is a second `const`, something that
   re-renders when the choice changes, and clearing the highlighted-source cache on a switch.
-- [ ] Use freya's icon libraries where they suit, panel titles at least — an icon beside
+- [x] Use freya's icon libraries where they suit, panel titles at least — an icon beside
   Objects / Symbols / Info / History / Assembly / Source in the tab bar. `freya`'s
-  `icons-lucide` feature reexports `freya_icons` with the Lucide set; nothing in the app
-  uses it yet, and the two places that wanted icons so far settled for text (the file-type
-  tags on object rows, the `Aa` / `\b` / `.*` filter toggles) because Lucide has no glyph
-  for an object format or a regex flag. A panel title is the case it does fit, so weigh
-  those two again once the dependency is in.
+  `icons-lucide` feature is on and `Tab::icon` names one glyph per view (`package`,
+  `square-function`, `info`, `history`, `binary`, `file-code`), drawn at the interface
+  font's size times 1.25 and in the palette's new `icon_fg`. The two places that had
+  settled for text were weighed again with the dependency in and both keep it: Lucide does
+  carry `case-sensitive` / `whole-word` / `regex`, but rendered at the toggles' 22px they
+  say less than `Aa` / `\b` / `.*`, which are the regex the toggles turn on; and nothing in
+  the 1640-icon set names an object file format, so the file-type tags would all become one
+  generic page. See `notes/Plan.md` 6e.
 - [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
   sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only

@@ -9,6 +9,7 @@ use async_io::Timer;
 use freya::code_editor::{
     EditorLanguage, EditorSyntaxTheme, Rope, SyntaxBlocks, SyntaxHighlighter, TextNode,
 };
+use freya::icons::lucide;
 use freya::prelude::*;
 use rfd::AsyncFileDialog;
 
@@ -34,6 +35,23 @@ const FILTER_HEIGHT: f32 = 32.0;
 
 /// The side of one of the three square toggle buttons.
 const TOGGLE_SIZE: f32 = 22.0;
+
+/// How much bigger than the interface font a tab bar's icon is drawn. A Lucide glyph
+/// fills its whole box where a letter fills its x-height, so an icon at exactly the text
+/// size reads as the larger of the two; a quarter up from it sits it on the same optical
+/// line as the word beside it. It is a multiple and not a pixel count because the
+/// interface font is the desktop's (`fonts()`), so an icon that did not follow it would
+/// be a postage stamp beside a 20px title, or tower over a 9px one.
+const ICON_SCALE: f32 = 1.25;
+
+/// The side of a tab bar icon: the interface font, scaled, and capped so that it is never
+/// what decides how tall the bar is -- a `ROW_HEIGHT` strip has to keep a little air above
+/// and below whatever the desktop's font size turns out to be.
+fn icon_size() -> f32 {
+    (fonts().ui.size * ICON_SCALE)
+        .round()
+        .min(ROW_HEIGHT - 8.0)
+}
 
 /// The column a file row's disclosure triangle sits in, and the width every row of the
 /// objects tree gives up to it so that the tags below one another line up whether or not
@@ -154,6 +172,12 @@ struct Palette {
     line_pin_bg: Color,
     /// The wash over the half of a panel a dragged tab would land in.
     drop_preview_bg: Color,
+    /// A Lucide glyph in a dock tab header. A step lighter than the title beside it,
+    /// because the icon is what the eye finds the tab by and the word is what tells it
+    /// apart: an icon as dark as its label competes with it at the same size. It is the
+    /// palette's one chrome *foreground* -- every other colour in this group is a surface,
+    /// the interface text itself being freya's theme colour and inherited.
+    icon_fg: Color,
     /// A filter toggle that is on, and one the pointer is over. Two shades of the header's
     /// own grey rather than a colour of their own: a 22px square is small enough that "this
     /// one is pressed" has to be read from how dark it is, and against `header_bg` these are
@@ -218,6 +242,7 @@ impl Palette {
         line_focus_bg: Color::from_argb(70, 120, 160, 220),
         line_pin_bg: Color::from_argb(120, 120, 160, 220),
         drop_preview_bg: Color::from_argb(60, 105, 89, 132),
+        icon_fg: Color::from_rgb(90, 90, 90),
         toggle_on_bg: Color::from_rgb(196, 196, 196),
         toggle_hover_bg: Color::from_rgb(225, 225, 225),
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
@@ -967,10 +992,18 @@ impl Toggle {
 
     /// What the button is drawn as.
     ///
-    /// No icon font: freya's Lucide set is behind a feature of its own and three toggles
-    /// do not earn a dependency. Two of the three have a better answer than a picture
-    /// anyway — `\b` and `.*` *are* the regex the toggle turns on, written out — and `Aa`
-    /// is what every search box writes for case. The words are in the tooltip.
+    /// Still text, and looked at twice. The first answer leaned on the dependency, which
+    /// the tab bar's icons have since brought in, and on Lucide having nothing for a regex
+    /// flag, which is simply wrong: the set carries `case-sensitive`, `whole-word` and
+    /// `regex`, which are VS Code's three toggles glyph for glyph. Rendered at
+    /// `TOGGLE_SIZE` beside these, they lose anyway. `case-sensitive` is an `Aa` drawn as
+    /// strokes, so it says exactly what the two letters say and no more; `regex` at 17px
+    /// is a splayed asterisk over a rounded box, muddier than the two characters it stands
+    /// for; and `\b` and `.*` *are* the regex the toggle turns on, written out, which in a
+    /// window whose filter bar compiles to a `regex::Regex` and whose reader is reading
+    /// disassembly is the more precise label rather than the more cryptic one. `whole-word`
+    /// is the one that is arguably better than its text, and one of three is not a set.
+    /// The words are in the tooltip either way.
     fn glyph(self) -> &'static str {
         match self {
             Toggle::Case => "Aa",
@@ -2845,6 +2878,46 @@ impl Tab {
         }
     }
 
+    /// The Lucide glyph drawn before the title, at the interface font's own size and in
+    /// the palette's `icon_fg`.
+    ///
+    /// Each one names what the pane holds rather than what it looks like: `package` for
+    /// **Objects**, an archive being literally a package of members and a linked image the
+    /// same thing with one; `square-function` for **Symbols**, since only `SymbolKind::Text`
+    /// symbols are kept and the list is therefore a list of functions; `info` and `history`
+    /// for the two panes Lucide happens to have named after them; `binary` for **Assembly**,
+    /// the one glyph in the set that says *machine code* where `code` and `terminal` say
+    /// source and shell; and `file-code` for **Source**, a file rather than bare code
+    /// because the pane is a strip of files and shows one of them.
+    ///
+    /// The name is passed beside the bytes because `ImageSource` keys the raster cache on
+    /// a hash of whatever it is given, and hashing six short names per render is cheaper
+    /// than hashing six SVGs.
+    fn icon(self) -> Element {
+        let (name, svg) = match self {
+            Tab::Objects => ("package", lucide::package()),
+            Tab::Symbols => ("square-function", lucide::square_function()),
+            Tab::Info => ("info", lucide::info()),
+            Tab::History => ("history", lucide::history()),
+            Tab::Assembly => ("binary", lucide::binary()),
+            Tab::Source => ("file-code", lucide::file_code()),
+        };
+
+        let side = icon_size();
+        SvgViewer::new((name, svg))
+            .width(Size::px(side))
+            .height(Size::px(side))
+            // The colour is given rather than inherited: `SvgViewer` rasterizes only once
+            // it knows one, and with none set it waits for an `on_styled` to tell it the
+            // inherited text colour, which is a frame late and a frame of nothing in a
+            // 26px bar. Setting it also skips the loader, which is off in any case --
+            // these are six 24px glyphs rasterized synchronously out of the binary, and a
+            // spinner in a tab header would be a lie about the work being done.
+            .color(palette().icon_fg)
+            .show_loader(false)
+            .into_element()
+    }
+
     fn view(self) -> Element {
         match self {
             Tab::Objects => ObjectsTab.into_element(),
@@ -3306,9 +3379,11 @@ fn tab_label(tab: Tab, background: Color) -> impl IntoElement {
         .horizontal()
         .cross_align(Alignment::Center)
         .padding(Gaps::new_symmetric(0.0, 8.0))
+        .spacing(6.0)
         .background(background)
         .border(right_hairline())
         .overflow(Overflow::Clip)
+        .child(tab.icon())
         .child(label().text(tab.title()).max_lines(1))
 }
 
