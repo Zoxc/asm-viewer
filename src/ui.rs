@@ -1,4 +1,34 @@
-use std::{
+//! The freya UI.
+//!
+//! The module is a directory of its own, and every one of its files is a **cut out of one
+//! 8 700-line file** rather than a boundary designed from scratch: what each holds is
+//! exactly what the section banners and the cross-references in `AGENTS.md` already said
+//! belonged together, and nothing changed on the way across.
+//!
+//! Two mechanical decisions come with that and are worth stating once, here, rather than
+//! being rediscovered in each file.
+//!
+//! **The imports below are the module's own prelude.** They are `pub(crate) use` and every
+//! file under this one begins `use super::*;`, so each keeps the exact set of names it had
+//! while it was a section of one file. The alternative -- a tailored import block per file
+//! -- is tidier and buys nothing here: these files are the halves of one UI and they use
+//! one another's types freely, so the tailored blocks would be eighteen copies of most of
+//! this one.
+//!
+//! **Each file is re-exported straight back out.** A `mod x;` is followed by a
+//! `pub(crate) use x::*;`, so a name means what it meant before the split wherever it is
+//! written, `src/ui/tests.rs`'s `use super::*` included. The globs cannot collide, by
+//! construction: every one of these names already shared a single namespace.
+//!
+//! **What is `pub(crate)` is what the compiler asked for and no more.** The blanket
+//! alternative was a `pub(crate)` on all four hundred-odd items, fields and methods, which
+//! is one line of script and a worse answer: with the visibility minimal, the annotations
+//! *are* the list of what crosses a file boundary, and a struct whose fields are still
+//! private is a struct nothing outside its file takes apart. It is `pub(crate)` and never
+//! `pub` because dead-code analysis still runs on a `pub(crate)` item, so nothing here can
+//! quietly stop being used and stay compiled.
+
+pub(crate) use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     ops::ControlFlow,
@@ -8,35 +38,39 @@ use std::{
     time::Duration,
 };
 
-use async_io::Timer;
-use freya::code_editor::{
+pub(crate) use async_io::Timer;
+pub(crate) use freya::code_editor::{
     CodeEditor, CodeEditorData, EditorLanguage, EditorSyntaxTheme, EditorThemePartialExt, Rope,
     SyntaxBlocks, SyntaxHighlighter, TextNode,
 };
-use freya::icons::lucide;
-use freya::prelude::*;
-use rfd::AsyncFileDialog;
+pub(crate) use freya::icons::lucide;
+pub(crate) use freya::prelude::*;
+pub(crate) use rfd::AsyncFileDialog;
 
-use analysis::{
+pub(crate) use analysis::{
     open_files_streaming, Assembly, Instruction, LineInfo, Object, Progress, SpanKind, Symbol,
     SymbolData,
 };
 
-use crate::docs::{DocId, Docs};
-use crate::filter::{Filter, Matcher};
-use crate::fonts::{self, Font, Fonts};
-use crate::history::History;
-use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
-use crate::project::{self, Details, Document, Project, ProjectId, Recent, Selection, Session};
-use crate::rows::RowSelection;
-use crate::scratchpad::{
+pub(crate) use crate::docs::{DocId, Docs};
+pub(crate) use crate::filter::{Filter, Matcher};
+pub(crate) use crate::fonts::{self, Font, Fonts};
+pub(crate) use crate::history::History;
+pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
+pub(crate) use crate::project::{
+    self, Details, Document, Project, ProjectId, Recent, Selection, Session,
+};
+pub(crate) use crate::rows::RowSelection;
+pub(crate) use crate::scratchpad::{
     Build, Dependency, Diagnostic, Ended, Failure, Half, Level, Problem, RunEvent, RunOutput,
     Running, Scratchpad, Stream,
 };
-use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
-use crate::source::{self, SourceFile};
-use crate::tabs::{self, Positions};
-use crate::tree::{format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG};
+pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
+pub(crate) use crate::source::{self, SourceFile};
+pub(crate) use crate::tabs::{self, Positions};
+pub(crate) use crate::tree::{
+    format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
+};
 
 /// The leading a row adds to the font it is drawn in, and the floor under the answer.
 ///
