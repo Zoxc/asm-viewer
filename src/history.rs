@@ -1,10 +1,10 @@
-//! Where the selection has been: a browser-style back/forward history.
+//! Where the reader has been: a browser-style back/forward history.
 //!
-//! Framework-free, like [`crate::project`] — this is plain data over [`Selection`], so
+//! Framework-free, like [`crate::project`] — this is plain data over [`Document`], so
 //! the whole navigation model is unit-testable without a UI. Only the `State<History>`
 //! that shares it through context lives in `ui.rs`.
 //!
-//! An entry is a [`Selection`], i.e. `Arc`s compared by pointer, so recording one costs
+//! An entry is a [`Document`], i.e. `Arc`s compared by pointer, so recording one costs
 //! a refcount bump and comparing two is a pointer test. The flip side of pointer
 //! identity is that parsing the same file twice yields different pointers: entries made
 //! before a re-parse never compare equal to the ones made after it, and they keep the
@@ -20,7 +20,7 @@
 //! resolves are dropped on the way in, which is why `restored` takes an already-built
 //! list rather than replaying pushes.
 
-use crate::project::Selection;
+use crate::project::Document;
 
 /// The most entries a history ever holds. A push that would take it past this drops the
 /// oldest ones off the front, and [`History::restored`] keeps the newest this many.
@@ -33,7 +33,7 @@ use crate::project::Selection;
 /// bounding both.
 const MAX_ENTRIES: usize = 200;
 
-/// A list of visited selections plus a cursor into it.
+/// A list of visited documents plus a cursor into it.
 ///
 /// The cursor is the entry currently on screen. [`History::push`] records a new entry
 /// after it and drops whatever was in front; [`History::back`] and
@@ -44,7 +44,7 @@ const MAX_ENTRIES: usize = 200;
 /// [`History::restored`] are the only two ways entries get in, and both enforce it.
 #[derive(Clone, Default)]
 pub struct History {
-    entries: Vec<Selection>,
+    entries: Vec<Document>,
     /// The index of the current entry. In range whenever `entries` is non-empty, and
     /// `0` — meaning nothing — while it is empty.
     cursor: usize,
@@ -79,12 +79,12 @@ impl History {
     /// the cursor follows it down; in the pathological one, a saved cursor with more than
     /// `MAX_ENTRIES` entries in front of it, its entry goes and the cursor lands on the
     /// oldest survivor.
-    pub fn restored(entries: Vec<Selection>, cursor: usize) -> History {
+    pub fn restored(entries: Vec<Document>, cursor: usize) -> History {
         let current = entries
             .get(cursor.min(entries.len().saturating_sub(1)))
             .cloned();
 
-        let mut deduplicated: Vec<Selection> = Vec::with_capacity(entries.len());
+        let mut deduplicated: Vec<Document> = Vec::with_capacity(entries.len());
         for entry in entries {
             if let Some(position) = deduplicated.iter().position(|existing| *existing == entry) {
                 deduplicated.remove(position);
@@ -128,7 +128,7 @@ impl History {
     ///
     /// Duplicates are [`History::restored`]'s business rather than this loop's, which is
     /// why the survivors go out through it.
-    pub fn rebuilt(entries: impl IntoIterator<Item = Option<Selection>>, cursor: usize) -> History {
+    pub fn rebuilt(entries: impl IntoIterator<Item = Option<Document>>, cursor: usize) -> History {
         let mut kept = Vec::new();
         let mut moved = 0;
 
@@ -150,10 +150,10 @@ impl History {
     ///
     /// This is what closing a file does to the history: every entry pointing into an
     /// object that is going away is dropped, and the reader is left on the nearest place
-    /// they can still reach. The predicate is over the whole [`Selection`] rather than
+    /// they can still reach. The predicate is over the whole [`Document`] rather than
     /// over an object, because an entry names a symbol as often as an object and both
     /// answer for the file they came out of.
-    pub fn retaining(&self, keep: impl Fn(&Selection) -> bool) -> History {
+    pub fn retaining(&self, keep: impl Fn(&Document) -> bool) -> History {
         History::rebuilt(
             self.entries
                 .iter()
@@ -164,24 +164,24 @@ impl History {
 
     /// Every entry, oldest first — what persistence saves. The history panel wants
     /// [`History::recent`] instead, which numbers them and hands them back newest first.
-    pub fn entries(&self) -> &[Selection] {
+    pub fn entries(&self) -> &[Document] {
         &self.entries
     }
 
     /// The entry the cursor is on, or `None` before anything has been recorded.
-    pub fn current(&self) -> Option<&Selection> {
+    pub fn current(&self) -> Option<&Document> {
         self.entries.get(self.cursor)
     }
 
-    /// Whether [`History::push`] would record `selection` as a new entry.
+    /// Whether [`History::push`] would record `document` as a new entry.
     ///
-    /// It would not for a selection that is already the entry at the cursor, which is
+    /// It would not for a document that is already the entry at the cursor, which is
     /// the whole of the rule now that "nothing selected" is an absent selection rather
     /// than a value this could be handed: it is what stops back/forward navigation —
     /// which sets the selection, and so is observed like any other selection change —
     /// from re-recording where it has just moved the cursor.
-    pub fn would_push(&self, selection: &Selection) -> bool {
-        self.current() != Some(selection)
+    pub fn would_push(&self, document: &Document) -> bool {
+        self.current() != Some(document)
     }
 
     /// Record `selection` as the newest entry and put the cursor on it. A no-op when
@@ -203,14 +203,14 @@ impl History {
     /// A push that takes the list past [`MAX_ENTRIES`] then drops the oldest entries, so
     /// the newest destination is always recorded and it is the far end of the back stack
     /// that is forgotten.
-    pub fn push(&mut self, selection: Selection) {
-        if !self.would_push(&selection) {
+    pub fn push(&mut self, document: Document) {
+        if !self.would_push(&document) {
             return;
         }
 
         self.entries.truncate(self.cursor + 1);
-        self.entries.retain(|entry| *entry != selection);
-        self.entries.push(selection);
+        self.entries.retain(|entry| *entry != document);
+        self.entries.push(document);
         self.cursor = self.entries.len() - 1;
         self.cap();
     }
@@ -245,7 +245,7 @@ impl History {
     /// Every entry with its index, newest first — the order a history panel shows them
     /// in. The index is what [`History::jump`] takes, so a row can carry the one it was
     /// built from and hand it straight back.
-    pub fn recent(&self) -> impl ExactSizeIterator<Item = (usize, &Selection)> + '_ {
+    pub fn recent(&self) -> impl ExactSizeIterator<Item = (usize, &Document)> + '_ {
         self.entries.iter().enumerate().rev()
     }
 
@@ -263,7 +263,7 @@ impl History {
     /// the oldest entry. Nothing is recorded: the caller sets the selection to what
     /// comes back, and the push that observes that change dedups against the entry the
     /// cursor has just landed on.
-    pub fn back(&mut self) -> Option<Selection> {
+    pub fn back(&mut self) -> Option<Document> {
         self.can_back().then(|| {
             self.cursor -= 1;
             self.entries[self.cursor].clone()
@@ -272,7 +272,7 @@ impl History {
 
     /// Step the cursor forward one entry, or `None` at the newest one. The mirror of
     /// [`History::back`], and equally not a push.
-    pub fn forward(&mut self) -> Option<Selection> {
+    pub fn forward(&mut self) -> Option<Document> {
         self.can_forward().then(|| {
             self.cursor += 1;
             self.entries[self.cursor].clone()
@@ -289,7 +289,7 @@ impl History {
     /// [`History::can_jump`] is false. Like [`History::back`] and [`History::forward`]
     /// this only moves the cursor: nothing is recorded and nothing in front of it is
     /// dropped, so jumping to an older entry leaves the newer ones to come back to.
-    pub fn jump(&mut self, index: usize) -> Option<Selection> {
+    pub fn jump(&mut self, index: usize) -> Option<Document> {
         self.can_jump(index).then(|| {
             self.cursor = index;
             self.entries[index].clone()
@@ -304,12 +304,13 @@ mod tests {
     use analysis::{Architecture, BinaryFormat, Object, ObjectData};
 
     use super::*;
+    use crate::project::Selection;
 
-    /// A distinct selection. Two calls with the same `name` still produce different
+    /// A distinct document. Two calls with the same `name` still produce different
     /// `Arc`s, and so entries that do not compare equal — identity here is the pointer,
     /// never the name.
-    fn selection(name: &str) -> Selection {
-        Selection::Object(Arc::new(Object {
+    fn selection(name: &str) -> Document {
+        Document::Assembly(Selection::Object(Arc::new(Object {
             path: PathBuf::from("/tmp/lib.a"),
             name: name.to_owned(),
             format: BinaryFormat::Elf,
@@ -319,7 +320,7 @@ mod tests {
             sections: Vec::new(),
             data: ObjectData::from(&b""[..]),
             dwarf: Default::default(),
-        }))
+        })))
     }
 
     #[test]
@@ -481,7 +482,7 @@ mod tests {
 
     /// The entries newest first, which is the order the history panel shows and the one
     /// bumping is about.
-    fn newest_first(history: &History) -> Vec<Selection> {
+    fn newest_first(history: &History) -> Vec<Document> {
         history.recent().map(|(_, entry)| entry.clone()).collect()
     }
 
@@ -636,8 +637,8 @@ mod tests {
 
     /// `count` distinct selections, oldest first, pushed onto a fresh history — the
     /// caller keeps them to say which ones the cap should have dropped.
-    fn filled(count: usize) -> (History, Vec<Selection>) {
-        let entries: Vec<Selection> = (0..count).map(|i| selection(&format!("e{i}"))).collect();
+    fn filled(count: usize) -> (History, Vec<Document>) {
+        let entries: Vec<Document> = (0..count).map(|i| selection(&format!("e{i}"))).collect();
         let mut history = History::default();
         for entry in &entries {
             history.push(entry.clone());
@@ -676,7 +677,7 @@ mod tests {
     #[test]
     fn the_cursor_follows_its_entry_across_a_drop() {
         let over = MAX_ENTRIES + 50;
-        let entries: Vec<Selection> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
+        let entries: Vec<Document> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
 
         // A cursor part-way back through an over-long history: what the cap moves it to
         // is wherever its *entry* ended up, not the index that entry used to have.
@@ -707,7 +708,7 @@ mod tests {
         for _ in 0..5 {
             history.back();
         }
-        let fresh: Vec<Selection> = (0..10).map(|i| selection(&format!("n{i}"))).collect();
+        let fresh: Vec<Document> = (0..10).map(|i| selection(&format!("n{i}"))).collect();
         history.push(fresh[0].clone());
         assert!(history.entries().len() == MAX_ENTRIES - 4);
         assert!(!history.can_forward());
@@ -733,7 +734,7 @@ mod tests {
     #[test]
     fn restoring_keeps_the_newest_entries_and_carries_the_cursor() {
         let over = MAX_ENTRIES + 50;
-        let entries: Vec<Selection> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
+        let entries: Vec<Document> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
 
         // A cursor near the newest entry, the ordinary case: its entry survives the trim
         // and the cursor comes down with it by however many entries were dropped.
@@ -766,8 +767,8 @@ mod tests {
         // Every entry saved twice: 380 saved entries, 190 destinations. The collapse runs
         // first, so all 190 fit and the cap drops nothing — capping first would have
         // thrown away half of them to keep 200 saved *entries*.
-        let unique: Vec<Selection> = (0..190).map(|i| selection(&format!("e{i}"))).collect();
-        let saved: Vec<Selection> = unique.iter().flat_map(|e| [e.clone(), e.clone()]).collect();
+        let unique: Vec<Document> = (0..190).map(|i| selection(&format!("e{i}"))).collect();
+        let saved: Vec<Document> = unique.iter().flat_map(|e| [e.clone(), e.clone()]).collect();
 
         let history = History::restored(saved, 379);
         assert!(history.entries().len() == 190);
@@ -776,10 +777,10 @@ mod tests {
     }
 
     /// What an entry is called, so that the retaining tests below can name the file
-    /// that is closing without [`Selection::in_file`], which is `project.rs`'s to test.
-    fn named(entry: &Selection) -> &str {
+    /// that is closing without [`Document::in_file`], which is `project.rs`'s to test.
+    fn named(entry: &Document) -> &str {
         match entry {
-            Selection::Object(object) => &object.name,
+            Document::Assembly(Selection::Object(object)) => &object.name,
             _ => unreachable!("the entries here are all objects"),
         }
     }

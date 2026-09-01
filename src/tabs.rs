@@ -3,14 +3,13 @@
 //! Framework-free, like [`crate::history`] and [`crate::filter`] — this is a list with
 //! three rules on it and no pixels, so the rules are unit-tested without mounting a UI.
 //!
-//! Two lists in the app are this shape: the functions and objects open in the content
-//! area, which hold [`crate::project::Selection`]s, and the source files open in the
-//! Source pane, which hold paths. Neither of them records *which* tab is on screen.
-//! That is deliberate and is the whole reason this type is as small as it is: the active
-//! function already has a home in `Sel`, which is what the history records and the session
-//! saves, and giving the list a second answer to the same question would be two states to
-//! keep in step. The active tab is simply the one equal to what is on screen, which is
-//! well defined because no two tabs are ever equal.
+//! One list in the app is this shape: the open documents ([`crate::project::Document`]),
+//! each of which is a place in a binary or a source file. It does not record *which* tab
+//! is on screen. That is deliberate and is the whole reason this type is as small as it
+//! is: the active document already has a home in `Active`, which is what the history
+//! records and the session saves, and giving the list a second answer to the same
+//! question would be two states to keep in step. The active tab is simply the one equal
+//! to what is on screen, which is well defined because no two tabs are ever equal.
 //!
 //! The other thing worth saying is what this is *not*. [`crate::history::History`] grows
 //! on its own — every place the reader goes is recorded, so it dedups by bumping an entry
@@ -41,7 +40,7 @@ impl<T: Clone + PartialEq> Tabs<T> {
     /// Hands back the copy that is *in the list* rather than a bool, because for a source
     /// file the two are equal without being the same allocation: two `LineInfo`s naming
     /// one path hold two `Arc<str>`s of it, and keeping the one already open is what keeps
-    /// the pointer identity the rows are keyed by stable across a selection change.
+    /// the pointer identity the rows are keyed by stable across a change of document.
     pub fn find(&self, item: &T) -> Option<&T> {
         self.open.iter().find(|open| *open == item)
     }
@@ -113,9 +112,8 @@ impl<T: Clone + PartialEq> Tabs<T> {
 /// The other half of a tab, and deliberately not a field of one. A [`Tabs`] entry is
 /// what the strip draws and what the session writes out; this is a view of it, written
 /// by the pane a tab is *shown in* and read by nothing else — so keeping the two apart
-/// is what stops a scroll of the reader's from re-rendering the strip, and what lets the
-/// content area's tabs and the Source pane's files each carry one of these without the
-/// list types learning about pixels.
+/// is what stops a scroll of the reader's from re-rendering the strip, and what lets a
+/// tab's two sides each carry one of these without the list type learning about pixels.
 ///
 /// **A row and not a pixel offset.** The two are convertible (`code_row_height()` is the
 /// two code panes' `item_size`, and these positions are only ever theirs), so this is a
@@ -132,8 +130,9 @@ impl<T: Clone + PartialEq> Tabs<T> {
 /// when a tab opens, and nothing leaks when one closes without ever being scrolled.
 ///
 /// A `Vec` of pairs and not a `HashMap`, because the key is whatever the tab list holds:
-/// a [`crate::project::Selection`] is compared by `Arc` pointer identity and hashes by
-/// nothing at all, and a strip is a handful of tabs, not a table.
+/// a [`crate::project::Document`] is compared by `Arc` pointer identity where it is a
+/// place in a binary and hashes by nothing at all, and a strip is a handful of tabs, not
+/// a table.
 pub struct Positions<T> {
     at: Vec<(T, usize)>,
 }
@@ -181,10 +180,10 @@ impl<T: Clone + PartialEq> Positions<T> {
 
     /// Forget where `tab` was, because it is no longer open.
     ///
-    /// Not an optimisation: a [`crate::project::Selection`] holds the `Arc<Object>` it
-    /// points into, so a position kept for a tab that was closed with its binary would
-    /// hold that binary's bytes — 331 MB of them, for the sample the app is developed
-    /// against — for as long as the app ran.
+    /// Not an optimisation: a [`crate::project::Document`] that is a place in a binary
+    /// holds the `Arc<Object>` it points into, so a position kept for a tab that was
+    /// closed with its binary would hold that binary's bytes — 331 MB of them, for the
+    /// sample the app is developed against — for as long as the app ran.
     pub fn forget(&mut self, tab: &T) {
         self.at.retain(|(open, _)| open != tab);
     }

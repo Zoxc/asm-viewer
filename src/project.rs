@@ -1,6 +1,6 @@
 //! Projects: what the user gave — a name, a directory, the binaries in it — and what the
-//! app noticed while they read them — the open tabs, where each was left, what was
-//! selected and where the selection has been.
+//! app noticed while they read them — the open documents, where each side of each was
+//! left, which one was on screen and where the reader has been.
 //!
 //! This module is deliberately **framework-free** — no freya types appear here — so it
 //! can move into a crate of its own.
@@ -23,8 +23,8 @@
 //! **The two halves are two files**, which is the storage split `notes/Goals.md` asks
 //! for and `settings.rs` took the first slice of. `project.toml` is what the user *said*:
 //! the name, the associated directory and the binaries they opened. `session.toml` is
-//! what the app *noticed*: the tabs, the rows they were left at, the selection, the
-//! history, and the digest each binary hashed to. The line is drawn where the save policy
+//! what the app *noticed*: the tabs, the rows each side of them was left at, the active
+//! document, the history, and the digest each binary hashed to. The line is drawn where the save policy
 //! already drew one — [`Saves`] writes a binaries change at once and leaves everything
 //! else pending — so the file a user might reasonably keep, copy or edit is exactly the
 //! file that is written only when they do something, and the file rewritten every thirty
@@ -35,9 +35,10 @@
 //! touches a file nothing else is trying to read.
 //!
 //! Identity *inside* those files is not pointers — the UI's identity is `Arc` pointer
-//! identity, which does not survive a restart — but *path + names + address*. That
-//! mapping lives in exactly two places: [`SavedSelection::from_selection`] going out and
-//! [`SavedSelection::resolve`] coming back.
+//! identity, which does not survive a restart — but *path + names + address* for a place
+//! in a binary, and the path itself for a source file. That
+//! mapping lives in exactly two places: [`SavedDocument::from_document`] going out and
+//! [`SavedDocument::resolve`] coming back.
 //!
 //! The *when* of saving lives here too, in [`Saves`]: [`record`] is told what the app is
 //! now showing and either writes it at once or marks it pending, and [`flush`] writes
@@ -134,6 +135,77 @@ impl PartialEq for Selection {
         match (self, other) {
             (Selection::Object(a), Selection::Object(b)) => Arc::ptr_eq(a, b),
             (Selection::Symbol(a), Selection::Symbol(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// One of the places the reader has open: a place in a binary, or a file.
+///
+/// **A document is a place in a binary *or* a file**, which is the doctrine Step 1
+/// replaced "a document is a place in a binary" with. A tab holds one of these and has
+/// two sides — assembly and source — and the variant says which side the tab is *about*
+/// and therefore which one drives the other. An assembly-driven document has the function
+/// on the subject side and the source it was compiled from beside it; a source-driven one
+/// has the file on the subject side and the assembly for the line clicked in it beside
+/// that. Opening a file and opening a function then produce the same kind of thing,
+/// differing only in which way the mapping runs.
+///
+/// Here rather than in `ui.rs` for [`Selection`]'s reason: plain data over the analysis
+/// types, with both persistence directions needing to speak it.
+///
+/// A file is the string the debug info said and never a path this filesystem was asked
+/// about — it may well name the machine that compiled the binary — which is why it is an
+/// `Arc<str>` and not a `PathBuf`.
+#[derive(Clone)]
+pub enum Document {
+    Assembly(Selection),
+    Source(Arc<str>),
+}
+
+impl Document {
+    /// Whether this points into the file at `path` — what closing a binary asks of a tab
+    /// and of a history entry.
+    ///
+    /// A source-driven document answers **false** whatever the path: a file chip outlives
+    /// the binary that led the reader to it, because the text stands on its own and
+    /// nothing records which object opened it. That is the rule the Source pane's own
+    /// strip used to hold by simply not being consulted, kept now that the two strips are
+    /// one.
+    pub fn in_file(&self, path: &Path) -> bool {
+        match self {
+            Document::Assembly(selection) => selection.in_file(path),
+            Document::Source(_) => false,
+        }
+    }
+
+    /// The place in a binary this is about, or `None` for a file.
+    pub fn selection(&self) -> Option<&Selection> {
+        match self {
+            Document::Assembly(selection) => Some(selection),
+            Document::Source(_) => None,
+        }
+    }
+
+    /// The symbol this is about: a document that is a function, and not one that is an
+    /// object or a file. What the analysis worker is asked for.
+    pub fn symbol(&self) -> Option<&Symbol> {
+        match self.selection() {
+            Some(Selection::Symbol(symbol)) => Some(symbol),
+            _ => None,
+        }
+    }
+}
+
+impl PartialEq for Document {
+    /// Each variant by its own rule — `Arc` pointer identity for a selection, text for a
+    /// file — and never across the two. Which is what keeps "no two open tabs are ever
+    /// equal" true of the one strip: it was already true within each of the two lists
+    /// this merged, and a function and a file cannot be confused for each other.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Document::Assembly(a), Document::Assembly(b)) => a == b,
+            (Document::Source(a), Document::Source(b)) => a == b,
             _ => false,
         }
     }
@@ -315,19 +387,17 @@ pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
 /// — it changes on every click, it is rewritten on a timer, and losing it costs a few
 /// clicks. That is the line between this file and [`Project`]; see the module docs.
 ///
-/// **The field order is load-bearing.** The one plain value — the `shown` index — comes
-/// first, and everything table-valued follows: `digests` and `selection` are tables, and
-/// `tabs`, `sources` and `history.entries` are arrays of them.
+/// **One list of tabs, not two.** Until Step 1 this held the content area's `tabs` beside
+/// the Source pane's `sources` and a `shown` index into the second of them, because the
+/// app had two strips with two notions of what was open. It has one, so this has one: the
+/// strip's interleaved order is what the reader made and is what comes back, and `active`
+/// is the one document that was on screen whichever kind it is.
+///
+/// **The field order is load-bearing.** Nothing here is a plain value any more, so the
+/// rule has nothing to bite on directly — but that is a property of the current fields
+/// and not a licence, and the round-trip test is what holds it, here as everywhere else.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
-    /// An index into `sources`, and `0` — meaning nothing — while it is empty, exactly
-    /// as [`SavedHistory::cursor`] indexes its own entries.
-    ///
-    /// An index and not a path because the pane shows one *of the open files*: a path
-    /// would be a second place for the name to be spelt and a second thing that could
-    /// disagree with the list.
-    #[serde(default)]
-    pub shown: usize,
     /// What each opened binary's bytes hashed to when the session was saved, keyed by the
     /// path [`Project::binaries`] holds — the same identity every other saved thing is
     /// expressed in.
@@ -352,43 +422,49 @@ pub struct Session {
     /// before there was a digest to consult. See [`Rebuilt`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub digests: BTreeMap<PathBuf, String>,
-    /// `skip_serializing_if` because the `toml` crate cannot write a bare `None` at all
-    /// — there is no null in TOML — so an unselected session has to leave the key out,
-    /// and `default` to read that file back.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection: Option<SavedSelection>,
-    /// The content area's open tabs, in strip order.
+    /// The document that was on screen.
     ///
-    /// Which of them was active is not recorded here: `selection` already is it, so a
-    /// field for it would be a second answer to the same question — the very thing
-    /// `Tabs` refuses to hold in memory. The restore's only extra rule is an ordering,
-    /// tabs before selection, and it lives at the call site.
+    /// Written out in full rather than as an index into `tabs`, although the active
+    /// document is by construction one of them, because the two are read back under
+    /// different rules: a tab that no longer resolves is *dropped*, which would shift
+    /// every later index, and this one *degrades* — a symbol to its object, an object to
+    /// nothing — because there is one of it and the app has to open somewhere.
+    ///
+    /// `skip_serializing_if` because the `toml` crate cannot write a bare `None` at all
+    /// — there is no null in TOML — so a session with nothing open has to leave the key
+    /// out, and `default` to read that file back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<SavedDocument>,
+    /// The open tabs, in strip order, of both kinds.
     #[serde(default)]
     pub tabs: Vec<SavedTab>,
-    /// The Source pane's open files, in strip order.
-    #[serde(default)]
-    pub sources: Vec<SavedSource>,
     /// `serde(default)` so a partial file — one written by hand, or trimmed — loads with
-    /// an empty history rather than failing and taking the tabs and the selection down
-    /// with it. The fields above carry it for the same reason.
+    /// an empty history rather than failing and taking the tabs and the active document
+    /// down with it. The fields above carry it for the same reason.
     #[serde(default)]
     pub history: SavedHistory,
 }
 
-/// One of the content area's open tabs: a place, and the row the reader left it at.
+/// One of the open tabs: a place, and the row each of its two sides was left at.
 ///
-/// The row travels *with* the tab it belongs to rather than in a list of its own beside
+/// The rows travel *with* the tab they belong to rather than in lists of their own beside
 /// [`Session::tabs`], and that is the whole of why this type exists. A parallel array of
 /// rows would be a second list to keep in step with the first, and it could not survive
 /// the one thing that certainly happens to the first: [`Session::resolve_tabs`] drops the
 /// tabs that no longer resolve, which would silently shift every later row onto the wrong
 /// tab.
 ///
-/// The field order is load-bearing here too: `row` is a plain value and `selection` an
+/// **Two rows, because a tab has two sides.** A document is a function beside its source
+/// or a file beside the assembly for a line in it, and the reader leaves each side
+/// somewhere; keying a source position by the *file* — which is what the Source pane's
+/// own strip did — made two functions compiled from one file share a position they have
+/// no reason to share.
+///
+/// The field order is load-bearing here too: both rows are plain values and `document` an
 /// externally tagged enum, which TOML writes as a sub-table.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedTab {
-    /// Which row was at the top of the assembly pane, `0` being the first instruction.
+    /// Which row was at the top of the assembly side, `0` being the first instruction.
     ///
     /// A row and not a pixel offset, for [`crate::tabs::Positions`]' reasons — and one
     /// more that is only true of a saved one: the row height follows the fonts, so a
@@ -399,32 +475,14 @@ pub struct SavedTab {
     /// `serde(default)` because it is a hint and not a fact: a hand-written or trimmed
     /// file that names a tab without saying where in it simply opens that tab at the top.
     #[serde(default)]
-    pub row: usize,
-    pub selection: SavedSelection,
-}
-
-/// One of the Source pane's open files: its path, and the row the reader left it at.
-///
-/// The path is a `String` rather than a `PathBuf` because it is what the debug info said
-/// and not something this filesystem was asked about: it is the string `LineInfo` handed
-/// the pane, it may well name the machine that compiled the binary rather than this one,
-/// and writing it as a path would only invite the non-UTF-8 refusal in
-/// [`write_atomically`] on a value that was UTF-8 all along.
-///
-/// A file that has since been deleted still comes back as a tab. The pane already draws
-/// "Source file not found" for one, which is the true answer and a visible one; dropping
-/// the tab instead would lose a file the reader had open without ever saying so. Nothing
-/// here is therefore resolved against anything — unlike a [`SavedTab`], these come back
-/// exactly as they went out.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SavedSource {
-    /// Which line was at the top of the Source pane, `0` being the file's first line.
-    /// A hint like [`SavedTab::row`] and defaulted for the same reason — and a file that
-    /// has been edited shorter since is exactly what the clamp in
+    pub asm_row: usize,
+    /// Which line was at the top of the source side, `0` being the file's first line. A
+    /// hint like `asm_row` and defaulted for the same reason — and a file that has been
+    /// edited shorter since is exactly what the clamp in
     /// [`crate::tabs::Positions::row`] is for.
     #[serde(default)]
-    pub row: usize,
-    pub path: String,
+    pub src_row: usize,
+    pub document: SavedDocument,
 }
 
 /// The navigation history in saved form: the index of the entry that was on screen, and
@@ -438,7 +496,7 @@ pub struct SavedHistory {
     /// An index into `entries`, and `0` — meaning nothing — while it is empty.
     pub cursor: usize,
     #[serde(default)]
-    pub entries: Vec<SavedSelection>,
+    pub entries: Vec<SavedDocument>,
 }
 
 impl SavedHistory {
@@ -451,14 +509,15 @@ impl SavedHistory {
     }
 
     /// The saved form of `history`. Every entry is a place, so nothing is dropped here
-    /// and the cursor stays pointing at the same entry.
+    /// and the cursor stays pointing at the same entry — a visited source file included,
+    /// which is what makes the history panel able to list one.
     fn from_history(history: &History) -> SavedHistory {
         SavedHistory {
             cursor: history.cursor().unwrap_or(0),
             entries: history
                 .entries()
                 .iter()
-                .map(SavedSelection::from_selection)
+                .map(SavedDocument::from_document)
                 .collect(),
         }
     }
@@ -638,13 +697,25 @@ impl Rebuilt {
     }
 }
 
-/// A [`Selection`] expressed in terms that survive a restart.
+/// A [`Document`] expressed in terms that survive a restart.
+///
+/// **Flat, one table per entry, and not a document wrapping a saved selection.** The two
+/// binary variants are what the file has always spelt and the third is a file, so a
+/// nested enum would buy a second level of TOML table and one more thing for a
+/// hand-edited file to get wrong, to express a distinction the variant names already
+/// make.
 ///
 /// `object_name` is [`Object::name`] — the archive member name, or the file name for a
 /// plain object — and is needed because one path can contribute many `Object`s (every
 /// member of an archive, plus the file itself), so `path` alone is ambiguous.
+///
+/// [`SavedDocument::Source`]'s `path` is a `String` rather than a `PathBuf` because it is
+/// what the debug info said and not something this filesystem was asked about: it may
+/// well name the machine that compiled the binary, and writing it as a path would only
+/// invite the non-UTF-8 refusal in [`write_atomically`] on a value that was UTF-8 all
+/// along.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SavedSelection {
+pub enum SavedDocument {
     Object {
         path: PathBuf,
         object_name: String,
@@ -655,44 +726,56 @@ pub enum SavedSelection {
         symbol_name: String,
         address: u64,
     },
+    Source {
+        path: String,
+    },
 }
 
-impl SavedSelection {
-    /// The saved form of `selection`. Total, because a [`Selection`] is always a place:
-    /// having none is an absent one, which is the caller's `Option` and not a variant here.
-    pub fn from_selection(selection: &Selection) -> SavedSelection {
-        match selection {
-            Selection::Object(object) => SavedSelection::Object {
+impl SavedDocument {
+    /// The saved form of `document`. Total, because a [`Document`] is always a place:
+    /// having none open is an absent one, which is the caller's `Option` and not a
+    /// variant here.
+    pub fn from_document(document: &Document) -> SavedDocument {
+        match document {
+            Document::Assembly(Selection::Object(object)) => SavedDocument::Object {
                 path: object.path.clone(),
                 object_name: object.name.clone(),
             },
-            Selection::Symbol(symbol) => SavedSelection::Symbol {
+            Document::Assembly(Selection::Symbol(symbol)) => SavedDocument::Symbol {
                 path: symbol.object.path.clone(),
                 object_name: symbol.object.name.clone(),
                 symbol_name: symbol.data.name.clone(),
                 address: symbol.data.address,
             },
+            Document::Source(file) => SavedDocument::Source {
+                path: file.to_string(),
+            },
         }
     }
 
-    fn path(&self) -> &Path {
+    /// The binary this names, or `None` for a file — which is not one of this app's
+    /// binaries and is not a thing [`Rebuilt`] has anything to say about.
+    fn binary_path(&self) -> Option<&Path> {
         match self {
-            SavedSelection::Object { path, .. } | SavedSelection::Symbol { path, .. } => path,
+            SavedDocument::Object { path, .. } | SavedDocument::Symbol { path, .. } => Some(path),
+            SavedDocument::Source { .. } => None,
         }
     }
 
-    fn object_name(&self) -> &str {
+    fn object_name(&self) -> Option<&str> {
         match self {
-            SavedSelection::Object { object_name, .. }
-            | SavedSelection::Symbol { object_name, .. } => object_name,
+            SavedDocument::Object { object_name, .. }
+            | SavedDocument::Symbol { object_name, .. } => Some(object_name),
+            SavedDocument::Source { .. } => None,
         }
     }
 
     /// The loaded object this names, if it is still there.
     fn find_object<'a>(&self, objects: &'a [Arc<Object>]) -> Option<&'a Arc<Object>> {
+        let (path, name) = (self.binary_path()?, self.object_name()?);
         objects
             .iter()
-            .find(|object| object.path == self.path() && object.name == self.object_name())
+            .find(|object| object.path == path && object.name == name)
     }
 
     /// Exactly what this names, or `None` when the object — or, for a symbol, the
@@ -704,28 +787,36 @@ impl SavedSelection {
     ///
     /// `rebuilt` is what decides whether the saved address is a fact about this file or
     /// only a memory of the one it was saved against; see [`Rebuilt`] and
-    /// [`SavedSelection::find_symbol`].
-    fn resolve(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Selection> {
+    /// [`SavedDocument::find_symbol`].
+    ///
+    /// **A source-driven entry resolves against nothing and so cannot fail.** It is a
+    /// path a compiler wrote down, this app never asked the filesystem about it, and a
+    /// file that has since been deleted still comes back as a tab over the pane's own
+    /// "Source file not found" — which is the true answer and a visible one, where
+    /// dropping the tab would lose a file the reader had open without ever saying so.
+    fn resolve(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Document> {
+        if let SavedDocument::Source { path } = self {
+            return Some(Document::Source(Arc::from(path.as_str())));
+        }
+
         let object = self.find_object(objects)?;
-        match self {
-            SavedSelection::Object { .. } => Some(Selection::Object(object.clone())),
-            SavedSelection::Symbol {
+        let selection = match self {
+            SavedDocument::Object { .. } => Selection::Object(object.clone()),
+            SavedDocument::Symbol {
+                path,
                 symbol_name,
                 address,
                 ..
-            } => SavedSelection::find_symbol(
-                object,
-                symbol_name,
-                *address,
-                rebuilt.changed(self.path()),
-            )
-            .map(|data| {
+            } => SavedDocument::find_symbol(object, symbol_name, *address, rebuilt.changed(path))
+                .map(|data| {
                 Selection::Symbol(Symbol {
                     object: object.clone(),
                     data: data.clone(),
                 })
-            }),
-        }
+            })?,
+            SavedDocument::Source { .. } => unreachable!("answered above"),
+        };
+        Some(Document::Assembly(selection))
     }
 
     /// The symbol a saved place names, under a file that either is or is not the one it
@@ -787,12 +878,16 @@ impl SavedSelection {
     /// The same, degrading instead of failing: a symbol that is gone falls back to its
     /// object and an object that is gone to nothing at all.
     ///
-    /// This is what the *selection* wants. There is only one of it and it is where the
-    /// app opens, so landing near the last session's place beats landing nowhere;
-    /// a history entry, of which there are many, is better dropped.
-    fn resolve_or_degrade(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Selection> {
-        self.resolve(objects, rebuilt)
-            .or_else(|| self.find_object(objects).cloned().map(Selection::Object))
+    /// This is what the *active document* wants. There is only one of it and it is where
+    /// the app opens, so landing near the last session's place beats landing nowhere;
+    /// a history entry, of which there are many, is better dropped. A source-driven entry
+    /// never reaches the fallback, having never failed.
+    fn resolve_or_degrade(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Document> {
+        self.resolve(objects, rebuilt).or_else(|| {
+            self.find_object(objects)
+                .cloned()
+                .map(|object| Document::Assembly(Selection::Object(object)))
+        })
     }
 }
 
@@ -800,41 +895,32 @@ impl Session {
     /// The empty session, as a `const fn` so [`Saves`] can be a `static`.
     pub const fn new() -> Session {
         Session {
-            shown: 0,
             digests: BTreeMap::new(),
-            selection: None,
+            active: None,
             tabs: Vec::new(),
-            sources: Vec::new(),
             history: SavedHistory::new(),
         }
     }
 
     /// The session described by the state the app is currently in: the loaded `objects`,
-    /// the content area's open `tabs` and the active one (`selection`), the `history`,
-    /// and the Source pane's open `sources` with the one it is `shown` — each strip
-    /// beside the `rows` its panes were left at.
+    /// the open `tabs` with the `active` one, the `history`, and the row each side of
+    /// each tab was left at.
     ///
     /// The one place the app's state is turned into what would be saved — [`binaries`]
     /// being the other half of it, for the other file — so the save policy in [`Saves`]
-    /// never has to know where any of it came from. It takes the two tab lists as plain
-    /// slices rather than a `Tabs<T>` for exactly that reason: this is a mapping over what
-    /// is open, not a party to how the lists are kept. The positions come as a
-    /// [`Positions`] rather than a slice only because that is the shape of the question —
-    /// "where was this tab left" — and a tab that was never scrolled has no entry in one
-    /// at all, which is written out as row `0`.
-    ///
-    /// A `shown` naming a file that is not in `sources` cannot happen — `open_file` puts
-    /// it there — and lands on `0` rather than being reported, because there is nothing
-    /// for a saver to do about it and the restore clamps the same way.
+    /// never has to know where any of it came from. It takes the tab list as a plain
+    /// slice rather than a `Tabs<T>` for exactly that reason: this is a mapping over what
+    /// is open, not a party to how the list is kept. The positions come as two
+    /// [`Positions`] rather than slices only because that is the shape of the question —
+    /// "where was this side of this tab left" — and a side that was never scrolled has no
+    /// entry in one at all, which is written out as row `0`.
     pub fn from_state(
         objects: &[Arc<Object>],
-        tabs: &[Selection],
-        tab_rows: &Positions<Selection>,
-        selection: Option<&Selection>,
+        tabs: &[Document],
+        asm_rows: &Positions<Document>,
+        src_rows: &Positions<Document>,
+        active: Option<&Document>,
         history: &History,
-        sources: &[Arc<str>],
-        source_rows: &Positions<Arc<str>>,
-        shown: Option<&str>,
     ) -> Session {
         let mut digests: BTreeMap<PathBuf, String> = BTreeMap::new();
         for object in objects {
@@ -847,97 +933,70 @@ impl Session {
                 .or_insert_with(|| object.data.digest().to_string());
         }
         Session {
-            shown: shown
-                .and_then(|file| sources.iter().position(|open| &**open == file))
-                .unwrap_or(0),
             digests,
-            selection: selection.map(SavedSelection::from_selection),
+            active: active.map(SavedDocument::from_document),
             tabs: tabs
                 .iter()
                 .map(|tab| SavedTab {
-                    row: tab_rows.at(tab).unwrap_or(0),
-                    selection: SavedSelection::from_selection(tab),
-                })
-                .collect(),
-            sources: sources
-                .iter()
-                .map(|file| SavedSource {
-                    row: source_rows.at(file).unwrap_or(0),
-                    path: file.to_string(),
+                    asm_row: asm_rows.at(tab).unwrap_or(0),
+                    src_row: src_rows.at(tab).unwrap_or(0),
+                    document: SavedDocument::from_document(tab),
                 })
                 .collect(),
             history: SavedHistory::from_history(history),
         }
     }
 
-    /// Turn the saved selection back into a live one against the objects that are now
-    /// loaded. Binaries change between runs, so this degrades silently: a symbol that
+    /// Turn the saved active document back into a live one against the objects that are
+    /// now loaded. Binaries change between runs, so this degrades silently: a symbol that
     /// is gone falls back to its object, and an object that is gone to nothing at all.
     ///
     /// A binary that has been *rebuilt* since it was saved changes what "is gone" means
     /// — see [`Rebuilt`], which is where the digests are compared.
-    pub fn resolve(&self, objects: &[Arc<Object>]) -> Option<Selection> {
-        let saved = self.selection.as_ref()?;
+    pub fn resolve(&self, objects: &[Arc<Object>]) -> Option<Document> {
+        let saved = self.active.as_ref()?;
         saved.resolve_or_degrade(objects, &Rebuilt::of(self, objects))
     }
 
-    /// Turn the saved tabs back into live selections against the objects that are now
-    /// loaded, in strip order. A tab that no longer resolves is **dropped**, the way a
-    /// history entry is and pointedly not the way the selection is.
+    /// Turn the saved tabs back into live documents against the objects that are now
+    /// loaded, in strip order, each with the rows its two sides were left at. A tab that
+    /// no longer resolves is **dropped**, the way a history entry is and pointedly not
+    /// the way the active document is.
     ///
-    /// The selection degrades because there is one of it and the app has to open
-    /// somewhere; a tab is one of many, and a strip whose chips lead to places that are
+    /// The active document degrades because there is one of it and the app has to open
+    /// somewhere; a tab is one of many, and a strip whose tabs lead to places that are
     /// no longer there — or, worse, that all degraded onto the same object and so
-    /// collapsed into one chip — is worse than a shorter strip.
+    /// collapsed into one tab — is worse than a shorter strip. A source-driven tab is
+    /// never dropped, having nothing to resolve against.
     ///
     /// Duplicates need no attention here: `Tabs::open` already refuses to open a second
     /// tab for something that is open, so two saved tabs that degrade onto one live
-    /// selection could not both be opened even if they got this far.
+    /// document could not both be opened even if they got this far.
     ///
-    /// Each surviving tab comes back with the row it was left at, which is why the row is
-    /// a field of the tab rather than a list beside it: the dropping here is exactly what
-    /// a parallel array could not have survived.
-    pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<(Selection, usize)> {
+    /// Each surviving tab comes back with the rows it was left at, which is why they are
+    /// fields of the tab rather than lists beside it: the dropping here is exactly what a
+    /// parallel array could not have survived.
+    pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<(Document, usize, usize)> {
         let rebuilt = Rebuilt::of(self, objects);
         self.tabs
             .iter()
             .filter_map(|saved| {
-                let selection = saved.selection.resolve(objects, &rebuilt)?;
+                let document = saved.document.resolve(objects, &rebuilt)?;
                 // A row is a claim about a listing, so a listing that has been rebuilt
-                // takes its rows with it; see [`Rebuilt`]. The tab itself survives —
-                // it is the function that is being read, not the offset into it.
-                let row = match rebuilt.changed(saved.selection.path()) {
-                    true => 0,
-                    false => saved.row,
-                };
-                Some((selection, row))
+                // takes both its rows with it; see [`Rebuilt`]. The tab itself survives —
+                // it is the function that is being read, not the offset into it. A file
+                // has no binary path and so is never rebuilt, which is the honest answer:
+                // the app did not compile it and knows nothing about whether it moved.
+                let changed = saved
+                    .document
+                    .binary_path()
+                    .is_some_and(|path| rebuilt.changed(path));
+                match changed {
+                    true => Some((document, 0, 0)),
+                    false => Some((document, saved.asm_row, saved.src_row)),
+                }
             })
             .collect()
-    }
-
-    /// The Source pane's open files with the row each was left at, in strip order.
-    ///
-    /// Nothing is resolved and nothing is dropped — see [`SavedSource`] — so this is only
-    /// the change of type, done here rather than at the call site because the mapping
-    /// between what is saved and what the app holds belongs to this module.
-    pub fn resolve_sources(&self) -> Vec<(Arc<str>, usize)> {
-        self.sources
-            .iter()
-            .map(|saved| (Arc::from(saved.path.as_str()), saved.row))
-            .collect()
-    }
-
-    /// The source file the pane was showing, or `None` when it had none open.
-    ///
-    /// Clamped rather than trusted: a `shown` past the end of `sources` — hand-edited, or
-    /// left behind by a trimmed list — falls back to the first open file, because "a file
-    /// is shown exactly when one is open" is an invariant of the pane and "none of these"
-    /// is not one of its states.
-    pub fn shown_source(&self) -> Option<&str> {
-        self.sources
-            .get(self.shown)
-            .or_else(|| self.sources.first())
-            .map(|saved| saved.path.as_str())
     }
 
     /// Turn the saved history back into a live one against the objects that are now
@@ -1484,25 +1543,38 @@ mod tests {
         })
     }
 
-    /// [`Session::from_state`] over a session whose only open tab is the selection, whose
-    /// Source pane has nothing open and whose panes are at the top of what they show — the
-    /// state the tests written before there were tabs to save were already describing, now
-    /// spelt out.
+    /// [`Session::from_state`] over a session whose only open tab is the active document
+    /// and whose panes are at the top of what they show — the state the tests written
+    /// before there were tabs to save were already describing, now spelt out.
+    ///
+    /// It takes a [`Selection`] because every test that reaches for it is about a place in
+    /// a binary; a source-driven tab has its own tests below.
     fn from_state(
         objects: &[Arc<Object>],
         selection: Option<&Selection>,
         history: &History,
     ) -> Session {
+        let document = selection.cloned().map(Document::Assembly);
         Session::from_state(
             objects,
-            selection.map(std::slice::from_ref).unwrap_or_default(),
+            document
+                .as_ref()
+                .map(std::slice::from_ref)
+                .unwrap_or_default(),
             &Positions::default(),
-            selection,
+            &Positions::default(),
+            document.as_ref(),
             history,
-            &[],
-            &Positions::default(),
-            None,
         )
+    }
+
+    /// What [`Session::resolve`] answers, as the selection inside it. Every use of this
+    /// is a test about a place in a binary, which is what the app had before a document
+    /// could also be a file.
+    fn resolve_selection(session: &Session, objects: &[Arc<Object>]) -> Option<Selection> {
+        session
+            .resolve(objects)
+            .and_then(|document| document.selection().cloned())
     }
 
     fn objects() -> Vec<Arc<Object>> {
@@ -1547,8 +1619,8 @@ mod tests {
         let session = from_state(&objects, Some(&selection), &History::default());
         assert_eq!(binaries(&objects), vec![PathBuf::from("/tmp/lib.a")]);
         assert_eq!(
-            session.selection,
-            Some(SavedSelection::Symbol {
+            session.active,
+            Some(SavedDocument::Symbol {
                 path: PathBuf::from("/tmp/lib.a"),
                 object_name: "b.o".into(),
                 symbol_name: "caller".into(),
@@ -1557,7 +1629,7 @@ mod tests {
         );
 
         // The duplicate `caller` in `a.o` must not win.
-        assert!(session.resolve(&objects) == Some(selection));
+        assert!(resolve_selection(&session, &objects) == Some(selection));
     }
 
     #[test]
@@ -1565,22 +1637,22 @@ mod tests {
         let objects = objects();
         let selection = Selection::Object(objects[0].clone());
         let session = from_state(&objects, Some(&selection), &History::default());
-        assert!(session.resolve(&objects) == Some(selection));
+        assert!(resolve_selection(&session, &objects) == Some(selection));
     }
 
     #[test]
     fn no_selection_round_trips_as_none() {
         let objects = objects();
         let session = from_state(&objects, None, &History::default());
-        assert_eq!(session.selection, None);
-        assert!(session.resolve(&objects).is_none());
+        assert_eq!(session.active, None);
+        assert!(resolve_selection(&session, &objects).is_none());
     }
 
     #[test]
     fn a_missing_symbol_falls_back_to_its_object() {
         let objects = objects();
         let session = Session {
-            selection: Some(SavedSelection::Symbol {
+            active: Some(SavedDocument::Symbol {
                 path: PathBuf::from("/tmp/lib.a"),
                 object_name: "a.o".into(),
                 symbol_name: "gone".into(),
@@ -1589,14 +1661,16 @@ mod tests {
             history: SavedHistory::default(),
             ..Session::new()
         };
-        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
+        assert!(
+            resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone()))
+        );
     }
 
     #[test]
     fn a_moved_symbol_falls_back_to_its_object() {
         let objects = objects();
         let session = Session {
-            selection: Some(SavedSelection::Symbol {
+            active: Some(SavedDocument::Symbol {
                 path: PathBuf::from("/tmp/lib.a"),
                 object_name: "a.o".into(),
                 // Right name, recompiled to a different address.
@@ -1606,23 +1680,25 @@ mod tests {
             history: SavedHistory::default(),
             ..Session::new()
         };
-        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
+        assert!(
+            resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone()))
+        );
     }
 
     #[test]
     fn a_missing_object_falls_back_to_nothing() {
         let objects = objects();
         for saved in [
-            SavedSelection::Object {
+            SavedDocument::Object {
                 path: PathBuf::from("/tmp/other.a"),
                 object_name: "a.o".into(),
             },
             // Right path, but that member is no longer in the archive.
-            SavedSelection::Object {
+            SavedDocument::Object {
                 path: PathBuf::from("/tmp/lib.a"),
                 object_name: "c.o".into(),
             },
-            SavedSelection::Symbol {
+            SavedDocument::Symbol {
                 path: PathBuf::from("/tmp/lib.a"),
                 object_name: "c.o".into(),
                 symbol_name: "caller".into(),
@@ -1630,11 +1706,11 @@ mod tests {
             },
         ] {
             let session = Session {
-                selection: Some(saved),
+                active: Some(saved),
                 history: SavedHistory::default(),
                 ..Session::new()
             };
-            assert!(session.resolve(&objects).is_none());
+            assert!(resolve_selection(&session, &objects).is_none());
         }
     }
 
@@ -1657,7 +1733,7 @@ mod tests {
     #[test]
     fn toml_round_trips() {
         let session = Session {
-            selection: Some(SavedSelection::Symbol {
+            active: Some(SavedDocument::Symbol {
                 path: PathBuf::from("/tmp/lib.a"),
                 object_name: "b.o".into(),
                 symbol_name: "caller".into(),
@@ -1668,7 +1744,7 @@ mod tests {
         };
         let text = round_trip(&session);
         // The externally tagged enum is a table named after its variant.
-        assert!(text.contains("[selection.Symbol]"), "{text}");
+        assert!(text.contains("[active.Symbol]"), "{text}");
     }
 
     #[test]
@@ -1677,16 +1753,16 @@ mod tests {
         // has to be left out of the file entirely, and read back as `None`.
         let session = Session::new();
         let text = round_trip(&session);
-        assert!(!text.contains("selection"), "{text}");
+        assert!(!text.contains("active"), "{text}");
     }
 
     #[test]
     fn a_session_with_no_selection_round_trips() {
         let objects = objects();
         let session = from_state(&objects, None, &History::default());
-        assert_eq!(session.selection, None);
+        assert_eq!(session.active, None);
         let text = round_trip(&session);
-        assert!(!text.contains("selection"), "{text}");
+        assert!(!text.contains("active"), "{text}");
     }
 
     #[test]
@@ -1708,7 +1784,7 @@ mod tests {
         let path = directory.join("nested").join(SESSION_FILE);
 
         let session = Session {
-            selection: Some(SavedSelection::Object {
+            active: Some(SavedDocument::Object {
                 path: PathBuf::from("/tmp/lib.a"),
                 object_name: "a.o".into(),
             }),
@@ -1728,12 +1804,12 @@ mod tests {
     /// object `b.o`, with the cursor wherever `back` calls leave it.
     fn history(objects: &[Arc<Object>], back: usize) -> History {
         let mut history = History::default();
-        history.push(Selection::Object(objects[0].clone()));
-        history.push(Selection::Symbol(Symbol {
+        history.push(Document::Assembly(Selection::Object(objects[0].clone())));
+        history.push(Document::Assembly(Selection::Symbol(Symbol {
             object: objects[0].clone(),
             data: objects[0].symbols_sorted[1].clone(),
-        }));
-        history.push(Selection::Object(objects[1].clone()));
+        })));
+        history.push(Document::Assembly(Selection::Object(objects[1].clone())));
         for _ in 0..back {
             history.back();
         }
@@ -1774,9 +1850,9 @@ mod tests {
 
     /// Building a saved history by hand, since these are entries no live `History`
     /// could have produced against these objects.
-    fn saved_history(entries: &[SavedSelection], cursor: usize) -> Session {
+    fn saved_history(entries: &[SavedDocument], cursor: usize) -> Session {
         Session {
-            selection: None,
+            active: None,
             history: SavedHistory {
                 entries: entries.to_vec(),
                 cursor,
@@ -1785,8 +1861,8 @@ mod tests {
         }
     }
 
-    fn saved_object(name: &str) -> SavedSelection {
-        SavedSelection::Object {
+    fn saved_object(name: &str) -> SavedDocument {
+        SavedDocument::Object {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: name.to_owned(),
         }
@@ -1804,7 +1880,7 @@ mod tests {
                 // which would degrade to the object, an entry is dropped: the user
                 // never visited the object, and a list of places they did not go is
                 // worse than a shorter list.
-                SavedSelection::Symbol {
+                SavedDocument::Symbol {
                     path: PathBuf::from("/tmp/lib.a"),
                     object_name: "a.o".into(),
                     symbol_name: "gone".into(),
@@ -1816,13 +1892,7 @@ mod tests {
         );
 
         let restored = session.resolve_history(&objects);
-        assert!(
-            restored.entries()
-                == [
-                    Selection::Object(objects[0].clone()),
-                    Selection::Object(objects[1].clone()),
-                ]
-        );
+        assert!(restored.entries() == [tab(&objects[0]), tab(&objects[1]),]);
         // The cursor was on the last entry, which survived: it must still be on it,
         // at its new index, and not on the entry that moved into its old one.
         assert_eq!(restored.cursor(), Some(1));
@@ -1844,13 +1914,7 @@ mod tests {
         );
 
         let restored = session.resolve_history(&objects);
-        assert!(
-            restored.entries()
-                == [
-                    Selection::Object(objects[1].clone()),
-                    Selection::Object(objects[0].clone()),
-                ]
-        );
+        assert!(restored.entries() == [tab(&objects[1]), tab(&objects[0]),]);
         // The cursor was on the newest `a.o`, which is where the collapse left it.
         assert_eq!(restored.cursor(), Some(1));
         assert!(!restored.can_forward());
@@ -1871,13 +1935,7 @@ mod tests {
         );
 
         let restored = session.resolve_history(&objects);
-        assert!(
-            restored.entries()
-                == [
-                    Selection::Object(objects[1].clone()),
-                    Selection::Object(objects[0].clone()),
-                ]
-        );
+        assert!(restored.entries() == [tab(&objects[1]), tab(&objects[0]),]);
         assert_eq!(restored.cursor(), Some(1));
     }
 
@@ -1896,7 +1954,7 @@ mod tests {
         );
 
         let restored = session.resolve_history(&objects);
-        assert!(restored.current() == Some(&Selection::Object(objects[1].clone())));
+        assert!(restored.current() == Some(&tab(&objects[1])));
         assert_eq!(restored.cursor(), Some(0));
         // The newest `a.o` is still in front of it to go forward to.
         assert!(restored.can_forward());
@@ -1906,7 +1964,7 @@ mod tests {
     #[test]
     fn two_saved_symbols_naming_the_same_one_restore_as_one_entry() {
         let objects = objects();
-        let symbol = || SavedSelection::Symbol {
+        let symbol = || SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "a.o".into(),
             symbol_name: "target".into(),
@@ -1920,11 +1978,11 @@ mod tests {
         assert!(
             restored.entries()
                 == [
-                    Selection::Object(objects[1].clone()),
-                    Selection::Symbol(Symbol {
+                    tab(&objects[1]),
+                    Document::Assembly(Selection::Symbol(Symbol {
                         object: objects[0].clone(),
                         data: objects[0].symbols_sorted[1].clone(),
-                    }),
+                    })),
                 ]
         );
         assert_eq!(restored.cursor(), Some(1));
@@ -1943,14 +2001,14 @@ mod tests {
                 ],
                 cursor,
             );
-            session.selection = Some(session.history.entries[cursor].clone());
+            session.active = Some(session.history.entries[cursor].clone());
 
             let restored_history = session.resolve_history(&objects);
-            let restored_selection = session.resolve(&objects);
+            let restored_active = session.resolve(&objects);
 
-            assert!(restored_history.current() == restored_selection.as_ref());
+            assert!(restored_history.current() == restored_active.as_ref());
             assert!(!restored_history
-                .would_push(restored_selection.as_ref().expect("a restored selection")));
+                .would_push(restored_active.as_ref().expect("a restored document")));
         }
     }
 
@@ -1968,7 +2026,7 @@ mod tests {
 
         let restored = session.resolve_history(&objects);
         assert!(restored.cursor() == Some(0));
-        assert!(restored.current() == Some(&Selection::Object(objects[0].clone())));
+        assert!(restored.current() == Some(&tab(&objects[0])));
         // `b.o` was in front of the cursor and still is.
         assert!(restored.can_forward());
     }
@@ -1980,7 +2038,7 @@ mod tests {
 
         let restored = session.resolve_history(&objects);
         assert!(restored.cursor() == Some(0));
-        assert!(restored.current() == Some(&Selection::Object(objects[1].clone())));
+        assert!(restored.current() == Some(&tab(&objects[1])));
     }
 
     #[test]
@@ -2011,17 +2069,18 @@ mod tests {
         // Every position the cursor can be in, including one the user walked back to.
         for back in 0..3 {
             let history = history(&objects, back);
-            let selection = history.current().expect("a current entry").clone();
+            let current = history.current().expect("a current entry").clone();
+            let selection = current.selection().expect("a place in a binary").clone();
             let session = from_state(&objects, Some(&selection), &history);
 
             let restored_history = session.resolve_history(&objects);
-            let restored_selection = session.resolve(&objects);
+            let restored_active = session.resolve(&objects);
 
-            assert!(restored_history.current() == restored_selection.as_ref());
+            assert!(restored_history.current() == restored_active.as_ref());
             // Which is what keeps the recording effect from pushing a duplicate the
-            // moment the restore sets the selection.
+            // moment the restore sets the active document.
             assert!(!restored_history
-                .would_push(restored_selection.as_ref().expect("a restored selection")));
+                .would_push(restored_active.as_ref().expect("a restored document")));
         }
     }
 
@@ -2032,7 +2091,7 @@ mod tests {
         let text = r#"
             binaries = ["/tmp/lib.a"]
 
-            [selection.Object]
+            [active.Object]
             path = "/tmp/lib.a"
             object_name = "a.o"
         "#;
@@ -2042,7 +2101,9 @@ mod tests {
 
         // And it restores exactly as it would have: the selection back, no history.
         let objects = objects();
-        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
+        assert!(
+            resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone()))
+        );
         assert!(session.resolve_history(&objects).entries().is_empty());
     }
 
@@ -2103,12 +2164,7 @@ mod tests {
         round_trip(&session);
     }
 
-    // --- the open tabs and the source files ---------------------------------
-
-    /// The Source pane's strip, in the `Arc<str>` the UI holds it in.
-    fn sources(files: &[&str]) -> Vec<Arc<str>> {
-        files.iter().map(|file| Arc::from(*file)).collect()
-    }
+    // --- the open tabs ------------------------------------------------------
 
     /// Where the panes were left, in the map the UI keeps it in.
     fn positions<T: Clone + PartialEq>(at: &[(&T, usize)]) -> Positions<T> {
@@ -2119,52 +2175,68 @@ mod tests {
         positions
     }
 
-    fn saved_tab(object_name: &str, row: usize) -> SavedTab {
+    /// An assembly-driven tab over a whole object.
+    fn tab(object: &Arc<Object>) -> Document {
+        Document::Assembly(Selection::Object(object.clone()))
+    }
+
+    /// A source-driven tab, in the `Arc<str>` the UI holds a file in.
+    fn file_tab(path: &str) -> Document {
+        Document::Source(Arc::from(path))
+    }
+
+    fn saved_tab(object_name: &str, asm_row: usize) -> SavedTab {
         SavedTab {
-            row,
-            selection: saved_object(object_name),
+            asm_row,
+            src_row: 0,
+            document: saved_object(object_name),
         }
     }
 
-    fn saved_source(path: &str, row: usize) -> SavedSource {
-        SavedSource {
-            row,
-            path: path.to_owned(),
+    fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
+        SavedTab {
+            asm_row,
+            src_row,
+            document: SavedDocument::Source {
+                path: path.to_owned(),
+            },
         }
     }
 
-    /// A strip goes out in order and comes back in it, through the very mapping the
-    /// history already uses — which is the whole reason a saved tab costs no new one.
+    /// One strip of both kinds goes out in the reader's own order and comes back in it,
+    /// through the very mapping the history already uses — which is the whole reason a
+    /// saved tab costs no new one.
     #[test]
     fn saves_and_resolves_the_open_tabs() {
         let objects = objects();
         let tabs = vec![
-            Selection::Object(objects[0].clone()),
-            Selection::Symbol(Symbol {
+            tab(&objects[0]),
+            file_tab("/src/main.rs"),
+            Document::Assembly(Selection::Symbol(Symbol {
                 object: objects[0].clone(),
                 data: objects[0].symbols_sorted[1].clone(),
-            }),
-            Selection::Object(objects[1].clone()),
+            })),
+            tab(&objects[1]),
         ];
 
         let session = Session::from_state(
             &objects,
             &tabs,
             &Positions::default(),
-            Some(&tabs[2]),
-            &History::default(),
-            &[],
             &Positions::default(),
-            None,
+            Some(&tabs[3]),
+            &History::default(),
         );
 
         assert_eq!(
             session.tabs,
             [
                 saved_tab("a.o", 0),
+                saved_file_tab("/src/main.rs", 0, 0),
                 SavedTab {
-                    row: 0,
-                    selection: SavedSelection::Symbol {
+                    asm_row: 0,
+                    src_row: 0,
+                    document: SavedDocument::Symbol {
                         path: PathBuf::from("/tmp/lib.a"),
                         object_name: "a.o".into(),
                         symbol_name: "target".into(),
@@ -2177,43 +2249,46 @@ mod tests {
         assert!(
             session.resolve_tabs(&objects)
                 == [
-                    (tabs[0].clone(), 0),
-                    (tabs[1].clone(), 0),
-                    (tabs[2].clone(), 0),
+                    (tabs[0].clone(), 0, 0),
+                    (tabs[1].clone(), 0, 0),
+                    (tabs[2].clone(), 0, 0),
+                    (tabs[3].clone(), 0, 0),
                 ]
         );
     }
 
-    /// The active tab is not written twice: it is the selection, and a saved session
-    /// says which chip is on screen only by naming it there.
+    /// The active tab is not written twice: it is `active`, and a saved session says
+    /// which tab is on screen only by naming it there.
     #[test]
-    fn the_active_tab_is_only_the_selection() {
+    fn the_active_tab_is_only_the_active_document() {
         let objects = objects();
-        let tabs = [Selection::Object(objects[0].clone())];
+        let tabs = [tab(&objects[0])];
         let session = Session::from_state(
             &objects,
             &tabs,
             &Positions::default(),
+            &Positions::default(),
             Some(&tabs[0]),
             &History::default(),
-            &[],
-            &Positions::default(),
-            None,
         );
 
-        assert_eq!(session.selection, Some(saved_object("a.o")));
+        assert_eq!(session.active, Some(saved_object("a.o")));
         assert_eq!(session.tabs, [saved_tab("a.o", 0)]);
     }
 
-    /// A tab is dropped exactly where the selection would degrade. There is one
-    /// selection and the app has to open somewhere, but a strip whose chips lead to
+    /// A tab is dropped exactly where the active document would degrade. There is one
+    /// active document and the app has to open somewhere, but a strip whose tabs lead to
     /// places that are no longer there is worse than a shorter strip — and degrading
     /// would be worse still, since two symbols of one object would degrade onto the
     /// same tab and `Tabs::open` would collapse them into one.
     ///
-    /// The rows go with the tabs they belong to, which is the whole reason a row is a
-    /// field of one: the second and third tabs here are dropped, and a parallel array of
-    /// rows would have handed `b.o` the row of the tab that vanished before it.
+    /// A **source-driven tab is never dropped**: it resolves against nothing, so there is
+    /// nothing for it to fail against, and a file that has been deleted since is the
+    /// pane's own "Source file not found" rather than a tab that quietly went away.
+    ///
+    /// The rows go with the tabs they belong to, which is the whole reason they are
+    /// fields of one: the second and third tabs here are dropped, and a parallel array of
+    /// rows would have handed `b.o` the rows of a tab that vanished before it.
     #[test]
     fn open_tabs_that_no_longer_resolve_are_dropped() {
         let objects = objects();
@@ -2222,17 +2297,19 @@ mod tests {
                 saved_tab("a.o", 3),
                 // A member that is no longer in the archive.
                 saved_tab("c.o", 4),
-                // The object is still there; the symbol is not. The selection would
-                // fall back to `a.o` here, and a tab must not.
+                // The object is still there; the symbol is not. The active document
+                // would fall back to `a.o` here, and a tab must not.
                 SavedTab {
-                    row: 5,
-                    selection: SavedSelection::Symbol {
+                    asm_row: 5,
+                    src_row: 0,
+                    document: SavedDocument::Symbol {
                         path: PathBuf::from("/tmp/lib.a"),
                         object_name: "a.o".into(),
                         symbol_name: "gone".into(),
                         address: 12,
                     },
                 },
+                saved_file_tab("/no/such/file.rs", 0, 9),
                 saved_tab("b.o", 6),
             ],
             ..Session::new()
@@ -2241,40 +2318,42 @@ mod tests {
         assert!(
             session.resolve_tabs(&objects)
                 == [
-                    (Selection::Object(objects[0].clone()), 3),
-                    (Selection::Object(objects[1].clone()), 6),
+                    (tab(&objects[0]), 3, 0),
+                    (file_tab("/no/such/file.rs"), 0, 9),
+                    (tab(&objects[1]), 6, 0),
                 ]
         );
     }
 
-    /// Where each pane was left goes out with the tab it belongs to, and a tab that was
-    /// never scrolled is written as the top rather than left out.
+    /// Where each *side* of each tab was left goes out with the tab it belongs to, and a
+    /// side that was never scrolled is written as the top rather than left out.
+    ///
+    /// Two rows and not one, because a tab has two sides: keying the source position by
+    /// the file — which is what the Source pane's own strip did — made two functions
+    /// compiled from one file share a position they have no reason to share.
     #[test]
-    fn saves_the_row_each_tab_was_left_at() {
+    fn saves_the_rows_each_side_of_a_tab_was_left_at() {
         let objects = objects();
-        let tabs = vec![
-            Selection::Object(objects[0].clone()),
-            Selection::Object(objects[1].clone()),
-        ];
-        let files = sources(&["/src/main.rs", "/src/lib.rs"]);
+        let tabs = vec![tab(&objects[0]), tab(&objects[1])];
 
         let session = Session::from_state(
             &objects,
             &tabs,
             &positions(&[(&tabs[1], 42)]),
+            &positions(&[(&tabs[0], 7)]),
             Some(&tabs[0]),
             &History::default(),
-            &files,
-            &positions(&[(&files[0], 7)]),
-            Some("/src/main.rs"),
         );
 
-        assert_eq!(session.tabs, [saved_tab("a.o", 0), saved_tab("b.o", 42)]);
         assert_eq!(
-            session.sources,
+            session.tabs,
             [
-                saved_source("/src/main.rs", 7),
-                saved_source("/src/lib.rs", 0)
+                SavedTab {
+                    asm_row: 0,
+                    src_row: 7,
+                    document: saved_object("a.o"),
+                },
+                saved_tab("b.o", 42),
             ]
         );
     }
@@ -2284,82 +2363,54 @@ mod tests {
     #[test]
     fn the_rows_come_back_against_the_tabs_they_belong_to() {
         let objects = objects();
-        let tabs = vec![
-            Selection::Object(objects[0].clone()),
-            Selection::Object(objects[1].clone()),
-        ];
-        let files = sources(&["/src/main.rs"]);
+        let tabs = vec![tab(&objects[0]), tab(&objects[1])];
 
         let session = Session::from_state(
             &objects,
             &tabs,
             &positions(&[(&tabs[0], 12), (&tabs[1], 900)]),
+            &positions(&[(&tabs[1], 4)]),
             Some(&tabs[0]),
             &History::default(),
-            &files,
-            &positions(&[(&files[0], 4)]),
-            Some("/src/main.rs"),
         );
         let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
 
-        let mut restored: Positions<Selection> = Positions::default();
-        for (tab, row) in session.resolve_tabs(&objects) {
-            restored.remember(tab, row);
+        let (mut asm, mut src): (Positions<Document>, Positions<Document>) =
+            (Positions::default(), Positions::default());
+        for (tab, asm_row, src_row) in session.resolve_tabs(&objects) {
+            asm.remember(tab.clone(), asm_row);
+            src.remember(tab, src_row);
         }
-        assert_eq!(restored.at(&tabs[0]), Some(12));
-        assert_eq!(restored.at(&tabs[1]), Some(900));
+        assert_eq!(asm.at(&tabs[0]), Some(12));
+        assert_eq!(asm.at(&tabs[1]), Some(900));
+        assert_eq!(src.at(&tabs[1]), Some(4));
         // And a hint it is: a listing that has since shrunk clamps to what it holds now.
-        assert_eq!(restored.row(&tabs[1], 100), 99);
-
-        assert_eq!(session.resolve_sources(), [(files[0].clone(), 4)]);
+        assert_eq!(asm.row(&tabs[1], 100), 99);
     }
 
     /// A row is a hint and not a fact, so a saved tab that does not name one is a tab at
     /// the top rather than a file that will not load.
     #[test]
-    fn a_saved_tab_with_no_row_opens_at_the_top() {
+    fn a_saved_tab_with_no_rows_opens_at_the_top() {
         let text = r#"
             binaries = ["/tmp/lib.a"]
 
             [[tabs]]
-            [tabs.selection.Object]
+            [tabs.document.Object]
             path = "/tmp/lib.a"
             object_name = "a.o"
 
-            [[sources]]
+            [[tabs]]
+            [tabs.document.Source]
             path = "/src/main.rs"
         "#;
         let session: Session = toml::from_str(text).expect("deserializing");
 
         let objects = objects();
-        assert!(session.resolve_tabs(&objects) == [(Selection::Object(objects[0].clone()), 0)]);
-        assert_eq!(session.resolve_sources(), [(Arc::from("/src/main.rs"), 0)]);
-    }
-
-    #[test]
-    fn saves_and_restores_the_source_files() {
-        let objects = objects();
-        let files = sources(&["/src/main.rs", "/src/lib.rs"]);
-        let session = Session::from_state(
-            &objects,
-            &[],
-            &Positions::default(),
-            None,
-            &History::default(),
-            &files,
-            &Positions::default(),
-            Some("/src/lib.rs"),
+        assert!(
+            session.resolve_tabs(&objects)
+                == [(tab(&objects[0]), 0, 0), (file_tab("/src/main.rs"), 0, 0),]
         );
-
-        assert_eq!(
-            session.sources,
-            [
-                saved_source("/src/main.rs", 0),
-                saved_source("/src/lib.rs", 0)
-            ]
-        );
-        assert_eq!(session.shown, 1);
-        assert_eq!(session.shown_source(), Some("/src/lib.rs"));
     }
 
     /// Nothing about a source file is resolved against this filesystem, on purpose:
@@ -2371,120 +2422,84 @@ mod tests {
         let path = "/no/such/directory/gone.rs";
         assert!(!Path::new(path).exists());
 
+        let objects = objects();
+        let tabs = [file_tab(path)];
         let session = Session::from_state(
-            &objects(),
-            &[],
+            &objects,
+            &tabs,
             &Positions::default(),
-            None,
+            &Positions::default(),
+            Some(&tabs[0]),
             &History::default(),
-            &sources(&[path]),
-            &Positions::default(),
-            Some(path),
         );
 
-        assert_eq!(session.sources, [saved_source(path, 0)]);
-        assert_eq!(session.shown_source(), Some(path));
-    }
-
-    #[test]
-    fn a_shown_index_past_the_end_falls_back_to_the_first_open_file() {
-        // Hand-edited, or left behind by a trimmed list. "A file is shown exactly when
-        // one is open" leaves no room for a fourth answer, so this clamps rather than
-        // reporting nothing.
-        let session = Session {
-            sources: vec![
-                saved_source("/src/main.rs", 0),
-                saved_source("/src/lib.rs", 0),
-            ],
-            shown: 99,
-            ..Session::new()
-        };
-        assert_eq!(session.shown_source(), Some("/src/main.rs"));
-    }
-
-    #[test]
-    fn no_open_source_files_shows_nothing() {
-        assert_eq!(Session::new().shown_source(), None);
-
-        // A file open but none shown cannot happen; `from_state` writes index 0 for it
-        // and it reads back as the first of them, not as a state of its own.
-        let session = Session::from_state(
-            &objects(),
-            &[],
-            &Positions::default(),
-            None,
-            &History::default(),
-            &sources(&["/src/main.rs"]),
-            &Positions::default(),
-            None,
+        assert_eq!(session.tabs, [saved_file_tab(path, 0, 0)]);
+        assert_eq!(
+            session.active,
+            Some(SavedDocument::Source { path: path.into() })
         );
-        assert_eq!(session.shown, 0);
-        assert_eq!(session.shown_source(), Some("/src/main.rs"));
+        assert!(session.resolve(&objects) == Some(file_tab(path)));
     }
 
-    /// The field-order trap, which only a real serialization catches: the `shown` index is
-    /// the session's one plain value and has to reach the file before the first table
-    /// opens, and a saved tab's own `row` before the `selection` sub-table under it. A
-    /// session with every field set at once is the one that fails when they do not.
+    /// The field-order trap, which only a real serialization catches: a saved tab's two
+    /// rows are plain values and have to reach the file before the `document` sub-table
+    /// under them. A session with every field set at once is the one that fails when they
+    /// do not.
     #[test]
     fn a_full_session_round_trips_through_toml() {
         let objects = objects();
         let tabs = vec![
-            Selection::Object(objects[0].clone()),
-            Selection::Symbol(Symbol {
+            tab(&objects[0]),
+            Document::Assembly(Selection::Symbol(Symbol {
                 object: objects[0].clone(),
                 data: objects[0].symbols_sorted[1].clone(),
-            }),
+            })),
+            file_tab("/src/main.rs"),
         ];
-        let files = sources(&["/src/main.rs", "/src/lib.rs"]);
         let session = Session::from_state(
             &objects,
             &tabs,
             &positions(&[(&tabs[0], 12), (&tabs[1], 34)]),
+            &positions(&[(&tabs[0], 56)]),
             Some(&tabs[1]),
             &history(&objects, 1),
-            &files,
-            &positions(&[(&files[1], 56)]),
-            Some("/src/lib.rs"),
         );
 
         let text = round_trip(&session);
         assert!(text.contains("[[tabs]]"), "{text}");
-        assert!(text.contains("[[sources]]"), "{text}");
+        assert!(text.contains("[tabs.document.Source]"), "{text}");
 
-        let first_table = text.find("\n[").expect("a table");
-        let shown = text.find("shown = ").unwrap_or_else(|| panic!("{text}"));
-        assert!(shown < first_table, "shown after a table\n{text}");
-        // And inside a tab, the row before the table its selection is written as.
-        let row = text.find("row = 12").expect("the first tab's row");
-        let selection = text
-            .find("[tabs.selection")
-            .expect("the first tab's selection");
-        assert!(row < selection, "row after its selection\n{text}");
+        // Inside a tab, the rows before the table its document is written as.
+        let asm_row = text.find("asm_row = 12").expect("the first tab's row");
+        let src_row = text
+            .find("src_row = 56")
+            .expect("the first tab's source row");
+        let document = text
+            .find("[tabs.document")
+            .expect("the first tab's document");
+        assert!(asm_row < document, "asm_row after its document\n{text}");
+        assert!(src_row < document, "src_row after its document\n{text}");
     }
 
     #[test]
-    fn a_file_with_no_tabs_or_source_files_still_loads() {
+    fn a_file_with_no_tabs_still_loads() {
         // The `serde(default)`s, from the other side: a hand-written or trimmed file is
         // a session with an empty strip rather than a load failure.
         let text = r#"
             binaries = ["/tmp/lib.a"]
 
-            [selection.Object]
+            [active.Object]
             path = "/tmp/lib.a"
             object_name = "a.o"
         "#;
         let session: Session = toml::from_str(text).expect("deserializing");
 
         assert!(session.tabs.is_empty());
-        assert!(session.sources.is_empty());
-        assert_eq!(session.shown, 0);
-        assert_eq!(session.shown_source(), None);
 
-        // And the selection still restores, opening its own tab through `activate` the
-        // way a session saved before there were tabs to save would.
+        // And the active document still restores, opening its own tab through `activate`
+        // the way a session saved before there were tabs to save would.
         let objects = objects();
-        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
+        assert!(session.resolve(&objects) == Some(tab(&objects[0])));
         assert!(session.resolve_tabs(&objects).is_empty());
     }
 
@@ -2497,15 +2512,16 @@ mod tests {
 
     /// A saved session naming one binary at `row`, with the digest of `bytes` — what a
     /// run that had this file open would have written.
-    fn saved_against(bytes: Option<&[u8]>, saved: SavedSelection, row: usize) -> Session {
+    fn saved_against(bytes: Option<&[u8]>, saved: SavedDocument, row: usize) -> Session {
         Session {
             digests: bytes
                 .map(|bytes| BTreeMap::from([(PathBuf::from("/tmp/lib.a"), digest_of(bytes))]))
                 .unwrap_or_default(),
-            selection: Some(saved.clone()),
+            active: Some(saved.clone()),
             tabs: vec![SavedTab {
-                row,
-                selection: saved.clone(),
+                asm_row: row,
+                src_row: 0,
+                document: saved.clone(),
             }],
             history: SavedHistory {
                 cursor: 0,
@@ -2515,8 +2531,8 @@ mod tests {
         }
     }
 
-    fn saved_symbol(object_name: &str, symbol_name: &str, address: u64) -> SavedSelection {
-        SavedSelection::Symbol {
+    fn saved_symbol(object_name: &str, symbol_name: &str, address: u64) -> SavedDocument {
+        SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: object_name.to_owned(),
             symbol_name: symbol_name.to_owned(),
@@ -2553,7 +2569,7 @@ mod tests {
             42,
         );
         assert!(
-            session.resolve(&objects)
+            resolve_selection(&session, &objects)
                 == Some(Selection::Symbol(Symbol {
                     object: objects[0].clone(),
                     data: objects[0].symbols_sorted[1].clone(),
@@ -2569,7 +2585,7 @@ mod tests {
             saved_symbol("a.o", "target", 999),
             42,
         );
-        assert!(moved.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
+        assert!(resolve_selection(&moved, &objects) == Some(Selection::Object(objects[0].clone())));
         assert!(moved.resolve_tabs(&objects).is_empty());
         assert!(moved.resolve_history(&objects).entries().is_empty());
     }
@@ -2601,9 +2617,10 @@ mod tests {
             object: objects[0].clone(),
             data: objects[0].symbols_sorted[1].clone(),
         });
-        assert!(session.resolve(&objects) == Some(expected.clone()));
-        assert!(session.resolve_tabs(&objects) == [(expected.clone(), 0)]);
-        assert!(session.resolve_history(&objects).entries() == [expected]);
+        assert!(resolve_selection(&session, &objects) == Some(expected.clone()));
+        let document = Document::Assembly(expected.clone());
+        assert!(session.resolve_tabs(&objects) == [(document.clone(), 0, 0)]);
+        assert!(session.resolve_history(&objects).entries() == [document]);
     }
 
     /// The half that is a refusal rather than a recovery: two symbols of one name in a
@@ -2626,7 +2643,9 @@ mod tests {
             42,
         );
         // The selection degrades to the object; the tab and the history entry drop.
-        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
+        assert!(
+            resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone()))
+        );
         assert!(session.resolve_tabs(&objects).is_empty());
         assert!(session.resolve_history(&objects).entries().is_empty());
 
@@ -2637,7 +2656,7 @@ mod tests {
             42,
         );
         assert!(
-            exact.resolve(&objects)
+            resolve_selection(&exact, &objects)
                 == Some(Selection::Symbol(Symbol {
                     object: objects[0].clone(),
                     data: objects[0].symbols_sorted[1].clone(),
@@ -2658,7 +2677,9 @@ mod tests {
         )];
 
         let session = saved_against(None, saved_symbol("a.o", "target", 6), 42);
-        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
+        assert!(
+            resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone()))
+        );
         assert!(session.resolve_tabs(&objects).is_empty());
     }
 
@@ -2679,23 +2700,19 @@ mod tests {
         assert_eq!(session.resolve_tabs(&objects)[0].1, 42);
     }
 
-    /// The field-order trap once more, for the digests: they are a TOML *table*, so they
-    /// have to be emitted after the plain `shown` and before nothing in particular — and a
-    /// hex string is what the table holds, since a `u64` digest does not fit TOML's signed
-    /// integers at all.
+    /// The digests are a TOML *table*, and a hex string is what it holds, since a `u64`
+    /// digest does not fit TOML's signed integers at all.
     #[test]
     fn the_digests_round_trip_through_toml() {
         let objects = objects();
-        let tabs = vec![Selection::Object(objects[0].clone())];
+        let tabs = vec![tab(&objects[0]), file_tab("/src/main.rs")];
         let session = Session::from_state(
             &objects,
             &tabs,
             &positions(&[(&tabs[0], 12)]),
+            &Positions::default(),
             Some(&tabs[0]),
             &history(&objects, 1),
-            &sources(&["/src/main.rs"]),
-            &Positions::default(),
-            Some("/src/main.rs"),
         );
 
         let text = round_trip(&session);
@@ -2704,10 +2721,6 @@ mod tests {
             text.contains(&format!("{}\"", digest_of(b"the first build"))),
             "{text}"
         );
-
-        let digests = text.find("[digests]").expect("the digests table");
-        let shown = text.find("shown = ").unwrap_or_else(|| panic!("{text}"));
-        assert!(shown < digests, "shown after the digests table\n{text}");
     }
 
     /// And a file with no digests at all still loads, the way one with no tabs does.
@@ -2716,7 +2729,7 @@ mod tests {
         let text = r#"
             binaries = ["/tmp/lib.a"]
 
-            [selection.Object]
+            [active.Object]
             path = "/tmp/lib.a"
             object_name = "a.o"
         "#;
@@ -2724,7 +2737,9 @@ mod tests {
         assert!(session.digests.is_empty());
 
         let objects = objects();
-        assert!(session.resolve(&objects) == Some(Selection::Object(objects[0].clone())));
+        assert!(
+            resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone()))
+        );
     }
 
     // --- the save policy ---------------------------------------------------
@@ -2735,7 +2750,7 @@ mod tests {
 
     fn session_with(selection: Option<&str>) -> Session {
         Session {
-            selection: selection.map(saved_object),
+            active: selection.map(saved_object),
             history: SavedHistory::new(),
             ..Session::new()
         }
@@ -2902,11 +2917,13 @@ mod tests {
         written(&mut saves, &["/tmp/lib.a"], None);
 
         let mut session = session_with(None);
-        session.sources = vec![
-            saved_source("/src/main.rs", 0),
-            saved_source("/src/lib.rs", 0),
+        session.tabs = vec![
+            saved_file_tab("/src/main.rs", 0, 0),
+            saved_file_tab("/src/lib.rs", 0, 0),
         ];
-        session.shown = 1;
+        session.active = Some(SavedDocument::Source {
+            path: "/src/lib.rs".into(),
+        });
         assert_eq!(
             recorded(&mut saves, paths(&["/tmp/lib.a"]), session.clone()),
             None
@@ -3172,7 +3189,7 @@ mod tests {
         let directory = directory(line!());
         let project = a_project();
         let session = Session {
-            selection: Some(saved_object("a.o")),
+            active: Some(saved_object("a.o")),
             tabs: vec![saved_tab("a.o", 7)],
             ..Session::new()
         };
@@ -3187,8 +3204,8 @@ mod tests {
         let project_text = fs::read_to_string(directory.join(PROJECT_FILE)).expect("reading");
         let session_text = fs::read_to_string(directory.join(SESSION_FILE)).expect("reading");
         assert!(project_text.contains("/tmp/lib.a"), "{project_text}");
-        assert!(!project_text.contains("selection"), "{project_text}");
-        assert!(session_text.contains("selection"), "{session_text}");
+        assert!(!project_text.contains("active"), "{project_text}");
+        assert!(session_text.contains("active"), "{session_text}");
         assert!(!session_text.contains("binaries"), "{session_text}");
 
         assert_eq!(
@@ -3375,7 +3392,7 @@ mod tests {
         let base = directory(line!());
         let project = a_project();
         let session = Session {
-            selection: Some(saved_object("a.o")),
+            active: Some(saved_object("a.o")),
             ..Session::new()
         };
 

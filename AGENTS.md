@@ -337,21 +337,26 @@ already at the front writes nothing. The recent-projects view reads each row's
 name out of that project's own `project.toml`, never out of this file: a name copied in here would
 be a second copy to keep in step with the one the user edits.
 
-Inside those files, identity is **path + object name + symbol name + address**, never pointers;
-that mapping lives in exactly two places, `SavedSelection::from_selection` and `::resolve`. The
-Source pane's open `sources` are `String`s, since they are what the debug info said rather than
-paths this filesystem was asked about, with a `shown` index into them. Each open tab also carries
-**the row it was left at**: a `tabs` entry is a `SavedTab` (`row` + `selection`) and a `sources`
-entry a `SavedSource` (`row` + `path`), rather than either list having an array of rows beside it.
-The row travels with its tab because `resolve_tabs` *drops* the tabs that no longer resolve, which
-would shift every later row of a parallel array onto the wrong tab. It is a row and not a pixel
-offset so that the row height following the fonts (Step 9c) does not move every saved position, and it is
-a hint and not a fact — `#[serde(default)]`, and clamped to what the tab holds *now* by
+Inside those files, identity is **path + object name + symbol name + address** for a place in a
+binary and **the path itself** for a source file, never pointers; that mapping lives in exactly two
+places, `SavedDocument::from_document` and `::resolve`. A source file's path is a `String`, since
+it is what the debug info said rather than something this filesystem was asked about.
+
+**One `tabs` list of both kinds, not a `tabs` and a `sources` beside it**, because there is one
+strip: the reader's own interleaved order is what comes back, and the one document that was on
+screen is `active` whichever kind it is — written out in full rather than as an index, since a tab
+that no longer resolves is *dropped* (which would shift the index) while the active one *degrades*.
+Each entry carries **the rows both of its sides were left at**: a `tabs` entry is a `SavedTab`
+(`asm_row` + `src_row` + `document`), rather than the list having arrays of rows beside it. The
+rows travel with their tab because `resolve_tabs` drops the tabs that no longer resolve, which
+would shift every later row of a parallel array onto the wrong tab. They are rows and not pixel
+offsets so that the row height following the fonts (Step 9c) does not move every saved position,
+and they are hints and not facts — `#[serde(default)]`, and clamped to what the tab holds *now* by
 `Positions::row`. **Field order within these structs is load-bearing**: TOML emits plain values
-before tables, so `shown` must precede `digests`/`selection`/`tabs`/`sources`/`history`, every
-field of `Project` is a plain value, `SavedTab::row` must precede its `selection`, and
-`SavedHistory::cursor` its `entries`. Getting it wrong fails at *runtime*, not at compile time,
-and a round trip through real TOML per struct is what holds it.
+before tables, so every field of `Project` being a plain value is what lets `binaries` sit beside
+the name, `SavedTab`'s two rows must precede its `document`, and `SavedHistory::cursor` its
+`entries`. Getting it wrong fails at *runtime*, not at compile time, and a round trip through real
+TOML per struct is what holds it.
 
 `Session::digests` is the digest each binary had when the session was saved, keyed by path — in
 the *other* file from `binaries` and not a field beside them, because `binaries` is the list to *open* and a digest is
@@ -363,9 +368,11 @@ address is exactly what lands a reader on the wrong function), and the saved **r
 being a claim about a listing this build no longer has. A path with *no* saved digest is a third
 state, not a mismatch: it behaves as everything did before digests existed.
 
-Coming back, the **selection degrades** (symbol -> its object -> nothing, since there is one of it
-and the app must open somewhere) while **history entries are dropped** (a list of places the reader
-cannot get back to is worse than a short list). `History::rebuilt` is the one walk both a restore
+Coming back, the **active document degrades** (symbol -> its object -> nothing, since there is one
+of it and the app must open somewhere) while **history entries are dropped** (a list of places the
+reader cannot get back to is worse than a short list). A source-driven entry resolves against
+nothing, so it neither degrades nor drops: a deleted file comes back as a tab over the pane's own
+"Source file not found". `History::rebuilt` is the one walk both a restore
 and a file-close go through, carrying the cursor to the last survivor at or before it.
 `History::restored` also collapses duplicates and trims to the newest `MAX_ENTRIES` (200).
 
@@ -376,7 +383,7 @@ session)` is called on every state change and compares each against its baseline
 the directory — writes **`project.toml` alone**, since a rename lets go of no binary and so cannot
 leave the two files disagreeing; a change to only the session marks it **pending** — a tab because
 it is expressed against the binaries rather than the other way round, costs one click to remake,
-and arrives on every navigation, `activate` opening one on the way to each selection change.
+and arrives on every navigation, `activate` opening one on the way to each change of document.
 Nothing in `record` has to *say* which is which: which file a field lives in is what decides it,
 and `Written` is how it says which half it decided. `flush()` writes the pending
 session — on a 30s timer and from the window's close hook, which is the one exit hook freya 0.4
@@ -411,19 +418,18 @@ of it — and `use_restore_on_startup` knows nothing about where they came from,
 a project picker out of it. The binaries stream in the way any other open does, so the sidebar
 fills in behind them, but the **session waits for the whole load**: a tab, a selection or a history
 entry is resolved against the objects by name, and resolving one against a half-filled list would
-drop the tabs whose object had not landed yet. Both tab strips are then restored, and **through the five functions that hold the invariants** rather
-than by writing either list: `use_restore_on_startup` sets the history, `activate`s each content
-tab and then the selection, and `open_file`s each source file and then the shown one. Three
-orderings are load-bearing. Each strip's **rows go into its `Positions` map before its tabs are
-opened** — that map is the one thing the restore writes directly, and a pane puts its view back
-when it notices the tab it is showing has changed, so a row arriving after the `activate` arrives
-after the only moment anything looks at it. Tabs before the selection, because `activate` opens
-what it cannot find and would otherwise append the restored selection at the end of the strip
-instead of finding it in place (the other direction is safe: a selection that degraded to its object while the strip
-holds the symbol simply opens a tab). And the shown file last, because `open_file` puts the pane
-on whatever it opens. A content tab that no longer resolves is **dropped**, like a history entry;
-a source file is never resolved at all, so one that has been deleted comes back as a tab over the
-pane's own "Source file not found" rather than silently vanishing.
+drop the tabs whose object had not landed yet. The strip is then restored, and **through the two
+functions that hold the invariants** rather than by writing the list: `use_restore_on_startup`
+sets the history, then `activate`s each tab and then the active one. Two orderings are
+load-bearing. The **rows go into the two `Positions` maps before the tabs are opened** — those
+maps are the one thing the restore writes directly, and a pane puts its view back when it notices
+the tab it is showing has changed, so a row arriving after the `activate` arrives after the only
+moment anything looks at it. And tabs before the active document, because `activate` opens what it
+cannot find and would otherwise append it at the end of the strip instead of finding it in place
+(the other direction is safe: a document that degraded to its object while the strip holds the
+symbol simply opens a tab). An assembly-driven tab that no longer resolves is **dropped**, like a
+history entry; a source-driven one is never resolved at all, so a file that has been deleted comes
+back as a tab over the pane's own "Source file not found" rather than silently vanishing.
 
 **The settings are a file of their own, above the projects** (`src/settings.rs`, `settings.toml`
 at the top of the state directory beside `recents.toml`, since a setting is the user's and not any
@@ -519,30 +525,43 @@ API (`rect().width(Size::fill()).child(..)`) over its own `freya-core`. Most fre
 describes the older API and does not apply.
 
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
-`use_consume`: `Objects`, `Sel` (the active `Selection`), `Open`/`Files`/`Shown` (open tabs),
-`AsmAt`/`SrcAt` (where each of those tabs was left), `Hist`, `Proj` (which project all of that
-belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Pinned`,
+`use_consume`: `Objects`, `Active` (the active `Document`), `Open` (the open tabs),
+`AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `Hist`, `Proj` (which project
+all of that belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Pinned`,
 `Marked`/`Shift`, `Analysis` (what the worker has to say about
 the selected symbol), `Pad`/`PadText` (the scratchpad, and the buffer being typed into it), plus
-the memo `Symbols`. The ten that a project *owns* travel together as a
+the memo `Symbols`. The eight that a project *owns* travel together as a
 `ProjectStates`, since a project switch closes all of them and reopens all of them.
 
-**`Sel` is the active tab.** `Open(State<Tabs<Selection>>)` is the *list* of open tabs and holds no
-cursor: the active one is whichever entry equals `Sel`, which is well defined because no two tabs
-are equal. `Selection` is what the history records and the session saves, and a list with a second
-answer to "what is on screen" would be two states to keep in step. `Files`/`Shown` mirror this for
-the Source pane. Both invariants — the selection is one of the open tabs (or `None`, which is
-exactly "nothing open"), and a file is shown exactly when one is open — are held by five functions
-and nothing else: `activate`, `close_tab`, `open_file`, `close_file`, `close_binary`. **Every** site
-that would set the selection calls `activate`, `navigate` included, because the history keeps an
-entry long after its tab was closed.
+**One strip, two kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**:
+`Document::Assembly(Selection)` — an object or a function — or `Document::Source(Arc<str>)`, the
+string the debug info said and never a path this filesystem was asked about. A tab has two sides,
+assembly and source, and the variant says which side the tab is *about* and therefore which drives
+the other. So opening a file from a directory panel and opening a function from the symbol list
+produce the same kind of thing, differing only in which way the mapping runs. Each tab wears the
+one glyph that tells the two apart, which is the same glyph the dock's Assembly and Source views
+wear. Until Step 1 this was two strips with two notions of what was open — `Open`/`Sel` for
+functions and `Files`/`Shown` for files — and the merge is what made the history able to record a
+visited file and the session able to keep the strip's interleaved order.
+
+**`Active` is the active tab.** `Open(State<Tabs<Document>>)` is the *list* of open tabs and holds
+no cursor: the active one is whichever entry equals `Active`, which is well defined because no two
+tabs are equal (each variant compares by its own rule — `Arc` pointer identity for a selection,
+text for a file — and never across the two). `Document` is what the history records and the session
+saves, and a list with a second answer to "what is on screen" would be two states to keep in step.
+The invariant — the active document is one of the open tabs, or `None`, which is exactly "nothing
+open" — is held by three functions and nothing else: `activate`, `close_tab`, `close_binary`.
+**Every** site that would change the active document calls `activate`, `navigate` included, because
+the history keeps an entry long after its tab was closed. `Selection` itself has **no "nothing"
+variant**: having none open is an absent one, which is the only spelling that stays honest once a
+selection is something a tab can hold.
 
 **Layout** is a toolbar over a `ResizableContainer`: a `PanelSize::px(300.)` sidebar and a
 `PanelSize::percent(100.)` content pane, mixing the two sizing modes deliberately so the sidebar
 keeps a fixed width and the content takes the rest, with freya's 4px `ResizableHandle` between
 them. `ResizableContainer` renders itself `.expanded()`, so it needs a parent already sized —
 `Size::flex(..)` only works under a parent with `.content(Content::Flex)`. The content panel is a
-flex column of `TabStrip` over the `DockingArea`, so the open-document chips sit above **both**
+flex column of `TabStrip` over the `DockingArea`, so the open documents sit above **both**
 panes: the active tab is what the assembly *and* the source show, and a strip inside one of them
 would follow that pane wherever it was docked.
 
@@ -558,42 +577,44 @@ selection change re-renders only the tabs that read it and never the root. Proje
 start tabbed beside Assembly and behind it, since the app is for reading disassembly and each of
 those is what a reader looks at once.
 
-**Tab strips are not dock tabs.** The nine `Tab`s are *views*; the chips in a strip are the
-*documents* open in them. Open functions are not dock tabs because the dock tree is the *layout*
-(closing the last one would fold the split away), because a per-panel active tab gives two answers
-to "which function is active", and because the list would then be inseparable from a layout nothing
-persists. A chip's name is elided **by character count in Rust**, where every other truncation is a
-width: a `maximum_width` anywhere inside a chip makes it shrinkable, and a horizontal scroll view
-measures children against the space *left*, so chips past the edge get no width and draw as a bare
-×. Do not "fix" that back into a width.
+**The tab strip is not the dock's tabs.** The nine `Tab`s are *views*; the entries in the strip
+are the *documents* open in them. Open documents are not dock tabs because the dock tree is the
+*layout* (closing the last one would fold the split away), because a per-panel active tab gives two
+answers to "which document is active", and because the list would then be inseparable from a layout
+nothing persists. A tab's name is elided **by character count in Rust**, where every other
+truncation is a width: a `maximum_width` anywhere inside one makes it shrinkable, and a horizontal
+scroll view measures children against the space *left*, so tabs past the edge get no width and draw
+as a bare ×. Do not "fix" that back into a width.
 
-**A document is a place in a binary; everything else is a view.** This is the rule 8e settled and
-9c and 10c inherit, so decide nothing about it again. The content-area strip holds `Selection`s —
-an object or a function — and never anything else, and that is what lets five separate things work
-without a case each: the Assembly *and* Source panes both render "the active tab", the history
-records it, `SavedSelection::from_selection`/`::resolve` write it down as a path plus a name and
-find it again after a restart, `close_binary` knows which chips a closing file takes with it, and
-`entry_text` knows what to call it. A project view, the settings page and a scratchpad's editor
-(10c) are none of that: they resolve against no object, there is one of each rather than many, and
-neither pane could draw one. So they are **dockable views** — a `Tab` — which is the mechanism the
-app already has for "a pane with its own state that the reader can put where they like", and which
-`InfoTab` was already an instance of. A fourth `Selection` variant was the alternative and buys a
-chip in a strip nothing else would put a second entry in, at the price of five answers nobody
-wants: what `resolve` does with it after a restart, what `Selection::in_file` says when a binary
-closes, what the assembly pane draws for it, what the history means by a "place" that is not one,
-and what the session file spells it as. Persistence follows from the same sentence: a `Tab` is
-layout, and the dock layout is deliberately not persisted, so a view is **explicitly excluded**
-from the saved tabs 8a/8b write and `SavedSelection` needs no answer for it. What a scratchpad
-*builds* needs no rule at all — the artifact goes through `open_files` like any other binary, and
-its functions are ordinary chips.
+**A document is a place in a binary or a file; everything else is a view.** This is 8e's rule with
+Step 1's amendment — it used to end at "in a binary" — and everything below it is unchanged, so
+decide nothing about it again. The strip holds `Document`s and never anything else, and that is
+what lets five separate things work without a case each: the Assembly *and* Source panes both
+render "the active tab", the history records it, `SavedDocument::from_document`/`::resolve` write
+it down and find it again after a restart, `close_binary` knows which tabs a closing file takes
+with it, and `entry_text` knows what to call it. A project view, the settings page and a
+scratchpad's editor are none of that: they resolve against no object, they are no file on disk the
+panes could open, there is one of each rather than many, and neither pane could draw one. So they
+are **dockable views** — a `Tab` — which is the mechanism the app already has for "a pane with its
+own state that the reader can put where they like", and which `InfoTab` was already an instance of.
+A third `Document` variant was the alternative and buys a tab in a strip nothing else would put a
+second entry in, at the price of five answers nobody wants: what `resolve` does with it after a
+restart, what `Document::in_file` says when a binary closes, what the panes draw for it, what the
+history means by a "place" that is not one, and what the session file spells it as. Persistence
+follows from the same sentence: a `Tab` is layout, and the dock layout is deliberately not
+persisted, so a view is **explicitly excluded** from the saved tabs and `SavedDocument` needs no
+answer for it. What a scratchpad *builds* needs no rule at all — the artifact goes through
+`open_files` like any other binary, and its functions are ordinary tabs.
 
-**Each tab remembers where it was left.** A pane has one `ScrollController` and shows one tab at a
-time, so left alone it hands the tab arriving whatever offset the one leaving had. `AsmAt`/`SrcAt`
-are two root `Positions` maps beside `Open`/`Files`, keyed by the very values those lists hold — so
-an entry means "this tab" for exactly as long as the tab is open — and `use_kept_position` is the
-whole of the behaviour, called once by `InstructionList` (keyed by the `Selection`) and once by
-`SourceList` (keyed by the file it is showing). What is kept is a **row**, clamped to what the tab
-holds *now*, so a rebuilt binary or a shortened file cannot come back past the end. Three things are
+**Each tab remembers where each of its sides was left.** A pane has one `ScrollController` and
+shows one tab at a time, so left alone it hands the tab arriving whatever offset the one leaving
+had. `AsmAt`/`SrcAt` are two root `Positions` maps beside `Open`, **both keyed by the `Document`**
+— so an entry means "this side of this tab" for exactly as long as the tab is open — and
+`use_kept_position` is the whole of the behaviour, called once by `InstructionList` and once by
+`SourceList`. Keying the source side by the *file*, which is what the Source pane's own strip did,
+made two functions compiled from one file share a position they have no reason to share. What is
+kept is a **row**, clamped to what the tab holds *now*, so a rebuilt binary or a shortened file
+cannot come back past the end. Three things are
 load-bearing. Reading the controller's position (`<(i32, i32)>::from`) is a `State::read`, which is
 what **subscribes the effect to the pane's own scroll**: every position is written down as it
 happens rather than on the way out, which is what survives the window merely being closed. The tab
@@ -603,10 +624,10 @@ the view, and every write goes under the held one. And a `Pin::reveal` **wins** 
 position with nothing written to make it: the two are never owed at once, since this moves the view
 only when the tab changes while a click asking for a reveal changes no tab (and a selection change,
 which does, drops the pin), and when a reveal scrolls, the effect wakes on that scroll and records
-where it landed. `close_tab`/`close_file`/`close_binary` forget a tab's position with the tab, which
-is not tidiness: a `Selection` key holds the `Arc<Object>` it points into — and the hook is handed
-the tab list precisely so that the run *after* a close, still holding the tab that has gone, cannot
-put it straight back.
+where it landed. `close_tab`/`close_binary` forget both of a tab's positions with the tab, which is
+not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into — and the hook is
+handed the tab list precisely so that the run *after* a close, still holding the tab that has gone,
+cannot put it straight back.
 
 **Opening a binary is the one path in, and it streams.** `open_binaries` is `close_binary`'s
 opposite number and the only thing that ever adds to `Objects` — the toolbar's Open, a session
@@ -661,8 +682,9 @@ message displace it, which is the order of the arms in `Analyzed::showing` — t
 pane decides what it is drawing, so the two cannot disagree. Two things follow
 from `shown` being the drawn symbol rather than the selected one: `InstructionList` is mounted only
 for a listing that exists, so `use_kept_position` cannot write a pending tab down at row 0 before a
-row of it has been seen; and `use_open_source_file` reads `Sel` *and* `Analysis` and checks that
-the two name the same symbol, which is what `Studied` carrying its `Symbol` is for.
+row of it has been seen; and the Source pane's companion file comes out of `Analysis` rather than
+out of `Active`, so it cannot name a file the previous symbol was compiled from, which is what
+`Studied` carrying its `Symbol` and `SymbolLines` carrying its file are for.
 
 **Nothing is cached in the UI, deliberately.** `SymbolData::assembly` does not memoize — it decodes
 afresh and hands back a new `Arc<Assembly>` — and `Object::line_info` caches the DWARF context and
@@ -672,12 +694,22 @@ a resize costs nothing where the old shape re-decoded in `render`. A second, key
 unbounded pile of `Assembly`s for listings the reader has left, to save a few milliseconds on a
 symbol they have already been shown.
 
-**The Source pane** shows one of its open files, chosen by `Shown`, and follows the selection:
-`use_open_source_file` opens the file the active symbol was compiled from — only the symbol's *own*
-file, never the rest of `LineInfo::files`, since a Rust function inlines dozens. Its other input is
-`SymbolLines` inside `Studied`, which carries **both** the `LineInfo` and the file to open on; that
-pairing is load-bearing, because the analysis arrives from a worker thread and anything reading
-`Sel` and it separately sees them disagree for as long as the work takes.
+**The Source pane draws the active tab's source side**, and `source_side` is the one place either
+pane decides which file that is — so the pane and the effect that drops its picked-out rows cannot
+disagree about which listing is up. A **subject** is a source-driven tab's own file; a
+**companion** is the file the drawn symbol was compiled from, which comes out of `SymbolLines`
+inside `Studied` and not out of `Active`, because the analysis arrives from a worker thread and
+anything reading the two separately sees them disagree for as long as the work takes. Only the
+symbol's *own* file is drawn, never the rest of `LineInfo::files`, since a Rust function inlines
+dozens.
+
+A companion wears a **header naming its file**, which a subject does not: the strip already names
+a subject, and nothing else in the window would name a companion now that the Source pane has no
+strip of its own. Pressing that header opens the file as a source-driven tab, and until the project
+explorer and the source search land it is the only door into one. The **assembly** side of a
+source-driven tab is blank: which symbols a source line compiled into is Step 2's index and picking
+one of them is Step 1d, and until then the pane draws nothing rather than carrying over an answer
+from a tab where "no symbol selected" is true.
 
 The rows are the app's own (`SourceRow`, a `VirtualScrollView`), **not** freya's `CodeEditor`,
 which paints a line background only for the cursor's row and keeps its scroll state private —
@@ -804,17 +836,17 @@ keystroke of something typed once a project. The binaries it lists come from `Ob
 `project::binaries`, which is what the saved list is *derived from*, so what the pane draws is what
 the next write will say.
 
-**A project switch is a close and a restore, through the same five functions.** `switch_project`
+**A project switch is a close and a restore, through the same functions.** `switch_project`
 is `project::switch` (flush, re-point, remember), then `clear_project`, then `restore_project` —
-and `clear_project` is a `close_binary` per path and a `close_file` per open file, never a write to
-either list, so a project is left in a state the reader could have reached by hand. Its one extra
-line is `Loads::clear`, which cannot go through the per-path walk: a file that has been asked for
-and has produced nothing yet is not in the objects list for that walk to reach, and its objects
-would otherwise arrive into the project that comes next. `restore_project`
-is the body the startup restore was, extracted so the two cannot drift. The Source pane is emptied
-here where a closing *binary* deliberately leaves it alone: a file chip outlives the binary that
-opened it because the text stands on its own, but it does not outlive the project whose session
-recorded that it was open. The ordering is what makes it safe — `project::switch` empties the
+and `clear_project` is a `close_binary` per path and then a `close_tab` for whatever is left,
+never a write to the list, so a project is left in a state the reader could have reached by hand.
+Its one extra line is `Loads::clear`, which cannot go through the per-path walk: a file that has
+been asked for and has produced nothing yet is not in the objects list for that walk to reach, and
+its objects would otherwise arrive into the project that comes next. `restore_project`
+is the body the startup restore was, extracted so the two cannot drift. The source-driven tabs go
+in that second walk, where a closing *binary* deliberately leaves them standing: a file tab
+outlives the binary that led the reader to it because the text stands on its own, but it does not
+outlive the project whose session recorded that it was open. The ordering is what makes it safe — `project::switch` empties the
 baselines *before* the app is emptied, and freya wakes an effect by a notify rather than at the
 write, so the save observer runs once after the whole handler and sees a settled state that matches
 the baseline exactly. `new_project` is the same thing with nothing to restore.
@@ -973,7 +1005,7 @@ emptied, a stepper cannot.
 **The Scratchpad page** (`Tab::Scratchpad`) is the source, the crates, the build and what the
 compiler said, and it is a *view* for the reason the settings page is: there is one of it, it
 resolves against no object, and neither code pane could draw one. What it **builds** needs no rule
-at all — the executable goes through `open_files` and its functions are ordinary chips.
+at all — the executable goes through `open_files` and its functions are ordinary tabs.
 
 **Its editor is freya's own `CodeEditor`**, which the read-only source pane deliberately rejected.
 That is not a reversal: both of the pane's objections were about painting and scrolling a listing
@@ -1057,7 +1089,7 @@ touches it.
 the toolbar's Open does, in one handler: a binary is a **path** throughout this app — that is what
 `close_binary` closes by and what `project::binaries` derives the saved list from — and a rebuild
 writes the same path with different bytes, so two generations of one file cannot both be in the
-objects list. The cost is real and is the reader's: the chips for that file's functions, their
+objects list. The cost is real and is the reader's: the tabs for that file's functions, their
 viewing positions and the history entries into them go with it. Keeping them would be `Rebuilt`'s
 resolve-by-name machinery pointed at a live state instead of at a session file.
 

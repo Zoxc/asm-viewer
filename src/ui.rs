@@ -26,7 +26,7 @@ use crate::filter::{Filter, Matcher};
 use crate::fonts::{self, Font, Fonts};
 use crate::history::History;
 use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
-use crate::project::{self, Details, Project, ProjectId, Recent, Selection, Session};
+use crate::project::{self, Details, Document, Project, ProjectId, Recent, Selection, Session};
 use crate::rows::RowSelection;
 use crate::scratchpad::{
     Build, Dependency, Diagnostic, Ended, Failure, Half, Level, Problem, RunEvent, RunOutput,
@@ -824,65 +824,58 @@ struct Objects(State<Vec<Arc<Object>>>);
 #[derive(Clone, Copy)]
 struct Loading(State<Loads>);
 
-/// The current selection, shared through context.
+/// The active document, shared through context.
 ///
-/// Since 6c this *is* the active tab: everything that is on screen in the content area is
-/// the one entry of [`Open`] that this names. Nothing beside it says which tab is active,
-/// which is why `Selection` is still the single thing the history records and the session
-/// saves — it did not become a second state, it grew a list around it.
+/// Since 6c this *is* the active tab: everything on screen in the content area is the one
+/// entry of [`Open`] that this names. Nothing beside it says which tab is active, and
+/// since Step 1 there is nothing beside it saying which *file* is shown either — that was
+/// `Shown`, the Source pane's own answer to the same question for its own strip, and the
+/// two strips are now one.
+///
+/// `None` is nothing open, which is exactly an empty [`Open`].
 #[derive(Clone, Copy)]
-struct Sel(State<Option<Selection>>);
+struct Active(State<Option<Document>>);
 
 /// The tabs open in the content area, shared through context.
 ///
-/// The list only; the active one is `Sel`. Every entry is an `Object` or a `Symbol` —
-/// there is no "nothing" entry: having no selection is an absent one, which is what the
-/// app is in when the list is empty and is the placeholder state.
+/// The list only; the active one is [`Active`]. Every entry is a place in a binary — an
+/// object or a function — or a source file, and there is no "nothing" entry: having
+/// nothing open is an empty list, which is the placeholder state.
 ///
 /// Objects are in here alongside functions on purpose. A tab is a place the reader has
 /// open, the sidebar's object rows have always *been* a selection, and giving them a tab
-/// is what keeps `Sel` equal to the active tab without a second "selected but not open"
-/// state beside it. The chip for an object is named after the object and the Assembly and
-/// Source panes show the same placeholders they always did for one.
+/// is what keeps `Active` equal to the active tab without a second "selected but not
+/// open" state beside it. The tab for an object is named after the object and the
+/// Assembly and Source panes show the same placeholders they always did for one.
 #[derive(Clone, Copy)]
-struct Open(State<Tabs<Selection>>);
+struct Open(State<Tabs<Document>>);
 
-/// The source files open in the Source pane, shared through context. The list only; which
-/// of them is on screen is [`Shown`], for the reason [`Open`] keeps that out too.
-#[derive(Clone, Copy)]
-struct Files(State<Tabs<Arc<str>>>);
-
-/// Which of the open source files the Source pane is showing. `Some` exactly when
-/// [`Files`] is non-empty, which [`open_file`] and [`close_file`] are what keep true.
-#[derive(Clone, Copy)]
-struct Shown(State<Option<Arc<str>>>);
-
-/// Which row each open content tab was left on, shared through context.
+/// Which row each open tab's **assembly** side was left on, shared through context.
 ///
 /// Beside [`Open`] rather than inside it, and beside it rather than inside
 /// [`InstructionList`], for one reason each. Inside `Tabs` it would be a field of what
-/// the strip draws, so a scroll of the reader's would re-render every chip; inside the
+/// the strip draws, so a scroll of the reader's would re-render every tab; inside the
 /// pane it would live and die with the component, which is precisely the bug this fixes —
 /// one scroll controller is reused for every symbol, so a tab switch used to leave the
 /// new function at the offset the old one was at. Here it outlives both the component and
-/// any one selection, which is what a *tab's* position has to do.
+/// any one document, which is what a *tab's* position has to do.
 ///
-/// Keyed by `Selection`, which is compared by `Arc` pointer identity — the same identity
-/// [`Open`] keys by, so an entry means "this tab" for exactly as long as that tab is in
-/// the list, and never accidentally means a second symbol of the same name in another
-/// object. It is also why the persisted form cannot reuse the key and identifies its tabs
-/// by path and name instead (`project.rs`).
+/// Keyed by [`Document`] — the same identity [`Open`] keys by, so an entry means "this
+/// tab" for exactly as long as that tab is in the list, and never accidentally means a
+/// second symbol of the same name in another object. It is also why the persisted form
+/// cannot reuse the key and identifies its tabs by path and name instead (`project.rs`).
 #[derive(Clone, Copy)]
-struct AsmAt(State<Positions<Selection>>);
+struct AsmAt(State<Positions<Document>>);
 
-/// Which line each open source file was left on, shared through context. [`AsmAt`] for
-/// the Source pane, keyed by the file the pane shows rather than by the selection: the
-/// pane's tabs are files, and two symbols compiled from one file are one tab.
+/// Which row each open tab's **source** side was left on. [`AsmAt`]'s other half, and
+/// keyed by the same document rather than by the file the pane happens to be showing:
+/// a tab has two sides and each remembers its own row, so two functions compiled from one
+/// file no longer share a position they have no reason to share.
 #[derive(Clone, Copy)]
-struct SrcAt(State<Positions<Arc<str>>>);
+struct SrcAt(State<Positions<Document>>);
 
-/// Where the selection has been, shared through context. Named `Hist` because
-/// `History` is the type it holds, the same way `Sel` holds a `Selection`.
+/// Where the reader has been, shared through context. Named `Hist` because `History` is
+/// the type it holds, the same way `Active` holds a `Document`.
 #[derive(Clone, Copy)]
 struct Hist(State<History>);
 
@@ -1029,8 +1022,8 @@ struct Prefs(State<EditedSettings>);
 /// One value because a project switch touches all of them at once — it closes everything
 /// that belonged to the project being left and restores everything that belongs to the
 /// one being entered — and because the two halves of that, [`clear_project`] and
-/// [`restore_project`], would otherwise be nine-argument functions called from three
-/// places. It is `Copy` and holds nothing but handles, so passing it is passing nine
+/// [`restore_project`], would otherwise be eight-argument functions called from three
+/// places. It is `Copy` and holds nothing but handles, so passing it is passing eight
 /// pointers.
 #[derive(Clone, Copy)]
 struct ProjectStates {
@@ -1041,17 +1034,15 @@ struct ProjectStates {
     /// files that have produced nothing yet and so are not in `objects` to be closed one
     /// by one.
     loading: State<Loads>,
-    open: State<Tabs<Selection>>,
-    asm_at: State<Positions<Selection>>,
-    selection: State<Option<Selection>>,
+    open: State<Tabs<Document>>,
+    asm_at: State<Positions<Document>>,
+    src_at: State<Positions<Document>>,
+    active: State<Option<Document>>,
     history: State<History>,
-    files: State<Tabs<Arc<str>>>,
-    src_at: State<Positions<Arc<str>>>,
-    shown: State<Option<Arc<str>>>,
 }
 
-/// The ten states as a component sees them: through the contexts the root provides, so a
-/// view that switches projects needs none of them handed down to it.
+/// The eight states as a component sees them: through the contexts the root provides, so
+/// a view that switches projects needs none of them handed down to it.
 fn use_project_states() -> ProjectStates {
     ProjectStates {
         proj: use_consume::<Proj>().0,
@@ -1059,11 +1050,9 @@ fn use_project_states() -> ProjectStates {
         loading: use_consume::<Loading>().0,
         open: use_consume::<Open>().0,
         asm_at: use_consume::<AsmAt>().0,
-        selection: use_consume::<Sel>().0,
-        history: use_consume::<Hist>().0,
-        files: use_consume::<Files>().0,
         src_at: use_consume::<SrcAt>().0,
-        shown: use_consume::<Shown>().0,
+        active: use_consume::<Active>().0,
+        history: use_consume::<Hist>().0,
     }
 }
 
@@ -1225,7 +1214,7 @@ impl Studied {
 }
 
 /// What DWARF says about the selected symbol's instructions, or `None` when it says
-/// nothing, and which of the files it names the Source pane should open on.
+/// nothing, and which of the files it names the Source pane draws beside it.
 ///
 /// Worked out once for all its readers rather than once per pane: `Object::line_info`
 /// walks the line program of every unit covering the symbol again on each call, even
@@ -1240,7 +1229,7 @@ impl Studied {
 #[derive(Clone)]
 struct SymbolLines {
     info: Option<Arc<LineInfo>>,
-    /// Which of the files the symbol touches the Source pane opens on: the one its first
+    /// Which of the files the symbol touches the Source pane draws: the one its first
     /// instruction was compiled from, which is the function's own file rather than one of
     /// the headers it inlined further in. A symbol whose entry instructions belong to no
     /// row at all -- a compiler-generated prologue is enough for that -- falls back to the
@@ -1263,7 +1252,7 @@ impl PartialEq for SymbolLines {
 }
 
 impl SymbolLines {
-    /// The line info for `symbol`, with the file the Source pane should open on.
+    /// The line info for `symbol`, with the file the Source pane draws beside it.
     fn new(symbol: &Symbol) -> SymbolLines {
         let info = symbol.data.line_info(&symbol.object);
         let file = info.as_ref().and_then(|info| {
@@ -1472,7 +1461,7 @@ fn row_offset(row: usize) -> i32 {
 /// **A [`Pin::reveal`] wins over a remembered position, and needs nothing to make it.**
 /// The two never ask at the same moment: this moves the view only when the tab changes,
 /// and a reveal is asked for by a click in the *other* pane, which changes no tab —
-/// while a selection change, which does, drops the pin outright (`use_clear_focus`).
+/// while a change of document, which does, drops the pin outright (`use_clear_focus`).
 /// When a reveal does scroll, this effect wakes on the scroll it made and records it, so
 /// the last thing the reader was shown is what the tab is remembered at. The memory
 /// follows the reveal rather than fighting it.
@@ -1527,7 +1516,7 @@ fn use_kept_position<T: Clone + PartialEq + 'static>(
             // Only for a tab that is still open, which is why the list is an argument
             // here at all: `close_tab` forgets a tab's position and then moves to a
             // neighbour, so the run that follows is holding a tab that has gone -- and
-            // writing its row down would put it straight back, keyed by a `Selection`
+            // writing its row down would put it straight back, keyed by a `Document`
             // that holds a whole `Object`. That the last scroll before a close is lost
             // with it is the right answer twice over: there is no tab to bring it back
             // for, and the file it pointed into may be being let go of in the same
@@ -2360,133 +2349,115 @@ impl Filtered {
 // Open tabs
 // ---------------------------------------------------------------------------
 
-/// Make `target` what the content area is showing, opening a tab for it if it has none.
+/// Make `target` the active document, opening a tab for it if it has none.
 ///
-/// The one path by which `Sel` ever changes, which is what makes "the selection is the
-/// active tab" an invariant rather than a convention: the sidebar's object and symbol
-/// rows, an assembly relocation link, the history panel and the back/forward buttons
-/// (both through [`navigate`]) and the startup restore all come through here, so none of
-/// them has to know that tabs exist. `None` opens nothing and is how the content area
-/// goes back to its placeholder.
+/// The one path by which [`Active`] ever changes, which is what makes "the active
+/// document is the active tab" an invariant rather than a convention: the sidebar's
+/// object and symbol rows, an assembly relocation link, the Source pane's companion
+/// header, the history panel and the back/forward buttons (both through [`navigate`]) and
+/// the startup restore all come through here, so none of them has to know that tabs
+/// exist. `None` opens nothing and is how the content area goes back to its placeholder.
+///
+/// **One function for both kinds of tab**, where until Step 1 there were two — `activate`
+/// for the content area's functions and `open_file` for the Source pane's files, each
+/// holding its own strip's invariant. The strips are one, so the rule is one, and opening
+/// a file and opening a function differ in nothing but the value handed over.
 ///
 /// Re-focusing a tab that is already open writes nothing: `State::write` notifies its
-/// subscribers whether or not the value changes, so both the list and the selection are
-/// asked before they are touched.
+/// subscribers whether or not the value changes, so both the list and the active document
+/// are asked before they are touched.
 fn activate(
-    mut open: State<Tabs<Selection>>,
-    mut selection: State<Option<Selection>>,
-    target: Option<Selection>,
+    mut open: State<Tabs<Document>>,
+    mut active: State<Option<Document>>,
+    target: Option<Document>,
 ) {
-    // The guard from `peek` has to be gone before `write` is reached, so the answer is
-    // taken out of it first rather than tested inline.
-    let opening = match &target {
-        Some(target) => open.peek().find(target).is_none(),
-        None => false,
+    // The copy that is *in the list* where there is one, so the identity a position is
+    // keyed by does not change when the same file is reached again through a different
+    // symbol's `LineInfo`: two of them naming one path hold two `Arc<str>`s of it.
+    let existing = target
+        .as_ref()
+        .and_then(|target| open.peek().find(target).cloned());
+    let target = match (existing, target) {
+        (Some(open), _) => Some(open),
+        (None, Some(target)) => {
+            open.write().open(target.clone());
+            Some(target)
+        }
+        (None, None) => None,
     };
-    if let (true, Some(target)) = (opening, &target) {
-        open.write().open(target.clone());
-    }
 
-    selection.set_if_modified(target);
+    active.set_if_modified(target);
 }
 
 /// Close the tab showing `entry`, moving to a neighbouring one when it was the tab on
 /// screen and to the placeholder when it was the last one open.
 ///
-/// Landing on the neighbour is an ordinary selection change, so it is recorded in the
-/// history like any other: the reader is now somewhere else, and the way back to it is
-/// the way back to anywhere else.
+/// Landing on the neighbour is an ordinary change of active document, so it is recorded
+/// in the history like any other: the reader is now somewhere else, and the way back to
+/// it is the way back to anywhere else.
 ///
-/// Where the tab was left goes with it. A closed tab is not a tab, so a position kept for
-/// one is both a lie — reopening it from the sidebar is a fresh tab, which starts at the
-/// top — and a leak, since a [`Selection`] holds the `Arc<Object>` it points into.
+/// Where the tab was left goes with it, **both sides of it**. A closed tab is not a tab,
+/// so a position kept for one is both a lie — reopening it from the sidebar is a fresh
+/// tab, which starts at the top — and a leak, since a [`Document::Assembly`] holds the
+/// `Arc<Object>` it points into.
 fn close_tab(
-    mut open: State<Tabs<Selection>>,
-    selection: State<Option<Selection>>,
-    mut at: State<Positions<Selection>>,
-    entry: &Selection,
+    mut open: State<Tabs<Document>>,
+    active: State<Option<Document>>,
+    mut asm_at: State<Positions<Document>>,
+    mut src_at: State<Positions<Document>>,
+    entry: &Document,
 ) {
-    let was_showing = selection.peek().as_ref() == Some(entry);
+    let was_showing = active.peek().as_ref() == Some(entry);
     let next = open.write().close(entry);
-    at.write().forget(entry);
+    asm_at.write().forget(entry);
+    src_at.write().forget(entry);
 
     if was_showing {
         // Through `activate` like everything else, even though the neighbour is by
-        // construction already open: this is a selection change and there is one way to
-        // make one. The write guard above is released before it is reached.
-        activate(open, selection, next);
-    }
-}
-
-/// Open a tab for `file` in the Source pane and put the pane on it.
-///
-/// The file the pane is put on is the copy already in the list where there is one, so the
-/// `Arc` the rows are keyed by does not change identity when the same file is reached
-/// again through a different symbol's `LineInfo`.
-fn open_file(mut files: State<Tabs<Arc<str>>>, mut shown: State<Option<Arc<str>>>, file: Arc<str>) {
-    let existing = files.peek().find(&file).cloned();
-    let file = match existing {
-        Some(file) => file,
-        None => {
-            files.write().open(file.clone());
-            file
-        }
-    };
-
-    shown.set_if_modified(Some(file));
-}
-
-/// Close the tab showing `file`, moving to a neighbouring one when it was the file on
-/// screen. The Source pane's own half of [`close_tab`], and the mirror of it: nothing
-/// here touches the selection, because which file is on screen is a view of the symbol
-/// rather than a place the reader has been.
-fn close_file(
-    mut files: State<Tabs<Arc<str>>>,
-    mut shown: State<Option<Arc<str>>>,
-    mut at: State<Positions<Arc<str>>>,
-    file: &Arc<str>,
-) {
-    let was_showing = shown.peek().as_ref() == Some(file);
-    let next = files.write().close(file);
-    at.write().forget(file);
-
-    if was_showing {
-        shown.set(next);
+        // construction already open: this is a change of active document and there is one
+        // way to make one. The write guard above is released before it is reached.
+        activate(open, active, next);
     }
 }
 
 /// Let go of the binary at `path`: drop every [`Object`] it contributed and answer for
 /// everything that was pointing at them.
 ///
-/// The fifth of the functions that hold the app's invariants, beside [`activate`],
-/// [`close_tab`], [`open_file`] and [`close_file`], and the only one that ever *removes*
-/// an object -- until now the app could open a binary and never let go of one. The unit
-/// is the **file** and never the object: an archive member is not something the reader
-/// opened, closing one member of 196 would leave a file half-present with no row able to
-/// say so, and the saved `binaries` are a list of paths, so half a file is not a thing the
-/// session could even record. One path opened twice is therefore also one close: the
-/// objects list holds both copies, `Object::path` cannot tell them apart, and neither
-/// could the file it would be written to.
+/// The third of the functions that hold the app's invariants, beside [`activate`] and
+/// [`close_tab`], and the only one that ever *removes* an object -- until 8c the app could
+/// open a binary and never let go of one. The unit is the **file** and never the object:
+/// an archive member is not something the reader opened, closing one member of 196 would
+/// leave a file half-present with no row able to say so, and the saved `binaries` are a
+/// list of paths, so half a file is not a thing the session could even record. One path
+/// opened twice is therefore also one close: the objects list holds both copies,
+/// `Object::path` cannot tell them apart, and neither could the file it would be written
+/// to.
 ///
-/// What each of the five things pointing at those objects does with the news:
+/// What each of the things pointing at those objects does with the news:
 ///
-/// - The **tabs** whose selection was in the file are closed, all of them at once
-///   ([`Tabs::close_all`]), which is what closing the one tab the reader was on would
-///   have done had its neighbours not gone with it.
-/// - The **selection** follows the tabs rather than degrading the way a restore's does.
-///   Degrading has nothing to fall back *to* here: a file takes its objects and their
-///   symbols together, so `resolve_or_degrade`'s symbol-to-object step would land on an
-///   object that is going away in the same breath. What is left is the tab rule -- the
-///   neighbouring tab, or nothing at all when the close emptied the strip -- and
-///   that is also the only answer that keeps "the selection is the active tab" true,
-///   since the placeholder with tabs still open would be a fourth state.
+/// - The **assembly-driven tabs** whose document was in the file are closed, all of them
+///   at once ([`Tabs::close_all`]), which is what closing the one tab the reader was on
+///   would have done had its neighbours not gone with it. **Source-driven tabs survive**
+///   ([`Document::in_file`] answers false for one): a file chip outlives the binary that
+///   led the reader to it, because the text stands on its own and nothing records which
+///   object opened it. That was the Source pane's separate strip being left alone; it is
+///   now a rule of the one strip.
+/// - The **active document** follows the tabs rather than degrading the way a restore's
+///   does. Degrading has nothing to fall back *to* here: a file takes its objects and
+///   their symbols together, so `resolve_or_degrade`'s symbol-to-object step would land on
+///   an object that is going away in the same breath. What is left is the tab rule -- the
+///   neighbouring tab, or nothing at all when the close emptied the strip -- and that is
+///   also the only answer that keeps "the active document is the active tab" true, since
+///   the placeholder with tabs still open would be a fourth state.
 /// - The **history** drops its entries rather than degrading them ([`History::retaining`]),
 ///   which is the same walk and the same reasoning as a restore whose binaries have
 ///   changed: a list of places the reader cannot get back to is worse than a short list.
-/// - The **viewing positions** of the tabs that closed go with them ([`Positions`]), which
-///   is not tidiness: every entry is keyed by a [`Selection`], which holds the
-///   `Arc<Object>` it points into, so one left behind would hold the file's bytes -- 331 MB
-///   of them, for `viewer-sample` -- for as long as the app ran.
+///   A visited source file is kept, by the same rule its tab is.
+/// - The **viewing positions** of the tabs that closed go with them, both sides of each
+///   ([`Positions`]), which is not tidiness: every entry is keyed by a [`Document`], which
+///   for an assembly-driven one holds the `Arc<Object>` it points into, so one left behind
+///   would hold the file's bytes -- 331 MB of them, for `viewer-sample` -- for as long as
+///   the app ran.
 /// - **The file's load**, if it is still being read, is cancelled ([`Loads::cancel`]) —
 ///   which is not tidiness either: without it the objects still coming out of the worker
 ///   would arrive after the close and put the file back, one member at a time. The unit
@@ -2498,33 +2469,30 @@ fn close_file(
 ///   which is what `Goals.md` asks of a change the user made, and the first thing since
 ///   opening a file to take that path.
 ///
-/// All four writes happen here, in one event handler, before anything can render: the
+/// All the writes happen here, in one event handler, before anything can render: the
 /// save observer therefore wakes once, with all of it settled, so the file that reaches
 /// the disk never names a binary the app has already let go of.
-///
-/// The Source pane's open files are deliberately left alone. A file chip is a path on
-/// disk that some symbol's line info named, nothing records which object opened it, and
-/// the text stands perfectly well on its own -- the same reason a selection with no line
-/// info neither opens nor closes one.
 fn close_binary(
     mut objects: State<Vec<Arc<Object>>>,
     mut loading: State<Loads>,
-    mut open: State<Tabs<Selection>>,
-    selection: State<Option<Selection>>,
-    mut at: State<Positions<Selection>>,
+    mut open: State<Tabs<Document>>,
+    active: State<Option<Document>>,
+    mut asm_at: State<Positions<Document>>,
+    mut src_at: State<Positions<Document>>,
     mut history: State<History>,
     path: &Path,
 ) {
     // Every guard below is taken out of its own statement, so none of them is still
     // alive when the next write -- or `activate` at the end -- is reached.
-    let showing = selection.peek().clone();
+    let showing = active.peek().clone();
     let next = open
         .write()
         .close_all(showing.as_ref(), |tab| tab.in_file(path));
 
     // The same walk over the same rule, so the positions cannot outlive the tabs they
     // belong to.
-    at.write().forgetting(|tab| !tab.in_file(path));
+    asm_at.write().forgetting(|tab| !tab.in_file(path));
+    src_at.write().forgetting(|tab| !tab.in_file(path));
 
     let remaining = history.peek().retaining(|entry| !entry.in_file(path));
     history.set(remaining);
@@ -2536,10 +2504,10 @@ fn close_binary(
     loading.write().cancel(path);
 
     if showing.is_some_and(|showing| showing.in_file(path)) {
-        // Through `activate` like every other selection change, even though the tab it
-        // lands on is by construction already open. Landing there is an ordinary move,
-        // so `use_record_history` records it exactly as it records closing one tab.
-        activate(open, selection, next);
+        // Through `activate` like every other change of active document, even though the
+        // tab it lands on is by construction already open. Landing there is an ordinary
+        // move, so `use_record_history` records it exactly as it records closing one tab.
+        activate(open, active, next);
     }
 }
 
@@ -2548,21 +2516,28 @@ fn close_binary(
 ///
 /// Built per press rather than once, because it closes over the path of the row it was
 /// opened on -- freya's `ContextMenu` takes a whole `Menu` and places it at the pointer
-/// (`freya-components/src/context_menu.rs`), so there is nothing to keep. The four states
-/// come in as arguments for the reason every row's do: this is called from an event
-/// handler, where no hook may run.
-fn close_menu(
-    objects: State<Vec<Arc<Object>>>,
-    loading: State<Loads>,
-    open: State<Tabs<Selection>>,
-    selection: State<Option<Selection>>,
-    at: State<Positions<Selection>>,
-    history: State<History>,
-    path: PathBuf,
-) -> Menu {
+/// (`freya-components/src/context_menu.rs`), so there is nothing to keep. The states come
+/// in as an argument for the reason every row's do: this is called from an event handler,
+/// where no hook may run.
+fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
+    let ProjectStates {
+        objects,
+        loading,
+        open,
+        asm_at,
+        src_at,
+        active,
+        history,
+        ..
+    } = states;
+
     Menu::new().child(
         MenuButton::new()
-            .on_press(move |_| close_binary(objects, loading, open, selection, at, history, &path))
+            .on_press(move |_| {
+                close_binary(
+                    objects, loading, open, active, asm_at, src_at, history, &path,
+                )
+            })
             // "file" and not "object", because the row a reader right-clicks may be one
             // object of one file or the archive above 196 of them, and the same word has
             // to be true of both.
@@ -2786,14 +2761,9 @@ impl Component for ArchiveRow {
         let mut expanded = self.expanded;
         let group = self.group;
         let expansion = self.expansion;
-        // The five states closing a file has to answer for. Consumed here, in the
-        // render, because the handler that uses them may not run a hook.
-        let objects = use_consume::<Objects>().0;
-        let loading = use_consume::<Loading>().0;
-        let selection = use_consume::<Sel>().0;
-        let open = use_consume::<Open>().0;
-        let at = use_consume::<AsmAt>().0;
-        let history = use_consume::<Hist>().0;
+        // The states closing a file has to answer for. Consumed here, in the render,
+        // because the handler that uses them may not run a hook.
+        let states = use_project_states();
         let path = self.path.clone();
 
         let background = if hovering() {
@@ -2853,10 +2823,7 @@ impl Component for ArchiveRow {
                 // The archive is a file the reader opened, so it is one they can close,
                 // even though it selects nothing and has no `Object` behind it.
                 .on_secondary_down(move |e: Event<PressEventData>| {
-                    ContextMenu::open_from_event(
-                        &e,
-                        close_menu(objects, loading, open, selection, at, history, path.clone()),
-                    );
+                    ContextMenu::open_from_event(&e, close_menu(states, path.clone()));
                 })
                 .child(
                     label()
@@ -2925,12 +2892,8 @@ impl KeyExt for ObjectRow {
 impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let objects = use_consume::<Objects>().0;
-        let loading = use_consume::<Loading>().0;
-        let selection = use_consume::<Sel>().0;
-        let open = use_consume::<Open>().0;
-        let at = use_consume::<AsmAt>().0;
-        let history = use_consume::<Hist>().0;
+        let states = use_project_states();
+        let (open, active) = (states.open, states.active);
         let object = self.object.clone();
         let path = self.object.path.clone();
 
@@ -2962,7 +2925,11 @@ impl Component for ObjectRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
-                    activate(open, selection, Some(Selection::Object(object.clone())));
+                    activate(
+                        open,
+                        active,
+                        Some(Document::Assembly(Selection::Object(object.clone()))),
+                    );
                 })
                 // A lone object *is* the file it came out of, so it closes like one. A
                 // member is not: it was never opened on its own, and the row that can
@@ -2971,18 +2938,7 @@ impl Component for ObjectRow {
                 // reader was not pointing at with it.
                 .maybe(!self.member, move |row| {
                     row.on_secondary_down(move |e: Event<PressEventData>| {
-                        ContextMenu::open_from_event(
-                            &e,
-                            close_menu(
-                                objects,
-                                loading,
-                                open,
-                                selection,
-                                at,
-                                history,
-                                path.clone(),
-                            ),
-                        );
+                        ContextMenu::open_from_event(&e, close_menu(states, path.clone()));
                     })
                 })
                 // The column a file row's triangle sits in, kept empty here so that the
@@ -3028,7 +2984,7 @@ impl KeyExt for SymbolRow {
 impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let selection = use_consume::<Sel>().0;
+        let active = use_consume::<Active>().0;
         let open = use_consume::<Open>().0;
         let symbol = self.symbols.0[self.index].clone();
         let text = symbol
@@ -3057,7 +3013,11 @@ impl Component for SymbolRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
-                    activate(open, selection, Some(Selection::Symbol(symbol.clone())));
+                    activate(
+                        open,
+                        active,
+                        Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
+                    );
                 })
                 .child(label().text(text).max_lines(1)),
         )
@@ -3068,42 +3028,98 @@ impl Component for SymbolRow {
     }
 }
 
-/// What a selection is called where it is named in a list: the same demangled name the
-/// symbol list shows, or the object's name for an object. The history rows and the tab
-/// chips both draw this, which is what makes a place read the same wherever it is named.
-fn entry_text(entry: &Selection) -> String {
+/// What a document is called where it is named in a list: the same demangled name the
+/// symbol list shows for a function, the object's name for an object, and the file's own
+/// last path component for a source file. The history rows and the tabs both draw this,
+/// which is what makes a place read the same wherever it is named.
+///
+/// A file's *name* and not its path, because the strip is narrow and every one of these
+/// paths shares most of its directory with the others. The whole of it is in the tooltip
+/// ([`entry_tooltip`]), which is what the Source pane's header used to say.
+fn entry_text(entry: &Document) -> String {
     match entry {
-        Selection::Object(object) => object.name.clone(),
-        Selection::Symbol(symbol) => symbol
+        Document::Assembly(Selection::Object(object)) => object.name.clone(),
+        Document::Assembly(Selection::Symbol(symbol)) => symbol
             .data
             .demangled
             .as_ref()
             .unwrap_or(&symbol.data.name)
             .clone(),
+        Document::Source(file) => file_name(file),
     }
 }
 
-/// The pointer identity of what a selection points at, for keying the row or chip that
-/// names it. A tab chip keys by this alone, its place in the strip being stable. Paired
-/// with the entry's index because a row's identity is its place in the list: the entry at
+/// What hovering a document's tab or row says. The whole path for a file, where the row
+/// itself has only room for its name; everything else says what it draws, elided or not.
+fn entry_tooltip(entry: &Document) -> String {
+    match entry {
+        Document::Source(file) => file.to_string(),
+        entry => entry_text(entry),
+    }
+}
+
+/// Which kind of tab this is, as the one glyph that tells the two apart.
+///
+/// The same two glyphs the dock's own Assembly and Source views wear (`Tab::icon`), and
+/// deliberately so: the tab says which pane is in charge of it, so it should be named by
+/// the pane it is about.
+fn entry_icon(entry: &Document) -> Element {
+    let (name, svg) = match entry {
+        Document::Assembly(_) => ("binary", lucide::binary()),
+        Document::Source(_) => ("file-code", lucide::file_code()),
+    };
+
+    let side = icon_size();
+    SvgViewer::new((name, svg))
+        .width(Size::px(side))
+        .height(Size::px(side))
+        .color(palette().icon_fg)
+        .show_loader(false)
+        .into_element()
+}
+
+/// The identity of what a document points at, for keying the row or tab that names it.
+///
+/// A tab keys by this alone, its place in the strip being stable. A history row pairs it
+/// with the entry's index, because a row's identity is its place in the list: the entry at
 /// an index changes when a push truncates the forward entries, and again when a push
 /// bumps an existing entry to the newest position and shifts the ones behind it down. The
 /// pointer alone would be identity enough now that no two entries are equal, but then a
 /// bumped row would keep the hover state of the one that used to sit where it now does;
 /// with the index in the key the moved rows are simply rebuilt, which for a list this
 /// short costs nothing.
-fn entry_addr(entry: &Selection) -> usize {
+///
+/// The variant is part of the key and not only the pointer, since a file is keyed by its
+/// text: a hash of an address and a hash of a path could otherwise collide into one key
+/// for two tabs of different kinds.
+#[derive(Hash)]
+enum EntryKey<'a> {
+    Object(usize),
+    Symbol(usize),
+    Source(&'a str),
+}
+
+fn entry_key(entry: &Document) -> EntryKey<'_> {
     match entry {
-        Selection::Object(object) => Arc::as_ptr(object).addr(),
-        Selection::Symbol(symbol) => Arc::as_ptr(&symbol.data).addr(),
+        Document::Assembly(Selection::Object(object)) => {
+            EntryKey::Object(Arc::as_ptr(object).addr())
+        }
+        Document::Assembly(Selection::Symbol(symbol)) => {
+            EntryKey::Symbol(Arc::as_ptr(&symbol.data).addr())
+        }
+        Document::Source(file) => EntryKey::Source(file),
     }
 }
 
-/// One visited selection in the history list. Clicking it moves the history cursor to
+/// One visited document in the history list. Clicking it moves the history cursor to
 /// this entry rather than recording a new one, which is what `Nav::To` is for.
+///
+/// A visited *source file* is an entry like any function, which is the whole of what
+/// Step 1e asked of this list: the history records documents, so it can list one, and the
+/// row wears the same kind icon its tab does.
 #[derive(Clone)]
 struct HistoryRow {
-    entry: Selection,
+    entry: Document,
     index: usize,
     /// Whether the cursor is on this entry, i.e. this is what is on screen.
     current: bool,
@@ -3112,7 +3128,8 @@ struct HistoryRow {
 
 impl PartialEq for HistoryRow {
     fn eq(&self, other: &Self) -> bool {
-        // `Selection`'s own `PartialEq` is written in terms of `Arc::ptr_eq`.
+        // `Document`'s own `PartialEq` is written in terms of `Arc::ptr_eq` for a place
+        // in a binary and of text for a file.
         self.entry == other.entry && self.index == other.index && self.current == other.current
     }
 }
@@ -3126,7 +3143,7 @@ impl KeyExt for HistoryRow {
 impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let selection = use_consume::<Sel>().0;
+        let active = use_consume::<Active>().0;
         let open = use_consume::<Open>().0;
         // Consuming does not subscribe -- only reading would, and this row never reads
         // the history; it only hands an index back to `navigate`.
@@ -3143,16 +3160,20 @@ impl Component for HistoryRow {
         };
 
         row_tooltip(
-            text.clone(),
+            entry_tooltip(&self.entry),
             rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
                 .width(Size::fill())
                 .height(Size::px(list_row_height()))
-                .padding(5.0)
+                .padding(Gaps::new_symmetric(0.0, 5.0))
+                .spacing(5.0)
                 .background(background)
                 .overflow(Overflow::Clip)
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |_| navigate(open, history, selection, Nav::To(index)))
+                .on_press(move |_| navigate(open, history, active, Nav::To(index)))
+                .child(entry_icon(&self.entry))
                 .child(label().text(text).max_lines(1)),
         )
     }
@@ -3179,7 +3200,7 @@ impl PartialEq for RelocationLabel {
 impl Component for RelocationLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let selection = use_consume::<Sel>().0;
+        let active = use_consume::<Active>().0;
         let open = use_consume::<Open>().0;
         let symbol = Symbol {
             object: self.object.clone(),
@@ -3213,7 +3234,11 @@ impl Component for RelocationLabel {
                     // also pin the line I am leaving", so the row never sees it.
                     e.stop_propagation();
 
-                    activate(open, selection, Some(Selection::Symbol(symbol.clone())));
+                    activate(
+                        open,
+                        active,
+                        Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
+                    );
                 })
                 .child(label().text(text).max_lines(1).color(if hovering() {
                     palette().name_hover_fg
@@ -3675,17 +3700,17 @@ impl Component for SourceRow {
 }
 
 // ---------------------------------------------------------------------------
-// Tab strips
+// The tab strip
 // ---------------------------------------------------------------------------
 
-/// One tab in a strip: what it is called, an × that closes it, and the pane's own white
-/// when it is the one on screen -- the same thing a dock tab header does, so the two bars
-/// read as bars of the same kind.
+/// One tab in the strip: the icon naming its kind, what it is called, an × that closes it,
+/// and the pane's own white when it is the one on screen -- the same thing a dock tab
+/// header does, so the two bars read as bars of the same kind.
 ///
-/// A stateless helper rather than a component: the two kinds of chip differ only in what
-/// they name and in what their two presses do, and the hover state belongs to the
-/// component that called this, so no hook runs here.
+/// A stateless helper rather than a component, the hover state belonging to the component
+/// that called this, so no hook runs here.
 fn chip(
+    icon: Element,
     text: String,
     tooltip: String,
     active: bool,
@@ -3718,6 +3743,7 @@ fn chip(
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
             .on_press(on_activate)
+            .child(icon)
             .child(label().text(elide(&text)).max_lines(1))
             .child(
                 rect()
@@ -3772,18 +3798,19 @@ fn chip_strip(chips: Vec<Element>) -> Element {
         .into_element()
 }
 
-/// One open function or object, in the content area's strip.
+/// One open document: a function, an object or a source file.
 #[derive(Clone)]
 struct TabChip {
-    entry: Selection,
-    /// Whether this is the tab the content area is showing, i.e. whether it is `Sel`.
+    entry: Document,
+    /// Whether this is the tab the content area is showing, i.e. whether it is [`Active`].
     active: bool,
     key: DiffKey,
 }
 
 impl PartialEq for TabChip {
     fn eq(&self, other: &Self) -> bool {
-        // `Selection`'s own `PartialEq` is written in terms of `Arc::ptr_eq`.
+        // `Document`'s own `PartialEq`: `Arc::ptr_eq` for a place in a binary, text for a
+        // file.
         self.entry == other.entry && self.active == other.active
     }
 }
@@ -3797,19 +3824,20 @@ impl KeyExt for TabChip {
 impl Component for TabChip {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
-        let selection = use_consume::<Sel>().0;
+        let active = use_consume::<Active>().0;
         let open = use_consume::<Open>().0;
-        let at = use_consume::<AsmAt>().0;
-        let text = entry_text(&self.entry);
+        let asm_at = use_consume::<AsmAt>().0;
+        let src_at = use_consume::<SrcAt>().0;
         let (activated, closed) = (self.entry.clone(), self.entry.clone());
 
         chip(
-            text.clone(),
-            text,
+            entry_icon(&self.entry),
+            entry_text(&self.entry),
+            entry_tooltip(&self.entry),
             self.active,
             hovering,
-            move |_| activate(open, selection, Some(activated.clone())),
-            move |_| close_tab(open, selection, at, &closed),
+            move |_| activate(open, active, Some(activated.clone())),
+            move |_| close_tab(open, active, asm_at, src_at, &closed),
         )
     }
 
@@ -3820,12 +3848,16 @@ impl Component for TabChip {
 
 /// The strip of open tabs over the content area.
 ///
-/// Over the whole content area rather than inside the Assembly pane, which is where the
-/// plan's sketch put it. The tab decides what *both* panes show -- the assembly of a
-/// function and the source it was compiled from are two views of the one place -- and a
-/// strip inside one of them would go wherever that pane was dragged, taking the only way
-/// of switching functions into a 300px sidebar with it. In the default layout the two are
-/// the same thing: the strip is the bar directly above the assembly.
+/// **One strip and not two.** Until Step 1 there was a second one inside the Source pane,
+/// over its own list of open files, and the two had two notions of what was open. A tab
+/// decides what *both* panes show -- the assembly of a function beside the source it came
+/// from, or a file beside the assembly for a line in it -- so there is one list of them,
+/// and each chip's icon says which of its two sides is the one in charge.
+///
+/// Over the whole content area rather than inside either pane, which is where the plan's
+/// sketch put it: a strip inside one of them would go wherever that pane was dragged,
+/// taking the only way of switching documents into a 300px sidebar with it. In the default
+/// layout the two are the same thing: the strip is the bar directly above the assembly.
 ///
 /// Nothing at all when no tab is open, so an app with nothing loaded looks exactly as it
 /// did before there were tabs.
@@ -3837,7 +3869,7 @@ impl Component for TabStrip {
         let open = use_consume::<Open>().0;
         // Reading both subscribes the strip to them, so a tab opened or closed and a
         // change of which one is active each re-render this bar and nothing else.
-        let active = use_consume::<Sel>().0.read().clone();
+        let active = use_consume::<Active>().0.read().clone();
         let entries = open.read().tabs().to_vec();
 
         if entries.is_empty() {
@@ -3853,59 +3885,11 @@ impl Component for TabStrip {
                         active: Some(entry) == active.as_ref(),
                         key: DiffKey::None,
                     }
-                    .key(entry_addr(entry))
+                    .key(entry_key(entry))
                     .into()
                 })
                 .collect(),
         )
-    }
-}
-
-/// One open source file, in the Source pane's strip.
-#[derive(Clone)]
-struct FileChip {
-    file: Arc<str>,
-    active: bool,
-    key: DiffKey,
-}
-
-impl PartialEq for FileChip {
-    fn eq(&self, other: &Self) -> bool {
-        // By its text and not by pointer, for the reason `LinePos` compares that way: a
-        // path is a value, and two `LineInfo`s naming one file hold two `Arc<str>`s of it.
-        self.file == other.file && self.active == other.active
-    }
-}
-
-impl KeyExt for FileChip {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
-
-impl Component for FileChip {
-    fn render(&self) -> impl IntoElement {
-        let hovering = use_state(|| false);
-        let files = use_consume::<Files>().0;
-        let shown = use_consume::<Shown>().0;
-        let at = use_consume::<SrcAt>().0;
-        let (activated, closed) = (self.file.clone(), self.file.clone());
-
-        chip(
-            // The file's own name; the strip is narrow and every one of these paths shares
-            // most of its directory with the others. The whole path is in the tooltip,
-            // which is what the pane's header used to say.
-            file_name(&self.file),
-            self.file.to_string(),
-            self.active,
-            hovering,
-            move |_| open_file(files, shown, activated.clone()),
-            move |_| close_file(files, shown, at, &closed),
-        )
-    }
-
-    fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
     }
 }
 
@@ -3921,7 +3905,7 @@ fn elide(text: &str) -> String {
     }
 }
 
-/// What a source file is called in its chip: the last component of its path, or the whole
+/// What a source file is called in a list: the last component of its path, or the whole
 /// of it when there is nothing else to call it.
 fn file_name(file: &str) -> String {
     Path::new(file)
@@ -3952,8 +3936,9 @@ fn file_name(file: &str) -> String {
 struct InstructionList {
     assembly: Arc<Assembly>,
     /// The whole symbol and not just its object, because these rows answer to a *tab*
-    /// as well as to a disassembly: `Selection::Symbol(symbol)` is the key its viewing
-    /// position is kept under, and it is the one the strip and the session key by too.
+    /// as well as to a disassembly: `Document::Assembly(Selection::Symbol(symbol))` is the
+    /// key its viewing position is kept under, and it is the one the strip and the session
+    /// key by too.
     symbol: Symbol,
     lanes: Arc<Lanes>,
     lines: SymbolLines,
@@ -4017,7 +4002,7 @@ impl Component for InstructionList {
             use_consume::<AsmAt>().0,
             use_consume::<Open>().0,
             controller,
-            &Selection::Symbol(self.symbol.clone()),
+            &Document::Assembly(Selection::Symbol(self.symbol.clone())),
             length,
         );
         let touching = hover()
@@ -4104,11 +4089,19 @@ impl Component for InstructionList {
 struct SourceList {
     source: SourceText,
     file: Arc<str>,
+    /// The tab these rows belong to, which is what the viewing position is kept under and
+    /// is **not** the same as the file being shown: this pane draws a source-driven tab's
+    /// own file *and* an assembly-driven tab's companion, and two functions compiled from
+    /// one file are two tabs with one file between them. Keying by the document is what
+    /// stops them sharing a position they have no reason to share.
+    document: Document,
 }
 
 impl PartialEq for SourceList {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source && Arc::ptr_eq(&self.file, &other.file)
+        self.source == other.source
+            && Arc::ptr_eq(&self.file, &other.file)
+            && self.document == other.document
     }
 }
 
@@ -4134,14 +4127,12 @@ impl Component for SourceList {
         let pin = pinned.read().as_ref().and_then(|pin| line_here(&pin.at));
 
         let length = self.source.0.lines;
-        // The Source pane's tab is the file it is showing, so that is what the position
-        // is kept under: two symbols compiled from one file share the tab, and so share
-        // where it was left.
+        // The tab and not the file: see `SourceList::document`.
         use_kept_position(
             use_consume::<SrcAt>().0,
-            use_consume::<Files>().0,
+            use_consume::<Open>().0,
             controller,
-            &self.file,
+            &self.document,
             length,
         );
 
@@ -4266,19 +4257,20 @@ fn symbol_info(symbol: &Symbol) -> impl IntoElement {
 // Tabs
 // ---------------------------------------------------------------------------
 
-/// One of the nine dockable views. A tab is a persistent view rather than a slot
-/// the selection drives, so each one renders itself off the state it is about
-/// and subscribes to it on its own -- which also keeps a
-/// selection change from re-rendering the whole tree.
+/// One of the nine dockable views. A tab is a persistent view rather than a slot the
+/// active document drives, so each one renders itself off the state it is about and
+/// subscribes to it on its own -- which also keeps a change of document from re-rendering
+/// the whole tree.
 ///
-/// **This, and not the content area's tab strip, is where a view that is not a place in a
-/// binary belongs.** A chip in that strip is a [`Selection`] -- an object or a function --
-/// which is what makes the Assembly and Source panes able to render "the active tab", the
-/// history able to record it and the session able to write it down as a path and a name.
-/// A project, the settings and a scratchpad's editor are none of those: there is one of
-/// each, they resolve against no object, and neither pane could draw one. So they are
-/// views here, where a singleton with its own state already fits, rather than a fourth
-/// `Selection` variant that every one of those five places would need an answer for.
+/// **This, and not the content area's tab strip, is where a view that is not a document
+/// belongs.** A tab in that strip is a [`Document`] -- a place in a binary, or a source
+/// file -- which is what makes the Assembly and Source panes able to render "the active
+/// tab", the history able to record it and the session able to write it down. A project,
+/// the settings and a scratchpad's editor are none of those: there is one of each, they
+/// resolve against no object and are no file on disk the panes could open, and neither
+/// pane could draw one. So they are views here, where a singleton with its own state
+/// already fits, rather than a third `Document` variant that every one of those five
+/// places would need an answer for.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Tab {
     Objects,
@@ -4410,8 +4402,8 @@ impl Component for ObjectsTab {
         // `Arc` itself: everything handed to a `VirtualScrollView` has to be `PartialEq`
         // and an `Object` is not, while pointer identity — which is the only identity the
         // UI uses anyway — compares as a number.
-        let selected = match &*use_consume::<Sel>().0.read() {
-            Some(Selection::Object(object)) => Some(Arc::as_ptr(object).addr()),
+        let selected = match &*use_consume::<Active>().0.read() {
+            Some(Document::Assembly(Selection::Object(object))) => Some(Arc::as_ptr(object).addr()),
             _ => None,
         };
         let length = tree.len();
@@ -4481,8 +4473,8 @@ impl Component for SymbolsTab {
         let filtered =
             use_memo(move || Filtered::new(symbols.read().clone(), &filter.read().matcher()));
         let filtered = filtered.read().clone();
-        let selected = match &*use_consume::<Sel>().0.read() {
-            Some(Selection::Symbol(symbol)) => Some(symbol.clone()),
+        let selected = match &*use_consume::<Active>().0.read() {
+            Some(Document::Assembly(Selection::Symbol(symbol))) => Some(symbol.clone()),
             _ => None,
         };
         let length = filtered.len();
@@ -4519,18 +4511,19 @@ struct InfoTab;
 
 impl Component for InfoTab {
     fn render(&self) -> impl IntoElement {
-        let current = use_consume::<Sel>().0.read().clone();
+        let current = use_consume::<Active>().0.read().clone();
 
         match &current {
             None => placeholder("Nothing selected"),
-            Some(Selection::Object(object)) => rect()
+            Some(Document::Source(_)) => placeholder("No symbol selected"),
+            Some(Document::Assembly(Selection::Object(object))) => rect()
                 .expanded()
                 .background(palette().pane_bg)
                 .child(info_line(format!("Object: `{}`", object.name)))
                 .child(info_line(format!("Format: {:?}", object.format)))
                 .child(info_line(format!("Symbols: {:?}", object.symbols.len())))
                 .into(),
-            Some(Selection::Symbol(symbol)) => rect()
+            Some(Document::Assembly(Selection::Symbol(symbol))) => rect()
                 .expanded()
                 .background(palette().pane_bg)
                 .child(ScrollView::new().child(symbol_info(symbol).into_element()))
@@ -4569,7 +4562,7 @@ impl Component for HistoryTab {
                         current: cursor == Some(index),
                         key: DiffKey::None,
                     }
-                    .key((index, entry_addr(entry)))
+                    .key((index, entry_key(entry)))
                     .into()
                 })
                 .collect();
@@ -4595,20 +4588,67 @@ impl Component for HistoryTab {
     }
 }
 
-/// The Assembly pane: a dispatch over the three things [`Analyzed`] can be saying, and
-/// no work of its own at all.
+/// Which file the Source pane is drawing, and whose side of the tab it is.
 ///
-/// It reads the analysis and not `Sel`, which is what keeps the listing and the rows that
-/// draw it in step: while the worker is catching up the two disagree, and it is the
-/// analysis — the symbol whose disassembly is actually in hand — that everything from the
-/// gutter to the kept scroll position is keyed by.
+/// The one place either pane decides that, so the Source pane and the effect that drops
+/// its picked-out rows cannot disagree about which listing is up. A **subject** is the
+/// tab's own file, a **companion** is the file the drawn symbol was compiled from — and
+/// which of the two it is comes from the active document's kind and from nothing else.
+///
+/// The companion comes out of the *analysis* and not out of `Active`, because the two
+/// disagree for as long as the worker takes and it is the analysis that says which symbol
+/// is actually drawn. `SymbolLines` carries the file beside the line info for exactly
+/// this reason.
+enum SourceSide {
+    Subject(Arc<str>),
+    Companion(Arc<str>),
+}
+
+impl SourceSide {
+    fn file(&self) -> &Arc<str> {
+        match self {
+            SourceSide::Subject(file) | SourceSide::Companion(file) => file,
+        }
+    }
+}
+
+fn source_side(active: Option<&Document>, analysis: &Analyzed) -> Option<SourceSide> {
+    match active? {
+        Document::Source(file) => Some(SourceSide::Subject(file.clone())),
+        Document::Assembly(_) => {
+            let shown = analysis.shown.as_ref()?;
+            shown.lines.file.clone().map(SourceSide::Companion)
+        }
+    }
+}
+
+/// The Assembly pane: a dispatch over the things [`Analyzed`] can be saying, and no work
+/// of its own at all.
+///
+/// It reads the analysis and not the active document for everything it draws, which is
+/// what keeps the listing and the rows that draw it in step: while the worker is catching
+/// up the two disagree, and it is the analysis — the symbol whose disassembly is actually
+/// in hand — that everything from the gutter to the kept scroll position is keyed by.
+///
+/// The one thing it does ask the active document is what *kind* of tab this is, because
+/// on a source-driven one the assembly is the **companion** side and there is nothing to
+/// put in it yet: which symbols a source line compiled into is Step 2's index, and picking
+/// one of them is Step 1d. Until then this pane is empty for such a tab, rather than
+/// carrying the analysis' "No symbol selected" over from a tab where that is the answer.
 #[derive(PartialEq)]
 struct AssemblyTab;
 
 impl Component for AssemblyTab {
     fn render(&self) -> impl IntoElement {
-        let analysis = use_consume::<Analysis>().0.read().clone();
+        let active = use_consume::<Active>().0;
+        let analysis = use_consume::<Analysis>().0;
 
+        let source_driven = matches!(&*active.read(), Some(Document::Source(_)));
+        if source_driven {
+            return rect().expanded().background(palette().asm_pane_bg).into();
+        }
+
+        let analysis = analysis.read().clone();
         let studied = match analysis.showing() {
             Showing::Listing(studied) => studied,
             Showing::Message(text) => return placeholder(text),
@@ -4644,25 +4684,64 @@ impl Component for AssemblyTab {
     }
 }
 
+/// The bar over the Source pane naming the file it is showing as a **companion**, and
+/// opening that file as a tab of its own when it is pressed.
+///
+/// It exists because the strip no longer does the job. A companion file is not a tab —
+/// it is one side of the function's tab — so nothing else in the window says which file
+/// the pane is drawing, and the whole path used to be a tooltip on a chip that is gone.
+///
+/// Pressing it is also the way a **source-driven tab is made**: the reader is looking at a
+/// file and says "this file, on its own", and what they get is the same kind of thing the
+/// symbol list gives them. Until the project explorer and the source search land
+/// (`notes/Goals.md`, *Panels and tabs*) this is the only door into one, which is why it
+/// is a press and not a label.
+///
+/// A subject file gets no header: it is the tab, and the strip already names it.
+///
+/// The two states come in as arguments and are not consumed here: this is called from
+/// inside a `match`, and a hook may only run unconditionally in a component's body.
+fn companion_header(
+    open: State<Tabs<Document>>,
+    active: State<Option<Document>>,
+    file: Arc<str>,
+) -> Element {
+    let document = Document::Source(file.clone());
+
+    row_tooltip(
+        file.to_string(),
+        rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .width(Size::fill())
+            .height(Size::px(list_row_height()))
+            .padding(Gaps::new_symmetric(0.0, 8.0))
+            .spacing(6.0)
+            .background(palette().header_bg)
+            .border(bottom_hairline())
+            .on_press(move |_| activate(open, active, Some(document.clone())))
+            .child(entry_icon(&Document::Source(file.clone())))
+            .child(label().text(file_name(&file)).max_lines(1)),
+    )
+    .into_element()
+}
+
+/// The Source pane: the tab's source side, whichever of the two sides that is.
 #[derive(PartialEq)]
 struct SourceTab;
 
 impl Component for SourceTab {
     fn render(&self) -> impl IntoElement {
-        let files = use_consume::<Files>().0;
-        let shown = use_consume::<Shown>().0;
-        // Consumed unconditionally, hooks having to run on every render, but only read in
-        // the branch that needs it: which of the reasons nothing is open comes from the
-        // analysis, since the strip has nothing to say about it. Reading it there also
+        let active = use_consume::<Active>().0;
+        let open = use_consume::<Open>().0;
+        // Consumed unconditionally, hooks having to run on every render, and read here
+        // because the companion file comes out of it -- and because reading it is what
         // subscribes this tab to it, so the pane fills in when a newly selected symbol's
         // line info is worked out, without the root re-rendering.
-        let analysis = use_consume::<Analysis>().0;
+        let analysis = use_consume::<Analysis>().0.read().clone();
+        let side = source_side(active.read().as_ref(), &analysis);
 
-        let open: Vec<Arc<str>> = files.read().tabs().to_vec();
-        let file = shown.read().clone();
-
-        let Some(file) = file else {
-            let analysis = analysis.read().clone();
+        let Some(side) = side else {
             // The same answer the assembly pane gives, from the same place, so the two
             // panes cannot disagree about whether anything is selected -- with one more
             // case of its own, since a symbol can be analysed and still name no file.
@@ -4670,31 +4749,35 @@ impl Component for SourceTab {
                 Showing::Message(text) => placeholder(text),
                 Showing::Nothing => rect().expanded().background(palette().pane_bg).into(),
                 Showing::Listing(studied) if studied.lines.info.is_some() => {
-                    placeholder("No source file open")
+                    placeholder("No source file for this symbol")
                 }
                 Showing::Listing(_) => placeholder("No line info"),
             };
         };
 
+        let file = side.file().clone();
+        let document = match &side {
+            SourceSide::Subject(file) => Document::Source(file.clone()),
+            // The *drawn* symbol's tab and not the active one, which is the same rule the
+            // assembly side follows: while the worker is catching up the two disagree, and
+            // a row written down against the tab that is arriving would be a row of the
+            // listing that is leaving.
+            SourceSide::Companion(_) => match analysis.shown.as_ref() {
+                Some(studied) => Document::Assembly(Selection::Symbol(studied.symbol.clone())),
+                None => return rect().expanded().background(palette().pane_bg).into(),
+            },
+        };
+
         rect()
             .expanded()
-            // The strip takes its own height and the list is given the rest, which torin
+            // The header takes its own height and the list is given the rest, which torin
             // only works out for a `flex` child of a `Content::Flex` parent.
             .content(Content::Flex)
             .background(palette().pane_bg)
-            .child(chip_strip(
-                open.iter()
-                    .map(|open| {
-                        FileChip {
-                            file: open.clone(),
-                            active: *open == file,
-                            key: DiffKey::None,
-                        }
-                        .key(&**open)
-                        .into()
-                    })
-                    .collect(),
-            ))
+            .maybe_child(match &side {
+                SourceSide::Companion(file) => Some(companion_header(open, active, file.clone())),
+                SourceSide::Subject(_) => None,
+            })
             .child(
                 rect()
                     .width(Size::fill())
@@ -4703,7 +4786,12 @@ impl Component for SourceTab {
                     // source built on another machine, moved, or deleted since all look
                     // alike from here.
                     .child(match source_text(Path::new(&*file)) {
-                        Some(source) => SourceList { source, file }.into_element(),
+                        Some(source) => SourceList {
+                            source,
+                            file,
+                            document,
+                        }
+                        .into_element(),
                         None => placeholder(format!("Source file not found: {file}")),
                     }),
             )
@@ -6032,8 +6120,9 @@ fn reopen_binary(states: ProjectStates, path: PathBuf) {
         states.objects,
         states.loading,
         states.open,
-        states.selection,
+        states.active,
         states.asm_at,
+        states.src_at,
         states.history,
         &path,
     );
@@ -6937,19 +7026,16 @@ fn use_save_on_change(states: ProjectStates) {
         loading: _,
         open,
         asm_at,
-        selection,
-        history,
-        files,
         src_at,
-        shown,
+        active,
+        history,
     } = states;
 
     use_side_effect(move || {
         // Reading these subscribes the effect to them: any change re-runs it. Each
         // guard lives to the end of the statement it is created in, which is the one
-        // `record` call, and nothing here writes anything, so holding nine at once is
+        // `record` call, and nothing here writes anything, so holding several at once is
         // the safe half of the `peek`/`write` gotcha rather than the dangerous one.
-        let shown = shown.read();
         let objects = objects.read();
         project::record(
             // The user-given half, which since 8e is a state like the rest rather than
@@ -6962,11 +7048,9 @@ fn use_save_on_change(states: ProjectStates) {
                 &objects,
                 open.read().tabs(),
                 &asm_at.read(),
-                selection.read().as_ref(),
-                &history.read(),
-                files.read().tabs(),
                 &src_at.read(),
-                shown.as_deref(),
+                active.read().as_ref(),
+                &history.read(),
             ),
         );
     });
@@ -7014,23 +7098,23 @@ fn use_periodic_save() {
 /// change, and `would_push` is false because that entry is exactly what the cursor is
 /// now on. Navigation therefore costs no entry, and no separate "we are navigating"
 /// flag is needed to make that true.
-fn use_record_history(selection: State<Option<Selection>>, history: State<History>) {
+fn use_record_history(active: State<Option<Document>>, history: State<History>) {
     use_side_effect(move || {
-        // Reading subscribes the effect to the selection; `peek` on the history does
-        // not, because the effect must not subscribe to the state it writes.
-        let selection = selection.read().clone();
-        let Some(selection) = selection else {
-            // Nothing selected is not a place to come back to; it is the state the app
-            // boots into and the one an emptied strip leaves it in.
+        // Reading subscribes the effect to the active document; `peek` on the history
+        // does not, because the effect must not subscribe to the state it writes.
+        let active = active.read().clone();
+        let Some(active) = active else {
+            // Nothing open is not a place to come back to; it is the state the app boots
+            // into and the one an emptied strip leaves it in.
             return;
         };
 
         // `write()` notifies its subscribers before it hands the value over, whether or
         // not anything changes, so ask first: a push that would dedup away must not
         // wake the history panel.
-        if history.peek().would_push(&selection) {
+        if history.peek().would_push(&active) {
             let mut history = history;
-            history.write().push(selection);
+            history.write().push(active);
         }
     });
 }
@@ -7049,14 +7133,14 @@ fn use_record_history(selection: State<Option<Selection>>, history: State<Histor
 /// Its own effect for the reason `use_record_history` is: it has no business subscribing
 /// to anything but `Sel`, and the two concerns stay separable.
 fn use_clear_focus(
-    selection: State<Option<Selection>>,
+    active: State<Option<Document>>,
     focused: State<Option<LineFocus>>,
     pinned: State<Option<Pin>>,
 ) {
     use_side_effect(move || {
-        // Reading subscribes the effect to the selection, which is the whole of what it
-        // wants from it -- both are `None` again whatever the new selection is.
-        let _ = selection.read();
+        // Reading subscribes the effect to the active document, which is the whole of
+        // what it wants from it -- both are `None` again whatever the new one is.
+        let _ = active.read();
 
         let (mut focused, mut pinned) = (focused, pinned);
         focused.set_if_modified(None);
@@ -7082,70 +7166,41 @@ fn use_clear_focus(
 /// info and go when *it* does, while the source pane's run is a range of lines in a file
 /// that a change of symbol very often leaves open.
 fn use_clear_marks(
-    selection: State<Option<Selection>>,
-    shown: State<Option<Arc<str>>>,
+    active: State<Option<Document>>,
+    analysis: State<Analyzed>,
     marked: State<Option<Marks>>,
 ) {
     use_side_effect(move || {
-        let _ = selection.read();
+        let _ = active.read();
         unmark(marked, Pane::Assembly);
     });
+    // Which file the Source pane was drawing the last time this ran. An `Rc<RefCell>`
+    // and not a `State` for `use_kept_position`'s reason: nothing renders from it, and a
+    // state here would cost the root a second render every time the pane changed file.
+    let showing = use_hook(|| Rc::new(RefCell::new(None::<Arc<str>>)));
     use_side_effect(move || {
-        let _ = shown.read();
+        // The *file the Source pane is drawing*, which is what its rows index into, and
+        // which is not the active document: an assembly-driven tab draws its companion,
+        // so switching from one function to another compiled from the same file leaves
+        // the same lines on screen and the run picked out in them still means something.
+        // `source_side` is the one place either pane works that out, so this cannot
+        // disagree with what is drawn.
+        //
+        // Compared against what it last was rather than answered to directly, because
+        // reading the analysis subscribes this to all of it — a request going out and the
+        // slow flag turning over are writes to it that change no listing, and dropping a
+        // run of rows on one of those would take it away under the reader's hand.
+        let file =
+            source_side(active.read().as_ref(), &analysis.read()).map(|side| side.file().clone());
+        // Cloned out of the borrow before the `borrow_mut`, which panics exactly the way
+        // a `State` guard held across a write does.
+        let was = showing.borrow().clone();
+        if was == file {
+            return;
+        }
+        *showing.borrow_mut() = file;
+
         unmark(marked, Pane::Source);
-    });
-}
-
-/// Open a tab for the file the active symbol was compiled from, and put the Source pane
-/// on it.
-///
-/// This is what keeps the source side following the selection now that it has tabs of its
-/// own: selecting a function always shows that function's source, whichever file the
-/// reader had switched to by hand, and the file is added to the strip if it was not there
-/// already. Selecting one whose file *is* already open costs nothing but the focus moving
-/// to its chip.
-///
-/// Only the symbol's own file is opened, never the rest of `LineInfo::files`. A Rust
-/// function inlines dozens of them, and a strip that grew by dozens per click would stop
-/// being a strip; reaching an inlined header's source is a list of the files a symbol
-/// touches, which is a thing to build when there is somewhere to put it.
-///
-/// A selection with no line info opens nothing and closes nothing -- the pane keeps
-/// showing whatever was open, which is what tabs mean, and the assembly side already says
-/// that nothing is mapped by lighting no rows.
-///
-/// It reads the selection *and* the analysis, and checks that the two agree rather than
-/// trusting them to. The analysis of a symbol arrives from a worker thread, so for as long
-/// as it takes the panes are still drawing the symbol before it -- and opening a file
-/// named by the previous symbol's `LineInfo` would put the Source pane on a function
-/// nobody selected. [`Studied`] carries the symbol it is about for exactly this reason,
-/// and `SymbolLines` carries the file for the same one a step further down.
-///
-/// Both reads are also what it answers to. On the analysis, so a file opens the moment the
-/// worker has said which; on the selection, so that clicking the symbol already on screen
-/// brings the Source pane back to its file after the reader has switched to another chip
-/// by hand.
-fn use_open_source_file(
-    selection: State<Option<Selection>>,
-    analysis: State<Analyzed>,
-    files: State<Tabs<Arc<str>>>,
-    shown: State<Option<Arc<str>>>,
-) {
-    use_side_effect(move || {
-        // Both cloned out of their guards before anything is written: a `State` read
-        // hands back a guard, and one still alive across a write panics.
-        let current = selection.read().clone();
-        let studied = analysis.read().shown.clone();
-
-        let Some(studied) = studied else {
-            return;
-        };
-        if !matches!(&current, Some(Selection::Symbol(symbol)) if *symbol == studied.symbol) {
-            return;
-        }
-        if let Some(file) = studied.lines.file.clone() {
-            open_file(files, shown, file);
-        }
     });
 }
 
@@ -7182,8 +7237,8 @@ fn use_open_source_file(
 ///
 /// **What the panes show meanwhile** is in [`Analyzed`]: the listing they already have,
 /// until either the next one arrives or [`SLOW_ANALYSIS`] passes.
-fn use_analysis(selection: State<Option<Selection>>, analysis: State<Analyzed>) {
-    use_analysis_with(selection, analysis, Studied::new);
+fn use_analysis(active: State<Option<Document>>, analysis: State<Analyzed>) {
+    use_analysis_with(active, analysis, Studied::new);
 }
 
 /// The whole of [`use_analysis`], with the work itself as an argument so a test can hold
@@ -7191,7 +7246,7 @@ fn use_analysis(selection: State<Option<Selection>>, analysis: State<Analyzed>) 
 /// the one that arrives while the reader has already clicked on — and nothing can assert
 /// it against a worker that answers as fast as it is asked.
 fn use_analysis_with(
-    selection: State<Option<Selection>>,
+    active: State<Option<Document>>,
     mut analysis: State<Analyzed>,
     study: impl Fn(Symbol) -> Studied + Send + 'static,
 ) {
@@ -7229,8 +7284,11 @@ fn use_analysis_with(
             while let Ok(studied) = answers.recv().await {
                 // The superseding rule. Cloned out of the guard first, since everything
                 // below it writes.
-                let current = selection.peek().clone();
-                if !matches!(&current, Some(Selection::Symbol(symbol)) if *symbol == studied.symbol)
+                let current = active.peek().clone();
+                if !current
+                    .as_ref()
+                    .and_then(Document::symbol)
+                    .is_some_and(|symbol| *symbol == studied.symbol)
                 {
                     continue;
                 }
@@ -7259,15 +7317,15 @@ fn use_analysis_with(
     });
 
     use_side_effect(move || {
-        // Reading subscribes this to the selection, which is the only thing it answers
-        // to; the state it writes is `peek`ed, so it cannot wake itself.
-        let current = selection.read().clone();
+        // Reading subscribes this to the active document, which is the only thing it
+        // answers to; the state it writes is `peek`ed, so it cannot wake itself.
+        let current = active.read().clone();
 
-        let Some(Selection::Symbol(symbol)) = current else {
-            // Not a symbol. There is nothing to work out and so nothing to wait for, and
-            // the panes are told at once — clearing is instant even though replacing is
-            // not. Anything still in flight is for a place the reader has left and is
-            // dropped when it lands.
+        let Some(symbol) = current.as_ref().and_then(Document::symbol).cloned() else {
+            // Not a function: an object, a source file, or nothing open at all. There
+            // is nothing to work out and so nothing to wait for, and the panes are told
+            // at once — clearing is instant even though replacing is not. Anything still
+            // in flight is for a place the reader has left and is dropped when it lands.
             analysis.set_if_modified(Analyzed::default());
             return;
         };
@@ -7341,7 +7399,7 @@ impl Nav {
     }
 
     /// Move the cursor and hand back the entry it landed on.
-    fn step(self, history: &mut History) -> Option<Selection> {
+    fn step(self, history: &mut History) -> Option<Document> {
         match self {
             Self::Back => history.back(),
             Self::Forward => history.forward(),
@@ -7363,15 +7421,15 @@ impl Nav {
 /// has been and keeps entries long after their tab was closed, so going back to one has to
 /// be able to open a tab for it again.
 fn navigate(
-    open: State<Tabs<Selection>>,
+    open: State<Tabs<Document>>,
     mut history: State<History>,
-    selection: State<Option<Selection>>,
+    active: State<Option<Document>>,
     nav: Nav,
 ) {
     // Ask before writing. `State::write` notifies its subscribers whether or not the
     // value it hands over changes, so back at the oldest entry -- or forward at the
     // newest -- must not reach for it at all: a no-op has to leave the history alone,
-    // leave the selection on screen alone, and wake nothing.
+    // leave the document on screen alone, and wake nothing.
     if !nav.possible(&history.peek()) {
         return;
     }
@@ -7380,7 +7438,7 @@ fn navigate(
     // and `use_record_history` peeks the history back.
     let entry = nav.step(&mut history.write());
     if entry.is_some() {
-        activate(open, selection, entry);
+        activate(open, active, entry);
     }
 }
 
@@ -7413,7 +7471,7 @@ fn use_restore_on_startup(states: ProjectStates) {
     });
 }
 
-/// Put a project's binaries, tabs, selection, source files and history on screen.
+/// Put a project's binaries, tabs, active document and history on screen.
 ///
 /// The whole of what a restore *is*, and shared by the two things that do one -- the app
 /// starting and a switch to another project -- so that the second cannot drift from the
@@ -7427,45 +7485,39 @@ fn use_restore_on_startup(states: ProjectStates) {
 /// swallows its own failures), `Session::resolve` falls back from a vanished symbol to
 /// its object and from a vanished object to nothing, and `Session::resolve_history` and
 /// `Session::resolve_tabs` drop what no longer points anywhere -- the history keeping
-/// its cursor on the right one.
+/// its cursor on the right one. A source-driven tab resolves against nothing and so
+/// always comes back, a deleted file included: it returns as a tab over the pane's own
+/// "Source file not found", which is the true answer and a visible one.
 ///
-/// **Both strips are rebuilt through the functions that hold the app's invariants**,
-/// never by writing either list directly, so a restored session is in a state the app
-/// could have got into by hand: every content tab through [`activate`], every source
-/// file through [`open_file`]. Two orderings follow from that and are the only
-/// genuinely new rules here:
+/// **The strip is rebuilt through the functions that hold the app's invariants**, never
+/// by writing the list directly, so a restored session is in a state the app could have
+/// got into by hand: every tab through [`activate`], of either kind. Two orderings follow
+/// from that and are the only genuinely new rules here:
 ///
-/// - The **tabs before the selection**. `activate` opens what it cannot find, so
-///   restoring the selection first would leave its chip at the end of the strip instead
-///   of in the place the reader left it. The other direction is safe: the selection can
-///   have degraded to its object while the strip still holds the symbol, and `activate`
-///   simply opens a tab for it, which is also what the reader would see had they closed
-///   that tab themselves.
-/// - The **shown source file last**, since `open_file` puts the pane on whatever it just
-///   opened. It is asked for by name and answers with the copy already in the list, so
-///   the second call moves the pane and adds nothing.
-///
-/// The one thing the restore cannot promise is that the pane *stays* on that file:
-/// `use_open_source_file` follows the selection, so the moment `Lines` resolves for the
-/// restored symbol the pane moves to that symbol's own file. That is the pane's rule and
-/// not a lost restore -- clicking the same symbol in a running session does the same --
-/// and the strip it moves within is the restored one either way.
+/// - The **tabs before the active document**. `activate` opens what it cannot find, so
+///   restoring the active one first would leave its tab at the end of the strip instead
+///   of in the place the reader left it. The other direction is safe: it can have
+///   degraded to its object while the strip still holds the symbol, and `activate` simply
+///   opens a tab for it, which is also what the reader would see had they closed that tab
+///   themselves.
+/// - The **rows go into the two `Positions` maps before the tabs are opened**. Those maps
+///   are the one thing the restore writes directly, and a pane puts its view back when it
+///   notices the tab it is showing has changed, so a row arriving after the `activate`
+///   arrives after the only moment anything looks at it.
 ///
 /// Every write below happens in one go, before the frame can end: freya's effects are
 /// woken by an async notify (`Effect::create`) rather than run at the write, so
 /// `use_record_history` and `use_save_on_change` see the settled result once and not
-/// each intermediate `Sel` the tab loop passes through.
+/// each intermediate `Active` the tab loop passes through.
 fn restore_project(states: ProjectStates, project: Project, session: Session) {
     let ProjectStates {
         objects,
         loading,
         open,
         mut asm_at,
-        selection,
-        history,
-        files,
         mut src_at,
-        shown,
+        active,
+        history,
         ..
     } = states;
 
@@ -7476,9 +7528,10 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
     spawn(async move {
         // The objects arrive as they are parsed and the sidebar fills in behind them, so
         // the reader can be clicking through the first archive member before the last one
-        // exists. What waits for the whole load is the *session*: a tab, a selection or a
-        // history entry is resolved against the objects by name, and resolving one against
-        // a half-filled list would drop the tabs whose object had not landed yet.
+        // exists. What waits for the whole load is the *session*: a tab, the active
+        // document or a history entry is resolved against the objects by name, and
+        // resolving one against a half-filled list would drop the tabs whose object had
+        // not landed yet.
         open_binaries(objects, loading, project.binaries.clone()).await;
 
         let (objects, mut history) = (objects, history);
@@ -7489,11 +7542,10 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         }
 
         // Resolved against everything now loaded rather than just what this load
-        // contributed, so
-        // this stays correct if the user managed to open something first. All
-        // three are computed before any of them is set so the read guard is long
-        // gone by the time anything is notified.
-        let (restored_history, restored_tabs, restored_selection) = {
+        // contributed, so this stays correct if the user managed to open something
+        // first. All three are computed before any of them is set so the read guard is
+        // long gone by the time anything is notified.
+        let (restored_history, restored_tabs, restored_active) = {
             let loaded = objects.read();
             (
                 session.resolve_history(&loaded),
@@ -7502,77 +7554,57 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
             )
         };
 
-        // The history first, so that when `use_record_history` observes the
-        // selection there is already a cursor to dedup against. The saved cursor
-        // entry is the saved selection -- that is what put it there -- and the two
-        // resolve through the same lookup to the same `Arc`s, so `would_push` is
-        // false and the restored session costs no duplicate entry. It is only when
-        // the cursor entry was dropped, or the selection degraded, that the two
-        // differ, and then a push is exactly right: the app is somewhere new.
+        // The history first, so that when `use_record_history` observes the active
+        // document there is already a cursor to dedup against. The saved cursor entry is
+        // the saved active document -- that is what put it there -- and the two resolve
+        // through the same lookup to the same `Arc`s, so `would_push` is false and the
+        // restored session costs no duplicate entry. It is only when the cursor entry was
+        // dropped, or the active document degraded, that the two differ, and then a push
+        // is exactly right: the app is somewhere new.
         history.set(restored_history);
 
-        // The strip, oldest chip first, and then the one that was active. Each of
-        // these is a `Sel` write that will be overwritten by the next, which is the
-        // price of there being exactly one way to open a content tab; the last one
-        // is the only one anything observes.
-        //
-        // Where each tab was left goes in *before* the tab is opened, and this is the
-        // one place either map is written from outside a pane. A pane restores its
-        // position when it notices the tab it is showing has changed, so a row that
-        // arrived after the `activate` would arrive after the only moment it is
-        // looked at.
+        // Where each side of each tab was left goes in *before* the tab is opened; see
+        // above. Then the strip, oldest tab first, and then the one that was active. Each
+        // of these is an `Active` write that will be overwritten by the next, which is the
+        // price of there being exactly one way to open a tab; the last one is the only one
+        // anything observes.
         {
-            let mut at = asm_at.write();
-            for (tab, row) in &restored_tabs {
-                at.remember(tab.clone(), *row);
+            let (mut asm, mut src) = (asm_at.write(), src_at.write());
+            for (tab, asm_row, src_row) in &restored_tabs {
+                asm.remember(tab.clone(), *asm_row);
+                src.remember(tab.clone(), *src_row);
             }
         }
-        for (tab, _) in restored_tabs {
-            activate(open, selection, Some(tab));
+        for (tab, _, _) in restored_tabs {
+            activate(open, active, Some(tab));
         }
-        activate(open, selection, restored_selection);
-
-        // The Source pane's strip, which needs no resolving: a path that is gone is
-        // still a tab, showing the pane's own "Source file not found".
-        let restored_sources = session.resolve_sources();
-        {
-            let mut at = src_at.write();
-            for (file, row) in &restored_sources {
-                at.remember(file.clone(), *row);
-            }
-        }
-        for (file, _) in &restored_sources {
-            open_file(files, shown, file.clone());
-        }
-        if let Some(file) = session.shown_source() {
-            open_file(files, shown, Arc::from(file));
-        }
+        activate(open, active, restored_active);
     });
 }
 
 /// Empty the app of everything that belonged to the project being left.
 ///
-/// **Through the five functions that hold the invariants and nothing else**, which is the
+/// **Through the functions that hold the invariants and nothing else**, which is the
 /// same rule a restore goes through in the other direction: closing every binary takes
-/// its objects, its tabs, their viewing positions, the history entries into it and the
-/// selection with them ([`close_binary`]), and closing every source file takes the Source
-/// pane's strip ([`close_file`]). Writing the lists directly would be shorter and would
-/// be the one place in the app where "the selection is the active tab" was held by hand.
+/// its objects, its assembly-driven tabs, their viewing positions, the history entries
+/// into it and the active document with them ([`close_binary`]), and the source-driven
+/// tabs it deliberately leaves standing are then closed one by one ([`close_tab`]).
+/// Writing the list directly would be shorter and would be the one place in the app where
+/// "the active document is the active tab" was held by hand.
 ///
-/// The Source pane is emptied here where a closing *binary* deliberately leaves it alone:
-/// a file chip outlives the binary that opened it because the text stands on its own, but
-/// it does not outlive the project, whose session is what recorded that it was open.
+/// The source tabs go here where a closing *binary* deliberately leaves them alone: a
+/// file tab outlives the binary that led the reader to it because the text stands on its
+/// own, but it does not outlive the project, whose session is what recorded that it was
+/// open.
 fn clear_project(states: ProjectStates) {
     let ProjectStates {
         objects,
         mut loading,
         open,
         asm_at,
-        selection,
-        history,
-        files,
         src_at,
-        shown,
+        active,
+        history,
         ..
     } = states;
 
@@ -7585,12 +7617,14 @@ fn clear_project(states: ProjectStates) {
     // also the plain iteration rule: `close_binary` writes the very list being walked.
     let binaries = project::binaries(&objects.peek());
     for path in binaries {
-        close_binary(objects, loading, open, selection, asm_at, history, &path);
+        close_binary(
+            objects, loading, open, active, asm_at, src_at, history, &path,
+        );
     }
 
-    let sources = files.peek().tabs().to_vec();
-    for file in &sources {
-        close_file(files, shown, src_at, file);
+    let remaining = open.peek().tabs().to_vec();
+    for tab in &remaining {
+        close_tab(open, active, asm_at, src_at, tab);
     }
 }
 
@@ -7661,25 +7695,22 @@ pub fn app() -> impl IntoElement {
     // still-being-read rows from. Beside `objects` because it is the same list seen a
     // moment earlier.
     let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;
-    let selection = use_provide_context(|| Sel(State::create(None))).0;
-    // The places open in the content area, of which `selection` is the active one, and the
-    // source files open in the Source pane, of which `shown` is. Both lists are opened and
-    // closed only through `activate`/`close_tab` and `open_file`/`close_file`, which is
-    // what keeps "the selection is the active tab" and "a file is shown exactly when one
-    // is open" invariants rather than conventions -- for the startup restore as much as
-    // for a click, since both lists are now part of the saved session.
+    let active = use_provide_context(|| Active(State::create(None))).0;
+    // The places open in the content area, of which `active` is the one on screen. The
+    // list is opened and closed only through `activate`/`close_tab`, which is what keeps
+    // "the active document is the active tab" an invariant rather than a convention --
+    // for the startup restore as much as for a click, since the list is part of the saved
+    // session.
     let open = use_provide_context(|| Open(State::create(Tabs::default()))).0;
-    let files = use_provide_context(|| Files(State::create(Tabs::default()))).0;
-    let shown = use_provide_context(|| Shown(State::create(None))).0;
-    // Where each of those tabs was left, which is a view of the two lists rather than a
-    // second copy of them: an entry appears when a pane is scrolled and goes when the tab
-    // it belongs to is closed, so the same five functions hold this true as hold the
-    // lists themselves.
+    // Where each side of each tab was left, which is a view of that list rather than a
+    // second copy of it: an entry appears when a pane is scrolled and goes when the tab
+    // it belongs to is closed, so the same functions hold this true as hold the list
+    // itself.
     let asm_at = use_provide_context(|| AsmAt(State::create(Positions::default()))).0;
     let src_at = use_provide_context(|| SrcAt(State::create(Positions::default()))).0;
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     // Where the pointer is pointing, which the assembly and source panes answer for each
-    // other. A plain state like the three above rather than something derived from them:
+    // other. A plain state like the ones above rather than something derived from them:
     // it is an input, written by whichever row the pointer is on.
     let focused = use_provide_context(|| Focused(State::create(None))).0;
     // Where a click fixed the two panes, which outlives the pointer moving on and is what
@@ -7696,7 +7727,7 @@ pub fn app() -> impl IntoElement {
     // because the project view both draws it and edits it -- which is also what let the
     // save policy stop carrying the name across its own calls.
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
-    // The ten of them together, since a project switch closes all of them and reopens
+    // The eight of them together, since a project switch closes all of them and reopens
     // all of them.
     let states = ProjectStates {
         proj,
@@ -7704,16 +7735,13 @@ pub fn app() -> impl IntoElement {
         loading,
         open,
         asm_at,
-        selection,
-        history,
-        files,
         src_at,
-        shown,
+        active,
+        history,
     };
     use_save_on_change(states);
-    use_record_history(selection, history);
-    use_clear_focus(selection, focused, pinned);
-    use_clear_marks(selection, shown, marked);
+    use_record_history(active, history);
+    use_clear_focus(active, focused, pinned);
     use_periodic_save();
     // After the save effect on purpose: the effect is in place, with the save policy's
     // empty baseline, before the restore can put anything into any of the states it
@@ -7744,9 +7772,10 @@ pub fn app() -> impl IntoElement {
     // binary builds the whole DWARF context (267 MB for `viewer-sample`) and stalled the
     // frame that asked for it.
     let analysis = use_provide_context(|| Analysis(State::create(Analyzed::default()))).0;
-    use_analysis(selection, analysis);
-    // Registered after the state it follows, for the obvious reason.
-    use_open_source_file(selection, analysis, files, shown);
+    use_analysis(active, analysis);
+    // After the analysis, because the file the Source pane draws for an assembly-driven
+    // tab is what the analysis says it is.
+    use_clear_marks(active, analysis, marked);
 
     // The scratchpad: the source the reader edits, the crates it asks for, and the worker
     // that is the only thing which ever reads or writes its directory. Both states are
@@ -7849,8 +7878,8 @@ pub fn app() -> impl IntoElement {
         // stopping propagation. The rows are unaffected -- `on_press` is left-button
         // only -- and so is `on_secondary_down`, which asks for the right button.
         .on_global_pointer_down(move |e: Event<PointerEventData>| match e.button() {
-            Some(MouseButton::Back) => navigate(open, history, selection, Nav::Back),
-            Some(MouseButton::Forward) => navigate(open, history, selection, Nav::Forward),
+            Some(MouseButton::Back) => navigate(open, history, active, Nav::Back),
+            Some(MouseButton::Forward) => navigate(open, history, active, Nav::Forward),
             _ => {}
         })
         // A row selection is swept out with the button down and ends wherever the button
@@ -8111,7 +8140,7 @@ mod tests {
         rect().expanded()
     }
 
-    /// The ten contexts `app()` provides, in one `ProjectStates`, so a test can drive a
+    /// The eight contexts `app()` provides, in one `ProjectStates`, so a test can drive a
     /// switch exactly as the recent list's press does.
     ///
     /// A macro and not a function: the runner's type is `freya_core::integration::Runner`,
@@ -8138,68 +8167,59 @@ mod tests {
                 asm_at: $runner
                     .provide_root_context(|| AsmAt(State::create(Positions::default())))
                     .0,
-                selection: $runner.provide_root_context(|| Sel(State::create(None))).0,
-                history: $runner
-                    .provide_root_context(|| Hist(State::create(History::default())))
-                    .0,
-                files: $runner
-                    .provide_root_context(|| Files(State::create(Tabs::default())))
-                    .0,
                 src_at: $runner
                     .provide_root_context(|| SrcAt(State::create(Positions::default())))
                     .0,
-                shown: $runner
-                    .provide_root_context(|| Shown(State::create(None)))
+                active: $runner
+                    .provide_root_context(|| Active(State::create(None)))
+                    .0,
+                history: $runner
+                    .provide_root_context(|| Hist(State::create(History::default())))
                     .0,
             }
         };
     }
 
-    /// Leaving a project leaves nothing of it behind: no object, no tab, no viewing
-    /// position, no history entry, no source file and no selection.
+    /// Leaving a project leaves nothing of it behind: no object, no tab of either kind,
+    /// no viewing position, no history entry and nothing active.
     ///
     /// Headless for the reason the swept run below is. `clear_project` goes through
-    /// `close_binary` and `close_file`, and each of those reads a state and then writes
+    /// `close_binary` and `close_tab`, and each of those reads a state and then writes
     /// it -- which is legal to the compiler and panics at the moment it runs if the read
     /// is still borrowed. Asserting the emptiness is half of it; the other half is that
     /// the whole walk happens at all.
+    ///
+    /// The source-driven tab is the case a binary close deliberately leaves standing, so
+    /// it is the one only this walk reaches.
     #[test]
     fn leaving_a_project_leaves_nothing_of_it_behind() {
         let symbols = fixture_symbols();
         let (first, second) = (symbols[0].clone(), symbols[1].clone());
         let object = first.object.clone();
+        let source = Document::Source(Arc::from("/src/main.rs"));
 
         let (mut test, states) =
             TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
         test.sync_and_update();
 
         // The app as a session leaves it: a binary open, two of its functions in the
-        // strip with a row remembered for one of them, a source file open and somewhere
-        // to go back to.
-        let (mut objects, mut history, mut asm_at) =
-            (states.objects, states.history, states.asm_at);
+        // strip with a row remembered for one of them, a source file open beside them and
+        // somewhere to go back to.
+        let (mut objects, mut history, mut asm_at, mut src_at) =
+            (states.objects, states.history, states.asm_at, states.src_at);
         objects.write().push(object.clone());
-        activate(
-            states.open,
-            states.selection,
-            Some(Selection::Symbol(first.clone())),
-        );
-        activate(
-            states.open,
-            states.selection,
-            Some(Selection::Symbol(second.clone())),
-        );
-        history.write().push(Selection::Symbol(first.clone()));
-        history.write().push(Selection::Symbol(second.clone()));
-        asm_at
-            .write()
-            .remember(Selection::Symbol(first.clone()), 12);
-        open_file(states.files, states.shown, Arc::from("/src/main.rs"));
+        let tab = |symbol: &Symbol| Document::Assembly(Selection::Symbol(symbol.clone()));
+        activate(states.open, states.active, Some(tab(&first)));
+        activate(states.open, states.active, Some(tab(&second)));
+        activate(states.open, states.active, Some(source.clone()));
+        history.write().push(tab(&first));
+        history.write().push(tab(&second));
+        asm_at.write().remember(tab(&first), 12);
+        src_at.write().remember(source.clone(), 7);
         test.sync_and_update();
 
-        assert_eq!(states.open.peek().tabs().len(), 2);
+        assert_eq!(states.open.peek().tabs().len(), 3);
         assert_eq!(states.history.peek().entries().len(), 2);
-        assert_eq!(states.files.peek().tabs().len(), 1);
 
         clear_project(states);
         test.sync_and_update();
@@ -8216,21 +8236,71 @@ mod tests {
             states.history.peek().entries().is_empty(),
             "a history entry was left behind"
         );
-        assert!(
-            states.files.peek().tabs().is_empty(),
-            "a source file was left behind"
-        );
-        assert!(states.shown.peek().is_none(), "a file is still shown");
-        // Not tidiness: a `Selection` key holds the `Arc<Object>` it points into, so a
-        // position left here would hold the whole binary of the project just left.
+        // Not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points
+        // into, so a position left here would hold the whole binary of the project just
+        // left.
         assert_eq!(
-            states.asm_at.peek().at(&Selection::Symbol(first)),
+            states.asm_at.peek().at(&tab(&first)),
             None,
             "a viewing position was left behind"
         );
+        assert_eq!(
+            states.src_at.peek().at(&source),
+            None,
+            "a source position was left behind"
+        );
         assert!(
-            states.selection.peek().is_none(),
-            "the selection still points into the project just left"
+            states.active.peek().is_none(),
+            "the app still points into the project just left"
+        );
+    }
+
+    /// Closing a binary takes its own tabs and leaves a source-driven one standing.
+    ///
+    /// The rule the one strip inherited from the two: a file tab outlives the binary that
+    /// led the reader to it, because the text stands on its own and nothing records which
+    /// object opened it. Worth a runner rather than a `Tabs` test, because what has to
+    /// hold is that `close_binary` lands the *active* document somewhere sensible when the
+    /// tab it was on goes and a tab of the other kind is what is left.
+    #[test]
+    fn closing_a_binary_keeps_the_source_tabs() {
+        let symbols = fixture_symbols();
+        let symbol = symbols[0].clone();
+        let object = symbol.object.clone();
+        let path = object.path.clone();
+        let source = Document::Source(Arc::from("/src/main.rs"));
+        let function = Document::Assembly(Selection::Symbol(symbol));
+
+        let (mut test, states) =
+            TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+        test.sync_and_update();
+
+        let mut objects = states.objects;
+        objects.write().push(object);
+        activate(states.open, states.active, Some(source.clone()));
+        activate(states.open, states.active, Some(function.clone()));
+        test.sync_and_update();
+        assert_eq!(states.open.peek().tabs().len(), 2);
+
+        close_binary(
+            states.objects,
+            states.loading,
+            states.open,
+            states.active,
+            states.asm_at,
+            states.src_at,
+            states.history,
+            &path,
+        );
+        test.sync_and_update();
+
+        assert!(
+            states.open.peek().tabs() == [source.clone()],
+            "the file tab went with the binary"
+        );
+        assert!(
+            *states.active.peek() == Some(source),
+            "closing the binary did not land on the tab that survived it"
         );
     }
 
@@ -8401,8 +8471,9 @@ mod tests {
             states.objects,
             states.loading,
             states.open,
-            states.selection,
+            states.active,
             states.asm_at,
+            states.src_at,
             states.history,
             &path,
         );
@@ -8473,8 +8544,8 @@ mod tests {
 
         // Through `activate`, which is the only way anything opens a tab -- a partially
         // read file is not a special case for it.
-        let opened = Selection::Object(objects[0].clone());
-        activate(states.open, states.selection, Some(opened.clone()));
+        let opened = Document::Assembly(Selection::Object(objects[0].clone()));
+        activate(states.open, states.active, Some(opened.clone()));
         test.sync_and_update();
 
         for object in &objects[1..] {
@@ -8489,8 +8560,8 @@ mod tests {
         pump(&mut test, || !states.loading.peek().is_loading(&path));
 
         assert!(
-            *states.selection.peek() == Some(opened),
-            "the selection moved while the rest of the file was arriving"
+            *states.active.peek() == Some(opened),
+            "the active document moved while the rest of the file was arriving"
         );
         assert_eq!(states.open.peek().tabs().len(), 1);
         assert_eq!(states.objects.peek().len(), 3);
@@ -8552,12 +8623,12 @@ mod tests {
     /// The analysis wiring and nothing else: no panes, since what is under test is which
     /// answers reach them rather than what they draw.
     fn analysis_harness() -> impl IntoElement {
-        let selection = use_consume::<Sel>().0;
+        let active = use_consume::<Active>().0;
         let analysis = use_consume::<Analysis>().0;
         let study = use_consume::<Study>().0;
         let mut seen = use_consume::<Seen>().0;
 
-        use_analysis_with(selection, analysis, move |symbol| study(symbol));
+        use_analysis_with(active, analysis, move |symbol| study(symbol));
 
         use_side_effect(move || {
             let shown = analysis.read().shown.clone();
@@ -8652,7 +8723,9 @@ mod tests {
             move |runner| {
                 runner.provide_root_context(|| Study(Arc::new(study)));
                 (
-                    runner.provide_root_context(|| Sel(State::create(None))).0,
+                    runner
+                        .provide_root_context(|| Active(State::create(None)))
+                        .0,
                     runner
                         .provide_root_context(|| Analysis(State::create(Analyzed::default())))
                         .0,
@@ -8672,7 +8745,7 @@ mod tests {
         settle(&mut test);
 
         // The first click. The worker takes it and stops inside it.
-        selection.set(Some(Selection::Symbol(first.clone())));
+        selection.set(Some(Document::Assembly(Selection::Symbol(first.clone()))));
         pump(&mut test, || !starts.is_empty());
         assert!(starts.recv_blocking().expect("the worker started") == first);
         assert!(
@@ -8682,7 +8755,7 @@ mod tests {
 
         // The second click, while the first is still being worked on. That the UI takes
         // it at all is the other half of what this sub-step is for.
-        selection.set(Some(Selection::Symbol(second.clone())));
+        selection.set(Some(Document::Assembly(Selection::Symbol(second.clone()))));
         settle(&mut test);
 
         // Let the first one finish. Its answer is on the channel by the time the worker
@@ -8715,7 +8788,7 @@ mod tests {
     }
 
     /// The happy path, over the real work rather than a gate: a symbol selected comes back
-    /// disassembled, with the line info and the file the Source pane opens on beside it,
+    /// disassembled, with the line info and the file the Source pane draws beside it,
     /// and with the panes told about it exactly once.
     #[test]
     fn a_selected_symbol_comes_back_disassembled_and_mapped() {
@@ -8730,7 +8803,9 @@ mod tests {
             |runner| {
                 runner.provide_root_context(|| Study(Arc::new(Studied::new)));
                 (
-                    runner.provide_root_context(|| Sel(State::create(None))).0,
+                    runner
+                        .provide_root_context(|| Active(State::create(None)))
+                        .0,
                     runner
                         .provide_root_context(|| Analysis(State::create(Analyzed::default())))
                         .0,
@@ -8744,7 +8819,7 @@ mod tests {
         let mut selection = selection;
         test.sync_and_update();
 
-        selection.set(Some(Selection::Symbol(symbol.clone())));
+        selection.set(Some(Document::Assembly(Selection::Symbol(symbol.clone()))));
         pump(&mut test, || analysis.peek().shown.is_some());
 
         let state = analysis.peek().clone();
