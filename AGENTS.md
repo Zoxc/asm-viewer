@@ -72,6 +72,7 @@ command.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
 - `src/tree.rs` — the Objects list's tree shape, and which files are still being read into it.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
+- `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
 - `src/rows.rs` — the run of rows a reader picks out to copy.
 - `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the document it stands for.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.

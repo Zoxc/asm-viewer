@@ -277,13 +277,29 @@ impl Component for BranchLabel {
 /// columns and the two halves of a corner meet in the middle of the row. It is also why
 /// `InstructionRow` pads horizontally only: a line has to reach the row's own top and
 /// bottom edges, or the gutter comes out dashed with one gap per row.
+///
+/// Every stroke here is put on the device pixel grid by its **edges** ([`Grid`]), never
+/// by placing its centre on a fraction: a one-pixel line drawn across two device pixels
+/// comes out as two grey ones, which beside the crisp text next to it reads as blurred.
+/// The two exceptions are deliberate -- the row's own top and bottom, which a line must
+/// reach exactly or the column is dashed, and the arrowhead's diagonals, which no
+/// placement can align and which are drawn half a device pixel wider instead.
 fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
+    let grid = pixel_grid();
     let height = code_row_height();
-    let middle = height / 2.0;
+    // The row of device pixels the horizontal run is drawn in. It is also where the two
+    // halves of a corner meet and where the arrowhead pivots, so all three are put on the
+    // grid by this one answer rather than each rounding `height / 2.0` for itself.
+    let run = grid.stroke(height / 2.0, BRANCH_STROKE);
     // Where an arrowhead points, and where a horizontal run ends. Lane 0 is the innermost,
     // so the lanes are laid out leftwards from here.
-    let tip = width as f32 * LANE_WIDTH + ARROW_WIDTH;
-    let lane_x = move |lane: usize| (width - 1 - lane) as f32 * LANE_WIDTH + LANE_WIDTH / 2.0;
+    let tip = grid.edge(width as f32 * LANE_WIDTH + ARROW_WIDTH);
+    let column = move |lane: usize| {
+        grid.stroke(
+            (width - 1 - lane) as f32 * LANE_WIDTH + LANE_WIDTH / 2.0,
+            BRANCH_STROKE,
+        )
+    };
 
     // The horizontal run and the arrowhead are the two ends of one gesture, so both are
     // lit exactly when a branch of the hovered row has an end in this one.
@@ -302,46 +318,45 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
     };
 
     rect()
-        .width(Size::px(tip + GUTTER_PAD))
-        .height(Size::px(code_row_height()))
+        .width(Size::px(grid.edge(tip + GUTTER_PAD)))
+        .height(Size::px(height))
         .children((0..width).filter_map(move |lane| {
             let vertical = arrows.lanes.lanes[lane];
+            // A half stroke ends at the far side of the horizontal run rather than at its
+            // centre line, so the corner is filled to the pixel instead of ending inside
+            // the run and leaving the notch that an antialiased end would draw there.
             let (top, tall) = match (vertical.top, vertical.bottom) {
                 (true, true) => (0.0, height),
-                (true, false) => (0.0, middle),
-                (false, true) => (middle, height - middle),
+                (true, false) => (0.0, run.far()),
+                (false, true) => (run.near, height - run.near),
                 (false, false) => return None,
             };
 
+            let column = column(lane);
             Some(
-                stroke(
-                    lane_x(lane) - BRANCH_STROKE / 2.0,
-                    top,
-                    BRANCH_STROKE,
-                    tall,
-                    arrows.lit.lanes[lane],
-                )
-                .into_element(),
+                stroke(column.near, top, column.thick, tall, arrows.lit.lanes[lane]).into_element(),
             )
         }))
         .maybe_child(arrows.lanes.stub.map(|lane| {
-            stroke(
-                lane_x(lane),
-                middle - BRANCH_STROKE / 2.0,
-                tip - lane_x(lane),
-                BRANCH_STROKE,
-                lit,
-            )
+            // From the near edge of its lane's own stroke and not from the lane's centre:
+            // the half pixel that adds is under that stroke, and starting on the grid is
+            // what keeps the run's own left edge crisp where the lane has no stroke to
+            // hide it.
+            let across = grid.span(column(lane).near, tip);
+            stroke(across.near, run.near, across.thick, run.thick, lit)
         }))
         // The two strokes of the arrowhead are one stroke turned about its right end,
-        // which is the tip, once each way.
+        // which is the tip, once each way. A diagonal cannot be put on the grid at all, so
+        // it is weighted instead of aligned -- `Grid::diagonal` -- and only its pivot is
+        // snapped, which is the run's own end.
         .maybe(arrows.lanes.arrow, |el| {
-            el.children([ARROW_ANGLE, -ARROW_ANGLE].map(|angle| {
+            let barb = grid.diagonal(BRANCH_STROKE);
+            el.children([ARROW_ANGLE, -ARROW_ANGLE].map(move |angle| {
                 stroke(
                     tip - ARROW_STROKE,
-                    middle - BRANCH_STROKE / 2.0,
+                    run.centre() - barb / 2.0,
                     ARROW_STROKE,
-                    BRANCH_STROKE,
+                    barb,
                     lit,
                 )
                 .rotate(angle)

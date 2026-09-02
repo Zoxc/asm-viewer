@@ -248,15 +248,27 @@ one item per part, so the unfinished half stays visible.
   and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
   as the symbol needs; past five, the outermost lane is shared. Hovering a row draws its own
   branches darker, all the way to where they go.
-- [ ] Pixel-align the gutter's strokes. Every stroke in `gutter` is placed at a fractional
-  coordinate — `lane_x` is `LANE_WIDTH / 2.0` off a multiple, a vertical is cut at
-  `code_row_height() / 2.0`, and the whole row sits wherever a row height that is itself a
-  function of the font puts it — so a one-pixel line lands across two device pixels and is
-  drawn as two grey ones. It reads as blurred beside the crisp text next to it. What it needs
-  is the stroke's edges rounded to the device pixel grid rather than its centre placed on a
-  fraction, which means the scale factor reaching `gutter`, and a decision about whether the
-  arrowhead's diagonal is worth aligning at all or should simply be drawn a half-pixel wider.
-  Judged on a 1× display, where the fault is visible; on a 2× one it very nearly is not.
+- [x] Pixel-align the gutter's strokes. Every stroke in `gutter` is now placed by its **edges**
+  through `Grid` (`src/pixels.rs`), which rounds them to the device pixel grid rather than
+  putting a centre on a fraction and letting a one-pixel line come out as two grey ones. The
+  scale factor was there to be had: freya keeps it on `Platform`, a root context the renderer
+  writes and `freya-testing` takes from `with_scale_factor`, so `pixel_grid()` in
+  `ui/metrics.rs` reads it the way `fonts()` and `palette()` are read and subscribes the row
+  that asked. What was really blurred at 1× was the horizontal run and the cut at
+  `code_row_height() / 2.0` — whole numbers whenever the row height is even, and so half-pixels
+  once a stroke was centred on them; the lanes' own columns already landed right, `lane_x`
+  being half a pixel off a multiple and the stroke half a pixel wide. At a fractional scale all
+  of it was off. The arrowhead's diagonals are **not** aligned and never could be — at 30° a
+  line crosses into a new row of pixels wherever it is put — so they are weighted instead of
+  aligned: half a device pixel more ink, so the two rows the antialiasing spreads them over stop
+  reading lighter than the crisp run they point along. Only their pivot is snapped, and it is
+  that run's own end. The row's own top and bottom stay exact, a lane's line having to reach
+  them or the column comes out dashed, and a corner's half-stroke now ends at the far edge of
+  the run instead of inside it. The snapping is relative to the gutter's origin, which nothing
+  inside a row can see: at 1× and 2× every offset above it is whole, at 1.5× the pane's padding
+  decides. `pixels::tests` pins the geometry and
+  `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the laid-out strokes on a 26-pixel
+  row, the even height the old placement was worst on.
 - [x] Follow a jump by clicking its target offset, the way a call's relocation target is
   clicked. A branch's displacement (`jle 4Bh`) is a link where the listing holds the row it
   lands on — the same set the gutter draws an arrow for — and pressing it puts that row on

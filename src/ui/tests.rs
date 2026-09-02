@@ -3810,6 +3810,77 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// Every axis-aligned stroke of the gutter is laid out on whole device pixels, so a
+/// one-pixel line is one lit row of pixels and not two grey ones beside crisp text.
+///
+/// The row height here is deliberately **even**: a code row is the mono size plus 12, so
+/// half of it -- the line the horizontal run and the arrowhead are drawn along -- is a
+/// whole pixel, and placing a stroke's *centre* there left it spanning 12.5 to 13.5. An
+/// odd row height hid the fault by accident, which is why this pins a font size rather
+/// than taking whatever the desktop resolves to.
+#[test]
+fn the_gutter_puts_its_strokes_on_whole_device_pixels() {
+    // 10.5pt is 14 logical pixels, so a code row is 26.
+    set_fonts(fixed_fonts(9.0, 10.5));
+    assert_eq!(code_row_height(), 26.0);
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    let (mut test, _) = TestingRunner::new(
+        listing_harness,
+        (500., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+
+    // The lanes and the horizontal runs: a stroke exactly one pixel thick one way. The
+    // two barbs of an arrowhead are neither, being drawn thicker on purpose.
+    let strokes: Vec<Area> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        (element.style().background == Fill::Color(palette().branch_fg)
+            && (area.width() == BRANCH_STROKE || area.height() == BRANCH_STROKE))
+            .then_some(area)
+    });
+    assert!(
+        strokes.iter().any(|area| area.width() > BRANCH_STROKE),
+        "no horizontal run was drawn, so the y of a stroke proves nothing"
+    );
+
+    let whole = |edge: f32| edge == edge.round();
+    for area in &strokes {
+        assert!(
+            whole(area.origin.x)
+                && whole(area.origin.x + area.width())
+                && whole(area.origin.y)
+                && whole(area.origin.y + area.height()),
+            "a gutter stroke was laid out at {area:?}, which is spread across two \
+             device pixels and drawn as two grey ones"
+        );
+    }
+
+    // And the arrowhead is the one thing deliberately off the grid: no placement can
+    // align a 30 degree diagonal, so it is weighted instead -- half a device pixel more
+    // ink, so the two rows the antialiasing spreads it over do not read lighter than the
+    // run it points along.
+    let barbs: Vec<Area> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        (element.style().background == Fill::Color(palette().branch_fg)
+            && area.width() == ARROW_STROKE)
+            .then_some(area)
+    });
+    assert!(!barbs.is_empty(), "the fixture draws no arrowhead");
+    for area in &barbs {
+        assert_eq!(area.height(), BRANCH_STROKE + 0.5, "at {area:?}");
+    }
+}
+
 /// A component with no props at all, which is what every view in the app is. Its parent
 /// reads nothing coloured, so the theme has to reach it on its own.
 #[derive(PartialEq)]

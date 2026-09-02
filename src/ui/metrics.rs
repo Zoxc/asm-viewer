@@ -30,6 +30,18 @@ pub(crate) fn code_row_height() -> f32 {
     row_height_for(fonts().mono.size())
 }
 
+/// The device pixel grid the window is being drawn on, and a subscription to it.
+///
+/// freya keeps the scale factor on `Platform`, a root context the renderer provides --
+/// `freya-winit` writes the window's own, multiplied by the user zoom, and `freya-testing`
+/// writes whatever `with_scale_factor` was given -- so it is reachable from inside any
+/// component's render, and reading it here subscribes that component the way asking for a
+/// colour or a font does. Every stroke thin enough for the grid to matter goes through
+/// [`Grid`]; see `src/pixels.rs` for why the edges and not the centre are what is rounded.
+pub(crate) fn pixel_grid() -> Grid {
+    Grid::new(*Platform::get().scale_factor.read())
+}
+
 /// The side of one of the three square toggle buttons in a filter bar: a row less the air
 /// around it.
 pub(crate) fn toggle_size() -> f32 {

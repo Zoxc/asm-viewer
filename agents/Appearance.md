@@ -149,6 +149,14 @@ because the per-tab positions 8b saves are *rows* rather than pixel offsets. The
 (`MIN_ROW_HEIGHT`) is against a hand-edited `settings.toml`, where a size of 0.1 is positive enough
 to pass `FontSetting::size` and would make `item_size` a fraction of a pixel.
 
+**One more number the fonts drag in is the device pixel grid.** A row height is a function of a
+font and the branch gutter's strokes are drawn at fractions of a row, so where they land is
+whatever the font left behind — and freya rounds nothing between the layout and Skia.
+`pixel_grid()` sits beside the row heights in `ui/metrics.rs` and answers a `Grid`
+(`src/pixels.rs`) off freya's `Platform::scale_factor`, which is a root context and so subscribes
+whoever reads it, exactly as `fonts()` and `palette()` do. Only the gutter asks so far; anything
+else drawing a hairline should (`agents/Panes.md`).
+
 **And it is two functions, because no row mixes the two fonts.** `list_row_height` follows
 `fonts().ui` and `code_row_height` follows `fonts().mono`; both are `row_height_for`, so they can
 differ only in which font they ask about. It was one number — the *larger* of the two sizes — and

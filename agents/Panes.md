@@ -108,6 +108,31 @@ therefore pads horizontally only: a line must reach the row's top and bottom edg
 comes out dashed. Hovering a row draws its own branches darker, which needs a row *index* in
 `InstructionList` rather than `Focused` — a source position is many rows.
 
+**Every stroke in it is put on the device pixel grid by its edges.** freya lays a window out in
+logical pixels and multiplies the whole tree by the window's scale factor on the way to Skia,
+rounding nothing afterwards, so a hairline placed by its *centre* comes out spread over two device
+pixels and drawn as two grey ones — blurred beside the crisp text next to it. `Grid`
+(`src/pixels.rs`) rounds the edges instead: a stroke is asked for by the line it runs along and
+the ink it should have, and comes back as the run of whole device pixels nearest that, never
+thinner than one. The scale factor reaches it through `pixel_grid()` in `ui/metrics.rs`, off
+freya's own `Platform::scale_factor` — a root context the renderer writes and `freya-testing`
+takes from `with_scale_factor` — so reading it subscribes the row the way asking for a colour or
+a font does. What was actually wrong at 1× was the horizontal run and the cut at
+`code_row_height() / 2.0`, whole numbers whenever the row height is even and so half-pixels once
+the stroke was centred on them; the lanes' own columns already landed right, `lane_x` being half a
+pixel off a multiple and the stroke half a pixel wide. At a fractional scale everything was. Two
+things are deliberately left off the grid: the row's own top and bottom, which a lane's line must
+reach exactly or the column comes out dashed, and the arrowhead's two diagonals, which no
+placement can align — at 30° a line crosses into a new row of pixels wherever it is put — and
+which are drawn **half a device pixel wider** instead, so the two rows the antialiasing spreads
+them over stop reading lighter than the run they point along. Only their pivot is snapped, and it
+is the run's own end. A corner's half-stroke now ends at the *far* edge of that run rather than on
+its centre line, so the joint is filled to the pixel instead of stopping inside the run behind an
+antialiased edge. All of it is relative to the gutter's own origin, which nothing inside a row can
+see: at 1× and 2× every offset above it is a whole number, and at 1.5× the pane's own padding
+decides. `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the axis-aligned ones on a
+26-pixel row, that being the even height the old placement was worst on.
+
 **A row a branch lands on starts a block**, and the listing says so with a `SeparatorRow` above
 it — a **row of its own**, not a border on the row below, so a block reads as separated from the
 one before rather than as underlined by it. The set is the gutter's own — `RowLanes::arrow`,

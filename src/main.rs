@@ -5,6 +5,7 @@ mod fonts;
 mod history;
 mod lanes;
 mod naming;
+mod pixels;
 mod project;
 mod rows;
 mod scratchpad;
