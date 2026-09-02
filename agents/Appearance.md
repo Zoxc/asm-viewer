@@ -14,9 +14,12 @@ which `blend` composites over the pane — the same alpha over a dark ground is 
 step it was over white, so each was judged as what it *comes out as*. Two tests hold that: a
 contrast floor for every foreground on the surface it is really drawn on (3.0, not WCAG's 4.5 —
 the light palette's address column and its comments are meant to recede and sit between 3 and
-3.5), and a
-visible-step floor for every wash over the row under it, with the pin required to stay louder than
-the focus. The code colours are named for what they mean, not for the pane they came from, and
+3.5), the × on a dock tab included, whose surface is its own wash composited over whichever of two
+grounds the tab is on; and a visible-step floor for every wash over the row under it, with the pin
+required to stay louder than the focus and the × required to move the tab it sits on further than
+the tab's own hover moves the bar — the one wash here that has to be told apart from *another
+highlight* rather than from a plain surface, since the pointer on the × lights the tab under it
+too. The code colours are named for what they mean, not for the pane they came from, and
 `Palette::syntax` maps `freya-code-editor`'s ~33 capture fields onto them. Beware
 `resolve_capture_color`: it treats a capture whose colour equals `text` as unmapped and walks *up*
 the dotted name, so giving a child field the text colour while its parent holds another silently

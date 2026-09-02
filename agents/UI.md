@@ -154,6 +154,22 @@ first switch to the tab it is closing. The × is drawn for documents only — th
 one of a kind, with no way back once closed, where a document is always reachable again from the
 symbol list or the history.
 
+**The × is a control of its own**, `TabClose`, and a component rather than another line of
+`chip` for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the
+`use_state` with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper — which is
+why the × reaches `chip` as an element already built rather than as an `on_close` handler. Two
+things follow from its being a control. It is **a target you hit rather than one you aim at**: a
+`close_target()` square — a row less the air above and below, the shape `toggle_size()` is —
+centred on the glyph, so what grew is the padding and not the ×, which keeps the interface font's
+own size. And it says under the pointer that it is the × and not the tab: `close_hover_bg` behind
+it and the glyph up from `address_fg` to the interface text, while the tab under it stays lit —
+the two are told apart by the wash being the deeper step, not by the tab going out. It closes the
+tab itself rather than taking a handler, a `Component` being `PartialEq` where a closure is not:
+the `DocId` is the prop and the five states a close needs come from the contexts, the same ones
+the header reads a step above it. The headless pair is
+`a_press_beside_the_glyph_still_closes_the_tab`, which presses inside the target and nowhere near
+the glyph, and `the_close_target_lights_under_the_pointer`.
+
 A right-click on a document's header opens a menu of one item, **Close other tabs**, which is
 `close_others`: the tab it was opened on stays, every other *document* in the panel goes, and a view
 sharing the panel is left where it is — it is not a document, and the × it has no place for is the

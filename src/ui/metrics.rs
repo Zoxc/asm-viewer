@@ -36,6 +36,16 @@ pub(crate) fn toggle_size() -> f32 {
     list_row_height() - 4.0
 }
 
+/// The side of the square the × on a document's tab is centred in.
+///
+/// **This is the whole of what makes the close a target you hit rather than one you aim
+/// at**: the glyph keeps the interface font's own size and the padding around it is what
+/// grows, so a bigger target costs the tab no more height and the × no more weight. A row
+/// less the air above and below it, the shape [`toggle_size`] is.
+pub(crate) fn close_target() -> f32 {
+    list_row_height() - 6.0
+}
+
 /// The side of a tab bar icon: the interface font, a quarter bigger, and capped so it is
 /// never what decides how tall the bar is.
 pub(crate) fn icon_size() -> f32 {

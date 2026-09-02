@@ -405,11 +405,15 @@ one item per part, so the unfinished half stays visible.
   it names arrives — which also means deciding what such a tab does if the load finishes and the
   object never comes, where the answer is probably the same drop the restore does now, only
   later and visibly.
-- [ ] A larger close icon on a tab, with a highlight under the pointer. The × on a tab is
-  small enough to be a target you aim at rather than one you hit, and nothing distinguishes
-  the pointer being over the × from being over the tab — so the only feedback that you are
-  about to close a tab rather than switch to it arrives after the tab is gone. Cheaper now that
-  documents are dock tabs: there is one kind of header to change rather than two.
+- [x] A larger close target on a tab, with a highlight under the pointer. The × on a document's
+  tab is a control of its own now, a square the size of a row less the air above and below it,
+  centred on the glyph: what a reader hits is the padding around the × rather than the × itself,
+  which keeps the interface font's own size and weight. Under the pointer it takes a wash of its
+  own and the glyph comes up to the interface text, while the tab under it stays lit — the two
+  are told apart by the close being the deeper step, in both palettes, which the visible-step
+  test holds along with the glyph's contrast over the composited wash. A component and not
+  another line of the chip, because freya has no hover pseudo-state and the state has to be the
+  ×'s own.
 - [ ] Reach the panels from the keyboard. Only the two code panes have key handlers at all: the
   tab chips are pointer targets, the sidebar lists have no cursor, and there is no way in to a
   filter box — which is the ranked-search item above seen from the other side. Note what it

@@ -10,24 +10,24 @@
 
 use super::*;
 
-/// One document's tab header: the icon naming its kind, what it is called, an × that
-/// closes it, a right-click menu that closes the others, and the pane's own white when it
-/// is the one on screen.
+/// One document's tab header: the icon naming its kind, what it is called, the [`TabClose`]
+/// that closes it, a right-click menu that closes the others, and the pane's own white
+/// when it is the one on screen.
 ///
 /// **Nothing here activates the tab.** freya wraps a tab header in a `DropZone` around a
 /// `rect().on_press(set_active)` around a `DragZone`, so pressing this makes it the
-/// panel's active tab -- which is also why the × must `stop_propagation`: without it a
-/// close would first switch to the tab it is closing.
+/// panel's active tab.
 ///
 /// A stateless helper rather than a component, the hover state belonging to the caller, so
-/// no hook runs here.
+/// no hook runs here -- which is exactly why the × arrives as an element already built: it
+/// carries a hover of its own and a hook has to run somewhere.
 fn chip(
     icon: Element,
     text: String,
     tooltip: String,
     active: bool,
     mut hovering: State<bool>,
-    mut on_close: impl FnMut(Event<PressEventData>) + 'static,
+    close: Element,
     mut on_menu: impl FnMut(Event<PressEventData>) + 'static,
 ) -> impl IntoElement {
     // The active chip takes the pane's own background, so it reads as the top edge of the
@@ -59,22 +59,71 @@ fn chip(
             .on_secondary_down(move |e: Event<PressEventData>| on_menu(e))
             .child(icon)
             .child(label().text(elide(&text)).max_lines(1))
-            .child(
-                rect()
-                    // Without this the press bubbles into freya's own wrapper and the
-                    // close first switches to the tab it is closing.
-                    .on_press(move |e: Event<PressEventData>| {
-                        e.stop_propagation();
-                        on_close(e);
-                    })
-                    .child(
-                        label()
-                            .text("\u{00d7}")
-                            .color(palette().address_fg)
-                            .max_lines(1),
-                    ),
-            ),
+            .child(close),
     )
+}
+
+/// The × on a document's tab: **a target with padding around the glyph rather than a
+/// bigger glyph**, and a wash of its own under the pointer.
+///
+/// A component and not another line of [`chip`] because the hover has to be *this*
+/// control's, and freya has no `.hover()` pseudo-state: it is a `use_state` with
+/// `on_pointer_over`/`on_pointer_out` around it, and a hook cannot run in a helper. The
+/// tab under it stays lit at the same time -- the two are told apart by the wash being
+/// deeper, not by the tab going out -- and the glyph comes up from `address_fg` to the
+/// interface text, so what is about to happen is said twice.
+///
+/// It closes the tab itself rather than taking a handler: a `Component` is `PartialEq`, a
+/// closure is not, and the [`DocId`] is all the identity a close needs.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct TabClose {
+    pub(crate) id: DocId,
+}
+
+impl Component for TabClose {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let open = use_open();
+        let history = use_consume::<Hist>().0;
+        let asm_at = use_consume::<AsmAt>().0;
+        let src_at = use_consume::<SrcAt>().0;
+        let driven = use_consume::<Drives>().0;
+        let id = self.id;
+
+        rect()
+            .width(Size::px(close_target()))
+            .height(Size::px(close_target()))
+            .center()
+            .corner_radius(4.0)
+            .background(if hovering() {
+                palette().close_hover_bg
+            } else {
+                Color::TRANSPARENT
+            })
+            .on_pointer_over(move |_| hovering.set_if_modified(true))
+            .on_pointer_out(move |_| hovering.set_if_modified(false))
+            // Without the `stop_propagation` the press bubbles into freya's own header
+            // wrapper and the close first switches to the tab it is closing.
+            .on_press(move |e: Event<PressEventData>| {
+                e.stop_propagation();
+                // The document is looked up at the press and in a statement of its own,
+                // so the table's read guard is gone before `close_tab` writes to it.
+                let document = open.docs.peek().get(id).cloned();
+                if let Some(document) = document {
+                    close_tab(open, history, asm_at, src_at, driven, &document);
+                }
+            })
+            .child(
+                label()
+                    .text("\u{00d7}")
+                    .color(if hovering() {
+                        palette().text_fg
+                    } else {
+                        palette().address_fg
+                    })
+                    .max_lines(1),
+            )
+    }
 }
 
 /// The control that opens a list of every tab in the document panel, pinned at the
@@ -317,7 +366,6 @@ impl Component for DocumentHeader {
         let Some(document) = open.docs.read().get(self.id).cloned() else {
             return rect().into_element();
         };
-        let closed = document.clone();
 
         let id = self.id;
         chip(
@@ -326,7 +374,7 @@ impl Component for DocumentHeader {
             entry_tooltip(&document),
             self.active,
             hovering,
-            move |_| close_tab(open, history, asm_at, src_at, driven, &closed),
+            TabClose { id }.into_element(),
             move |e: Event<PressEventData>| {
                 // Read at the press rather than at the render: whether this tab has
                 // company is not something the header draws, so subscribing to the panel

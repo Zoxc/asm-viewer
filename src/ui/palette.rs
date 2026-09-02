@@ -39,6 +39,12 @@ pub(crate) struct Palette {
     /// own grey.
     pub(crate) toggle_on_bg: Color,
     pub(crate) toggle_hover_bg: Color,
+    /// The wash under the × on a dock tab while the pointer is on the × *itself* rather
+    /// than merely on the tab. Translucent, because it sits on either of two grounds --
+    /// the active tab's `pane_bg` and a hovered tab's `toggle_hover_bg` -- and has to say
+    /// the same thing over both; deeper than the tab's own hover, which is what tells the
+    /// two apart on the same surface.
+    pub(crate) close_hover_bg: Color,
     /// The wash behind a relocation link the pointer is over, lightening whatever row
     /// background is under it.
     pub(crate) link_hover_bg: Color,
@@ -95,6 +101,7 @@ impl Palette {
         icon_fg: Color::from_rgb(90, 90, 90),
         toggle_on_bg: Color::from_rgb(196, 196, 196),
         toggle_hover_bg: Color::from_rgb(225, 225, 225),
+        close_hover_bg: Color::from_argb(70, 90, 90, 96),
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
         branch_fg: Color::from_rgb(176, 188, 202),
         branch_hover_fg: Color::from_rgb(90, 116, 148),
@@ -135,6 +142,9 @@ impl Palette {
         icon_fg: Color::from_rgb(160, 160, 160),
         toggle_on_bg: Color::from_rgb(88, 88, 92),
         toggle_hover_bg: Color::from_rgb(60, 60, 64),
+        // Translucent, and stated the same way as the four above: what it comes out as
+        // over a tab, which here means lifting the surface rather than darkening it.
+        close_hover_bg: Color::from_argb(75, 200, 200, 210),
         link_hover_bg: Color::from_af32rgb(0.25, 255, 255, 255),
         branch_fg: Color::from_rgb(96, 108, 124),
         branch_hover_fg: Color::from_rgb(150, 178, 210),

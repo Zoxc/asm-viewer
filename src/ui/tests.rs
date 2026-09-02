@@ -858,6 +858,155 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
     );
 }
 
+/// The × on a document's tab, mounted on its own: how big a target it is and what the
+/// pointer does to it are questions about the control rather than about the strip around
+/// it. It takes its document the way a header does, from the panel's first document tab.
+fn close_harness() -> impl IntoElement {
+    let open = use_open();
+    let id = open.dock.read().document_panel().and_then(|panel| {
+        panel.tabs.iter().find_map(|tab| match tab {
+            Tab::Document(id) => Some(*id),
+            Tab::View(_) => None,
+        })
+    });
+
+    rect()
+        .expanded()
+        .maybe_child(id.map(|id| TabClose { id }.into_element()))
+}
+
+/// One open document, and the × that closes it as it was actually laid out -- asserting on
+/// the way past that the glyph has air around it, which is the whole of what the target is.
+/// A comparison between the target and the glyph inside it and never an absolute width: the
+/// second would be an assertion about the fonts on whoever ran it.
+fn one_close_target(test: &mut TestingRunner, states: &ProjectStates) -> Area {
+    let symbols = fixture_symbols();
+    let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    activate(states.open, states.history, Some(document), Visit::Went);
+    test.sync_and_update();
+
+    let target = test
+        .find(|node, _| {
+            let area = node.layout().area;
+            (area.width() == close_target() && area.height() == close_target()).then_some(area)
+        })
+        .expect("the × is a target of its own");
+
+    // The only thing narrower than the target is the glyph centred in it; everything above
+    // it is the harness, at the window's own width.
+    let glyph = test
+        .find(|node, _| {
+            let area = node.layout().area;
+            (area.width() < target.width()).then_some(area)
+        })
+        .expect("the × draws a glyph");
+    let (left, right) = (
+        glyph.origin.x - target.origin.x,
+        target.max_x() - glyph.max_x(),
+    );
+    assert!(
+        left >= 2.0 && right >= 2.0,
+        "the glyph fills its target: {left} left of it and {right} right of it"
+    );
+
+    target
+}
+
+/// A press that lands in the target but nowhere near the glyph still closes the tab: what
+/// grew is the padding around the ×, not the × itself. The offset is measured from the
+/// target's own centre -- which is the glyph's -- so the assertion is about how much room
+/// there is around the glyph and not about where the control happens to sit.
+#[test]
+fn a_press_beside_the_glyph_still_closes_the_tab() {
+    let (mut test, states) =
+        TestingRunner::new(close_harness, (200., 100.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let target = one_close_target(&mut test, &states);
+
+    let centre = (
+        (target.origin.x + target.width() / 2.0) as f64,
+        (target.origin.y + target.height() / 2.0) as f64,
+    );
+    let press = |test: &mut TestingRunner, at: (f64, f64)| {
+        test.move_cursor(at);
+        test.press_cursor(at);
+        test.release_cursor(at);
+        test.sync_and_update();
+    };
+
+    // Past the target's own edge is not the tab's business, which is what says the close
+    // below is the target answering rather than any press anywhere.
+    press(&mut test, (centre.0 + close_target() as f64, centre.1));
+    assert_eq!(
+        states.open.docs.peek().len(),
+        1,
+        "a press outside the × closed the tab"
+    );
+
+    // And two pixels inside its left edge, which is the padding and not the glyph.
+    press(
+        &mut test,
+        (centre.0 - close_target() as f64 / 2.0 + 2.0, centre.1),
+    );
+    assert_eq!(
+        states.open.docs.peek().len(),
+        0,
+        "a press in the × missed the glyph and did nothing"
+    );
+    let documents = states
+        .open
+        .dock
+        .peek()
+        .document_panel()
+        .map(|panel| panel.tabs.len())
+        .unwrap_or_default();
+    assert_eq!(documents, 0, "the tab outlived the document it stood for");
+}
+
+/// The × lights under the pointer in a wash of its own, and puts itself back when the
+/// pointer moves off it. freya has no hover pseudo-state, so this is the control's own
+/// `use_state` and the pair of `over`/`out` handlers around it; that the wash is louder
+/// than the tab's own is `every_wash_reads_against_the_pane_under_it`.
+#[test]
+fn the_close_target_lights_under_the_pointer() {
+    let (mut test, states) =
+        TestingRunner::new(close_harness, (200., 100.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let target = one_close_target(&mut test, &states);
+
+    // The one paintable thing in the harness is the target itself, so "anything painted"
+    // is the wash and nothing else.
+    let wash = |test: &TestingRunner| {
+        test.find(|_, element| {
+            let background = element.style().background.clone();
+            (background != Fill::Color(Color::TRANSPARENT)).then_some(background)
+        })
+    };
+    assert_eq!(
+        wash(&test),
+        None,
+        "the × is lit before the pointer is on it"
+    );
+
+    let centre = (
+        (target.origin.x + target.width() / 2.0) as f64,
+        (target.origin.y + target.height() / 2.0) as f64,
+    );
+    test.move_cursor(centre);
+    test.sync_and_update();
+    assert_eq!(
+        wash(&test),
+        Some(Fill::Color(palette().close_hover_bg)),
+        "the pointer on the × did not light it"
+    );
+
+    // Off the target and still inside the window: a wash that outlived the pointer would
+    // be `out` never having run.
+    test.move_cursor((centre.0 + close_target() as f64, centre.1));
+    test.sync_and_update();
+    assert_eq!(wash(&test), None, "the wash outlived the pointer");
+}
+
 /// A document has a tab in the panel exactly while it has an entry in the table, which is
 /// what makes "the panel's `tabs` vec is the list of open documents" true without a second
 /// list. `use_kept_position` leans on it directly.
@@ -3212,6 +3361,17 @@ fn every_foreground_is_legible_on_its_own_surface() {
             }
         }
 
+        // The × on a tab comes up to the interface text under the pointer, over a wash
+        // that is over whichever of the two grounds the tab is on. Composited, because
+        // that is what the reader is aiming at when legibility matters most.
+        for (surface, ground) in [
+            ("an active tab", palette.pane_bg),
+            ("a hovered tab", palette.toggle_hover_bg),
+        ] {
+            let ratio = contrast(palette.text_fg, blend(palette.close_hover_bg, ground));
+            assert!(ratio >= 3.0, "{theme} the × on {surface}: {ratio:.2}");
+        }
+
         // The branch gutter is a diagram and is drawn quiet deliberately, so its floor is
         // only against a line that has disappeared into the pane altogether.
         let line = contrast(palette.branch_fg, palette.asm_pane_bg);
@@ -3246,6 +3406,14 @@ fn every_wash_reads_against_the_pane_under_it() {
             ("line_pin_bg", palette.line_pin_bg, palette.asm_pane_bg),
             ("row_select_bg", palette.row_select_bg, palette.asm_pane_bg),
             ("drop_preview_bg", palette.drop_preview_bg, palette.pane_bg),
+            // The × on a tab sits on either of two grounds and has to say the same thing
+            // over both: the active tab's own pane, and a hovered tab's grey.
+            ("close_hover_bg", palette.close_hover_bg, palette.pane_bg),
+            (
+                "close_hover_bg over a hovered tab",
+                palette.close_hover_bg,
+                palette.toggle_hover_bg,
+            ),
         ] {
             let step = step(wash, ground);
             assert!(step >= 10, "{theme} {name}: {step} levels");
@@ -3254,6 +3422,14 @@ fn every_wash_reads_against_the_pane_under_it() {
         let focus = step(palette.line_focus_bg, palette.asm_pane_bg);
         let pin = step(palette.line_pin_bg, palette.asm_pane_bg);
         assert!(pin > focus, "{theme} pin {pin} vs focus {focus}");
+
+        // And the × has to be told apart from the tab under it, which is lit at the same
+        // time: the two hovers differ by strength on the same surface, the close moving
+        // the tab further than the tab's own hover moves the bar it sits in. `step` of an
+        // opaque colour is that colour, the bottom being fully covered.
+        let tab = step(palette.toggle_hover_bg, palette.header_bg);
+        let close = step(palette.close_hover_bg, palette.toggle_hover_bg);
+        assert!(close > tab, "{theme} close {close} vs tab {tab}");
     }
 }
 
