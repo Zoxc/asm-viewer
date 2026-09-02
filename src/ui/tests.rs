@@ -3684,6 +3684,59 @@ macro_rules! listing_states {
     }};
 }
 
+/// A listing scrolled by a separator's distance puts a *different* separator in the slot
+/// one was in. Freya matches siblings by key alone, so separators sharing the type's
+/// default key are taken for one row that never moved, the moves around it leave the
+/// scope graph disagreeing with the element tree, and an instruction row's props reach a
+/// separator's scope -- where the downcast inside `freya-core`'s `element.rs` unwraps
+/// `None`. Keyed apart, the scroll just scrolls (`notes/upstream/freya.md`).
+///
+/// `sum_to`'s separators sit at listing rows 7 and 15; eight rows is the distance, and a
+/// pane this tall shows eleven, so the slot a separator was in holds the other afterwards.
+#[test]
+fn scrolling_past_a_separator_keeps_every_row_its_own() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    assert_eq!(
+        studied.lanes.row_of(7),
+        8,
+        "the fixture's first block boundary moved"
+    );
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+
+    let (mut test, (_states, _pinned, _marked)) = TestingRunner::new(
+        listing_harness,
+        (500., 300.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let drawn = labels(&test);
+    // `sum_to` is the fixture's third function, at 30h.
+    assert!(
+        drawn.iter().any(|text| text == "0000000000000030 "),
+        "the listing did not open at its top: {drawn:?}"
+    );
+
+    test.scroll((250., 100.), (0., -8.0 * code_row_height() as f64));
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        !drawn.iter().any(|text| text == "0000000000000030 "),
+        "the listing did not scroll: {drawn:?}"
+    );
+    assert!(
+        drawn.iter().any(|text| text == "0000000000000061 "),
+        "the row past the boundary is not drawn: {drawn:?}"
+    );
+}
+
 /// Pressing a branch's displacement puts the row it lands on on screen **and pins the line
 /// that row was compiled from** -- the pin a press on the target row itself would have
 /// made, with the Source pane owed the scroll and the Assembly pane not, since it has just

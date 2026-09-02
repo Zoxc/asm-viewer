@@ -403,6 +403,15 @@ fn block_rule() -> impl IntoElement {
 /// from the one above rather than as underlined by it. It is exactly `code_row_height()`,
 /// like every other row -- the `VirtualScrollView`'s `item_size` is one number for the
 /// whole listing -- which is what the second index space in [`Lanes`] is for.
+///
+/// **Keyed, uniquely, and apart from the instruction rows.** Unkeyed, every separator
+/// would share the type's default key, and freya matches siblings by key alone: a
+/// listing scrolled by a separator's distance puts a different separator in the same
+/// slot, the diff calls it the same row unmoved, and the moves around it leave the scope
+/// graph disagreeing with the element tree -- at which point `run_scope` hands an
+/// `InstructionRow`'s props to a scope keeping a `SeparatorRow`'s render closure, and
+/// the downcast inside freya unwraps `None` (`notes/upstream/freya.md`). The key is the
+/// address of the instruction below, tagged so it can never equal an instruction row's.
 #[derive(Clone, PartialEq)]
 struct SeparatorRow {
     /// The listing row this is, for the picked-out run: a sweep that crosses a boundary
@@ -413,6 +422,13 @@ struct SeparatorRow {
     /// The gutter's width for the whole symbol, and the lanes crossing this boundary.
     width: usize,
     arrows: RowArrows,
+    key: DiffKey,
+}
+
+impl KeyExt for SeparatorRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
 }
 
 impl Component for SeparatorRow {
@@ -440,6 +456,10 @@ impl Component for SeparatorRow {
             .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, row))
             .maybe(width > 0, |el| el.child(gutter(width, self.arrows)))
             .child(block_rule())
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
     }
 }
 
@@ -858,6 +878,9 @@ impl Component for InstructionList {
                             let mut lit = lanes::lit(&rows.touching, below);
                             lit.corner = false;
 
+                            // Keyed by the row it opens, in a key space of its own:
+                            // see `SeparatorRow`.
+                            let address = rows.data.assembly.instructions[below].address;
                             return SeparatorRow {
                                 row: i,
                                 selected,
@@ -866,7 +889,9 @@ impl Component for InstructionList {
                                     lanes: rows.data.lanes.boundary(below),
                                     lit,
                                 },
+                                key: DiffKey::None,
                             }
+                            .key((true, address))
                             .into();
                         };
 
@@ -887,7 +912,9 @@ impl Component for InstructionList {
                             viewport,
                             key: DiffKey::None,
                         }
-                        .key(rows.data.assembly.instructions[index].address)
+                        // Tagged, for the separators' sake: an address alone could be
+                        // any separator's too.
+                        .key((false, rows.data.assembly.instructions[index].address))
                         .into()
                     },
                     controller,

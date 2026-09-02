@@ -162,7 +162,12 @@ separator and the arrowhead below it cannot disagree. Never above the first row:
 the top of a symbol says nothing and would open the listing with a gap. Only the targets, too:
 the row after a `ret` or an unconditional `jmp` also begins a block, but nothing below the
 disassembler says which instructions end a fall-through, and that is crate work this did not
-need.
+need. **Every separator is keyed**, by the address of the row it opens and in a key space of its
+own (`(true, address)` against the instruction rows' `(false, address)`): freya matches siblings
+by key alone, so separators left on the type's default key were one row to it, and a scroll of
+a separator's distance -- one wheel notch is two or three rows -- put an instruction row's props
+into a separator's scope and panicked inside freya (`notes/upstream/freya.md`;
+`scrolling_past_a_separator_keeps_every_row_its_own`).
 
 A `VirtualScrollView` is given one `item_size` for the whole listing, so the separator is
 `code_row_height()` like every other row and the rule is drawn *inside* it, across its middle.
