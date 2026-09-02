@@ -376,6 +376,7 @@ pub(crate) enum View {
     Symbols,
     Info,
     History,
+    Locations,
     Project,
     Settings,
     Scratchpad,
@@ -388,6 +389,7 @@ impl View {
             View::Symbols => "Symbols",
             View::Info => "Info",
             View::History => "History",
+            View::Locations => "Locations",
             View::Project => "Project",
             View::Settings => "Settings",
             View::Scratchpad => "Scratchpad",
@@ -405,6 +407,7 @@ impl View {
             View::Symbols => ("square-function", lucide::square_function()),
             View::Info => ("info", lucide::info()),
             View::History => ("history", lucide::history()),
+            View::Locations => ("map-pin", lucide::map_pin()),
             View::Project => ("folder-open", lucide::folder_open()),
             View::Settings => ("settings", lucide::settings()),
             View::Scratchpad => ("notebook-pen", lucide::notebook_pen()),
@@ -428,6 +431,7 @@ impl View {
             View::Symbols => SymbolsTab.into_element(),
             View::Info => InfoTab.into_element(),
             View::History => HistoryTab.into_element(),
+            View::Locations => LocationsTab.into_element(),
             View::Project => ProjectTab.into_element(),
             View::Settings => SettingsTab.into_element(),
             View::Scratchpad => ScratchpadTab.into_element(),
@@ -527,6 +531,17 @@ impl DockArea {
             panel.tabs.push(tab);
         }
         panel.active_tab_id = Some(tab);
+    }
+
+    /// Bring `view` to the top of whichever panel of this area holds it, answering
+    /// whether one does -- a view may have been dragged into the other area, which is
+    /// the caller's to try next.
+    pub(crate) fn show_view(&mut self, view: View) -> bool {
+        let tab = Tab::View(view);
+        let Some((panel_id, _)) = self.tree.find_tab(&tab) else {
+            return false;
+        };
+        self.set_active(panel_id, tab)
     }
 
     /// Whether `tab` is the one on top in whichever panel holds it.

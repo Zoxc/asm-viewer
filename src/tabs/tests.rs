@@ -1,3 +1,9 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData};
+
 use super::*;
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -161,5 +167,66 @@ fn closing_a_tab_forgets_what_it_was_driven_from() {
     assert_eq!(driven.line(&source("lib.rs")), Some(7));
     // And forgetting a tab that was never driven is not an error.
     driven.forget(&source("other.rs"));
+    assert_eq!(driven.line(&source("lib.rs")), Some(7));
+}
+
+/// A bare symbol in a bare object at `path`: only what [`Driven::release`] looks at.
+fn symbol(path: &str, name: &str) -> Symbol {
+    let data = Arc::new(SymbolData {
+        name: name.to_owned(),
+        demangled: None,
+        address: 0,
+        section: None,
+        size: 0,
+    });
+    let object = Arc::new(Object {
+        path: PathBuf::from(path),
+        name: path.to_owned(),
+        format: BinaryFormat::Elf,
+        architecture: Architecture::X86_64,
+        symbols: HashMap::new(),
+        symbols_sorted: vec![data.clone()],
+        sections: Vec::new(),
+        data: ObjectData::from(b"bytes".as_slice()),
+        dwarf: Default::default(),
+    });
+    Symbol { object, data }
+}
+
+#[test]
+fn a_choice_comes_back_and_outlives_the_next_line() {
+    let mut driven = Driven::default();
+    let (first, second) = (symbol("lib.a", "f<u8>"), symbol("lib.a", "f<u16>"));
+    assert!(driven.choice(&source("main.rs")).is_none());
+
+    driven.remember(source("main.rs"), 42);
+    driven.choose(source("main.rs"), first.clone());
+    assert!(driven.choice(&source("main.rs")) == Some(first.clone()));
+    // Reading down the function inside the instantiation picked is the point of
+    // picking one, so the next line keeps the choice.
+    driven.remember(source("main.rs"), 43);
+    assert!(driven.choice(&source("main.rs")) == Some(first.clone()));
+    // A second choice replaces the first, and belongs to its own tab.
+    driven.choose(source("main.rs"), second.clone());
+    assert!(driven.choice(&source("main.rs")) == Some(second));
+    assert!(driven.choice(&source("lib.rs")).is_none());
+}
+
+#[test]
+fn closing_a_tab_forgets_its_choice_and_a_closing_binary_releases_the_choices_into_it() {
+    let mut driven = Driven::default();
+    driven.remember(source("main.rs"), 42);
+    driven.choose(source("main.rs"), symbol("lib.a", "f"));
+    driven.remember(source("lib.rs"), 7);
+    driven.choose(source("lib.rs"), symbol("other.o", "g"));
+
+    driven.forget(&source("main.rs"));
+    assert!(driven.choice(&source("main.rs")).is_none());
+    assert!(driven.choice(&source("lib.rs")).is_some());
+
+    // The file closing takes the choice into it and leaves the line: the tab stands, and
+    // its next ask answers out of whatever is still open.
+    driven.release(&PathBuf::from("other.o"));
+    assert!(driven.choice(&source("lib.rs")).is_none());
     assert_eq!(driven.line(&source("lib.rs")), Some(7));
 }

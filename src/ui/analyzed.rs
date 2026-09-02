@@ -1,5 +1,11 @@
-//! The analysis worker `use_analysis` owns, the question it is asked, the `Studied` it
+//! The analysis worker `use_analysis` owns, the questions it is asked, the `Studied` it
 //! hands over, and the `Analyzed` the panes draw out of while it works.
+//!
+//! Two kinds of job go to the one worker: a **listing** -- the symbol the panes draw,
+//! named outright or resolved from a source line -- and a **locate**, every symbol a line
+//! was compiled into, for the Locations panel. They supersede separately: the queue is
+//! drained to the newest of *each*, since a reader who asked for a line's locations and
+//! then clicked a symbol wants both answers.
 
 use super::*;
 
@@ -12,13 +18,18 @@ pub(crate) struct Analysis(pub(crate) State<Analyzed>);
 ///
 /// Two kinds because a tab has two: an assembly-driven one names its symbol outright,
 /// while a source-driven one names a line and the symbol is whatever that line was
-/// compiled into. Equality is still identity, but of two kinds -- [`Ask::Symbol`] by the
-/// `Arc` pointers [`Symbol`] compares, [`Ask::Source`] by [`LinePos`], which is the one
-/// `Arc` in the UI compared by its text.
+/// compiled into -- or, where the reader chose among the many, the one they chose, since
+/// a different choice is a different question. Equality is still identity, but of two
+/// kinds -- [`Ask::Symbol`] by the `Arc` pointers [`Symbol`] compares, [`Ask::Source`] by
+/// [`LinePos`], which is the one `Arc` in the UI compared by its text, and by the choice.
 #[derive(Clone, PartialEq)]
 pub(crate) enum Ask {
     Symbol(Symbol),
-    Source(LinePos),
+    Source {
+        at: LinePos,
+        /// See [`Driven::choice`].
+        chosen: Option<Symbol>,
+    },
 }
 
 /// The tab an answer to `ask` belongs to. One definition, used by the pane that keeps its
@@ -27,7 +38,7 @@ pub(crate) enum Ask {
 pub(crate) fn asked_of(ask: &Ask) -> Document {
     match ask {
         Ask::Symbol(symbol) => Document::Assembly(Selection::Symbol(symbol.clone())),
-        Ask::Source(at) => Document::Source(at.file.clone()),
+        Ask::Source { at, .. } => Document::Source(at.file.clone()),
     }
 }
 
@@ -40,11 +51,12 @@ pub(crate) fn ask(active: Option<&Document>, driven: &Driven) -> Option<Ask> {
     match active? {
         Document::Assembly(Selection::Symbol(symbol)) => Some(Ask::Symbol(symbol.clone())),
         Document::Assembly(Selection::Object(_)) => None,
-        document @ Document::Source(file) => driven.line(document).map(|line| {
-            Ask::Source(LinePos {
+        document @ Document::Source(file) => driven.line(document).map(|line| Ask::Source {
+            at: LinePos {
                 file: file.clone(),
                 line,
-            })
+            },
+            chosen: driven.choice(document),
         }),
     }
 }
@@ -59,43 +71,93 @@ pub(crate) enum Question {
     Study(Symbol),
     Resolve {
         at: LinePos,
+        /// The reader's own choice among the many, which outranks everything below.
+        chosen: Option<Symbol>,
         objects: Vec<Arc<Object>>,
         /// Where the reader has been, newest first, with the symbol on screen at its
         /// head. See [`compiled::pick`].
         recent: Vec<Symbol>,
     },
+    /// Every symbol `at` was compiled into, for the Locations panel.
+    Locate {
+        at: LinePos,
+        objects: Vec<Arc<Object>>,
+    },
+}
+
+/// The two kinds of job, which supersede separately.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Listing,
+    Locate,
+}
+
+impl Question {
+    fn kind(&self) -> Kind {
+        match self {
+            Question::Study(_) | Question::Resolve { .. } => Kind::Listing,
+            Question::Locate { .. } => Kind::Locate,
+        }
+    }
+}
+
+/// The newest question of each kind out of `first` and whatever is `queued` behind it,
+/// in the order they are worked: the listing first, since it is what is on screen.
+///
+/// What the reader clicked past is dropped here, without being started. Per kind and not
+/// overall, because a locate is not a newer version of the listing question -- drained to
+/// one, a symbol click after asking for a line's locations would silently cancel the
+/// locations, or the other way round.
+pub(crate) fn newest(first: Question, queued: impl Iterator<Item = Question>) -> Vec<Question> {
+    let mut listing = None;
+    let mut locate = None;
+    for question in std::iter::once(first).chain(queued) {
+        match question.kind() {
+            Kind::Listing => listing = Some(question),
+            Kind::Locate => locate = Some(question),
+        }
+    }
+    listing.into_iter().chain(locate).collect()
 }
 
 /// What the worker sends back: the question, and what it came to.
-///
-/// `studied` is `None` only for a source line no open object holds code from -- the one
-/// question that can name no symbol at all.
-pub(crate) struct Answer {
-    pub(crate) ask: Ask,
-    pub(crate) studied: Option<Studied>,
+pub(crate) enum Answer {
+    /// `studied` is `None` only for a source line no open object holds code from -- the
+    /// one listing question that can name no symbol at all.
+    Listing { ask: Ask, studied: Option<Studied> },
+    /// The symbols `at` was compiled into, over the objects the question carried.
+    Located { at: LinePos, symbols: Vec<Symbol> },
 }
 
 /// The expensive work, and the one definition of what an answer is: a third kind of
-/// question cannot grow a second `Studied::new` call site. Touches no UI state, which is
-/// what lets it run on a plain `std::thread`.
+/// listing question cannot grow a second `Studied::new` call site. Touches no UI state,
+/// which is what lets it run on a plain `std::thread`.
 pub(crate) fn answer(question: Question) -> Answer {
     match question {
-        Question::Study(symbol) => Answer {
+        Question::Study(symbol) => Answer::Listing {
             ask: Ask::Symbol(symbol.clone()),
             studied: Some(Studied::new(symbol)),
         },
         Question::Resolve {
             at,
+            chosen,
             objects,
             recent,
         } => {
             let candidates = compiled::compiled_from(&objects, &at.file, at.line);
-            let studied = compiled::pick(&candidates, &recent).map(Studied::new);
-            Answer {
-                ask: Ask::Source(at),
+            // The choice at the head of the ranking: it wins where the line compiled
+            // into it, and where it did not the pick falls back as if none were made.
+            let ranked: Vec<Symbol> = chosen.iter().cloned().chain(recent).collect();
+            let studied = compiled::pick(&candidates, &ranked).map(Studied::new);
+            Answer::Listing {
+                ask: Ask::Source { at, chosen },
                 studied,
             }
         }
+        Question::Locate { at, objects } => Answer::Located {
+            symbols: compiled::compiled_from(&objects, &at.file, at.line),
+            at,
+        },
     }
 }
 
@@ -134,7 +196,7 @@ impl Shown {
     fn still_open(&self, objects: &[Arc<Object>]) -> bool {
         match self.ask {
             Ask::Symbol(_) => true,
-            Ask::Source(_) => objects
+            Ask::Source { .. } => objects
                 .iter()
                 .any(|object| Arc::ptr_eq(object, &self.studied.symbol.object)),
         }
@@ -143,7 +205,7 @@ impl Shown {
     fn answers(&self, ask: &Ask) -> bool {
         match ask {
             Ask::Symbol(symbol) => self.studied.symbol == *symbol,
-            Ask::Source(_) => self.ask == *ask,
+            Ask::Source { .. } => self.ask == *ask,
         }
     }
 }
@@ -360,8 +422,9 @@ fn recent_symbols(shown: Option<&Shown>, history: &History) -> Vec<Symbol> {
 }
 
 /// Work the question out on the app's one worker thread and hand the answer to the panes
-/// through [`Analysis`]. Requests supersede: the queue is drained to its newest entry, so
-/// what the reader clicked past is dropped before it is started.
+/// through [`Analysis`], and a locate's to the Locations panel through `located`.
+/// Requests supersede: the queue is drained to its newest entry of each kind
+/// ([`newest`]), so what the reader clicked past is dropped before it is started.
 ///
 /// **One worker and not two**, now that there are two kinds of question: `dwarf.index` is
 /// a `OnceLock` and the source index's build holds the same `context` mutex `line_info`
@@ -377,6 +440,7 @@ pub(crate) fn use_analysis_with(
     objects: State<Vec<Arc<Object>>>,
     history: State<History>,
     mut analysis: State<Analyzed>,
+    mut located: State<Located>,
     work: impl Fn(Question) -> Answer + Send + 'static,
 ) {
     // The worker and the task that listens to it, started once and never restarted.
@@ -390,14 +454,13 @@ pub(crate) fn use_analysis_with(
             while let Ok(question) = jobs.recv_blocking() {
                 // Everything the reader clicked past while the last job ran, dropped
                 // without being started rather than after the fact.
-                let mut question = question;
-                while let Ok(newer) = jobs.try_recv() {
-                    question = newer;
-                }
+                let questions = newest(question, std::iter::from_fn(|| jobs.try_recv().ok()));
 
-                // A send that fails is the app shutting down.
-                if answered.send_blocking(work(question)).is_err() {
-                    return;
+                for question in questions {
+                    // A send that fails is the app shutting down.
+                    if answered.send_blocking(work(question)).is_err() {
+                        return;
+                    }
                 }
             }
         });
@@ -405,6 +468,25 @@ pub(crate) fn use_analysis_with(
         spawn(async move {
             let mut analysis = analysis;
             while let Ok(answer) = answers.recv().await {
+                let (ask, studied) = match answer {
+                    Answer::Listing { ask, studied } => (ask, studied),
+                    Answer::Located { at, symbols } => {
+                        // The same rule as below, against the line the panel is asking
+                        // about now; and the same rule as `Shown::still_open`, applied
+                        // per symbol, so a binary closed while the worker ran is not put
+                        // back by its answer.
+                        if located.peek().asked.as_ref() != Some(&at) {
+                            continue;
+                        }
+                        let mut found = Found::new(at, symbols);
+                        found.retain_open(&objects.peek());
+                        let mut next = located.peek().clone();
+                        next.found = Some(found);
+                        located.set(next);
+                        continue;
+                    }
+                };
+
                 // **The supersession rule**: an answer is kept only if its question is
                 // the one being asked *now* -- a comparison and not a generation counter,
                 // since an `Ask` already compares by identity, and since the answer for
@@ -412,24 +494,24 @@ pub(crate) fn use_analysis_with(
                 // A dropped answer is what clicking twice quickly means, so nothing logs
                 // or retries. Cloned out of the guard first, since everything below
                 // writes.
-                if asked.peek_ask().as_ref() != Some(&answer.ask) {
+                if asked.peek_ask().as_ref() != Some(&ask) {
                     continue;
                 }
                 // And an answer out of a binary that has been closed since it was asked
                 // for is not taken either. `Shown::still_open` -- the same rule the effect
                 // applies to the listing that is up, so the two cannot drift.
-                let landed = answer.studied.map(|studied| Shown {
-                    ask: answer.ask.clone(),
+                let landed = studied.map(|studied| Shown {
+                    ask: ask.clone(),
                     studied,
                 });
                 let landed = landed.filter(|shown| shown.still_open(&objects.peek()));
 
                 let mut next = analysis.peek().clone();
-                if next.pending.as_ref() == Some(&answer.ask) {
+                if next.pending.as_ref() == Some(&ask) {
                     next.pending = None;
                     next.slow = false;
                 }
-                next.answered = Some(answer.ask.clone());
+                next.answered = Some(ask.clone());
 
                 match landed {
                     Some(shown) => next.shown = Some(shown),
@@ -442,7 +524,7 @@ pub(crate) fn use_analysis_with(
                         let mine = next
                             .shown
                             .as_ref()
-                            .is_some_and(|shown| asked_of(&shown.ask) == asked_of(&answer.ask));
+                            .is_some_and(|shown| asked_of(&shown.ask) == asked_of(&ask));
                         if !mine {
                             next.shown = None;
                         }
@@ -456,6 +538,7 @@ pub(crate) fn use_analysis_with(
         requests
     });
 
+    let requests_for_locate = requests.clone();
     use_side_effect(move || {
         // Reading subscribes this to the question; the state it writes is `peek`ed, so it
         // cannot wake itself.
@@ -514,8 +597,9 @@ pub(crate) fn use_analysis_with(
 
         let question = match &ask {
             Ask::Symbol(symbol) => Question::Study(symbol.clone()),
-            Ask::Source(at) => Question::Resolve {
+            Ask::Source { at, chosen } => Question::Resolve {
                 at: at.clone(),
+                chosen: chosen.clone(),
                 objects: open,
                 // Peeked, not read: the ranking is an input to an answer and a visit must
                 // not re-ask a question that has been answered.
@@ -538,5 +622,34 @@ pub(crate) fn use_analysis_with(
                 analysis.write().slow = true;
             }
         });
+    });
+
+    // The locate question. The objects are **peeked** where the listing reads them: an
+    // answer stands until replaced, so a file opened afterwards is not searched until the
+    // line is asked again -- the panel says which objects it answered for by saying when.
+    // A file closed afterwards is the effect below.
+    use_side_effect(move || {
+        let pending = located.read().pending().cloned();
+        let Some(at) = pending else {
+            return;
+        };
+        let _ = requests_for_locate.try_send(Question::Locate {
+            at,
+            objects: objects.peek().clone(),
+        });
+    });
+
+    // A closed binary takes its locations with it, at once and whatever the panel is
+    // doing: `Found::retain_open` answers whether anything went, so a load that added an
+    // object writes nothing.
+    use_side_effect(move || {
+        let open = objects.read().clone();
+        let mut next = located.peek().clone();
+        let Some(found) = next.found.as_mut() else {
+            return;
+        };
+        if found.retain_open(&open) {
+            located.set(next);
+        }
     });
 }

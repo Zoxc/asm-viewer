@@ -91,6 +91,9 @@ impl Component for SourceRow {
         let mut driven = use_consume::<Drives>().0;
         let marked = use_consume::<Marked>().0;
         let shift = use_consume::<Shift>().0;
+        // Consumed here, in the render, because the menu handler may not run a hook.
+        let located = use_consume::<Locations>().0;
+        let dock = use_consume::<ContentDock>().0;
         let index = self.index;
         let source = &self.source.0;
 
@@ -153,6 +156,18 @@ impl Component for SourceRow {
                 hovering.set_if_modified(false);
                 release_focus(focused, focus.as_ref());
             })
+            .on_secondary_down({
+                let at = at.clone();
+                // A location found from the file a source-driven tab is about is chosen
+                // for that tab; from a companion it opens the symbol.
+                let subject = self.drives.then(|| self.file.clone());
+                move |e: Event<PressEventData>| {
+                    ContextMenu::open_from_event(
+                        &e,
+                        locate_menu(located, dock, at.clone(), subject.clone()),
+                    );
+                }
+            })
             // Every source row is a position, so unlike an instruction row this one always
             // has something to pin.
             .on_press({
@@ -170,7 +185,8 @@ impl Component for SourceRow {
                     }
                     pinned.set(Some(Pin {
                         at: at.clone(),
-                        reveal: Some(Pane::Assembly),
+                        reveal: Owed::by(Pane::Assembly),
+                        landed: false,
                     }));
                 }
             })
@@ -223,7 +239,7 @@ impl Component for SourceList {
         let rows = marked_rows(marked, Pane::Source);
         let a11y = use_a11y();
 
-        let mut controller = use_scroll_controller(ScrollConfig::default);
+        let controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);
 
         // Which line of *this* file each cross-view position names: a symbol's rows can
@@ -251,6 +267,30 @@ impl Component for SourceList {
         use_kept_position(
             use_consume::<SrcAt>().0,
             move |document: &Document| docs.peek().id_of(document).is_some(),
+            {
+                let file = self.file.clone();
+                move |controller: &mut ScrollController| {
+                    let Some(at) = owed_reveal(pinned, Pane::Source) else {
+                        return false;
+                    };
+                    // Nothing to scroll to when the instruction came from a file this
+                    // pane is not showing -- an inlined header's line 42 is not line 42
+                    // of the file on screen -- nor when the line is past the end of a
+                    // file that has moved on since it was compiled.
+                    if at.file != file {
+                        return false;
+                    }
+                    let Some(index) = (at.line as usize)
+                        .checked_sub(1)
+                        .filter(|index| *index < length)
+                    else {
+                        return false;
+                    };
+                    reveal_made(pinned, Pane::Source);
+                    reveal_row(controller, *viewport.peek(), index);
+                    true
+                }
+            },
             controller,
             &self.document,
             length,
@@ -272,29 +312,6 @@ impl Component for SourceList {
                     .unwrap_or_default()
             })
         };
-
-        use_side_effect_with_deps(self, move |list: &SourceList| {
-            let Some(at) = owed_reveal(pinned, Pane::Source) else {
-                return;
-            };
-
-            // Nothing to scroll to when the instruction came from a file this pane is not
-            // showing -- an inlined header's line 42 is not line 42 of the file on screen
-            // -- nor when the line is past the end of a file that has moved on since it was
-            // compiled.
-            if at.file != list.file {
-                return;
-            }
-            let Some(index) = (at.line as usize)
-                .checked_sub(1)
-                .filter(|index| *index < list.source.0.lines)
-            else {
-                return;
-            };
-
-            reveal_made(pinned, Pane::Source);
-            reveal_row(&mut controller, viewport(), index);
-        });
 
         rect()
             .width(Size::fill())
@@ -366,12 +383,37 @@ impl SourceSide {
     }
 }
 
-pub(crate) fn source_side(active: Option<&Document>, analysis: &Analyzed) -> Option<SourceSide> {
+/// Which file the Source pane draws for `active`: a source-driven tab's own file, or the
+/// drawn symbol's companion. The companion is the symbol's own file -- the one its first
+/// instruction was compiled from -- except under a **landed** pin naming another file
+/// the listing's line info knows: a row in the Locations panel opens a symbol on a line,
+/// and a symbol whose prologue was inlined from elsewhere would otherwise open on that
+/// elsewhere, with the line the reader asked for in a file that is not up. A pin made
+/// inside the panes changes no file, so clicking an inlined instruction leaves the
+/// symbol's own file on screen as it always did.
+pub(crate) fn source_side(
+    active: Option<&Document>,
+    analysis: &Analyzed,
+    pin: Option<&Pin>,
+) -> Option<SourceSide> {
     match active? {
         Document::Source(file) => Some(SourceSide::Subject(file.clone())),
         Document::Assembly(_) => {
             let shown = analysis.shown.as_ref()?;
-            shown.studied.lines.file.clone().map(SourceSide::Companion)
+            let lines = &shown.studied.lines;
+            let landed = pin
+                .filter(|pin| pin.landed)
+                .map(|pin| &pin.at.file)
+                .filter(|file| {
+                    lines
+                        .info
+                        .as_ref()
+                        .is_some_and(|info| info.files().iter().any(|named| named == *file))
+                });
+            landed
+                .cloned()
+                .or_else(|| lines.file.clone())
+                .map(SourceSide::Companion)
         }
     }
 }
@@ -425,7 +467,8 @@ impl Component for SourcePane {
         let analysis = use_consume::<Analysis>().0.read().clone();
         // The tab's own document and not `Active`, which is a memo and a beat behind: this
         // pane is only ever mounted for the tab it belongs to.
-        let side = source_side(Some(&self.document), &analysis);
+        let pin = use_consume::<Pinned>().0.read().clone();
+        let side = source_side(Some(&self.document), &analysis, pin.as_ref());
 
         let Some(side) = side else {
             // The same answer the assembly pane gives, from the same place, plus one case

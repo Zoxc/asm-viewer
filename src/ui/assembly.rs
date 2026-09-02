@@ -38,6 +38,9 @@ struct AsmData {
     /// so it can never be a beat behind the rows it is drawn over.
     lanes: Arc<Lanes>,
     lines: SymbolLines,
+    /// The file of the source-driven tab this listing is the assembly side of, or `None`
+    /// for an assembly-driven tab's own listing. Compared by text, as `LinePos` is.
+    subject: Option<Arc<str>>,
 }
 
 impl PartialEq for AsmData {
@@ -46,6 +49,7 @@ impl PartialEq for AsmData {
             && Arc::ptr_eq(&self.object, &other.object)
             && Arc::ptr_eq(&self.lanes, &other.lanes)
             && self.lines == other.lines
+            && self.subject == other.subject
     }
 }
 
@@ -303,6 +307,12 @@ impl Component for InstructionRow {
         let mut pinned = use_consume::<Pinned>().0;
         let marked = use_consume::<Marked>().0;
         let shift = use_consume::<Shift>().0;
+        // Consumed here, in the render, because the menu handler may not run a hook.
+        let located = use_consume::<Locations>().0;
+        let dock = use_consume::<ContentDock>().0;
+        // The source-driven tab this listing is the assembly side of, if it is one: a
+        // location found from it is chosen for it.
+        let subject = self.data.subject.clone();
         let mut hover = self.hover;
         let index = self.index;
         let width = self.data.lanes.width;
@@ -417,6 +427,21 @@ impl Component for InstructionRow {
                 }
                 release_focus(focused, focus.as_ref());
             })
+            // And offers no menu either: there is no line to find the locations of.
+            .maybe(at.is_some(), {
+                let at = at.clone();
+                move |row| {
+                    let Some(at) = at else {
+                        return row;
+                    };
+                    row.on_secondary_down(move |e: Event<PressEventData>| {
+                        ContextMenu::open_from_event(
+                            &e,
+                            locate_menu(located, dock, at.clone(), subject.clone()),
+                        );
+                    })
+                }
+            })
             .on_press(move |_| {
                 // An instruction the debug info places nowhere pins nothing rather than
                 // clearing what is pinned: a click on a prologue byte is not a way of
@@ -424,7 +449,8 @@ impl Component for InstructionRow {
                 if let Some(at) = at.clone() {
                     pinned.set(Some(Pin {
                         at,
-                        reveal: Some(Pane::Source),
+                        reveal: Owed::by(Pane::Source),
+                        landed: false,
                     }));
                 }
             })
@@ -498,7 +524,7 @@ impl Component for InstructionList {
             .as_ref()
             .map(|pin| pin.at.clone())
             .or(match &self.asked {
-                Ask::Source(at) => Some(at.clone()),
+                Ask::Source { at, .. } => Some(at.clone()),
                 Ask::Symbol(_) => None,
             });
         let marked = use_consume::<Marked>().0;
@@ -508,7 +534,7 @@ impl Component for InstructionList {
         // listing.
         let a11y = use_a11y();
 
-        let mut controller = use_scroll_controller(ScrollConfig::default);
+        let controller = use_scroll_controller(ScrollConfig::default);
         // How tall the list is, which `reveal_row` needs to know whether the row it was
         // asked for is on screen already. `VirtualScrollView` measures itself but keeps
         // the answer, so the rect wrapping it is measured here instead.
@@ -524,14 +550,40 @@ impl Component for InstructionList {
             object: self.symbol.object.clone(),
             lanes: self.lanes.clone(),
             lines: self.lines.clone(),
+            subject: match &self.asked {
+                Ask::Source { at, .. } => Some(at.file.clone()),
+                Ask::Symbol(_) => None,
+            },
         };
         let length = data.assembly.instructions.len();
         // Where this tab was left, put back when it is switched to and written down as it
-        // is scrolled. A `Pin::reveal` (the effect below) wins over it.
+        // is scrolled -- and the scroll a pin is owed, which wins over it.
         let docs = use_consume::<OpenDocs>().0;
         use_kept_position(
             use_consume::<AsmAt>().0,
             move |document: &Document| docs.peek().id_of(document).is_some(),
+            {
+                let data = data.clone();
+                move |controller: &mut ScrollController| {
+                    let Some(at) = owed_reveal(pinned, Pane::Assembly) else {
+                        return false;
+                    };
+                    // Nothing at all when the line produced no instruction here -- one
+                    // the optimiser folded away, or one belonging to another function,
+                    // or, in a source-driven tab, the listing this very click is asking
+                    // for not having arrived yet. Scrolling somewhere arbitrary would be
+                    // worse than not scrolling, and **the request is left owed**, so the
+                    // listing that can answer it still finds it.
+                    let Some(index) = (0..data.assembly.instructions.len())
+                        .find(|&index| data.position(index).as_ref() == Some(&at))
+                    else {
+                        return false;
+                    };
+                    reveal_made(pinned, Pane::Assembly);
+                    reveal_row(controller, *viewport.peek(), index);
+                    true
+                }
+            },
             controller,
             &asked_of(&self.asked),
             length,
@@ -550,30 +602,6 @@ impl Component for InstructionList {
                     .unwrap_or_default()
             })
         };
-
-        // The deps are the disassembly and nothing the pointer touches, so this is armed
-        // once per symbol; `use_side_effect`'s callback is built by a `use_hook` and would
-        // otherwise still be holding the first symbol ever selected.
-        use_side_effect_with_deps(&data, move |data: &AsmData| {
-            let Some(at) = owed_reveal(pinned, Pane::Assembly) else {
-                return;
-            };
-
-            // Nothing at all when the line produced no instruction here -- one the
-            // optimiser folded away, or one belonging to another function, or, in a
-            // source-driven tab, the listing this very click is asking for not having
-            // arrived yet. Scrolling somewhere arbitrary would be worse than not
-            // scrolling, and **the request is left owed**, so the listing that can answer
-            // it still finds it.
-            let Some(index) = (0..data.assembly.instructions.len())
-                .find(|&index| data.position(index).as_ref() == Some(&at))
-            else {
-                return;
-            };
-
-            reveal_made(pinned, Pane::Assembly);
-            reveal_row(&mut controller, viewport(), index);
-        });
 
         rect()
             .expanded()

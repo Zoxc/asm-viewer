@@ -62,10 +62,58 @@ pub(crate) enum Pane {
 #[derive(Clone, PartialEq)]
 pub(crate) struct Pin {
     pub(crate) at: LinePos,
-    /// The pane that has yet to scroll `at` into view -- always the other one from the
-    /// pane clicked -- and `None` once it has. Separate from `at` so that clicking the
-    /// same line twice is two requests.
-    pub(crate) reveal: Option<Pane>,
+    /// The panes that have yet to scroll `at` into view -- the other one from the pane
+    /// clicked, or both for a click made in neither -- and none once they have. Separate
+    /// from `at` so that clicking the same line twice is two requests.
+    pub(crate) reveal: Owed,
+    /// Whether this pin was made by a [`Landing`] -- a click from outside both panes --
+    /// which names the **file** the Source pane shows as well as the line, where a click
+    /// inside them cannot change which file is up. See `source_side`.
+    pub(crate) landed: bool,
+}
+
+/// Which of the two panes still owe a scroll to a pin. A pair of flags and not an
+/// `Option<Pane>`: a click in one pane asks the other, but a row in the Locations panel
+/// is a click in neither and asks both.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Owed {
+    pub(crate) assembly: bool,
+    pub(crate) source: bool,
+}
+
+impl Owed {
+    pub(crate) const BOTH: Owed = Owed {
+        assembly: true,
+        source: true,
+    };
+
+    /// A scroll owed by `pane` alone.
+    pub(crate) fn by(pane: Pane) -> Owed {
+        match pane {
+            Pane::Assembly => Owed {
+                assembly: true,
+                source: false,
+            },
+            Pane::Source => Owed {
+                assembly: false,
+                source: true,
+            },
+        }
+    }
+
+    fn owes(self, pane: Pane) -> bool {
+        match pane {
+            Pane::Assembly => self.assembly,
+            Pane::Source => self.source,
+        }
+    }
+
+    fn paid(&mut self, pane: Pane) {
+        match pane {
+            Pane::Assembly => self.assembly = false,
+            Pane::Source => self.source = false,
+        }
+    }
 }
 
 /// The pinned position, shared through context. `None` until something is clicked, and
@@ -87,23 +135,42 @@ pub(crate) fn owed_reveal(pinned: State<Option<Pin>>, pane: Pane) -> Option<Line
     // the next click, so it has to happen before any early return.
     let pin = pinned.read();
     match pin.as_ref() {
-        Some(pin) if pin.reveal == Some(pane) => Some(pin.at.clone()),
+        Some(pin) if pin.reveal.owes(pane) => Some(pin.at.clone()),
         _ => None,
     }
 }
 
-/// Say that `pane` has made the scroll it was owed. The pin itself stays, only `reveal`
-/// is cleared, so it is answered exactly once and a repeat click is a second request.
+/// Say that `pane` has made the scroll it was owed. The pin itself stays, only `pane`'s
+/// half of `reveal` is cleared, so it is answered exactly once and a repeat click is a
+/// second request.
 pub(crate) fn reveal_made(mut pinned: State<Option<Pin>>, pane: Pane) {
-    let owed = matches!(pinned.peek().as_ref(), Some(pin) if pin.reveal == Some(pane));
+    let owed = matches!(pinned.peek().as_ref(), Some(pin) if pin.reveal.owes(pane));
     if !owed {
         return;
     }
 
     if let Some(pin) = pinned.write().as_mut() {
-        pin.reveal = None;
+        pin.reveal.paid(pane);
     }
 }
+
+/// A line to pin the moment `tab` becomes the active document.
+///
+/// What a click from outside the two panes -- a row in the Locations panel -- needs and
+/// a click inside them does not: opening the document is an `activate`, and the change of
+/// document that makes is exactly what [`use_clear_focus`] answers by dropping the pin,
+/// so a pin set in the same handler would be gone a beat later. Left here instead, for
+/// that effect to turn into the pin when the document it names arrives.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Landing {
+    pub(crate) tab: Document,
+    pub(crate) at: LinePos,
+}
+
+/// The landing asked for, shared through context. `None` almost always: it is set in the
+/// handler that opens a document and spent by the change of document that follows.
+#[derive(Clone, Copy)]
+pub(crate) struct Land(pub(crate) State<Option<Landing>>);
 
 /// Bring the row at `index` into view, and leave the scroll alone when it already is.
 ///
@@ -137,9 +204,18 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
 /// - **The tab the controller is *holding*** is tracked here and is not the tab the app is
 ///   showing: they differ for exactly the one run that has to move the view, and every
 ///   write goes under the held tab.
+///
+/// And the pane's reveal is made **here**, by `reveal`, rather than by an effect of its
+/// own: it is handed the controller and answers whether it scrolled, and a scroll it made
+/// is where the arriving tab goes instead of back to its row. The two are owed at once
+/// when a row in the Locations panel opens a symbol on a line, and two effects' scrolls
+/// land in whichever order the runtime wakes them -- with the reveal first, it had
+/// marked itself made by the time the kept row was put over it. One effect has one
+/// order. `reveal` reads the pin, which is what wakes this on a click inside a tab.
 pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     mut positions: State<Positions<T>>,
     is_open: impl Fn(&T) -> bool + 'static,
+    mut reveal: impl FnMut(&mut ScrollController) -> bool + 'static,
     mut controller: ScrollController,
     tab: &T,
     length: usize,
@@ -196,9 +272,13 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
         if switching {
             *held.borrow_mut() = Some(tab.clone());
         }
+        // The reveal first, and the kept row only when it made none: either scroll is a
+        // write this effect is subscribed to, so it wakes once more, finds the tab it is
+        // holding is the tab it is showing, and writes the row down.
+        if reveal(&mut controller) {
+            return;
+        }
         if let Some(row) = moving {
-            // A write this effect is subscribed to: it wakes once more, finds the tab it
-            // is holding is the tab it is showing, and writes the row down.
             controller.scroll_to_y(-((row as f32 * code_row_height()) as i32));
         }
     });
@@ -208,17 +288,36 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
 /// positions inside the drawn symbol's line info. Navigating from a relocation label
 /// leaves the pointer sitting on a row, so the focus need never be released the ordinary
 /// way, and a pin has no ordinary way at all.
+///
+/// The one exception is a [`Landing`] naming the document that has just arrived, which
+/// becomes the pin instead, owed by both panes. A landing is spent by whichever document
+/// arrives, the one it named or another: it is for the next arrival only, and one left
+/// lying would pin a line in a document opened for some other reason later.
 pub(crate) fn use_clear_focus(
     active: Memo<Option<Document>>,
     focused: State<Option<LineFocus>>,
     pinned: State<Option<Pin>>,
+    landing: State<Option<Landing>>,
 ) {
     use_side_effect(move || {
-        // Subscribes the effect to the active document, which is all it wants from it.
-        let _ = active.read();
+        // Subscribes the effect to the active document, which is all it wants from it;
+        // the landing is peeked, so setting one wakes nothing until the document does.
+        let active = active.read().clone();
 
-        let (mut focused, mut pinned) = (focused, pinned);
+        let (mut focused, mut pinned, mut landing) = (focused, pinned, landing);
         focused.set_if_modified(None);
-        pinned.set_if_modified(None);
+
+        let asked = landing.peek().clone();
+        if asked.is_some() {
+            landing.set(None);
+        }
+        let landed = asked
+            .filter(|landing| Some(&landing.tab) == active.as_ref())
+            .map(|landing| Pin {
+                at: landing.at,
+                reveal: Owed::BOTH,
+                landed: true,
+            });
+        pinned.set_if_modified(landed);
     });
 }

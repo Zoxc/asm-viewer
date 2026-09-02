@@ -153,6 +153,7 @@ pub(crate) fn use_clear_marks(
     active: Memo<Option<Document>>,
     asked: Asked,
     analysis: State<Analyzed>,
+    pinned: State<Option<Pin>>,
     marked: State<Option<Marks>>,
 ) {
     // The **question** and not the active document: a source-driven tab's listing is
@@ -172,8 +173,12 @@ pub(crate) fn use_clear_marks(
         // functions from one file leave the same lines on screen. Compared against what
         // it last was rather than answered to directly, since reading the analysis
         // subscribes this to writes -- a request, the slow flag -- that change no listing.
-        let file =
-            source_side(active.read().as_ref(), &analysis.read()).map(|side| side.file().clone());
+        let file = source_side(
+            active.read().as_ref(),
+            &analysis.read(),
+            pinned.read().as_ref(),
+        )
+        .map(|side| side.file().clone());
         // Cloned out of the borrow before the `borrow_mut`.
         let was = showing.borrow().clone();
         if was == file {

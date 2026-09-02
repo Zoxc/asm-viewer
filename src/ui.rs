@@ -62,6 +62,8 @@ mod focus;
 pub(crate) use focus::*;
 mod highlight;
 pub(crate) use highlight::*;
+mod locations;
+pub(crate) use locations::*;
 mod marks;
 pub(crate) use marks::*;
 mod metrics;
@@ -139,7 +141,7 @@ pub fn app() -> impl IntoElement {
         DockArea::column(vec![
             vec![Tab::View(View::Objects)],
             vec![Tab::View(View::Symbols), Tab::View(View::Info)],
-            vec![Tab::View(View::History)],
+            vec![Tab::View(View::History), Tab::View(View::Locations)],
         ])
     });
     let content_dock = use_state(|| {
@@ -182,6 +184,7 @@ pub fn app() -> impl IntoElement {
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     let focused = use_provide_context(|| Focused(State::create(None))).0;
     let pinned = use_provide_context(|| Pinned(State::create(None))).0;
+    let landing = use_provide_context(|| Land(State::create(None))).0;
     let marked = use_provide_context(|| Marked(State::create(None))).0;
     let mut shift = use_provide_context(|| Shift(State::create(false))).0;
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
@@ -196,7 +199,7 @@ pub fn app() -> impl IntoElement {
         history,
     };
     use_save_on_change(states);
-    use_clear_focus(active, focused, pinned);
+    use_clear_focus(active, focused, pinned, landing);
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.
@@ -219,12 +222,13 @@ pub fn app() -> impl IntoElement {
     use_provide_context(move || Symbols(symbols));
 
     let analysis = use_provide_context(|| Analysis(State::create(Analyzed::default()))).0;
+    let located = use_provide_context(|| Locations(State::create(Located::default()))).0;
     // The question and not the active document: a source-driven tab's assembly side
     // changes when a line in it is clicked, which changes no document.
     let asked = Asked { active, driven };
-    use_analysis_with(asked, objects, history, analysis, answer);
+    use_analysis_with(asked, objects, history, analysis, located, answer);
     // After the analysis: the file the Source pane draws is what the analysis says it is.
-    use_clear_marks(active, asked, analysis, marked);
+    use_clear_marks(active, asked, analysis, pinned, marked);
 
     // At the root rather than in the view: an inactive dock tab is unmounted, and neither
     // a buffer being typed into nor a program that was started can live there. The buffers

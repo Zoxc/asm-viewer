@@ -72,6 +72,7 @@ fn scrolling_harness() -> impl IntoElement {
     use_kept_position(
         at,
         move |tab: &String| open.peek().contains(tab),
+        |_| false,
         controller,
         &showing,
         rows,
@@ -192,6 +193,113 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
         test.sync_and_update();
     }
     assert_eq!(at.peek().at(&"a".to_owned()), None);
+}
+
+/// [`scrolling_harness`] with the panes' reveal made through the kept position, as
+/// theirs is: a `Pin` whose line is taken as a row index of whatever tab is shown.
+fn revealing_harness() -> impl IntoElement {
+    let tab = use_consume::<KeptTab>().0;
+    let at = use_consume::<KeptAt>().0;
+    let open = use_consume::<KeptOpen>().0;
+    let length = use_consume::<KeptLength>().0;
+    let mut top = use_consume::<KeptTop>().0;
+    let pinned = use_consume::<Pinned>().0;
+
+    let controller = use_scroll_controller(ScrollConfig::default);
+    let showing = tab.read().clone();
+    let rows = *length.read();
+    use_kept_position(
+        at,
+        move |tab: &String| open.peek().contains(tab),
+        move |controller: &mut ScrollController| {
+            let Some(at) = owed_reveal(pinned, Pane::Assembly) else {
+                return false;
+            };
+            reveal_made(pinned, Pane::Assembly);
+            reveal_row(controller, 100.0, at.line as usize);
+            true
+        },
+        controller,
+        &showing,
+        rows,
+    );
+
+    rect().expanded().child(
+        VirtualScrollView::new_with_data_controlled(
+            rows,
+            move |index, _: &usize| {
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(code_row_height()))
+                    .on_pointer_over(move |_| top.set(index))
+                    .key(index)
+                    .into()
+            },
+            controller,
+        )
+        .length(rows)
+        .item_size(code_row_height()),
+    )
+}
+
+/// A reveal owed when the tab changes wins over where the tab was left: the two are
+/// owed at once when a Locations row opens a symbol on a line, and the kept position
+/// putting the arriving tab at its top would undo the scroll the reveal made.
+#[test]
+fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
+    let (mut test, (tab, top, pinned)) = TestingRunner::new(
+        revealing_harness,
+        (100., 100.).into(),
+        |runner| {
+            let tabs = vec!["a".to_owned(), "b".to_owned()];
+            runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
+            runner.provide_root_context(|| KeptOpen(State::create(tabs)));
+            runner.provide_root_context(|| KeptLength(State::create(100)));
+            (
+                runner
+                    .provide_root_context(|| KeptTab(State::create("a".to_owned())))
+                    .0,
+                runner.provide_root_context(|| KeptTop(State::create(0))).0,
+                runner
+                    .provide_root_context(|| Pinned(State::create(None)))
+                    .0,
+            )
+        },
+        1.,
+    );
+    let (mut tab, mut pinned) = (tab, pinned);
+    test.sync_and_update();
+
+    let top_row = |test: &mut TestingRunner| {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        test.move_cursor((50., 90.));
+        test.sync_and_update();
+        test.move_cursor((50., 5.));
+        test.sync_and_update();
+        *top.peek()
+    };
+
+    // Tab "a" scrolled somewhere; then, in one handler's worth of writes, a reveal owed
+    // for a row of tab "b" and the switch to it.
+    test.scroll((50., 50.), (0., -300.));
+    assert!(top_row(&mut test) > 0, "the wheel moved nothing");
+    pinned.set(Some(Pin {
+        at: LinePos {
+            file: "b.rs".into(),
+            line: 40,
+        },
+        reveal: Owed::by(Pane::Assembly),
+        landed: false,
+    }));
+    tab.set("b".to_owned());
+    let landed = top_row(&mut test);
+    assert!(
+        (30..=40).contains(&landed),
+        "the arriving tab was put at row {landed} rather than at the revealed row"
+    );
+    assert!(owed_reveal(pinned, Pane::Assembly).is_none());
 }
 
 fn area(groups: Vec<Vec<Tab>>) -> DockArea {
@@ -833,6 +941,7 @@ fn closing_a_binary_keeps_the_source_tabs() {
         states.open,
         states.asm_at,
         states.src_at,
+        states.driven,
         states.history,
         &path,
     );
@@ -1006,6 +1115,7 @@ fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
         states.open,
         states.asm_at,
         states.src_at,
+        states.driven,
         states.history,
         &path,
     );
@@ -1085,10 +1195,16 @@ fn analysis_harness() -> impl IntoElement {
     let history = use_consume::<Hist>().0;
     let work = use_consume::<Work>().0;
     let mut seen = use_consume::<Seen>().0;
+    let located = use_consume::<Locations>().0;
 
-    use_analysis_with(asking, objects, history, analysis, move |question| {
-        work(question)
-    });
+    use_analysis_with(
+        asking,
+        objects,
+        history,
+        analysis,
+        located,
+        move |question| work(question),
+    );
 
     use_side_effect(move || {
         let shown = analysis.read().shown.clone();
@@ -1108,8 +1224,8 @@ fn analysis_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// The four states an analysis test drives the harness through, provided in the order
-/// `app()` provides them. A macro for [`project_states!`]'s reason.
+/// The states an analysis test drives the harness through, provided in the order `app()`
+/// provides them. A macro for [`project_states!`]'s reason.
 macro_rules! analysis_states {
     ($runner:expr, $work:expr) => {{
         $runner.provide_root_context(|| Work(Arc::new($work)));
@@ -1128,6 +1244,9 @@ macro_rules! analysis_states {
                 .0,
             $runner
                 .provide_root_context(|| Hist(State::create(History::default())))
+                .0,
+            $runner
+                .provide_root_context(|| Locations(State::create(Located::default())))
                 .0,
         )
     }};
@@ -1196,7 +1315,7 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
         answer(Question::Study(symbol))
     };
 
-    let (mut test, (asking, analysis, seen, _objects, _history)) = TestingRunner::new(
+    let (mut test, (asking, analysis, seen, _objects, _history, _located)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
         move |runner| analysis_states!(runner, work),
@@ -1263,7 +1382,7 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
 
-    let (mut test, (asking, analysis, seen, _objects, _history)) = TestingRunner::new(
+    let (mut test, (asking, analysis, seen, _objects, _history, _located)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
         |runner| analysis_states!(runner, answer),
@@ -1330,7 +1449,7 @@ fn a_source_line_answers_with_the_symbol_it_was_compiled_into() {
         .clone();
     let at = a_line_of(&wanted);
 
-    let (mut test, (asking, analysis, _seen, objects, _history)) = TestingRunner::new(
+    let (mut test, (asking, analysis, _seen, objects, _history, _located)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
         |runner| analysis_states!(runner, answer),
@@ -1340,13 +1459,22 @@ fn a_source_line_answers_with_the_symbol_it_was_compiled_into() {
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
 
-    asking.set(Some(Ask::Source(at.clone())));
+    asking.set(Some(Ask::Source {
+        at: at.clone(),
+        chosen: None,
+    }));
     pump(&mut test, || analysis.peek().shown.is_some());
 
     let state = analysis.peek().clone();
     let shown = state.shown.expect("the line was resolved");
     assert!(shown.studied.symbol == wanted, "another symbol was picked");
-    assert!(shown.ask == Ask::Source(at.clone()));
+    assert!(
+        shown.ask
+            == Ask::Source {
+                at: at.clone(),
+                chosen: None
+            }
+    );
     assert!(state.pending.is_none());
     assert!(shown
         .studied
@@ -1376,7 +1504,7 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
         line: 999_999,
     };
 
-    let (mut test, (asking, analysis, _seen, objects, _history)) = TestingRunner::new(
+    let (mut test, (asking, analysis, _seen, objects, _history, _located)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
         |runner| analysis_states!(runner, answer),
@@ -1386,12 +1514,22 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
 
-    asking.set(Some(Ask::Source(at.clone())));
+    asking.set(Some(Ask::Source {
+        at: at.clone(),
+        chosen: None,
+    }));
     pump(&mut test, || analysis.peek().shown.is_some());
 
-    asking.set(Some(Ask::Source(barren.clone())));
+    asking.set(Some(Ask::Source {
+        at: barren.clone(),
+        chosen: None,
+    }));
     pump(&mut test, || {
-        analysis.peek().answered == Some(Ask::Source(barren.clone()))
+        analysis.peek().answered
+            == Some(Ask::Source {
+                at: barren.clone(),
+                chosen: None,
+            })
     });
 
     let state = analysis.peek().clone();
@@ -1399,7 +1537,13 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     assert!(shown.studied.symbol == wanted);
     // And it is still filed under the question it was worked out for, not the one that
     // answered with nothing.
-    assert!(shown.ask == Ask::Source(at.clone()));
+    assert!(
+        shown.ask
+            == Ask::Source {
+                at: at.clone(),
+                chosen: None
+            }
+    );
     assert!(state.pending.is_none());
 
     // The same barren question against another tab's listing takes it down instead:
@@ -1408,14 +1552,969 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     pump(&mut test, || {
         analysis.peek().answered == Some(Ask::Symbol(wanted.clone()))
     });
-    asking.set(Some(Ask::Source(barren.clone())));
+    asking.set(Some(Ask::Source {
+        at: barren.clone(),
+        chosen: None,
+    }));
     pump(&mut test, || {
-        analysis.peek().answered == Some(Ask::Source(barren.clone()))
+        analysis.peek().answered
+            == Some(Ask::Source {
+                at: barren.clone(),
+                chosen: None,
+            })
     });
     assert!(
         analysis.peek().shown.is_none(),
         "a listing belonging to another tab was left up"
     );
+}
+
+/// The queue is drained to the newest question of each kind and not to the newest
+/// overall: a locate behind a listing question cancels neither, and the listing is
+/// worked first.
+#[test]
+fn the_queue_keeps_the_newest_question_of_each_kind() {
+    let symbols = fixture_symbols();
+    let at = a_line_of(&symbols[0]);
+    let locate = || Question::Locate {
+        at: at.clone(),
+        objects: Vec::new(),
+    };
+
+    let kinds = |questions: &[Question]| -> Vec<&'static str> {
+        questions
+            .iter()
+            .map(|question| match question {
+                Question::Study(_) => "study",
+                Question::Resolve { .. } => "resolve",
+                Question::Locate { .. } => "locate",
+            })
+            .collect()
+    };
+
+    // A listing behind a listing supersedes it; a locate behind either is kept beside it.
+    let drained = newest(
+        Question::Study(symbols[0].clone()),
+        vec![locate(), Question::Study(symbols[1].clone())].into_iter(),
+    );
+    assert_eq!(kinds(&drained), ["study", "locate"]);
+    let Question::Study(kept) = &drained[0] else {
+        panic!("the listing kind went missing");
+    };
+    assert!(*kept == symbols[1], "the older listing question won");
+
+    // The listing first whichever arrived first.
+    let drained = newest(
+        locate(),
+        vec![Question::Study(symbols[0].clone())].into_iter(),
+    );
+    assert_eq!(kinds(&drained), ["study", "locate"]);
+
+    // And one of a kind is simply itself.
+    assert_eq!(kinds(&newest(locate(), std::iter::empty())), ["locate"]);
+}
+
+/// A line's locations are every symbol compiled from it over every open object, and a
+/// line nothing was compiled from is answered -- with nothing -- rather than left pending.
+#[test]
+fn a_lines_locations_come_back_from_every_open_object() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    // The same file parsed twice is two objects, and both answer.
+    let twin = fixture_symbols()[0].object.clone();
+
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        |runner| analysis_states!(runner, answer),
+        1.,
+    );
+    let (mut objects, mut located) = (objects, located);
+    objects.set(vec![wanted.object.clone(), twin.clone()]);
+    test.sync_and_update();
+
+    located.write().asked = Some(at.clone());
+    assert!(located.peek().pending() == Some(&at));
+    pump(&mut test, || located.peek().found.is_some());
+
+    let state = located.peek().clone();
+    assert!(state.pending().is_none());
+    let found = state.found.expect("the line was looked for");
+    assert!(found.at == at);
+    let names: Vec<&str> = found
+        .symbols
+        .0
+        .iter()
+        .map(|symbol| symbol.data.name.as_str())
+        .collect();
+    assert_eq!(names, ["sum_to", "sum_to"]);
+    assert!(Arc::ptr_eq(&found.symbols.0[0].object, &wanted.object));
+    assert!(Arc::ptr_eq(&found.symbols.0[1].object, &twin));
+
+    // Past the end of any file the fixture names.
+    let barren = LinePos {
+        file: at.file.clone(),
+        line: 999_999,
+    };
+    located.write().asked = Some(barren.clone());
+    pump(&mut test, || {
+        located
+            .peek()
+            .found
+            .as_ref()
+            .is_some_and(|found| found.at == barren)
+    });
+    let state = located.peek().clone();
+    assert!(state.pending().is_none());
+    assert!(state.found.expect("answered").symbols.0.is_empty());
+}
+
+/// An answer for a line the reader has since asked about another line instead of is
+/// dropped, and the queue drained to the newest line means the middle one is never
+/// worked at all. Staged through a gate, as the listing's version of this test is.
+#[test]
+fn locations_for_a_line_no_longer_asked_about_are_dropped() {
+    let symbols = fixture_symbols();
+    let (first, second) = (a_line_of(&symbols[0]), a_line_of(&symbols[1]));
+    assert!(
+        first != second,
+        "the fixture's first two symbols share a line"
+    );
+
+    let (started, starts) = async_channel::unbounded::<LinePos>();
+    let (gate, gated) = async_channel::unbounded::<()>();
+    let work = move |question: Question| {
+        let Question::Locate { at, objects } = question else {
+            panic!("this test asks only about locations");
+        };
+        let _ = started.send_blocking(at.clone());
+        let _ = gated.recv_blocking();
+        answer(Question::Locate { at, objects })
+    };
+
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner| analysis_states!(runner, work),
+        1.,
+    );
+    let (mut objects, mut located) = (objects, located);
+    objects.set(vec![symbols[0].object.clone()]);
+    let settle = |test: &mut TestingRunner| {
+        for _ in 0..8 {
+            test.sync_and_update();
+        }
+    };
+    settle(&mut test);
+
+    located.write().asked = Some(first.clone());
+    pump(&mut test, || !starts.is_empty());
+    assert!(starts.recv_blocking().expect("the worker started") == first);
+
+    located.write().asked = Some(second.clone());
+    settle(&mut test);
+
+    gate.send_blocking(()).expect("the gate");
+    assert!(starts.recv_blocking().expect("the worker started") == second);
+    settle(&mut test);
+    assert!(
+        located.peek().found.is_none(),
+        "locations for a line the reader had left were put in the panel"
+    );
+    assert!(located.peek().pending() == Some(&second));
+
+    gate.send_blocking(()).expect("the gate");
+    pump(&mut test, || located.peek().found.is_some());
+    assert!(located.peek().found.as_ref().expect("answered").at == second);
+    assert!(located.peek().pending().is_none());
+}
+
+/// A locate queued behind a listing question cancels it in neither direction: both
+/// answers land. What the drain test above says of the function, said of the worker.
+#[test]
+fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
+    let symbols = fixture_symbols();
+    let symbol = symbols[0].clone();
+    let at = a_line_of(&symbol);
+
+    // The gate holds the worker inside its *first* job, so the two behind it are queued
+    // together and drained together.
+    let (started, starts) = async_channel::unbounded::<()>();
+    let (gate, gated) = async_channel::unbounded::<()>();
+    let work = move |question: Question| {
+        let _ = started.send_blocking(());
+        let _ = gated.recv_blocking();
+        answer(question)
+    };
+
+    let (mut test, (asking, analysis, _seen, objects, _history, located)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner| analysis_states!(runner, work),
+        1.,
+    );
+    let (mut asking, mut objects, mut located) = (asking, objects, located);
+    objects.set(vec![symbol.object.clone()]);
+    let settle = |test: &mut TestingRunner| {
+        for _ in 0..8 {
+            test.sync_and_update();
+        }
+    };
+    settle(&mut test);
+
+    // The job the worker is held inside, then the two behind it.
+    asking.set(Some(Ask::Symbol(symbols[1].clone())));
+    pump(&mut test, || !starts.is_empty());
+    starts.recv_blocking().expect("the worker started");
+    located.write().asked = Some(at.clone());
+    asking.set(Some(Ask::Symbol(symbol.clone())));
+    settle(&mut test);
+
+    // Let the held job go; the worker then takes both queued jobs, each behind the gate.
+    for _ in 0..3 {
+        gate.send_blocking(()).expect("the gate");
+    }
+    pump(&mut test, || {
+        located.peek().found.is_some()
+            && analysis
+                .peek()
+                .shown
+                .as_ref()
+                .is_some_and(|shown| shown.studied.symbol == symbol)
+    });
+    let found = located
+        .peek()
+        .found
+        .clone()
+        .expect("the locate was answered");
+    assert!(found.at == at);
+    assert!(!found.symbols.0.is_empty());
+    assert!(analysis.peek().pending.is_none());
+}
+
+/// A binary closed takes its locations with it -- the ones already in the panel and the
+/// ones still on their way out of the worker -- while another binary's stand.
+#[test]
+fn closing_a_binary_takes_its_locations_with_it() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    let twin = fixture_symbols()[0].object.clone();
+
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        |runner| analysis_states!(runner, answer),
+        1.,
+    );
+    let (mut objects, mut located) = (objects, located);
+    objects.set(vec![wanted.object.clone(), twin.clone()]);
+    test.sync_and_update();
+
+    located.write().asked = Some(at.clone());
+    pump(&mut test, || located.peek().found.is_some());
+    assert_eq!(
+        located
+            .peek()
+            .found
+            .as_ref()
+            .expect("answered")
+            .symbols
+            .0
+            .len(),
+        2
+    );
+
+    // One file closed: its row goes, the other's stays, and the answer is still about
+    // the line it was asked for.
+    objects.set(vec![twin.clone()]);
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    let found = located.peek().found.clone().expect("the answer stands");
+    assert!(found.at == at);
+    assert_eq!(found.symbols.0.len(), 1);
+    assert!(Arc::ptr_eq(&found.symbols.0[0].object, &twin));
+
+    // A load that adds an object changes nothing already found.
+    objects.set(vec![twin.clone(), wanted.object.clone()]);
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        located
+            .peek()
+            .found
+            .as_ref()
+            .expect("stands")
+            .symbols
+            .0
+            .len(),
+        1
+    );
+
+    // And the other file closed empties it without forgetting what was asked.
+    objects.set(Vec::new());
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    let state = located.peek().clone();
+    assert!(state.asked == Some(at.clone()));
+    assert!(state.found.expect("stands").symbols.0.is_empty());
+}
+
+/// The Locations view and nothing else, over the project's states and a `Located` the
+/// test writes directly: what is under test is what the panel draws of an answer and
+/// what a row does, not how the answer got there. `use_clear_focus` is mounted because a
+/// row's press is answered by it.
+fn locations_harness() -> impl IntoElement {
+    let active = use_consume::<Active>().0;
+    let focused = use_consume::<Focused>().0;
+    let pinned = use_consume::<Pinned>().0;
+    let landing = use_consume::<Land>().0;
+    use_clear_focus(active, focused, pinned, landing);
+
+    rect().expanded().child(LocationsTab)
+}
+
+/// The contexts [`locations_harness`] reads beside the project's.
+#[derive(Clone, Copy)]
+struct LocationStates {
+    located: State<Located>,
+    pinned: State<Option<Pin>>,
+    landing: State<Option<Landing>>,
+}
+
+macro_rules! location_states {
+    ($runner:expr) => {{
+        let states = project_states!($runner);
+        $runner.provide_root_context(|| Focused(State::create(None)));
+        let pinned = $runner
+            .provide_root_context(|| Pinned(State::create(None)))
+            .0;
+        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
+        let located = $runner
+            .provide_root_context(|| Locations(State::create(Located::default())))
+            .0;
+        (
+            states,
+            LocationStates {
+                located,
+                pinned,
+                landing,
+            },
+        )
+    }};
+}
+
+/// Where the label reading `text` was laid out, for a press on it.
+fn label_area(test: &TestingRunner, text: &str) -> Option<Area> {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    test.find(|node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .filter(|label| label.text == text)
+            .map(|_| node.layout().area)
+    })
+}
+
+/// A few passes, since the rows sit behind a memo over the answer: the memo is
+/// recomputed by a task woken on the write, a pass later than the write itself.
+fn settle(test: &mut TestingRunner) {
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+}
+
+/// The panel says which of its four states it is in off `Located`'s two fields, and a
+/// found answer is a heading naming the line over one row per symbol -- the same name
+/// twice, being in two objects, is two rows.
+#[test]
+fn the_locations_panel_draws_a_row_per_symbol() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let twin = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let at = a_line_of(&wanted);
+
+    let (mut test, (_states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut located = location.located;
+    settle(&mut test);
+    assert!(labels(&test).contains(&"Nothing looked for yet".to_owned()));
+
+    located.write().asked = Some(at.clone());
+    settle(&mut test);
+    let finding = format!(
+        "Finding locations for {}:{}\u{2026}",
+        file_name(&at.file),
+        at.line
+    );
+    assert!(labels(&test).contains(&finding), "{:?}", labels(&test));
+
+    located.write().found = Some(Found::new(at.clone(), Vec::new()));
+    settle(&mut test);
+    let nothing = format!("No code compiled from {}:{}", file_name(&at.file), at.line);
+    assert!(labels(&test).contains(&nothing), "{:?}", labels(&test));
+
+    located.write().found = Some(Found::new(at.clone(), vec![wanted.clone(), twin]));
+    settle(&mut test);
+    let drawn = labels(&test);
+    let heading = format!("2 locations for {}:{}", file_name(&at.file), at.line);
+    assert!(drawn.contains(&heading), "{drawn:?}");
+    assert_eq!(
+        drawn.iter().filter(|text| **text == "sum_to").count(),
+        2,
+        "{drawn:?}"
+    );
+    assert_eq!(
+        drawn
+            .iter()
+            .filter(|text| **text == wanted.object.name)
+            .count(),
+        2,
+        "{drawn:?}"
+    );
+}
+
+/// Pressing a row is a navigation: the symbol becomes the active document and the
+/// history records the visit, exactly as a press in the Symbols list does.
+#[test]
+fn a_location_row_opens_its_symbol() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut located = location.located;
+    located.write().asked = Some(at.clone());
+    located.write().found = Some(Found::new(at.clone(), vec![wanted.clone()]));
+    settle(&mut test);
+    assert!(states.open.active().is_none());
+
+    let row = label_area(&test, "sum_to").expect("the row is drawn");
+    let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
+    test.move_cursor(press);
+    test.press_cursor(press);
+    test.release_cursor(press);
+    settle(&mut test);
+
+    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    assert!(states.open.active() == Some(document.clone()));
+    assert!(states
+        .history
+        .peek()
+        .recent()
+        .any(|(_, entry)| *entry == document));
+}
+
+/// A row's press lands on the line as well as opening the symbol: the pin is the line,
+/// owed by both panes, and it survives the change of document that opening is --
+/// which is the mechanism, since that change is what drops every other pin.
+#[test]
+fn a_location_row_lands_on_its_line() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut located = location.located;
+    // Another document on top first, so the press is a change of document.
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Assembly(Selection::Symbol(symbols[0].clone()))),
+        Visit::Went,
+    );
+    located.write().asked = Some(at.clone());
+    located.write().found = Some(Found::new(at.clone(), vec![wanted.clone()]));
+    settle(&mut test);
+    assert!(location.pinned.peek().is_none());
+
+    let row = label_area(&test, "sum_to").expect("the row is drawn");
+    let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
+    test.move_cursor(press);
+    test.press_cursor(press);
+    test.release_cursor(press);
+    settle(&mut test);
+
+    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    assert!(states.open.active() == Some(document));
+    let pin = location.pinned.peek().clone().expect("the line was pinned");
+    assert!(pin.at == at);
+    assert!(pin.reveal == Owed::BOTH);
+    assert!(
+        location.landing.peek().is_none(),
+        "the landing was not spent by the document it named"
+    );
+    // Both panes are owed the scroll, and each pays its own.
+    assert!(owed_reveal(location.pinned, Pane::Assembly).as_ref() == Some(&at));
+    assert!(owed_reveal(location.pinned, Pane::Source).as_ref() == Some(&at));
+    reveal_made(location.pinned, Pane::Source);
+    assert!(owed_reveal(location.pinned, Pane::Assembly).as_ref() == Some(&at));
+    assert!(owed_reveal(location.pinned, Pane::Source).is_none());
+}
+
+/// Landing on the document already on top pins at once: `activate` then changes
+/// nothing, so no effect would run to spend a landing.
+#[test]
+fn landing_on_the_document_already_on_top_pins_at_once() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    activate(
+        states.open,
+        states.history,
+        Some(document.clone()),
+        Visit::Went,
+    );
+    settle(&mut test);
+
+    land(
+        states.open,
+        states.history,
+        location.pinned,
+        location.landing,
+        document.clone(),
+        at.clone(),
+    );
+    assert!(
+        location.landing.peek().is_none(),
+        "a landing was left to an effect that cannot run"
+    );
+    assert!(location
+        .pinned
+        .peek()
+        .as_ref()
+        .is_some_and(|pin| pin.at == at));
+    settle(&mut test);
+    assert!(
+        location
+            .pinned
+            .peek()
+            .as_ref()
+            .is_some_and(|pin| pin.at == at),
+        "the pin was dropped though no document changed"
+    );
+    assert!(states.open.active() == Some(document));
+}
+
+/// The companion file follows a **landed** pin when the symbol's line info names its
+/// file, and the symbol's own file otherwise -- so a Locations row opens on the file the
+/// line is in, while a click inside the panes changes no file.
+#[test]
+fn a_landed_pin_names_the_companion_file() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let mut studied = Studied::new(wanted.clone());
+    let named = studied
+        .lines
+        .info
+        .as_ref()
+        .expect("the fixture has DWARF")
+        .files()
+        .to_vec();
+    // The symbol's own file made distinct from every file the info names, so that the
+    // switch is observable whether or not the fixture's one function inlines anything.
+    let own: Arc<str> = "own.c".into();
+    studied.lines.file = Some(own.clone());
+    let analysis = Analyzed {
+        shown: Some(Shown {
+            ask: Ask::Symbol(wanted.clone()),
+            studied,
+        }),
+        ..Default::default()
+    };
+    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    let file_of = |pin: Option<&Pin>| {
+        source_side(Some(&document), &analysis, pin)
+            .expect("a companion")
+            .file()
+            .clone()
+    };
+    let pin = |file: &str, landed: bool| Pin {
+        at: LinePos {
+            file: file.into(),
+            line: 1,
+        },
+        reveal: Owed::BOTH,
+        landed,
+    };
+
+    // A distinct allocation of a file the info names, as the app hands about.
+    let elsewhere: String = named[0].to_string();
+    assert!(file_of(None) == own);
+    assert!(file_of(Some(&pin(&elsewhere, true))).as_ref() == elsewhere.as_str());
+    // Not landed: the same pin changes nothing.
+    assert!(file_of(Some(&pin(&elsewhere, false))) == own);
+    // Landed but naming a file the symbol knows nothing of: nothing to switch to.
+    assert!(file_of(Some(&pin("nowhere.rs", true))) == own);
+    // And a source-driven tab's subject is its own file whatever is pinned.
+    let subject = Document::Source("subject.rs".into());
+    assert!(
+        source_side(Some(&subject), &analysis, Some(&pin(&elsewhere, true)))
+            .expect("a subject")
+            .file()
+            .as_ref()
+            == "subject.rs"
+    );
+}
+
+/// A source-driven tab's ask carries the symbol the reader chose among the many, and
+/// the worker's pick answers with it -- over the symbol on screen, which is what would
+/// otherwise win -- and falls back where the choice was not compiled from the line.
+#[test]
+fn a_chosen_symbol_wins_the_pick_for_its_line() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    let twin = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let other = symbols
+        .iter()
+        .find(|symbol| symbol.data.name != "sum_to")
+        .expect("the fixture holds another function")
+        .clone();
+
+    let (mut test, (asking, analysis, _seen, objects, _history, _located)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        |runner| analysis_states!(runner, answer),
+        1.,
+    );
+    let (mut asking, mut objects) = (asking, objects);
+    objects.set(vec![wanted.object.clone(), twin.object.clone()]);
+    test.sync_and_update();
+
+    // Unchosen, the first object's copy is on screen.
+    asking.set(Some(Ask::Source {
+        at: at.clone(),
+        chosen: None,
+    }));
+    pump(&mut test, || analysis.peek().shown.is_some());
+    assert!(
+        analysis
+            .peek()
+            .shown
+            .as_ref()
+            .expect("resolved")
+            .studied
+            .symbol
+            == wanted
+    );
+
+    // Chosen, the twin's is, though the first is the symbol on screen.
+    let chosen = Ask::Source {
+        at: at.clone(),
+        chosen: Some(twin.clone()),
+    };
+    asking.set(Some(chosen.clone()));
+    pump(&mut test, || {
+        analysis.peek().answered == Some(chosen.clone())
+    });
+    assert!(
+        analysis
+            .peek()
+            .shown
+            .as_ref()
+            .expect("resolved")
+            .studied
+            .symbol
+            == twin
+    );
+
+    // A choice the line was not compiled from is no choice: the symbol on screen stays.
+    let elsewhere = Ask::Source {
+        at: at.clone(),
+        chosen: Some(other),
+    };
+    asking.set(Some(elsewhere.clone()));
+    pump(&mut test, || {
+        analysis.peek().answered == Some(elsewhere.clone())
+    });
+    assert!(
+        analysis
+            .peek()
+            .shown
+            .as_ref()
+            .expect("resolved")
+            .studied
+            .symbol
+            == twin
+    );
+}
+
+/// Locations asked for from a source-driven tab are chosen **for** it: pressing a row
+/// keeps the reader in that tab, drives it from the line and has its assembly side
+/// follow the symbol. Once the tab is gone the same press opens the symbol instead.
+#[test]
+fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    let tab = Document::Source(at.file.clone());
+
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut located = location.located;
+    activate(states.open, states.history, Some(tab.clone()), Visit::Went);
+    located.write().asked = Some(at.clone());
+    located.write().subject = Some(at.file.clone());
+    located.write().found = Some(Found::new(at.clone(), vec![wanted.clone()]));
+    settle(&mut test);
+
+    let row = label_area(&test, "sum_to").expect("the row is drawn");
+    let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
+    test.move_cursor(press);
+    test.press_cursor(press);
+    test.release_cursor(press);
+    settle(&mut test);
+
+    assert!(
+        states.open.active() == Some(tab.clone()),
+        "the press left the tab"
+    );
+    assert_eq!(
+        states.open.documents().len(),
+        1,
+        "a tab was opened for the symbol"
+    );
+    assert!(states.driven.peek().choice(&tab) == Some(wanted.clone()));
+    assert_eq!(states.driven.peek().line(&tab), Some(at.line));
+    assert!(location
+        .pinned
+        .peek()
+        .as_ref()
+        .is_some_and(|pin| pin.at == at));
+    // Which is the question the tab now asks.
+    assert!(
+        ask(Some(&tab), &states.driven.peek())
+            == Some(Ask::Source {
+                at: at.clone(),
+                chosen: Some(wanted.clone()),
+            })
+    );
+
+    // The tab closed, the same row opens the symbol as a tab of its own.
+    close_tab(
+        states.open,
+        states.history,
+        states.asm_at,
+        states.src_at,
+        states.driven,
+        &tab,
+    );
+    settle(&mut test);
+    let row = label_area(&test, "sum_to").expect("the row is still drawn");
+    let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
+    test.move_cursor(press);
+    test.press_cursor(press);
+    test.release_cursor(press);
+    settle(&mut test);
+    assert!(states.open.active() == Some(Document::Assembly(Selection::Symbol(wanted))));
+}
+
+/// A landing is for the next arrival only: whichever document arrives spends it, and
+/// one for another document pins nothing.
+#[test]
+fn a_landing_is_spent_by_whichever_document_arrives() {
+    let symbols = fixture_symbols();
+    let at = a_line_of(&symbols[0]);
+
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    settle(&mut test);
+
+    let mut landing = location.landing;
+    landing.set(Some(Landing {
+        tab: Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        at: at.clone(),
+    }));
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Assembly(Selection::Symbol(symbols[1].clone()))),
+        Visit::Went,
+    );
+    settle(&mut test);
+
+    assert!(
+        location.pinned.peek().is_none(),
+        "a landing pinned a line in another document"
+    );
+    assert!(
+        location.landing.peek().is_none(),
+        "a spent landing was left lying"
+    );
+}
+
+/// The sidebar's dock, which `app()` keeps as a local state and a test has to provide
+/// somewhere.
+#[derive(Clone, Copy)]
+struct SidebarDock(State<DockArea>);
+
+/// Asking for a line's locations is one write and one dock change: the question reaches
+/// the worker and is answered, and the Locations view is brought to the top of whichever
+/// panel holds it -- the sidebar's here, behind History -- looked for through the content
+/// dock the row can reach. Asking for the line already answered asks again.
+#[test]
+fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+
+    let (mut test, ((_asking, _analysis, _seen, objects, _history, located), content, sidebar)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| {
+                let states = analysis_states!(runner, answer);
+                // The two areas as `app()` wires them, the content one knowing the
+                // sidebar. The content dock holds no view at all, so the search has to
+                // cross over.
+                let sidebar = runner
+                    .provide_root_context(|| {
+                        SidebarDock(State::create(DockArea::column(vec![vec![
+                            Tab::View(View::History),
+                            Tab::View(View::Locations),
+                        ]])))
+                    })
+                    .0;
+                let content = runner
+                    .provide_root_context(|| {
+                        let mut area = DockArea::row(vec![vec![]]).with_documents(DOCUMENT_PANEL);
+                        area.other = Some(sidebar);
+                        ContentDock(State::create(area))
+                    })
+                    .0;
+                (states, content, sidebar)
+            },
+            1.,
+        );
+    let mut objects = objects;
+    objects.set(vec![wanted.object.clone()]);
+    test.sync_and_update();
+
+    let on_top = |dock: State<DockArea>| {
+        let dock = dock.peek();
+        let (panel, _) = dock.tree.find_tab(&Tab::View(View::Locations))?;
+        dock.tree.panel(&panel)?.active_tab_id
+    };
+    assert!(on_top(sidebar) == Some(Tab::View(View::History)));
+
+    find_locations(located, content, at.clone(), None);
+    assert!(on_top(sidebar) == Some(Tab::View(View::Locations)));
+    assert!(located.peek().pending() == Some(&at));
+    pump(&mut test, || located.peek().found.is_some());
+    let found = located.peek().found.clone().expect("answered");
+    assert!(found.at == at);
+    assert_eq!(found.symbols.0.len(), 1);
+
+    // The same line again is asked again, out of whatever is open now.
+    let mut objects = objects;
+    objects.set(vec![
+        wanted.object.clone(),
+        fixture_symbols()[0].object.clone(),
+    ]);
+    test.sync_and_update();
+    assert_eq!(
+        located
+            .peek()
+            .found
+            .as_ref()
+            .expect("stands")
+            .symbols
+            .0
+            .len(),
+        1,
+        "an answer re-asked itself when an object was opened"
+    );
+    find_locations(located, content, at.clone(), None);
+    assert!(located.peek().pending() == Some(&at));
+    pump(&mut test, || {
+        located
+            .peek()
+            .found
+            .as_ref()
+            .is_some_and(|found| found.symbols.0.len() == 2)
+    });
 }
 
 /// An answer for a line the reader has clicked past must never reach the panes.
@@ -1449,7 +2548,7 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
         answer(question)
     };
 
-    let (mut test, (asking, analysis, seen, objects, _history)) = TestingRunner::new(
+    let (mut test, (asking, analysis, seen, objects, _history, _located)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
         move |runner| analysis_states!(runner, work),
@@ -1468,12 +2567,18 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
         file: at.file.clone(),
         line: 999_999,
     };
-    asking.set(Some(Ask::Source(barren.clone())));
+    asking.set(Some(Ask::Source {
+        at: barren.clone(),
+        chosen: None,
+    }));
     pump(&mut test, || !starts.is_empty());
     assert!(starts.recv_blocking().expect("the worker started") == barren);
 
     // Clicked past while the first is still being worked on.
-    asking.set(Some(Ask::Source(later.clone())));
+    asking.set(Some(Ask::Source {
+        at: later.clone(),
+        chosen: None,
+    }));
     settle(&mut test);
 
     gate.send_blocking(()).expect("the gate");
@@ -1489,7 +2594,7 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
     assert!(seen.peek().len() == 1);
     assert!(seen.peek()[0] == wanted);
     // Two `Arc<str>`s of one path are one question, or every tab switch would re-resolve.
-    assert!(analysis.peek().answered == Some(Ask::Source(at)));
+    assert!(analysis.peek().answered == Some(Ask::Source { at, chosen: None }));
 }
 
 /// [`ask`] on its own, which is the whole of "what is this tab asking": no runner, since
@@ -1520,7 +2625,13 @@ fn what_a_tab_asks_follows_its_kind_and_its_driven_line() {
     assert!(ask(Some(&tab), &driven).is_none());
 
     driven.remember(tab.clone(), 42);
-    assert!(ask(Some(&tab), &driven) == Some(Ask::Source(LinePos { file, line: 42 })));
+    assert!(
+        ask(Some(&tab), &driven)
+            == Some(Ask::Source {
+                at: LinePos { file, line: 42 },
+                chosen: None
+            })
+    );
     // And the line belongs to that tab and not to source-driven tabs at large.
     assert!(ask(Some(&Document::Source("other.rs".into())), &driven).is_none());
 }
@@ -1542,7 +2653,7 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
     drop(symbols);
     let before = Arc::strong_count(&object);
 
-    let (mut test, (asking, analysis, seen, objects, _history)) = TestingRunner::new(
+    let (mut test, (asking, analysis, seen, objects, _history, _located)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
         |runner| analysis_states!(runner, answer),
@@ -1552,7 +2663,10 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
     objects.set(vec![object.clone()]);
     test.sync_and_update();
 
-    asking.set(Some(Ask::Source(at.clone())));
+    asking.set(Some(Ask::Source {
+        at: at.clone(),
+        chosen: None,
+    }));
     pump(&mut test, || analysis.peek().shown.is_some());
     assert!(Arc::strong_count(&object) > before, "the listing holds it");
 
@@ -1573,7 +2687,7 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
         "a listing out of a closed binary was left on screen"
     );
     // Asked again out of what is left, which is nothing, and said so.
-    assert!(analysis.peek().answered == Some(Ask::Source(at)));
+    assert!(analysis.peek().answered == Some(Ask::Source { at, chosen: None }));
     assert!(analysis.peek().pending.is_none());
     // The recorder this harness keeps for the supersession tests holds every symbol it
     // was told about, which is this test's own doing and not the app's.
@@ -1614,7 +2728,8 @@ fn a_reveal_the_listing_cannot_answer_is_left_owed() {
 
     pinned.set(Some(Pin {
         at: at.clone(),
-        reveal: Some(Pane::Assembly),
+        reveal: Owed::by(Pane::Assembly),
+        landed: false,
     }));
     test.sync_and_update();
 
@@ -1638,7 +2753,8 @@ fn a_reveal_the_listing_cannot_answer_is_left_owed() {
     // A second click on the same line is a second request.
     pinned.set(Some(Pin {
         at: at.clone(),
-        reveal: Some(Pane::Assembly),
+        reveal: Owed::by(Pane::Assembly),
+        landed: false,
     }));
     test.sync_and_update();
     assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));

@@ -155,6 +155,7 @@ pub(crate) fn close_binary(
     open: Open,
     mut asm_at: State<Positions<Document>>,
     mut src_at: State<Positions<Document>>,
+    mut driven: State<Driven>,
     mut history: State<History>,
     path: &Path,
 ) {
@@ -206,6 +207,10 @@ pub(crate) fn close_binary(
     // The positions cannot outlive the tabs they belong to.
     asm_at.write().forgetting(|tab| !tab.in_file(path));
     src_at.write().forgetting(|tab| !tab.in_file(path));
+    // A source-driven tab stands, but a symbol it chose out of this file is let go: the
+    // line beside the choice is what survives a close, and the next ask answers out of
+    // what is left.
+    driven.write().release(path);
 
     let remaining = history.peek().retaining(|entry| !entry.in_file(path));
     history.set(remaining);
@@ -223,6 +228,34 @@ pub(crate) fn close_binary(
     }
 }
 
+/// Open `target` on `at`: activate it, and pin the line in it with both panes owed the
+/// scroll -- at once when the document is already on top, since `activate` then changes
+/// nothing and no effect would run, and otherwise as a [`Landing`] for the change of
+/// document to turn into the pin. A visit either way, as any opening from a list is.
+pub(crate) fn land(
+    open: Open,
+    history: State<History>,
+    mut pinned: State<Option<Pin>>,
+    mut landing: State<Option<Landing>>,
+    target: Document,
+    at: LinePos,
+) {
+    if open.active().as_ref() == Some(&target) {
+        pinned.set(Some(Pin {
+            at,
+            reveal: Owed::BOTH,
+            landed: true,
+        }));
+        return;
+    }
+
+    landing.set(Some(Landing {
+        tab: target.clone(),
+        at,
+    }));
+    activate(open, history, Some(target), Visit::Went);
+}
+
 /// The menu a file row opens on a right-click.
 ///
 /// Built per press, since it closes over the row's path. The states come in as an argument
@@ -234,13 +267,18 @@ pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
         open,
         asm_at,
         src_at,
+        driven,
         history,
         ..
     } = states;
 
     Menu::new().child(
         MenuButton::new()
-            .on_press(move |_| close_binary(objects, loading, open, asm_at, src_at, history, &path))
+            .on_press(move |_| {
+                close_binary(
+                    objects, loading, open, asm_at, src_at, driven, history, &path,
+                )
+            })
             // "file" and not "object": the row may be one object of a file or the archive
             // above 196 of them, and the word has to be true of both.
             .child("Close file"),
@@ -413,6 +451,7 @@ pub(crate) fn reopen_binary(states: ProjectStates, path: PathBuf) {
         states.open,
         states.asm_at,
         states.src_at,
+        states.driven,
         states.history,
         &path,
     );

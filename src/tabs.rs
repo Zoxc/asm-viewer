@@ -4,6 +4,10 @@
 //! [`Driven`] is which source line a source-driven tab's assembly side follows. All three
 //! are framework-free, so they are unit-tested without mounting a UI.
 
+use std::path::Path;
+
+use analysis::Symbol;
+
 use crate::project::Document;
 
 /// The tab to show in place of `showing` once every tab `closing` answers true for is
@@ -103,12 +107,21 @@ impl<T: Clone + PartialEq> Positions<T> {
 /// [`row`](Positions::row) clamps a saved row against the listing that is there *now*,
 /// which is a rows-only answer and would have to grow a meaningless one for lines.
 ///
-/// The value is a line and not the symbol it resolves to, so this holds no `Arc<Object>`:
-/// a driven line survives its binary being closed, and the next ask simply answers out of
-/// whatever is still open. Lines are 1-based, as DWARF's are.
+/// The value is a line and not the symbol it resolves to, so the line holds no
+/// `Arc<Object>`: a driven line survives its binary being closed, and the next ask simply
+/// answers out of whatever is still open. Lines are 1-based, as DWARF's are.
+///
+/// Beside the line, **which of the many symbols the line compiles into the tab follows**,
+/// where the reader has said -- a row chosen in the Locations panel. That one is a
+/// [`Symbol`] and does hold the file's bytes, so it is [`released`](Driven::release) with
+/// its file where the line beside it stays. It outlives the line: reading down a generic
+/// function inside the instantiation picked is the point of picking one, so a click on
+/// the next line keeps the choice and the pick falls back only where the choice was not
+/// compiled from that line.
 #[derive(Default)]
 pub struct Driven {
     from: Vec<(Document, u32)>,
+    chosen: Vec<(Document, Symbol)>,
 }
 
 impl Driven {
@@ -129,11 +142,36 @@ impl Driven {
         }
     }
 
-    /// Forget what `tab` was driven from, because it is no longer open. Consistency and
-    /// not [`Positions::forget`]'s reason: a [`Document::Source`] key holds no
-    /// `Arc<Object>`, so nothing is being held up here.
+    /// The symbol `tab`'s assembly side follows among the many its line compiles into,
+    /// or `None` where the reader has not chosen one.
+    pub fn choice(&self, tab: &Document) -> Option<Symbol> {
+        self.chosen
+            .iter()
+            .find(|(open, _)| open == tab)
+            .map(|(_, symbol)| symbol.clone())
+    }
+
+    /// Have `tab`'s assembly side follow `symbol`, in place of whatever was chosen before.
+    pub fn choose(&mut self, tab: Document, symbol: Symbol) {
+        match self.chosen.iter_mut().find(|(open, _)| *open == tab) {
+            Some((_, chosen)) => *chosen = symbol,
+            None => self.chosen.push((tab, symbol)),
+        }
+    }
+
+    /// Forget what `tab` was driven from and what it chose, because it is no longer open.
+    /// For the line, consistency and not [`Positions::forget`]'s reason -- a
+    /// [`Document::Source`] key holds no `Arc<Object>`; for the choice, that reason.
     pub fn forget(&mut self, tab: &Document) {
         self.from.retain(|(open, _)| open != tab);
+        self.chosen.retain(|(open, _)| open != tab);
+    }
+
+    /// Let go of every choice into the file at `path`, because it is closing: a
+    /// [`Symbol`] holds the file's bytes. The lines stay, and the tabs they drive answer
+    /// out of whatever is still open.
+    pub fn release(&mut self, path: &Path) {
+        self.chosen.retain(|(_, symbol)| symbol.object.path != path);
     }
 }
 

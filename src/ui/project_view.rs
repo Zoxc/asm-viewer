@@ -409,7 +409,9 @@ pub(crate) fn clear_project(states: ProjectStates) {
     // `close_binary` writes the very list being walked.
     let binaries = project::binaries(&objects.peek());
     for path in binaries {
-        close_binary(objects, loading, open, asm_at, src_at, history, &path);
+        close_binary(
+            objects, loading, open, asm_at, src_at, driven, history, &path,
+        );
     }
 
     let remaining = open.documents();
