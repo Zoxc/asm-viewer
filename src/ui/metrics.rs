@@ -55,6 +55,15 @@ pub(crate) const TREE_INDENT: f32 = 16.0;
 /// is called.
 pub(crate) const FIELD_LABEL_WIDTH: f32 = 72.0;
 
+/// How wide the Scratchpad view's list of pads is.
+///
+/// A fixed width and not a `ResizableContainer`, which is what the two splits in this app
+/// that a reader can drag are: a dock tab that is not the active one in its panel is
+/// unmounted, and a `ResizablePanel` forgets its size on unmount — so a draggable width
+/// here would need a number kept at the root, the way `SplitRatio` is, for something
+/// nobody has asked to be able to drag.
+pub(crate) const PAD_LIST_WIDTH: f32 = 150.0;
+
 /// The column the short format tag is written in. Fixed, so the names to the right of it
 /// start at the same x whatever the tag says.
 pub(crate) const TAG_WIDTH: f32 = 34.0;

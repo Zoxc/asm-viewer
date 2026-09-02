@@ -128,12 +128,12 @@ impl Component for DependencyRow {
         // because a row is mounted only for an index the list has: the × below shortens
         // the list, and the rows are rebuilt before either box is read again.
         let name = pad.into_writable().map(
-            move |pad: &PadState| &pad.scratchpad.dependencies[index].name,
-            move |pad: &mut PadState| &mut pad.scratchpad.dependencies[index].name,
+            move |pads: &Pads| &pads.state().scratchpad.dependencies[index].name,
+            move |pads: &mut Pads| &mut pads.state_mut().scratchpad.dependencies[index].name,
         );
         let version = pad.into_writable().map(
-            move |pad: &PadState| &pad.scratchpad.dependencies[index].version,
-            move |pad: &mut PadState| &mut pad.scratchpad.dependencies[index].version,
+            move |pads: &Pads| &pads.state().scratchpad.dependencies[index].version,
+            move |pads: &mut Pads| &mut pads.state_mut().scratchpad.dependencies[index].version,
         );
 
         let marked = |input: Input, box_half: Half| {
@@ -172,7 +172,11 @@ impl Component for DependencyRow {
                         Button::new()
                             .compact()
                             .on_press(move |_| {
-                                pad.write().scratchpad.dependencies.remove(index);
+                                pad.write()
+                                    .state_mut()
+                                    .scratchpad
+                                    .dependencies
+                                    .remove(index);
                             })
                             .child("\u{00d7}"),
                     ),
@@ -197,17 +201,29 @@ impl Component for DependencyRow {
     }
 }
 
-/// The scratchpad's source, in freya's own `CodeEditor` -- which the read-only source pane
-/// rejected, both of its objections being about painting and scrolling a listing from
+/// The shown scratchpad's source, in freya's own `CodeEditor` -- which the read-only source
+/// pane rejected, both of its objections being about painting and scrolling a listing from
 /// outside and neither surviving a pane the reader is typing in. What is ours is the
 /// colours, out of the palette, and the font.
-#[derive(PartialEq)]
-struct SourceEditor;
+///
+/// The pad is a prop and the buffer is that pad's own, so a switch does not hand the
+/// arriving pad the buffer the leaving one was being typed into. It is mounted only for a
+/// pad the table [`PadBuffers::holds`], which is what makes the mapped `Writable` safe --
+/// a dependency row's two boxes are indexed the same way for the same reason.
+#[derive(Clone, PartialEq)]
+struct SourceEditor {
+    pad: PadId,
+}
 
 impl Component for SourceEditor {
     fn render(&self) -> impl IntoElement {
         let text = use_consume::<PadText>().0;
         let a11y_id = use_hook(AccessibilityId::new_unique);
+        let (reading, writing) = (self.pad.clone(), self.pad.clone());
+        let text = text.into_writable().map(
+            move |buffers: &PadBuffers| buffers.get(&reading),
+            move |buffers: &mut PadBuffers| buffers.get_mut(&writing),
+        );
 
         let font = fonts();
         let size = font.mono.size();
@@ -288,9 +304,86 @@ fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
         .into_element()
 }
 
-/// The Scratchpad pane: a source file the reader edits, the crates it asks for, a build,
-/// and what the compiler said about it. What it *builds* goes through `open_files` like
-/// any other binary.
+/// What a pad is called on screen: the name the reader gave it, or — for one they have not
+/// named — the app's own label, which is its id in angle brackets.
+///
+/// The brackets are `<entry point>`'s device in a second place: they say the label is the
+/// app's and not the reader's, so a row reading `<pad-3>` is plainly a pad with no name
+/// rather than a pad someone called that. That is also the whole of why an id may be drawn
+/// here at all, having no business anywhere a reader reads a *name* — in brackets it is not
+/// being offered as one. A plain "Unnamed" was the alternative and is worse: three fresh
+/// pads would be three identical rows.
+fn pad_label(id: &PadId, name: &str) -> String {
+    match name.trim() {
+        "" => format!("<{}>", id.as_str()),
+        named => named.to_owned(),
+    }
+}
+
+/// One row of the pad list: a scratchpad that can be switched to, drawn by the name the
+/// reader gave it — never by the id it is filed under.
+///
+/// The whole row is the press target, as a recent project's is; the shown pad wears
+/// `selected_bg` and the one under the pointer `object_hover_bg`, which is what every list
+/// in the sidebar already does. The name is a prop and the id is a prop, so a rename in the
+/// box beside it redraws the row and nothing else has to be told.
+#[derive(Clone, PartialEq)]
+struct PadRow {
+    id: PadId,
+    name: String,
+    shown: bool,
+    key: DiffKey,
+}
+
+impl KeyExt for PadRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for PadRow {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let pad = use_consume::<Pad>().0;
+        let jobs = use_consume::<PadJobs>();
+        let id = self.id.clone();
+
+        let background = match (self.shown, hovering()) {
+            (true, _) => palette().selected_bg,
+            (false, true) => palette().object_hover_bg,
+            (false, false) => Color::TRANSPARENT,
+        };
+
+        let unnamed = self.name.trim().is_empty();
+        let label = pad_label(&self.id, &self.name);
+
+        row_tooltip(
+            label.clone(),
+            rect()
+                .width(Size::fill())
+                .height(Size::px(list_row_height()))
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .padding(Gaps::new_symmetric(0.0, 6.0))
+                .content(Content::Flex)
+                .background(background)
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| show_pad(pad, &jobs, id.clone()))
+                // Dimmed when it is the placeholder and not something the reader wrote,
+                // which is how the recent-projects list draws a project with no name.
+                .child(tree_name(label, unnamed)),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// The Scratchpad pane: the pads there are down one side, and beside it the shown one --
+/// a source file the reader edits, the crates it asks for, a build, and what the compiler
+/// said about it. What it *builds* goes through `open_files` like any other binary.
 #[derive(PartialEq)]
 pub(crate) struct ScratchpadTab;
 
@@ -298,7 +391,26 @@ impl Component for ScratchpadTab {
     fn render(&self) -> impl IntoElement {
         let mut pad = use_consume::<Pad>().0;
         let jobs = use_consume::<PadJobs>();
-        let state = pad.read().clone();
+        let new_jobs = jobs.clone();
+        // The shown pad's own state and no more: the table holds every pad, and cloning
+        // all of them on every render would clone every source the app is holding. The
+        // rows want a name each, which is a string per pad and not a source per pad.
+        let pads = pad.read();
+        let (shown, state) = (pads.shown().clone(), pads.state().clone());
+        let listed: Vec<(PadId, String)> = pads
+            .order
+            .ids()
+            .iter()
+            .map(|id| {
+                let name = pads.get(id).map(|state| state.scratchpad.name.clone());
+                (id.clone(), name.unwrap_or_default())
+            })
+            .collect();
+        let refused = pads.refused.clone();
+        drop(pads);
+
+        let text = use_consume::<PadText>().0;
+        let editing = text.read().holds(&shown).then(|| shown.clone());
 
         let problems: HashMap<usize, Problem> = state.scratchpad.problems().into_iter().collect();
         let rows: Vec<Element> = state
@@ -393,10 +505,61 @@ impl Component for ScratchpadTab {
                 .into_element()
         });
 
-        rect()
-            .expanded()
+        // A plain `ScrollView` and not a `VirtualScrollView`: these are one-label rows and
+        // there are a handful of them, which is the History list's shape rather than the
+        // symbol list's.
+        let pads: Vec<Element> = listed
+            .into_iter()
+            .map(|(id, name)| {
+                let key = id.as_str().to_owned();
+                PadRow {
+                    shown: id == shown,
+                    id,
+                    name,
+                    key: DiffKey::None,
+                }
+                .key(key)
+                .into()
+            })
+            .collect();
+
+        let panel = rect()
+            .width(Size::px(PAD_LIST_WIDTH))
+            .height(Size::fill())
+            .border(right_hairline())
+            .child(section_heading(
+                "Scratchpads",
+                Some(
+                    Button::new()
+                        .compact()
+                        .on_press(move |_| request_new_pad(&new_jobs))
+                        .child("New")
+                        .into_element(),
+                ),
+            ))
+            .child(
+                ScrollView::new().child(rect().width(Size::fill()).children(pads).into_element()),
+            )
+            // The one thing the panel can be told no about. Under the list rather than
+            // over it, so a list that fills the panel is not pushed down by a line that is
+            // there once in a blue moon.
+            .maybe_child(refused.map(|failure| {
+                rect()
+                    .width(Size::fill())
+                    .padding(Gaps::new_symmetric(2.0, 6.0))
+                    .overflow(Overflow::Clip)
+                    .child(
+                        label()
+                            .text(format!("Not made: {failure}"))
+                            .color(palette().invalid_fg)
+                            .max_lines(1),
+                    )
+            }));
+
+        let body = rect()
+            .width(Size::flex(1.0))
+            .height(Size::fill())
             .content(Content::Flex)
-            .background(palette().pane_bg)
             .child(
                 rect()
                     .width(Size::fill())
@@ -424,12 +587,24 @@ impl Component for ScratchpadTab {
                                 .into_element(),
                         ),
                     ))
+                    // An ordinary bound box, exactly the project view's: the name is a
+                    // value in the pad's own package and nothing is filed under it, so a
+                    // keystroke is a state change the save effect writes out and there is
+                    // nothing to refuse, nothing to apply and no gesture to discover. It
+                    // is what the id being hidden buys.
                     .child(field_row(
-                        "Crate",
-                        label()
-                            .text(state.scratchpad.name().to_owned())
-                            .width(Size::flex(1.0))
-                            .max_lines(1),
+                        "Name",
+                        Input::new(pad.into_writable().map(
+                            |pads: &Pads| &pads.state().scratchpad.name,
+                            |pads: &mut Pads| &mut pads.state_mut().scratchpad.name,
+                        ))
+                        .compact()
+                        // The label the row is drawing, so an empty box says what the pad
+                        // is called elsewhere rather than a word that is true of any of
+                        // them -- and typing replaces it, where a seeded name would have
+                        // to be cleared first.
+                        .placeholder(pad_label(&shown, ""))
+                        .width(Size::flex(1.0)),
                     ))
                     // Where it is on disk: the package cargo is handed *is* the storage. In
                     // a tooltip too, a state directory being longer than any pane.
@@ -465,6 +640,7 @@ impl Component for ScratchpadTab {
                                 .compact()
                                 .on_press(move |_| {
                                     pad.write()
+                                        .state_mut()
                                         .scratchpad
                                         .dependencies
                                         .push(Dependency::default());
@@ -495,7 +671,10 @@ impl Component for ScratchpadTab {
                     .width(Size::fill())
                     .height(Size::flex(2.0))
                     .border(bottom_hairline())
-                    .child(SourceEditor),
+                    // Only once the pad's source has arrived and its buffer has been made:
+                    // the editor indexes that buffer, and there is nothing yet to type into
+                    // while the worker is still reading the disk.
+                    .maybe_child(editing.map(|pad| SourceEditor { pad }.into_element())),
             )
             .maybe_child((!diagnostics.is_empty()).then(|| {
                 rect()
@@ -516,6 +695,14 @@ impl Component for ScratchpadTab {
             // Under the diagnostics rather than over them: what the compiler said is about
             // the source directly above it, and what the program said is the newest thing
             // in the pane.
-            .maybe_child(output)
+            .maybe_child(output);
+
+        rect()
+            .expanded()
+            .horizontal()
+            .content(Content::Flex)
+            .background(palette().pane_bg)
+            .child(panel)
+            .child(body)
     }
 }

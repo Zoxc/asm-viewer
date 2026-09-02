@@ -5,7 +5,7 @@
 //! `pub(crate) use x::*;`, so a name means the same thing wherever it is written.
 pub(crate) use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     ops::ControlFlow,
     path::{Path, PathBuf},
     rc::Rc,
@@ -38,8 +38,8 @@ pub(crate) use crate::project::{
 };
 pub(crate) use crate::rows::RowSelection;
 pub(crate) use crate::scratchpad::{
-    run_in, Build, Dependency, Diagnostic, Ended, Failure, Half, Level, Problem, RunEvent,
-    RunOutput, Running, Scratchpad, Stream,
+    run_in, Build, Dependency, Diagnostic, Ended, Failure, Half, Level, PadId, PadListing,
+    PadOrder, Problem, RunEvent, RunOutput, Running, Scratchpad, Stream,
 };
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 pub(crate) use crate::source::{self, SourceFile};
@@ -226,16 +226,11 @@ pub fn app() -> impl IntoElement {
     // After the analysis: the file the Source pane draws is what the analysis says it is.
     use_clear_marks(active, asked, analysis, marked);
 
-    // At the root rather than in the view: an inactive dock tab is unmounted, and a
-    // buffer being typed into cannot live there.
-    let pad = use_provide_context(|| Pad(State::create(PadState::default()))).0;
-    let pad_text = use_provide_context(|| {
-        PadText(State::create(CodeEditorData::new(
-            Rope::from_str(&pad.peek().scratchpad.source),
-            language(Path::new(SOURCE_FILE)),
-        )))
-    })
-    .0;
+    // At the root rather than in the view: an inactive dock tab is unmounted, and neither
+    // a buffer being typed into nor a program that was started can live there. The buffers
+    // start empty and a pad gets its own when its source arrives.
+    let pad = use_provide_context(|| Pad(State::create(Pads::default()))).0;
+    let pad_text = use_provide_context(|| PadText(State::create(PadBuffers::default()))).0;
     use_scratchpad_with(pad, pad_text, states, pad_work);
 
     // Docking cannot express a fixed pixel width, which is why the outer split is a

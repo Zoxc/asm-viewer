@@ -554,22 +554,26 @@ one item per part, so the unfinished half stays visible.
   is not a target, so a reader with an error still finds the line by counting. Both halves
   already exist: cargo's JSON carries the span's line and column, and the editor has a cursor
   that can be put on one.
-- [ ] Scratchpads are a concept of their own, disjoint from projects, and there are many of them
-  saved. Today there is exactly one and it is implicit: the app opens `Scratchpad::default`,
-  fills it from whatever is on disk and never asks which pad it is looking at. Two halves of
-  the separation are already right and are what the rest should be built on — the pads live in
-  `scratchpads/` at the top of the state directory beside `projects/` and `settings.toml`,
-  never inside a project, and `Pad` is deliberately not one of the states a project switch
-  closes, because a scratchpad belongs to the app and not to whatever binary is being read.
-  What is missing is the rest of the concept: many pads kept side by side, each its own
-  directory the way each project is, each with a name the user can give it, a list of them that
-  outlives the session, and a way to move between them — a pad open in one project is the same
-  pad in the next, since nothing about it is about a binary. Two decisions to make before
-  building it. Where the list lives: a scratchpad list is a second document list, and the
-  content area's strip deliberately is not the place for one (a chip there is a *place in a
-  binary*), so it is the scratchpad view's own or a sidebar panel of its own. And which pad
-  opens at startup, which is the question `recents.toml` already answers for projects — an
-  order, most recent first, rather than a field saying "last".
+- [x] Scratchpads are a concept of their own, disjoint from projects, and there are many of them
+  saved. Each is its own directory under `scratchpads/` the way each project is one under
+  `projects/`, and it is filed under an **id the reader never sees** — the directory, the crate
+  and the order file all say the same `PadId`, checked the way a `ProjectId` is because it is
+  interpolated into a path and read back out of files a user can edit. What the reader deals in
+  is a **name**, a value in the pad's own package under `[package.metadata]`, so it may be
+  empty, hold spaces or repeat another pad's, and renaming is a keystroke the ordinary save
+  writes out rather than a directory move that has to claim a target and refuse a collision.
+  Which pad opens is the front of an order beside the pads, `recents.toml`'s rules exactly: an
+  order and not an index of what exists, `touch` answering whether anything moved, nothing
+  pruning itself on load. The *list* is the union of that order and the pad directories it does
+  not name, each row's name read from that pad's own package, since a reader picks a pad from it
+  and one that fell off the end has to stay reachable. The list lives in the **Scratchpad view's
+  own side panel**, the content area's strip deliberately not being the place for a second
+  document list. A new pad is the first free `scratch-N`, claimed by a `create_dir` that fails
+  rather than opens and written at once. **Runs are per pad**: several can be going at once,
+  leaving a pad stops nothing, and switching only switches which output is on screen. So is the
+  editor buffer, so a pad comes back with the cursor and the undo history it was left with.
+  Deleting a pad is deliberately absent — it is the one operation here that destroys a reader's
+  source, so it waits until it is asked for.
 - [ ] Stop a run's grandchildren with it. `Running::stop` kills the process the app spawned, so a
   scratchpad that spawns a child of its own leaves it running with nothing that could ever find
   it again. The fix is starting the run in a process group of its own and killing the group —

@@ -10,7 +10,7 @@ fn directory(line: u32) -> PathBuf {
 }
 
 fn scratchpad() -> Scratchpad {
-    Scratchpad::new("sketch").expect("a name")
+    Scratchpad::new("sketch").expect("an id")
 }
 
 fn dependency(name: impl Into<String>, version: impl Into<String>) -> Dependency {
@@ -26,6 +26,10 @@ fn dependency(name: impl Into<String>, version: impl Into<String>) -> Dependency
 #[test]
 fn a_package_is_a_manifest_and_a_main() {
     let mut scratchpad = scratchpad();
+    // What the reader calls it is under `[package.metadata]`, the one place cargo lets a
+    // tool of its own keep anything -- and it is under no obligation to be a crate name,
+    // where `[package] name`, which is the id, is. Untrimmed on purpose, like the rows.
+    scratchpad.name = " a name with spaces ".to_owned();
     scratchpad.dependencies = vec![
         dependency("rand", "0.8"),
         // Out of order and untrimmed on purpose: the manifest sorts and trims, the list
@@ -40,6 +44,9 @@ fn a_package_is_a_manifest_and_a_main() {
 name = \"sketch\"
 version = \"0.1.0\"
 edition = \"2021\"
+
+[package.metadata.scratchpad]
+name = \"a name with spaces\"
 
 [dependencies]
 anyhow = \"1.0.86\"
@@ -164,6 +171,9 @@ fn writes_and_reads_back() {
     let mut scratchpad = scratchpad();
     scratchpad.source = "fn main() { /* edited */ }\n".to_owned();
     scratchpad.dependencies = vec![dependency("anyhow", "1.0.86")];
+    // A name nothing could file a pad under: it is a value in the package and not the
+    // directory, so it may hold spaces, punctuation and any alphabet at all.
+    scratchpad.name = "Sam's ✎ notes".to_owned();
 
     scratchpad.write_to(&directory).expect("writing");
     assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad.clone()));
@@ -172,8 +182,10 @@ fn writes_and_reads_back() {
     assert!(!directory.join("Cargo.toml.tmp").exists());
     assert!(!directory.join("src").join("main.rs.tmp").exists());
 
-    // Writing again replaces rather than merges.
+    // Writing again replaces rather than merges -- the name included, a rename being an
+    // ordinary edit now that nothing is filed under it.
     scratchpad.source = "fn main() {}\n".to_owned();
+    scratchpad.name = "renamed".to_owned();
     scratchpad.dependencies = vec![dependency("rand", "0.8")];
     scratchpad.write_to(&directory).expect("writing again");
     assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad));
@@ -187,14 +199,64 @@ fn writes_and_reads_back() {
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// The reason [`Scratchpad::default`] may hand out a name without a `Result`: it is a name
-/// this module would accept if it were typed, and a package it would agree to write.
+/// An id is the directory a pad lives in, so it is read back through the same check the app
+/// generated it through. A file naming something that is not one is refused rather than
+/// interpolated into a path.
+#[test]
+fn an_id_out_of_a_file_goes_through_the_same_check_a_generated_one_does() {
+    assert_eq!(
+        PadId::new("sketch").map(|id| id.as_str().to_owned()),
+        Some("sketch".to_owned())
+    );
+    // Not trimmed, unlike a name: nobody types an id, so there is no stray space to
+    // forgive, and a path component with a space at either end is a different directory.
+    assert_eq!(PadId::new("  sketch  "), None);
+    assert_eq!(PadId::new(""), None);
+    assert_eq!(PadId::new("9lives"), None);
+    assert_eq!(PadId::new("a/b"), None);
+    assert_eq!(PadId::new(".."), None);
+
+    // And the same through serde, which is the path a hand-edited file takes.
+    let read = |text: &str| toml::from_str::<BTreeMap<String, PadId>>(text);
+    assert_eq!(
+        read("name = \"sketch\"").expect("an id")["name"].as_str(),
+        "sketch"
+    );
+    assert!(read("name = \"../evil\"").is_err());
+}
+
+/// A directory whose manifest names something that could not be a directory is not a
+/// scratchpad. That is the same sentence the pad listing is built on: a directory
+/// [`Scratchpad::load_from`] answers for is a pad, anything else is not — and the crate's
+/// name is the id, so this is where a hand-edited one is caught.
+#[test]
+fn a_manifest_naming_a_path_is_not_a_scratchpad() {
+    let directory = directory(line!());
+    let source = directory.join("src");
+    fs::create_dir_all(&source).expect("the directory");
+    fs::write(
+        directory.join("Cargo.toml"),
+        "[package]\nname = \"../evil\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("the manifest");
+    fs::write(source.join("main.rs"), "fn main() {}\n").expect("the source");
+
+    assert_eq!(Scratchpad::load_from(&directory), None);
+
+    let _ = fs::remove_dir_all(&directory);
+}
+
+/// The reason [`Scratchpad::default`] may hand out an id without an `Option`: it is an id
+/// this module would generate, and a package it would agree to write. It carries no name at
+/// all, a pad nobody has named having an empty one and what stands in for it on screen
+/// being the UI's business.
 #[test]
 fn the_default_scratchpad_is_one_this_module_would_write() {
     let scratchpad = Scratchpad::default();
 
-    assert_eq!(scratchpad.name(), DEFAULT_NAME);
-    assert_eq!(Scratchpad::new(DEFAULT_NAME), Ok(scratchpad.clone()));
+    assert_eq!(scratchpad.id().as_str(), DEFAULT_ID);
+    assert_eq!(scratchpad.name(), "");
+    assert_eq!(Scratchpad::new(DEFAULT_ID), Some(scratchpad.clone()));
     assert!(scratchpad.problems().is_empty());
     assert!(scratchpad.manifest().is_ok());
 }
@@ -217,10 +279,104 @@ fn a_scratchpad_opens_as_its_directory_has_it() {
     let opened = Scratchpad::default().opened_in(&directory);
     assert_eq!(opened.source, written.source);
     assert_eq!(opened.dependencies, written.dependencies);
-    // The manifest says `sketch` and the caller asked for `scratch`. The caller wins.
-    assert_eq!(opened.name(), DEFAULT_NAME);
+    // The manifest's crate name says `sketch` and the caller asked for `scratch`: the
+    // caller wins, because the id is where the next write goes. The *name* comes off the
+    // disk like everything else, being a value and not a place.
+    assert_eq!(opened.id().as_str(), DEFAULT_ID);
+    assert_eq!(opened.name(), written.name());
 
     let _ = fs::remove_dir_all(&directory);
+}
+
+/// An id for the tests below, which all deal in ids this module would generate.
+fn id(text: &str) -> PadId {
+    PadId::new(text).expect("an id")
+}
+
+/// What the listing says a pad is, for asserting against.
+fn row(id_text: &str, name: &str) -> PadListing {
+    PadListing {
+        id: id(id_text),
+        name: name.to_owned(),
+    }
+}
+
+/// The order is an *order* and not an index of what exists, so `touch` answers whether
+/// anything moved — which is the whole of why a startup that reopens the pad already at the
+/// front writes no file.
+#[test]
+fn the_order_answers_whether_anything_moved() {
+    let mut order = PadOrder::default();
+
+    assert!(order.touch(&id("one")));
+    assert!(order.touch(&id("two")));
+    assert_eq!(order.first(), Some(&id("two")));
+    // Already at the front: nothing moved, so nothing is written.
+    assert!(!order.touch(&id("two")));
+    // Behind the front: it moves, and is not repeated.
+    assert!(order.touch(&id("one")));
+    assert_eq!(order.ids(), [id("one"), id("two")]);
+}
+
+/// Every pad is reachable, which is the difference from the recent-projects list: that one
+/// is the projects a reader has *opened*, where this is the scratchpads there are. So an id
+/// the order has kept whose directory is not a package is dropped, and a package the order
+/// has never heard of is listed anyway. Each row carries the name out of that pad's own
+/// package, which is what lets the panel draw a pad nothing has opened.
+#[test]
+fn the_listing_drops_what_is_not_a_pad_and_keeps_what_the_order_forgot() {
+    let base = directory(line!());
+    let pads = base.join("scratchpads");
+    fs::create_dir_all(&pads).expect("the directory");
+
+    for (pad, name) in [("kept", "Kept one"), ("stray", "")] {
+        let mut scratchpad = Scratchpad::of(id(pad));
+        scratchpad.name = name.to_owned();
+        scratchpad.write_to(&pads.join(pad)).expect("writing");
+    }
+    // A directory with nothing in it, which `load_from` does not answer for.
+    fs::create_dir(pads.join("empty")).expect("the directory");
+
+    let mut order = PadOrder::default();
+    order.touch(&id("empty"));
+    order.touch(&id("gone"));
+    order.touch(&id("kept"));
+    write_toml(&pads.join("recents.toml"), &order).expect("the order");
+
+    // `kept` from the order, then the pad the order never named. `gone` has no directory
+    // and `empty` is not a package, so neither is a row. A pad the reader never named
+    // comes back with an empty name rather than with its id.
+    assert_eq!(pads_in(&base), [row("kept", "Kept one"), row("stray", "")]);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// A new pad claims its directory with the `create_dir` that fails rather than opens, so an
+/// id another copy of the app is already using is stepped over rather than taken. The
+/// package goes in at once: a claimed directory with nothing in it is not a pad, and the
+/// listing above would repair it away.
+#[test]
+fn a_new_pad_steps_over_what_is_already_claimed() {
+    let base = directory(line!());
+    let pads = base.join("scratchpads");
+    fs::create_dir_all(pads.join("pad-1")).expect("the squatter");
+
+    let made = new_pad_in(&base).expect("a pad");
+    assert_eq!(made.id().as_str(), "pad-2");
+    // And no name: naming it is the reader's, and until they do the pane calls it
+    // `<pad-2>` without anything having been written down.
+    assert_eq!(made.name(), "");
+    assert_eq!(
+        Scratchpad::load_from(&pads.join("pad-2")),
+        Some(made.clone())
+    );
+    // And it is at the front of the order, so it is what a restart would open.
+    assert_eq!(
+        PadOrder::load_from(&pads.join("recents.toml")).first(),
+        Some(made.id())
+    );
+
+    let _ = fs::remove_dir_all(&base);
 }
 
 /// What a failed build reports, over a canned cargo stream — which is why `outcome` is a

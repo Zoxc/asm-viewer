@@ -22,9 +22,9 @@ use std::{
     time::Duration,
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::project::{base, write_atomically};
+use crate::project::{base, write_atomically, write_toml};
 
 const SCRATCHPADS_DIR: &str = "scratchpads";
 
@@ -39,6 +39,21 @@ const PACKAGE_VERSION: &str = "0.1.0";
 
 /// crates.io's own limit.
 const MAX_NAME: usize = 64;
+
+/// What a new pad's id starts with, before the `-N`. The same stem as [`DEFAULT_ID`] and
+/// deliberately without its number: the pad a first run opens is `pad` and the ones New
+/// makes are `pad-1`, `pad-2`, so New can never hand out the id of the pad the app is
+/// already holding — which it could if that one were `pad-1`, since a pad nobody has typed
+/// in has claimed no directory for `create_dir` to fail on. It is a crate name because
+/// [`check_name`] wants a letter first, which is why this is not `1-pad`.
+const NEW_STEM: &str = "pad";
+
+/// The file beside the pads holding the order they were last shown in.
+const RECENTS_FILE: &str = "recents.toml";
+
+/// How many names [`PadOrder`] keeps. What is lost past this is an *order*, never a pad:
+/// [`pads_in`] lists a pad the order has forgotten just as it lists one made out of band.
+const MAX_PAD_RECENTS: usize = 50;
 
 /// How much of one line of a program's output is kept before it is cut and continued on
 /// the next: a program writing megabytes with no newline in them is still *delivered*
@@ -55,10 +70,10 @@ const MAX_OUTPUT_LINES: usize = 5000;
 /// would make [`Running::stop`] wait for the process it is trying to kill.
 const REAP_POLL: Duration = Duration::from_millis(20);
 
-/// What the one scratchpad the app opens is called, and so the directory it lives in.
-/// Checked against [`check_name`] by a test, which is what lets [`Scratchpad::default`]
-/// hand it out without a `Result`.
-pub const DEFAULT_NAME: &str = "scratch";
+/// The id of the pad a first run opens, and so the directory it lives in. Checked against
+/// [`check_name`] by a test, which is what lets [`Scratchpad::default`] hand it out without
+/// an `Option`.
+pub const DEFAULT_ID: &str = "pad";
 
 /// What a new scratchpad starts with. `#[inline(never)]` because the point of a scratchpad
 /// is a symbol of the reader's own in the assembly pane.
@@ -73,18 +88,78 @@ fn main() {
 }
 ";
 
-/// One scratchpad: the package's name, the source it holds, and the crates it asks for.
+/// A scratchpad's identity: the name of the directory its package lives in, which is also
+/// the crate's own name.
 ///
-/// The name is both the crate name and the directory name, and the crate-name rules are
-/// strictly stronger than what a safe path component needs, so validating once covers
-/// both.
+/// **Generated, never typed, and never shown.** It is what the app files a pad under — the
+/// directory, the order, the table the UI keeps — and the reader deals in
+/// [`Scratchpad::name`] instead, which is free text they can change without anything
+/// moving. That separation is the whole reason this is not the name: a name that is also a
+/// path is a rename that is also a directory move, has to be unique, and has to be spelt in
+/// the alphabet a crate name allows.
+///
+/// A newtype for [`ProjectId`](crate::project::ProjectId)'s reason all the same: it is
+/// interpolated into a path and it is read back out of files a user can edit — the order
+/// beside the pads, and every pad's own `Cargo.toml`. [`PadId::new`] is the only way to make
+/// one and `Deserialize` goes through it, so an id out of either file cannot be `..`, an
+/// absolute path or a name with a separator in it. The rules are [`check_name`]'s, since the
+/// id is what `[package] name` says, and they are strictly stronger than what a safe path
+/// component needs. No `Display`, deliberately: an id has no business being written into
+/// anything a reader looks at.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct PadId(String);
+
+impl<'de> Deserialize<'de> for PadId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<PadId, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        PadId::new(text).ok_or_else(|| serde::de::Error::custom("not a scratchpad id"))
+    }
+}
+
+impl PadId {
+    /// The id this text spells, or `None` when it is not one. An `Option` and not a
+    /// [`Problem`], where a dependency row's name gets one: nobody types an id, so there is
+    /// nobody to tell what is wrong with it.
+    pub fn new(text: impl Into<String>) -> Option<PadId> {
+        let text = text.into();
+        check_name(&text).ok()?;
+        Some(PadId(text))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One scratchpad: what the app files it under, what the reader calls it, the source it
+/// holds, and the crates it asks for.
+///
+/// [`PadId`] is the identity and `name` is free text — so two pads may be called the same
+/// thing, a rename moves nothing, and a name may be empty, hold spaces or be written in any
+/// alphabet at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scratchpad {
-    name: String,
+    id: PadId,
+    /// What the reader calls this pad. Raw text out of a box, so it is trimmed at the
+    /// accessor rather than on the way in, exactly as a dependency row's two halves are.
+    pub name: String,
     pub source: String,
     /// In the order the reader put them in — the manifest sorts them, this list does not,
     /// since reordering under an edit is the one thing a list of text boxes must not do.
     pub dependencies: Vec<Dependency>,
+}
+
+/// One row of the pad list: a scratchpad that can be shown, described by its own package
+/// read at the moment the list is asked for.
+///
+/// A name is never copied into the order file beside the ids — it lives in exactly one
+/// place, the package the reader edits, which is `recent_projects`' rule for a project's
+/// name and holds here for the same reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PadListing {
+    pub id: PadId,
+    pub name: String,
 }
 
 /// One `[dependencies]` row. Both halves are the raw text of a box the reader is typing
@@ -218,23 +293,37 @@ impl Dependency {
 
 impl Default for Scratchpad {
     fn default() -> Scratchpad {
-        Scratchpad::new(DEFAULT_NAME).expect("DEFAULT_NAME is a crate name")
+        Scratchpad::new(DEFAULT_ID).expect("DEFAULT_ID is a crate name")
     }
 }
 
 impl Scratchpad {
-    pub fn new(name: impl Into<String>) -> Result<Scratchpad, Problem> {
-        let name = name.into();
-        check_name(name.trim())?;
-        Ok(Scratchpad {
-            name: name.trim().to_owned(),
-            source: DEFAULT_SOURCE.to_owned(),
-            dependencies: Vec::new(),
-        })
+    pub fn new(id: impl Into<String>) -> Option<Scratchpad> {
+        Some(Scratchpad::of(PadId::new(id)?))
     }
 
+    /// A pad under `id`, with nothing in it yet — **no name included**: a pad nobody has
+    /// named has an empty one, and what stands in for it on screen is the UI's business,
+    /// not something written into the package.
+    pub fn of(id: PadId) -> Scratchpad {
+        Scratchpad {
+            id,
+            name: String::new(),
+            source: DEFAULT_SOURCE.to_owned(),
+            dependencies: Vec::new(),
+        }
+    }
+
+    /// What the app files this pad under. Never drawn.
+    pub fn id(&self) -> &PadId {
+        &self.id
+    }
+
+    /// What the reader calls it, trimmed — **empty when they have not said**, which is a
+    /// real answer and not a missing one: what a pad with no name of its own is called on
+    /// screen is the UI's to decide.
     pub fn name(&self) -> &str {
-        &self.name
+        self.name.trim()
     }
 
     /// Every dependency row that cannot be written, in list order — all of them, since
@@ -266,9 +355,14 @@ impl Scratchpad {
 
         let manifest = Manifest {
             package: Package {
-                name: self.name.clone(),
+                name: self.id.clone(),
                 version: PACKAGE_VERSION.to_owned(),
                 edition: EDITION.to_owned(),
+                metadata: Metadata {
+                    scratchpad: PadMetadata {
+                        name: self.name().to_owned(),
+                    },
+                },
             },
             dependencies: self
                 .dependencies
@@ -284,7 +378,7 @@ impl Scratchpad {
     /// Where this scratchpad lives, or `None` on a system with no state or local data
     /// directory to put it in.
     pub fn directory(&self) -> Option<PathBuf> {
-        Some(base()?.join(SCRATCHPADS_DIR).join(&self.name))
+        Some(pad_in(&base()?, &self.id))
     }
 
     /// Write the package into `directory`, creating it and its `src/`.
@@ -308,14 +402,17 @@ impl Scratchpad {
     ///
     /// The exact inverse of [`Scratchpad::write_to`] and nothing more: a manifest naming a
     /// dependency this module would refuse to write reads back as those rows, so a
-    /// hand-edited scratchpad opens with the bad row visible rather than not opening.
+    /// hand-edited scratchpad opens with the bad row visible rather than not opening. A
+    /// manifest with no name in its metadata reads back as a pad nobody has named, which is
+    /// what one written by hand is.
     pub fn load_from(directory: &Path) -> Option<Scratchpad> {
         let manifest = fs::read_to_string(directory.join(MANIFEST_NAME)).ok()?;
         let manifest: Manifest = toml::from_str(&manifest).ok()?;
         let source = fs::read_to_string(directory.join(SOURCE_DIR).join(SOURCE_NAME)).ok()?;
 
         Some(Scratchpad {
-            name: manifest.package.name,
+            id: manifest.package.name,
+            name: manifest.package.metadata.scratchpad.name,
             source,
             dependencies: manifest
                 .dependencies
@@ -328,13 +425,14 @@ impl Scratchpad {
     /// This scratchpad as `directory` has it, or this one where there is nothing there.
     /// Blocking.
     ///
-    /// The name kept is **this** scratchpad's and never the manifest's: `directory()` is
-    /// derived from the name, so a hand-edited `Cargo.toml` naming another crate would
-    /// otherwise send the next write somewhere the reader never opened.
+    /// The id kept is **this** scratchpad's and never the manifest's: `directory()` is
+    /// derived from the id, so a hand-edited `Cargo.toml` naming another crate would
+    /// otherwise send the next write somewhere the reader never opened. The *name* comes
+    /// off the disk like everything else, being a value and not a place.
     pub fn opened_in(self, directory: &Path) -> Scratchpad {
         match Scratchpad::load_from(directory) {
             Some(loaded) => Scratchpad {
-                name: self.name,
+                id: self.id,
                 ..loaded
             },
             None => self,
@@ -373,6 +471,180 @@ impl Scratchpad {
             output.status.success(),
         )
     }
+}
+
+/// Where the pads are kept: one directory each, under one directory of their own beside
+/// the projects and the settings.
+fn scratchpads_in(base: &Path) -> PathBuf {
+    base.join(SCRATCHPADS_DIR)
+}
+
+fn pad_in(base: &Path, id: &PadId) -> PathBuf {
+    scratchpads_in(base).join(id.as_str())
+}
+
+/// The order file sits **beside the pads** rather than at the top of the state directory,
+/// so it is not a second `recents.toml` to tell apart from the projects' one. It is a file
+/// where every sibling is a directory, so [`pads_in`] steps over it with no special case.
+fn pad_recents_in(base: &Path) -> PathBuf {
+    scratchpads_in(base).join(RECENTS_FILE)
+}
+
+/// The pads the reader has had open, most recently first.
+///
+/// `project.rs`'s `Recents` rules, for the same reasons: which pad to open is the first
+/// entry and not a field of its own, and this is an *order* rather than an index of what
+/// exists — the directories are that — which is why nothing here prunes an id whose
+/// directory has gone. [`pads_in`] repairs it at the point of use, where the repair is free.
+///
+/// Ids and never names: a name is a value the reader edits, and a copy of one here would be
+/// a second copy to keep in step with the package's.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PadOrder {
+    #[serde(default)]
+    scratchpads: Vec<PadId>,
+}
+
+impl PadOrder {
+    pub fn ids(&self) -> &[PadId] {
+        &self.scratchpads
+    }
+
+    pub fn first(&self) -> Option<&PadId> {
+        self.scratchpads.first()
+    }
+
+    /// Put `id` at the front, and say whether that changed anything — which is what keeps a
+    /// startup that reopens the pad already at the front from writing a file.
+    pub fn touch(&mut self, id: &PadId) -> bool {
+        if self.first() == Some(id) {
+            return false;
+        }
+        self.scratchpads.retain(|other| other != id);
+        self.scratchpads.insert(0, id.clone());
+        self.scratchpads.truncate(MAX_PAD_RECENTS);
+        true
+    }
+
+    fn load_from(path: &Path) -> PadOrder {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|data| toml::from_str(&data).ok())
+            .unwrap_or_default()
+    }
+}
+
+/// Put `name` at the front of the order on disk, if there is a directory for it.
+///
+/// The condition is what keeps the rule "nothing is written until there is something to
+/// say": the pad a first run opens is held in memory until something is typed into it, and
+/// recording it before then would leave a `recents.toml` behind on a machine where the
+/// reader never touched the scratchpad at all.
+pub fn remember(id: &PadId) {
+    if let Some(base) = base() {
+        remember_in(&base, id);
+    }
+}
+
+/// The whole of the above except finding the state directory. A read-modify-write of the
+/// whole file, and a failure is logged and swallowed: losing an order is not losing a pad.
+fn remember_in(base: &Path, id: &PadId) {
+    if !pad_in(base, id).is_dir() {
+        return;
+    }
+
+    let path = pad_recents_in(base);
+    let mut order = PadOrder::load_from(&path);
+    if !order.touch(id) {
+        return;
+    }
+    if let Err(error) = write_toml(&path, &order) {
+        log::warn!("could not save {}: {error}", path.display());
+    }
+}
+
+/// Every scratchpad there is, in the order they were last opened, then the ones the order
+/// does not name in id order — or an empty list on a system with nowhere to keep them.
+///
+/// Each row carries the name out of that pad's **own package**, read at the moment the list
+/// is asked for, which is what lets the panel draw a pad it has never opened. It is also
+/// why the order file holds ids alone: a name lives in one place, the one the reader edits.
+pub fn pads() -> Vec<PadListing> {
+    base().map(|base| pads_in(&base)).unwrap_or_default()
+}
+
+/// The whole of the above except finding the state directory.
+///
+/// A directory [`Scratchpad::load_from`] answers for is a pad and anything else is not, so
+/// an id in the order whose directory has gone — or was never a package — is dropped here
+/// rather than repaired on load. The strays are appended because this is the list a reader
+/// picks from and every pad has to be reachable: one that fell off the end of the order, or
+/// one made outside the app, is still a scratchpad. That is the difference from
+/// `recent_projects`, which lists the projects a reader has *opened*.
+fn pads_in(base: &Path) -> Vec<PadListing> {
+    let scratchpads = scratchpads_in(base);
+    let listing = |id: PadId| {
+        let name = Scratchpad::load_from(&pad_in(base, &id))?.name;
+        Some(PadListing { id, name })
+    };
+
+    let mut listed: Vec<PadListing> = PadOrder::load_from(&pad_recents_in(base))
+        .scratchpads
+        .into_iter()
+        .filter_map(listing)
+        .collect();
+
+    let mut strays: Vec<PadListing> = match fs::read_dir(&scratchpads) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().to_str().and_then(PadId::new))
+            .filter(|id| !listed.iter().any(|listed| &listed.id == id))
+            .filter_map(listing)
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    strays.sort_by(|one, other| one.id.cmp(&other.id));
+
+    listed.append(&mut strays);
+    listed
+}
+
+/// Claim a directory for a new pad, write the default package into it, and hand back the
+/// scratchpad. Blocking.
+///
+/// The claim *is* the `create_dir`: one atomic operation that fails with `AlreadyExists`
+/// rather than opening what is there, so two copies of the app cannot hand out one id.
+/// Bounded at a thousand tries, so a directory refusing every `create_dir` for a reason
+/// other than collision cannot spin. The package is written **at once** rather than at the
+/// first edit: pressing New is a deliberate act, and a claimed directory with no package in
+/// it is not a pad and would be repaired away by [`pads_in`].
+pub fn new_pad() -> Result<Scratchpad, Failure> {
+    new_pad_in(&base().ok_or(Failure::NoDirectory)?)
+}
+
+fn new_pad_in(base: &Path) -> Result<Scratchpad, Failure> {
+    let scratchpads = scratchpads_in(base);
+    fs::create_dir_all(&scratchpads).map_err(|error| Failure::Write(error.to_string()))?;
+
+    for n in 1..=1000 {
+        let id = PadId(format!("{NEW_STEM}-{n}"));
+        let directory = scratchpads.join(id.as_str());
+        match fs::create_dir(&directory) {
+            Ok(()) => {
+                let scratchpad = Scratchpad::of(id);
+                scratchpad.write_to(&directory)?;
+                remember_in(base, scratchpad.id());
+                return Ok(scratchpad);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(Failure::Write(error.to_string())),
+        }
+    }
+
+    Err(Failure::Write(format!(
+        "no free id under {}",
+        scratchpads.display()
+    )))
 }
 
 /// Start the program a build made in `directory`, streaming what it writes into `emit`
@@ -771,11 +1043,30 @@ struct Manifest {
     workspace: Workspace,
 }
 
+/// `metadata` is last because it is a table and the three above it are not — the field
+/// order rule again, and here it is also the only place cargo lets a tool of its own keep
+/// anything: `[package.metadata]` is reserved for exactly this and cargo itself ignores it.
 #[derive(Serialize, Deserialize)]
 struct Package {
-    name: String,
+    name: PadId,
     version: String,
     edition: String,
+    #[serde(default)]
+    metadata: Metadata,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct Metadata {
+    #[serde(default)]
+    scratchpad: PadMetadata,
+}
+
+/// What the package cannot say for itself: the name the reader gave this pad, which is not
+/// the crate's name and is under no obligation to be a crate name at all.
+#[derive(Default, Serialize, Deserialize)]
+struct PadMetadata {
+    #[serde(default)]
+    name: String,
 }
 
 #[derive(Default, Serialize, Deserialize)]

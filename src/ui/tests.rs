@@ -2291,7 +2291,9 @@ struct Asking(State<Option<PadJobs>>);
 /// What the worker was handed, in the order it was handed it.
 #[derive(Clone, Debug, PartialEq)]
 enum Asked {
-    Open,
+    List,
+    New,
+    Open(String),
     Save(String),
     Build(String),
     Run,
@@ -2324,6 +2326,19 @@ fn scratchpad_wiring() {
     use_hook(move || asking.set(Some(jobs)));
 }
 
+/// Type into the shown pad's buffer, which is the one the reader would be typing into.
+fn edit_shown(text: State<PadBuffers>, pad: State<Pads>, edit: impl FnOnce(&mut CodeEditorData)) {
+    let shown = pad.peek().shown().clone();
+    let mut text = text;
+    edit(text.write().get_mut(&shown));
+}
+
+/// What that buffer is holding.
+fn shown_rope(text: State<PadBuffers>, pad: State<Pads>) -> String {
+    let shown = pad.peek().shown().clone();
+    text.peek().get(&shown).rope.to_string()
+}
+
 /// The committed gcc fixture again, standing in for what a build produced.
 fn fixture_artifact() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o")
@@ -2337,7 +2352,9 @@ macro_rules! mount_scratchpad {
         let answer = $answer;
         let work = move |job: PadJob| {
             let recorded = match &job {
-                PadJob::Open(_) => Asked::Open,
+                PadJob::List => Asked::List,
+                PadJob::New => Asked::New,
+                PadJob::Open(scratchpad) => Asked::Open(scratchpad.id().as_str().to_owned()),
                 PadJob::Save(scratchpad) => Asked::Save(scratchpad.source.clone()),
                 PadJob::Build(scratchpad) => Asked::Build(scratchpad.source.clone()),
                 PadJob::Run { .. } => Asked::Run,
@@ -2353,15 +2370,10 @@ macro_rules! mount_scratchpad {
                 let states = project_states!(runner);
                 runner.provide_root_context(move || Working(Arc::new(work)));
                 let pad = runner
-                    .provide_root_context(|| Pad(State::create(PadState::default())))
+                    .provide_root_context(|| Pad(State::create(Pads::default())))
                     .0;
                 let text = runner
-                    .provide_root_context(|| {
-                        PadText(State::create(CodeEditorData::new(
-                            Rope::from_str(""),
-                            language(Path::new(SOURCE_FILE)),
-                        )))
-                    })
+                    .provide_root_context(|| PadText(State::create(PadBuffers::default())))
                     .0;
                 let asking = runner
                     .provide_root_context(|| Asking(State::create(None)))
@@ -2375,6 +2387,404 @@ macro_rules! mount_scratchpad {
 
         (test, states, pad, text, asking, asks)
     }};
+}
+
+/// Every `label()` on screen, by its text. `ElementExt` reads no text through the prelude,
+/// so this downcasts past it -- `agents/Headless.md` spells the recipe out.
+fn labels(test: &TestingRunner) -> Vec<String> {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    test.find_many(|node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .map(|label| label.text.to_string())
+    })
+}
+
+/// An id, for the tests below that name pads the app would have generated ids for.
+fn pad_id(text: &str) -> PadId {
+    PadId::new(text).expect("an id")
+}
+
+/// One row of what the worker's listing answers with: a pad on disk that nobody has named,
+/// which is what a new one is until the reader says otherwise.
+fn pad_listing(text: &str) -> PadListing {
+    PadListing {
+        id: pad_id(text),
+        name: String::new(),
+    }
+}
+
+/// Answer an `Open` with what a pad's directory would have in it: a source naming the pad
+/// it belongs to, so a test can tell which pad's text is on screen.
+fn pad_on_disk(scratchpad: Scratchpad) -> Scratchpad {
+    let mut opened = scratchpad;
+    opened.source = format!("// {}\n", opened.id().as_str());
+    opened
+}
+
+/// Which pad opens is the **front of the order**, not the pad the app boots holding — that
+/// one is only what there is to show before the worker has said what pads exist. And every
+/// pad there is gets a row, in that order, or the reader has no way back to one.
+#[test]
+fn the_front_of_the_order_is_the_pad_that_opens() {
+    let (mut test, _states, pad, text, _asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("second"), pad_listing("first"),]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    assert_eq!(pad.peek().shown().as_str(), "second");
+    assert_eq!(shown_rope(text, pad), "// second\n");
+    assert_eq!(
+        pad.peek()
+            .order
+            .ids()
+            .iter()
+            .map(PadId::as_str)
+            .collect::<Vec<_>>(),
+        ["second", "first"]
+    );
+
+    // The listing, then the one pad it named as the front. The pad the app booted holding
+    // is not opened at all.
+    assert_eq!(asks.try_recv(), Ok(Asked::List));
+    assert_eq!(asks.try_recv(), Ok(Asked::Open("second".to_owned())));
+    assert!(asks.is_empty());
+}
+
+/// Switching pads writes the one being left **before** it opens the next, and does it
+/// through the worker: the jobs are one ordered queue, so a save that went after the open
+/// -- or that was left to the effect, which wakes only after the handler is over -- would
+/// arrive behind the next pad's read. The pad arrived at is read once and never again, its
+/// buffer, its model and its baseline all being held from then on.
+#[test]
+fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
+    let (mut test, _states, pad, text, asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    assert_eq!(asks.try_recv(), Ok(Asked::List));
+    assert_eq!(asks.try_recv(), Ok(Asked::Open("one".to_owned())));
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    let two = pad_id("two");
+
+    // The state a keystroke leaves behind for one pass: the buffer has been mirrored into
+    // the model and the effect that writes the model out has not run yet, those being two
+    // effects and the second woken by the first. Written straight into the model, because
+    // a test cannot ask freya to run one of the two and not the other.
+    let mut pad = pad;
+    pad.write().state_mut().scratchpad.source = "// edited\n".to_owned();
+    show_pad(pad, &jobs, two.clone());
+    pump(&mut test, || {
+        pad.peek().shown() == &two && pad.peek().state().opened
+    });
+
+    // The order the worker was handed them, which is the order it did them in.
+    assert_eq!(asks.try_recv(), Ok(Asked::Save("// edited\n".to_owned())));
+    assert_eq!(asks.try_recv(), Ok(Asked::Open("two".to_owned())));
+
+    assert_eq!(pad.peek().shown(), &two);
+    assert_eq!(shown_rope(text, pad), "// two\n");
+    assert!(asks.is_empty(), "the switch asked for more than it had to");
+
+    // Back again: nothing is read a second time, the pad having been held all along, and
+    // the buffer that comes back is the one it was left with -- so is the cursor in it and
+    // so is its undo history, which is what a buffer each buys over one replaced on every
+    // switch.
+    let one = pad_id("one");
+    show_pad(pad, &jobs, one.clone());
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+
+    assert_eq!(pad.peek().shown(), &one);
+    assert_eq!(shown_rope(text, pad), "// one\n");
+    assert!(
+        !matches!(asks.try_recv(), Ok(Asked::Open(_))),
+        "the pad was read again on the way back"
+    );
+}
+
+/// The panel draws the **name** the reader gave a pad and never the id it is filed under,
+/// which is the whole of what the id being hidden means. The two are different strings here
+/// on purpose: a pad whose name has been changed, and a pad with no name at all, which
+/// falls back to a placeholder rather than to its id.
+#[test]
+fn the_panel_draws_names_and_never_ids() {
+    let (mut test, _states, pad, _text, _asking, _asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![
+                PadListing {
+                    id: pad_id("pad-7"),
+                    name: "Parser notes".to_owned(),
+                },
+                PadListing {
+                    id: pad_id("pad-8"),
+                    name: String::new(),
+                },
+            ]),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::New => unreachable!("this test never makes one"),
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "Parser notes"),
+        "the pad's name is not on screen: {drawn:?}"
+    );
+    assert!(
+        drawn.iter().any(|text| text == "<pad-8>"),
+        "a pad with no name drew something else: {drawn:?}"
+    );
+    // No row is a bare id. An unnamed pad's label carries one, in brackets that say it is
+    // the app's word and not the reader's; the other place an id is on screen is the
+    // package's path, which is a path and not an identity -- and now the only way to find
+    // a pad's directory, the name no longer spelling it.
+    assert!(
+        !drawn.iter().any(|text| text == "pad-7" || text == "pad-8"),
+        "an id was drawn as a pad's name: {drawn:?}"
+    );
+    assert!(
+        drawn.iter().any(|text| text.ends_with("scratchpads/pad-7")),
+        "the package's path stopped saying where the pad is: {drawn:?}"
+    );
+}
+
+/// A pad made from the panel is written and shown at once: pressing New is a deliberate
+/// act, so the pad appears where the reader is looking, at the front of the order.
+#[test]
+fn a_new_pad_is_written_and_shown_at_once() {
+    let made = Scratchpad::new("pad-1").expect("an id");
+    let answering = made.clone();
+    let (mut test, _states, pad, text, asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("pad")]),
+            PadJob::New => PadAnswer::Created(Ok(answering.clone())),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    assert_eq!(pad.peek().shown().as_str(), "pad");
+    while asks.try_recv().is_ok() {}
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_new_pad(&jobs);
+    pump(&mut test, || pad.peek().shown().as_str() == "pad-1");
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    assert_eq!(asks.try_recv(), Ok(Asked::New));
+    // Read straight back: the worker wrote the package on the way, and reading it is what
+    // seeds the baseline, so the first keystroke in it is a change and not a first write.
+    assert_eq!(asks.try_recv(), Ok(Asked::Open("pad-1".to_owned())));
+    assert_eq!(shown_rope(text, pad), "// pad-1\n");
+
+    // At the front of the order, and the pad it was made beside is still there.
+    assert_eq!(
+        pad.peek()
+            .order
+            .ids()
+            .iter()
+            .map(PadId::as_str)
+            .collect::<Vec<_>>(),
+        ["pad-1", "pad"]
+    );
+}
+
+/// A rename is a keystroke and nothing more: the name is a value in the pad's own package
+/// and nothing is filed under it, so the ordinary save writes it out and the row beside the
+/// box follows. Nothing moves, nothing can be refused, and two pads may be called the same
+/// thing -- which is the whole of what hiding the id buys.
+#[test]
+fn renaming_a_pad_is_a_save_and_moves_nothing() {
+    let (mut test, _states, pad, _text, _asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::New => unreachable!("this test never makes one"),
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    while asks.try_recv().is_ok() {}
+
+    // What the box does, which is all a rename is now.
+    let mut pad = pad;
+    pad.write().state_mut().scratchpad.name = "two".to_owned();
+    pump(&mut test, || !asks.is_empty());
+
+    // Written out by the ordinary save, under the id it was always filed under -- and a
+    // name another pad already has is simply a name another pad already has.
+    assert_eq!(asks.try_recv(), Ok(Asked::Save("// one\n".to_owned())));
+    assert!(asks.is_empty());
+    assert_eq!(pad.peek().shown().as_str(), "one");
+    assert_eq!(pad.peek().state().scratchpad.name, "two");
+    assert_eq!(
+        pad.peek()
+            .order
+            .ids()
+            .iter()
+            .map(PadId::as_str)
+            .collect::<Vec<_>>(),
+        ["one", "two"],
+        "a rename moved the pad in the order"
+    );
+}
+
+/// A run belongs to its pad, so leaving that pad does not stop it and its lines keep
+/// landing in **its own** list. There is one output pane, and untangled from the pad it
+/// would show one program's output under another program's name.
+#[test]
+fn a_program_goes_on_running_in_a_pad_that_is_not_shown() {
+    let directory = run_directory(line!());
+    let executable = looping_program(&directory);
+    let cwd = directory.clone();
+
+    let (mut test, _states, pad, _text, asking, _asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Run {
+                run,
+                scratchpad,
+                executable,
+                emit,
+            } => PadAnswer::Started {
+                pad: scratchpad.id().clone(),
+                run,
+                started: crate::scratchpad::run_in(&executable, &cwd, emit),
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    let one = pad.peek().shown().clone();
+    already_built(pad, executable);
+    test.sync_and_update();
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_run(pad, &jobs);
+    pump(&mut test, || pad.peek().state().output.len() > 0);
+
+    // Away to the other pad, which has never run anything.
+    let two = pad_id("two");
+    show_pad(pad, &jobs, two.clone());
+    pump(&mut test, || pad.peek().shown() == &two);
+
+    assert!(pad.peek().state().run_status().is_none());
+    let left = pad.peek().get(&one).expect("the pad that was left").clone();
+    assert!(left.is_running(), "leaving the pad stopped its program");
+    assert_eq!(
+        left.output.line(0).map(|line| line.text.to_string()),
+        Some("from the program".to_owned())
+    );
+
+    // Ended while another pad is on screen: the event carries the pad it is about, so it
+    // is that pad that stops rather than the one being looked at.
+    let RunState::Going(running) = &left.run_state else {
+        panic!("a going run, got {:?}", left.run_status());
+    };
+    running.stop();
+    pump(&mut test, || {
+        !pad.peek().get(&one).is_some_and(|state| state.is_running())
+    });
+
+    assert!(matches!(
+        pad.peek().get(&one).expect("the pad").run_state,
+        RunState::Over(Ended::Stopped)
+    ));
+    assert!(
+        pad.peek().state().run_status().is_none(),
+        "another pad's program ended into the pad on screen"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A save of one pad may not be dropped in favour of a job for another. The supersede rule
+/// is what makes a burst of keystrokes one write, and keyed on nothing it would also make a
+/// switch away from a pad throw away the last thing typed in it -- silently, since the pad
+/// that lost the write is the one nobody is looking at.
+#[test]
+fn a_save_is_superseded_only_by_a_job_for_the_same_pad() {
+    let pad = |id: &str, source: &str| {
+        let mut scratchpad = Scratchpad::new(id).expect("an id");
+        scratchpad.source = source.to_owned();
+        scratchpad
+    };
+
+    let mut queue = VecDeque::from([
+        PadJob::Save(pad("one", "second")),
+        PadJob::Save(pad("two", "other pad")),
+        PadJob::Save(pad("one", "third")),
+    ]);
+    let mut held = Vec::new();
+
+    let job = superseded(
+        PadJob::Save(pad("one", "first")),
+        || queue.pop_front(),
+        |newer| held.push(newer),
+    );
+
+    // The two saves of `one` collapsed into the newer of them, and the save of `two`
+    // stopped the drain rather than replacing it.
+    let PadJob::Save(scratchpad) = &job else {
+        panic!("a save");
+    };
+    assert_eq!(scratchpad.id().as_str(), "one");
+    assert_eq!(scratchpad.source, "second");
+
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].pad().map(PadId::as_str), Some("two"));
+    // And what was behind it is still queued, in order.
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].pad().map(PadId::as_str), Some("one"));
 }
 
 /// The scratchpad on disk is what the app opens on, and **nothing is written until it has
@@ -2392,19 +2802,30 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
     let answering = saved.clone();
     let (mut test, _states, pad, text, _asking, asks) =
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            // Nothing on this machine's disk: the pad the app booted holding is the one
+            // that is opened.
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
             PadJob::Open(_) => PadAnswer::Opened(answering.clone()),
-            PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: scratchpad.manifest().err(),
+            },
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().opened);
+    pump(&mut test, || pad.peek().state().opened);
 
-    assert_eq!(pad.peek().scratchpad, saved);
+    assert_eq!(pad.peek().state().scratchpad, saved);
     // The editor is holding it too, which is the half a reader can see.
-    assert_eq!(text.peek().rope.to_string(), saved.source);
+    assert_eq!(shown_rope(text, pad), saved.source);
 
-    assert_eq!(asks.try_recv(), Ok(Asked::Open));
+    assert_eq!(asks.try_recv(), Ok(Asked::List));
+    assert_eq!(
+        asks.try_recv(),
+        Ok(Asked::Open(crate::scratchpad::DEFAULT_ID.to_owned()))
+    );
     assert!(
         asks.is_empty(),
         "the package was written before the app knew what was in it"
@@ -2418,33 +2839,43 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
 fn an_edit_is_written_and_a_bad_row_says_which_row() {
     let (mut test, _states, pad, text, _asking, asks) =
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            // Nothing on this machine's disk: the pad the app booted holding is the one
+            // that is opened.
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             // The real refusal, without a disk: `write` fails on exactly what
             // `manifest` fails on, the manifest being what it refuses to generate.
-            PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: scratchpad.manifest().err(),
+            },
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().opened);
-    assert_eq!(asks.try_recv(), Ok(Asked::Open));
+    pump(&mut test, || pad.peek().state().opened);
+    assert_eq!(asks.try_recv(), Ok(Asked::List));
+    assert_eq!(
+        asks.try_recv(),
+        Ok(Asked::Open(crate::scratchpad::DEFAULT_ID.to_owned()))
+    );
 
     // Typing: the rope is what the keyboard edits and the model is what is written.
-    let mut text = text;
-    text.write().rope.insert(0, "// typed\n");
+    edit_shown(text, pad, |editor| editor.rope.insert(0, "// typed\n"));
     pump(&mut test, || !asks.is_empty());
 
     let typed = format!("// typed\n{}", crate::scratchpad::DEFAULT_SOURCE);
     assert_eq!(asks.try_recv(), Ok(Asked::Save(typed.clone())));
-    assert_eq!(pad.peek().scratchpad.source, typed);
-    assert!(pad.peek().unsaved.is_none());
+    assert_eq!(pad.peek().state().scratchpad.source, typed);
+    assert!(pad.peek().state().unsaved.is_none());
 
     // A row that names no crate. It is the *second* row, so the index in the answer is the
     // assertion.
     let mut pad = pad;
     {
         let mut state = pad.write();
-        state.scratchpad.dependencies = vec![
+        state.state_mut().scratchpad.dependencies = vec![
             Dependency {
                 name: "anyhow".to_owned(),
                 version: "1.0.86".to_owned(),
@@ -2452,20 +2883,20 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
             Dependency::default(),
         ];
     }
-    pump(&mut test, || pad.peek().unsaved.is_some());
+    pump(&mut test, || pad.peek().state().unsaved.is_some());
 
     assert_eq!(
-        pad.peek().unsaved,
+        pad.peek().state().unsaved,
         Some(Failure::Dependencies(vec![(1, Problem::NoName)]))
     );
 
     // And fixing it writes again, rather than leaving the disk holding the last good
     // version for ever.
-    pad.write().scratchpad.dependencies[1] = Dependency {
+    pad.write().state_mut().scratchpad.dependencies[1] = Dependency {
         name: "rand".to_owned(),
         version: "0.8".to_owned(),
     };
-    pump(&mut test, || pad.peek().unsaved.is_none());
+    pump(&mut test, || pad.peek().state().unsaved.is_none());
 }
 
 /// A build is asked for once however often the reader presses, and what it made is opened
@@ -2477,27 +2908,44 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
     let built = artifact.clone();
     let (mut test, states, pad, _text, asking, asks) =
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            // Nothing on this machine's disk: the pad the app booted holding is the one
+            // that is opened.
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
-            PadJob::Save(_) => PadAnswer::Saved(None),
-            PadJob::Build(_) => PadAnswer::Built(Build::Built {
-                executable: built.clone(),
-                diagnostics: Vec::new(),
-            }),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(scratchpad) => PadAnswer::Built {
+                pad: scratchpad.id().clone(),
+                build: Build::Built {
+                    executable: built.clone(),
+                    diagnostics: Vec::new(),
+                },
+            },
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().opened);
-    assert_eq!(asks.try_recv(), Ok(Asked::Open));
+    pump(&mut test, || pad.peek().state().opened);
+    assert_eq!(asks.try_recv(), Ok(Asked::List));
+    assert_eq!(
+        asks.try_recv(),
+        Ok(Asked::Open(crate::scratchpad::DEFAULT_ID.to_owned()))
+    );
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
     // The second press, while the first is still in flight. Nothing at all happens.
     request_build(pad, &jobs);
-    assert!(pad.peek().building);
+    assert!(pad.peek().state().building);
 
     pump(&mut test, || !states.objects.peek().is_empty());
-    assert!(!pad.peek().building);
-    assert!(matches!(pad.peek().built, Some(Build::Built { .. })));
+    assert!(!pad.peek().state().building);
+    assert!(matches!(
+        pad.peek().state().built,
+        Some(Build::Built { .. })
+    ));
 
     let opened = |states: &ProjectStates| {
         states
@@ -2511,7 +2959,7 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
     assert!(first > 0, "the artifact was never opened");
     assert_eq!(
         asks.try_recv(),
-        Ok(Asked::Build(pad.peek().scratchpad.source.clone()))
+        Ok(Asked::Build(pad.peek().state().scratchpad.source.clone()))
     );
     assert!(
         asks.is_empty(),
@@ -2522,7 +2970,9 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
     // than sit beside it -- waited for on the *objects*, a rebuild being a close followed
     // by a streaming reopen.
     request_build(pad, &jobs);
-    pump(&mut test, || !pad.peek().building && opened(&states) > 0);
+    pump(&mut test, || {
+        !pad.peek().state().building && opened(&states) > 0
+    });
 
     assert_eq!(
         opened(&states),
@@ -2539,16 +2989,23 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
 fn removing_a_dependency_row_does_not_take_the_pane_with_it() {
     let (mut test, _states, pad, _text, _asking, _asks) =
         mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            // Nothing on this machine's disk: the pad the app booted holding is the one
+            // that is opened.
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
-            PadJob::Save(scratchpad) => PadAnswer::Saved(scratchpad.manifest().err()),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: scratchpad.manifest().err(),
+            },
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().opened);
+    pump(&mut test, || pad.peek().state().opened);
 
     let mut pad = pad;
-    pad.write().scratchpad.dependencies = vec![
+    pad.write().state_mut().scratchpad.dependencies = vec![
         Dependency {
             name: "anyhow".to_owned(),
             version: "1.0.86".to_owned(),
@@ -2564,13 +3021,13 @@ fn removing_a_dependency_row_does_not_take_the_pane_with_it() {
 
     // The first row, which is what the × on it does -- so the row left behind is the
     // one that was drawn at index 1.
-    pad.write().scratchpad.dependencies.remove(0);
+    pad.write().state_mut().scratchpad.dependencies.remove(0);
     for _ in 0..4 {
         test.sync_and_update();
     }
 
-    assert_eq!(pad.peek().scratchpad.dependencies.len(), 1);
-    assert_eq!(pad.peek().scratchpad.dependencies[0].name(), "rand");
+    assert_eq!(pad.peek().state().scratchpad.dependencies.len(), 1);
+    assert_eq!(pad.peek().state().scratchpad.dependencies[0].name(), "rand");
 }
 
 /// A directory of this test's own, named after the line that asked for it.
@@ -2585,7 +3042,7 @@ fn run_directory(line: u32) -> PathBuf {
 /// `cargo build`: it is hermetic (no dependencies, so one rustc invocation), and nothing
 /// short of a real process can say whether a stop actually killed anything.
 fn looping_program(directory: &Path) -> PathBuf {
-    let mut scratchpad = Scratchpad::new("looper").expect("a name");
+    let mut scratchpad = Scratchpad::new("looper").expect("an id");
     scratchpad.source = "fn main() {\n\
              \x20   println!(\"from the program\");\n\
              \x20   loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n\
@@ -2602,8 +3059,8 @@ fn looping_program(directory: &Path) -> PathBuf {
 /// What a build left behind, put where a build would have put it -- written into the
 /// state rather than answered through `PadJob::Build`, so it does not go through
 /// `reopen_binary` on the way.
-fn already_built(mut pad: State<PadState>, executable: PathBuf) {
-    pad.write().built = Some(Build::Built {
+fn already_built(mut pad: State<Pads>, executable: PathBuf) {
+    pad.write().state_mut().built = Some(Build::Built {
         executable,
         diagnostics: Vec::new(),
     });
@@ -2621,28 +3078,39 @@ fn a_run_streams_while_it_is_going_and_a_stop_really_ends_it() {
 
     let (mut test, _states, pad, _text, asking, _asks) =
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            // Nothing on this machine's disk: the pad the app booted holding is the one
+            // that is opened.
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
-            PadJob::Save(_) => PadAnswer::Saved(None),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
             // Nothing about the run is faked: the real spawn, the real pipes and the
             // real kill, reached through the same job the button sends.
             PadJob::Run {
                 run,
+                scratchpad,
                 executable,
                 emit,
-                ..
-            } => PadAnswer::Started(run, crate::scratchpad::run_in(&executable, &cwd, emit)),
+            } => PadAnswer::Started {
+                pad: scratchpad.id().clone(),
+                run,
+                started: crate::scratchpad::run_in(&executable, &cwd, emit),
+            },
             PadJob::Build(_) => unreachable!("this test never builds"),
         });
 
-    pump(&mut test, || pad.peek().opened);
+    pump(&mut test, || pad.peek().state().opened);
     already_built(pad, executable);
     test.sync_and_update();
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_run(pad, &jobs);
 
-    pump(&mut test, || pad.peek().output.len() > 0);
-    let state = pad.peek().clone();
+    pump(&mut test, || pad.peek().state().output.len() > 0);
+    let state = pad.peek().state().clone();
     assert_eq!(
         state
             .output
@@ -2653,8 +3121,8 @@ fn a_run_streams_while_it_is_going_and_a_stop_really_ends_it() {
     assert!(state.is_running(), "it ended by itself");
 
     stop_run(pad);
-    pump(&mut test, || !pad.peek().is_running());
-    let state = pad.peek().clone();
+    pump(&mut test, || !pad.peek().state().is_running());
+    let state = pad.peek().state().clone();
     assert!(
         matches!(state.run_state, RunState::Over(Ended::Stopped)),
         "{:?}",
@@ -2676,32 +3144,46 @@ fn a_rebuild_stops_the_program_the_last_one_started() {
 
     let (mut test, _states, pad, _text, asking, _asks) =
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            // Nothing on this machine's disk: the pad the app booted holding is the one
+            // that is opened.
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
-            PadJob::Save(_) => PadAnswer::Saved(None),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
             PadJob::Run {
                 run,
+                scratchpad,
                 executable,
                 emit,
-                ..
-            } => PadAnswer::Started(run, crate::scratchpad::run_in(&executable, &cwd, emit)),
+            } => PadAnswer::Started {
+                pad: scratchpad.id().clone(),
+                run,
+                started: crate::scratchpad::run_in(&executable, &cwd, emit),
+            },
             // What the build itself answers does not matter here: the run is stopped
             // on the way to sending the job, before cargo would have been asked
             // anything at all.
-            PadJob::Build(_) => PadAnswer::Built(Build::Unavailable(Failure::NoArtifact)),
+            PadJob::Build(scratchpad) => PadAnswer::Built {
+                pad: scratchpad.id().clone(),
+                build: Build::Unavailable(Failure::NoArtifact),
+            },
         });
 
-    pump(&mut test, || pad.peek().opened);
+    pump(&mut test, || pad.peek().state().opened);
     already_built(pad, executable);
     test.sync_and_update();
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_run(pad, &jobs);
-    pump(&mut test, || pad.peek().output.len() > 0);
-    assert!(pad.peek().is_running());
+    pump(&mut test, || pad.peek().state().output.len() > 0);
+    assert!(pad.peek().state().is_running());
 
     request_build(pad, &jobs);
-    pump(&mut test, || !pad.peek().is_running());
-    let state = pad.peek().clone();
+    pump(&mut test, || !pad.peek().state().is_running());
+    let state = pad.peek().state().clone();
     assert!(
         matches!(state.run_state, RunState::Over(Ended::Stopped)),
         "{:?}",
@@ -2718,24 +3200,34 @@ fn a_rebuild_stops_the_program_the_last_one_started() {
 fn a_run_that_cannot_start_says_why() {
     let (mut test, _states, pad, _text, asking, _asks) =
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            // Nothing on this machine's disk: the pad the app booted holding is the one
+            // that is opened.
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
-            PadJob::Save(_) => PadAnswer::Saved(None),
-            PadJob::Run { run, .. } => PadAnswer::Started(
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Run {
+                run, scratchpad, ..
+            } => PadAnswer::Started {
+                pad: scratchpad.id().clone(),
                 run,
-                Err(Failure::NoProgram("No such file or directory".to_owned())),
-            ),
+                started: Err(Failure::NoProgram("No such file or directory".to_owned())),
+            },
             PadJob::Build(_) => unreachable!("this test never builds"),
         });
 
-    pump(&mut test, || pad.peek().opened);
+    pump(&mut test, || pad.peek().state().opened);
     already_built(pad, fixture_artifact());
     test.sync_and_update();
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_run(pad, &jobs);
-    pump(&mut test, || !pad.peek().is_running());
+    pump(&mut test, || !pad.peek().state().is_running());
 
-    let (text, bad) = pad.peek().run_status().expect("a status");
+    let (text, bad) = pad.peek().state().run_status().expect("a status");
     assert!(text.contains("No such file or directory"), "{text}");
     assert!(bad);
 }
