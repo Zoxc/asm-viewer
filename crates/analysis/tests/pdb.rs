@@ -55,6 +55,34 @@
 //! `/Fo line_fixture.obj` happened to work. No `.lib` is written for an image exporting
 //! nothing. `/Brepro` hashes the contents, so the two pairs have different GUIDs and neither
 //! PDB matches the other's DLL. Same 2.5 KB and 72 KB.
+//!
+//! A **third pair**, `line_fixture_public.dll` + `.pdb`, is that same object linked together
+//! with a second one, `public_fixture.cpp`, compiled **without** `/Z7`: its one function,
+//! `helper`, has no module symbols in the PDB at all, so the only name the PDB holds for it
+//! is the linker's public (`S_PUB32`) — and, `public_fixture.cpp` being C++, that name is the
+//! decorated `?helper@@YAHXZ`, where the C functions' publics are the plain `add`, `twice`
+//! and `sum_to`. Again no `/EXPORT`s, so the image declares nothing. From `tests/fixtures/`,
+//! with exactly:
+//!
+//! ```text
+//! clang-cl --target=x86_64-pc-windows-msvc /c /Z7 /Od /GS- -ffile-compilation-dir=/fixture \
+//!     /clang:-gcolumn-info /Foline_fixture_public.obj line_fixture.c
+//! clang-cl --target=x86_64-pc-windows-msvc /c /Od /GS- /Fopublic_fixture.obj public_fixture.cpp
+//! "$(rustc +stable --print sysroot)"/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
+//!     -flavor link /DEBUG /Brepro /PDBALTPATH:line_fixture_public.pdb /PDBSOURCEPATH:/fixture \
+//!     /NODEFAULTLIB /NOENTRY /DLL /OUT:line_fixture_public.dll /PDB:line_fixture_public.pdb \
+//!     line_fixture_public.obj public_fixture.obj
+//! rm line_fixture_public.obj public_fixture.obj line_fixture_public.lib
+//! ```
+//!
+//! built with the same clang 22.1.8 (Fedora 22.1.8-4.fc44) and the `rust-lld` of rustc 1.98.0
+//! (88d9e12ae 2026-08-18). This pair stands in for a **stripped** PDB — `/PDBSTRIPPED`, which
+//! keeps the publics and drops every module stream, so publics are all a PDB has — because
+//! that `rust-lld` accepts `/PDBSTRIPPED` and then warns `ignoring /pdbstripped flag, it is
+//! not yet supported`, writing no stripped file; an object without `/Z7` is the same shape
+//! for its one function. `helper` is at `.text` + 0x90, six bytes after `sum_to`'s end
+//! rounded up to 16, and the DLL is again 2.5 KB with the PDB 76 KB, one page more for the
+//! second module.
 
 mod common;
 
