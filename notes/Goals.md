@@ -802,6 +802,24 @@ one item per part, so the unfinished half stays visible.
   it needs beyond the pool that now exists is a reorder buffer, since members have to be emitted
   in file order for the Objects tree to be the same tree twice, and a rule for what a `Break`
   from the caller means once members are in flight.
+- [ ] Hand an object to the UI as soon as its names are demangled, and build the source →
+  assembly mapping behind it. The two halves of an open are not wanted at the same moment: the
+  symbol list is what the reader is waiting for, while `SourceIndex` — a file and a line out to
+  the symbols compiled from them — is what the first "find all locations" and the first click
+  in a source-driven tab ask for. It is built on the first ask today (`OnceLock::get_or_init` in
+  `line.rs`, deliberately never at parse time), so that click pays 2.2 s on this app's own
+  binary, of which 2.0 s is the extent pass. That is on the worker and not on the UI thread, so
+  nothing is blocked — what is wrong is that it is seconds late every first time, and the wait
+  is spent after the reader has asked rather than while they were reading the symbol list.
+  Four things to decide before starting. Whether it runs on the demangling pool now that there
+  is one or on a queue of its own — it is one long job per object rather than a batch of short
+  ones, so it wants a thread it can be left running on rather than a grain. What an ask arriving
+  mid-build does, where `OnceLock` makes the caller wait for the whole thing and the honest
+  alternatives are answering the slow way or answering "not yet". Whether every open object
+  gets one or only the ones the reader has touched, since the index is 10 MB and holding the
+  line programs its walk parsed takes the process from 756 MB to 1.23 GB — which is the whole
+  argument for its being lazy today, and the reason this is a change of *when* rather than of
+  *whether*. And what a binary closed mid-build does with the build still running over it.
 - [D] Cache the demangled names between runs. **Built, measured and then thrown away** — it is
   not in this repo's history, deliberately, so this item is the whole record of it. The gain did
   not justify what it cost to carry. What it bought, per file, release, cold open
