@@ -720,10 +720,32 @@ one item per part, so the unfinished half stays visible.
   wrapped row cannot tell it. Each costs one honest thing — a wrapped caret can sit under the
   wrong character, though only on a line clipping would have cut outright, and the output scrolls
   only as wide as the widest row it has drawn.
-- [ ] Click a diagnostic to reach the code it is about. The span is drawn under the message but
-  is not a target, so a reader with an error still finds the line by counting. Both halves
-  already exist: cargo's JSON carries the span's line and column, and the editor has a cursor
-  that can be put on one.
+- [x] Click a diagnostic to reach the code it is about. The place under the message is a target
+  now, and pressing it puts the editor's cursor on the line and the column rustc named. The
+  conversion between the two ways of counting is one pure function of the source text,
+  `Span::offset_in`, and is unit-tested rather than eyeballed: rustc counts from one and counts a
+  column in characters, a cursor is UTF-16 code units from the start of the text, and lines are
+  `\n` and nothing else. It is applied to the buffer as it is *now* rather than to what was
+  compiled, the reader having usually typed since, so a column past its line's end lands at that
+  end and a line past the file's end at the file's end — clamped, never out of range. Only a span
+  in the pad's own `src/main.rs` is a target: cargo names a dependency's file just as readily and
+  there is nowhere to put a cursor in one, so those keep the plain label, no hover and no press,
+  a promised press that did nothing being the worse answer. The cue is the relocation link's own
+  — its wash and its pointer — and the colour a place already wears. What it does is put the
+  cursor there; bringing the line *on screen* is the half below.
+- [D] Scroll the editor to the line a pressed diagnostic names. The cursor lands on it and the
+  row is marked — the editor's own current-line background, and its gutter number lit — but a
+  line that was off screen stays off screen, so a reader with an error below the fold is told
+  where it is without being shown it. Deferred on freya rather than on taste: 0.4.3's
+  `CodeEditor` keeps its scroll in `CodeEditorData.scrolls`, `pub(crate)`, with no
+  `new_controlled` and no controller to hand in, and it scrolls to its own cursor nowhere in the
+  crate — so nothing outside it can move that view. This is the same objection already written
+  down for not using `CodeEditor` in the read-only source pane, and the paragraph there claiming
+  "nothing here wants to scroll it from elsewhere" is what this invalidated. The one way to buy
+  it is to give the editor its content's full height inside a `ScrollView` of ours, which
+  de-virtualises it — every line of a pasted file built on every render — and that is too much
+  for a reveal. Undeferred by freya exposing the scroll, or by the editor scrolling to its own
+  cursor.
 - [x] Scratchpads are a concept of their own, disjoint from projects, and there are many of them
   saved. Each is its own directory under `scratchpads/` the way each project is one under
   `projects/`, and it is filed under an **id the reader never sees** — the directory, the crate

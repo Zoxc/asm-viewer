@@ -791,6 +791,44 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
     }
 }
 
+/// Put `pad`'s cursor where the compiler pointed: the line and column of a diagnostic's
+/// span, in that pad's own buffer.
+///
+/// The offset is worked out against the buffer **as it is now** and not against whatever
+/// was compiled, so it is always a place in this text and nothing here can be out of range
+/// — `Span::offset_in` carries the clamping and the reasoning for it. Any selection is
+/// cleared first: `TextSelection::move_to` moves only the far end of a range, so a jump
+/// made while something was selected would stretch the selection to the span instead of
+/// going there.
+///
+/// What this does **not** do is scroll the editor to the line. freya's `CodeEditor` keeps
+/// its scroll inside its own `CodeEditorData` (`pub(crate)`, with no controller to hand
+/// in), so nothing outside that crate can move it — the same objection that kept the
+/// component out of the read-only source pane, which was expected never to matter here.
+/// So the jump *marks* the line: the cursor's row takes the editor's own current-line
+/// background and its number lights in the gutter, which is the whole of what the pane can
+/// honestly promise until the editor exposes its scroll.
+pub(crate) fn jump_to_span(
+    mut text: State<PadBuffers>,
+    pad: &PadId,
+    span: &crate::scratchpad::Span,
+) {
+    let buffers = text.peek();
+    if !buffers.holds(pad) {
+        return;
+    }
+    let source = buffers.get(pad).rope.to_string();
+    // Bound to a `let` and dropped before the write below, which is the whole of the
+    // guard hazard this repo's headless tests were first written for.
+    drop(buffers);
+
+    let offset = span.offset_in(&source);
+    let mut buffers = text.write();
+    let editor = buffers.get_mut(pad);
+    editor.clear_selection();
+    editor.move_cursor_to(offset);
+}
+
 /// Ask for a pad nobody has named yet. What comes back is shown, this being a deliberate
 /// act and not something that happens behind the reader.
 pub(crate) fn request_new_pad(jobs: &PadJobs) {

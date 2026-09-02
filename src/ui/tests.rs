@@ -5573,6 +5573,179 @@ fn removing_a_dependency_row_does_not_take_the_pane_with_it() {
     assert_eq!(pad.peek().state().scratchpad.dependencies[0].name(), "rand");
 }
 
+/// Where a label with this exact text was laid out, as a point to press: the middle of it,
+/// since hit testing is `is_point_inside` and an edge is nobody's.
+fn label_centre(test: &TestingRunner, text: &str) -> Option<(f64, f64)> {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    test.find(|node, _element| {
+        let drawn = (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .map(|label| label.text.to_string())?;
+        if drawn != text {
+            return None;
+        }
+        let area = node.layout().area;
+        Some((
+            (area.origin.x + area.width() / 2.0) as f64,
+            (area.origin.y + area.height() / 2.0) as f64,
+        ))
+    })
+}
+
+/// **A diagnostic's span is a target.** rustc says where an error is and the editor has a
+/// cursor that can be put there, so the place under the message is pressed rather than
+/// counted to: the press puts the cursor on that line and that column, in the pad's own
+/// buffer.
+///
+/// The build is put in directly rather than answered by the worker, which would reopen the
+/// artifact as a binary on its way past; what is under test is the pane.
+#[test]
+fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
+    let (mut test, _states, pad, text, _asking, _asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    // Line 3, column 5 of `DEFAULT_SOURCE` is the `x` of `x * 3 + 1`.
+    let mut pad = pad;
+    pad.write().state_mut().built = Some(Build::Built {
+        executable: fixture_artifact(),
+        diagnostics: vec![Diagnostic {
+            level: Level::Warning,
+            message: "unused variable: `x`".to_owned(),
+            rendered: "warning: unused variable: `x`\n".to_owned(),
+            // `Span` is freya's own name in this file, the text kind: a diagnostic's is
+            // the model's, spelt out.
+            span: Some(crate::scratchpad::Span {
+                file: SOURCE_FILE.to_owned(),
+                line: 3,
+                column: 5,
+            }),
+        }],
+    });
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+
+    let place = label_centre(&test, "src/main.rs:3:5").expect("the span is drawn");
+
+    // The cue first: a place that can be gone to wears the relocation link's own wash
+    // while the pointer is on it, which is what says it can be pressed at all.
+    test.move_cursor(place);
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        washed(&test),
+        1,
+        "the span drew no hover, so nothing on screen offers the press"
+    );
+
+    test.click_cursor(place);
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+
+    let shown = pad.peek().shown().clone();
+    let buffers = text.peek();
+    let editor = buffers.get(&shown);
+    // Both counted from zero here, where rustc counts from one.
+    assert_eq!(
+        (editor.cursor_row(), editor.cursor_col()),
+        (2, 4),
+        "the span was pressed and the cursor did not move to it"
+    );
+}
+
+/// How many things on screen are wearing a link's hover wash.
+fn washed(test: &TestingRunner) -> usize {
+    test.find_many(|_node, element| {
+        (element.style().background == Fill::Color(palette().link_hover_bg)).then_some(())
+    })
+    .len()
+}
+
+/// **A span in a file that is not the pad's own is not a target.** cargo names a file in a
+/// dependency as readily as it names `src/main.rs`, and this app has nowhere to put a
+/// cursor in one — the editor holds the pad's source and nothing else. So the place is
+/// still drawn, cut down to the file's own name, and it is drawn as text: no hover to
+/// promise a press, and no press. An affordance that did nothing would be the worse answer.
+#[test]
+fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
+    let (mut test, _states, pad, text, _asking, _asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    let mut pad = pad;
+    pad.write().state_mut().built = Some(Build::Built {
+        executable: fixture_artifact(),
+        diagnostics: vec![Diagnostic {
+            level: Level::Warning,
+            message: "unused import".to_owned(),
+            rendered: "warning: unused import\n".to_owned(),
+            span: Some(crate::scratchpad::Span {
+                file: "/home/reader/.cargo/registry/src/index.crates.io-6f17/rand-0.8.5/src/lib.rs"
+                    .to_owned(),
+                line: 3,
+                column: 5,
+            }),
+        }],
+    });
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+
+    // Drawn, and by the file's own name: a registry path is most of a line on its own.
+    let place = label_centre(&test, "lib.rs:3:5").expect("the span is drawn");
+
+    test.move_cursor(place);
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        washed(&test),
+        0,
+        "a span nothing can be done about offered a press"
+    );
+
+    test.click_cursor(place);
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+
+    let shown = pad.peek().shown().clone();
+    let buffers = text.peek();
+    let editor = buffers.get(&shown);
+    assert_eq!(
+        (editor.cursor_row(), editor.cursor_col()),
+        (0, 0),
+        "a dependency's line was pressed and something moved in the pad's own source"
+    );
+}
+
 /// A directory of this test's own, named after the line that asked for it.
 fn run_directory(line: u32) -> PathBuf {
     std::env::temp_dir().join(format!(

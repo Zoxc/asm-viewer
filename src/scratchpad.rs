@@ -261,6 +261,42 @@ pub enum Level {
     Note,
 }
 
+impl Span {
+    /// Where in `text` this span points, counted in **UTF-16 code units** from the start of
+    /// the text — which is how a cursor position is counted, and the only unit that makes
+    /// the answer independent of who is counting lines.
+    ///
+    /// rustc counts a line and a column from one and counts a column in *characters*, so a
+    /// tab is one and an accented letter is one. Lines are separated by `\n` and nothing
+    /// else, which is rustc's own rule: it normalises `\r\n` before it numbers anything.
+    ///
+    /// Two clamps, and they are the same decision twice. `text` is the source **as it is
+    /// now**, which is not necessarily the source the build was told about — the reader has
+    /// usually typed since — so a column past the end of its line lands at the end of that
+    /// line, and a line past the end of the text at the end of the text. Being taken to
+    /// roughly the right place beats not being taken anywhere, and there is nothing here
+    /// that can fail.
+    pub fn offset_in(&self, text: &str) -> usize {
+        let line = self.line.saturating_sub(1);
+        let column = self.column.saturating_sub(1);
+        let units =
+            |text: &str, take: usize| text.chars().take(take).map(char::len_utf16).sum::<usize>();
+
+        let mut offset = 0;
+        for (index, row) in text.split_inclusive('\n').enumerate() {
+            if index == line {
+                // The line break is no part of the line: a column past the end of the text
+                // on it stops before the break rather than landing on the line below.
+                let row = row.trim_end_matches('\n').trim_end_matches('\r');
+                return offset + units(row, column);
+            }
+            offset += units(row, usize::MAX);
+        }
+
+        offset
+    }
+}
+
 impl Problem {
     pub fn half(&self) -> Half {
         match self {

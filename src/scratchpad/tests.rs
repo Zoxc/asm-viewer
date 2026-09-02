@@ -718,3 +718,62 @@ fn a_program_that_is_not_there_says_so() {
 
     assert!(matches!(failure, Failure::NoProgram(_)), "{failure:?}");
 }
+
+fn span(line: usize, column: usize) -> Span {
+    Span {
+        file: "src/main.rs".to_owned(),
+        line,
+        column,
+    }
+}
+
+/// A span is a line and a column the way rustc counts them; a cursor is one number the way
+/// an editor counts it. This is the whole of the conversion, and the unit is UTF-16 code
+/// units because that is what a cursor position is.
+#[test]
+fn a_span_is_a_cursor_position() {
+    let source = "fn main() {\n    let x = 1;\n}\n";
+
+    // One-based, both halves: line 2 column 5 is the `l` of `let`, which is char 16.
+    assert_eq!(span(2, 5).offset_in(source), 16);
+    // The first character of the file, which is where a span with no useful place lands.
+    assert_eq!(span(1, 1).offset_in(source), 0);
+    // The line break is not on the line: the last line is the empty one after it.
+    assert_eq!(span(3, 1).offset_in(source), 27);
+    assert_eq!(span(4, 1).offset_in(source), source.len());
+}
+
+/// A column is counted in characters and a cursor in UTF-16 code units, so a line with an
+/// astral character in it is where the two disagree — one character, two code units. A
+/// cursor placed by character count would sit one place left of the span for every one of
+/// them before it.
+#[test]
+fn a_column_is_characters_and_a_cursor_is_code_units() {
+    // `é` is one char and one code unit; `𝄞` is one char and two.
+    let source = "// é𝄞 x\nlet y = 2;\n";
+
+    // Column 7 is the `x`: six characters before it — `/`, `/`, ` `, `é`, `𝄞`, ` ` — which
+    // are seven code units, the `𝄞` being two.
+    assert_eq!(span(1, 7).offset_in(source), 7);
+    // And the line below starts after the whole of the line above, its break included:
+    // eight characters, nine code units.
+    assert_eq!(span(2, 1).offset_in(source), 9);
+}
+
+/// The source is edited under a diagnostic — the reader has usually typed since the build —
+/// so a span that no longer fits is clamped rather than dropped. Nowhere near a panic and
+/// never past the end of the text.
+#[test]
+fn a_span_the_source_has_outgrown_is_clamped() {
+    let source = "fn main() {}\n";
+
+    // Past the end of its line: the end of that line, and not the line below.
+    assert_eq!(span(1, 500).offset_in(source), 12);
+    // Past the end of the file: the end of the file.
+    assert_eq!(span(99, 1).offset_in(source), source.len());
+    // Nothing to point at at all.
+    assert_eq!(span(1, 1).offset_in(""), 0);
+    // Zero is not a line rustc writes, and is the first line rather than a subtraction
+    // that wraps.
+    assert_eq!(span(0, 0).offset_in(source), 0);
+}

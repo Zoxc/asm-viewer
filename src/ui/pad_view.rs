@@ -3,11 +3,14 @@
 //! beside this one.
 //!
 //! Every bad dependency row is marked, not the first, and a failed build points back at a
-//! row structurally rather than by looking for a crate name in a sentence. stdout and
-//! stderr are told apart by colour and by nothing else -- stderr is not an error, it is
-//! the other stream, so it takes the palette's one warm hue rather than the red. The
-//! output pane follows the newest line while the reader is at the bottom of it and leaves
-//! them where they are the moment they are not.
+//! row structurally rather than by looking for a crate name in a sentence. A diagnostic's
+//! **place is a target**, pressing it putting the cursor on the line and column rustc
+//! named -- but only for a span in the pad's own source, there being nowhere to put a
+//! cursor in a dependency's file. stdout and stderr are told apart by colour and by
+//! nothing else -- stderr is not an error, it is the other stream, so it takes the
+//! palette's one warm hue rather than the red. The output pane follows the newest line
+//! while the reader is at the bottom of it and leaves them where they are the moment they
+//! are not.
 //!
 //! **A line too wide for the pane wraps in the diagnostics and scrolls sideways in the
 //! output**, and which of the two it is follows from the list it is in rather than from
@@ -55,19 +58,85 @@ fn text_block(text: &str, color: Color) -> Element {
         .into_element()
 }
 
+/// The place a diagnostic points at, drawn as a **target**: pressing it puts the pad's
+/// cursor on that line and that column. `address_fg` at rest, which is what says "a place"
+/// everywhere else in this app, and the relocation link's own hover — the wash under it and
+/// the pointer over it — which is what says "this can be pressed".
+///
+/// **Only a span in the pad's own source is one.** cargo names a file in a dependency as
+/// readily as it names `src/main.rs`, and there is nowhere to put a cursor in one: the
+/// editor holds the pad's source and this app opens no other file for editing. So those
+/// keep the plain label they always had, with no wash, no pointer and no press. A target
+/// that did nothing when pressed would be the worse of the two answers — the hover is a
+/// promise, and one that is kept for `src/main.rs` and broken for everything else is worse
+/// than never making it.
+#[derive(Clone, PartialEq)]
+struct SpanTarget {
+    pad: PadId,
+    span: crate::scratchpad::Span,
+    text: String,
+}
+
+impl Component for SpanTarget {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let text = use_consume::<PadText>().0;
+        let (pad, span) = (self.pad.clone(), self.span.clone());
+
+        CursorArea::new().child(
+            rect()
+                .maybe(hovering(), |rect| {
+                    rect.background(palette().link_hover_bg).corner_radius(6.0)
+                })
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |e: Event<PressEventData>| {
+                    // The blocks are in a `ScrollView` that drags to scroll, and a press
+                    // that reached it would be the start of one.
+                    e.stop_propagation();
+
+                    jump_to_span(text, &pad, &span);
+                })
+                .child(
+                    label()
+                        .text(self.text.clone())
+                        .max_lines(1)
+                        .color(match hovering() {
+                            true => palette().name_hover_fg,
+                            false => palette().address_fg,
+                        }),
+                ),
+        )
+    }
+}
+
 /// One thing the compiler said: a line that can be scanned, and cargo's own rendering of
 /// it under that. The header adds the **place**, taken from the span rather than from the
-/// text.
-fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
+/// text — and that place is a [`SpanTarget`] when it is somewhere this pane can go.
+fn diagnostic_block(pad: &PadId, diagnostic: &Diagnostic) -> Element {
     let place = diagnostic.span.as_ref().map(|span| {
-        let file = match span.file == SOURCE_FILE {
+        let own = span.file == SOURCE_FILE;
+        let file = match own {
             true => span.file.clone(),
             // A registry path is most of a line on its own, and which crate it is in is
             // the useful half of it.
             false => file_name(&span.file),
         };
+        let text = format!("{file}:{}:{}", span.line, span.column);
 
-        format!("{file}:{}:{}", span.line, span.column)
+        match own {
+            true => SpanTarget {
+                pad: pad.clone(),
+                span: span.clone(),
+                text,
+            }
+            .into_element(),
+            false => label()
+                .text(text)
+                .color(palette().address_fg)
+                .max_lines(1)
+                .into_element(),
+        }
     });
 
     rect()
@@ -103,13 +172,7 @@ fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
                         })
                         .max_lines(1),
                 )
-                .maybe_child(place.map(|place| {
-                    label()
-                        .text(place)
-                        .color(palette().address_fg)
-                        .max_lines(1)
-                        .into_element()
-                }))
+                .maybe_child(place)
                 // The sentence rustc wrote, wrapping rather than cut at the pane's edge.
                 .child(
                     label()
@@ -646,7 +709,11 @@ impl Component for ScratchpadTab {
             })
             .collect();
 
-        let diagnostics: Vec<Element> = state.diagnostics().iter().map(diagnostic_block).collect();
+        let diagnostics: Vec<Element> = state
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic_block(&shown, diagnostic))
+            .collect();
         let refusal = state
             .refusal()
             .map(|message| text_block(message, palette().text_fg));

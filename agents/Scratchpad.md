@@ -175,9 +175,12 @@ the reader was in another tab still has to be there when they come back.
 
 **Its editor is freya's own `CodeEditor`**, which the read-only source pane deliberately rejected.
 That is not a reversal: both of the pane's objections were about painting and scrolling a listing
-from *outside*, and neither survives a pane the reader is typing in — the one line it backgrounds
-is the caret's, which is the only current line an editor has, and nothing here wants to scroll it
-from elsewhere. What comes with it is a cursor, a selection, an undo history, the clipboard, IME
+from *outside*, and the first does not survive a pane the reader is typing in — the one line it
+backgrounds is the caret's, which is the only current line an editor has. The second one came
+back. Its scroll lives in its own `CodeEditorData`, `pub(crate)` and with no controller to hand
+in, so nothing outside that crate can move it; that cost nothing for as long as the only thing
+moving in this pane was the reader's own typing, and it is exactly what the diagnostic jump below
+cannot do. What comes with it is a cursor, a selection, an undo history, the clipboard, IME
 preedit and an incremental tree-sitter re-parse per keystroke. Two things stay ours: the colours,
 mapped onto the palette (`EditorTheme` beside the `EditorSyntaxTheme` `Palette::syntax` already
 answers for), and the font — the component takes **one** family where everything else takes a
@@ -249,6 +252,40 @@ compiled anything, and `[dependencies]` is the only part of the generated packag
 wrong — so cargo's own stderr, where `no matching package named ... found` is said and nowhere
 else, is drawn under the rows. Once the compiler has spoken, the same stderr says only what the
 diagnostics list already does and is dropped.
+
+**A diagnostic's span is a target, and the target is the cursor.** rustc says where an error is —
+`src/main.rs:9:17`, under the message — and the editor has a cursor that can be put there, so the
+place is pressed rather than counted to. The conversion between the two is `Span::offset_in`, a
+pure function of the source text and therefore unit-tested rather than eyeballed: rustc counts a
+line and a column **from one** and counts a column in **characters**, an editor counts a cursor in
+**UTF-16 code units** from the start of the text, and lines are separated by `\n` and nothing else,
+which is rustc's own rule since it normalises `\r\n` before it numbers anything. It is applied to
+the buffer **as it is now** and not to what was compiled — the reader has usually typed since — so
+it clamps twice and for one reason: a column past the end of its line lands at the end of that
+line, a line past the end of the text at the end of the text, and nothing here can be out of range
+or fail. The press clears the selection first, `TextSelection::move_to` moving only the far end of
+a range, or a jump made with something selected would stretch the selection to the span instead of
+going there.
+
+**Only a span in the pad's own source is a target.** cargo names a file in a dependency as readily
+as it names `src/main.rs`, and there is nowhere to put a cursor in one: the editor holds the pad's
+source and this app opens no other file for editing. So a registry path keeps the plain label it
+always had, cut down to the file's own name, with no wash under it, no pointer over it and no
+press — where the pad's own file wears the relocation link's hover exactly, which is what says
+"this can be pressed" everywhere else in this app. A target that did nothing when pressed was the
+other answer and is worse: a hover is a promise, and one kept for `src/main.rs` and broken for
+everything else is worse than never making it.
+
+What the jump **cannot** do is scroll the editor to the line, for the reason the paragraph on the
+editor gives: its scroll is private and there is no controller to hand in. So the jump *marks* the
+line — the cursor's row takes the editor's own current-line background and its number lights in
+the gutter — and a line already off screen stays off screen. The way to buy the scroll back would
+be to give the editor its content's full height inside a `ScrollView` of ours, so that the one
+doing the scrolling is the one we hold: that is a real technique and it was rejected, since it
+de-virtualises the editor, and a pad someone pastes a long file into would then build every line
+of it on every render. A scratchpad is a small file the reader has just been typing in, so the
+line a diagnostic is about is usually on screen already; the honest thing is to say so here rather
+than to pay for the exception in every keystroke.
 
 **Wrap or scroll is decided by the list a line is in, and not by the line.** Both surfaces here
 draw a tool's own output and both had it clipped at the pane's right edge, which is worst exactly

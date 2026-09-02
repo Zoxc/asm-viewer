@@ -20,6 +20,9 @@ pub(crate) use freya::code_editor::{
 };
 pub(crate) use freya::icons::lucide;
 pub(crate) use freya::prelude::*;
+// The editor's own text trait, which the prelude does not carry: where its cursor is and
+// how to put it somewhere else.
+pub(crate) use freya::text_edit::TextEditor;
 pub(crate) use rfd::AsyncFileDialog;
 
 pub(crate) use analysis::{
