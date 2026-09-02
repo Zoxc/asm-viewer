@@ -4,6 +4,7 @@ mod common;
 
 use common::{
     elf_x86_64_with_dwarf, parse, symbol, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
+    UnitRanges,
 };
 use std::sync::Arc;
 
@@ -59,6 +60,7 @@ fn two_files(base_symbol: Option<usize>) -> Vec<u8> {
             subprograms: &[],
             base_symbol,
         }],
+        unit_ranges: UnitRanges::Relocated,
     })
 }
 
@@ -171,7 +173,7 @@ fn debug_line_relocations_are_applied() {
 /// The shape rustc emits: one `.text.<name>` per function, both at address 0, each with
 /// its own sequence relocated against its own symbol — so an address alone cannot say
 /// which function a row belongs to.
-fn two_sections() -> Vec<u8> {
+fn two_sections(unit_ranges: UnitRanges) -> Vec<u8> {
     elf_x86_64_with_dwarf(DwarfFixture {
         comp_dir: COMP_DIR,
         files: &["main.c", "other.c"],
@@ -218,6 +220,7 @@ fn two_sections() -> Vec<u8> {
                 base_symbol: Some(0),
             },
         ],
+        unit_ranges,
     })
 }
 
@@ -225,7 +228,7 @@ fn two_sections() -> Vec<u8> {
 /// both symbols.
 #[test]
 fn a_symbol_does_not_pick_up_another_sections_rows() {
-    let data = two_sections();
+    let data = two_sections(UnitRanges::Relocated);
     let object = parse(&data);
 
     let first = symbol(&object, "first");
@@ -267,7 +270,7 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
 /// well defined when no row is nested inside another.
 #[test]
 fn rows_are_ascending_and_do_not_overlap() {
-    let data = two_sections();
+    let data = two_sections(UnitRanges::Relocated);
     let object = parse(&data);
 
     for name in ["first", "second"] {
@@ -344,4 +347,38 @@ fn line_info_is_usable_from_several_threads_at_once() {
         assert_eq!(rows, 2);
         assert_eq!(files, [Arc::from("/src/main.c")]);
     }
+}
+
+/// The same two sections, with the unit's ranges written as offsets from a `DW_AT_low_pc`
+/// that carries no relocation: the line program's addresses move to their section's place
+/// and the declared range does not, so the unit stops covering its own code. Before the
+/// stale ranges were dropped this was a silent "no line info" for every section but the one
+/// left at 0.
+#[test]
+fn a_unit_whose_ranges_did_not_move_with_its_code_still_answers() {
+    let data = two_sections(UnitRanges::OffsetPairs);
+    let object = parse(&data);
+
+    let first = symbol(&object, "first");
+    let second = symbol(&object, "second");
+
+    let info = first.line_info(&object).expect("first has line info");
+    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(info.rows().len(), 2);
+    assert_eq!(info.rows()[0].range, 0..3);
+    assert_eq!(info.rows()[1].range, 3..6);
+
+    // The one the unit's stale range does not reach.
+    let info = second.line_info(&object).expect("second has line info");
+    assert_eq!(info.files(), [Arc::from("/src/other.c")]);
+    assert_eq!(info.rows().len(), 1);
+    assert_eq!(info.rows()[0].range, 0..2);
+    assert_eq!(
+        info.location(1),
+        Some(analysis::Location {
+            file: Some("/src/other.c"),
+            line: Some(42),
+            column: Some(7),
+        })
+    );
 }

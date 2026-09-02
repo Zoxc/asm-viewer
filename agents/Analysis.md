@@ -129,6 +129,27 @@ load-bearing:
   offset into another `.debug_*` section rather than an address. Hence `Object::line_info` takes a
   `&Section`: a bare range is not a question the crate can answer.
 
+The bias moves exactly what `relocate` moves, and a unit's declared ranges need not be among them.
+A line program's `DW_LNE_set_address` is always relocated in a relocatable object, so a sequence
+always follows its section; a unit's range list usually does too, since DWARF 4 states a range as a
+pair of addresses and DWARF 5 has `DW_RLE_start_length` — but neither obliges a producer to. A
+range can also be two offsets from a base the unit gives as a `DW_AT_low_pc` of 0 it never
+relocates (`DW_RLE_offset_pair`), and offsets follow nothing. The unit is then left declaring a
+range its own code is no longer in, and `addr2line` will not look inside a unit whose ranges miss
+the probe: a silent "no line info" for every section the bias moved, which is worse than a wrong
+answer because nothing about it looks wrong. So `stale_range_lists` reads each unit's root DIE
+after the first load and ends any `DW_AT_ranges` list that carries no relocation of its own where
+it begins — zeroed in place rather than removed, so the offsets units hold into the section are
+still in bounds and read there as a list of no ranges. `addr2line` then takes that unit's ranges
+from its line program's sequences, which did move. A list is judged by its **first entry**, which
+is where the relocation lands in every form that states an address, `DW_RLE_base_address` included:
+the offset pairs rustc writes for an inlined subroutine's ranges are offsets from a base that *is*
+relocated and are correctly left alone. Only a unit's own list is examined and only that one is
+dropped; the lists its children hold are read by nobody here and are not ours to rewrite. An object
+with relocations in `.debug_addr` is declined rather than judged, since DWARF 5's `DW_RLE_startx_*`
+state their addresses there. Measured on the 196-member rlib the rule fires on nothing, and the
+root-DIE pass costs 1.5% of a sweep of every symbol's line info and extent (200 ms -> 203 ms).
+
 **The reverse mapping is an index, and a whole-object one** (`line/source.rs`). "Which functions
 was this line compiled into" is not a question about one symbol, so it is not a query but a table:
 built on the **first source question against an object** and never before one, behind a `OnceLock`

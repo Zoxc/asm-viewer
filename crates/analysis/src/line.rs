@@ -79,7 +79,19 @@ impl Dwarf {
         let biases = section_biases(&file);
 
         let dwarf =
-            gimli::Dwarf::load::<_, ()>(|id| Ok(load_section(&file, id, endian, &biases))).ok()?;
+            gimli::Dwarf::load::<_, ()>(|id| Ok(load_section(&file, id, endian, &biases, &[])))
+                .ok()?;
+
+        // Read once more, without the range lists that were left behind by the bias. Rare
+        // enough — nothing in the tree emits the shape — that reading twice is cheaper than
+        // holding the section data aside for a patch that almost never comes.
+        let stale = stale_range_lists(&file, &biases, &dwarf);
+        let dwarf = if stale.is_empty() {
+            dwarf
+        } else {
+            gimli::Dwarf::load::<_, ()>(|id| Ok(load_section(&file, id, endian, &biases, &stale)))
+                .ok()?
+        };
 
         Some(Dwarf {
             context: Mutex::new(addr2line::Context::from_dwarf(dwarf).ok()?),
@@ -339,6 +351,109 @@ fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u64> {
 /// value; the gap it leaves means an off-by-one cannot walk into the next section.
 const SECTION_ALIGNMENT: u64 = 16;
 
+/// One unit range list that [`section_biases`] left behind, and the bytes that make it read
+/// as a list of no ranges at all.
+struct StaleRangeList {
+    section: gimli::SectionId,
+    offset: usize,
+    /// A DWARF 4 list ends on a pair of zero addresses and a DWARF 5 one on a single
+    /// `DW_RLE_end_of_list` byte, so this is what has to be written over the list's first
+    /// entry for the whole list to end where it begins.
+    length: usize,
+}
+
+/// Every unit whose `DW_AT_ranges` list did not move when the bias moved its code.
+///
+/// The bias moves exactly what [`relocate`] moves. A line program's `DW_LNE_set_address` is
+/// always relocated in a relocatable object, so a sequence always follows its section; a
+/// unit's range list usually does too, since DWARF 4 states a range as a pair of addresses and
+/// DWARF 5 has `DW_RLE_start_length`. But neither obliges a producer to. A range can also be
+/// two offsets from a base address — `DW_RLE_offset_pair`, and DWARF 4's equivalent — and a
+/// unit is free to give that base as a `DW_AT_low_pc` of 0 it does not relocate. Those offsets
+/// follow nothing. The unit is then left declaring a range its own code is no longer in, and
+/// `addr2line` does not look inside a unit whose ranges miss the probe: a silent "no line
+/// info" for every section the bias moved, rather than a wrong answer.
+///
+/// A list is judged by its **first entry**, which is where a relocation lands in every form
+/// that states an address — `DW_RLE_base_address` included, so a list of offset pairs from a
+/// relocated base is correctly left alone, which is the shape rustc emits for the ranges of an
+/// inlined subroutine. Only a unit's own list is examined and only that list is dropped: the
+/// lists a unit's children hold are read by nobody here and are not ours to rewrite.
+///
+/// One shape is declined rather than judged: DWARF 5's `DW_RLE_startx_*` state their addresses
+/// as indices into `.debug_addr`, which is relocated like any other section, so a relocation
+/// there means the ranges moved without any of them saying so.
+fn stale_range_lists(
+    file: &object::File<'_>,
+    biases: &HashMap<SectionIndex, u64>,
+    dwarf: &gimli::Dwarf<Reader>,
+) -> Vec<StaleRangeList> {
+    let mut stale = Vec::new();
+    if !biases.values().any(|&bias| bias != 0) {
+        return stale;
+    }
+
+    let relocations = |id: gimli::SectionId| match file.section_by_name(id.name()) {
+        Some(section) => section
+            .relocations()
+            .filter(|(_, relocation)| relocation.kind() == RelocationKind::Absolute)
+            .map(|(offset, _)| offset)
+            .collect(),
+        None => Vec::new(),
+    };
+    if !relocations(gimli::SectionId::DebugAddr).is_empty() {
+        return stale;
+    }
+    let ranges = relocations(gimli::SectionId::DebugRanges);
+    let rnglists = relocations(gimli::SectionId::DebugRngLists);
+
+    let mut headers = dwarf.units();
+    // A malformed unit stops the walk where it goes wrong, as everywhere else here.
+    while let Ok(Some(header)) = headers.next() {
+        let encoding = header.encoding();
+        let Ok(abbreviations) = dwarf.abbreviations(&header) else {
+            continue;
+        };
+        let mut entries = header.entries(&abbreviations);
+        let Ok(Some((_, root))) = entries.next_dfs() else {
+            continue;
+        };
+        // An index into the section's offset table (`DW_FORM_rnglistx`) is declined rather
+        // than resolved: the table itself would have to be trusted to find the list.
+        let offset = match root.attr_value(gimli::DW_AT_ranges) {
+            Ok(Some(gimli::AttributeValue::SecOffset(offset))) => offset,
+            Ok(Some(gimli::AttributeValue::RangeListsRef(offset))) => offset.0,
+            _ => continue,
+        };
+
+        let address_size = usize::from(encoding.address_size);
+        let (section, relocations, length) = if encoding.version >= 5 {
+            (gimli::SectionId::DebugRngLists, &rnglists, 1)
+        } else {
+            (gimli::SectionId::DebugRanges, &ranges, 2 * address_size)
+        };
+
+        // The first entry, plus the opcode byte DWARF 5 puts in front of it. Reaching into
+        // the second entry only makes the list look relocated when it partly is, which is
+        // the answer that leaves it alone.
+        let first = offset..offset.saturating_add(2 * address_size + 1);
+        if relocations
+            .iter()
+            .any(|&relocation| first.contains(&(relocation as usize)))
+        {
+            continue;
+        }
+
+        stale.push(StaleRangeList {
+            section,
+            offset,
+            length,
+        });
+    }
+
+    stale
+}
+
 /// Read one DWARF section, decompressing and relocating it. A section that is missing or
 /// unreadable becomes an empty reader, which is what `gimli` expects for "not present".
 fn load_section(
@@ -346,6 +461,7 @@ fn load_section(
     id: gimli::SectionId,
     endian: RunTimeEndian,
     biases: &HashMap<SectionIndex, u64>,
+    stale: &[StaleRangeList],
 ) -> Reader {
     let data = file
         .section_by_name(id.name())
@@ -354,6 +470,20 @@ fn load_section(
             // dropped, not believed.
             let mut data = section_data(&section)?;
             relocate(&mut data, file, &section, endian, biases);
+
+            // A stale list ([`stale_range_lists`]) is ended where it begins rather than
+            // believed, and after the relocation pass so that nothing writes the addresses
+            // back. Zeroed in place rather than removed, so every offset a unit holds into
+            // the section is still one this section has. A unit left declaring no ranges is
+            // one `addr2line` takes the ranges of from its line program's sequences, which
+            // did move with the code.
+            for list in stale.iter().filter(|list| list.section == id) {
+                let end = list.offset.saturating_add(list.length);
+                if let Some(bytes) = data.get_mut(list.offset..end) {
+                    bytes.fill(0);
+                }
+            }
+
             Some(data)
         })
         .unwrap_or_default();

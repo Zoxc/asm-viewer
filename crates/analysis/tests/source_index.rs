@@ -9,7 +9,9 @@
 mod common;
 
 use analysis::{Object, SymbolData};
-use common::{elf_x86_64_with_dwarf, parse, DwarfFixture, DwarfRow, DwarfSection, TextSymbol};
+use common::{
+    elf_x86_64_with_dwarf, parse, DwarfFixture, DwarfRow, DwarfSection, TextSymbol, UnitRanges,
+};
 use std::sync::Arc;
 
 const COMP_DIR: &str = "/src";
@@ -76,6 +78,7 @@ fn shared_line() -> Vec<u8> {
             subprograms: &[],
             base_symbol: None,
         }],
+        unit_ranges: UnitRanges::Relocated,
     })
 }
 
@@ -166,6 +169,7 @@ fn two_sections() -> Vec<u8> {
                 base_symbol: Some(0),
             },
         ],
+        unit_ranges: UnitRanges::Relocated,
     })
 }
 

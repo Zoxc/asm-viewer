@@ -6,6 +6,7 @@ mod common;
 
 use common::{
     elf_x86_64_with_dwarf, named, parse, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
+    UnitRanges,
 };
 
 /// Six bytes of code then four bytes of padding: ten to the symbol table, six to DWARF.
@@ -49,6 +50,7 @@ fn fixture(subprograms: &[(usize, u64)], base_symbol: Option<usize>) -> Vec<u8> 
             subprograms,
             base_symbol,
         }],
+        unit_ranges: UnitRanges::Relocated,
     })
 }
 
@@ -173,6 +175,7 @@ fn two_sections() -> Vec<u8> {
                 base_symbol: Some(0),
             },
         ],
+        unit_ranges: UnitRanges::Relocated,
     })
 }
 
@@ -221,6 +224,7 @@ fn a_derivation_reaching_a_megabyte_is_cut_off() {
             subprograms: &[],
             base_symbol: Some(0),
         }],
+        unit_ranges: UnitRanges::Relocated,
     }));
 
     let huge = named(&object, "huge");

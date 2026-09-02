@@ -394,8 +394,24 @@ pub struct DwarfFixture<'a> {
     /// The source files the line programs can name; `DwarfRow::file` indexes this.
     pub files: &'a [&'a str],
     /// One section gives the unit a `DW_AT_low_pc`/`DW_AT_high_pc`; several give it a
-    /// `DW_AT_ranges` list with one relocated entry apiece — a discontiguous unit.
+    /// `DW_AT_ranges` list — see [`UnitRanges`] for how that list is written.
     pub sections: &'a [DwarfSection<'a>],
+    /// How a multi-section unit states where its code is.
+    pub unit_ranges: UnitRanges,
+}
+
+/// How [`DwarfFixture`] writes the `DW_AT_ranges` list of a unit spanning several sections.
+/// Ignored by a single-section fixture, which states `DW_AT_low_pc`/`DW_AT_high_pc` instead.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum UnitRanges {
+    /// One entry per section, each an address and a length, and each address relocated
+    /// against that section's own symbol — what gcc and rustc emit.
+    Relocated,
+    /// One entry per section, each a pair of **offsets** from the unit's `DW_AT_low_pc`,
+    /// which is written as a literal 0 and carries no relocation. Nothing in the tree emits
+    /// this, but DWARF permits it: `DW_RLE_offset_pair` beside an unrelocated base leaves the
+    /// unit declaring a range that does not move when the line program's addresses do.
+    OffsetPairs,
 }
 
 /// [`elf_x86_64`] plus a DWARF compilation unit and line program describing its code
@@ -481,9 +497,15 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
             program.generate_row();
         }
         program.end_sequence(section.length);
-        ranges.push(Range::StartLength {
-            begin: address(index),
-            length: section.length,
+        ranges.push(match fixture.unit_ranges {
+            UnitRanges::Relocated => Range::StartLength {
+                begin: address(index),
+                length: section.length,
+            },
+            UnitRanges::OffsetPairs => Range::OffsetPair {
+                begin: 0,
+                end: section.length,
+            },
         });
     }
     dwarf.unit.line_program = program;
@@ -512,8 +534,7 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
     }
 
     // Without a range on the unit, nothing will look inside it for an address.
-    let unit_ranges =
-        (fixture.sections.len() > 1).then(|| dwarf.unit.ranges.add(RangeList(ranges)));
+    let range_list = (fixture.sections.len() > 1).then(|| dwarf.unit.ranges.add(RangeList(ranges)));
     let entry = dwarf.unit.get_mut(root);
     entry.set(
         gimli::DW_AT_comp_dir,
@@ -523,11 +544,21 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
         gimli::DW_AT_name,
         AttributeValue::String(fixture.files[0].as_bytes().to_vec()),
     );
-    match unit_ranges {
-        // A DWARF 4 range list holds offsets from the unit's base address, so the unit
-        // must not also declare a `DW_AT_low_pc`: the entries are the absolute addresses
-        // already, each one relocated on its own.
-        Some(list) => entry.set(gimli::DW_AT_ranges, AttributeValue::RangeListRef(list)),
+    match range_list {
+        Some(list) => {
+            entry.set(gimli::DW_AT_ranges, AttributeValue::RangeListRef(list));
+            // A DWARF 4 range list holds offsets from the unit's base address, so
+            // [`UnitRanges::Relocated`] must not also declare a `DW_AT_low_pc`: its entries
+            // are the absolute addresses already, each one relocated on its own.
+            // [`UnitRanges::OffsetPairs`] is the other spelling and needs the base, which it
+            // states as an unrelocated 0.
+            if fixture.unit_ranges == UnitRanges::OffsetPairs {
+                entry.set(
+                    gimli::DW_AT_low_pc,
+                    AttributeValue::Address(Address::Constant(0)),
+                );
+            }
+        }
         None => {
             entry.set(gimli::DW_AT_low_pc, AttributeValue::Address(address(0)));
             entry.set(
@@ -616,6 +647,7 @@ pub fn dwarf_fixture(subprograms: &[(usize, u64)]) -> Vec<u8> {
             subprograms,
             base_symbol: Some(1),
         }],
+        unit_ranges: UnitRanges::Relocated,
     })
 }
 
