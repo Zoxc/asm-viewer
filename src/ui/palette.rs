@@ -11,9 +11,7 @@ use super::*;
 /// (see [`Palette::syntax`]). Two tests in `ui/tests.rs` hold the palettes to a contrast
 /// floor for every foreground and a visible-step floor for every wash.
 pub(crate) struct Palette {
-    /// A pane's own body, the tab header above the active one, and the ground both code
-    /// panes are read on: the listing and the source beside it are one surface, and the
-    /// tab over them is the same one again.
+    /// A pane's own body, and the tab header above the active one.
     pub(crate) pane_bg: Color,
     /// The interface text: every label that does not ask for a colour of its own. Set
     /// once on the root and *inherited*, freya resolving an unset `color` from the
@@ -25,9 +23,7 @@ pub(crate) struct Palette {
     pub(crate) object_hover_bg: Color,
     pub(crate) symbol_pane_bg: Color,
     pub(crate) symbol_hover_bg: Color,
-    /// A block set into a pane, a step off its body: the scratchpad's diagnostics and its
-    /// run output, stacked under the editor they are about.
-    pub(crate) inset_bg: Color,
+    pub(crate) asm_pane_bg: Color,
     /// The pointer's own hover, on an instruction row and on a source line alike.
     pub(crate) code_row_hover_bg: Color,
     /// The cross-view highlight: this row is what the row the pointer is on maps to on the
@@ -102,7 +98,7 @@ impl Palette {
         object_hover_bg: Color::from_rgb(144, 238, 144), // LIGHT_GREEN
         symbol_pane_bg: Color::from_rgb(243, 243, 228),
         symbol_hover_bg: Color::from_rgb(226, 226, 205),
-        inset_bg: Color::from_rgb(248, 248, 248),
+        asm_pane_bg: Color::from_rgb(248, 248, 248),
         code_row_hover_bg: Color::from_argb(160, 228, 237, 216),
         line_focus_bg: Color::from_argb(70, 120, 160, 220),
         line_pin_bg: Color::from_argb(120, 120, 160, 220),
@@ -142,7 +138,7 @@ impl Palette {
         object_hover_bg: Color::from_rgb(48, 92, 52),
         symbol_pane_bg: Color::from_rgb(38, 38, 33),
         symbol_hover_bg: Color::from_rgb(52, 52, 44),
-        inset_bg: Color::from_rgb(34, 34, 36),
+        asm_pane_bg: Color::from_rgb(34, 34, 36),
         // The four translucent ones, each stated as what it should come out as over the
         // pane rather than as the light value flipped: `blend` puts 30/30/32 under them.
         code_row_hover_bg: Color::from_argb(110, 120, 160, 110),

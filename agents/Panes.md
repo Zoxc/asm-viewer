@@ -4,11 +4,6 @@ The Source pane and the Assembly pane: which file the source side draws, who wri
 source-driven tab's line, how the panes point at each other, how a click from outside lands, the
 arrow gutter, and the run of rows a reader copies.
 
-**The two panes are one surface.** Both draw on `pane_bg`; the assembly side had a step off it of
-its own, which left a seam down the middle of the default layout and bought nothing for it
-(`agents/Appearance.md`). What separates the two is the resizable handle between them, and that one
-is a listing and the other a file.
-
 **The Source pane draws the active tab's source side**, and `source_side` is the one place either
 pane decides which file that is — so the pane and the effect that drops its picked-out rows cannot
 disagree about which listing is up. A **subject** is a source-driven tab's own file; a

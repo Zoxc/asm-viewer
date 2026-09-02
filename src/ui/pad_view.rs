@@ -463,7 +463,7 @@ impl Component for OutputPane {
         rect()
             .width(Size::fill())
             .height(Size::flex(1.0))
-            .background(palette().inset_bg)
+            .background(palette().asm_pane_bg)
             .border(bottom_hairline())
             .child(
                 rect()
@@ -862,7 +862,7 @@ impl Component for ScratchpadTab {
                 rect()
                     .width(Size::fill())
                     .height(Size::flex(1.0))
-                    .background(palette().inset_bg)
+                    .background(palette().asm_pane_bg)
                     .child(
                         ScrollView::new().child(
                             rect()
