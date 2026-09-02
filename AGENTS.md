@@ -100,6 +100,7 @@ command.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, the Info pane, and their rows.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
+- `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, in both spellings.
 - `src/ui/source_view.rs` — the source side of one, and which file it is showing.
 - `src/ui/dock.rs` — the dock, its two-kinded tab, and the document panel's own tab bar.
 - `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers.

@@ -92,6 +92,8 @@ mod source_view;
 pub(crate) use source_view::*;
 mod state;
 pub(crate) use state::*;
+mod symbol_bar;
+pub(crate) use symbol_bar::*;
 
 /// One of the two history buttons at the left of the toolbar: the step it makes, drawn as
 /// the chevron pointing that way, with the entry it would land on in its tooltip.

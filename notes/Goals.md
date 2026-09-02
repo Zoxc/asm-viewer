@@ -172,7 +172,14 @@ one item per part, so the unfinished half stays visible.
 
 ## Assembly viewer
 
-- [ ] Bar under the Assembly tab with the full demangled + mangled symbol name.
+- [x] Bar under the Assembly tab with the full demangled + mangled symbol name. A header inside
+  the Assembly pane, the demangled name over the mangled original, each on one line. It names
+  **what the pane is drawing** and not what is selected — the same `Analyzed::showing` the rows
+  below it come from, where the Info pane it is taking over from read the selection and so said a
+  different thing for as long as the worker took. A tab that is a whole object has no listing
+  ever worked out for it, so the bar names the object there instead. The names are ellipsised
+  rather than wrapped, this repo's samples reaching 1038 bytes mangled, and **pressing one copies
+  it**, which with the tooltip is the whole of how the rest of a long name is got at.
 - [x] Name the Assembly tab after the function — just `namespace/module::fn_name`, without the
   extra generics, mangling, etc. (for Rust / C++). There is no Assembly tab any more: a document's
   tab *is* named after its function, and `src/naming.rs` cuts that name down to its last two path

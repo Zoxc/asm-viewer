@@ -925,8 +925,8 @@ impl Component for InstructionList {
     }
 }
 
-/// The Assembly pane: a dispatch over the things [`Analyzed`] can be saying, and no work
-/// of its own.
+/// The Assembly pane: a bar naming what is drawn over a dispatch over the things
+/// [`Analyzed`] can be saying, and no work of its own.
 ///
 /// It reads the analysis and not the active document for everything it draws, which keeps
 /// the listing and the rows in step: while the worker is catching up the two disagree, and
@@ -944,9 +944,27 @@ impl PartialEq for AssemblyPane {
     }
 }
 
-impl Component for AssemblyPane {
-    fn render(&self) -> impl IntoElement {
-        let analysis = use_consume::<Analysis>().0.read().clone();
+impl AssemblyPane {
+    /// What the bar over this pane names, which is what the pane itself is drawing -- and
+    /// for a tab that is a whole object, the object, that being the one selection no
+    /// listing is ever worked out for.
+    fn named(&self, analysis: &Analyzed) -> Option<Named> {
+        match analysis.showing(&self.document) {
+            Showing::Listing(shown) => Some(Named::Symbol(shown.studied.symbol.clone())),
+            _ => match &self.document {
+                Document::Assembly(Selection::Object(object)) => {
+                    Some(Named::Object(object.clone()))
+                }
+                _ => None,
+            },
+        }
+    }
+
+    /// Everything under the bar: the listing, or the word for why there is none.
+    ///
+    /// Its own function and not the body of `render`, because each of these answers is a
+    /// return and a header cannot be drawn above a return.
+    fn body(&self, analysis: &Analyzed) -> Element {
         let shown = match analysis.showing(&self.document) {
             Showing::Listing(shown) => shown,
             Showing::Message(text) => return placeholder(text),
@@ -967,10 +985,10 @@ impl Component for AssemblyPane {
         }
 
         rect()
-            .width(Size::fill())
-            .height(Size::fill())
+            .expanded()
+            // The listing's own inset, which is on it and not on the pane: the bar above
+            // runs the full width of the pane the way a header does.
             .padding(5.0)
-            .background(palette().asm_pane_bg)
             .child(InstructionList {
                 assembly,
                 symbol: studied.symbol.clone(),
@@ -980,5 +998,28 @@ impl Component for AssemblyPane {
                 lines: studied.lines.clone(),
             })
             .into()
+    }
+}
+
+impl Component for AssemblyPane {
+    fn render(&self) -> impl IntoElement {
+        let analysis = use_consume::<Analysis>().0.read().clone();
+
+        rect()
+            .expanded()
+            // The bar takes its own height and the listing is given the rest, which torin
+            // only works out for a `flex` child of a `Content::Flex` parent.
+            .content(Content::Flex)
+            .background(palette().asm_pane_bg)
+            .maybe_child(
+                self.named(&analysis)
+                    .map(|named| SymbolBar { named }.into_element()),
+            )
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.0))
+                    .child(self.body(&analysis)),
+            )
     }
 }

@@ -49,6 +49,36 @@ source-driven tab draws the symbol the tab's driven line was compiled into, whic
 `Analyzed::showing` like any other tab's; before a line has been clicked in it there is no
 question, so it says so.
 
+**The Assembly pane wears a bar naming what it is drawing**, in both spellings: the demangled name
+over the mangled original, `src/ui/symbol_bar.rs`. Until it there was one place a symbol was named
+-- its tab, where `short_name` has cut it to a `module::fn_name` and `elide` to forty characters --
+and the mangled spelling appeared nowhere in the window at all. It names **the drawn symbol and
+never the selected one**, worked out from the same `Analyzed::showing` the listing under it is
+built from, which is the rule the pane already obeyed and the Info pane it replaces did not: the
+analysis and the selection disagree for as long as the worker takes, and a bar naming a function
+the rows below it are not of is worse than no bar. A tab that is a whole *object* is the one
+selection no listing is ever worked out for -- `ask` answers `None` for it -- so there the bar
+falls back to the document and names the object; everything else gets no bar rather than an empty
+one. Because the four answers the pane can give are each a `return`, and a header cannot be drawn
+above a return, they moved into `AssemblyPane::body` and the pane became a `Content::Flex` column,
+the way the Source pane has been since its companion header: the bar takes its own height, the
+listing takes the rest, and the listing's five pixels of inset went onto the listing, a header
+running the full width of the pane.
+
+Each name is **one line however long the name is** -- ellipsised, never wrapped. This repo's own
+samples reach 1038 bytes mangled, which is fifteen wrapped lines at this pane's width, and a bar
+tall enough for the worst name is a bar that is that tall for every other one. So the tooltip and
+the clipboard are between them the whole of how a reader gets at the rest: **pressing a name
+copies it**, failing silently the way the listing's own Ctrl+C does, since a platform whose display
+handle gave freya-winit no clipboard has none and a header has nowhere to say so. The row lights
+with `toggle_hover_bg`, the grey a chrome control takes under the pointer, and deliberately not the
+relocation label's `link_hover_bg`: that one is a translucent white, and over the header's own grey
+it moves the surface six levels and says nothing -- which is what the wash test now holds, beside a
+contrast floor for `address_fg` on `header_bg`, the mangled row's own colour. The names sit in a
+box of their own inside the `flex` child rather than being it, `tree_name`'s trick: a flex child is
+measured from its content first, so a label placed there takes the width of its whole name and the
+ellipsis never happens.
+
 **A click in a source-driven tab's own file is the only writer of `Driven`.** A click in a
 companion file is a pin and nothing more, and a click in the *assembly* pane never reaches that
 handler at all — which is what stops a listing from re-driving itself. Nothing else changes: the

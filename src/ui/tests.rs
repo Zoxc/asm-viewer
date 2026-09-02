@@ -4110,6 +4110,128 @@ fn the_gutter_runs_straight_through_a_separator() {
     );
 }
 
+/// The tab a pane harness is mounted for, where the test needs it to be something other
+/// than the tab the listing in [`Analysis`] belongs to -- which is the disagreement the
+/// Assembly pane's bar has a rule about. Named around the dock's own `Tab`.
+#[derive(Clone)]
+struct PaneTab(Document);
+
+/// The Assembly pane for the tab [`PaneTab`] names, over whatever listing is in
+/// [`Analysis`].
+fn tab_pane_harness() -> impl IntoElement {
+    let document = use_consume::<PaneTab>().0;
+
+    rect().expanded().child(AssemblyPane { document })
+}
+
+/// A symbol with both spellings, out of the fixture's object so that it is a symbol of an
+/// open binary. Its address is nowhere in that object, so nothing is decoded for it and
+/// the pane draws a word instead of a listing -- which the bar is above either way.
+fn mangled_symbol() -> Symbol {
+    Symbol {
+        object: fixture_symbols()[0].object.clone(),
+        data: Arc::new(SymbolData {
+            name: "_ZN6viewer2ui8assembly12AssemblyPane6render17h0123456789abcdefE".to_owned(),
+            demangled: Some("viewer::ui::assembly::AssemblyPane::render".to_owned()),
+            address: 0x1000,
+            section: None,
+            size: 0,
+        }),
+    }
+}
+
+/// The bar names the symbol in both spellings, the mangled one under the demangled: a
+/// symbol is named nowhere else in the window but on its tab, where `short_name` has cut
+/// it down and the mangled original never appears at all.
+#[test]
+fn the_assembly_pane_names_the_symbol_in_both_spellings() {
+    let symbol = mangled_symbol();
+    let shown = Shown {
+        ask: Ask::Symbol(symbol.clone()),
+        studied: Studied::new(symbol.clone()),
+    };
+
+    let (mut test, (_states, _pinned, _marked)) = TestingRunner::new(
+        listing_harness,
+        (600., 300.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&symbol.data.demangled.clone().expect("it is demangled")),
+        "{drawn:?}"
+    );
+    assert!(drawn.contains(&symbol.data.name), "{drawn:?}");
+}
+
+/// **The bar names what the pane is drawing and not what is selected.** The two disagree
+/// for as long as the worker takes, and the Info pane this replaces read the selection --
+/// so a bar over a listing of one function would have been naming another.
+#[test]
+fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
+    let drawn_symbol = mangled_symbol();
+    let elsewhere = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(drawn_symbol.clone()),
+        studied: Studied::new(drawn_symbol.clone()),
+    };
+    let tab = Document::Assembly(Selection::Symbol(elsewhere.clone()));
+
+    let (mut test, (_states, _pinned, _marked)) = TestingRunner::new(
+        tab_pane_harness,
+        (600., 300.).into(),
+        move |runner| {
+            runner.provide_root_context(|| PaneTab(tab.clone()));
+            listing_states!(runner, shown)
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(drawn.contains(&drawn_symbol.data.name), "{drawn:?}");
+    assert!(
+        !drawn.contains(&elsewhere.data.name),
+        "the bar named the tab's symbol and not the drawn one: {drawn:?}"
+    );
+}
+
+/// A tab that is a whole object is the one selection no listing is ever worked out for
+/// (`ask` answers `None` for it), so the bar has nothing in hand to name and falls back to
+/// the document. It is what the Info pane said about an object, and it has to keep being
+/// said somewhere.
+#[test]
+fn an_object_tab_is_named_by_its_object() {
+    let object = fixture_symbols()[0].object.clone();
+    let tab = Document::Assembly(Selection::Object(object.clone()));
+
+    let (mut test, _states) = TestingRunner::new(
+        tab_pane_harness,
+        (600., 300.).into(),
+        move |runner| {
+            runner.provide_root_context(|| PaneTab(tab.clone()));
+            runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
+            project_states!(runner)
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(drawn.contains(&object.name), "{drawn:?}");
+    // The body still says there is no listing, which is the other half of the answer.
+    assert!(
+        drawn.contains(&"No symbol selected".to_owned()),
+        "{drawn:?}"
+    );
+}
+
 /// Whether [`source_pane_harness`] has the pane mounted at all, which is how a test asks
 /// for the first open of a tab and then for a later one: `app()` mounts both panes afresh
 /// for every document, so an unmount and a remount is what leaving a tab and coming back
@@ -4739,11 +4861,15 @@ fn every_foreground_is_legible_on_its_own_surface() {
             );
         }
 
-        // The chrome, on all three of the surfaces it is written over.
+        // The chrome, on all three of the surfaces it is written over. `address_fg` is
+        // here as well as over the code panes above: it is the app's dim text everywhere,
+        // and the Assembly pane's bar draws a symbol's mangled spelling in it on
+        // `header_bg`.
         for (name, color) in [
             ("text_fg", palette.text_fg),
             ("icon_fg", palette.icon_fg),
             ("invalid_fg", palette.invalid_fg),
+            ("address_fg", palette.address_fg),
         ] {
             for (surface, background) in [
                 ("pane_bg", palette.pane_bg),
@@ -4817,6 +4943,13 @@ fn every_wash_reads_against_the_pane_under_it() {
                 "close_hover_bg over a hovered tab",
                 palette.close_hover_bg,
                 palette.toggle_hover_bg,
+            ),
+            // The grey a chrome control takes under the pointer: a hovered tab in the
+            // bar, and a name in the Assembly pane's bar, both over the header's own grey.
+            (
+                "toggle_hover_bg",
+                palette.toggle_hover_bg,
+                palette.header_bg,
             ),
         ] {
             let step = step(wash, ground);
