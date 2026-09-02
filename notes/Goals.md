@@ -258,15 +258,22 @@ one item per part, so the unfinished half stays visible.
   Three things in the way, all of them real and worth knowing before starting. **Length**: a
   `VirtualScrollView` is told a row count up front, and x86 is variable-length, so instruction
   *n* of a section cannot be found without decoding from a known start — the sorted symbol
-  addresses in `Section::symbols` are the sync points that make this tractable, so the section
-  is probably the concatenation of its symbols' listings plus the gaps between them, decoded
-  lazily per symbol and counted as it goes. **Identity**: `Assembly::edges`, `Lanes`, the
+  addresses in `Section::symbols` are the sync points that make this tractable. *Decided, in
+  the crate* (`Listing`, `agents/Analysis.md`): the section is one stretch per symbol address,
+  each the symbol's own listing plus the bytes from its extent to the next label as a gap, and
+  a stretch is decoded when asked for and counted then; the skeleton is the addresses alone and
+  costs nothing. A gap is shown as bytes and never decoded — bytes no symbol claims are not
+  known to be code. **Identity**: `Assembly::edges`, `Lanes`, the
   per-tab viewing row and the copy-a-run selection are all indices into *one symbol's*
   instructions. Being a separate mode is what makes that affordable — none of it has to change
   — but the section mode needs the same four answers keyed by address instead, so the question
   is whether those are generalised over what indexes them or written twice. Note that indices
   were deliberately chosen over addresses in the first place, so that a symbol's edges are
-  independent of where it sits; a section listing has no such need. **Scale**: the app's own binary's `.text` is far past what
+  independent of where it sits; a section listing has no such need. *Decided*: written twice.
+  The crate's half is on the row — every instruction has its `address` and a branch has the
+  address it names (`Instruction::branch`), judged by nothing, since whether the target has a
+  row is only known once the stretch it is in has been decoded; the other three are the view's
+  to write against those. **Scale**: the app's own binary's `.text` is far past what
   decoding eagerly on the analysis worker would answer in one go, so this wants the worker to
   answer for a *window* of the section rather than for a whole symbol.
   Note what it would make easy in return: the "gap or line before a jump target" item below, and

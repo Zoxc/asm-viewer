@@ -203,8 +203,22 @@ pub fn elf_text(
     symbols: &[TextSymbol],
     relocations: &[TextRelocation],
 ) -> Vec<u8> {
+    elf_text_padded(architecture, &[], symbols, relocations)
+}
+
+/// [`elf_text`] with `leading` bytes at the start of `.text` that no symbol names: the one
+/// shape the symbol-by-symbol builder cannot make, since every byte it appends is a symbol's.
+pub fn elf_text_padded(
+    architecture: Architecture,
+    leading: &[u8],
+    symbols: &[TextSymbol],
+    relocations: &[TextRelocation],
+) -> Vec<u8> {
     let mut obj = write::Object::new(BinaryFormat::Elf, architecture, Endianness::Little);
     let text = obj.section_id(write::StandardSection::Text);
+    if !leading.is_empty() {
+        obj.append_section_data(text, leading, 1);
+    }
 
     let mut offsets = Vec::new();
     let mut ids = Vec::new();

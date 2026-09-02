@@ -14,16 +14,18 @@ use std::{
 mod demangle;
 pub mod disasm;
 mod line;
+mod listing;
 
 use disasm::Code;
 
 pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
 pub use line::{DwarfCache, LineInfo, LineRow, Location};
+pub use listing::{DecodedStretch, Gap, GapKind, Listing, Stretch};
 // Re-exported so the viewer needs no `object` dependency of its own.
 pub use object::{Architecture, BinaryFormat, SectionIndex};
 
-/// [`Object`] is shared as an `Arc` and read from worker threads; the other three are what
-/// a worker is handed and hands back. Asserted here so a field that stops being shared-safe
+/// [`Object`] is shared as an `Arc` and read from worker threads; the others are what a
+/// worker is handed and hands back. Asserted here so a field that stops being shared-safe
 /// is a compile error in this crate rather than a borrow error in the UI.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
@@ -31,6 +33,8 @@ const _: fn() = || {
     assert_send_sync::<Symbol>();
     assert_send_sync::<Assembly>();
     assert_send_sync::<LineInfo>();
+    assert_send_sync::<Listing>();
+    assert_send_sync::<DecodedStretch>();
 };
 
 pub struct Object {

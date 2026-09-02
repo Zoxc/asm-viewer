@@ -302,6 +302,37 @@ both. `Assembly::edge_from` is the pairing, and it is a binary search rather tha
 instruction names at most one target and a backend decodes from the front, so `from` ascends
 strictly across `edges`.
 
+**The section listing** (`listing.rs`) is the crate's half of the unified section view: a whole
+section as one address-keyed listing, beside the symbol view and not instead of it — nothing
+index-keyed changed for it. `Listing::new` is the **skeleton**, and it decodes nothing: one
+`Stretch` per distinct symbol address inside the section's bytes, its range running to the next
+address or the section's end, plus a leading stretch with no label when the first symbol is not
+at the start (or there is no symbol at all). Built from `Object::symbols` by pointer identity on
+the section — two sections of a relocatable object share address 0 — and ordered by `(address,
+SymbolIndex)`, so two names at one address are one stretch with two labels in the file's order
+rather than the hash seed's. A symbol placed outside the section's bytes is left out. That is
+free: a scan of the object's symbols and a sort of the section's own, and it is what gives a
+view a stable structure to scroll while instructions arrive. **A stretch is decoded on demand**
+(`Listing::decode`), and that is when its symbol's extent is asked for: the code is literally
+`SymbolData::assembly`'s answer, so the section and the symbol view cannot disagree, and the
+bytes from `SymbolData::extent` to the next label are the stretch's `Gap`. The step that planned
+this had the gaps "known up front", and they deliberately are not — the extent is a DWARF walk
+that costs 2.0 s over the 331 MB binary (the reverse index's measurement), and the skeleton has
+to cost nothing. **A gap is never decoded.** Bytes no symbol claims are not known to be code —
+alignment padding, a jump table MSVC put after the function, a stripped local — and decoding
+them would print the confident page of nonsense `undecodable` exists to prevent, so a gap is
+*said*: its range and a `GapKind`, and whoever draws it slices `Section::data`; the bytes are not
+copied, since the tail of a stripped PE's export can be megabytes. Two kinds only. `Bytes` is
+the ordinary one. `Cut` is the rest of a stretch whose derived extent hit `MAX_DERIVED_SIZE`,
+said apart because it is very likely the function going on past the cap rather than anything
+between two functions, and starts wherever the cap fell rather than at an instruction. An
+architecture no backend decodes gives the symbol stretch the `undecodable` `Assembly` as the
+symbol view gets, and its gaps are `Bytes` like any other. The section's end is saturating,
+where `estimate_size`'s is `None`: a listing has to end somewhere. `tests/listing.rs` holds one
+invariant test over every fixture shape and both committed gcc objects — the stretches partition
+the section exactly, every symbol inside it is at one label, each stretch's code is the symbol's
+own row for row, and the gap starts exactly where the extent stops — and a test per decision.
+
 **"Never panic on any file input" is tested two ways, and they are different jobs.**
 `tests/mutations.rs` is the **search**: it takes every fixture the suite builds — both committed
 gcc objects, the synthesized DWARF one, the ELF `.so` and the PE DLL — and truncates it at every
