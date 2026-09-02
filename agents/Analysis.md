@@ -178,8 +178,8 @@ so `subprogram_extent` declines `u64::MAX` outright rather than catching the pan
 **Disassembly** (`SymbolData::assembly`) goes through a seam — `disasm.rs` defines everything a
 caller sees and names no backend, `disasm/x86.rs` is the only module in the crate that mentions
 `iced-x86`. **Which decoder is used is a property of the file, not of this crate**:
-`Object::architecture` comes out of the header and `disasm::disassembler` maps it to a backend —
-`I386` at 32 bits, `X86_64`/`X86_64_X32` at 64. Bitness comes from the architecture and not from
+`Object::architecture` comes out of the header and `Assembly::decode` matches on it — `I386` at 32
+bits, `X86_64`/`X86_64_X32` at 64. Bitness comes from the architecture and not from
 `is_64()`, because the x32 ABI is 64-bit *code* with 32-bit pointers and is the one case the file's
 class gets backwards. An architecture no backend claims is a **third answer**, not an empty listing:
 `Assembly::undecodable` carries the architecture's name. It has to be *said*, because there is no
@@ -190,10 +190,18 @@ with no bytes at all. Nothing in the UI reads `undecodable` yet, so such an obje
 an empty pane rather than the reason.
 
 The trait is **one call wide** (`Disassembler::disassemble(&Code) -> Decoded`) and is shaped by what
-`Assembly` needs rather than by what a disassembler library offers. `Code` is the bytes, the address
+`Assembly` needs rather than by what a disassembler library offers. **The dispatch through it is
+generic and not dynamic**: `Assembly::decode` is the one `match` over the architecture, each arm
+naming a concrete backend, and `Assembly::decoded` — the whole decode path, the backend's call and
+the branch resolution together — is generic over the backend and compiled once per one. Nothing is
+boxed and no signature says `dyn`, which also keeps every type here nameable by a caller. What that
+buys is not the virtual call, one per symbol being nothing, but the allocation going away and the
+backend's formatting and span-mapping becoming inlinable into the per-instruction loop. The trade is
+that a new architecture is a new arm rather than a new impl behind a registry, which is what a set
+closed at compile time wants anyway. `Code` is the bytes, the address
 they sit at, and one question — `Code::relocation`, asked per instruction, because a relocation
 names a byte range and never an operand number. `Decoded` is the rows plus each branch's *address*;
-turning those into row indices is `Assembly::decode`'s binary search, so `edges`' drop rules hold
+turning those into row indices is `Assembly::decoded`'s binary search, so `edges`' drop rules hold
 for every backend rather than once per backend. What stays *behind* the seam is everything x86
 spells its own way: the `SymbolResolver` substitution, the per-instruction `rip_relative_addresses`
 flip, `branch_target`'s flow-control judgement and `FormatterTextKind -> SpanKind`. Each instruction
@@ -224,7 +232,7 @@ override of `write_symbol`; that is what lets `InstructionRow` render the run be
 gutter. Both ends are **indices into `instructions`**, not addresses, because that is what a row
 can be asked about and it makes the answer independent of where the symbol sits. A backend hands
 back the *address* each branch names — a forward branch names one no instruction has been decoded
-at yet — and `Assembly::decode` resolves them, which is what keeps the four rules below one
+at yet — and `Assembly::decoded` resolves them, which is what keeps the four rules below one
 decision rather than one per backend. `from`/`to` are in
 *execution* order (a backward branch has `from > to`); `first()`/`last()`/`is_backward()` sit on
 top. A **call is not an edge** even when it lands inside the symbol, because control comes straight

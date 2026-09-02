@@ -3,26 +3,18 @@
 //! Everything a caller sees of a disassembly — [`Assembly`], [`Instruction`], [`SpanKind`],
 //! [`BranchEdge`] — is defined here and names no backend. [`x86`] is the only module in the
 //! crate that mentions `iced-x86`; a second architecture is a second [`Disassembler`] impl
-//! plus an arm in [`disassembler`].
+//! plus an arm in [`Assembly::decode`].
+//!
+//! The dispatch is generic and not dynamic: the architecture is matched on once, each arm
+//! naming a concrete backend, and the decode path is monomorphised for it. Nothing is boxed
+//! and no signature here says `dyn`, so a backend's formatting and span-mapping can inline
+//! into the per-instruction decode loop.
 
 use crate::{Section, SymbolData};
 use object::{Architecture, RelocationTarget, SymbolIndex};
 use std::{collections::HashMap, sync::Arc};
 
 mod x86;
-
-/// The backend that decodes `architecture`, or [`None`] when nothing here does.
-///
-/// **Bitness comes from the architecture and not from `is_64()`.** `X86_64_X32` — the x32
-/// ABI — is 64-bit *code* with 32-bit pointers, so a file whose class says 32 still decodes
-/// as 64 there.
-fn disassembler(architecture: Architecture) -> Option<Box<dyn Disassembler>> {
-    match architecture {
-        Architecture::X86_64 | Architecture::X86_64_X32 => Some(Box::new(x86::X86 { bitness: 64 })),
-        Architecture::I386 => Some(Box::new(x86::X86 { bitness: 32 })),
-        _ => None,
-    }
-}
 
 /// What to call `architecture` in a sentence explaining that nothing decoded it. [`None`]
 /// for one with no spelling here, which falls back to the `Debug` name through the caller.
@@ -134,6 +126,9 @@ pub struct Decoded {
 ///
 /// A backend decodes from the first byte to the last and stops early rather than erroring —
 /// the bytes are whatever was in the file.
+///
+/// Implementors are named concretely by `Assembly::decode` and never made into an object, so
+/// the trait is the shape a backend is written to and not a way to hold one.
 pub trait Disassembler {
     fn disassemble(&self, code: &Code<'_>) -> Decoded;
 }
@@ -189,17 +184,32 @@ pub struct Assembly {
 
 impl Assembly {
     /// The listing for `code`, decoded by whichever backend claims `architecture`.
+    ///
+    /// The only place an architecture is dispatched on. The set is closed at compile time,
+    /// so each arm names its backend concretely and `decoded` is compiled once per backend
+    /// rather than called through a vtable; an architecture no arm claims is the third
+    /// answer, `unsupported`.
+    ///
+    /// **Bitness comes from the architecture and not from `is_64()`.** `X86_64_X32` — the
+    /// x32 ABI — is 64-bit *code* with 32-bit pointers, so a file whose class says 32 still
+    /// decodes as 64 there.
     pub(crate) fn decode(architecture: Architecture, code: &Code<'_>) -> Self {
-        let Some(backend) = disassembler(architecture) else {
-            return Self {
-                instructions: Vec::new(),
-                edges: Vec::new(),
-                undecodable: Some(
-                    architecture_name(architecture).unwrap_or("an unsupported architecture"),
-                ),
-            };
-        };
+        match architecture {
+            Architecture::X86_64 | Architecture::X86_64_X32 => {
+                Self::decoded(x86::X86 { bitness: 64 }, code)
+            }
+            Architecture::I386 => Self::decoded(x86::X86 { bitness: 32 }, code),
+            _ => Self::unsupported(architecture),
+        }
+    }
 
+    /// The listing `backend` reads out of `code`, with its branch addresses resolved to row
+    /// indices.
+    ///
+    /// Generic over the backend rather than taking one behind a pointer: this is the whole
+    /// decode path, so monomorphising it is what lets a backend's per-instruction work
+    /// inline into it.
+    fn decoded<D: Disassembler>(backend: D, code: &Code<'_>) -> Self {
         let decoded = backend.disassemble(code);
 
         // A backend decodes from the front, so these ascend and a target is one binary search
@@ -223,6 +233,18 @@ impl Assembly {
             instructions: decoded.instructions,
             edges,
             undecodable: None,
+        }
+    }
+
+    /// The answer for an architecture no arm of `decode` claims: no rows, and the
+    /// architecture's name to say why.
+    fn unsupported(architecture: Architecture) -> Self {
+        Self {
+            instructions: Vec::new(),
+            edges: Vec::new(),
+            undecodable: Some(
+                architecture_name(architecture).unwrap_or("an unsupported architecture"),
+            ),
         }
     }
 }
