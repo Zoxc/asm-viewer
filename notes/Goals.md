@@ -746,6 +746,25 @@ one item per part, so the unfinished half stays visible.
   de-virtualises it — every line of a pasted file built on every render — and that is too much
   for a reveal. Undeferred by freya exposing the scroll, or by the editor scrolling to its own
   cursor.
+- [ ] Draw the compiler's error once, not twice. A diagnostic block is a header — the level
+  word, the place, and `Diagnostic::message`, the one sentence rustc wrote — followed by
+  `Diagnostic::rendered`, which is cargo's own block and *opens with that same sentence and that
+  same place*. So every error in the pane says itself twice, and the taller the block the more
+  obviously. Which copy goes is the decision. Keeping the header and dropping `rendered` loses
+  the caret, the source excerpt and the `help:` lines, which are most of what makes a rustc
+  error readable; keeping `rendered` and dropping the header loses the level's colour, the
+  wrapping the header does, and — the one that is not cosmetic — the press target, since
+  `SpanTarget` hangs off the header's place and the `-->` inside the rendered block is text in a
+  paragraph rather than an element of its own. A third answer is to draw neither and build the
+  block from the JSON's own `spans` and `children`, which is the only one that ends with the app
+  deciding what an error looks like rather than reprinting what cargo decided.
+  And can it be coloured? Two ways, neither free. `Scratchpad::build_in` passes
+  `--color=never` today; `--color=always` would make `rendered` carry ANSI SGR escapes, which
+  means a parser turning them into spans and a mapping from rustc's eight colours onto the
+  palette's — the app's own colours being the rule everywhere else, and a terminal's red on a
+  themed pane not being one of them. Rendering from the JSON instead makes the colour the app's
+  by construction and costs the caret line, which would have to be drawn rather than reprinted.
+  Sequenced after this, since what is coloured depends on which copy survives.
 - [x] Scratchpads are a concept of their own, disjoint from projects, and there are many of them
   saved. Each is its own directory under `scratchpads/` the way each project is one under
   `projects/`, and it is filed under an **id the reader never sees** — the directory, the crate
