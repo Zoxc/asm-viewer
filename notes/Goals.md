@@ -961,6 +961,16 @@ one item per part, so the unfinished half stays visible.
   committed pair, `line_fixture_public.dll` + `.pdb`: the same object linked with a C++ file
   compiled without `/Z7`, whose one function the PDB names only as the public `?helper@@YAHXZ`
   — listed, demangled, sized 0, no lines — while the no-export pair still lists exactly three.
+- [ ] Make PDB private symbols informative only. The module streams' `S_GPROC32`/`S_LPROC32`
+  records — the PDB's *private* symbols, as against the linker's publics — are today a source
+  of symbols in their own right, fifth in `declared_code`'s order, and their names are the
+  compiler's display names (`core::ptr::drop_in_place<T>`), which no demangler claims and
+  `naming.rs` then shortens as if they were demangled output. The publics carry the linker's
+  decorated names, which the demangler reads as it reads an ELF's. So: the Symbols list is
+  built from what the image and the publics name, and a procedure only *informs* the symbol at
+  its address — its length as the declared size and extent (`debug_extent` already), its
+  display name shown in the symbol bar's info section beside the demangled one — rather than
+  standing as a symbol itself.
 - [ ] Map a PDB's source paths onto this machine: the names come out verbatim (`C:\...` from
   MSVC, `/rustc/<hash>\library\...` from rustc), so the Source pane cannot open them where the
   build was elsewhere. A root-to-root mapping saved with the project, with the recorded
