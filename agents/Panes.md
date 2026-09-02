@@ -94,6 +94,18 @@ therefore pads horizontally only: a line must reach the row's top and bottom edg
 comes out dashed. Hovering a row draws its own branches darker, which needs a row *index* in
 `InstructionList` rather than `Focused` — a source position is many rows.
 
+**A branch's displacement is the other way to follow it**, drawn as a `BranchLabel` exactly where
+a call's resolved target is drawn as a `RelocationLabel` — `Instruction::branch_span` says which
+span to lift out, and the row is the same three children either way. Only where
+`Assembly::edge_from` finds an edge, which is the set the gutter has an arrow for: a tail call
+keeps its plain operand, having no row here to be pointed at. Pressing it is `reveal_row` on the
+edge's target and nothing else — **a scroll and not a navigation**, so the document does not
+change, the selection does not, and nothing is pushed onto the history; a Back that undid reading
+further down one function would be answering a question nobody asked. The press is stopped from
+bubbling, or the row under it would pin the line the instruction being left came from. The
+listing's own `ScrollController` and its measured height are handed down to each row for it, the
+way the hovered index already is: both are the list's handles and neither changes while it lives.
+
 **A run of rows can be picked out and copied** in both panes (press, sweep or shift-click, Ctrl+C;
 Ctrl+A takes the listing, Escape drops it). Character selection is deliberately absent: freya's
 selection is char offsets into a rope wanting one `paragraph()` per line, and an instruction row is

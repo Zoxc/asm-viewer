@@ -72,10 +72,13 @@ impl Disassembler for X86 {
             let relocated = relocation.is_some();
             let relocation = relocation.and_then(|relocation| relocation.target);
 
-            if !relocated {
-                if let Some(target) = branch_target(&instruction) {
-                    decoded.branches.push((decoded.instructions.len(), target));
-                }
+            let branch = if relocated {
+                None
+            } else {
+                branch_target(&instruction)
+            };
+            if let Some(target) = branch {
+                decoded.branches.push((decoded.instructions.len(), target));
             }
 
             let mut inst = Instruction {
@@ -84,6 +87,7 @@ impl Disassembler for X86 {
                 format: Vec::new(),
                 relocation,
                 relocation_span: None,
+                branch_span: None,
             };
 
             // The resolver takes the name, so at most one operand is substituted however
@@ -108,6 +112,14 @@ impl Disassembler for X86 {
             );
 
             formatter.format(&instruction, &mut inst);
+
+            // `write_number` marks every branch-target operand the formatter writes, and a
+            // call's target and a far branch's selector-and-offset are written the same
+            // way. Only the instructions that named an address of their own above keep the
+            // mark: those are the ones a row can be pointed at.
+            if branch.is_none() {
+                inst.branch_span = None;
+            }
 
             decoded.instructions.push(inst);
         }
@@ -135,6 +147,30 @@ impl From<iced_x86::FormatterTextKind> for SpanKind {
 impl iced_x86::FormatterOutput for Instruction {
     fn write(&mut self, text: &str, kind: iced_x86::FormatterTextKind) {
         self.format.push((text.to_owned(), kind.into()));
+    }
+
+    /// Every number the formatter prints comes through here, and the branch target is the
+    /// one written with a branch's own text kind — a displacement or an immediate is a
+    /// plain `Number`. Record where it lands, the way [`write_symbol`](Self::write_symbol)
+    /// records a substituted name: it is the span the UI makes clickable.
+    ///
+    /// The *first* such span, since a far branch writes its selector and its offset both
+    /// this way; the decode loop discards the mark for anything that is not a near branch
+    /// naming an address of its own.
+    fn write_number(
+        &mut self,
+        _instruction: &iced_x86::Instruction,
+        _operand: u32,
+        _instruction_operand: Option<u32>,
+        text: &str,
+        _value: u64,
+        _number_kind: iced_x86::NumberKind,
+        kind: iced_x86::FormatterTextKind,
+    ) {
+        if SpanKind::from(kind) == SpanKind::Address && self.branch_span.is_none() {
+            self.branch_span = Some(self.format.len());
+        }
+        self.write(text, kind);
     }
 
     /// The formatter got a name back from [`RelocationResolver`], so this is the

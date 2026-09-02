@@ -160,6 +160,18 @@ pub struct Instruction {
     /// [`None`] with a `relocation` present means the formatter never offered an operand to
     /// substitute into, and the target can only be named beside the instruction.
     pub relocation_span: Option<usize>,
+
+    /// Where in [`format`](Self::format) this instruction's own branch displacement was
+    /// printed — [`relocation_span`](Self::relocation_span)'s twin, and exclusive with it:
+    /// a branch whose displacement is a relocation placeholder names no address of its
+    /// own, so a backend records a span for exactly the branches it reports in
+    /// [`Decoded::branches`].
+    ///
+    /// It says where the number is and not that there is anywhere to go: the four kinds of
+    /// branch [`Assembly::edges`] drops keep their span. A caller that wants to *follow*
+    /// one pairs this with [`Assembly::edge_from`], which is what says the target has a
+    /// row.
+    pub branch_span: Option<usize>,
 }
 
 pub struct Assembly {
@@ -234,6 +246,20 @@ impl Assembly {
             edges,
             undecodable: None,
         }
+    }
+
+    /// The edge the instruction at `index` branches along, if it is a branch this symbol
+    /// has both ends of.
+    ///
+    /// A binary search, not a scan: an instruction names at most one branch target and a
+    /// backend decodes from the front, so `from` ascends strictly across
+    /// [`edges`](Self::edges).
+    pub fn edge_from(&self, index: usize) -> Option<BranchEdge> {
+        let at = self
+            .edges
+            .binary_search_by_key(&index, |edge| edge.from)
+            .ok()?;
+        self.edges.get(at).copied()
     }
 
     /// The answer for an architecture no arm of `decode` claims: no rows, and the

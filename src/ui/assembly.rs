@@ -1,6 +1,7 @@
 //! The assembly half of a document, from the row up: what a row is drawn out of, the
-//! branch gutter, the clickable name of a relocation target, the virtual list of
-//! instructions and the pane holding it.
+//! branch gutter, the two operands a row can make a link of -- a relocation target's name
+//! and a branch's own displacement -- the virtual list of instructions and the pane
+//! holding it.
 //!
 //! The gutter is drawn with **rects and not `canvas()`**, whose `RenderCallback` compares
 //! equal unconditionally -- exactly wrong for a row a scroll view recycles. And a row's
@@ -173,6 +174,66 @@ impl Component for RelocationLabel {
     }
 }
 
+/// The clickable displacement of a branch that lands inside this symbol: pressing it puts
+/// the row it names on screen.
+///
+/// A scroll and **not** a navigation. The document does not change, so nothing is pushed
+/// onto the history and the selection is left where the reader put it -- following a jump
+/// is reading further down the same listing, and a Back button that undid it would be
+/// answering a question nobody asked.
+#[derive(Clone, PartialEq)]
+struct BranchLabel {
+    /// The operand as the disassembler printed it, which is what a reader is clicking.
+    text: String,
+    /// The row the branch lands on, from the edge the gutter draws.
+    to: usize,
+    /// The listing's own scroll, and how tall it is: `reveal_row` needs both, and needs
+    /// them at the moment of the press rather than at the render that drew this label.
+    controller: ScrollController,
+    viewport: State<f32>,
+}
+
+impl Component for BranchLabel {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let text = self.text.clone();
+        let to = self.to;
+        let mut controller = self.controller;
+        let viewport = self.viewport;
+
+        CursorArea::new().child(
+            rect()
+                .maybe(hovering(), |rect| {
+                    rect.background(palette().link_hover_bg)
+                        .corner_radius(6.0)
+                        .border(
+                            Border::new()
+                                .fill(palette().branch_hover_fg)
+                                .width(BorderWidth {
+                                    top: 0.0,
+                                    right: 0.0,
+                                    bottom: 2.0,
+                                    left: 0.0,
+                                }),
+                        )
+                })
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |e: Event<PressEventData>| {
+                    // Or the press bubbles into the row and pins the line this
+                    // instruction came from, which is not what following a jump asks for.
+                    e.stop_propagation();
+                    reveal_row(&mut controller, *viewport.peek(), to);
+                })
+                .child(label().text(text).max_lines(1).color(if hovering() {
+                    palette().branch_hover_fg
+                } else {
+                    kind_color(SpanKind::Address)
+                })),
+        )
+    }
+}
+
 /// The branch gutter for one row: a vertical line for every lane running through it, the
 /// horizontal run out to the listing where a branch starts or ends here, and an arrowhead
 /// where one lands. `width` is the whole symbol's lane count and not this row's, so that
@@ -270,6 +331,11 @@ struct InstructionRow {
     /// Where the pointer is, which this row writes and does not read. Kept out of the
     /// `PartialEq` below: it is the same handle for the whole life of the list.
     hover: State<Option<usize>>,
+    /// The listing's scroll and its height, for a branch operand to scroll to the row it
+    /// names. Out of the `PartialEq` for the same reason `hover` is: both are the list's
+    /// own handles and neither changes while it lives.
+    controller: ScrollController,
+    viewport: State<f32>,
     /// Whether the source line the pointer is on is the one this instruction was compiled
     /// from. Worked out by the list rather than read here, so that a focus moving between
     /// two instructions of one line leaves every row untouched.
@@ -335,13 +401,36 @@ impl Component for InstructionRow {
                 target: target.clone(),
             });
 
-        // The disassembler says which span the target's name landed in, so the row is
-        // three children: the text before that span, the name as a clickable link, and the
-        // text after it. That keeps the link in the operand's own position, inside the
-        // brackets of a memory operand and after the `rip+` of a rip-relative one. An
-        // instruction with no such span has an empty tail and the link is appended.
-        let (head, tail) = match instruction.relocation_span {
-            Some(i) if relocation.is_some() && i < instruction.format.len() => {
+        // A branch's displacement is a link only where this listing has the row it lands
+        // on -- the same set the gutter draws an arrow for, since both are asking
+        // `edges`. A tail call, or a jump into the middle of an instruction, keeps its
+        // plain operand.
+        let branch = match (
+            instruction.branch_span,
+            self.data.assembly.edge_from(self.index),
+        ) {
+            (Some(span), Some(edge)) => instruction.format.get(span).map(|(text, _)| BranchLabel {
+                text: text.clone(),
+                to: edge.to,
+                controller: self.controller,
+                viewport: self.viewport,
+            }),
+            _ => None,
+        };
+
+        // The disassembler says which span the link replaced, so the row is three
+        // children: the text before that span, the link, and the text after it. That keeps
+        // the link in the operand's own position, inside the brackets of a memory operand
+        // and after the `rip+` of a rip-relative one. The two spans are exclusive -- a
+        // branch whose displacement is a relocation placeholder names no address of its
+        // own -- so there is at most one link, and an instruction with no span has an
+        // empty tail and the relocation's name appended.
+        let link = match instruction.relocation_span {
+            Some(i) if relocation.is_some() => Some(i),
+            _ => branch.as_ref().and(instruction.branch_span),
+        };
+        let (head, tail) = match link {
+            Some(i) if i < instruction.format.len() => {
                 (&instruction.format[..i], &instruction.format[i + 1..])
             }
             _ => (&instruction.format[..], &[][..]),
@@ -377,7 +466,7 @@ impl Component for InstructionRow {
 
         let head = paragraph()
             .max_lines(1)
-            .spans_iter(spans(head, relocation.is_some()).into_iter());
+            .spans_iter(spans(head, link.is_some()).into_iter());
         let tail = (!tail.is_empty()).then(|| {
             paragraph()
                 .max_lines(1)
@@ -466,6 +555,7 @@ impl Component for InstructionRow {
             )
             .child(head)
             .maybe_child(relocation)
+            .maybe_child(branch)
             .maybe_child(tail)
     }
 
@@ -632,6 +722,8 @@ impl Component for InstructionList {
                                 lit: lanes::lit(&rows.touching, i),
                             },
                             hover,
+                            controller,
+                            viewport,
                             key: DiffKey::None,
                         }
                         .key(rows.data.assembly.instructions[i].address)

@@ -718,6 +718,131 @@ fn a_branch_to_itself_is_not_an_edge() {
     );
 }
 
+#[test]
+fn a_branch_marks_the_span_its_displacement_landed_in() {
+    // The loop from `a_forward_jump_and_a_backward_conditional_are_edges`, asked the other
+    // question: *which* span the target was printed into, so a row can draw that one span
+    // as the way to the row it names. The `short` keyword before it is not part of it.
+    let object = parse(&elf_x86_64(
+        &[TextSymbol {
+            name: "looper",
+            bytes: &[
+                0x31, 0xC0, 0xEB, 0x03, 0x48, 0xFF, 0xC0, 0x48, 0x83, 0xF8, 0x0A, 0x7C, 0xF7, 0xC3,
+            ],
+        }],
+        &[],
+    ));
+    let assembly = assemble(&object, "looper");
+
+    let forward = &assembly.instructions[1];
+    assert_eq!(branch_span(forward), Some(("7", SpanKind::Address)));
+    assert_eq!(
+        before_span(forward, forward.branch_span.unwrap()),
+        "jmp       short "
+    );
+    assert_eq!(after_span(forward, forward.branch_span.unwrap()), "");
+
+    let backward = &assembly.instructions[4];
+    assert_eq!(branch_span(backward), Some(("4", SpanKind::Address)));
+
+    // Only the two branches have one; the `xor`, the `inc`, the `cmp` and the `ret` do not.
+    assert_eq!(
+        marked(&assembly),
+        [1, 4],
+        "unexpected branch spans: {:?}",
+        assembly
+            .instructions
+            .iter()
+            .map(|instruction| text(instruction))
+            .collect::<Vec<_>>()
+    );
+
+    // The span says where the number is; the edge says where it goes. `edge_from` is the
+    // pairing, and it is a search over `edges` rather than the caller's own scan.
+    assert_eq!(
+        assembly.edge_from(1).map(|edge| (edge.from, edge.to)),
+        Some((1, 3))
+    );
+    assert_eq!(
+        assembly.edge_from(4).map(|edge| (edge.from, edge.to)),
+        Some((4, 2))
+    );
+    for row in [0, 2, 3, 5] {
+        assert_eq!(assembly.edge_from(row), None, "row {row} branches nowhere");
+    }
+}
+
+#[test]
+fn a_call_and_a_relocated_branch_have_no_branch_span() {
+    // Three operands printed in a branch target's own colour and not one of them a branch
+    // this listing can follow. A call's target is written exactly like a jump's, but
+    // control comes straight back, so it is not an edge and its operand is not the way to
+    // one -- the relocation label is.
+    let object = parse(&elf_x86_64(
+        &[TextSymbol {
+            name: "caller",
+            bytes: &[0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3],
+        }],
+        &[],
+    ));
+    let assembly = assemble(&object, "caller");
+    assert_eq!(text(&assembly.instructions[0]).trim_end(), "call      5");
+    assert_eq!(assembly.instructions[0].branch_span, None);
+
+    // A relocated `jmp target`: the displacement is a placeholder the name stands in for,
+    // and the name is `relocation_span`'s. The two spans are exclusive.
+    let relocated = parse(&elf_x86_64(
+        &[
+            TextSymbol {
+                name: "jumper",
+                bytes: &[0xE9, 0x00, 0x00, 0x00, 0x00, 0xC3],
+            },
+            TextSymbol {
+                name: "target",
+                bytes: &[0xC3],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 0,
+            offset: 1,
+            target: 1,
+        }],
+    ));
+    let assembly = assemble(&relocated, "jumper");
+    let jump = &assembly.instructions[0];
+    assert_eq!(relocation_span(jump), Some(("target", SpanKind::Address)));
+    assert_eq!(jump.branch_span, None);
+
+    // And the same jump relocated against a data symbol, where nothing was substituted and
+    // the placeholder is printed as it stands: still no span, on the same rule that drops
+    // the edge.
+    let assembly = assemble(&parse(&branch_to_data()), "jumper");
+    let jump = &assembly.instructions[0];
+    assert_eq!(spans_of(jump, SpanKind::Address), ["5"]);
+    assert_eq!(jump.branch_span, None);
+}
+
+#[test]
+fn a_branch_with_no_row_to_land_on_keeps_its_span() {
+    // `jmp $`, whose two ends are one row: the displacement is the instruction's own and
+    // is printed, so the span is recorded -- and there is no edge, which is what says the
+    // operand has nowhere to go. A caller needs both answers and gets them separately.
+    let object = parse(&elf_x86_64(
+        &[TextSymbol {
+            name: "spinner",
+            bytes: &[0xEB, 0xFE, 0xC3],
+        }],
+        &[],
+    ));
+    let assembly = assemble(&object, "spinner");
+
+    assert_eq!(
+        branch_span(&assembly.instructions[0]),
+        Some(("0", SpanKind::Address))
+    );
+    assert_eq!(assembly.edge_from(0), None);
+}
+
 fn assemble(object: &analysis::Object, name: &str) -> Arc<analysis::Assembly> {
     symbol(object, name)
         .assembly(object)
@@ -738,6 +863,40 @@ fn relocation_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKin
     let index = instruction.relocation_span?;
     let (text, kind) = instruction.format.get(index)?;
     Some((text.as_str(), *kind))
+}
+
+/// The span [`analysis::Instruction::branch_span`] points at, with its kind.
+fn branch_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
+    let index = instruction.branch_span?;
+    let (text, kind) = instruction.format.get(index)?;
+    Some((text.as_str(), *kind))
+}
+
+/// The formatted text before span `index`, which is what a row draws left of a link.
+fn before_span(instruction: &analysis::Instruction, index: usize) -> String {
+    instruction.format[..index]
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect()
+}
+
+/// The formatted text after span `index`, which is what a row draws right of a link.
+fn after_span(instruction: &analysis::Instruction, index: usize) -> String {
+    instruction.format[index + 1..]
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect()
+}
+
+/// The rows of `assembly` whose branch displacement got a span.
+fn marked(assembly: &analysis::Assembly) -> Vec<usize> {
+    assembly
+        .instructions
+        .iter()
+        .enumerate()
+        .filter(|(_, instruction)| instruction.branch_span.is_some())
+        .map(|(index, _)| index)
+        .collect()
 }
 
 fn spans_of(instruction: &analysis::Instruction, kind: SpanKind) -> Vec<&str> {

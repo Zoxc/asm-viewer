@@ -227,6 +227,10 @@ encoding does not have. The option cannot be set per operand — `format_memory`
 one. `Instruction::relocation_span` is the index of the span the name landed in, recorded by an
 override of `write_symbol`; that is what lets `InstructionRow` render the run before it as one
 `paragraph()`, the span as a `RelocationLabel`, and the run after it as a second `paragraph()`.
+`branch_span` is its **twin** and is recorded by an override of `write_number`, which is how a
+branch target reaches the output: it is the span an instruction's *own* displacement was printed
+into. The two are exclusive by construction, since a branch covered by a relocation is not one
+that named an address, so a row has at most one link and the same three-child split serves both.
 
 **Branch edges** (`Assembly::edges`) are the branches staying inside one symbol, for the arrow
 gutter. Both ends are **indices into `instructions`**, not addresses, because that is what a row
@@ -240,6 +244,11 @@ back. Four things are dropped rather than drawn, each of which would be a line t
 not point at: a branch out of the symbol, one landing mid-instruction, one whose displacement is a
 relocation placeholder (tested on the *raw* relocation lookup, since a branch relocated against a
 section carries no text symbol while its displacement is just as meaningless), and `jmp $`.
+Those four keep their `branch_span` all the same — the number is where the number is — so
+**the span and the edge are separate answers** and a caller that wants to *follow* a branch needs
+both. `Assembly::edge_from` is the pairing, and it is a binary search rather than a scan: an
+instruction names at most one target and a backend decodes from the front, so `from` ascends
+strictly across `edges`.
 
 **"Never panic on any file input" is tested two ways, and they are different jobs.**
 `tests/mutations.rs` is the **search**: it takes every fixture the suite builds — both committed

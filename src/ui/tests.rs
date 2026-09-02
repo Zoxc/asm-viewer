@@ -3253,6 +3253,104 @@ fn a_reveal_the_listing_cannot_answer_is_left_owed() {
     assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
 }
 
+/// The Assembly pane over a listing the test puts into [`Analysis`] itself, with no worker
+/// between the two. The document it is handed is the tab the drawn listing belongs to,
+/// which is what `app()` hands it.
+fn listing_harness() -> impl IntoElement {
+    let analysis = use_consume::<Analysis>().0;
+    let document = analysis
+        .read()
+        .shown
+        .as_ref()
+        .map(|shown| asked_of(&shown.ask))
+        .unwrap_or_else(|| Document::Source(Arc::from("")));
+
+    rect().expanded().child(AssemblyPane { document })
+}
+
+/// The contexts a listing's rows read, beside the project's.
+macro_rules! listing_states {
+    ($runner:expr, $shown:expr) => {{
+        let states = project_states!($runner);
+        $runner.provide_root_context(|| Focused(State::create(None)));
+        $runner.provide_root_context(|| Marked(State::create(None)));
+        $runner.provide_root_context(|| Shift(State::create(false)));
+        $runner.provide_root_context(|| Locations(State::create(Located::default())));
+        let pinned = $runner
+            .provide_root_context(|| Pinned(State::create(None)))
+            .0;
+        $runner.provide_root_context(|| {
+            Analysis(State::create(Analyzed {
+                shown: Some($shown),
+                ..Analyzed::default()
+            }))
+        });
+        (states, pinned)
+    }};
+}
+
+/// Pressing a branch's displacement puts the row it lands on on screen -- and does only
+/// that. It is a scroll inside one listing, so nothing is pinned, nothing is pushed onto
+/// the history and the document does not change; a Back button that undid reading further
+/// down the same function would be answering a question nobody asked.
+///
+/// Headless because every part of it is a question about the real tree: which spans a row
+/// is drawn out of, which rows a `VirtualScrollView` built, where the operand was laid
+/// out, and whether a press on it reaches the row underneath.
+#[test]
+fn following_a_jump_scrolls_to_the_row_it_lands_on() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    // `jmp short 61h` is the sixth instruction of the fixture's loop and lands on the
+    // fifteenth, far enough down that a pane this tall is not showing it.
+    let landing = "0000000000000061 ";
+
+    let (mut test, (states, pinned)) = TestingRunner::new(
+        listing_harness,
+        (500., 200.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "61h"),
+        "the jump's operand is not drawn as a span of its own: {drawn:?}"
+    );
+    assert!(
+        !drawn.iter().any(|text| text == landing),
+        "the row it lands on is on screen already: {drawn:?}"
+    );
+
+    let operand = label_area(&test, "61h").expect("the operand is laid out");
+    let at = (
+        (operand.origin.x + operand.width() as f32 / 2.0) as f64,
+        (operand.origin.y + operand.height() as f32 / 2.0) as f64,
+    );
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(&mut test);
+
+    assert!(
+        labels(&test).iter().any(|text| text == landing),
+        "the listing did not scroll to the row the jump lands on: {:?}",
+        labels(&test)
+    );
+    // A scroll and not a navigation: the press is stopped before the row can pin the line
+    // this instruction came from, and nothing was opened or visited.
+    assert!(pinned.peek().is_none(), "following a jump pinned a line");
+    assert!(states.open.active().is_none());
+    assert_eq!(states.history.peek().recent().count(), 0);
+}
+
 /// A component with no props at all, which is what every view in the app is. Its parent
 /// reads nothing coloured, so the theme has to reach it on its own.
 #[derive(PartialEq)]

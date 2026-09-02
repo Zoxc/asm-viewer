@@ -209,14 +209,16 @@ one item per part, so the unfinished half stays visible.
   and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
   as the symbol needs; past five, the outermost lane is shared. Hovering a row draws its own
   branches darker, all the way to where they go.
-- [ ] Follow a jump by clicking its target offset, the way a call's relocation target is
-  clicked. A branch's displacement (`jle 4Bh`) is drawn as plain text where a call's resolved
-  target is already a clickable label, so the place a jump goes is still reached by scrolling
-  to it. The analysis is already there — `Assembly::edges` names both ends as row indices and
-  `reveal_row` already puts a pane on a row — and the crate's half is only recording which
-  span the target landed in, `relocation_span`'s twin. Like clicking across the two panes, it
-  is a scroll within one symbol rather than a navigation: the selection does not change and
-  nothing is pushed onto the history.
+- [x] Follow a jump by clicking its target offset, the way a call's relocation target is
+  clicked. A branch's displacement (`jle 4Bh`) is a link where the listing holds the row it
+  lands on — the same set the gutter draws an arrow for — and pressing it puts that row on
+  screen. `Instruction::branch_span` is `relocation_span`'s twin, the span the displacement
+  was printed into, and the two are exclusive: a branch whose displacement is a relocation
+  placeholder names no address of its own. `Assembly::edge_from` pairs the span with the edge
+  that says where it goes. Like clicking across the two panes, it is a scroll within one
+  symbol rather than a navigation: the selection does not change and nothing is pushed onto
+  the history. A branch out of the symbol — a tail call — keeps its plain operand; making
+  that one navigate like a call target is an item of its own.
 
 ## UI
 
