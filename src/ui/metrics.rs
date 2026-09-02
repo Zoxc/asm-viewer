@@ -38,12 +38,23 @@ pub(crate) fn toggle_size() -> f32 {
 
 /// The side of the square the × on a document's tab is centred in.
 ///
-/// **This is the whole of what makes the close a target you hit rather than one you aim
-/// at**: the glyph keeps the interface font's own size and the padding around it is what
-/// grows, so a bigger target costs the tab no more height and the × no more weight. A row
-/// less the air above and below it, the shape [`toggle_size`] is.
+/// **This is what makes the close a target you hit rather than one you aim at**: the air
+/// around the glyph, four pixels of it on every side, is what a press that misses the mark
+/// still lands in. It is written as the glyph plus that air rather than as a share of the
+/// row, so growing one grows the other; the row is only the cap, since a target taller than
+/// the bar it sits in would decide how tall the bar is.
 pub(crate) fn close_target() -> f32 {
-    list_row_height() - 6.0
+    (close_glyph() + 8.0).min(list_row_height() - 2.0)
+}
+
+/// The size the × on a tab is drawn at: the interface font, a third bigger.
+///
+/// Bigger than the text beside it because it is a *mark* and not a letter -- at the
+/// interface size the multiplication sign is a thin scratch that reads as dirt on the tab.
+/// [`close_target`] is written in terms of this rather than the other way round, so the air
+/// around the glyph is what stays fixed when either the font or the row height moves.
+pub(crate) fn close_glyph() -> f32 {
+    (fonts().ui.size() * 1.33).round()
 }
 
 /// The side of a tab bar icon: the interface font, a quarter bigger, and capped so it is

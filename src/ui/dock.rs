@@ -116,6 +116,7 @@ impl Component for TabClose {
             .child(
                 label()
                     .text("\u{00d7}")
+                    .font_size(close_glyph())
                     .color(if hovering() {
                         palette().text_fg
                     } else {

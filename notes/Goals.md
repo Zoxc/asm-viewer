@@ -427,9 +427,12 @@ one item per part, so the unfinished half stays visible.
   object never comes, where the answer is probably the same drop the restore does now, only
   later and visibly.
 - [x] A larger close target on a tab, with a highlight under the pointer. The × on a document's
-  tab is a control of its own now, a square the size of a row less the air above and below it,
-  centred on the glyph: what a reader hits is the padding around the × rather than the × itself,
-  which keeps the interface font's own size and weight. Under the pointer it takes a wash of its
+  tab is a control of its own now: a square centred on the glyph with four pixels of air on every
+  side, capped at the row so it never decides how tall the bar is, so what a reader hits is the
+  padding as much as the × itself. The glyph is drawn a third larger than the interface font
+  beside it, being a mark rather than a letter — at the text's own size the multiplication sign
+  reads as a scratch — and the target is written as the glyph plus its air, so growing one grows
+  the other. Under the pointer it takes a wash of its
   own and the glyph comes up to the interface text, while the tab under it stays lit — the two
   are told apart by the close being the deeper step, in both palettes, which the visible-step
   test holds along with the glyph's contrast over the composited wash. A component and not

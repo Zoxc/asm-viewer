@@ -961,8 +961,8 @@ fn one_close_target(test: &mut TestingRunner, states: &ProjectStates) -> Area {
     target
 }
 
-/// A press that lands in the target but nowhere near the glyph still closes the tab: what
-/// grew is the padding around the ×, not the × itself. The offset is measured from the
+/// A press that lands in the target but nowhere near the glyph still closes the tab: the
+/// padding is as much of the control as the × is. The offset is measured from the
 /// target's own centre -- which is the glyph's -- so the assertion is about how much room
 /// there is around the glyph and not about where the control happens to sit.
 #[test]

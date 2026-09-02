@@ -163,9 +163,11 @@ symbol list or the history.
 `use_state` with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper — which is
 why the × reaches `chip` as an element already built rather than as an `on_close` handler. Two
 things follow from its being a control. It is **a target you hit rather than one you aim at**: a
-`close_target()` square — a row less the air above and below, the shape `toggle_size()` is —
-centred on the glyph, so what grew is the padding and not the ×, which keeps the interface font's
-own size. And it says under the pointer that it is the × and not the tab: `close_hover_bg` behind
+`close_target()` square centred on the glyph, four pixels of air on every side, capped at the row
+so the close never decides how tall the bar is. The square is written as `close_glyph() + 8`
+rather than as a share of the row, so the air is what stays fixed when the font or the row moves.
+The × is drawn a third larger than the interface font it sits beside: it is a mark and not a
+letter, and at the text's own size the multiplication sign reads as a scratch on the tab. And it says under the pointer that it is the × and not the tab: `close_hover_bg` behind
 it and the glyph up from `address_fg` to the interface text, while the tab under it stays lit —
 the two are told apart by the wash being the deeper step, not by the tab going out. It closes the
 tab itself rather than taking a handler, a `Component` being `PartialEq` where a closure is not:
