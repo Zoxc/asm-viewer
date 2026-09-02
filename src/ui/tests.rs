@@ -3289,10 +3289,12 @@ macro_rules! listing_states {
     }};
 }
 
-/// Pressing a branch's displacement puts the row it lands on on screen -- and does only
-/// that. It is a scroll inside one listing, so nothing is pinned, nothing is pushed onto
-/// the history and the document does not change; a Back button that undid reading further
-/// down the same function would be answering a question nobody asked.
+/// Pressing a branch's displacement puts the row it lands on on screen **and pins the line
+/// that row was compiled from** -- the pin a press on the target row itself would have
+/// made, with the Source pane owed the scroll and the Assembly pane not, since it has just
+/// been given one. It is still not a navigation: the document does not change and nothing
+/// is pushed onto the history, so a Back button never has to undo reading further down the
+/// same function.
 ///
 /// Headless because every part of it is a question about the real tree: which spans a row
 /// is drawn out of, which rows a `VirtualScrollView` built, where the operand was laid
@@ -3303,9 +3305,40 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    // The lines this test tells apart, worked out from the line info rather than from the
+    // pane. The fixture has two branches and only the second is any use for telling *which*
+    // row was pinned: the forward `jmp` and the row at 61h it lands on are both line 35, so
+    // it is the backward one -- 67h, line 35, landing on 4Bh, line 36 -- that says the pin
+    // followed the jump instead of staying where the press started. The test asserts that
+    // pairing before it leans on it.
+    let line_at = |address: u64| {
+        let info = studied
+            .lines
+            .info
+            .as_ref()
+            .expect("the gcc fixture carries line info");
+        let row = info.row_at(address).expect("the address is in a line row");
+        LinePos {
+            file: info.files()[row.file.expect("the row names a file")].clone(),
+            line: row.line.expect("the row names a line"),
+        }
+    };
+    let forward_lands_on = line_at(0x61);
+    let backward_starts_at = line_at(0x67);
+    let backward_lands_on = line_at(0x4B);
+    // `LinePos` carries no `Debug` and is not given one for a test's benefit, so the
+    // failures below spell a position out themselves.
+    let spell = |at: &LinePos| format!("{}:{}", at.file, at.line);
+    assert!(
+        backward_starts_at != backward_lands_on,
+        "the backward jump and its target share {}, so a pin cannot tell them apart",
+        spell(&backward_lands_on)
+    );
+
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
-        studied: Studied::new(sum_to.clone()),
+        studied,
     };
     // `jmp short 61h` is the sixth instruction of the fixture's loop and lands on the
     // fifteenth, far enough down that a pane this tall is not showing it.
@@ -3344,9 +3377,54 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
         "the listing did not scroll to the row the jump lands on: {:?}",
         labels(&test)
     );
-    // A scroll and not a navigation: the press is stopped before the row can pin the line
-    // this instruction came from, and nothing was opened or visited.
-    assert!(pinned.peek().is_none(), "following a jump pinned a line");
+    // The selection followed it too, and the Source pane owes the scroll: the Assembly
+    // pane has just been given one and must not be asked for a second.
+    let pin = pinned
+        .peek()
+        .clone()
+        .expect("following a jump pinned nothing");
+    assert!(
+        pin.at == forward_lands_on,
+        "the pin is {} where the jump lands on {}",
+        spell(&pin.at),
+        spell(&forward_lands_on)
+    );
+    assert!(pin.reveal.source, "the source side was not owed the scroll");
+    assert!(
+        !pin.reveal.assembly,
+        "the listing was asked to scroll twice"
+    );
+
+    // And again on the backward jump, which is the one whose line differs from its
+    // target's: the press lands on 67h, line 35, and what is pinned afterwards is 4Bh's
+    // line 36 -- the row jumped *to*, not the row the pointer was over.
+    let operand = label_area(&test, "4Bh").expect("the backward jump is on screen now");
+    let at = (
+        (operand.origin.x + operand.width() as f32 / 2.0) as f64,
+        (operand.origin.y + operand.height() as f32 / 2.0) as f64,
+    );
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(&mut test);
+
+    let pin = pinned
+        .peek()
+        .clone()
+        .expect("the backward jump pinned nothing");
+    assert!(
+        pin.at == backward_lands_on,
+        "the pin is {} where the backward jump lands on {}",
+        spell(&pin.at),
+        spell(&backward_lands_on)
+    );
+    assert!(
+        pin.at != backward_starts_at,
+        "the press bubbled into the row and pinned where it started, {}",
+        spell(&backward_starts_at)
+    );
+
+    // Still not a navigation: nothing was opened or visited by either press.
     assert!(states.open.active().is_none());
     assert_eq!(states.history.peek().recent().count(), 0);
 }

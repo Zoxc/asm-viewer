@@ -219,10 +219,12 @@ one item per part, so the unfinished half stays visible.
   screen. `Instruction::branch_span` is `relocation_span`'s twin, the span the displacement
   was printed into, and the two are exclusive: a branch whose displacement is a relocation
   placeholder names no address of its own. `Assembly::edge_from` pairs the span with the edge
-  that says where it goes. Like clicking across the two panes, it is a scroll within one
-  symbol rather than a navigation: the selection does not change and nothing is pushed onto
-  the history. A branch out of the symbol — a tail call — keeps its plain operand; making
-  that one navigate like a call target is an item of its own.
+  that says where it goes. It is a scroll within one symbol and **not** a navigation: the
+  document does not change and nothing is pushed onto the history. It does move the
+  selection, the way clicking the target row would — the pin is `position` of the row landed
+  on, with the source side owed the scroll — so the two panes are lit where the reader has
+  arrived rather than where they left. A branch out of the symbol — a tail call — keeps its
+  plain operand; making that one navigate like a call target is an item of its own.
 
 ## UI
 

@@ -176,18 +176,24 @@ impl Component for RelocationLabel {
 }
 
 /// The clickable displacement of a branch that lands inside this symbol: pressing it puts
-/// the row it names on screen.
+/// the row it names on screen and pins the line that row came from.
 ///
-/// A scroll and **not** a navigation. The document does not change, so nothing is pushed
-/// onto the history and the selection is left where the reader put it -- following a jump
-/// is reading further down the same listing, and a Back button that undid it would be
-/// answering a question nobody asked.
+/// **Not** a navigation. The document does not change, so nothing is pushed onto the
+/// history -- following a jump is reading further down the same listing, and a Back button
+/// that undid it would be answering a question nobody asked. It *is* a selection, though:
+/// arriving at the target and then having to click it to light it up made the reader say
+/// twice where they had gone, so the press pins exactly what a press on the target row
+/// would, source pane owed the scroll and all.
 #[derive(Clone, PartialEq)]
 struct BranchLabel {
     /// The operand as the disassembler printed it, which is what a reader is clicking.
     text: String,
     /// The row the branch lands on, from the edge the gutter draws.
     to: usize,
+    /// Where that row points on the source side, or `None` where the debug info places it
+    /// nowhere. The target's own position and not this row's: the pin is the one a click
+    /// on the row being jumped to would have made.
+    at: Option<LinePos>,
     /// The listing's own scroll, and how tall it is: `reveal_row` needs both, and needs
     /// them at the moment of the press rather than at the render that drew this label.
     controller: ScrollController,
@@ -197,8 +203,10 @@ struct BranchLabel {
 impl Component for BranchLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
+        let mut pinned = use_consume::<Pinned>().0;
         let text = self.text.clone();
         let to = self.to;
+        let at = self.at.clone();
         let mut controller = self.controller;
         let viewport = self.viewport;
 
@@ -221,10 +229,23 @@ impl Component for BranchLabel {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |e: Event<PressEventData>| {
-                    // Or the press bubbles into the row and pins the line this
-                    // instruction came from, which is not what following a jump asks for.
+                    // Or the press bubbles into the row and pins the line *this*
+                    // instruction came from, where the reader asked for the one it jumps
+                    // to.
                     e.stop_propagation();
                     reveal_row(&mut controller, *viewport.peek(), to);
+                    // The same rule the row itself obeys: a target the debug info places
+                    // nowhere pins nothing rather than clearing what is pinned, so a jump
+                    // into a prologue is not a way of losing the line the reader put
+                    // there. The Assembly pane is not owed the scroll -- it has just been
+                    // given one, above.
+                    if let Some(at) = at.clone() {
+                        pinned.set(Some(Pin {
+                            at,
+                            reveal: Owed::by(Pane::Source),
+                            landed: false,
+                        }));
+                    }
                 })
                 .child(label().text(text).max_lines(1).color(if hovering() {
                     palette().branch_hover_fg
@@ -431,6 +452,7 @@ impl Component for InstructionRow {
             (Some(span), Some(edge)) => instruction.format.get(span).map(|(text, _)| BranchLabel {
                 text: text.clone(),
                 to: edge.to,
+                at: self.data.position(edge.to),
                 controller: self.controller,
                 viewport: self.viewport,
             }),

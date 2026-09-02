@@ -119,10 +119,16 @@ a call's resolved target is drawn as a `RelocationLabel` — `Instruction::branc
 span to lift out, and the row is the same three children either way. Only where
 `Assembly::edge_from` finds an edge, which is the set the gutter has an arrow for: a tail call
 keeps its plain operand, having no row here to be pointed at. Pressing it is `reveal_row` on the
-edge's target and nothing else — **a scroll and not a navigation**, so the document does not
-change, the selection does not, and nothing is pushed onto the history; a Back that undid reading
-further down one function would be answering a question nobody asked. The press is stopped from
-bubbling, or the row under it would pin the line the instruction being left came from. The
+edge's target **and the pin a press on that row would have made** — `position(edge.to)`, with the
+Source pane owed the scroll and the Assembly pane not, since it has just been given one. It is
+still **not a navigation**: the document does not change and nothing is pushed onto the history, so
+a Back that undid reading further down one function would be answering a question nobody asked. It
+is a selection, though. Arriving at a target and then having to click it to light it up made the
+reader say twice where they had gone, and the two panes would meanwhile be lit at the place the
+reader had just left. A target the debug info places nowhere pins nothing rather than clearing what
+is pinned, which is the rule the row itself obeys. The press is still stopped from bubbling — the
+row under it would otherwise pin the line the instruction being *left* came from, which is the one
+answer the click is not asking for. The
 listing's own `ScrollController` and its measured height are handed down to each row for it, the
 way the hovered index already is: both are the list's handles and neither changes while it lives.
 
