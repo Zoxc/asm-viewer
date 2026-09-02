@@ -359,6 +359,15 @@ one item per part, so the unfinished half stays visible.
   source-driven tab surviving a binary close, so the analysis lets go of a closed binary; and the
   reveal a click asks for is now looked at before it is taken, the listing that can answer it not
   being the one that is up when the click is made.
+- [ ] Put the source side of a source-driven tab on the left, the assembly on the right: the
+  side a tab is driven from is the side the reader is reading, and it sits where the assembly
+  does in an assembly-driven tab.
+- [ ] Refactor the tabs away from freya's dock panels and onto components of the app's own,
+  with a fixed panel for the tabs rather than one the reader can fold, split or drag documents
+  out of.
+- [ ] Let the views close — Project, Settings, the Scratchpad and the rest — and add a menu at
+  the top left of the window to reopen them. Today a view has no × because there is no way back
+  once it is closed; the menu is that way back, so the × can come.
 - [ ] Selecting a symbol in a view opens a "temporal" tab when the symbol is not already open
   in a tab: one preview tab reused by the next such selection, so walking down a list does
   not leave a tab behind per click. What promotes it into a tab that stays is a design
@@ -552,6 +561,9 @@ one item per part, so the unfinished half stays visible.
 - [ ] Follow the newest line of a running scratchpad's output. It has to be scrolled by hand
   today, so a long run scrolls away from the reader. Needs the viewport height and a "the reader
   has scrolled away, leave them there" rule — the same shape `reveal_row` already has.
+- [?] Use freya's tty for the scratchpad's output, in place of the list of coloured rows the
+  run pane draws: a terminal would carry a program's own colours, cursor movement and
+  progress bars, where the rows keep only which stream a line came from.
 - [ ] Wrap or scroll the compiler output. Diagnostics and cargo's own stderr clip at the pane's
   right edge, and a diagnostic carrying a span is exactly the line too wide to fit, so the part
   that says where the error is is the part that gets cut.
