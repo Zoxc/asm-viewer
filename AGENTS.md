@@ -594,10 +594,10 @@ and never on load.
 tool of its own and ignores itself — so "the package is the storage" still holds: nothing describes
 a pad beside its own directory, and `load_from` is still the exact inverse of `write_to`. It is
 *not* in the order file beside the ids, which is `recent_projects`' rule for a project's name: a
-copy there would be a second one to keep in step with the one the reader edits. A new pad's name
-**starts as its id's own spelling** and is a name from that moment on — one rule for the pad a first
-run opens and for every pad New makes, and no way for a column of fresh pads to be identical
-placeholders. A pad with no name at all draws as `Unnamed`, dimmed, and never falls back to its id.
+copy there would be a second one to keep in step with the one the reader edits. A new pad is made
+with **no name at all**, an empty one being a real answer and not a missing one, and what stands in
+for it on screen is the UI's to decide — nothing is written into the package until the reader has
+said something.
 
 The crate name being the id rather than the name has a second payoff: **a rename does not move the
 artifact**. `reopen_binary` keys on the path cargo named, so a pad renamed between builds writes the
@@ -619,11 +619,13 @@ which is what keeps the "nothing is written until there is something to say" rul
 run holds is in memory until something is typed into it.
 
 **A new pad is `new_pad`, and the claim is a `create_dir` that fails rather than opens** — the
-first free `scratch-N`, `ProjectId::anonymous`'s shape and bound, stepping over an id another copy
-of the app already took. Unlike an anonymous project it **writes the package at once**: pressing
-New is a deliberate act, and a claimed directory with no package in it is not a pad and the listing
-would repair it away. The stem is `DEFAULT_ID`'s, so the pad a first run opens (`scratch`) can
-never collide with one New makes.
+first free `pad-N`, `ProjectId::anonymous`'s shape and bound, stepping over an id another copy of
+the app already took. Unlike an anonymous project it **writes the package at once**: pressing New
+is a deliberate act, and a claimed directory with no package in it is not a pad and the listing
+would repair it away. The stem is `DEFAULT_ID`'s and deliberately without its number — the pad a
+first run opens is `pad` and New makes `pad-1`, `pad-2` — so New can never hand out the id of the
+pad the app is already holding, which it could if that one were `pad-1`: a pad nobody has typed in
+has claimed no directory for the `create_dir` to fail on.
 
 **There is no rename operation**, and that is the point of the id: renaming writes
 `Scratchpad::name` and the ordinary per-change save puts it on disk, exactly as typing in the
@@ -1321,10 +1323,17 @@ splits in this app a reader can drag: a dock tab that is not the active one in i
 unmounted, and a `ResizablePanel` forgets its size on unmount, so a draggable width here would
 need a number kept at the root the way `SplitRatio` is — for something nobody has asked to drag.
 Its rows are a plain `ScrollView`, the History list's shape rather than the symbol list's, there
-being a handful of one-label rows, and each draws the pad's **name** and never its id. **The name
-box is an ordinary bound box**, the project view's exactly: it writes into the shown pad's own
+being a handful of one-label rows, and each draws the pad's **name**. **`pad_label` is the one
+place that decides what that is**: the name the reader gave it, or — for a pad they have not named
+— the id in angle brackets, `<pad-3>`. That is `<entry point>`'s device in a second place, and it
+is the whole of why an id may be drawn at all: in brackets it is plainly the app's word and not a
+name someone chose, where a bare id would be offering itself as one. A flat "Unnamed" was the
+alternative and is worse — three fresh pads would be three identical rows. **The name box is an
+ordinary bound box**, the project view's exactly: it writes into the shown pad's own
 `Scratchpad::name` on every keystroke and the save effect writes the package, because nothing is
-filed under the name. The one thing the panel can be told no about is New, whose failure sits under
+filed under the name. Its placeholder is that same label, so an empty box says what the pad is
+called in the list beside it, and typing replaces it where a seeded name would have to be cleared
+first. The one thing the panel can be told no about is New, whose failure sits under
 the list as `Pads::refused` — at the root and not in the view, since an answer that landed while
 the reader was in another tab still has to be there when they come back.
 

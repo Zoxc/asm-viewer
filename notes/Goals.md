@@ -561,15 +561,17 @@ one item per part, so the unfinished half stays visible.
   interpolated into a path and read back out of files a user can edit. What the reader deals in
   is a **name**, a value in the pad's own package under `[package.metadata]`, so it may be
   empty, hold spaces or repeat another pad's, and renaming is a keystroke the ordinary save
-  writes out rather than a directory move that has to claim a target and refuse a collision.
+  writes out rather than a directory move that has to claim a target and refuse a collision. A pad
+  nobody has named has an empty one, and the pane calls it `<pad-3>` — the id in the brackets that
+  already mark `<entry point>` as the app's word rather than the file's.
   Which pad opens is the front of an order beside the pads, `recents.toml`'s rules exactly: an
   order and not an index of what exists, `touch` answering whether anything moved, nothing
   pruning itself on load. The *list* is the union of that order and the pad directories it does
   not name, each row's name read from that pad's own package, since a reader picks a pad from it
   and one that fell off the end has to stay reachable. The list lives in the **Scratchpad view's
   own side panel**, the content area's strip deliberately not being the place for a second
-  document list. A new pad is the first free `scratch-N`, claimed by a `create_dir` that fails
-  rather than opens and written at once. **Runs are per pad**: several can be going at once,
+  document list. A new pad is the first free `pad-N`, claimed by a `create_dir` that fails rather
+  than opens and written at once. **Runs are per pad**: several can be going at once,
   leaving a pad stops nothing, and switching only switches which output is on screen. So is the
   editor buffer, so a pad comes back with the cursor and the undo history it was left with.
   Deleting a pad is deliberately absent — it is the one operation here that destroys a reader's
