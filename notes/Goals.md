@@ -225,6 +225,13 @@ one item per part, so the unfinished half stays visible.
   on, with the source side owed the scroll — so the two panes are lit where the reader has
   arrived rather than where they left. A branch out of the symbol — a tail call — keeps its
   plain operand; making that one navigate like a call target is an item of its own.
+- [ ] Let a call target with no symbol be opened. `Code::relocation` answers a `Relocated`
+  whose `target` is `None` whenever the relocation points at something the object has no text
+  symbol for — a section, a data symbol, an undefined import — and the operand is then drawn
+  as the placeholder the linker will overwrite, with nothing to click. A reader who can see
+  where a call goes should be able to go there, so the question is what a document is when
+  there is no symbol to name it: a place in a section at an address, which is the same
+  question the unified section view above asks, and probably the same answer.
 
 ## UI
 

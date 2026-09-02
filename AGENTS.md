@@ -11,6 +11,9 @@ Standing instructions from the user.
   `rustfmt.toml`: the defaults are what the formatted files already follow.
 - Don't reference an uncommitted file from a committed one.
 - Keep `notes/Goals.md` current. It is the checklist of planned features.
+- **Adding a goal is not a request to do it.** "Add a goal: …" means write the item down and
+  stop there; the checklist is where work is planned, not where it is started. Implement one
+  only when asked for the thing itself.
 - Prefer TOML for files, not JSON.
 - Add a minimal test case every time something is found wrong with binary inspection.
 - Answer a question about the UI with a headless test rather than by launching the app — a
