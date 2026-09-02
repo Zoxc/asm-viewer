@@ -605,10 +605,15 @@ one item per part, so the unfinished half stays visible.
   editor buffer, so a pad comes back with the cursor and the undo history it was left with.
   Deleting a pad is deliberately absent — it is the one operation here that destroys a reader's
   source, so it waits until it is asked for.
-- [ ] Stop a run's grandchildren with it. `Running::stop` kills the process the app spawned, so a
-  scratchpad that spawns a child of its own leaves it running with nothing that could ever find
-  it again. The fix is starting the run in a process group of its own and killing the group —
-  a `libc` call on Unix and a job object on Windows, neither of which this crate carries today.
+- [x] Stop a run's grandchildren with it. A run is started in a process group of its own, so Stop
+  kills the program *and* everything it forked rather than only the process the app holds a handle
+  for — a grandchild's pid was never anywhere but inside the program that is now gone. One idea
+  with two implementations: `process_group(0)` before the spawn and `kill(-pgid, SIGKILL)` in the
+  stop on Unix, and a kill-on-close job object the child is assigned to on Windows, where closing
+  the app's only handle is the kill. The child's own kill stays behind the group's, as what a job
+  the system refuses still gets. Nothing else moved: the reap is the same `try_wait` on a poll —
+  the group changes who dies, not how the end is noticed — and the rebuild, the next run,
+  `stop_all` and the window closing all go through the same stop and inherit it.
 
 ## Binary inspection design
 

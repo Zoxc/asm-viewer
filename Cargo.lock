@@ -4448,6 +4448,7 @@ dependencies = [
  "env_logger",
  "freya",
  "freya-testing",
+ "libc",
  "log",
  "regex",
  "rfd",

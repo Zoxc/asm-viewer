@@ -46,6 +46,15 @@ serde_json = "1"
 dirs = "6"
 toml = "1.1.4"
 
+# One call: `kill(-pgid, SIGKILL)`, which ends a scratchpad run's whole process group
+# (`src/scratchpad.rs`). Putting the run in a group of its own is std's `process_group`, but
+# signalling one is not something std exposes. Target-gated, and not a new crate in the
+# build: libc is already compiled in this tree for every unix target, under `dirs-sys` and
+# under the `errno`/`rustix` chain beneath freya, so this adds an edge and no packages. The
+# version is what the lock already holds; `cargo tree -d` is how that stays true.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Windows' own font settings, read through `SystemParametersInfo` rather than by shelling
 # out to `reg.exe` (`src/fonts.rs`). Target-gated, so the Linux and macOS builds are
 # exactly what they were. The version is pinned to what the tree already holds rather than
@@ -60,6 +69,17 @@ windows-sys = { version = "0.61", features = [
     # `LOGFONTW` -- which is also what gates the `NONCLIENTMETRICSW` fields holding one --
     # and the screen DC the metrics' DPI is read off: `GetDC`/`GetDeviceCaps`/`ReleaseDC`.
     "Win32_Graphics_Gdi",
+    # The Windows half of a scratchpad run's process group (`src/scratchpad.rs`): a
+    # kill-on-close job object the spawned program is assigned to, so that stopping it
+    # stops what it started. `CreateJobObjectW`, `SetInformationJobObject` with
+    # `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`, and `AssignProcessToJobObject`.
+    "Win32_System_JobObjects",
+    # Not asked for directly, but the two the above will not compile without: the
+    # `SECURITY_ATTRIBUTES` in `CreateJobObjectW`'s signature (which is passed null), and
+    # the limit structure itself, which windows-sys gates on Threading. Both are cfgs in a
+    # crate already being compiled and neither is a package.
+    "Win32_Security",
+    "Win32_System_Threading",
 ] }
 
 [features]

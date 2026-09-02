@@ -101,12 +101,31 @@ redo resolution to arrive back at that same path, could arrive at a *different* 
 usually typed since, so what ran would not be what the diagnostics describe), would interleave
 cargo's progress into the stream the reader is reading as their program's output, and would make
 stopping meaningless — killing a `cargo run` kills cargo and leaves its child with nothing holding
-it. What the app is handed back is a `Running`, whose one job is `stop`: `Child::kill`, since
-`Child`'s own `Drop` neither waits nor kills, so a run abandoned rather than stopped goes on running
-with nothing that could ever find it again. A **grandchild is out of reach**, which would need the
-run in a process group of its own and a `libc` this crate does not carry. `stop_all` is the same
-thing for every run at once, off a `static`, because the window's close hook can read no state —
-`Saves`' reason exactly, and it sits beside `flush` in `main.rs`.
+it. What the app is handed back is a `Running`, whose one job is `stop`, since `Child`'s own `Drop`
+neither waits nor kills, so a run abandoned rather than stopped goes on running with nothing that
+could ever find it again. `stop_all` is the same thing for every run at once, off a `static`,
+because the window's close hook can read no state — `Saves`' reason exactly, and it sits beside
+`flush` in `main.rs`.
+
+**A run is a process group, so the stop reaches the grandchildren too.** A scratchpad is a buffer
+someone is experimenting in and `Command::new` is an ordinary thing to experiment with, so a stop
+that killed only the process this app holds a handle for would leave the rest running with nothing
+that could ever find them — the grandchild's pid was never anywhere but inside the program that is
+now gone. `Group` is that one idea with two implementations and the same three moments: something
+before the spawn, something taking hold of what was spawned, and a kill. On Unix it is
+`Command::process_group(0)` — std's own, so only the kill needs a crate — and `libc::kill(-pgid,
+SIGKILL)`, the group being the child's own pid and the negative guarded, since `-1` is every
+process this user may signal. On Windows it is a **kill-on-close job object**, created and
+assigned right after the spawn, and closing the app's only handle to it is the kill; the sliver
+between the spawn and the assignment is accepted rather than bought back with `CREATE_SUSPENDED`
+and a `ResumeThread`, for a window a scratchpad's program does not use, and a job the system
+refuses leaves the stop exactly what it was. The child's own kill stays, under the same lock and
+after the group's, as what a refused job or a third platform still gets. The **reap is untouched**
+— the group changes who dies, not how the end is noticed — and every other way a run is stopped
+(`stop_all`, the rebuild, the next run, the window closing) goes through the same `stop` and
+inherits it. What is tested is the group being real: the pgid the kernel reports for a run is the
+run's own pid, and not the one it would have inherited. What is inside the group once the program
+starts forking is the same fact one step on, and is judged by hand.
 
 **Output is streamed, not collected**, which is the whole difference from `build_in`'s
 run-it-and-return-the-output shape: a program that prints and then loops for ever has said

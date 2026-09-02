@@ -666,6 +666,47 @@ fn a_program_that_never_exits_still_says_something_and_can_be_killed() {
     let _ = fs::remove_dir_all(&directory);
 }
 
+/// The group is real, which is the half of "a stop kills the grandchildren too" that can be
+/// asserted: a run is started in a process group of its own, so the pgid the kernel reports
+/// for the child is the child's own pid and not this test binary's. That is what makes
+/// `kill(-pgid)` the program and everything it forked, rather than everything this process
+/// belongs to. What is inside the group once the program starts forking is the same fact
+/// one step on, and is judged by hand.
+#[cfg(unix)]
+#[test]
+fn a_run_is_a_process_group_of_its_own() {
+    let directory = directory(line!());
+    let executable = program(
+        &directory,
+        "fn main() {\n\
+             \x20   loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n\
+             }\n",
+    );
+
+    let (events, arrived) = std::sync::mpsc::channel();
+    let running = run_in(&executable, &directory, move |event| {
+        let _ = events.send(event);
+    })
+    .expect("it started");
+
+    // Asked of the kernel and not of the `Command`: the group is set between the fork and
+    // the exec, so nothing this side of the spawn has seen it.
+    let pid = {
+        let child = running.0.child.lock().expect("the child");
+        child.id() as i32
+    };
+    let group = unsafe { libc::getpgid(pid) };
+    assert_eq!(group, pid, "the run did not lead a group of its own");
+    // And it is not the one the test binary is in, which is what it would have inherited.
+    assert_ne!(group, unsafe { libc::getpgid(0) });
+
+    // Reaped before the test ends, so nothing is left behind for the next one to find.
+    running.stop();
+    assert_eq!(until_ended(&arrived), vec![RunEvent::Ended(Ended::Stopped)]);
+
+    let _ = fs::remove_dir_all(&directory);
+}
+
 /// Nothing to run is an answer and not a panic — the executable a build named can be gone
 /// by the time the reader presses the button.
 #[test]
