@@ -3523,30 +3523,19 @@ fn contrast(a: Color, b: Color) -> f32 {
 #[test]
 fn every_foreground_is_legible_on_its_own_surface() {
     for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
-        // The code colours, on the pane each is drawn on: the assembly pane has no
-        // comments and no strings, and the source pane is the plain one.
-        let both = [
+        // The code colours, on the one surface both code panes are drawn on. Which of
+        // them a given pane shows differs -- the assembly has no comments and no strings
+        // -- but the ground no longer does, so there is one judgement to make.
+        for (name, color) in [
             ("address_fg", palette.address_fg),
             ("keyword_fg", palette.keyword_fg),
             ("operand_fg", palette.operand_fg),
             ("literal_fg", palette.literal_fg),
+            ("string_fg", palette.string_fg),
+            ("comment_fg", palette.comment_fg),
             ("punctuation_fg", palette.punctuation_fg),
             ("name_fg", palette.name_fg),
             ("name_hover_fg", palette.name_hover_fg),
-        ];
-        for (name, color) in both {
-            for (surface, background) in [
-                ("asm_pane_bg", palette.asm_pane_bg),
-                ("pane_bg", palette.pane_bg),
-            ] {
-                let ratio = contrast(color, background);
-                assert!(ratio >= 3.0, "{theme} {name} on {surface}: {ratio:.2}");
-            }
-        }
-
-        for (name, color) in [
-            ("string_fg", palette.string_fg),
-            ("comment_fg", palette.comment_fg),
         ] {
             let ratio = contrast(color, palette.pane_bg);
             assert!(ratio >= 3.0, "{theme} {name} on pane_bg: {ratio:.2}");
@@ -3581,8 +3570,8 @@ fn every_foreground_is_legible_on_its_own_surface() {
 
         // The branch gutter is a diagram and is drawn quiet deliberately, so its floor is
         // only against a line that has disappeared into the pane altogether.
-        let line = contrast(palette.branch_fg, palette.asm_pane_bg);
-        let lit = contrast(palette.branch_hover_fg, palette.asm_pane_bg);
+        let line = contrast(palette.branch_fg, palette.pane_bg);
+        let lit = contrast(palette.branch_hover_fg, palette.pane_bg);
         assert!(line >= 1.5, "{theme} branch_fg: {line:.2}");
         assert!(lit > line, "{theme} branch_hover_fg: {lit:.2} vs {line:.2}");
     }
@@ -3607,11 +3596,20 @@ fn every_wash_reads_against_the_pane_under_it() {
             (
                 "code_row_hover_bg",
                 palette.code_row_hover_bg,
-                palette.asm_pane_bg,
+                palette.pane_bg,
             ),
-            ("line_focus_bg", palette.line_focus_bg, palette.asm_pane_bg),
-            ("line_pin_bg", palette.line_pin_bg, palette.asm_pane_bg),
-            ("row_select_bg", palette.row_select_bg, palette.asm_pane_bg),
+            ("line_focus_bg", palette.line_focus_bg, palette.pane_bg),
+            ("line_pin_bg", palette.line_pin_bg, palette.pane_bg),
+            ("row_select_bg", palette.row_select_bg, palette.pane_bg),
+            // The one wash that is never over the bare pane: a link is under the pointer
+            // only while the row it is on is, so what it has to lighten is the hover.
+            // It is white in both palettes, and over a code pane that is now white
+            // itself the plain surface would be no test at all -- it moves it nowhere.
+            (
+                "link_hover_bg",
+                palette.link_hover_bg,
+                blend(palette.code_row_hover_bg, palette.pane_bg),
+            ),
             ("drop_preview_bg", palette.drop_preview_bg, palette.pane_bg),
             // The × on a tab sits on either of two grounds and has to say the same thing
             // over both: the active tab's own pane, and a hovered tab's grey.
@@ -3626,8 +3624,8 @@ fn every_wash_reads_against_the_pane_under_it() {
             assert!(step >= 10, "{theme} {name}: {step} levels");
         }
 
-        let focus = step(palette.line_focus_bg, palette.asm_pane_bg);
-        let pin = step(palette.line_pin_bg, palette.asm_pane_bg);
+        let focus = step(palette.line_focus_bg, palette.pane_bg);
+        let pin = step(palette.line_pin_bg, palette.pane_bg);
         assert!(pin > focus, "{theme} pin {pin} vs focus {focus}");
 
         // And the × has to be told apart from the tab under it, which is lit at the same
@@ -3744,7 +3742,9 @@ fn fixed_edited(ui: f32, mono: f32) -> EditedSettings {
 
 /// Two components with no props at all, one row at each of the two heights. `ThemedRow`'s
 /// twins: nothing about either changes across a font change, so freya has no reason to
-/// re-render them except that they read the state.
+/// re-render them except that they read the state. The two fills only have to *differ*,
+/// `painted_height` being how the rows are told apart; neither says anything about where
+/// a row of that height is really drawn.
 #[derive(PartialEq)]
 struct FontedRow;
 
@@ -3765,7 +3765,7 @@ impl Component for FontedCodeRow {
         rect()
             .width(Size::fill())
             .height(Size::px(code_row_height()))
-            .background(palette().asm_pane_bg)
+            .background(palette().header_bg)
     }
 }
 
@@ -3794,7 +3794,7 @@ fn a_font_change_repaints_and_resizes_a_component_nothing_else_woke() {
     test.sync_and_update();
 
     let list = palette().pane_bg;
-    let code = palette().asm_pane_bg;
+    let code = palette().header_bg;
 
     assert_eq!((list_row_height(), code_row_height()), (24.0, 26.0));
     assert_eq!(painted_height(&test, list), 24.0);
@@ -3963,7 +3963,7 @@ fn the_settings_reach_the_theme_the_fonts_and_the_file() {
     // `PreferredTheme::Light`, and the fonts are the ones the state holds.
     assert_eq!(appearance(), Appearance::Light);
     assert_eq!(fonts().mono.points, 10.5);
-    assert_eq!(painted_height(&test, palette().asm_pane_bg), 26.0);
+    assert_eq!(painted_height(&test, palette().header_bg), 26.0);
 
     // A theme chosen. Two passes: the write the root makes wakes the scopes that drew a
     // colour in the pass after the one it was made in.
@@ -3982,7 +3982,7 @@ fn the_settings_reach_the_theme_the_fonts_and_the_file() {
         test.sync_and_update();
     }
     assert_eq!(fonts().mono.points, 18.0);
-    assert_eq!(painted_height(&test, palette().asm_pane_bg), 36.0);
+    assert_eq!(painted_height(&test, palette().header_bg), 36.0);
     assert_eq!(saved.peek().len(), 2);
     assert_eq!(saved.peek()[1].fixed.size, Some(18.0));
 
@@ -3994,7 +3994,7 @@ fn the_settings_reach_the_theme_the_fonts_and_the_file() {
     }
     assert_eq!(saved.peek().len(), 3);
     assert_eq!(saved.peek()[2].fixed.size, Some(10.5));
-    assert_eq!(painted_height(&test, palette().asm_pane_bg), 26.0);
+    assert_eq!(painted_height(&test, palette().header_bg), 26.0);
 
     // And the thread is left as it was found.
     set_appearance(Appearance::Light);

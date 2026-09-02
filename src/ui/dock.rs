@@ -878,7 +878,7 @@ impl Component for DocumentBody {
         let Some(document) = docs.read().get(self.id).cloned() else {
             return rect()
                 .expanded()
-                .background(palette().asm_pane_bg)
+                .background(palette().pane_bg)
                 .into_element();
         };
 

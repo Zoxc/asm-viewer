@@ -762,7 +762,7 @@ impl Component for AssemblyPane {
         let shown = match analysis.showing(&self.document) {
             Showing::Listing(shown) => shown,
             Showing::Message(text) => return placeholder(text),
-            Showing::Nothing => return rect().expanded().background(palette().asm_pane_bg).into(),
+            Showing::Nothing => return rect().expanded().background(palette().pane_bg).into(),
         };
         let studied = &shown.studied;
         let Some(assembly) = studied.assembly.clone() else {
@@ -782,7 +782,7 @@ impl Component for AssemblyPane {
             .width(Size::fill())
             .height(Size::fill())
             .padding(5.0)
-            .background(palette().asm_pane_bg)
+            .background(palette().pane_bg)
             .child(InstructionList {
                 assembly,
                 symbol: studied.symbol.clone(),

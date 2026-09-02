@@ -255,11 +255,15 @@ one item per part, so the unfinished half stays visible.
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
   way is vendoring the whole scrollview module (~1350 lines) out of `freya-components` — too much to
   carry for a cosmetic change. Revisit if freya makes it themeable.
-- [ ] One background under both code panes. The assembly pane draws on `asm_pane_bg` and the
-  source pane on `pane_bg`, so there is a faint seam down the middle of the default layout. It
-  predates the shared palette and is a surface rather than a syntax colour, so 5e left it
-  alone; it is one line to unify, and the only real question is which of the two both panes
-  should take.
+- [x] One background under both code panes. The seam down the middle of the default layout was
+  the assembly pane's `asm_pane_bg`, a step off the `pane_bg` the source pane is on. Both panes
+  take `pane_bg` now: it is the ground the source side, the scratchpad's editor and every other
+  pane body already draw on, and the one a tab takes to read as the top edge of what is under it,
+  so the horizontal seam under the tab bar goes with the vertical one. The colour is not retired —
+  renamed `inset_bg`, it is still what the scratchpad's diagnostics and its run output are stepped
+  back with — and the palette's contrast tests re-judge every code foreground and every code wash
+  on the surface each really has now, the link hover included, which over a pane that is white
+  itself has to be measured over the hovered row it actually lightens.
 - [ ] Keep every expensive operation off the UI thread. A standing rule rather than a task that
   finishes, since each new one arrives with whatever feature needed it. freya's executor *is* the
   UI thread, so a `spawn` is not the answer: what is expensive goes onto a `std::thread` fed an

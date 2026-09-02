@@ -29,6 +29,25 @@ for both. This is deliberately **not** freya's own theming — `ColorsSheet` nam
 roles, and the source pane's colours cannot be read from the element tree at all, being baked into
 a `SyntaxBlocks` when a file is *loaded*.
 
+**One ground under both code panes.** `pane_bg` is what the assembly pane and the source pane are
+both read on, and choosing between it and the `asm_pane_bg` the assembly side used to have was the
+whole of that change. It went to `pane_bg` on three counts: that is already the ground of every
+other body in the window, the scratchpad's editor — the app's third code surface — included, so a
+step off it made a seam down the middle of the default layout and nowhere else; a tab takes
+`pane_bg` precisely so it reads as the top edge of the pane under it, which was true of the source
+half and not of the assembly half, so the horizontal seam goes with the vertical one; and in the
+dark palette that step was *upward*, lighting the one place the reader looks at longest instead of
+settling it into the ground the rest of the window shares. Every foreground gained a little
+contrast by the move and every wash lost a level or two, all still clear of their floors — which is
+what the two tests above now measure, on the one surface each colour really has rather than on
+whichever of two it might have landed on. The losing value is not retired: it is `inset_bg` now,
+the step *back* the scratchpad's diagnostics and its run output are stacked with under the editor,
+which is the only thing it was ever doing outside the assembly pane. The one wash the move could
+have killed is `link_hover_bg`, white in both palettes: over a pane that is itself white it moves
+nothing at all. It is never over the bare pane — a relocation link is under the pointer only while
+its row is — so the test judges it over the hovered row it really lightens, and pointing it at the
+pane instead is how that was checked.
+
 **A disabled control is derived rather than a field.** `dimmed(color, surface)` is the colour the
 control has when it is live, faded into the ground it sits on at `DISABLED_ALPHA` through the same
 `blend` the washes use — so a dimmed drawing follows whatever colour the live one is given, in both
