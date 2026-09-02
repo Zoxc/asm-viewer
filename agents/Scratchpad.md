@@ -250,6 +250,28 @@ wrong — so cargo's own stderr, where `no matching package named ... found` is 
 else, is drawn under the rows. Once the compiler has spoken, the same stderr says only what the
 diagnostics list already does and is dropped.
 
+**Wrap or scroll is decided by the list a line is in, and not by the line.** Both surfaces here
+draw a tool's own output and both had it clipped at the pane's right edge, which is worst exactly
+where it matters most: a diagnostic carrying a span is the widest line rustc writes, and
+`--> src/main.rs:9:17` — the half that says *where* — is the half that went over the edge. The
+diagnostics are a **plain `ScrollView` of wrapping paragraphs**: a build says dozens of things, so
+there is nothing to virtualise away, and once nothing is virtual a block's height may be whatever
+its text turns out to need. The run output **stays a `VirtualScrollView`** and takes a horizontal
+scroll instead, because it is bounded at `MAX_OUTPUT_LINES` and nothing smaller — and a virtual
+list steps by one `item_size`, so it has to know a row's height before it has built one, which is
+precisely what a wrapped row cannot tell it. So the two are not a matter of taste: a wrapping row
+and a virtual list are incompatible, and which surface can afford which follows from how much each
+of them has to draw.
+
+What wrapping costs the diagnostics is that a caret can land under the wrong character, which is
+why the rendered block used to cut instead. The answer is which line pays: a line that fits is
+untouched, so every diagnostic narrower than the pane is drawn exactly as it was, and the only
+line that wraps is the one clipping would have thrown the end of away — a caret out of place is a
+worse drawing of something still readable, where a cut is the answer not being there at all. What
+the sideways scroll costs the output is that the width it can be moved over is the widest row the
+list has *built*, so a wide line further down is not reachable until it has been scrolled to
+vertically. A virtual list has no better answer, having never measured the rows it did not draw.
+
 **Running does not sit on that worker, and stopping does not go near it.** `PadJob::Run` only
 starts the program and comes straight back — it goes to the worker because it forks and because the
 directory it hands the program is that thread's, not because it blocks. A run has no bound on how

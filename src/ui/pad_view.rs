@@ -8,6 +8,14 @@
 //! the other stream, so it takes the palette's one warm hue rather than the red. The
 //! output pane follows the newest line while the reader is at the bottom of it and leaves
 //! them where they are the moment they are not.
+//!
+//! **A line too wide for the pane wraps in the diagnostics and scrolls sideways in the
+//! output**, and which of the two it is follows from the list it is in rather than from
+//! anything about the text. A build says dozens of things, so the diagnostics are a plain
+//! `ScrollView` of paragraphs whose heights are whatever they turn out to be; a run says
+//! thousands, so the output stays a `VirtualScrollView`, which builds the rows it draws by
+//! stepping one `item_size` at a time and therefore has to know a row's height before it
+//! has built one.
 
 use super::*;
 use std::cell::Cell;
@@ -20,12 +28,19 @@ const NAME_FLEX: f32 = 2.0;
 const VERSION_FLEX: f32 = 1.0;
 
 /// A block of a tool's own output, laid out the way it wrote it: one label per line, in
-/// the fixed-width font, so rustc's carets sit under what they point at. A paragraph that
-/// wrapped would put a caret under the wrong character.
+/// the fixed-width font, so rustc's carets sit under what they point at. A line too wide
+/// for the pane **wraps** rather than being cut off at its right edge.
+///
+/// Wrapping does move a caret out from under the character it points at, which is why this
+/// block used to cut instead. What settles it is which line pays: a line that fits is
+/// untouched, so every block narrower than the pane is drawn exactly as it was, and the
+/// only line that wraps is the one clipping would have thrown the end of away entirely.
+/// `--> src/main.rs:9:17` is that line -- the half of a diagnostic that says *where* --
+/// and a caret under the wrong column is a worse drawing of something the reader can
+/// still read, where a cut is the answer not being there at all.
 fn text_block(text: &str, color: Color) -> Element {
     rect()
         .width(Size::fill())
-        .overflow(Overflow::Clip)
         .children(
             text.lines()
                 .map(|line| {
@@ -33,7 +48,6 @@ fn text_block(text: &str, color: Color) -> Element {
                         .text(line.to_owned())
                         .assembly_font()
                         .color(color)
-                        .max_lines(1)
                         .into()
                 })
                 .collect::<Vec<Element>>(),
@@ -62,9 +76,15 @@ fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
         .child(
             rect()
                 .width(Size::fill())
-                .height(Size::px(list_row_height()))
+                // Tall enough for what is in it and never shorter than an ordinary row:
+                // the message wraps, so the header is one row for almost every diagnostic
+                // and as many as the sentence needs for the one that does not fit.
+                .height(Size::auto())
+                .min_height(Size::px(list_row_height()))
                 .horizontal()
-                .cross_align(Alignment::Center)
+                // Start and not `Center`: what a wrapped message stands beside is the word
+                // `error` and the place, which belong against its first line.
+                .cross_align(Alignment::Start)
                 .spacing(6.0)
                 .content(Content::Flex)
                 .child(
@@ -90,11 +110,11 @@ fn diagnostic_block(diagnostic: &Diagnostic) -> Element {
                         .max_lines(1)
                         .into_element()
                 }))
+                // The sentence rustc wrote, wrapping rather than cut at the pane's edge.
                 .child(
                     label()
                         .text(diagnostic.message.clone())
-                        .width(Size::flex(1.0))
-                        .max_lines(1),
+                        .width(Size::flex(1.0)),
                 ),
         )
         .child(text_block(&diagnostic.rendered, palette().text_fg))
@@ -284,6 +304,18 @@ impl PartialEq for OutputRows {
 }
 
 /// One line, in the colour of the stream it came from.
+///
+/// **As wide as the line is**, where every other row in this app is as wide as its pane:
+/// the row is what gives the list around it something to scroll sideways over, and it is
+/// exactly the width the `max_lines(1)` label measures to -- freya lays a one-line label
+/// out against `f32::MAX` and reports its longest line, so a row asking for its content's
+/// width gets the whole of the line and not the pane's share of it.
+///
+/// The one thing that cannot change is the **height**, which is `code_row_height()`
+/// because that is the `item_size` the [`OutputPane`]'s `VirtualScrollView` steps by. That
+/// is the whole of why this row cannot wrap the way a diagnostic does: a wrapped row is a
+/// row whose height depends on its text, and a virtual list has to know every row's height
+/// before it has built one.
 fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
     let color = match line.stream {
         Stream::Out => palette().text_fg,
@@ -291,12 +323,11 @@ fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
     };
 
     rect()
-        .width(Size::fill())
+        .width(Size::auto())
         .height(Size::px(code_row_height()))
         .horizontal()
         .cross_align(Alignment::Center)
         .padding(Gaps::new_symmetric(0.0, 12.0))
-        .overflow(Overflow::Clip)
         .child(
             label()
                 .text(line.text.to_string())
@@ -375,6 +406,14 @@ fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usiz
 }
 
 /// What the program has written, under a line saying where the run got to.
+///
+/// A `VirtualScrollView` and not the diagnostics' plain one: a run's output is bounded at
+/// `MAX_OUTPUT_LINES` and nothing else, so the rows have to be built as they are drawn --
+/// which is the whole of why a row here cannot wrap and takes a **sideways scroll**
+/// instead. That scroll costs one honest thing: the width the list can be moved over is
+/// the widest row it has *built*, so a wide line further down the output is not reachable
+/// until it has been scrolled to vertically. A virtual list has no other answer, having
+/// never measured the rows it did not draw.
 ///
 /// A component of its own for the sake of [`use_follow_tail`]: **keyed on the pad**, so
 /// the scroll and the follow are that pad's output's and not one position dragged between
@@ -815,6 +854,10 @@ impl Component for ScratchpadTab {
                     // while the worker is still reading the disk.
                     .maybe_child(editing.map(|pad| SourceEditor { pad }.into_element())),
             )
+            // A plain `ScrollView` and never a virtual one, which is what lets the blocks
+            // in it wrap: a virtual list steps by one `item_size`, and a row that wraps is
+            // a row whose height is not known until it has been laid out. A build says
+            // dozens of things, so there is nothing to virtualise away.
             .maybe_child((!diagnostics.is_empty()).then(|| {
                 rect()
                     .width(Size::fill())

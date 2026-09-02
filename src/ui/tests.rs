@@ -5098,3 +5098,166 @@ fn the_output_pane_follows_the_newest_line_until_the_reader_scrolls_away() {
         "coming back to the bottom did not take the follow up again: {rearmed:?}"
     );
 }
+
+/// The laid-out box of every `label()` whose text starts with `prefix`, in document order.
+/// A wrap is a fact about the layout and about nothing else -- the same string is drawn
+/// either way -- so a test about one has to read the areas rather than the texts.
+fn label_boxes(test: &TestingRunner, prefix: &str) -> Vec<Area> {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    let prefix = prefix.to_owned();
+    test.find_many(move |node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .filter(|label| label.text.starts_with(&prefix))
+            .map(|_| node.layout().area)
+    })
+}
+
+/// A diagnostic too wide for the pane **wraps** instead of being cut off at its right
+/// edge, which is what taking the list out of a fixed row height buys: both the sentence
+/// rustc wrote and its own rendered block are paragraphs in a plain `ScrollView`.
+///
+/// Headless because a wrap is only ever a laid-out thing. The two diagnostics are the same
+/// shape and differ only in how long their text is, so every number below is the long one
+/// against the short one and none of them is an assertion about this machine's fonts: a
+/// 300-character line does not fit in a 400-pixel window under any font there is, so a
+/// label no wider than the window that is several lines tall is a label that wrapped.
+#[test]
+fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
+    let (mut test, _states, pad, _text, _asking, _asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: scratchpad.manifest().err(),
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    // Two errors of the same shape: one that fits and one that cannot. The rendered block
+    // of the second is the `-->` line a span carries, which is the line the goal is about.
+    let diagnostic = |message: &str, rendered: &str| Diagnostic {
+        level: Level::Error,
+        message: message.to_owned(),
+        rendered: rendered.to_owned(),
+        span: Some(crate::scratchpad::Span {
+            file: SOURCE_FILE.to_owned(),
+            line: 1,
+            column: 1,
+        }),
+    };
+    let mut pad = pad;
+    pad.write().state_mut().built = Some(Build::Rejected {
+        diagnostics: vec![
+            diagnostic("short: nope", "  --> short"),
+            diagnostic(
+                &format!("long: {}", "mismatched ".repeat(40)),
+                &format!("  --> long {}", "y".repeat(300)),
+            ),
+        ],
+        message: String::new(),
+    });
+    for _ in 0..6 {
+        test.sync_and_update();
+    }
+
+    let one = |prefix: &str| {
+        let boxes = label_boxes(&test, prefix);
+        assert_eq!(boxes.len(), 1, "{prefix} is not drawn exactly once");
+        boxes[0]
+    };
+    let (short_message, long_message) = (one("short: "), one("long: "));
+    let (short_rendered, long_rendered) = (one("  --> short"), one("  --> long"));
+
+    // The sentence rustc wrote, beside the level and the place, is a paragraph now: the
+    // long one stands where the short one does and is several times as tall.
+    assert!(
+        long_message.height() > short_message.height() * 2.0,
+        "the message was cut rather than wrapped: {long_message:?} against {short_message:?}"
+    );
+
+    // And so is the rendered block under it. Bounded by the pane on one side -- a label
+    // measuring out to its natural width is one that is about to be clipped -- and taller
+    // than one line on the other, which together is what wrapping means.
+    assert!(
+        long_rendered.width() <= 400.0,
+        "the span line measured out past the window: {long_rendered:?}"
+    );
+    assert!(
+        long_rendered.height() > short_rendered.height() * 2.0,
+        "the span line was cut rather than wrapped: {long_rendered:?}"
+    );
+}
+
+/// The run output is the other answer to the same question: it stays a `VirtualScrollView`
+/// stepping by one `item_size`, so a row cannot wrap, and a line too wide for the pane is
+/// reached by scrolling sideways instead.
+///
+/// The load-bearing assertion is the wheel. A row measured to its content is what gives
+/// the list something wider than its viewport to scroll over; a row filling the pane
+/// leaves the two the same width, and freya scrolls a list no further than its content
+/// goes -- so with the row filling the pane the wheel below moves nothing at all.
+#[test]
+fn a_wide_output_line_is_reached_by_scrolling_sideways() {
+    let (mut test, lines) = TestingRunner::new(
+        output_harness,
+        (200., 200.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| RunLines(State::create(Arc::new(RunOutput::default()))))
+                .0
+        },
+        1.,
+    );
+    let settle = |test: &mut TestingRunner| {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+    };
+    settle(&mut test);
+
+    wrote(lines, &format!("wide {}", "x".repeat(400)));
+    settle(&mut test);
+
+    let before = label_boxes(&test, "wide ");
+    assert_eq!(before.len(), 1, "the line is not drawn exactly once");
+    let before = before[0];
+
+    // The premise, in two halves. One row and not two, the height being the `item_size`
+    // the list steps by and a wrapping row being what would break it; and the whole line
+    // measured, which is what there is to scroll sideways over. Neither is the assertion
+    // -- `max_lines(1)` was already both of these -- they are what the row's own width now
+    // inherits.
+    assert!(
+        before.height() <= code_row_height(),
+        "an output row grew past the item size the list steps by: {before:?}"
+    );
+    assert!(
+        before.width() > 200.0,
+        "the line was cut to the pane instead of measured: {before:?}"
+    );
+
+    // The wheel, sideways. `freya`'s scroll views take `delta_x` as well as `delta_y`, and
+    // what bounds it is the content's width against the viewport's.
+    test.scroll((100., 120.), (-150., 0.));
+    settle(&mut test);
+
+    let after = label_boxes(&test, "wide ");
+    let after = after[0];
+    assert_eq!(
+        after.width(),
+        before.width(),
+        "scrolling re-measured the row"
+    );
+    assert!(
+        after.min_x() < before.min_x() - 100.0,
+        "the sideways wheel moved nothing: {after:?} against {before:?}"
+    );
+}

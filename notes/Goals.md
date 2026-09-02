@@ -603,9 +603,17 @@ one item per part, so the unfinished half stays visible.
 - [?] Use freya's tty for the scratchpad's output, in place of the list of coloured rows the
   run pane draws: a terminal would carry a program's own colours, cursor movement and
   progress bars, where the rows keep only which stream a line came from.
-- [ ] Wrap or scroll the compiler output. Diagnostics and cargo's own stderr clip at the pane's
-  right edge, and a diagnostic carrying a span is exactly the line too wide to fit, so the part
-  that says where the error is is the part that gets cut.
+- [x] Wrap or scroll the compiler output, wrap or scroll being decided by the list a line is in
+  rather than by the line. The diagnostics and cargo's own stderr are a plain `ScrollView` of
+  wrapping paragraphs — a build says dozens of things, so there is nothing to virtualise away, and
+  once nothing is virtual a block may be as tall as its text needs; the `--> src/main.rs:9:17` a
+  span carries, which was the widest line rustc writes and so the first thing the pane's right
+  edge took, now wraps. The run output stays a `VirtualScrollView` stepping by one `item_size`,
+  being bounded at nothing smaller than `MAX_OUTPUT_LINES`, and takes a sideways scroll instead:
+  a virtual list has to know a row's height before it has built one, which is exactly what a
+  wrapped row cannot tell it. Each costs one honest thing — a wrapped caret can sit under the
+  wrong character, though only on a line clipping would have cut outright, and the output scrolls
+  only as wide as the widest row it has drawn.
 - [ ] Click a diagnostic to reach the code it is about. The span is drawn under the message but
   is not a target, so a reader with an error still finds the line by counting. Both halves
   already exist: cargo's JSON carries the span's line and column, and the editor has a cursor
