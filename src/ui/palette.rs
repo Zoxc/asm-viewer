@@ -61,12 +61,21 @@ pub(crate) struct Palette {
     /// the two washes above by `blend`.
     pub(crate) row_select_bg: Color,
 
-    // The code colours, shared by both panes. Which syntactic category takes which is
-    // [`Palette::syntax`].
+    // The code colours. Which syntactic category takes which is [`Palette::syntax`] on
+    // the source side and `kind_color` on the assembly side. Not every one of them is
+    // drawn on both panes: a disassembly has no strings, comments, attributes, types or
+    // call names, so those five are the source pane's alone.
     /// Where a thing is: the instruction addresses, and the source line-number gutter.
     pub(crate) address_fg: Color,
-    /// What is being done: mnemonics and prefixes, source keywords, operators and types.
+    /// What is being done: mnemonics and prefixes, source keywords and operators.
     pub(crate) keyword_fg: Color,
+    /// A type where it is named. Source-only, and a dim red rather than the keyword's
+    /// purple, so `struct Foo` reads as the keyword introducing a name and not as two
+    /// halves of one word.
+    pub(crate) type_fg: Color,
+    /// A function or a method where it is *called* or defined, as against the plain text
+    /// around it. Source-only, and a blue with none of the address column's greyness.
+    pub(crate) function_fg: Color,
     /// What it is being done to: registers, and source variables, parameters and fields.
     pub(crate) operand_fg: Color,
     /// A value written out: immediates, and source numbers, booleans and constants.
@@ -78,8 +87,13 @@ pub(crate) struct Palette {
     /// The glue between the operands: brackets, commas, and on the assembly side the
     /// operand-size keywords (`qword ptr`) that are glue in exactly the same way.
     pub(crate) punctuation_fg: Color,
-    /// A name that names one thing: a relocation target in the assembly, a function,
-    /// method or module in the source. Also the source pane's plain text.
+    /// An attribute -- `#[derive(..)]` and the rest -- which is scaffolding around the
+    /// code rather than code, so it is a plain grey that recedes: quieter than the
+    /// keyword it used to be drawn in, and quieter than the punctuation beside it.
+    /// Source-only.
+    pub(crate) attribute_fg: Color,
+    /// A name that names one thing: a relocation target in the assembly, a module or a
+    /// constructor in the source. Also the source pane's plain text.
     pub(crate) name_fg: Color,
     /// A relocation link under the pointer, and the underline drawn beneath it.
     pub(crate) name_hover_fg: Color,
@@ -115,11 +129,14 @@ impl Palette {
 
         address_fg: Color::from_rgb(118, 141, 169),
         keyword_fg: Color::from_rgb(116, 94, 147),
+        type_fg: Color::from_rgb(160, 64, 80),
+        function_fg: Color::from_rgb(46, 95, 160),
         operand_fg: Color::from_rgb(87, 103, 65),
         literal_fg: Color::from_rgb(80, 107, 135),
         string_fg: Color::from_rgb(148, 98, 74),
         comment_fg: Color::from_rgb(128, 148, 128),
         punctuation_fg: Color::from_rgb(102, 102, 102),
+        attribute_fg: Color::from_rgb(132, 132, 140),
         name_fg: Color::from_rgb(50, 50, 50),
         name_hover_fg: Color::from_rgb(105, 89, 132),
 
@@ -159,11 +176,14 @@ impl Palette {
 
         address_fg: Color::from_rgb(132, 156, 186),
         keyword_fg: Color::from_rgb(178, 150, 214),
+        type_fg: Color::from_rgb(226, 132, 148),
+        function_fg: Color::from_rgb(118, 156, 232),
         operand_fg: Color::from_rgb(158, 180, 120),
         literal_fg: Color::from_rgb(130, 175, 214),
         string_fg: Color::from_rgb(214, 150, 120),
         comment_fg: Color::from_rgb(128, 158, 128),
         punctuation_fg: Color::from_rgb(150, 150, 150),
+        attribute_fg: Color::from_rgb(126, 126, 136),
         name_fg: Color::from_rgb(216, 216, 216),
         name_hover_fg: Color::from_rgb(190, 168, 224),
 
@@ -184,15 +204,18 @@ impl Palette {
             text: self.name_fg,
             // Never actually seen: `SourceRow` draws leading indentation as plain spaces.
             whitespace: self.punctuation_fg,
-            attribute: self.keyword_fg,
+            attribute: self.attribute_fg,
             boolean: self.literal_fg,
             comment: self.comment_fg,
             constant: self.literal_fg,
             constructor: self.name_fg,
             escape: self.literal_fg,
-            function: self.name_fg,
-            function_macro: self.name_fg,
-            function_method: self.name_fg,
+            function: self.function_fg,
+            // A macro is called like a function and is coloured like one -- and it could
+            // not be left on the text colour in any case: `resolve_capture_color` walks
+            // `function.macro` up to `function` and would paint it in this silently.
+            function_macro: self.function_fg,
+            function_method: self.function_fg,
             keyword: self.keyword_fg,
             label: self.keyword_fg,
             module: self.name_fg,
@@ -212,7 +235,7 @@ impl Palette {
             text_title: self.keyword_fg,
             text_uri: self.string_fg,
             text_emphasis: self.name_fg,
-            type_: self.keyword_fg,
+            type_: self.type_fg,
             variable: self.operand_fg,
             variable_builtin: self.keyword_fg,
             variable_parameter: self.operand_fg,

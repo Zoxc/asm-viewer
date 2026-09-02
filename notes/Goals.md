@@ -62,20 +62,24 @@ one item per part, so the unfinished half stays visible.
   fields the register's olive, literals the immediate's blue, function and module names the
   relocation target's near-black, punctuation the rest's grey, and comments and strings are
   two new entries of the palette's own.
-- [ ] Pull attributes, types and functions apart in the source side's highlighting. Three
-  of `syntax()`'s entries were mapped onto colours the assembly side already had, and the
-  result is that a Rust file reads as two colours: `attribute` and `type_` are both
-  `keyword_fg`, and `function` / `function_method` are `name_fg`, which is also plain text.
-  Each wants a colour of its own in the palette, defined light-first and turned through the
-  background for dark the way every other pair is:
-  - `attribute` a dark grey — `#[derive(..)]` is scaffolding around the code and should
-    recede, not read as loudly as `fn`.
-  - `type_` a dim red, so a type is told from the keyword introducing it.
-  - `function` and `function_method` a dim blue, so a call site is told from the plain text
-    around it.
-  All three go through the contrast test on the pane they are read on, and the question to
-  settle is whether the assembly side wants any of them too — a mnemonic is not a keyword
-  and an operand is not a variable, so the two sides may want to stop sharing here.
+- [x] Pull attributes, types and functions apart in the source side's highlighting. Three
+  of `syntax()`'s entries had been mapped onto colours the assembly side already had, and a
+  Rust file read as two: `attribute` and `type_` were both `keyword_fg`, `function` and
+  `function_method` were `name_fg`, which is also the plain text. Three palette entries of
+  their own now, light-first and turned through the background for dark — `attribute_fg` a
+  plain grey that recedes, since `#[derive(..)]` is scaffolding around the code rather than
+  code; `type_fg` a dim red, so a type is told from the keyword introducing it;
+  `function_fg` a blue with none of the address column's greyness, so a call site is told
+  from the text around it. `function_macro` went with the other two though nothing asked
+  for it: `resolve_capture_color` walks a child left on the text colour up to its parent, so
+  it would have been painted `function_fg` silently anyway. The assembly side keeps the five
+  colours it had — that was the open question, and the answer is that none of the three has
+  anything to name in a listing: `SpanKind` is a mnemonic, a prefix, a register, a number, an
+  address and glue, and the one name there is a relocation target, as often data as a
+  function and already told apart by `name_fg`/`name_hover_fg` and its underline. The
+  contrast test holds the three on `pane_bg` alone, beside the strings and comments, and
+  `attribute_fg` to a relationship as well: quieter than the keyword it left, the punctuation
+  beside it and the plain text.
 - [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
   each language is a `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and
   deferred *per language* rather than as a whole: a grammar is a parser generator's worth of

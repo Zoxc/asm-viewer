@@ -4003,12 +4003,35 @@ fn every_foreground_is_legible_on_its_own_surface() {
             }
         }
 
+        // The five the source pane has to itself: a disassembly holds no strings,
+        // comments, attributes, types or call names, so these are only ever read on
+        // `pane_bg`.
         for (name, color) in [
             ("string_fg", palette.string_fg),
             ("comment_fg", palette.comment_fg),
+            ("attribute_fg", palette.attribute_fg),
+            ("type_fg", palette.type_fg),
+            ("function_fg", palette.function_fg),
         ] {
             let ratio = contrast(color, palette.pane_bg);
             assert!(ratio >= 3.0, "{theme} {name} on pane_bg: {ratio:.2}");
+        }
+
+        // An attribute is scaffolding around the code and is meant to recede: legible,
+        // and quieter than both the keyword it was drawn in before and the punctuation
+        // it sits among. A relationship rather than a value, since what makes it read as
+        // scaffolding is the gap and not the grey.
+        let attribute = contrast(palette.attribute_fg, palette.pane_bg);
+        for (name, color) in [
+            ("keyword_fg", palette.keyword_fg),
+            ("punctuation_fg", palette.punctuation_fg),
+            ("name_fg", palette.name_fg),
+        ] {
+            let louder = contrast(color, palette.pane_bg);
+            assert!(
+                attribute < louder,
+                "{theme} attribute_fg {attribute:.2} vs {name} {louder:.2}"
+            );
         }
 
         // The chrome, on all three of the surfaces it is written over.
@@ -4125,6 +4148,43 @@ fn a_dimmed_control_recedes_without_disappearing() {
             dim >= 1.5,
             "{theme}: dimmed {dim:.2} has gone into the surface"
         );
+    }
+}
+
+/// An attribute, a type and a call are three colours and not two of somebody else's.
+/// The mapping is the whole of the feature, and it is one `syntax()` line per capture, so
+/// what is pinned here is that no one of them has drifted back onto the entry it was
+/// carved out of -- `attribute` and `type` off `keyword`, `function` and its two children
+/// off the plain text.
+#[test]
+fn attributes_types_and_calls_are_their_own_colours() {
+    for (name, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
+        let theme = palette.syntax();
+        for (capture, color, taken, other) in [
+            ("attribute", theme.attribute, "keyword", theme.keyword),
+            ("type", theme.type_, "keyword", theme.keyword),
+            ("function", theme.function, "text", theme.text),
+            ("function.method", theme.function_method, "text", theme.text),
+            ("function.macro", theme.function_macro, "text", theme.text),
+        ] {
+            assert!(
+                color != other,
+                "{name}: {capture} is still the {taken} colour"
+            );
+        }
+
+        // And the three are told from each other, not merely from what they left.
+        for (a, first, b, second) in [
+            ("attribute", theme.attribute, "type", theme.type_),
+            ("attribute", theme.attribute, "function", theme.function),
+            ("type", theme.type_, "function", theme.function),
+        ] {
+            assert!(first != second, "{name}: {a} and {b} are one colour");
+        }
+
+        // A call site is one colour whichever of the three shapes it is written in.
+        assert_eq!(theme.function, theme.function_method, "{name}: a method");
+        assert_eq!(theme.function, theme.function_macro, "{name}: a macro");
     }
 }
 

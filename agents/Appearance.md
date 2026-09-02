@@ -29,7 +29,27 @@ width of the listing where the stroke beside it is a few pixels long. The code c
 the dotted name, so giving a child field the text colour while its parent holds another silently
 paints the child in the parent's colour — a property of which fields *share* a value, so a second
 palette can break it by landing two colours on each other, and `captures_do_not_walk_up` asserts it
-for both. This is deliberately **not** freya's own theming — `ColorsSheet` names none of these
+for both. Three of those fields used to point at colours the assembly side had brought with it, and
+the result was that a Rust file read as two colours: `attribute` and `type` were both `keyword_fg`,
+and `function` and `function.method` were `name_fg`, which is also the plain text, so a call site was
+the colour of everything around it. Each has an entry of its own now — `attribute_fg` a plain grey
+that recedes, `#[derive(..)]` being scaffolding around the code rather than code; `type_fg` a dim red,
+so `struct Foo` reads as a keyword introducing a name and not as two halves of one word; `function_fg`
+a blue with none of the address column's greyness — each written light-first and turned through the
+background for dark like every other pair. `function.macro` went with them although the goal did not
+name it: by the trap above, a child left on the text colour is painted in its parent's, so leaving it
+alone would have made it `function_fg` silently instead of saying so. **The assembly side keeps the
+five it had**, which was the open question and is a decision and not an omission: none of the three
+has anything to name over there. `SpanKind` is a mnemonic, a prefix, a register, a number, an address
+and glue — a listing holds no attribute, no type, and no call site that is not already a relocation
+target, which is as often data as it is a function, is the one name in a row of registers, and has
+`name_fg`/`name_hover_fg` and an underline to be told apart by. The split was for a *file* reading as
+two colours; a listing never had that problem, and repainting the mnemonic to keep the two sides from
+sharing would cost them the one vocabulary they are read in. So the three are source-only, and the
+contrast test holds them on `pane_bg` alone beside the strings and the comments, with `attribute_fg`
+additionally required to land *quieter* than the keyword it left, the punctuation beside it and the
+plain text — a relationship rather than a value, receding being the whole of what it is for.
+This is deliberately **not** freya's own theming — `ColorsSheet` names none of these
 roles, and the source pane's colours cannot be read from the element tree at all, being baked into
 a `SyntaxBlocks` when a file is *loaded*.
 
