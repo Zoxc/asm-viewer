@@ -18,7 +18,9 @@ filter); Objects and History filter where their rows are built. A History row dr
 name (`entry_text`) and is filtered on the whole one (`entry_name`), so a generic argument the row
 has no room for is still something a reader can search for.
 
-**The Objects list is a tree** (`src/tree.rs`). `ObjectTree::new` groups objects by *consecutive
+**Pressing an object opens all of its code** as one listing (`Document::Code`, `agents/UI.md`),
+which is the one thing an object has to show that a symbol does not; the file's own facts are the
+file-tab goal's. **The Objects list is a tree** (`src/tree.rs`). `ObjectTree::new` groups objects by *consecutive
 runs* of equal `Object::path` and flattens the result into `TreeRow`s — the tree is a shape in the
 data, never in the element tree, because a `VirtualScrollView` is told a length and asked for row
 *n*. A file contributing exactly **one** object is its own row and grows no parent. Filter and

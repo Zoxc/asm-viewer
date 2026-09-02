@@ -440,6 +440,9 @@ macro_rules! project_states {
             src_at: $runner
                 .provide_root_context(|| SrcAt(State::create(Positions::default())))
                 .0,
+            code_at: $runner
+                .provide_root_context(|| CodeAt(State::create(Positions::default())))
+                .0,
             history: $runner
                 .provide_root_context(|| Hist(State::create(History::default())))
                 .0,
@@ -1118,6 +1121,7 @@ fn the_panel_and_the_table_hold_the_same_documents() {
             states.history,
             states.asm_at,
             states.src_at,
+            states.code_at,
             states.driven,
             document,
         );
@@ -1168,6 +1172,7 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         &documents[1],
     );
@@ -1183,6 +1188,7 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         &documents[2],
     );
@@ -1195,6 +1201,7 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         &documents[0],
     );
@@ -1257,6 +1264,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         keep,
     );
@@ -1337,6 +1345,7 @@ fn switching_to_an_open_tab_is_not_a_visit() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         &first,
     );
@@ -1379,6 +1388,7 @@ fn closing_a_binary_keeps_the_source_tabs() {
         states.open,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         states.history,
         &path,
@@ -1553,6 +1563,7 @@ fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
         states.open,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         states.history,
         &path,
@@ -1694,6 +1705,8 @@ fn analysis_harness() -> impl IntoElement {
     let work = use_consume::<Work>().0;
     let mut seen = use_consume::<Seen>().0;
     let located = use_consume::<Locations>().0;
+    let reading = use_consume::<Sections>().0;
+    let window = use_consume::<Window>().0;
 
     use_analysis_with(
         asking,
@@ -1701,6 +1714,8 @@ fn analysis_harness() -> impl IntoElement {
         history,
         analysis,
         located,
+        reading,
+        window,
         move |question| work(question),
     );
 
@@ -1745,6 +1760,12 @@ macro_rules! analysis_states {
                 .0,
             $runner
                 .provide_root_context(|| Locations(State::create(Located::default())))
+                .0,
+            $runner
+                .provide_root_context(|| Sections(State::create(Reading::default())))
+                .0,
+            $runner
+                .provide_root_context(|| Window(State::create(None)))
                 .0,
         )
     }};
@@ -1813,12 +1834,13 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
         answer(Question::Study(symbol))
     };
 
-    let (mut test, (asking, analysis, seen, _objects, _history, _located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        move |runner| analysis_states!(runner, work),
-        1.,
-    );
+    let (mut test, (asking, analysis, seen, _objects, _history, _located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            move |runner| analysis_states!(runner, work),
+            1.,
+        );
     let mut asking = asking;
     let settle = |test: &mut TestingRunner| {
         for _ in 0..8 {
@@ -1880,12 +1902,13 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
 
-    let (mut test, (asking, analysis, seen, _objects, _history, _located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        |runner| analysis_states!(runner, answer),
-        1.,
-    );
+    let (mut test, (asking, analysis, seen, _objects, _history, _located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| analysis_states!(runner, answer),
+            1.,
+        );
     let mut asking = asking;
     test.sync_and_update();
 
@@ -1947,12 +1970,13 @@ fn a_source_line_answers_with_the_symbol_it_was_compiled_into() {
         .clone();
     let at = a_line_of(&wanted);
 
-    let (mut test, (asking, analysis, _seen, objects, _history, _located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        |runner| analysis_states!(runner, answer),
-        1.,
-    );
+    let (mut test, (asking, analysis, _seen, objects, _history, _located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| analysis_states!(runner, answer),
+            1.,
+        );
     let (mut asking, mut objects) = (asking, objects);
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
@@ -2002,12 +2026,13 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
         line: 999_999,
     };
 
-    let (mut test, (asking, analysis, _seen, objects, _history, _located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        |runner| analysis_states!(runner, answer),
-        1.,
-    );
+    let (mut test, (asking, analysis, _seen, objects, _history, _located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| analysis_states!(runner, answer),
+            1.,
+        );
     let (mut asking, mut objects) = (asking, objects);
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
@@ -2086,6 +2111,7 @@ fn the_queue_keeps_the_newest_question_of_each_kind() {
                 Question::Study(_) => "study",
                 Question::Resolve { .. } => "resolve",
                 Question::Locate { .. } => "locate",
+                Question::Code(_) => "code",
             })
             .collect()
     };
@@ -2110,6 +2136,234 @@ fn the_queue_keeps_the_newest_question_of_each_kind() {
 
     // And one of a kind is simply itself.
     assert_eq!(kinds(&newest(locate(), std::iter::empty())), ["locate"]);
+
+    // A window of an object's code is a third kind, worked between the two: a newer
+    // window replaces an older one and cancels neither of the others.
+    let object = symbols[0].object.clone();
+    let code = |window: Vec<usize>| {
+        Question::Code(CodeAsk {
+            object: object.clone(),
+            code: None,
+            window,
+        })
+    };
+    let drained = newest(
+        code(vec![0]),
+        vec![locate(), Question::Study(symbols[0].clone()), code(vec![1])].into_iter(),
+    );
+    assert_eq!(kinds(&drained), ["study", "code", "locate"]);
+    let Question::Code(kept) = &drained[1] else {
+        panic!("the window kind went missing");
+    };
+    assert_eq!(kept.window, [1], "the older window won");
+}
+
+/// A window lands in the reading it was asked for: the skeleton with the first answer,
+/// each stretch decoded the way its own tab decodes it, and the ask no longer pending.
+#[test]
+fn a_window_lands_in_the_reading_with_the_skeleton() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let (mut test, (_asking, _analysis, _seen, open, _history, _located, reading, window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            move |runner| analysis_states!(runner, answer),
+            1.,
+        );
+    let (mut open, mut reading, mut window) = (open, reading, window);
+    open.write().push(object.clone());
+    reading.set(Reading::of(Some(object.clone())));
+    settle(&mut test);
+
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: None,
+        window: vec![1, 2],
+    };
+    window.set(Some(ask.clone()));
+    // Pending while the worker has it and idle once the answer lands; on a loaded machine
+    // the two can be one pump apart, so only the landing is waited for.
+    pump(&mut test, || {
+        reading.peek().pending.is_none() && reading.peek().code.is_some()
+    });
+
+    let landed = reading.peek().clone();
+    let code = landed
+        .code
+        .clone()
+        .expect("the skeleton came with the answer");
+    assert_eq!(code.sections().len(), 1);
+    assert_eq!(landed.held.keys().copied().collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(landed.generation, 1);
+    // The second stretch is `twice`, decoded exactly as its own tab would be.
+    let twice = landed.held[&1].clone();
+    let studied = twice.code.as_ref().expect("twice has a symbol");
+    assert_eq!(studied.symbol.data.name, "twice");
+    let own = Studied::new(studied.symbol.clone());
+    assert_eq!(
+        studied.assembly.as_ref().map(|a| a.instructions.len()),
+        own.assembly.as_ref().map(|a| a.instructions.len())
+    );
+    // The line info is asked for afresh either way, so it is the answers that agree.
+    assert_eq!(studied.lines.file, own.lines.file);
+    assert_eq!(studied.lines.line, own.lines.line);
+    assert_eq!(
+        studied.lines.info.as_ref().map(|info| info.rows().len()),
+        own.lines.info.as_ref().map(|info| info.rows().len())
+    );
+}
+
+/// The worker decodes at most a chunk of the window it is asked for, in the order it was
+/// asked, so a symbol click queued behind a window waits for a few functions and not for
+/// the whole screen.
+#[test]
+fn a_window_is_decoded_a_chunk_at_a_time() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    // Nine stretches named, over an object that has three: the first eight are taken,
+    // repeats and all, before a single one is looked at.
+    let window: Vec<usize> = (0..9).map(|i| i % 3).collect();
+    let Answer::Code { decoded, code, .. } = answer(Question::Code(CodeAsk {
+        object: object.clone(),
+        code: None,
+        window: window.clone(),
+    })) else {
+        panic!("a window is answered with a window");
+    };
+    assert_eq!(decoded.len(), CHUNK);
+    assert_eq!(
+        decoded.iter().map(|(flat, _)| *flat).collect::<Vec<_>>(),
+        window[..CHUNK]
+    );
+    assert_eq!(code.sections().len(), 1);
+    // A stretch the listing has no place for is skipped, not answered.
+    let Answer::Code { decoded, .. } = answer(Question::Code(CodeAsk {
+        object,
+        code: Some(code),
+        window: vec![7],
+    })) else {
+        panic!("a window is answered with a window");
+    };
+    assert!(decoded.is_empty());
+}
+
+/// A window answer is taken only into the reading it is about: an answer arriving after
+/// the reader moved to another object's code is dropped, and so is one out of a binary
+/// closed since it was asked for.
+#[test]
+fn a_window_answer_for_a_reading_that_moved_on_is_dropped() {
+    let (_path, objects) = fixture_objects(2);
+    let (first, second) = (objects[0].clone(), objects[1].clone());
+
+    let (started, starts) = async_channel::unbounded::<()>();
+    let (gate, gated) = async_channel::unbounded::<()>();
+    let work = move |question: Question| {
+        let _ = started.send_blocking(());
+        let _ = gated.recv_blocking();
+        answer(question)
+    };
+    let (mut test, (_asking, _analysis, _seen, open, _history, _located, reading, window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            move |runner| analysis_states!(runner, work),
+            1.,
+        );
+    let (mut open, mut reading, mut window) = (open, reading, window);
+    open.write().extend([first.clone(), second.clone()]);
+    reading.set(Reading::of(Some(first.clone())));
+    settle(&mut test);
+
+    // Asked for the first object's code; the worker takes it and stops inside it.
+    window.set(Some(CodeAsk {
+        object: first.clone(),
+        code: None,
+        window: vec![0],
+    }));
+    pump(&mut test, || !starts.is_empty());
+    starts.recv_blocking().expect("the worker started");
+
+    // Meanwhile the reader is reading the second object's code.
+    reading.set(Reading::of(Some(second.clone())));
+    settle(&mut test);
+    gate.send_blocking(()).expect("the gate");
+    for _ in 0..40 {
+        test.sync_and_update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let landed = reading.peek().clone();
+    assert!(landed.is_about(&second));
+    assert!(
+        landed.held.is_empty(),
+        "an answer about the first object landed in the second's reading"
+    );
+    assert!(landed.code.is_none());
+
+    // And the second's own window, asked while its file closes under it, lands nowhere.
+    window.set(Some(CodeAsk {
+        object: second.clone(),
+        code: None,
+        window: vec![0],
+    }));
+    pump(&mut test, || !starts.is_empty());
+    starts.recv_blocking().expect("the worker started");
+    open.write().retain(|object| !Arc::ptr_eq(object, &second));
+    settle(&mut test);
+    gate.send_blocking(()).expect("the gate");
+    for _ in 0..40 {
+        test.sync_and_update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        reading.peek().held.is_empty(),
+        "an answer out of a closed binary landed"
+    );
+}
+
+/// What is held is bounded: a stretch farther than `KEEP` from the window an answer was
+/// asked for is let go when the answer lands.
+#[test]
+fn a_stretch_far_from_the_window_is_let_go() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let code = Arc::new(CodeListing::new(&object));
+    let empty = || Stretched {
+        code: None,
+        gap: None,
+    };
+    let mut reading = Reading::of(Some(object.clone()));
+    let ask = |window: Vec<usize>| CodeAsk {
+        object: object.clone(),
+        code: Some(code.clone()),
+        window,
+    };
+
+    // Two answers, one at each end of a long listing (the indices need not exist to be
+    // held; only the worker cares).
+    assert!(reading.take(&ask(vec![0]), code.clone(), vec![(0, empty())]));
+    assert!(reading.take(
+        &ask(vec![KEEP * 3]),
+        code.clone(),
+        vec![(KEEP * 3, empty())]
+    ));
+    assert_eq!(reading.held.keys().copied().collect::<Vec<_>>(), [KEEP * 3]);
+    // One within reach of the window stays.
+    assert!(reading.take(
+        &ask(vec![KEEP * 2]),
+        code.clone(),
+        vec![(KEEP * 2, empty())]
+    ));
+    assert_eq!(
+        reading.held.keys().copied().collect::<Vec<_>>(),
+        [KEEP * 2, KEEP * 3]
+    );
+    assert_eq!(reading.generation, 3);
+
+    // An answer with another skeleton is not this reading's.
+    let other = Arc::new(CodeListing::new(&object));
+    assert!(!reading.take(&ask(vec![1]), other, vec![(1, empty())]));
+    assert_eq!(reading.generation, 3);
 }
 
 /// A line's locations are every symbol compiled from it over every open object, and a
@@ -2126,12 +2380,13 @@ fn a_lines_locations_come_back_from_every_open_object() {
     // The same file parsed twice is two objects, and both answer.
     let twin = fixture_symbols()[0].object.clone();
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        |runner| analysis_states!(runner, answer),
-        1.,
-    );
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| analysis_states!(runner, answer),
+            1.,
+        );
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![wanted.object.clone(), twin.clone()]);
     test.sync_and_update();
@@ -2198,12 +2453,13 @@ fn locations_for_a_line_no_longer_asked_about_are_dropped() {
         answer(Question::Locate { query, objects })
     };
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        move |runner| analysis_states!(runner, work),
-        1.,
-    );
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            move |runner| analysis_states!(runner, work),
+            1.,
+        );
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![symbols[0].object.clone()]);
     let settle = |test: &mut TestingRunner| {
@@ -2253,12 +2509,13 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
         answer(question)
     };
 
-    let (mut test, (asking, analysis, _seen, objects, _history, located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        move |runner| analysis_states!(runner, work),
-        1.,
-    );
+    let (mut test, (asking, analysis, _seen, objects, _history, located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            move |runner| analysis_states!(runner, work),
+            1.,
+        );
     let (mut asking, mut objects, mut located) = (asking, objects, located);
     objects.set(vec![symbol.object.clone()]);
     let settle = |test: &mut TestingRunner| {
@@ -2311,12 +2568,13 @@ fn closing_a_binary_takes_its_locations_with_it() {
     let at = a_line_of(&wanted);
     let twin = fixture_symbols()[0].object.clone();
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        |runner| analysis_states!(runner, answer),
-        1.,
-    );
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| analysis_states!(runner, answer),
+            1.,
+        );
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![wanted.object.clone(), twin.clone()]);
     test.sync_and_update();
@@ -2746,12 +3004,13 @@ fn a_chosen_symbol_wins_the_pick_for_its_line() {
         .expect("the fixture holds another function")
         .clone();
 
-    let (mut test, (asking, analysis, _seen, objects, _history, _located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        |runner| analysis_states!(runner, answer),
-        1.,
-    );
+    let (mut test, (asking, analysis, _seen, objects, _history, _located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| analysis_states!(runner, answer),
+            1.,
+        );
     let (mut asking, mut objects) = (asking, objects);
     objects.set(vec![wanted.object.clone(), twin.object.clone()]);
     test.sync_and_update();
@@ -2879,6 +3138,7 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
         states.history,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         &tab,
     );
@@ -2950,12 +3210,13 @@ fn an_instance_query_answers_each_symbol_once() {
     };
     let query = Query::function(at.clone(), &function("everything", 21..=39));
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        |runner| analysis_states!(runner, answer),
-        1.,
-    );
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| analysis_states!(runner, answer),
+            1.,
+        );
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
@@ -3329,34 +3590,40 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
         .clone();
     let at = a_line_of(&wanted);
 
-    let (mut test, ((_asking, _analysis, _seen, objects, _history, located), content, sidebar)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| {
-                let states = analysis_states!(runner, answer);
-                // The two areas as `app()` wires them, the content one knowing the
-                // sidebar. The content dock holds no view at all, so the search has to
-                // cross over.
-                let sidebar = runner
-                    .provide_root_context(|| {
-                        SidebarDock(State::create(DockArea::column(vec![vec![
-                            Tab::View(View::History),
-                            Tab::View(View::Locations),
-                        ]])))
-                    })
-                    .0;
-                let content = runner
-                    .provide_root_context(|| {
-                        let mut area = DockArea::row(vec![vec![]]).with_documents(DOCUMENT_PANEL);
-                        area.other = Some(sidebar);
-                        ContentDock(State::create(area))
-                    })
-                    .0;
-                (states, content, sidebar)
-            },
-            1.,
-        );
+    let (
+        mut test,
+        (
+            (_asking, _analysis, _seen, objects, _history, located, _reading, _window),
+            content,
+            sidebar,
+        ),
+    ) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        |runner| {
+            let states = analysis_states!(runner, answer);
+            // The two areas as `app()` wires them, the content one knowing the
+            // sidebar. The content dock holds no view at all, so the search has to
+            // cross over.
+            let sidebar = runner
+                .provide_root_context(|| {
+                    SidebarDock(State::create(DockArea::column(vec![vec![
+                        Tab::View(View::History),
+                        Tab::View(View::Locations),
+                    ]])))
+                })
+                .0;
+            let content = runner
+                .provide_root_context(|| {
+                    let mut area = DockArea::row(vec![vec![]]).with_documents(DOCUMENT_PANEL);
+                    area.other = Some(sidebar);
+                    ContentDock(State::create(area))
+                })
+                .0;
+            (states, content, sidebar)
+        },
+        1.,
+    );
     let mut objects = objects;
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
@@ -3437,12 +3704,13 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
         answer(question)
     };
 
-    let (mut test, (asking, analysis, seen, objects, _history, _located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        move |runner| analysis_states!(runner, work),
-        1.,
-    );
+    let (mut test, (asking, analysis, seen, objects, _history, _located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            move |runner| analysis_states!(runner, work),
+            1.,
+        );
     let (mut asking, mut objects) = (asking, objects);
     objects.set(vec![wanted.object.clone()]);
     let settle = |test: &mut TestingRunner| {
@@ -3542,12 +3810,13 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
     drop(symbols);
     let before = Arc::strong_count(&object);
 
-    let (mut test, (asking, analysis, seen, objects, _history, _located)) = TestingRunner::new(
-        analysis_harness,
-        (100., 100.).into(),
-        |runner| analysis_states!(runner, answer),
-        1.,
-    );
+    let (mut test, (asking, analysis, seen, objects, _history, _located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            |runner| analysis_states!(runner, answer),
+            1.,
+        );
     let (mut asking, mut objects, mut seen) = (asking, objects, seen);
     objects.set(vec![object.clone()]);
     test.sync_and_update();
@@ -3683,7 +3952,12 @@ macro_rules! listing_states {
                 ..Analyzed::default()
             }))
         });
-        (states, pinned, marked)
+        // The row's door into the object's code reads these three, and lands through
+        // the last.
+        $runner.provide_root_context(|| Sections(State::create(Reading::default())));
+        $runner.provide_root_context(|| Window(State::create(None)));
+        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
+        (states, pinned, marked, landing)
     }};
 }
 
@@ -3713,7 +3987,7 @@ fn scrolling_past_a_separator_keeps_every_row_its_own() {
         studied,
     };
 
-    let (mut test, (_states, _pinned, _marked)) = TestingRunner::new(
+    let (mut test, (_states, _pinned, _marked, _landing)) = TestingRunner::new(
         listing_harness,
         (500., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -3798,7 +4072,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // fifteenth, far enough down that a pane this tall is not showing it.
     let landing = "0000000000000061 ";
 
-    let (mut test, (states, pinned, marked)) = TestingRunner::new(
+    let (mut test, (states, pinned, marked, _landing)) = TestingRunner::new(
         listing_harness,
         (500., 200.).into(),
         |runner| listing_states!(runner, shown),
@@ -4155,7 +4429,7 @@ fn the_assembly_pane_names_the_symbol_in_both_spellings() {
         studied: Studied::new(symbol.clone()),
     };
 
-    let (mut test, (_states, _pinned, _marked)) = TestingRunner::new(
+    let (mut test, (_states, _pinned, _marked, _landing)) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -4187,7 +4461,7 @@ fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
     };
     let tab = Document::Assembly(Selection::Symbol(elsewhere.clone()));
 
-    let (mut test, (_states, _pinned, _marked)) = TestingRunner::new(
+    let (mut test, (_states, _pinned, _marked, _landing)) = TestingRunner::new(
         tab_pane_harness,
         (600., 300.).into(),
         move |runner| {
@@ -4265,7 +4539,7 @@ fn the_expanded_section_says_what_the_info_pane_said() {
         studied: Studied::new(sum_to.clone()),
     };
 
-    let (mut test, (states, _pinned, _marked)) = TestingRunner::new(
+    let (mut test, (states, _pinned, _marked, _landing)) = TestingRunner::new(
         listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),
@@ -4441,7 +4715,7 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
             let mounted = runner
                 .provide_root_context(|| Mounted(State::create(true)))
                 .0;
-            let (states, _pinned, _marked) = listing_states!(runner, shown);
+            let (states, _pinned, _marked, _landing) = listing_states!(runner, shown);
             (states, mounted)
         },
         1.,
@@ -4706,7 +4980,7 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
         studied,
     };
 
-    let (mut test, (states, _pinned, _marked)) = TestingRunner::new(
+    let (mut test, (states, _pinned, _marked, _landing)) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
         |runner| {
@@ -6935,4 +7209,1153 @@ fn a_wide_output_line_is_reached_by_scrolling_sideways() {
         after.min_x() < before.min_x() - 100.0,
         "the sideways wheel moved nothing: {after:?} against {before:?}"
     );
+}
+
+/// The hovered row is kept as a **listing row**, so one state can serve a listing of many
+/// symbols, and the list converts it back to the instruction it is before asking `Lanes`
+/// what that instruction touches. Below a separator the two spaces differ by one, so a
+/// hover there lights the branch of the instruction under the pointer only if the
+/// conversion is made -- taken as an index, it would light some other row's branch, or
+/// none.
+#[test]
+fn hovering_a_row_below_a_separator_lights_that_rows_own_branch() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    let assembly = studied.assembly.clone().expect("sum_to decodes");
+    let lanes = studied.lanes.clone();
+
+    // A branching instruction drawn below a separator, whose listing row is no branch's
+    // index: the fixture guard for what this test tells apart.
+    let edge = assembly
+        .edges
+        .iter()
+        .copied()
+        .find(|edge| {
+            let row = lanes.row_of(edge.from);
+            row != edge.from && assembly.edge_from(row).is_none()
+        })
+        .expect("sum_to branches from below a block boundary");
+    let address = format!("{:016X} ", assembly.instructions[edge.from].address);
+
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, _) = TestingRunner::new(
+        listing_harness,
+        (500., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+
+    let lit = |test: &TestingRunner| -> usize {
+        test.find_many(|_node, element| {
+            (element.style().background == Fill::Color(palette().branch_hover_fg)).then_some(())
+        })
+        .len()
+    };
+    assert_eq!(lit(&test), 0, "nothing is lit before the pointer arrives");
+
+    let row = label_area(&test, &address).expect("the branching row is drawn");
+    test.move_cursor((
+        (row.origin.x + 5.0) as f64,
+        (row.origin.y + row.height() / 2.0) as f64,
+    ));
+    settle(&mut test);
+    assert!(
+        lit(&test) > 0,
+        "hovering row {} (instruction {}) lit no stroke of its branch",
+        lanes.row_of(edge.from),
+        edge.from
+    );
+}
+
+/// The address a copied line spells is the listing's, which is the instruction's own plus
+/// what the listing adds: nothing for a symbol read alone, and the section's place in the
+/// object's layout in a listing of all its code.
+#[test]
+fn a_copied_line_spells_the_address_the_listing_draws() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let assembly = sum_to
+        .data
+        .assembly(&sum_to.object)
+        .expect("sum_to decodes");
+    let first = &assembly.instructions[0];
+
+    assert!(asm_line(first, 0).starts_with("0000000000000030 "));
+    assert!(asm_line(first, 0x1000).starts_with("0000000000001030 "));
+}
+
+/// Pressing an object in the Objects list opens all of its code as one listing -- a
+/// document of its own kind, named after the object, visited like any other.
+#[test]
+fn pressing_an_object_row_opens_its_code() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let (mut test, mut states) = TestingRunner::new(
+        objects_harness,
+        (300., 300.).into(),
+        |runner| project_states!(runner),
+        1.,
+    );
+    states.objects.write().push(object.clone());
+    settle(&mut test);
+
+    let row = label_area(&test, "line_fixture.o").expect("the object has a row");
+    let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
+    test.move_cursor(press);
+    test.press_cursor(press);
+    test.release_cursor(press);
+    settle(&mut test);
+
+    let document = Document::Code(object.clone());
+    assert!(states.open.active() == Some(document.clone()));
+    assert!(states
+        .history
+        .peek()
+        .recent()
+        .any(|(_, entry)| *entry == document));
+    assert!(
+        states.open.active() != Some(Document::Assembly(Selection::Object(object))),
+        "the object tab is not what opened"
+    );
+    assert_eq!(entry_text(&document), "line_fixture.o");
+}
+
+use crate::section::{Row, Rows};
+
+/// Nothing at all: for a test that drives the states and mounts no pane.
+fn bare_harness() -> impl IntoElement {
+    rect().expanded()
+}
+
+/// The Assembly pane over an object's code, the reading seeded by the test: the skeleton
+/// and whatever stretches it says are decoded, with no worker between the two.
+fn code_harness() -> impl IntoElement {
+    let reading = use_consume::<Sections>().0;
+    let object = reading.read().object.clone();
+    match object {
+        Some(object) => rect().expanded().child(AssemblyPane {
+            document: Document::Code(object),
+        }),
+        None => rect().expanded(),
+    }
+}
+
+/// The contexts the section view reads, beside the project's: the listing's own states
+/// and a reading of `object` with `held` decoded.
+macro_rules! code_states {
+    ($runner:expr, $reading:expr) => {{
+        let states = project_states!($runner);
+        $runner.provide_root_context(|| Focused(State::create(None)));
+        let marked = $runner
+            .provide_root_context(|| Marked(State::create(None)))
+            .0;
+        $runner.provide_root_context(|| Shift(State::create(false)));
+        $runner.provide_root_context(|| Locations(State::create(Located::default())));
+        let pinned = $runner
+            .provide_root_context(|| Pinned(State::create(None)))
+            .0;
+        $runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
+        let reading = $runner
+            .provide_root_context(|| Sections(State::create($reading)))
+            .0;
+        let window = $runner
+            .provide_root_context(|| Window(State::create(None)))
+            .0;
+        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
+        let ctrl = $runner
+            .provide_root_context(|| Ctrl(State::create(false)))
+            .0;
+        (states, pinned, marked, reading, window, landing, ctrl)
+    }};
+}
+
+/// A reading of `object`'s code with its skeleton and the stretches in `held` decoded the
+/// way the worker decodes them.
+fn reading_of(object: &Arc<Object>, held: &[usize]) -> Reading {
+    let code = Arc::new(CodeListing::new(object));
+    let mut reading = Reading::of(Some(object.clone()));
+    let decoded: Vec<(usize, Stretched)> = held
+        .iter()
+        .filter_map(|&flat| {
+            let Answer::Code { mut decoded, .. } = answer(Question::Code(CodeAsk {
+                object: object.clone(),
+                code: Some(code.clone()),
+                window: vec![flat],
+            })) else {
+                return None;
+            };
+            decoded.pop()
+        })
+        .collect();
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: Some(code.clone()),
+        window: held.to_vec(),
+    };
+    assert!(reading.take(&ask, code, decoded));
+    reading
+}
+
+/// The rows of `reading` as the view counts them.
+fn rows_of(reading: &Reading) -> Arc<Rows> {
+    let code = reading.code.clone().expect("the reading has a skeleton");
+    Arc::new(Rows::new(code, |flat| reading.body(flat)))
+}
+
+/// The address labels drawn, top to bottom.
+fn address_labels(test: &TestingRunner) -> Vec<String> {
+    let mut drawn: Vec<(f32, String)> = test.find_many(|node, element| {
+        use freya::elements::label::LabelElement;
+        use std::any::Any;
+        let _ = element;
+        let element = node.element();
+        let label = (element.as_ref() as &dyn Any).downcast_ref::<LabelElement>()?;
+        let text = label.text.to_string();
+        (text.len() == 17 && text.ends_with(' ') && u64::from_str_radix(text.trim(), 16).is_ok())
+            .then(|| (node.layout().area.origin.y, text))
+    });
+    drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
+    drawn.into_iter().map(|(_, text)| text).collect()
+}
+
+/// Before a byte is decoded, a code tab draws its section's header, a label for every
+/// symbol at the address the layout places it, and empty rows between them -- the whole
+/// listing's length, from the first frame.
+#[test]
+fn a_code_tab_draws_its_labels_and_empty_rows_before_a_byte_is_decoded() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let rows = rows_of(&reading);
+    let (mut test, _) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    for text in ["section .text", "<add>:", "<twice>:", "<sum_to>:"] {
+        assert!(
+            drawn.contains(&text.to_string()),
+            "{text} is not drawn: {drawn:?}"
+        );
+    }
+    assert_eq!(
+        address_labels(&test),
+        [
+            "0000000000000000 ",
+            "0000000000000000 ",
+            "0000000000000014 ",
+            "0000000000000030 "
+        ],
+        "the header and the three labels, at their addresses, and nothing between them"
+    );
+    // The empty rows are there to be scrolled over: the listing is as long as the
+    // estimate says, which is far more than its four rows of text.
+    assert!(rows.len() > 4);
+    let label_rows: Vec<usize> = (0..rows.len())
+        .filter(|&row| matches!(rows.row(row), Some(Row::Label { .. })))
+        .collect();
+    let top = label_area(&test, "section .text").expect("the header is drawn");
+    let bottom = label_area(&test, "<sum_to>:").expect("sum_to is labelled");
+    assert_eq!(
+        bottom.origin.y - top.origin.y,
+        label_rows[2] as f32 * code_row_height(),
+        "the last label sits below the empty rows the others were guessed to take"
+    );
+}
+
+/// When a stretch above the viewport decodes, its guess is replaced by its rows and the
+/// row under the reader stays where it is: the view keeps its place by address.
+#[test]
+fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let rows = rows_of(&reading);
+    let (mut test, (states, _pinned, _marked, sections, _window, _landing, _ctrl)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 300.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    let mut sections = sections;
+    let document = Document::Code(object.clone());
+    // Open, as a tab is in the app: a place is written down only for an open tab.
+    activate(
+        states.open,
+        states.history,
+        Some(document.clone()),
+        Visit::Went,
+    );
+    settle(&mut test);
+
+    // Scroll so that `sum_to`'s label is the row at the top.
+    let label = (0..rows.len())
+        .find(|&row| {
+            rows.address_of(row) == Some(0x30) && matches!(rows.row(row), Some(Row::Label { .. }))
+        })
+        .expect("sum_to has a label row");
+    test.scroll(
+        (300., 150.),
+        (0., -(label as f64) * code_row_height() as f64),
+    );
+    settle(&mut test);
+    assert_eq!(address_labels(&test)[0], "0000000000000030 ");
+    assert_eq!(
+        states.code_at.peek().at(&document),
+        Some(Spot {
+            address: 0x30,
+            rows: 0
+        }),
+        "the place is written down as the reader scrolls"
+    );
+
+    let before = label_area(&test, "<sum_to>:").expect("sum_to is labelled");
+
+    // `add` decodes, above the viewport: its guess becomes its instruction rows, and every
+    // row below it moves in the listing -- but not on screen.
+    let mut decoded = reading_of(&object, &[0]);
+    let grown = rows_of(&decoded);
+    assert_ne!(grown.len(), rows.len(), "the guess was not the truth");
+    // Both readings were built from nothing and count their answers alike; the view
+    // tells them apart by the generation, which in the app only ever goes up.
+    decoded.generation = sections.peek().generation + 1;
+    sections.set(decoded);
+    settle(&mut test);
+    settle(&mut test);
+    let after = label_area(&test, "<sum_to>:").expect("sum_to is still labelled");
+    assert_eq!(
+        after.origin.y, before.origin.y,
+        "the row under the reader moved"
+    );
+    assert_eq!(address_labels(&test)[0], "0000000000000030 ");
+}
+
+/// A code tab comes back to the address it was left at: the place written down for it
+/// is what its first run scrolls to.
+#[test]
+fn a_code_tab_comes_back_to_the_address_it_was_left_at() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, (mut states, ..)) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let document = Document::Code(object.clone());
+    activate(
+        states.open,
+        states.history,
+        Some(document.clone()),
+        Visit::Went,
+    );
+    states.code_at.write().remember(
+        document.clone(),
+        Spot {
+            address: 0x14,
+            rows: 0,
+        },
+    );
+    settle(&mut test);
+    settle(&mut test);
+
+    assert_eq!(address_labels(&test)[0], "0000000000000014 ");
+    assert!(labels(&test).contains(&"<twice>:".to_string()));
+}
+
+/// What the view asks for is the stretches within a buffer of screens of the viewport
+/// that are not held, nearest the reader first -- and at the top of a listing that fits
+/// in the buffer, that is every stretch from the first.
+#[test]
+fn scrolling_asks_for_a_buffer_of_screens_nearest_the_reader_first() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let rows = rows_of(&reading);
+    let (mut test, (_states, _pinned, _marked, _sections, window, _landing, _ctrl)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 300.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    settle(&mut test);
+    settle(&mut test);
+
+    let asked = window.peek().clone().expect("the view asked for a window");
+    assert!(Arc::ptr_eq(&asked.object, &object));
+    assert!(asked.code.is_some(), "the skeleton travels with the ask");
+    assert_eq!(asked.window, [0, 1, 2]);
+
+    // Scrolled to the bottom, the last stretch is nearest and the buffer still reaches
+    // the first.
+    test.scroll(
+        (300., 150.),
+        (0., -(rows.len() as f64) * code_row_height() as f64),
+    );
+    settle(&mut test);
+    settle(&mut test);
+    let asked = window.peek().clone().expect("the view asked again");
+    assert_eq!(asked.window, [2, 1, 0]);
+}
+
+/// Closing a code tab forgets the address it was left at, with the tab -- a place kept
+/// for a closed tab would hold its object's bytes.
+#[test]
+fn closing_a_code_tab_forgets_its_address() {
+    let (_path, objects) = fixture_objects(1);
+    let document = Document::Code(objects[0].clone());
+    let (mut test, mut states) = TestingRunner::new(
+        bare_harness,
+        (100., 100.).into(),
+        |runner| project_states!(runner),
+        1.,
+    );
+    activate(
+        states.open,
+        states.history,
+        Some(document.clone()),
+        Visit::Went,
+    );
+    states.code_at.write().remember(
+        document.clone(),
+        Spot {
+            address: 0x30,
+            rows: 2,
+        },
+    );
+    test.sync_and_update();
+    assert!(states.code_at.peek().at(&document).is_some());
+
+    close_tab(
+        states.open,
+        states.history,
+        states.asm_at,
+        states.src_at,
+        states.code_at,
+        states.driven,
+        &document,
+    );
+    test.sync_and_update();
+    assert!(states.code_at.peek().at(&document).is_none());
+    assert!(states.open.active().is_none());
+}
+
+/// The Source pane beside an object's code, the reading seeded by the test.
+fn code_source_harness() -> impl IntoElement {
+    let reading = use_consume::<Sections>().0;
+    let object = reading.read().object.clone();
+    match object {
+        Some(object) => rect().expanded().child(SourcePane {
+            document: Document::Code(object),
+        }),
+        None => rect().expanded(),
+    }
+}
+
+/// Beside an object's code the Source pane draws the file of whatever the reader pinned
+/// in it, and nothing until they have: the listing draws no symbol of its own to name one.
+#[test]
+fn a_pin_in_the_section_view_opens_its_file_beside_it() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, (_states, pinned, ..)) = TestingRunner::new(
+        code_source_harness,
+        (600., 300.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let mut pinned = pinned;
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&"Click an instruction".to_string()),
+        "{:?}",
+        labels(&test)
+    );
+
+    // A pin names a line of the fixture's source, which this machine does not have: the
+    // pane names the file it went looking for, which is the whole of what is asked here.
+    pinned.set(Some(Pin {
+        at: LinePos {
+            file: Arc::from("/fixture/line_fixture.c"),
+            line: 5,
+        },
+        reveal: Owed::by(Pane::Source),
+        landed: false,
+    }));
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn
+            .iter()
+            .any(|text| text.contains("/fixture/line_fixture.c")),
+        "the pinned line's file is not what the pane went to: {drawn:?}"
+    );
+}
+
+/// The run picked out of an object's code is listing rows, and the rows are counted
+/// afresh with every answer that lands: the run goes when they do, and stays through an
+/// ask, which writes the same state and changes no row.
+#[test]
+fn a_chunk_landing_drops_the_run_picked_out_over_it() {
+    fn marks_harness() -> impl IntoElement {
+        let active = use_consume::<Active>().0;
+        let driven = use_consume::<Drives>().0;
+        let analysis = use_consume::<Analysis>().0;
+        let pinned = use_consume::<Pinned>().0;
+        let reading = use_consume::<Sections>().0;
+        let marked = use_consume::<Marked>().0;
+        use_clear_marks(
+            active,
+            crate::ui::analyzed::Asked { active, driven },
+            analysis,
+            pinned,
+            reading,
+            marked,
+        );
+        rect().expanded()
+    }
+
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, (_states, _pinned, marked, sections, _window, _landing, _ctrl)) =
+        TestingRunner::new(
+            marks_harness,
+            (100., 100.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    let mut sections = sections;
+    settle(&mut test);
+
+    mark_row(marked, Pane::Assembly, 3);
+    settle(&mut test);
+    assert!(marked.peek().is_some(), "the run was not picked out");
+
+    // An ask: the same state written, no row changed.
+    let mut asked = sections.peek().clone();
+    asked.pending = Some(CodeAsk {
+        object: object.clone(),
+        code: asked.code.clone(),
+        window: vec![1],
+    });
+    sections.set(asked);
+    settle(&mut test);
+    assert!(marked.peek().is_some(), "an ask dropped the run");
+
+    // An answer: the rows are counted afresh, and the run with them.
+    let mut landed = sections.peek().clone();
+    landed.generation += 1;
+    sections.set(landed);
+    settle(&mut test);
+    assert!(
+        marked.peek().is_none(),
+        "the rows changed under the run and it stayed"
+    );
+}
+
+/// A run copied out of an object's code spells each kind of row as it is drawn: the
+/// section's header, a symbol's label after its address, an instruction as its own tab
+/// copies it, and an empty row as the blank line it is.
+#[test]
+fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0]);
+    let rows = rows_of(&reading);
+
+    let lines: Vec<String> = (0..rows.len())
+        .map(|row| row_line(&rows, &reading, row))
+        .collect();
+    assert_eq!(lines[0], "section .text");
+    assert_eq!(lines[1], "0000000000000000 <add>:");
+    let add = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "add")
+        .expect("the fixture holds add");
+    let own = add.data.assembly(&add.object).expect("add decodes");
+    assert_eq!(lines[2], asm_line(&own.instructions[0], 0));
+    // `twice` is not decoded: its label, then blank lines.
+    let twice = lines
+        .iter()
+        .position(|line| line == "0000000000000014 <twice>:")
+        .expect("twice is labelled");
+    assert_eq!(lines[twice + 1], "");
+}
+
+/// A click on a source row beside an object's code owes the listing a scroll to the
+/// instruction compiled from that line, paid out of whichever held stretch has one -- and
+/// left owed, for the answer that decodes the stretch to pay, while none does.
+#[test]
+fn a_source_click_beside_the_section_view_reveals_its_instruction() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let sum_to = Symbol {
+        object: object.clone(),
+        data: object
+            .symbols_sorted
+            .iter()
+            .find(|data| data.name == "sum_to")
+            .expect("the fixture holds sum_to")
+            .clone(),
+    };
+    let at = a_line_of(&sum_to);
+    let reading = reading_of(&object, &[]);
+    let (mut test, (_states, pinned, _marked, sections, _window, _landing, _ctrl)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 300.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    let (mut pinned, mut sections) = (pinned, sections);
+    settle(&mut test);
+    assert_eq!(address_labels(&test)[0], "0000000000000000 ");
+
+    // Pinned from the source side while `sum_to` is still empty rows: owed, and unpaid.
+    pinned.set(Some(Pin {
+        at: at.clone(),
+        reveal: Owed::by(Pane::Assembly),
+        landed: false,
+    }));
+    settle(&mut test);
+    assert!(
+        owed_reveal(pinned, Pane::Assembly).is_some(),
+        "the reveal was paid with nothing to pay it"
+    );
+
+    // `sum_to` decodes: the row is there now, and the listing scrolls to it.
+    let mut decoded = reading_of(&object, &[2]);
+    decoded.generation = sections.peek().generation + 1;
+    sections.set(decoded);
+    settle(&mut test);
+    settle(&mut test);
+    assert!(
+        owed_reveal(pinned, Pane::Assembly).is_none(),
+        "the reveal is still owed"
+    );
+    let drawn = address_labels(&test);
+    assert_ne!(
+        drawn[0], "0000000000000000 ",
+        "the listing did not scroll: {drawn:?}"
+    );
+    assert!(
+        drawn
+            .iter()
+            .all(|text| u64::from_str_radix(text.trim(), 16).unwrap() >= 0x30),
+        "sum_to's rows are not what is on screen: {drawn:?}"
+    );
+}
+
+/// Ctrl-pressing a symbol's label in an object's code opens that symbol's own tab: the
+/// door back from a function read among its neighbours to reading it alone, a visit like
+/// any opening from a list. A plain press is a plain press.
+#[test]
+fn pressing_a_label_opens_the_symbols_own_tab() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, (states, _pinned, _marked, _sections, _window, _landing, ctrl)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    let mut ctrl = ctrl;
+    let code = Document::Code(object.clone());
+    activate(states.open, states.history, Some(code.clone()), Visit::Went);
+    settle(&mut test);
+
+    // A plain press is a plain press: the tab stays.
+    let label = centre_of(&test, "<twice>:");
+    press_at(&mut test, label);
+    settle(&mut test);
+    assert!(states.open.active() == Some(code.clone()));
+
+    // With Ctrl held it is the door.
+    ctrl.set(true);
+    settle(&mut test);
+    press_at(&mut test, label);
+    settle(&mut test);
+    let twice = Symbol {
+        object: object.clone(),
+        data: object
+            .symbols_sorted
+            .iter()
+            .find(|data| data.name == "twice")
+            .expect("the fixture holds twice")
+            .clone(),
+    };
+    let symbol = Document::Assembly(Selection::Symbol(twice));
+    assert!(states.open.active() == Some(symbol.clone()));
+    assert!(states
+        .history
+        .peek()
+        .recent()
+        .any(|(_, entry)| *entry == symbol));
+}
+
+/// The Assembly pane over a symbol's listing, with a menu viewer above it so a row's
+/// menu can open.
+fn menu_listing_harness() -> impl IntoElement {
+    let analysis = use_consume::<Analysis>().0;
+    let document = analysis
+        .read()
+        .shown
+        .as_ref()
+        .map(|shown| asked_of(&shown.ask))
+        .unwrap_or_else(|| Document::Source(Arc::from("")));
+
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(AssemblyPane { document })
+}
+
+/// An instruction's menu offers to show it among its neighbours: the object's code tab
+/// opens with its place set on that instruction's address -- written before the tab is
+/// opened, the order a restore uses -- and the line it was compiled from left as a
+/// landing for both panes.
+#[test]
+fn show_in_object_lands_the_code_tab_on_the_instruction() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let object = sum_to.object.clone();
+    let studied = Studied::new(sum_to.clone());
+    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, (states, _pinned, _marked, landing)) = TestingRunner::new(
+        menu_listing_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    activate(states.open, states.history, Some(symbol), Visit::Went);
+    settle(&mut test);
+
+    let row = centre_of(&test, &format!("{first:016X} "));
+    right_click(&mut test, row);
+    let entry = "Show in unified view".to_string();
+    assert!(labels(&test).contains(&entry), "{:?}", labels(&test));
+    let item = centre_of(&test, &entry);
+    press_at(&mut test, item);
+    settle(&mut test);
+
+    let code = Document::Code(object.clone());
+    assert!(states.open.active() == Some(code.clone()));
+    assert_eq!(
+        states.code_at.peek().at(&code),
+        Some(Spot {
+            address: first,
+            rows: 0
+        })
+    );
+    let landed = landing.peek().clone().expect("the line is left to land");
+    assert!(landed.tab == code);
+    assert!(landed.at == a_line_of(&sum_to));
+}
+
+/// Shown among its neighbours while the object's code is already on top, the view
+/// scrolls to the instruction and nothing else changes: the place is written and read
+/// back by the pane, and the document stays.
+#[test]
+fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, (states, pinned, _marked, _sections, _window, landing, _ctrl)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 300.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    let code = Document::Code(object.clone());
+    activate(states.open, states.history, Some(code.clone()), Visit::Went);
+    settle(&mut test);
+    assert_eq!(address_labels(&test)[0], "0000000000000000 ");
+    let visits = states.history.peek().recent().count();
+
+    show_in_code(
+        states.open,
+        states.history,
+        pinned,
+        landing,
+        states.code_at,
+        object.clone(),
+        0x30,
+        None,
+    );
+    settle(&mut test);
+    settle(&mut test);
+    assert_eq!(address_labels(&test)[0], "0000000000000030 ");
+    assert!(states.open.active() == Some(code));
+    assert_eq!(states.history.peek().recent().count(), visits);
+}
+
+/// The rows of an object's code that are bytes and not instructions read as data and not
+/// as assembly: a data directive in front of the values -- `dq` for a row that divides
+/// into quadwords, down to `db` -- and the bytes as characters after them, which no
+/// instruction row has; and a copied line says the same.
+#[test]
+fn a_gap_row_is_marked_as_data() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    // A stretch decoded as sixteen bytes of gap and no code, put into the reading by hand:
+    // the fixture's own functions leave no padding between them.
+    let mut reading = reading_of(&object, &[]);
+    let code = reading.code.clone().expect("the skeleton");
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: Some(code.clone()),
+        window: vec![0],
+    };
+    let gap = analysis::Gap {
+        range: 0..16,
+        kind: analysis::GapKind::Bytes,
+    };
+    assert!(reading.take(
+        &ask,
+        code,
+        vec![(
+            0,
+            Stretched {
+                code: None,
+                gap: Some(gap),
+            }
+        )]
+    ));
+    let rows = rows_of(&reading);
+    let gap_row = (0..rows.len())
+        .find(|&row| matches!(rows.row(row), Some(Row::Gap { .. })))
+        .expect("the stretch has a gap row");
+    // Sixteen bytes divide into quadwords, little-endian; a row of them is `dq`.
+    let copied = row_line(&rows, &reading, gap_row);
+    let value = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .rev()
+            .fold(0u64, |value, &byte| (value << 8) | u64::from(byte))
+    };
+    let section = object
+        .sections
+        .iter()
+        .find(|section| section.name == ".text")
+        .expect(".text is there");
+    let ascii: String = section.data[0..16]
+        .iter()
+        .map(|&b| {
+            if b.is_ascii_graphic() || b == b' ' {
+                b as char
+            } else {
+                '.'
+            }
+        })
+        .collect();
+    assert_eq!(
+        copied,
+        format!(
+            "0000000000000000 dq {:016X}, {:016X}{} |{ascii}|",
+            value(&section.data[0..8]),
+            value(&section.data[8..16]),
+            " ".repeat(47 - 34),
+        )
+    );
+
+    let (mut test, _) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"dq\u{a0}".to_string()), "{drawn:?}");
+    assert!(
+        drawn
+            .iter()
+            .any(|text| text.ends_with('|') && text.contains('|')),
+        "no row draws its bytes as characters: {drawn:?}"
+    );
+}
+
+/// The Assembly pane over an object's code with a menu viewer above it, so a row's menu
+/// can open.
+fn menu_code_harness() -> impl IntoElement {
+    let reading = use_consume::<Sections>().0;
+    let object = reading.read().object.clone();
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .maybe_child(object.map(|object| {
+            AssemblyPane {
+                document: Document::Code(object),
+            }
+            .into_element()
+        }))
+}
+
+/// An instruction's menu in the unified view offers the symbol it belongs to as a tab of
+/// its own, landed on the row's line: the door back from reading a function among its
+/// neighbours to reading it alone, and not only through its label.
+#[test]
+fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let twice = Symbol {
+        object: object.clone(),
+        data: object
+            .symbols_sorted
+            .iter()
+            .find(|data| data.name == "twice")
+            .expect("the fixture holds twice")
+            .clone(),
+    };
+    let reading = reading_of(&object, &[1]);
+    let (mut test, (states, _pinned, _marked, _sections, _window, landing, _ctrl)) =
+        TestingRunner::new(
+            menu_code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    let code = Document::Code(object.clone());
+    activate(states.open, states.history, Some(code), Visit::Went);
+    settle(&mut test);
+
+    // The second instruction: the first shares its address text with the label above
+    // it, which is not a row with a menu.
+    let second = format!("{:016X} ", twice.data.address + 1);
+    let row = centre_of(&test, &second);
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"Open as symbol".to_string()), "{drawn:?}");
+    assert!(
+        !drawn.contains(&"Show in unified view".to_string()),
+        "the unified view offered itself: {drawn:?}"
+    );
+    let item = centre_of(&test, "Open as symbol");
+    press_at(&mut test, item);
+    settle(&mut test);
+
+    let symbol = Document::Assembly(Selection::Symbol(twice.clone()));
+    assert!(states.open.active() == Some(symbol.clone()));
+    let landed = landing
+        .peek()
+        .clone()
+        .expect("the row's line is left to land");
+    assert!(landed.tab == symbol);
+    assert!(landed.at.file == a_line_of(&twice).file);
+}
+
+/// The Assembly pane over an object's code as `app()` mounts it: the pane first, and the
+/// reading following the active document a beat later through `use_reading_of`.
+fn app_like_code_harness() -> impl IntoElement {
+    let object = use_consume::<PaneObject>().0;
+    let active = use_consume::<Active>().0;
+    let objects = use_consume::<Objects>().0;
+    let reading = use_consume::<Sections>().0;
+    let window = use_consume::<Window>().0;
+    use_reading_of(active, objects, reading, window);
+    rect().expanded().child(AssemblyPane {
+        document: Document::Code(object),
+    })
+}
+
+/// The object [`app_like_code_harness`] mounts the pane over.
+#[derive(Clone)]
+struct PaneObject(Arc<Object>);
+
+/// The unified view's pane mounts a beat before its reading is its own -- the active
+/// document is a memo, and the reading follows the memo -- and it has to ask for its
+/// skeleton once the reading catches up, with nothing else moving in between. It once
+/// asked only when the viewport did, and a tab opened this way stayed empty until the
+/// pane was resized.
+#[test]
+fn a_unified_view_asks_for_its_skeleton_once_the_reading_is_its_own() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let (mut test, (states, _pinned, _marked, sections, window, _landing, _ctrl)) =
+        TestingRunner::new(
+            app_like_code_harness,
+            (600., 300.).into(),
+            {
+                let object = object.clone();
+                move |runner| {
+                    runner.provide_root_context(|| PaneObject(object.clone()));
+                    code_states!(runner, Reading::default())
+                }
+            },
+            1.,
+        );
+    let mut open = states.objects;
+    open.write().push(object.clone());
+    settle(&mut test);
+    // Mounted over a reading of nothing: nothing to ask for yet.
+    assert!(window.peek().is_none());
+    assert!(sections.peek().object.is_none());
+
+    // The tab is opened; the memo catches up, the reading becomes the object's, and the
+    // pane -- untouched otherwise -- asks for the skeleton.
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Code(object.clone())),
+        Visit::Went,
+    );
+    settle(&mut test);
+    settle(&mut test);
+    assert!(
+        sections.peek().is_about(&object),
+        "the reading did not follow the tab"
+    );
+    let asked = window.peek().clone().expect("the skeleton is asked for");
+    assert!(Arc::ptr_eq(&asked.object, &object));
+    assert!(asked.code.is_none());
+}
+
+/// The rows are rebuilt a pass after an answer lands, and for that pass the pane can read
+/// a reading newer than the rows on screen. A stretch the answer let go of is still drawn
+/// from the old rows, and has to be drawn from what it was counted from: against the new
+/// reading it found no bytes, every one of its rows fell back to one key, and freya's diff
+/// panicked on the duplicate.
+#[test]
+fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    // Stretch 0 as a gap of sixteen bytes, by hand, so the listing has gap rows.
+    let mut reading = reading_of(&object, &[]);
+    let code = reading.code.clone().expect("the skeleton");
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: Some(code.clone()),
+        window: vec![0],
+    };
+    assert!(reading.take(
+        &ask,
+        code.clone(),
+        vec![(
+            0,
+            Stretched {
+                code: None,
+                gap: Some(analysis::Gap {
+                    range: 0..16,
+                    kind: analysis::GapKind::Bytes,
+                }),
+            }
+        )]
+    ));
+    let (mut test, (_states, _pinned, _marked, sections, _window, _landing, _ctrl)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    let mut sections = sections;
+    settle(&mut test);
+    assert!(labels(&test).contains(&"dq\u{a0}".to_string()));
+
+    // The answer that lets stretch 0 go: the same skeleton, nothing held, a new generation.
+    let mut let_go = Reading::of(Some(object.clone()));
+    let_go.code = Some(code);
+    let_go.generation = sections.peek().generation + 1;
+    sections.set(let_go);
+    // One pass: the render before the effect that rebuilds the rows. This is where the
+    // gap rows were drawn against a reading that no longer held them.
+    test.sync_and_update();
+    assert!(
+        labels(&test).contains(&"dq\u{a0}".to_string()),
+        "drawn from the old rows still"
+    );
+    settle(&mut test);
+    assert!(
+        !labels(&test).contains(&"dq\u{a0}".to_string()),
+        "the rows caught up with the reading"
+    );
+}
+
+/// A Caps Lock the desktop has made into Ctrl names itself Caps Lock, and a key event's
+/// mask is the state *before* the key: its press comes over a mask without Ctrl, its
+/// release over a mask with Ctrl still in it. The keyboard is learnt from that release --
+/// after it, the key's press counts and its release clears -- and a Caps Lock let go under
+/// a real Ctrl teaches nothing.
+#[test]
+fn a_caps_lock_that_acts_as_ctrl_is_learnt_from_its_release() {
+    let (mut test, (keys, ctrl)) = TestingRunner::new(
+        bare_harness,
+        (100., 100.).into(),
+        |runner| {
+            let shift = runner
+                .provide_root_context(|| Shift(State::create(false)))
+                .0;
+            let ctrl = runner.provide_root_context(|| Ctrl(State::create(false))).0;
+            // Two states of the root's own, made where a state can be: in a context.
+            #[derive(Clone, Copy)]
+            struct CapsIsCtrl(State<bool>);
+            #[derive(Clone, Copy)]
+            struct ControlHeld(State<bool>);
+            let caps = runner
+                .provide_root_context(|| CapsIsCtrl(State::create(false)))
+                .0;
+            let held = runner
+                .provide_root_context(|| ControlHeld(State::create(false)))
+                .0;
+            (ModifierKeys::new(shift, ctrl, caps, held), ctrl)
+        },
+        1.,
+    );
+    let caps = Key::Named(NamedKey::CapsLock);
+    let control = Key::Named(NamedKey::Control);
+    test.sync_and_update();
+
+    // A real Ctrl: known by its name both ways.
+    keys.down(&control, Modifiers::empty());
+    assert!(*ctrl.peek());
+    keys.up(&control, Modifiers::CONTROL);
+    assert!(!*ctrl.peek());
+
+    // A Caps Lock let go under a real Ctrl is a plain Caps Lock: nothing learnt, and Ctrl
+    // still down.
+    keys.down(&control, Modifiers::empty());
+    keys.down(&caps, Modifiers::CONTROL);
+    keys.up(&caps, Modifiers::CONTROL);
+    assert!(*ctrl.peek());
+    keys.up(&control, Modifiers::CONTROL);
+    assert!(!*ctrl.peek());
+    keys.down(&caps, Modifiers::empty());
+    assert!(!*ctrl.peek(), "an unlearnt Caps Lock is not Ctrl");
+
+    // The first release of a Caps Lock that *is* Ctrl: the mask says Ctrl and no Control
+    // key is down. Before this it was left stuck on; now it is learnt and cleared.
+    keys.up(&caps, Modifiers::CONTROL);
+    assert!(!*ctrl.peek(), "the release left Ctrl on");
+    keys.down(&caps, Modifiers::empty());
+    assert!(*ctrl.peek(), "the learnt key's press does not count");
+    keys.up(&caps, Modifiers::CONTROL);
+    assert!(!*ctrl.peek());
 }

@@ -245,8 +245,14 @@ one item per part, so the unfinished half stays visible.
   quieter than the branch line beside it in both palettes, which the palette test holds. The
   row after a `ret` or an unconditional `jmp` starts a block too, but nothing below the
   disassembler says which instructions end a fall-through, so that half is left.
-- [ ] A unified **section** view of code: the whole `.text` as one endless scroll, with the
+- [x] A unified **section** view of code: the whole `.text` as one endless scroll, with the
   symbols drawn as labels *inside* the listing where they start — what `objdump -d` reads like.
+  *Done*: a third kind of document, `Document::Code`, one per object, opened by pressing the
+  object in the Objects list and drawn by `src/ui/section_view.rs` — every code section placed in
+  the parse's layout, a label per symbol, the rows estimated from the bytes before a stretch is
+  decoded and empty until it is, decoded in windows of a few screens around the reader through
+  the one worker, the place kept as an address, the pinned line's file beside it, and two doors
+  between it and the symbol view (`agents/Panes.md`, `agents/Worker.md`, `agents/UI.md`).
   It is how you see what sits between two functions, what the padding is, and code no symbol
   claims at all.
   It is a **separate viewing mode beside the function/symbol assembly view, not a replacement
@@ -325,6 +331,14 @@ one item per part, so the unfinished half stays visible.
   for an object with no line info, the second lighting both panes where the reader has
   arrived rather than where they left. A branch out of the symbol — a tail call — keeps its
   plain operand; making that one navigate like a call target is an item of its own.
+- [ ] Show the current symbol as a breadcrumb in the unified view. The bar over the pane names
+  the object for a code tab, and nothing on screen says which function the rows under the
+  pointer, or at the top of the pane, belong to once its label has scrolled off — a reader
+  three screens into a long function is reading unnamed code. The stretch the top row is in is
+  already what the kept place is worked out from (`section::Rows::row`), so the bar could name
+  that symbol beside the object, object › symbol, and pressing it would be the "Open as symbol"
+  door in one more place. Whether it follows the top row or the pointer is the one decision:
+  the top row is stable and the pointer is what a hover already lights.
 - [ ] Let a call target with no symbol be opened. `Code::relocation` answers a `Relocated`
   whose `target` is `None` whenever the relocation points at something the object has no text
   symbol for — a section, a data symbol, an undefined import — and the operand is then drawn

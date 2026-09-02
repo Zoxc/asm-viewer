@@ -14,7 +14,7 @@
 use analysis::BranchEdge;
 
 /// How many lanes the gutter is ever drawn with.
-const MAX_LANES: usize = 5;
+pub(crate) const MAX_LANES: usize = 5;
 
 /// The vertical strokes one lane of one row carries. Two halves rather than one flag
 /// because a row where a branch starts or ends is a *corner*: the line runs from the

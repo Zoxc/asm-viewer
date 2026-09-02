@@ -65,6 +65,7 @@ fn from_state(
             .unwrap_or_default(),
         &Positions::default(),
         &Positions::default(),
+        &Positions::default(),
         &Driven::default(),
         document.as_ref(),
         history,
@@ -77,7 +78,7 @@ fn resolve_selection(session: &Session, objects: &[Arc<Object>]) -> Option<Selec
         .resolve(objects)
         .and_then(|document| match document {
             Document::Assembly(selection) => Some(selection),
-            Document::Source(_) => None,
+            Document::Source(_) | Document::Code(_) => None,
         })
 }
 
@@ -488,6 +489,7 @@ fn saved_tab(object_name: &str, asm_row: usize) -> SavedTab {
         asm_row,
         src_row: 0,
         line: None,
+        asm_address: None,
         document: saved_object(object_name),
     }
 }
@@ -497,6 +499,7 @@ fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
         asm_row,
         src_row,
         line: None,
+        asm_address: None,
         document: SavedDocument::Source {
             path: path.to_owned(),
         },
@@ -510,6 +513,7 @@ fn restored(document: &Document, asm_row: usize, src_row: usize) -> RestoredTab 
         asm_row,
         src_row,
         line: None,
+        address: None,
     }
 }
 
@@ -532,6 +536,7 @@ fn saves_and_resolves_the_open_tabs() {
         &tabs,
         &Positions::default(),
         &Positions::default(),
+        &Positions::default(),
         &Driven::default(),
         Some(&tabs[3]),
         &History::default(),
@@ -546,6 +551,7 @@ fn saves_and_resolves_the_open_tabs() {
                 asm_row: 0,
                 src_row: 0,
                 line: None,
+                asm_address: None,
                 document: SavedDocument::Symbol {
                     path: PathBuf::from("/tmp/lib.a"),
                     object_name: "a.o".into(),
@@ -584,6 +590,7 @@ fn open_tabs_that_no_longer_resolve_are_dropped() {
                 asm_row: 5,
                 src_row: 0,
                 line: None,
+                asm_address: None,
                 document: SavedDocument::Symbol {
                     path: PathBuf::from("/tmp/lib.a"),
                     object_name: "a.o".into(),
@@ -618,6 +625,7 @@ fn the_rows_come_back_against_the_tabs_they_belong_to() {
         &tabs,
         &positions(&[(&tabs[0], 12), (&tabs[1], 900)]),
         &positions(&[(&tabs[1], 4)]),
+        &Positions::default(),
         &Driven::default(),
         Some(&tabs[0]),
         &History::default(),
@@ -679,6 +687,7 @@ fn a_source_file_that_is_no_longer_there_still_comes_back() {
         &tabs,
         &Positions::default(),
         &Positions::default(),
+        &Positions::default(),
         &Driven::default(),
         Some(&tabs[0]),
         &History::default(),
@@ -710,6 +719,7 @@ fn a_full_session_round_trips_through_toml() {
         &tabs,
         &positions(&[(&tabs[0], 12), (&tabs[1], 34)]),
         &positions(&[(&tabs[0], 56)]),
+        &Positions::default(),
         &driven(&[(&tabs[2], 42)]),
         Some(&tabs[1]),
         &history(&objects, 1),
@@ -748,6 +758,7 @@ fn the_line_a_source_tab_was_driven_from_comes_back() {
         &tabs,
         &positions(&[(&tabs[0], 7)]),
         &Positions::default(),
+        &Positions::default(),
         &driven(&[(&tabs[0], 42)]),
         Some(&tabs[0]),
         &History::default(),
@@ -782,6 +793,7 @@ fn saved_against(bytes: Option<&[u8]>, saved: SavedDocument, row: usize) -> Sess
             line: None,
             asm_row: row,
             src_row: 0,
+            asm_address: None,
             document: saved.clone(),
         }],
         history: SavedHistory {
@@ -957,6 +969,7 @@ fn the_digests_round_trip_through_toml() {
         &objects,
         &tabs,
         &positions(&[(&tabs[0], 12)]),
+        &Positions::default(),
         &Positions::default(),
         &Driven::default(),
         Some(&tabs[0]),
@@ -1631,4 +1644,167 @@ fn a_recent_project_that_is_gone_is_dropped_and_an_empty_one_is_not() {
     assert_eq!(recents[0].binaries, 0);
 
     let _ = fs::remove_dir_all(&base);
+}
+
+/// An object's code is saved the way the object is -- by the file's path and the object's
+/// name -- and found again by them, as its own kind of document and not as the object.
+#[test]
+fn a_code_document_is_saved_by_its_object_and_found_again() {
+    let objects = objects();
+    let document = Document::Code(objects[1].clone());
+
+    let saved = SavedDocument::from_document(&document);
+    assert_eq!(
+        saved,
+        SavedDocument::Code {
+            path: PathBuf::from("/tmp/lib.a"),
+            object_name: "b.o".into(),
+        }
+    );
+    let found = saved.resolve(&objects, &Rebuilt::default());
+    assert!(
+        found == Some(document.clone()),
+        "the code document comes back"
+    );
+    assert!(
+        found != Some(Document::Assembly(Selection::Object(objects[1].clone()))),
+        "the object's code is not the object"
+    );
+
+    // Gone with its object, and degrading to nothing rather than to another object.
+    let rest: Vec<Arc<Object>> = objects[..1].to_vec();
+    assert!(saved.resolve(&rest, &Rebuilt::default()).is_none());
+    assert!(saved
+        .resolve_or_degrade(&rest, &Rebuilt::default())
+        .is_none());
+
+    // And it survives the round trip through TOML in a tab.
+    let tab = SavedTab {
+        asm_row: 3,
+        src_row: 0,
+        line: None,
+        asm_address: None,
+        document: saved,
+    };
+    let text = toml::to_string(&tab).expect("serialises");
+    let back: SavedTab = toml::from_str(&text).expect("parses back");
+    assert_eq!(back, tab);
+}
+
+/// An object's code points into the file its object came out of, so it closes with it and
+/// with nothing else.
+#[test]
+fn a_code_document_closes_with_its_file() {
+    let objects = objects();
+    let code = Document::Code(objects[1].clone());
+    assert!(code.in_file(Path::new("/tmp/lib.a")));
+    assert!(!code.in_file(Path::new("/tmp/some.dll")));
+    assert!(code.symbol().is_none(), "no symbol to ask the worker about");
+}
+
+/// The address a code tab was left at is written before its document, as the rows are:
+/// TOML puts plain values before tables, and a value after one would be read as the
+/// table's.
+#[test]
+fn a_code_tabs_address_is_written_before_its_document() {
+    let objects = objects();
+    let code = Document::Code(objects[1].clone());
+    let mut places = Positions::default();
+    places.remember(
+        code.clone(),
+        Spot {
+            address: 0x30,
+            rows: 2,
+        },
+    );
+
+    let session = Session::from_state(
+        &objects,
+        &[code.clone()],
+        &Positions::default(),
+        &Positions::default(),
+        &places,
+        &Driven::default(),
+        Some(&code),
+        &History::default(),
+    );
+    assert_eq!(session.tabs[0].asm_address, Some(0x30));
+    let text = toml::to_string(&session).expect("serialises");
+    let address = text
+        .find("asm_address = 48")
+        .expect("the address is written");
+    let document = text.find("[[tabs]]").expect("the tab is a table");
+    let inner = text[document..]
+        .find("document")
+        .expect("the document follows")
+        + document;
+    assert!(document < address && address < inner, "{text}");
+    let back: Session = toml::from_str(&text).expect("parses back");
+    assert_eq!(back.tabs, session.tabs);
+
+    // And it comes back as the tab's address, the rows past it being a nicety.
+    let restored = session.resolve_tabs(&objects);
+    assert!(restored[0].document == code);
+    assert_eq!(restored[0].address, Some(0x30));
+}
+
+/// An address is a claim about a layout: a rebuilt binary takes it with the rows and
+/// leaves the tab.
+#[test]
+fn a_rebuilt_binary_takes_the_saved_address_with_it() {
+    let objects = objects();
+    let code = Document::Code(objects[1].clone());
+    let mut places = Positions::default();
+    places.remember(
+        code.clone(),
+        Spot {
+            address: 0x30,
+            rows: 0,
+        },
+    );
+    let session = Session::from_state(
+        &objects,
+        &[code.clone()],
+        &Positions::default(),
+        &Positions::default(),
+        &places,
+        &Driven::default(),
+        Some(&code),
+        &History::default(),
+    );
+
+    // The same file, rebuilt: a different digest under the same path.
+    let rebuilt = vec![
+        built("/tmp/lib.a", "a.o", &[("caller", 0)], b"the second build"),
+        built("/tmp/lib.a", "b.o", &[("caller", 0)], b"the second build"),
+    ];
+    let restored = session.resolve_tabs(&rebuilt);
+    assert_eq!(restored.len(), 1);
+    assert!(restored[0].document == Document::Code(rebuilt[1].clone()));
+    assert_eq!(restored[0].address, None);
+}
+
+/// Only a code tab has an address to save; a symbol's tab keeps its row.
+#[test]
+fn a_symbol_tab_saves_no_address() {
+    let objects = objects();
+    let symbol = Document::Assembly(Selection::Symbol(Symbol {
+        object: objects[0].clone(),
+        data: objects[0].symbols_sorted[0].clone(),
+    }));
+    let mut rows = Positions::default();
+    rows.remember(symbol.clone(), 4);
+    let session = Session::from_state(
+        &objects,
+        &[symbol.clone()],
+        &rows,
+        &Positions::default(),
+        &Positions::default(),
+        &Driven::default(),
+        Some(&symbol),
+        &History::default(),
+    );
+    assert_eq!(session.tabs[0].asm_row, 4);
+    assert_eq!(session.tabs[0].asm_address, None);
+    assert!(!toml::to_string(&session).unwrap().contains("asm_address"));
 }

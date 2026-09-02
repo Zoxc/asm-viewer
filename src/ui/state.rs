@@ -276,6 +276,8 @@ pub(crate) struct ProjectStates {
     pub(crate) open: Open,
     pub(crate) asm_at: State<Positions<Document>>,
     pub(crate) src_at: State<Positions<Document>>,
+    /// Where each code tab was left, as an address.
+    pub(crate) code_at: State<Positions<Document, Spot>>,
     /// Which line each source-driven tab's assembly side is driven from.
     pub(crate) driven: State<Driven>,
     pub(crate) history: State<History>,
@@ -298,6 +300,7 @@ pub(crate) fn use_project_states() -> ProjectStates {
         loading: use_consume::<Loading>().0,
         open: use_open(),
         asm_at: use_consume::<AsmAt>().0,
+        code_at: use_consume::<CodeAt>().0,
         src_at: use_consume::<SrcAt>().0,
         driven: use_consume::<Drives>().0,
         history: use_consume::<Hist>().0,

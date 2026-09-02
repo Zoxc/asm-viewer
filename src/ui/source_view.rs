@@ -408,6 +408,10 @@ pub(crate) fn source_side(
 ) -> Option<SourceSide> {
     match active? {
         Document::Source(file) => Some(SourceSide::Subject(file.clone())),
+        // An object's code draws no symbol of its own, so its companion is the file of
+        // whatever the reader pinned in it -- an instruction row pins the line it was
+        // compiled from, file and all -- and nothing until they have.
+        Document::Code(_) => pin.map(|pin| SourceSide::Companion(pin.at.file.clone())),
         Document::Assembly(_) => {
             let shown = analysis.shown.as_ref()?;
             let lines = &shown.studied.lines;
@@ -519,6 +523,15 @@ impl Component for SourcePane {
         // asked to see.
         let (document, opening) = match &side {
             SourceSide::Subject(file) => (Document::Source(file.clone()), 0),
+            // In an object's code the companion is the pinned line's file, and the tab
+            // opens on that line.
+            SourceSide::Companion(_) if matches!(self.document, Document::Code(_)) => {
+                let line = pin.as_ref().map_or(0, |pin| pin.at.line as usize);
+                (
+                    self.document.clone(),
+                    line.saturating_sub(1).saturating_sub(CONTEXT_ROWS as usize),
+                )
+            }
             // The *drawn* symbol's tab and not the active one: a row written down against
             // the tab that is arriving would be a row of the listing that is leaving.
             SourceSide::Companion(_) => match analysis.shown.as_ref() {

@@ -88,6 +88,7 @@ pub(crate) fn close_tab(
     history: State<History>,
     mut asm_at: State<Positions<Document>>,
     mut src_at: State<Positions<Document>>,
+    mut code_at: State<Positions<Document, Spot>>,
     mut driven: State<Driven>,
     entry: &Document,
 ) {
@@ -127,6 +128,7 @@ pub(crate) fn close_tab(
     docs.write().close(id);
     asm_at.write().forget(entry);
     src_at.write().forget(entry);
+    code_at.write().forget(entry);
     driven.write().forget(entry);
 
     // A document landed on goes through `activate`, even though it is by construction
@@ -156,6 +158,7 @@ pub(crate) fn close_others(
     history: State<History>,
     mut asm_at: State<Positions<Document>>,
     mut src_at: State<Positions<Document>>,
+    mut code_at: State<Positions<Document, Spot>>,
     mut driven: State<Driven>,
     keep: DocId,
 ) {
@@ -221,6 +224,7 @@ pub(crate) fn close_others(
     let held = |tab: &Document| !closed.contains(tab);
     asm_at.write().forgetting(held);
     src_at.write().forgetting(held);
+    code_at.write().forgetting(held);
     {
         // One guard rather than one write per tab: a write notifies whether or not it
         // changed anything, and a dozen tabs closing is one change.
@@ -256,6 +260,7 @@ pub(crate) fn close_binary(
     open: Open,
     mut asm_at: State<Positions<Document>>,
     mut src_at: State<Positions<Document>>,
+    mut code_at: State<Positions<Document, Spot>>,
     mut driven: State<Driven>,
     mut history: State<History>,
     path: &Path,
@@ -308,6 +313,7 @@ pub(crate) fn close_binary(
     // The positions cannot outlive the tabs they belong to.
     asm_at.write().forgetting(|tab| !tab.in_file(path));
     src_at.write().forgetting(|tab| !tab.in_file(path));
+    code_at.write().forgetting(|tab| !tab.in_file(path));
     // A source-driven tab stands, but a symbol it chose out of this file is let go: the
     // line beside the choice is what survives a close, and the next ask answers out of
     // what is left.
@@ -368,12 +374,13 @@ pub(crate) fn tab_menu(
     history: State<History>,
     asm_at: State<Positions<Document>>,
     src_at: State<Positions<Document>>,
+    code_at: State<Positions<Document, Spot>>,
     driven: State<Driven>,
     keep: DocId,
 ) -> Menu {
     Menu::new().child(
         MenuButton::new()
-            .on_press(move |_| close_others(open, history, asm_at, src_at, driven, keep))
+            .on_press(move |_| close_others(open, history, asm_at, src_at, code_at, driven, keep))
             // "tabs" and not "documents": the strip is what the reader is pointing at, and
             // a view sharing the panel is a tab this leaves alone.
             .child("Close other tabs"),
@@ -391,6 +398,7 @@ pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
         open,
         asm_at,
         src_at,
+        code_at,
         driven,
         history,
         ..
@@ -400,7 +408,7 @@ pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
         MenuButton::new()
             .on_press(move |_| {
                 close_binary(
-                    objects, loading, open, asm_at, src_at, driven, history, &path,
+                    objects, loading, open, asm_at, src_at, code_at, driven, history, &path,
                 )
             })
             // "file" and not "object": the row may be one object of a file or the archive
@@ -513,7 +521,9 @@ pub(crate) fn entry_text(entry: &Document) -> String {
 /// something a reader can search for after the tab stopped drawing it.
 pub(crate) fn entry_name(entry: &Document) -> String {
     match entry {
-        Document::Assembly(Selection::Object(object)) => object.name.clone(),
+        Document::Assembly(Selection::Object(object)) | Document::Code(object) => {
+            object.name.clone()
+        }
         Document::Assembly(Selection::Symbol(symbol)) => symbol
             .data
             .demangled
@@ -524,20 +534,23 @@ pub(crate) fn entry_name(entry: &Document) -> String {
     }
 }
 
-/// What hovering a document's tab or row says: the whole path for a file, the whole name
-/// for everything else -- which is where the rest of a shortened symbol name is.
+/// What hovering a document's tab or row says: the whole path for a file and for an
+/// object's code, whose name says nothing about where it came from; the whole name for
+/// everything else -- which is where the rest of a shortened symbol name is.
 pub(crate) fn entry_tooltip(entry: &Document) -> String {
     match entry {
         Document::Source(file) => file.to_string(),
+        Document::Code(object) => object.path.display().to_string(),
         entry => entry_name(entry),
     }
 }
 
-/// Which kind of tab this is, as the one glyph that tells the two apart.
+/// Which kind of tab this is, as the one glyph that tells the three apart.
 pub(crate) fn entry_icon(entry: &Document) -> Element {
     let (name, svg) = match entry {
         Document::Assembly(_) => ("binary", lucide::binary()),
         Document::Source(_) => ("file-code", lucide::file_code()),
+        Document::Code(_) => ("scroll-text", lucide::scroll_text()),
     };
 
     let side = icon_size();
@@ -558,6 +571,7 @@ pub(crate) enum EntryKey<'a> {
     Object(usize),
     Symbol(usize),
     Source(&'a str),
+    Code(usize),
 }
 
 pub(crate) fn entry_key(entry: &Document) -> EntryKey<'_> {
@@ -569,6 +583,7 @@ pub(crate) fn entry_key(entry: &Document) -> EntryKey<'_> {
             EntryKey::Symbol(Arc::as_ptr(&symbol.data).addr())
         }
         Document::Source(file) => EntryKey::Source(file),
+        Document::Code(object) => EntryKey::Code(Arc::as_ptr(object).addr()),
     }
 }
 
@@ -586,6 +601,7 @@ pub(crate) fn reopen_binary(states: ProjectStates, path: PathBuf) {
         states.open,
         states.asm_at,
         states.src_at,
+        states.code_at,
         states.driven,
         states.history,
         &path,

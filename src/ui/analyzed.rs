@@ -1,11 +1,12 @@
 //! The analysis worker `use_analysis` owns, the questions it is asked, the `Studied` it
 //! hands over, and the `Analyzed` the panes draw out of while it works.
 //!
-//! Two kinds of job go to the one worker: a **listing** -- the symbol the panes draw,
-//! named outright or resolved from a source line -- and a **locate**, every symbol a line
-//! or a function was compiled into, for the Locations panel. They supersede separately: the queue is
-//! drained to the newest of *each*, since a reader who asked for a line's locations and
-//! then clicked a symbol wants both answers.
+//! Three kinds of job go to the one worker: a **listing** -- the symbol the panes draw,
+//! named outright or resolved from a source line -- a **window** of an object's code for
+//! the section view, and a **locate**, every symbol a line or a function was compiled
+//! into, for the Locations panel. They supersede separately: the queue is drained to the
+//! newest of *each*, since a reader who asked for a line's locations and then clicked a
+//! symbol wants both answers.
 
 use super::*;
 
@@ -50,7 +51,7 @@ pub(crate) fn asked_of(ask: &Ask) -> Document {
 pub(crate) fn ask(active: Option<&Document>, driven: &Driven) -> Option<Ask> {
     match active? {
         Document::Assembly(Selection::Symbol(symbol)) => Some(Ask::Symbol(symbol.clone())),
-        Document::Assembly(Selection::Object(_)) => None,
+        Document::Assembly(Selection::Object(_)) | Document::Code(_) => None,
         document @ Document::Source(file) => driven.line(document).map(|line| Ask::Source {
             at: LinePos {
                 file: file.clone(),
@@ -83,12 +84,16 @@ pub(crate) enum Question {
         query: Query,
         objects: Vec<Arc<Object>>,
     },
+    /// A window of an object's code for the section view: the first [`CHUNK`] of the
+    /// stretches it names, decoded.
+    Code(CodeAsk),
 }
 
-/// The two kinds of job, which supersede separately.
+/// The three kinds of job, which supersede separately.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Listing,
+    Code,
     Locate,
 }
 
@@ -96,28 +101,33 @@ impl Question {
     fn kind(&self) -> Kind {
         match self {
             Question::Study(_) | Question::Resolve { .. } => Kind::Listing,
+            Question::Code(_) => Kind::Code,
             Question::Locate { .. } => Kind::Locate,
         }
     }
 }
 
 /// The newest question of each kind out of `first` and whatever is `queued` behind it,
-/// in the order they are worked: the listing first, since it is what is on screen.
+/// in the order they are worked: the listing first, since it is what is on screen, then
+/// the window, then the locate.
 ///
 /// What the reader clicked past is dropped here, without being started. Per kind and not
 /// overall, because a locate is not a newer version of the listing question -- drained to
 /// one, a symbol click after asking for a line's locations would silently cancel the
-/// locations, or the other way round.
+/// locations, or the other way round -- and a window the reader scrolled past is the one
+/// thing here that *should* go, the next window asking for whatever of it still matters.
 pub(crate) fn newest(first: Question, queued: impl Iterator<Item = Question>) -> Vec<Question> {
     let mut listing = None;
+    let mut code = None;
     let mut locate = None;
     for question in std::iter::once(first).chain(queued) {
         match question.kind() {
             Kind::Listing => listing = Some(question),
+            Kind::Code => code = Some(question),
             Kind::Locate => locate = Some(question),
         }
     }
-    listing.into_iter().chain(locate).collect()
+    listing.into_iter().chain(code).chain(locate).collect()
 }
 
 /// What the worker sends back: the question, and what it came to.
@@ -127,6 +137,13 @@ pub(crate) enum Answer {
     Listing { ask: Ask, studied: Option<Studied> },
     /// The symbols `query` was compiled into, over the objects the question carried.
     Located { query: Query, symbols: Vec<Symbol> },
+    /// The skeleton -- the ask's own, or built for it -- and the stretches decoded, by
+    /// flat index: the first [`CHUNK`] the ask named that the listing has.
+    Code {
+        ask: CodeAsk,
+        code: Arc<CodeListing>,
+        decoded: Vec<(usize, Stretched)>,
+    },
 }
 
 /// The expensive work, and the one definition of what an answer is: a third kind of
@@ -134,6 +151,43 @@ pub(crate) enum Answer {
 /// which is what lets it run on a plain `std::thread`.
 pub(crate) fn answer(question: Question) -> Answer {
     match question {
+        Question::Code(ask) => {
+            let code = ask
+                .code
+                .clone()
+                .unwrap_or_else(|| Arc::new(CodeListing::new(&ask.object)));
+            let decoded = ask
+                .window
+                .iter()
+                .take(CHUNK)
+                .filter_map(|&flat| {
+                    let place = section::place_of(&code, flat)?;
+                    let stretch =
+                        &code.sections()[place.section].listing.stretches()[place.stretch];
+                    let decoded = code.decode(&ask.object, place)?;
+                    // The symbol's listing exactly as its own tab would work it out --
+                    // one decode, the crate's, with the lanes and the line info put
+                    // beside it as `Studied::new` puts them.
+                    let studied = stretch.symbol().map(|data| {
+                        Studied::with_assembly(
+                            Symbol {
+                                object: ask.object.clone(),
+                                data: data.clone(),
+                            },
+                            decoded.code,
+                        )
+                    });
+                    Some((
+                        flat,
+                        Stretched {
+                            code: studied,
+                            gap: decoded.gap,
+                        },
+                    ))
+                })
+                .collect();
+            Answer::Code { ask, code, decoded }
+        }
         Question::Study(symbol) => Answer::Listing {
             ask: Ask::Symbol(symbol.clone()),
             studied: Some(Studied::new(symbol)),
@@ -270,6 +324,8 @@ impl Analyzed {
             (None, None, _) => Showing::Message(match document {
                 Document::Assembly(_) => "No symbol selected",
                 Document::Source(_) => "Click a source line",
+                // The listing beside this asks nothing; its source side follows a pin.
+                Document::Code(_) => "Click an instruction",
             }),
         }
     }
@@ -306,6 +362,13 @@ impl Studied {
     /// Decode the symbol and build the object's DWARF context.
     pub(crate) fn new(symbol: Symbol) -> Studied {
         let assembly = symbol.data.assembly(&symbol.object);
+        Studied::with_assembly(symbol, assembly)
+    }
+
+    /// The rest of the analysis over a listing already decoded -- the section view
+    /// decodes a stretch through the crate's listing, which is the same decode, and must
+    /// not pay for it twice.
+    pub(crate) fn with_assembly(symbol: Symbol, assembly: Option<Arc<Assembly>>) -> Studied {
         let lanes = Arc::new(match &assembly {
             Some(assembly) => Lanes::new(&assembly.edges, assembly.instructions.len()),
             None => Lanes::new(&[], 0),
@@ -457,6 +520,8 @@ pub(crate) fn use_analysis_with(
     history: State<History>,
     mut analysis: State<Analyzed>,
     mut located: State<Located>,
+    mut reading: State<Reading>,
+    window: State<Option<CodeAsk>>,
     work: impl Fn(Question) -> Answer + Send + 'static,
 ) {
     // The worker and the task that listens to it, started once and never restarted.
@@ -486,6 +551,24 @@ pub(crate) fn use_analysis_with(
             while let Ok(answer) = answers.recv().await {
                 let (ask, studied) = match answer {
                     Answer::Listing { ask, studied } => (ask, studied),
+                    Answer::Code { ask, code, decoded } => {
+                        // Taken whenever it is about the object on screen -- a decoded
+                        // stretch is never stale, see `Reading::take` -- and never out
+                        // of a binary closed since it was asked for, `Shown::still_open`'s
+                        // rule once more.
+                        let open = objects
+                            .peek()
+                            .iter()
+                            .any(|object| Arc::ptr_eq(object, &ask.object));
+                        if !open {
+                            continue;
+                        }
+                        let mut next = reading.peek().clone();
+                        if next.take(&ask, code, decoded) {
+                            reading.set(next);
+                        }
+                        continue;
+                    }
                     Answer::Located { query, symbols } => {
                         // The same rule as below, against the question the panel is
                         // asking now; and the same rule as `Shown::still_open`, applied
@@ -552,6 +635,25 @@ pub(crate) fn use_analysis_with(
         });
 
         requests
+    });
+
+    // The window question: what the section view wants next, asked once. Reading the
+    // window subscribes this to it; the reading it writes is peeked, so it cannot wake
+    // itself. An ask about an object the reading is not of -- a tab switched under it --
+    // is not sent.
+    let requests_for_code = requests.clone();
+    use_side_effect(move || {
+        let wanted = window.read().clone();
+        let Some(ask) = wanted else {
+            return;
+        };
+        let mut next = reading.peek().clone();
+        if !next.is_about(&ask.object) || next.pending.as_ref() == Some(&ask) {
+            return;
+        }
+        next.pending = Some(ask.clone());
+        reading.set(next);
+        let _ = requests_for_code.try_send(Question::Code(ask));
     });
 
     let requests_for_locate = requests.clone();

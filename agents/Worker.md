@@ -17,6 +17,30 @@ call in the crate at once for one useful answer, and `DwarfCache` is a `OnceLock
 would block on the winner rather than race usefully. (The parallelism `notes/Goals.md` asks for is
 about parsing many objects at once and is a different job.)
 
+**A third kind of question is a window of an object's code** (`src/ui/reading.rs`), for the
+section view: `Question::Code(CodeAsk)`, an object, its skeleton once the view has one, and the
+stretches wanted by flat index, **nearest the reader first**. The skeleton (`CodeListing`,
+free) is built on the worker with the first ask and answered with it; a stretch is decoded
+through the crate's own `CodeListing::decode` and then `Studied::with_assembly`, the rest of what
+`Studied::new` does over a listing already in hand, so the section view and the symbol's own
+tab decode a function once and identically. The worker decodes **at most `CHUNK` (8) of the ask**
+and answers, because the queue below is drained to its newest question only *between* jobs: a
+window decoded whole would hold a symbol click behind every function on a screen and three
+screens of buffer, where a chunk holds it behind a few, and the view asks for the rest once the
+chunk has landed. The answers land in `Reading` (`Sections` at the root) and never in `Analyzed`,
+which is one symbol's shape and read by everything that draws a symbol. **A decoded stretch is a
+pure function of the object and the stretch and is never stale** -- unlike a listing, which is
+stale the moment the ask moves on -- so an answer is taken whenever it is about the object and
+the skeleton on screen, whichever window asked for it, and only `pending` is judged against the
+ask; what a scroll superseded is exactly what the next window asks for again. Two things bound
+it: a stretch farther than `KEEP` (512) from the last window is let go as the answer lands, and
+the whole reading is dropped when the active document stops being that object's code or the
+object closes under it (`use_reading_of`, an effect reading `Active` and `Objects` -- an effect
+and not `close_binary`, the skeleton holding every section's bytes, so a rebuild and a project
+switch drop it by the same line). The window is a state of its own, `Window`, and not a field of
+the reading, because the effect working out the next window reads what is held and would wake
+itself on writing beside it.
+
 **The worker is asked a question, not handed a symbol.** An `Ask` is either the symbol an
 assembly-driven tab names outright or the source line a source-driven tab is driven from, where
 the symbol is whatever that line was compiled into — `compiled::compiled_from` over every open
@@ -66,7 +90,9 @@ landing on the line inside the symbol is the pin's job (`agents/Panes.md`). Thre
 **The queue is drained to the newest question of each kind** (`newest`), not the newest
 overall, since a locate is not a newer version of the listing question and drained to one a
 symbol click would silently cancel the locations, or the other way round; the listing is
-worked first, being what is on screen. The answer is kept only while its line is the one
+worked first, being what is on screen, then the window, then the locate -- and a window the
+reader scrolled past is the one question here that *should* go, the next one asking for whatever
+of it still matters. The answer is kept only while its line is the one
 `asked` now -- the listing's comparison rule again, and there is no `pending` field, a line
 being pending exactly while `asked` and `found` disagree. And **a closed binary takes its
 locations with it** (`Found::retain_open`, in the effect reading `Objects` and on the answer
@@ -145,5 +171,7 @@ the subprogram extents but re-walks the covering units' line programs per call. 
 state gives is the one thing a re-render needed: the answer is *held*, so a hover, a theme change or
 a resize costs nothing where the old shape re-decoded in `render`. A second, keyed cache would be an
 unbounded pile of `Assembly`s for listings the reader has left, to save a few milliseconds on a
-symbol they have already been shown.
+symbol they have already been shown. `Reading::held` is not that cache: it is the section view's
+one answer, a listing being read in windows rather than whole, bounded by `KEEP` and dropped with
+the tab.
 

@@ -66,20 +66,29 @@ leave, a global, a capture (`name.rs:248-254`) — is nothing at all.
 
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`, `Active` (the active `Document`), `Open` (the open tabs),
-`AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `Hist`, `Proj` (which project
+`AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `CodeAt` (where each code
+tab was left, as an address), `Hist`, `Proj` (which project
 all of that belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Pinned`,
 `Marked`/`Shift`, `Land` (a line to pin the moment a document arrives), `Analysis` (what
-the worker has to say about the selected symbol), `Locations` (every symbol the line, or the
-function around it, last asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
+the worker has to say about the selected symbol), `Sections`/`Window` (what it has decoded of the
+object whose code is on screen, and the stretches the view wants next), `Locations` (every symbol
+the line, or the function around it, last asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
 `SplitRatio`/`Splits` (how wide a document's leading side is), plus the memos `Symbols` and
-`Active`. The seven that a project *owns* travel together as a `ProjectStates`, since a project
+`Active`. The eight that a project *owns* travel together as a `ProjectStates`, since a project
 switch closes all of them and reopens all of them.
 
-**One strip, two kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**:
-`Document::Assembly(Selection)` — an object or a function — or `Document::Source(Arc<str>)`, the
-string the debug info said and never a path this filesystem was asked about. A tab has two sides,
-assembly and source, and the variant says which side the tab is *about* and therefore which drives
-the other. So opening a file from a directory panel and opening a function from the symbol list
+**One strip, three kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**:
+`Document::Assembly(Selection)` — an object or a function — `Document::Source(Arc<str>)`, the
+string the debug info said and never a path this filesystem was asked about, or
+`Document::Code(Arc<Object>)`, **all of one object's code** as one listing with the symbols drawn
+as labels inside it (`agents/Panes.md`). A tab has two sides, assembly and source, and the
+variant says which side the tab is *about* and therefore which drives the other; an object's code
+is assembly-driven like a function's tab. It is one document per object, compared by the object's
+pointer, and where the reader was in it is the tab's position and not its identity — a place in
+it at an address is that tab landed there, which is also what a call target with no symbol will
+open. Pressing an object in the Objects list opens it; the object tab `Selection::Object` opened
+until then drew nothing but "No symbol selected", stays a valid document (restorable, and the
+shape the file-tab goal in `notes/Goals.md` will fill) and has no door for now. So opening a file from a directory panel and opening a function from the symbol list
 produce the same kind of thing, differing only in which way the mapping runs. Each tab wears the
 one glyph that tells the two apart — the same pair the Assembly and Source views wore before those
 two became a document's left and right halves. Until Step 1 this was two strips with two notions of what was open — `Open`/`Sel` for
@@ -298,10 +307,13 @@ panes could open, there is one of each rather than many, and neither pane could 
 are **dockable views** — a `Tab` — which is the mechanism the app already has for "a pane with its
 own state that the reader can put where they like", and which the three sidebar lists were already
 instances of.
-A third `Document` variant was the alternative and buys a tab in a strip nothing else would put a
-second entry in, at the price of five answers nobody wants: what `resolve` does with it after a
-restart, what `Document::in_file` says when a binary closes, what the panes draw for it, what the
-history means by a "place" that is not one, and what the session file spells it as. Persistence
+A `Document` variant for a view was the alternative and buys a tab in a strip nothing else would
+put a second entry in, at the price of five answers nobody wants: what `resolve` does with it after
+a restart, what `Document::in_file` says when a binary closes, what the panes draw for it, what the
+history means by a "place" that is not one, and what the session file spells it as. `Document::Code`
+is not that: an object's code *is* a place in a binary — the whole of it — and every one of the
+five has an answer that is the object's own, which is why it is a document and not a mode of the
+object's tab. Persistence
 follows from the same sentence: a `Tab` is layout, and the dock layout is deliberately not
 persisted, so a view is **explicitly excluded** from the saved tabs and `SavedDocument` needs no
 answer for it. What a scratchpad *builds* needs no rule at all — the artifact goes through
@@ -341,6 +353,29 @@ not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into 
 handed the tab list precisely so that the run *after* a close, still holding the tab that has gone,
 cannot put it straight back. `close_tab` forgets the tab's driven line with them, which *is*
 tidiness: a `Document::Source` key holds no object, so nothing is being held up.
+
+**A code tab's place is an address, in the same map type.** The listing of an object's whole
+code is counted afresh with every answer that lands (`agents/Panes.md`), so a row there means
+nothing for long; `CodeAt` is a `Positions<Document, Spot>` — the map generalised over its value,
+`row`'s clamp being the one rows-only answer — holding the placed address at the top of the pane
+and how many rows past that address's own row it was, a stretch's header, its labels and its first
+instruction all sitting at one address. It is forgotten in the three closers with the other two
+and travels in `ProjectStates` as they do; `use_kept_place` in `src/ui/section_view.rs` is its
+`use_kept_position`, and the differences are the point: the map is **read** and not peeked, so a
+place written from outside while the tab is on top is answered (the run that wakes on its own
+write finds nothing moved and writes nothing); the rows the place is re-applied against are
+produced in the same run, so a chunk landing above the reader never draws one frame at the old
+offset; and a move it makes is re-issued until a run finds the view there, a few times and no
+more, since a `VirtualScrollView` clamps a target past its content. A place written from outside
+is answered **once, as a change of the map's value**, and never as "the map disagrees with the
+view": a listing of a large binary is millions of rows and tens of millions of pixels down, past
+where freya's `f32` scroll offset holds a pixel (`notes/upstream/freya.md`), so the view cannot
+always be put exactly where the map says, and a rule that answered the disagreement moved the view
+into a run that found the same disagreement, for ever -- the freeze the first scroll through the
+app's own binary produced. The hook's own arithmetic is `f64` for the same reason. The list is mounted from the
+first frame with no rows for the same reason: the view resets the controller as it mounts, and a
+move made before that was read back as the reader's own scroll and written over the place they
+asked for.
 
 **Opening a binary is the one path in, and it streams.** `open_binaries` is `close_binary`'s
 opposite number and the only thing that ever adds to `Objects` — the toolbar's Open, a session

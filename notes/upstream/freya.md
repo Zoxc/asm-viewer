@@ -35,3 +35,29 @@ and tagged apart from the instruction rows' keys (`ui/assembly.rs`;
 remount on a key change rather than swap props under a stale closure, and the debug
 duplicate-key check (`path_element.rs:180-197`) exempts exactly the default keys that cause
 it.
+
+## The scroll offset is an `f32`
+
+`ScrollController`'s position is read back as an `i32` but is held and laid out as an `f32`, so
+an offset past 2^24 pixels -- about sixteen million, some 670 000 rows of `code_row_height()` --
+is rounded to the nearest few pixels. A listing of an object's whole code is estimated at a row
+per four bytes before it is decoded, so a large binary's `.text` is millions of rows and its far
+end is not addressable to the row. What it cost here: the place-keeping effect of
+`src/ui/section_view.rs` once re-issued a move whenever the map and the view disagreed, and past
+that point they always did, which was an effect waking itself for ever (`agents/UI.md`). The
+effect now answers a written place once and does its own arithmetic in `f64`; the view itself
+may still land a row off down there, which nothing above the framework can mend. Not reported:
+it is an `f32` by design, and a virtual list this long is unusual.
+
+## A key event's modifiers are the mask before the key, and the change itself never arrives
+
+`freya-winit` stores `WindowEvent::ModifiersChanged` (`renderer.rs:709`) and hands the stored
+mask to the next `KeyboardInput` (`:947`); nothing forwards the change to the app, and no mouse
+or pointer event carries modifiers (`events/data.rs`). On Wayland the compositor sends a key and
+then the modifiers, so a modifier's own press and release arrive over the mask as it was before
+them. What it cost here: a Caps Lock KDE has made into Ctrl (`caps:ctrl_modifier`, which keeps
+the keysym and adds a Control *action*, unlike `ctrl:nocaps`) names itself Caps Lock over a mask
+without Ctrl on the way down and with Ctrl on the way up, so the app's Ctrl was never set by the
+press and left set by the release. `ModifierKeys` (`src/ui/marks.rs`) learns such a Caps Lock from
+its first release. The fix upstream is either forwarding `ModifiersChanged` as a global event or
+carrying the current modifiers on pointer events. Not reported yet.

@@ -50,38 +50,36 @@ pub fn landing<T: Clone + PartialEq>(
 /// A `Vec` of pairs and not a `HashMap`, because the key is whatever the tab list holds:
 /// a [`crate::project::Document`] is compared by `Arc` pointer identity where it is a
 /// place in a binary and hashes by nothing at all.
-pub struct Positions<T> {
-    at: Vec<(T, usize)>,
+///
+/// The value is a row for the two panes, and an **address** for the listing of an
+/// object's whole code, whose rows are counted afresh as it is decoded and where a row
+/// means nothing for long; the map is the same map either way, and only
+/// [`row`](Positions::row), the clamp against a listing's length, is a rows-only answer.
+pub struct Positions<T, V = usize> {
+    at: Vec<(T, V)>,
 }
 
-impl<T> Default for Positions<T> {
+impl<T, V> Default for Positions<T, V> {
     fn default() -> Self {
         Positions { at: Vec::new() }
     }
 }
 
-impl<T: Clone + PartialEq> Positions<T> {
-    /// The row `tab` was left at, or `None` when it has never been anywhere — which a
-    /// pane needs in order to tell "never seen" from "seen at the top".
-    pub fn at(&self, tab: &T) -> Option<usize> {
+impl<T: Clone + PartialEq, V: Copy + PartialEq> Positions<T, V> {
+    /// Where `tab` was left, or `None` when it has never been anywhere — which a pane
+    /// needs in order to tell "never seen" from "seen at the top".
+    pub fn at(&self, tab: &T) -> Option<V> {
         self.at
             .iter()
             .find(|(open, _)| open == tab)
-            .map(|(_, row)| *row)
+            .map(|(_, at)| *at)
     }
 
-    /// The row to put `tab` back on, in a pane now holding `length` rows. A saved
-    /// position is a hint and not a fact, so this clamps twice: a tab never seen is the
-    /// top, and a row past the end of what the tab holds now is its last row.
-    pub fn row(&self, tab: &T, length: usize) -> usize {
-        self.at(tab).unwrap_or(0).min(length.saturating_sub(1))
-    }
-
-    /// Remember that `tab` is at `row`, replacing whatever it was at before.
-    pub fn remember(&mut self, tab: T, row: usize) {
+    /// Remember that `tab` is at `at`, replacing whatever it was at before.
+    pub fn remember(&mut self, tab: T, at: V) {
         match self.at.iter_mut().find(|(open, _)| *open == tab) {
-            Some((_, at)) => *at = row,
-            None => self.at.push((tab, row)),
+            Some((_, was)) => *was = at,
+            None => self.at.push((tab, at)),
         }
     }
 
@@ -99,6 +97,26 @@ impl<T: Clone + PartialEq> Positions<T> {
     pub fn forgetting(&mut self, keep: impl Fn(&T) -> bool) {
         self.at.retain(|(open, _)| keep(open));
     }
+}
+
+impl<T: Clone + PartialEq> Positions<T> {
+    /// The row to put `tab` back on, in a pane now holding `length` rows. A saved
+    /// position is a hint and not a fact, so this clamps twice: a tab never seen is the
+    /// top, and a row past the end of what the tab holds now is its last row.
+    pub fn row(&self, tab: &T, length: usize) -> usize {
+        self.at(tab).unwrap_or(0).min(length.saturating_sub(1))
+    }
+}
+
+/// Where a listing of an object's whole code was left: the placed address at the top of
+/// the pane, and how many rows past that address's row -- a stretch's header, its labels
+/// and its first instruction all sit at one address, and the rows are what tell them
+/// apart. The address is what a session saves; the rows are a nicety that does not
+/// survive a restart.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Spot {
+    pub address: u64,
+    pub rows: usize,
 }
 
 /// Which source line each source-driven tab's assembly side is driven from.

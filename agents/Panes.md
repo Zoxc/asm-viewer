@@ -25,7 +25,14 @@ outside both panes) whose file the listing's line info names, the companion is *
 Locations row opens a symbol on a line, and a symbol whose prologue was inlined from elsewhere
 would otherwise open on that elsewhere, the line asked for sitting in a file that is not up and
 the reveal with nowhere to go. A pin made inside the panes changes no file, so clicking an
-inlined instruction leaves the symbol's own file on screen as it always did.
+inlined instruction leaves the symbol's own file on screen as it always did. **In an object's
+code the companion is the pinned line's file** and nothing before a pin -- the listing draws
+no symbol of its own, and an instruction row pins the line it was compiled from, file and all --
+and the tab opens on that line; the pane says "Click an instruction" until then. The other way
+round, a click on a source row beside it owes the listing a scroll to the instruction compiled
+from that line, which `use_kept_place`'s reveal pays out of whichever held stretch has one and
+leaves owed while none does -- the stretch may not be decoded yet, and the answer that decodes it
+wakes the effect again.
 
 **A tab opens its source side on the symbol's own lines**, which is what selecting a symbol
 asked to see: a function a hundred lines into its file was otherwise read from the top of the
@@ -56,10 +63,10 @@ and the mangled spelling appeared nowhere in the window at all. It names **the d
 never the selected one**, worked out from the same `Analyzed::showing` the listing under it is
 built from, which is the rule the pane already obeyed and the Info pane it replaces did not: the
 analysis and the selection disagree for as long as the worker takes, and a bar naming a function
-the rows below it are not of is worse than no bar. A tab that is a whole *object* is the one
-selection no listing is ever worked out for -- `ask` answers `None` for it -- so there the bar
-falls back to the document and names the object; everything else gets no bar rather than an empty
-one. Because the four answers the pane can give are each a `return`, and a header cannot be drawn
+the rows below it are not of is worse than no bar. A tab that is a whole *object*, and a tab that is
+an object's *code*, are the two selections no listing is ever worked out for -- `ask` answers
+`None` for both -- so there the bar falls back to the document and names the object; everything
+else gets no bar rather than an empty one. Because the four answers the pane can give are each a `return`, and a header cannot be drawn
 above a return, they moved into `AssemblyPane::body` and the pane became a `Content::Flex` column,
 the way the Source pane has been since its companion header: the bar takes its own height, the
 listing takes the rest, and the listing's five pixels of inset went onto the listing, a header
@@ -158,7 +165,22 @@ the line, and that effect turns it into the pin when the document it names arriv
 Whichever document arrives spends it, the one it named or another, since a landing left lying
 would pin a line in a document opened for some other reason later. A row whose symbol is
 already on top pins at once (`documents::land`), `activate` then changing nothing and no effect
-running.
+running. **Two doors join the two views** and both go through the same functions. A **Ctrl**-press on a
+label in an object's code opens the symbol's own tab, an `activate` and a visit like any opening
+from a list; a plain press picks the row out like any other, since a label is a row of the
+listing first. Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift`, both kept by
+`ModifierKeys`), a freya pointer event carrying no modifiers, and the label lights as a link only
+while it is held. A Caps Lock the desktop has made into Ctrl names itself Caps Lock in every event,
+so it is learnt from its first release (`ModifierKeys`' doc, `notes/upstream/freya.md`).
+An instruction's menu offers to show it among its neighbours -- "Show in unified view", offered in
+a symbol's listing and not in the code listing it would open -- which is `show_in_code`: the code
+tab's place is written to `CodeAt` **first**, the order a restore uses, so the pane's first run
+finds it, and when the code tab is already on top that write is what moves the view, the
+place-keeping hook reading the map for exactly this; then `land` with the instruction's line where
+it has one, or a plain `activate` where it has none. Nothing new was added to `Landing` for it: a
+landing is a line, and the address travels as the tab's place. The same menu in the code listing
+offers the door the other way, "Open as symbol" (`open_as_symbol`): the symbol's own tab, landed
+on the row's line where it has one -- so a label is not the only way back.
 
 **The arrow gutter** draws every branch staying inside the symbol, with the layout in `src/lanes.rs`
 because a `VirtualScrollView` builds row *n* knowing nothing but *n* — a row has to be *told* which
@@ -172,8 +194,11 @@ past that, since the corner and the arrowhead survive sharing and only the joini
 ambiguous. It is drawn with **rects**, not `canvas()`, whose `RenderCallback` has a `PartialEq`
 returning `true` unconditionally — exactly wrong for a row a scroll view recycles. `InstructionRow`
 therefore pads horizontally only: a line must reach the row's top and bottom edges or the column
-comes out dashed. Hovering a row draws its own branches darker, which needs a row *index* in
-`InstructionList` rather than `Focused` — a source position is many rows.
+comes out dashed. Hovering a row draws its own branches darker, which needs the hovered *row* in
+`InstructionList` rather than `Focused` — a source position is many rows. It is kept as a
+**listing row** and not an instruction index, so that one state can serve a listing of many
+symbols; the list converts it back through `Lanes` where it works out what the hovered row
+touches, and a separator under the pointer lights nothing.
 
 **Every stroke in it is put on the device pixel grid by its edges.** freya lays a window out in
 logical pixels and multiplies the whole tree by the window's scale factor on the way to Skia,
@@ -225,7 +250,14 @@ What that costs is **two index spaces**, and `Lanes` is the only thing allowed t
 them: `listing_rows`, `row_of` and `instruction_at`. An **instruction index** is what
 `AsmData::position`, the gutter, `Lanes::touching` and the branch edges speak; a **listing row**
 is what the scroll (`reveal_row`, `use_kept_position`) and the picked-out run (`Marked`,
-`on_listing_key`) speak. `InstructionRow` carries both and never mixes them. The separator draws
+`on_listing_key`) speak. `InstructionRow` carries both and never mixes them. A row is also told
+three things about the listing it is in, through `AsmData`, so that the same row serves a
+listing that is not one symbol's: `base`, the listing row the symbol's first instruction row is
+drawn at, added to every row `Lanes` answers (a branch label's target is `base + row_of`);
+`bias`, added to every address the row draws, copies or names in its focus (`Section::bias`,
+what tells two functions of a relocatable object apart when both are at 0); and `width`, the
+gutter's lane count, the symbol's own when it is read alone. On its own, a symbol's listing
+hands in 0, 0 and its lanes' width, and nothing about it changed. The separator draws
 the lanes that cross it — `Lanes::boundary`, the row below's `top` strokes run full height — so a
 branch's line is unbroken where the listing opens the gap under it, and it carries neither stub
 nor arrowhead, both of which belong to the row landed on. It takes the mark handlers too, so a
@@ -243,6 +275,53 @@ one-pixel rect centred on one straddles the two pixels either side. The offset i
 rather than an absolute position, so the rule still takes the width the row's flex leaves it. Its colour is
 `block_rule`, held quieter against the pane than `branch_fg` — it runs the width of the listing
 where the gutter's stroke is a few pixels long (`agents/Appearance.md`).
+
+**A listing of a whole object's code is rows before it is instructions** (`src/section.rs`).
+A `VirtualScrollView` has to be told its length up front, and x86 being variable-length, the
+instruction rows of a section cannot be counted without decoding it -- which is the one thing the
+section view must not do eagerly. So `Rows` counts from the skeleton: a header row where a placed
+section starts, a label row per symbol at each stretch's address, and under them either the rows
+the stretch's decoded body takes -- the symbol's own instruction rows and separators, straight
+out of its `Lanes`, then its gap as rows of sixteen bytes -- or, for a stretch nobody has decoded,
+a **guess**: its bytes over four, x86's mean instruction length, and never fewer than one. The
+listing therefore has its whole length from the first frame, the scrollbar means something, and
+what the reader scrolls over is empty space that fills in as the worker reaches it; the length
+starts estimated and settles. What makes that bearable is that **every row has an address and
+every address a row** -- `address_of` and `row_for`, placed addresses both, an empty row's being
+its share of the stretch's bytes rounded so the two agree -- since an address is the one name for
+a row that survives the rows around it changing. The view keeps the reader's place as an address
+for exactly that reason -- plus how many rows past `row_for` it was, since a stretch's header, its
+labels and its first instruction all sit at one address and `row_for` answers the first of them. Nothing here is a fourth answer to the two index spaces above: a decoded
+stretch's rows *are* its `Lanes`' rows, at `body_start` into the listing, which is the `base` an
+`InstructionRow` is handed.
+
+**The section view reads an object's code in windows and keeps its place by address**
+(`src/ui/section_view.rs`). The rows above are drawn into one `VirtualScrollView`, the
+instruction rows being `InstructionRow` told its `base`, `bias` and a gutter `MAX_LANES` wide,
+the separators `SeparatorRow`, and the header, label, empty and gap rows four small rows of the
+view's own -- all of them keyed in a key space per kind over the placed address they stand for,
+the separators' lesson in six places. Two effects do the rest. `use_kept_place` keeps the reader's
+place (`agents/UI.md`, `CodeAt`) and rebuilds the rows whenever the reading's generation changes,
+in the one run that also moves the controller to where the place now is -- and what it produces
+is the rows **and the reading they were counted from**, as one `Built`, because the effect runs a
+pass after the answer and for that pass the reading the pane can read is newer than the rows on
+screen: a stretch the answer let go of, drawn from the old rows against the new reading, found no
+bytes, and every one of its rows fell back to one key, which freya's diff panics on. The list draws
+from the pair and never from the two apart; a gap row is keyed by its own address besides. `use_window` reads the
+controller, the viewport, the rows **and the reading** -- the pane mounts a beat before the
+reading is its own, `Active` being a memo, and a run that found the reading about something
+else must be woken when it catches up, or the tab stays empty until the pane is resized -- and asks -- through `Window`, which the worker's sender
+reads -- for the stretches within `BUFFER` (3) screens above and below the viewport that are not
+held, nearest the middle of the viewport first and at most `WINDOW` (64) of them; the worker
+answers a chunk, the rows change, the effect wakes on them and asks for the rest, so the buffer
+fills from the viewport outwards and a page up or down lands on rows already decoded. Before
+there is a skeleton it asks for that, with nothing decoded. What a row copies is what it draws:
+`section .text` for a header, `<name>:` after its address for a label, the instruction's own line
+for an instruction, and for a gap row a data directive -- `dq` for a row that divides into
+quadwords, down to `db` for one that does not, the values little-endian as x86 reads them --
+followed by the same bytes as characters between bars: a hex dump's shape, which is how a row of
+data is told from a row of assembly, in its shape and not in a colour. Nothing for an empty row or
+a separator.
 
 **A branch's displacement is the other way to follow it**, drawn as a `BranchLabel` exactly where
 a call's resolved target is drawn as a `RelocationLabel` — `Instruction::branch_span` says which
@@ -277,5 +356,9 @@ and deliberately not global, or a Ctrl+C meant for a filter box would come back 
 disassembly. Runs are dropped by `use_clear_marks` at the root, not by an effect inside each list —
 `AsmData` carries an `Arc<Lanes>` rebuilt every render, so that effect would wipe the run the press
 just started. What is copied is what the row draws: `asm_line` (address plus the instruction with
-the target's name in its operand), and the rope's own line for source, tabs and all.
+the target's name in its operand), and the rope's own line for source, tabs and all -- and, in an
+object's code, each kind of row as it draws (`row_line`), a separator and an empty row as the blank
+line they are. That listing's run is also dropped when its rows are counted afresh under it, since
+a run is listing rows: `use_clear_marks` watches the reading's generation, and only the generation,
+because the asks the view makes as it scrolls write the same state and change no row.
 

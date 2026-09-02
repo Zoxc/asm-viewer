@@ -75,6 +75,8 @@ command.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
 - `src/rows.rs` — the run of rows a reader picks out to copy.
+- `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
+  a stretch is decoded, the symbol's own after, and an address for every one.
 - `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the document it stands for.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.
 - `src/tabs.rs` — `landing`, the rule a close obeys; `Positions`, where each tab was left;
@@ -96,6 +98,10 @@ command.
   cache holding it.
 - `src/ui/locations.rs` — every symbol a line, or the function around it, was compiled into: the
   question, the answer, the panel.
+- `src/ui/reading.rs` — what the worker has decoded of an object's code for the section view,
+  and the window of it the view asks for next.
+- `src/ui/section_view.rs` — the section view: an object's code as one listing, its rows, the
+  place it keeps as an address, and the window it asks for.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.

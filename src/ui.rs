@@ -26,8 +26,8 @@ pub(crate) use freya::text_edit::TextEditor;
 pub(crate) use rfd::AsyncFileDialog;
 
 pub(crate) use analysis::{
-    open_files_streaming, Assembly, Instruction, LineInfo, Object, Progress, SpanKind, Symbol,
-    SymbolData,
+    open_files_streaming, Assembly, CodeListing, Instruction, LineInfo, Object, Progress, SpanKind,
+    Symbol, SymbolData,
 };
 
 pub(crate) use crate::compiled;
@@ -47,9 +47,10 @@ pub(crate) use crate::scratchpad::{
     run_in, Build, Dependency, Diagnostic, Ended, Failure, Half, Level, PadId, PadListing,
     PadOrder, Problem, RunEvent, RunOutput, Running, Scratchpad, Stream,
 };
+pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 pub(crate) use crate::source::{self, SourceFile};
-pub(crate) use crate::tabs::{self, Driven, Positions};
+pub(crate) use crate::tabs::{self, Driven, Positions, Spot};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
@@ -84,6 +85,10 @@ mod parts;
 pub(crate) use parts::*;
 mod project_view;
 pub(crate) use project_view::*;
+mod reading;
+pub(crate) use reading::*;
+mod section_view;
+pub(crate) use section_view::*;
 mod settings_view;
 pub(crate) use settings_view::*;
 mod sidebar;
@@ -284,6 +289,7 @@ pub fn app() -> impl IntoElement {
     });
     let asm_at = use_provide_context(|| AsmAt(State::create(Positions::default()))).0;
     let src_at = use_provide_context(|| SrcAt(State::create(Positions::default()))).0;
+    let code_at = use_provide_context(|| CodeAt(State::create(Positions::default()))).0;
     let driven = use_provide_context(|| Drives(State::create(Driven::default()))).0;
     use_provide_context(|| Expanded(State::create(HashSet::new())));
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
@@ -291,7 +297,11 @@ pub fn app() -> impl IntoElement {
     let pinned = use_provide_context(|| Pinned(State::create(None))).0;
     let landing = use_provide_context(|| Land(State::create(None))).0;
     let marked = use_provide_context(|| Marked(State::create(None))).0;
-    let mut shift = use_provide_context(|| Shift(State::create(false))).0;
+    let shift = use_provide_context(|| Shift(State::create(false))).0;
+    let ctrl = use_provide_context(|| Ctrl(State::create(false))).0;
+    let caps_is_ctrl = use_state(|| false);
+    let control_held = use_state(|| false);
+    let keys = ModifierKeys::new(shift, ctrl, caps_is_ctrl, control_held);
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
     let states = ProjectStates {
         proj,
@@ -300,6 +310,7 @@ pub fn app() -> impl IntoElement {
         open,
         asm_at,
         src_at,
+        code_at,
         driven,
         history,
     };
@@ -328,12 +339,17 @@ pub fn app() -> impl IntoElement {
 
     let analysis = use_provide_context(|| Analysis(State::create(Analyzed::default()))).0;
     let located = use_provide_context(|| Locations(State::create(Located::default()))).0;
+    let reading = use_provide_context(|| Sections(State::create(Reading::default()))).0;
+    let window = use_provide_context(|| Window(State::create(None))).0;
+    use_reading_of(active, objects, reading, window);
     // The question and not the active document: a source-driven tab's assembly side
     // changes when a line in it is clicked, which changes no document.
     let asked = Asked { active, driven };
-    use_analysis_with(asked, objects, history, analysis, located, answer);
+    use_analysis_with(
+        asked, objects, history, analysis, located, reading, window, answer,
+    );
     // After the analysis: the file the Source pane draws is what the analysis says it is.
-    use_clear_marks(active, asked, analysis, pinned, marked);
+    use_clear_marks(active, asked, analysis, pinned, reading, marked);
 
     // At the root rather than in the view: an inactive dock tab is unmounted, and neither
     // a buffer being typed into nor a program that was started can live there. The buffers
@@ -379,20 +395,10 @@ pub fn app() -> impl IntoElement {
         // A sweep ends wherever the button comes up, very often not over the pane it
         // started in, so the end of the gesture is watched for here.
         .on_global_pointer_press(move |_| mark_release(marked))
-        // A freya pointer event carries no modifiers, so Shift has to be known before the
-        // click that asks about it. The key and the mask are both tested: platforms
-        // disagree about which of the two arrives first, and the mask is what recovers
-        // when a key event is missed (the window losing focus mid-gesture, say).
-        .on_global_key_down(move |e: Event<KeyboardEventData>| {
-            shift.set_if_modified(
-                e.key == Key::Named(NamedKey::Shift) || e.modifiers.contains(Modifiers::SHIFT),
-            );
-        })
-        .on_global_key_up(move |e: Event<KeyboardEventData>| {
-            shift.set_if_modified(
-                e.key != Key::Named(NamedKey::Shift) && e.modifiers.contains(Modifiers::SHIFT),
-            );
-        })
+        // A freya pointer event carries no modifiers, so Shift and Ctrl have to be known
+        // before the click that asks about them: `ModifierKeys`.
+        .on_global_key_down(move |e: Event<KeyboardEventData>| keys.down(&e.key, e.modifiers))
+        .on_global_key_up(move |e: Event<KeyboardEventData>| keys.up(&e.key, e.modifiers))
         // Provides the root state `ContextMenu::open_from_event` looks up: opening a menu
         // without one in an ancestor scope panics. It lays out as nothing until a menu
         // is open.

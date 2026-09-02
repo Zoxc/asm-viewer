@@ -25,7 +25,7 @@ use analysis::{Object, Symbol, SymbolData};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::history::History;
-use crate::tabs::{Driven, Positions};
+use crate::tabs::{Driven, Positions, Spot};
 
 /// The one directory everything this app stores lives under: the projects, the recent
 /// list, the settings and the scratchpads.
@@ -82,10 +82,16 @@ impl PartialEq for Selection {
 /// says which side the tab is *about* and therefore which one drives the other. A file is
 /// the string the debug info said and never a path this filesystem was asked about, which
 /// is why it is an `Arc<str>` and not a `PathBuf`.
+///
+/// [`Code`](Document::Code) is a third kind: **all of one object's code** as one listing,
+/// the symbols drawn as labels inside it where they start. It is assembly-driven like a
+/// symbol's tab, and one per object rather than one per place in it — where the reader
+/// was in it is the tab's position, not its identity.
 #[derive(Clone)]
 pub enum Document {
     Assembly(Selection),
     Source(Arc<str>),
+    Code(Arc<Object>),
 }
 
 impl Document {
@@ -96,6 +102,7 @@ impl Document {
         match self {
             Document::Assembly(selection) => selection.in_file(path),
             Document::Source(_) => false,
+            Document::Code(object) => object.path == path,
         }
     }
 
@@ -110,12 +117,14 @@ impl Document {
 }
 
 impl PartialEq for Document {
-    /// Each variant by its own rule — `Arc` pointer identity for a selection, text for a
-    /// file — and never across the two.
+    /// Each variant by its own rule — `Arc` pointer identity for a selection and for an
+    /// object's code, text for a file — and never across the kinds: an object's code and
+    /// the object itself are two documents.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Document::Assembly(a), Document::Assembly(b)) => a == b,
             (Document::Source(a), Document::Source(b)) => a == b,
+            (Document::Code(a), Document::Code(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -286,19 +295,26 @@ pub struct SavedTab {
     /// answers it again out of what is loaded now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    /// The placed address at the top of an object's **code** tab, and absent for every
+    /// other kind: that listing's rows are counted afresh as it is decoded, so a row
+    /// there is no place to come back to and an address is. A claim about a layout, so a
+    /// rebuilt binary takes it with the rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asm_address: Option<u64>,
     pub document: SavedDocument,
 }
 
 /// A saved tab that still points somewhere: what [`Session::resolve_tabs`] hands back.
 ///
-/// Named rather than a tuple because it is four things now, and because the rows drop
-/// under a rebuilt binary while the line does not.
+/// Named rather than a tuple because it is five things now, and because the rows and the
+/// address drop under a rebuilt binary while the line does not.
 #[derive(Clone, PartialEq)]
 pub struct RestoredTab {
     pub document: Document,
     pub asm_row: usize,
     pub src_row: usize,
     pub line: Option<u32>,
+    pub address: Option<u64>,
 }
 
 /// The navigation history in saved form: the index of the entry that was on screen, and
@@ -466,12 +482,21 @@ pub enum SavedDocument {
     Source {
         path: String,
     },
+    /// All of an object's code, named the way its object is.
+    Code {
+        path: PathBuf,
+        object_name: String,
+    },
 }
 
 impl SavedDocument {
     /// The saved form of `document`.
     pub fn from_document(document: &Document) -> SavedDocument {
         match document {
+            Document::Code(object) => SavedDocument::Code {
+                path: object.path.clone(),
+                object_name: object.name.clone(),
+            },
             Document::Assembly(Selection::Object(object)) => SavedDocument::Object {
                 path: object.path.clone(),
                 object_name: object.name.clone(),
@@ -491,7 +516,9 @@ impl SavedDocument {
     /// The binary this names, or `None` for a file.
     fn binary_path(&self) -> Option<&Path> {
         match self {
-            SavedDocument::Object { path, .. } | SavedDocument::Symbol { path, .. } => Some(path),
+            SavedDocument::Object { path, .. }
+            | SavedDocument::Symbol { path, .. }
+            | SavedDocument::Code { path, .. } => Some(path),
             SavedDocument::Source { .. } => None,
         }
     }
@@ -501,7 +528,8 @@ impl SavedDocument {
         let path = self.binary_path()?;
         let name = match self {
             SavedDocument::Object { object_name, .. }
-            | SavedDocument::Symbol { object_name, .. } => object_name.as_str(),
+            | SavedDocument::Symbol { object_name, .. }
+            | SavedDocument::Code { object_name, .. } => object_name.as_str(),
             SavedDocument::Source { .. } => return None,
         };
         objects
@@ -523,6 +551,7 @@ impl SavedDocument {
 
         let object = self.find_object(objects)?;
         let selection = match self {
+            SavedDocument::Code { .. } => return Some(Document::Code(object.clone())),
             SavedDocument::Object { .. } => Selection::Object(object.clone()),
             SavedDocument::Symbol {
                 path,
@@ -623,6 +652,7 @@ impl Session {
         tabs: &[Document],
         asm_rows: &Positions<Document>,
         src_rows: &Positions<Document>,
+        places: &Positions<Document, Spot>,
         driven: &Driven,
         active: Option<&Document>,
         history: &History,
@@ -645,6 +675,7 @@ impl Session {
                     asm_row: asm_rows.at(tab).unwrap_or(0),
                     src_row: src_rows.at(tab).unwrap_or(0),
                     line: driven.line(tab),
+                    asm_address: places.at(tab).map(|spot| spot.address),
                     document: SavedDocument::from_document(tab),
                 })
                 .collect(),
@@ -677,15 +708,16 @@ impl Session {
                     .document
                     .binary_path()
                     .is_some_and(|path| rebuilt.changed(path));
-                let (asm_row, src_row) = match changed {
-                    true => (0, 0),
-                    false => (saved.asm_row, saved.src_row),
+                let (asm_row, src_row, address) = match changed {
+                    true => (0, 0, None),
+                    false => (saved.asm_row, saved.src_row, saved.asm_address),
                 };
                 Some(RestoredTab {
                     document,
                     asm_row,
                     src_row,
                     line: saved.line,
+                    address,
                 })
             })
             .collect()

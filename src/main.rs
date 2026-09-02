@@ -10,6 +10,7 @@ mod pixels;
 mod project;
 mod rows;
 mod scratchpad;
+mod section;
 mod settings;
 mod source;
 mod tabs;

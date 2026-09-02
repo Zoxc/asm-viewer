@@ -51,13 +51,18 @@ binary and **the path itself** for a source file, never pointers; that mapping l
 places, `SavedDocument::from_document` and `::resolve`. A source file's path is a `String`, since
 it is what the debug info said rather than something this filesystem was asked about.
 
-**One `tabs` list of both kinds, not a `tabs` and a `sources` beside it**, because there is one
-strip: the reader's own interleaved order is what comes back, and the one document that was on
+**One `tabs` list of every kind, not a `tabs` and a `sources` beside it**, because there is one
+strip — `SavedDocument::Code`, an object's whole code, is saved by its object's path and name
+exactly as the object is and joins the same list: the reader's own interleaved order is what comes back, and the one document that was on
 screen is `active` whichever kind it is — written out in full rather than as an index, since a tab
 that no longer resolves is *dropped* (which would shift the index) while the active one *degrades*.
 Each entry carries **the rows both of its sides were left at**: a `tabs` entry is a `SavedTab`
-(`asm_row` + `src_row` + `line` + `document`), rather than the list having arrays of rows beside
-it. The
+(`asm_row` + `src_row` + `line` + `asm_address` + `document`), rather than the list having arrays
+of rows beside it. `asm_address` is where an object's **code** tab was left, as a placed address,
+and is absent for every other kind: that listing's rows are counted afresh as it is decoded, so a
+row there is no place to come back to and an address is (`agents/UI.md`, `CodeAt`). It is a claim
+about a layout, so a rebuilt binary takes it with the rows; how many rows past the address the
+tab was is not saved, a label being a fine place to come back to. The
 rows travel with their tab because `resolve_tabs` drops the tabs that no longer resolve, which
 would shift every later row of a parallel array onto the wrong tab. They are rows and not pixel
 offsets so that the row height following the fonts (Step 9c) does not move every saved position,

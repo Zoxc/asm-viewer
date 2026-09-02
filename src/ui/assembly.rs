@@ -14,9 +14,10 @@ use super::*;
 /// One instruction as one line of text, which is what a copy of the row has to be: the
 /// address column, then the formatted instruction with the relocation target's name
 /// substituted into its operand -- or appended, where the formatter offered no operand to
-/// put it in. The gutter is left out, being a picture of the branches.
-fn asm_line(instruction: &Instruction) -> String {
-    let mut text = format!("{:016X} ", instruction.address);
+/// put it in. The gutter is left out, being a picture of the branches. `bias` is what the
+/// listing adds to every address it draws (see [`AsmData::bias`]).
+pub(crate) fn asm_line(instruction: &Instruction, bias: u64) -> String {
+    let mut text = format!("{:016X} ", instruction.address.wrapping_add(bias));
     text.extend(instruction.format.iter().map(|(span, _)| span.as_str()));
 
     if instruction.relocation_span.is_none() {
@@ -33,25 +34,48 @@ fn asm_line(instruction: &Instruction) -> String {
 /// A disassembled symbol, where its branches are drawn and what says where its
 /// instructions came from, compared by pointer.
 #[derive(Clone)]
-struct AsmData {
-    assembly: Arc<Assembly>,
-    object: Arc<Object>,
+pub(crate) struct AsmData {
+    pub(crate) assembly: Arc<Assembly>,
+    pub(crate) object: Arc<Object>,
+    /// The symbol the listing is of, for a row to name the tab it can be opened alone in.
+    pub(crate) symbol: Arc<SymbolData>,
     /// The gutter layout for this symbol's branches, derived from `assembly` on the worker
     /// so it can never be a beat behind the rows it is drawn over.
-    lanes: Arc<Lanes>,
-    lines: SymbolLines,
+    pub(crate) lanes: Arc<Lanes>,
+    pub(crate) lines: SymbolLines,
     /// The file of the source-driven tab this listing is the assembly side of, or `None`
     /// for an assembly-driven tab's own listing. Compared by text, as `LinePos` is.
-    subject: Option<Arc<str>>,
+    pub(crate) subject: Option<Arc<str>>,
+    /// The listing row this symbol's first instruction row is drawn at: 0 in a listing
+    /// that is one symbol, and where the symbol starts in a listing of a whole object's
+    /// code. What `lanes` answers in rows is relative to the symbol, and this is what the
+    /// scroll and the picked-out run -- which speak the listing's rows -- have it added.
+    pub(crate) base: usize,
+    /// What is added to every address drawn, copied or named in a focus: 0 for a symbol
+    /// read on its own, and the section's place in the object's layout
+    /// (`Section::bias`) in a listing of all its code, where two functions of a
+    /// relocatable object are both at 0 and have to be told apart.
+    pub(crate) bias: u64,
+    /// How many lanes the gutter is drawn with: the symbol's own on its own, and one width
+    /// for every symbol in a listing of many, so the addresses start at one x.
+    pub(crate) width: usize,
+    /// Whether this listing is the object's code already, where a row has no
+    /// neighbours to be shown among.
+    pub(crate) code_tab: bool,
 }
 
 impl PartialEq for AsmData {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.assembly, &other.assembly)
             && Arc::ptr_eq(&self.object, &other.object)
+            && Arc::ptr_eq(&self.symbol, &other.symbol)
             && Arc::ptr_eq(&self.lanes, &other.lanes)
             && self.lines == other.lines
             && self.subject == other.subject
+            && self.base == other.base
+            && self.bias == other.bias
+            && self.width == other.width
+            && self.code_tab == other.code_tab
     }
 }
 
@@ -59,7 +83,7 @@ impl AsmData {
     /// The source position the instruction at `index` was compiled from, or `None` where
     /// the debug info gives it none: no line info at all, an address no row covers, or a
     /// row naming no file or sitting on DWARF's line 0.
-    fn position(&self, index: usize) -> Option<LinePos> {
+    pub(crate) fn position(&self, index: usize) -> Option<LinePos> {
         let lines = self.lines.info.as_ref()?;
         let row = lines.row_at(self.assembly.instructions[index].address)?;
         Some(LinePos {
@@ -88,9 +112,9 @@ struct AsmRows {
 /// What one row draws in the gutter: its own lanes, and how much of it belongs to a branch
 /// of the row under the pointer.
 #[derive(Clone, Copy, PartialEq)]
-struct RowArrows {
-    lanes: RowLanes,
-    lit: Lit,
+pub(crate) struct RowArrows {
+    pub(crate) lanes: RowLanes,
+    pub(crate) lit: Lit,
 }
 
 impl AsmRows {
@@ -287,6 +311,7 @@ impl Component for BranchLabel {
 fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
     let grid = pixel_grid();
     let height = code_row_height();
+    debug_assert!(width > 0);
     // The row of device pixels the horizontal run is drawn in. It is also where the two
     // halves of a corner meet and where the arrowhead pivots, so all three are put on the
     // grid by this one answer rather than each rounding `height / 2.0` for itself.
@@ -366,6 +391,16 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
         })
 }
 
+/// How wide a gutter of `width` lanes is drawn, for a row that has no gutter and wants
+/// its address column to start where an instruction row's does.
+pub(crate) fn gutter_width(width: usize) -> f32 {
+    if width == 0 {
+        return 0.0;
+    }
+    let grid = pixel_grid();
+    grid.edge(grid.edge(width as f32 * LANE_WIDTH + ARROW_WIDTH) + GUTTER_PAD)
+}
+
 /// The hairline a [`SeparatorRow`] draws across its middle, between the gutter and the
 /// listing's right edge.
 ///
@@ -413,16 +448,16 @@ fn block_rule() -> impl IntoElement {
 /// the downcast inside freya unwraps `None` (`notes/upstream/freya.md`). The key is the
 /// address of the instruction below, tagged so it can never equal an instruction row's.
 #[derive(Clone, PartialEq)]
-struct SeparatorRow {
+pub(crate) struct SeparatorRow {
     /// The listing row this is, for the picked-out run: a sweep that crosses a boundary
     /// must not stop tracking the pointer, and a copy takes the blank line it draws.
-    row: usize,
+    pub(crate) row: usize,
     /// Whether it is inside the picked-out run.
-    selected: bool,
+    pub(crate) selected: bool,
     /// The gutter's width for the whole symbol, and the lanes crossing this boundary.
-    width: usize,
-    arrows: RowArrows,
-    key: DiffKey,
+    pub(crate) width: usize,
+    pub(crate) arrows: RowArrows,
+    pub(crate) key: DiffKey,
 }
 
 impl KeyExt for SeparatorRow {
@@ -464,36 +499,39 @@ impl Component for SeparatorRow {
 }
 
 #[derive(Clone)]
-struct InstructionRow {
-    data: AsmData,
+pub(crate) struct InstructionRow {
+    pub(crate) data: AsmData,
     /// Which instruction this row draws.
-    index: usize,
+    pub(crate) index: usize,
     /// Which row of the listing it is drawn in, which is `index` plus every separator
-    /// above it. The picked-out run and the scroll speak this one; everything else --
-    /// the gutter, the line info, the branch edges -- speaks `index`. See [`Lanes`].
-    row: usize,
+    /// above it and plus [`AsmData::base`]. The picked-out run and the scroll speak this
+    /// one; everything else -- the gutter, the line info, the branch edges -- speaks
+    /// `index`. See [`Lanes`].
+    pub(crate) row: usize,
     /// What this row draws in the gutter, worked out by the list for the reason `focused`
     /// is: the lanes lit in row 40 belong to a branch of row 12.
-    arrows: RowArrows,
-    /// Where the pointer is, which this row writes and does not read. Kept out of the
-    /// `PartialEq` below: it is the same handle for the whole life of the list.
-    hover: State<Option<usize>>,
+    pub(crate) arrows: RowArrows,
+    /// Where the pointer is, as a **listing row**, which this row writes and does not
+    /// read. A row and not an instruction index so that one state serves a listing of
+    /// many symbols; the list converts. Kept out of the `PartialEq` below: it is the same
+    /// handle for the whole life of the list.
+    pub(crate) hover: State<Option<usize>>,
     /// The listing's scroll and its height, for a branch operand to scroll to the row it
     /// names. Out of the `PartialEq` for the same reason `hover` is: both are the list's
     /// own handles and neither changes while it lives.
-    controller: ScrollController,
-    viewport: State<f32>,
+    pub(crate) controller: ScrollController,
+    pub(crate) viewport: State<f32>,
     /// Whether the source line the pointer is on is the one this instruction was compiled
     /// from. Worked out by the list rather than read here, so that a focus moving between
     /// two instructions of one line leaves every row untouched.
-    focused: bool,
+    pub(crate) focused: bool,
     /// Whether the source line a click pinned is that same line.
-    pinned: bool,
+    pub(crate) pinned: bool,
     /// Whether this row is one of the run picked out to be copied. Worked out by the list
     /// too, so a row re-renders on its own membership changing and not on every row a drag
     /// passes over.
-    selected: bool,
-    key: DiffKey,
+    pub(crate) selected: bool,
+    pub(crate) key: DiffKey,
 }
 
 impl PartialEq for InstructionRow {
@@ -524,21 +562,34 @@ impl Component for InstructionRow {
         // Consumed here, in the render, because the menu handler may not run a hook.
         let located = use_consume::<Locations>().0;
         let dock = use_consume::<ContentDock>().0;
+        let open = use_open();
+        let history = use_consume::<Hist>().0;
+        let landing = use_consume::<Land>().0;
+        let code_at = use_consume::<CodeAt>().0;
         // The source-driven tab this listing is the assembly side of, if it is one: a
         // location found from it is chosen for it.
         let subject = self.data.subject.clone();
         let mut hover = self.hover;
-        let index = self.index;
         let row = self.row;
-        let width = self.data.lanes.width;
+        let width = self.data.width;
         let instruction = &self.data.assembly.instructions[self.index];
+        // The address as the listing draws it: the symbol's own, plus where the listing
+        // has placed the symbol's section.
+        let address = instruction.address.wrapping_add(self.data.bias);
+        // The row's door into the object's code, unless this listing is that already --
+        // and from there, the door back to the symbol read alone.
+        let neighbours = (!self.data.code_tab).then(|| (self.data.object.clone(), address));
+        let alone = self.data.code_tab.then(|| Symbol {
+            object: self.data.object.clone(),
+            data: self.data.symbol.clone(),
+        });
 
         // Where this row points on the source side. Worked out once here rather than in
         // each of the three handlers, which all need the same answer.
         let at = self.data.position(self.index);
         let focus = at.clone().map(|at| LineFocus {
             at,
-            from: FocusOrigin::Instruction(instruction.address),
+            from: FocusOrigin::Instruction(address),
         });
         let taken = focus.clone();
 
@@ -560,7 +611,7 @@ impl Component for InstructionRow {
         ) {
             (Some(span), Some(edge)) => instruction.format.get(span).map(|(text, _)| BranchLabel {
                 text: text.clone(),
-                to: self.data.lanes.row_of(edge.to),
+                to: self.data.base + self.data.lanes.row_of(edge.to),
                 at: self.data.position(edge.to),
                 controller: self.controller,
                 viewport: self.viewport,
@@ -647,9 +698,9 @@ impl Component for InstructionRow {
             })
             .on_pointer_over(move |_| {
                 hovering.set_if_modified(true);
-                // Two hovers: this row's own background, and the index shared with the
+                // Two hovers: this row's own background, and the row shared with the
                 // whole list, which the gutter uses for rows the pointer is nowhere near.
-                hover.set_if_modified(Some(index));
+                hover.set_if_modified(Some(row));
                 focused.set_if_modified(taken.clone());
                 // Sweeping a selection out to here, in the handler the cross-view focus
                 // already uses -- a second `pointer_over` would answer the same event
@@ -661,23 +712,56 @@ impl Component for InstructionRow {
                 // `pointerout` on the row being left and `pointerover` on the row being
                 // entered are not ordered against each other, so a row may only take back
                 // what is still its own. See `release_focus`.
-                if *hover.peek() == Some(index) {
+                if *hover.peek() == Some(row) {
                     hover.set(None);
                 }
                 release_focus(focused, focus.as_ref());
             })
-            // And offers no menu either: there is no line to find the locations of.
-            .maybe(at.is_some(), {
+            // The menu: the line's locations, where the debug info gives the row a line,
+            // and the row shown among its neighbours, where it is not already.
+            .maybe(at.is_some() || neighbours.is_some() || alone.is_some(), {
                 let at = at.clone();
                 move |row| {
-                    let Some(at) = at else {
-                        return row;
-                    };
                     row.on_secondary_down(move |e: Event<PressEventData>| {
-                        ContextMenu::open_from_event(
-                            &e,
-                            locate_menu(located, dock, at.clone(), subject.clone(), None),
-                        );
+                        let menu = match &at {
+                            Some(at) => {
+                                locate_menu(located, dock, at.clone(), subject.clone(), None)
+                            }
+                            None => Menu::new(),
+                        };
+                        let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {
+                            let at = at.clone();
+                            MenuButton::new()
+                                .on_press(move |_| {
+                                    show_in_code(
+                                        open,
+                                        history,
+                                        pinned,
+                                        landing,
+                                        code_at,
+                                        object.clone(),
+                                        address,
+                                        at.clone(),
+                                    )
+                                })
+                                .child("Show in unified view")
+                        }));
+                        let menu = menu.maybe_child(alone.clone().map(|symbol| {
+                            let at = at.clone();
+                            MenuButton::new()
+                                .on_press(move |_| {
+                                    open_as_symbol(
+                                        open,
+                                        history,
+                                        pinned,
+                                        landing,
+                                        symbol.clone(),
+                                        at.clone(),
+                                    )
+                                })
+                                .child("Open as symbol")
+                        }));
+                        ContextMenu::open_from_event(&e, menu);
                     })
                 }
             })
@@ -698,7 +782,7 @@ impl Component for InstructionRow {
             .maybe(width > 0, |el| el.child(gutter(width, self.arrows)))
             .child(
                 label()
-                    .text(format!("{:016X} ", instruction.address))
+                    .text(format!("{address:016X} "))
                     .min_width(Size::px(200.0))
                     .color(palette().address_fg)
                     .max_lines(1),
@@ -780,20 +864,27 @@ impl Component for InstructionList {
         // the answer, so the rect wrapping it is measured here instead.
         let mut viewport = use_state(|| 0.0f32);
 
-        // Which row the pointer is on, which the rows write and the gutter reads. It lives
-        // here because it is what the rows *around* the pointer need: hovering a `jne`
-        // lights its line all the way down to where it lands.
+        // Which listing row the pointer is on, which the rows write and the gutter reads.
+        // It lives here because it is what the rows *around* the pointer need: hovering
+        // a `jne` lights its line all the way down to where it lands.
         let hover = use_state(|| None::<usize>);
 
         let data = AsmData {
             assembly: self.assembly.clone(),
             object: self.symbol.object.clone(),
+            symbol: self.symbol.data.clone(),
             lanes: self.lanes.clone(),
             lines: self.lines.clone(),
             subject: match &self.asked {
                 Ask::Source { at, .. } => Some(at.file.clone()),
                 Ask::Symbol(_) => None,
             },
+            // A listing that is one symbol: its rows start at the top, its addresses
+            // are the file's own, and its gutter is as wide as it needs.
+            base: 0,
+            bias: 0,
+            width: self.lanes.width,
+            code_tab: false,
         };
         // The listing's rows, which is the instructions plus a separator above every row a
         // branch lands on. Everything below that scrolls, picks out or counts rows is in
@@ -834,8 +925,11 @@ impl Component for InstructionList {
             // The top: a listing *is* the symbol, so its first row is its own first line.
             0,
         );
+        // The hovered row is a listing row, and `touching` speaks instructions: a
+        // separator under the pointer lights nothing.
         let touching = hover()
-            .map(|row| data.lanes.touching(row))
+            .and_then(|row| data.lanes.instruction_at(row))
+            .map(|index| data.lanes.touching(index))
             .unwrap_or_default();
 
         let on_key_down = {
@@ -847,7 +941,7 @@ impl Component for InstructionList {
                 lanes
                     .instruction_at(row)
                     .and_then(|index| assembly.instructions.get(index))
-                    .map(asm_line)
+                    .map(|instruction| asm_line(instruction, 0))
                     .unwrap_or_default()
             })
         };
@@ -884,7 +978,7 @@ impl Component for InstructionList {
                             return SeparatorRow {
                                 row: i,
                                 selected,
-                                width: rows.data.lanes.width,
+                                width: rows.data.width,
                                 arrows: RowArrows {
                                     lanes: rows.data.lanes.boundary(below),
                                     lit,
@@ -952,7 +1046,7 @@ impl AssemblyPane {
         match analysis.showing(&self.document) {
             Showing::Listing(shown) => Some(Named::Symbol(shown.studied.symbol.clone())),
             _ => match &self.document {
-                Document::Assembly(Selection::Object(object)) => {
+                Document::Assembly(Selection::Object(object)) | Document::Code(object) => {
                     Some(Named::Object(object.clone()))
                 }
                 _ => None,
@@ -965,6 +1059,18 @@ impl AssemblyPane {
     /// Its own function and not the body of `render`, because each of these answers is a
     /// return and a header cannot be drawn above a return.
     fn body(&self, analysis: &Analyzed) -> Element {
+        // An object's code is its own listing, read in windows, and asks the analysis
+        // nothing: `src/ui/section_view.rs`.
+        if let Document::Code(object) = &self.document {
+            return rect()
+                .expanded()
+                .padding(5.0)
+                .child(SectionList {
+                    document: self.document.clone(),
+                    object: object.clone(),
+                })
+                .into();
+        }
         let shown = match analysis.showing(&self.document) {
             Showing::Listing(shown) => shown,
             Showing::Message(text) => return placeholder(text),

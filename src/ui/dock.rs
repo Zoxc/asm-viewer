@@ -87,6 +87,7 @@ impl Component for TabClose {
         let history = use_consume::<Hist>().0;
         let asm_at = use_consume::<AsmAt>().0;
         let src_at = use_consume::<SrcAt>().0;
+        let code_at = use_consume::<CodeAt>().0;
         let driven = use_consume::<Drives>().0;
         let id = self.id;
 
@@ -110,7 +111,7 @@ impl Component for TabClose {
                 // so the table's read guard is gone before `close_tab` writes to it.
                 let document = open.docs.peek().get(id).cloned();
                 if let Some(document) = document {
-                    close_tab(open, history, asm_at, src_at, driven, &document);
+                    close_tab(open, history, asm_at, src_at, code_at, driven, &document);
                 }
             })
             .child(
@@ -360,6 +361,7 @@ impl Component for DocumentHeader {
         let history = use_consume::<Hist>().0;
         let asm_at = use_consume::<AsmAt>().0;
         let src_at = use_consume::<SrcAt>().0;
+        let code_at = use_consume::<CodeAt>().0;
         let driven = use_consume::<Drives>().0;
 
         // Not reachable -- a tab and its table entry are closed together -- but a render
@@ -391,7 +393,7 @@ impl Component for DocumentHeader {
                 if others {
                     ContextMenu::open_from_event(
                         &e,
-                        tab_menu(open, history, asm_at, src_at, driven, id),
+                        tab_menu(open, history, asm_at, src_at, code_at, driven, id),
                     );
                 }
             },
@@ -897,7 +899,7 @@ impl Component for DocumentBody {
                 .into_element(),
                 AssemblyPane { document }.into_element(),
             ),
-            Document::Assembly(_) => (
+            Document::Assembly(_) | Document::Code(_) => (
                 AssemblyPane {
                     document: document.clone(),
                 }

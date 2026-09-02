@@ -254,6 +254,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         open,
         asm_at,
         src_at,
+        code_at,
         driven,
         history,
     } = states;
@@ -270,6 +271,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                 &open_documents(&dock, &docs),
                 &asm_at.read(),
                 &src_at.read(),
+                &code_at.read(),
                 &driven.read(),
                 active_document(&dock, &docs).as_ref(),
                 &history.read(),
@@ -327,6 +329,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         open,
         mut asm_at,
         mut src_at,
+        mut code_at,
         mut driven,
         history,
         ..
@@ -367,11 +370,15 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         // has been told exactly once, when it notices the tab it is showing has changed.
         {
             let (mut asm, mut src, mut from) = (asm_at.write(), src_at.write(), driven.write());
+            let mut places = code_at.write();
             for tab in &restored_tabs {
                 asm.remember(tab.document.clone(), tab.asm_row);
                 src.remember(tab.document.clone(), tab.src_row);
                 if let Some(line) = tab.line {
                     from.remember(tab.document.clone(), line);
+                }
+                if let Some(address) = tab.address {
+                    places.remember(tab.document.clone(), Spot { address, rows: 0 });
                 }
             }
         }
@@ -396,6 +403,7 @@ pub(crate) fn clear_project(states: ProjectStates) {
         open,
         asm_at,
         src_at,
+        code_at,
         driven,
         history,
         ..
@@ -410,13 +418,13 @@ pub(crate) fn clear_project(states: ProjectStates) {
     let binaries = project::binaries(&objects.peek());
     for path in binaries {
         close_binary(
-            objects, loading, open, asm_at, src_at, driven, history, &path,
+            objects, loading, open, asm_at, src_at, code_at, driven, history, &path,
         );
     }
 
     let remaining = open.documents();
     for tab in &remaining {
-        close_tab(open, history, asm_at, src_at, driven, tab);
+        close_tab(open, history, asm_at, src_at, code_at, driven, tab);
     }
 
     // And the history outright, which neither walk above does.

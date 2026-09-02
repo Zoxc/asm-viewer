@@ -215,11 +215,13 @@ impl Component for ObjectRow {
                 .overflow(Overflow::Clip)
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
+                // What pressing an object opens is all of its code as one listing --
+                // the one thing an object has to show that a symbol does not.
                 .on_press(move |_| {
                     activate(
                         open,
                         history,
-                        Some(Document::Assembly(Selection::Object(object.clone()))),
+                        Some(Document::Code(object.clone())),
                         Visit::Went,
                     );
                 })
@@ -412,7 +414,9 @@ impl Component for ObjectsTab {
         // `VirtualScrollView` has to be `PartialEq` and an `Object` is not, while pointer
         // identity compares as a number.
         let selected = match &*use_consume::<Active>().0.read() {
-            Some(Document::Assembly(Selection::Object(object))) => Some(Arc::as_ptr(object).addr()),
+            Some(Document::Assembly(Selection::Object(object)) | Document::Code(object)) => {
+                Some(Arc::as_ptr(object).addr())
+            }
             _ => None,
         };
         let length = tree.len();

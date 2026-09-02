@@ -22,6 +22,90 @@ pub(crate) struct Marked(pub(crate) State<Option<Marks>>);
 #[derive(Clone, Copy)]
 pub(crate) struct Shift(pub(crate) State<bool>);
 
+/// Whether Ctrl is held, tracked as [`Shift`] is and for the same reason: it is what turns a
+/// press on a symbol's label in the unified view into opening the symbol's tab, where a
+/// plain press is a plain press -- picking the row out, and nothing that changes the tab.
+#[derive(Clone, Copy)]
+pub(crate) struct Ctrl(pub(crate) State<bool>);
+
+/// The two modifiers as the root's global key handlers keep them, and what it takes to keep
+/// them right.
+///
+/// A key event carries the key's own name and the modifier mask **as it was before the
+/// key**: on Wayland the compositor sends the key and then the modifiers, and freya keeps
+/// only the mask, handing it to the next key event and never forwarding the change. So a
+/// modifier's own press is known by its *name* and its release by its name too, and the
+/// mask is what recovers when a key event was missed. That is what a Caps Lock made into
+/// Ctrl by the desktop breaks: KDE's `caps:ctrl_modifier` keeps the key's name and adds the
+/// Control action, so its press names Caps Lock over a mask without Ctrl, and its release
+/// names Caps Lock over a mask with Ctrl still in it -- which read as a press missed and
+/// left Ctrl stuck on. Nothing freya exposes says what the mask became, so the keyboard
+/// is **learnt**: a Caps Lock coming up with Ctrl in the mask while no Control key is down
+/// acts as Ctrl, and from then on its press counts and its release clears
+/// (`notes/upstream/freya.md`).
+#[derive(Clone, Copy)]
+pub(crate) struct ModifierKeys {
+    shift: State<bool>,
+    ctrl: State<bool>,
+    /// Whether this keyboard's Caps Lock has shown itself to be a Ctrl.
+    caps_is_ctrl: State<bool>,
+    /// Whether a key *named* Control is down, which is what tells a Caps Lock released
+    /// under a real Ctrl from one that is the Ctrl.
+    control_held: State<bool>,
+}
+
+impl ModifierKeys {
+    pub(crate) fn new(
+        shift: State<bool>,
+        ctrl: State<bool>,
+        caps_is_ctrl: State<bool>,
+        control_held: State<bool>,
+    ) -> Self {
+        Self {
+            shift,
+            ctrl,
+            caps_is_ctrl,
+            control_held,
+        }
+    }
+
+    /// A key went down: `key` under `modifiers`, the mask as it was before it.
+    pub(crate) fn down(mut self, key: &Key, modifiers: Modifiers) {
+        self.shift.set_if_modified(
+            *key == Key::Named(NamedKey::Shift) || modifiers.contains(Modifiers::SHIFT),
+        );
+        let control = *key == Key::Named(NamedKey::Control);
+        if control {
+            self.control_held.set_if_modified(true);
+        }
+        let caps = *key == Key::Named(NamedKey::CapsLock) && *self.caps_is_ctrl.peek();
+        self.ctrl
+            .set_if_modified(control || caps || modifiers.contains(Modifiers::CONTROL));
+    }
+
+    /// A key came up: `key` under `modifiers`, the mask as it was before it.
+    pub(crate) fn up(mut self, key: &Key, modifiers: Modifiers) {
+        self.shift.set_if_modified(
+            *key != Key::Named(NamedKey::Shift) && modifiers.contains(Modifiers::SHIFT),
+        );
+        let control = *key == Key::Named(NamedKey::Control);
+        if control {
+            self.control_held.set_if_modified(false);
+        }
+        let caps = *key == Key::Named(NamedKey::CapsLock);
+        // The one event that shows a Caps Lock for the Ctrl it is: up, with Ctrl in the
+        // mask, and no key named Control down to account for it.
+        let learnt = caps && modifiers.contains(Modifiers::CONTROL) && !*self.control_held.peek();
+        if learnt {
+            self.caps_is_ctrl.set_if_modified(true);
+        }
+        let caps_is_ctrl = learnt || *self.caps_is_ctrl.peek();
+        self.ctrl.set_if_modified(
+            !control && !(caps && caps_is_ctrl) && modifiers.contains(Modifiers::CONTROL),
+        );
+    }
+}
+
 /// The rows picked out in `pane`, and nothing when the selection is the other pane's.
 /// Reads rather than peeks: this is the subscription that repaints as the run grows.
 pub(crate) fn marked_rows(marked: State<Option<Marks>>, pane: Pane) -> Option<RowSelection> {
@@ -170,6 +254,7 @@ pub(crate) fn use_clear_marks(
     asked: Asked,
     analysis: State<Analyzed>,
     pinned: State<Option<Pin>>,
+    reading: State<Reading>,
     marked: State<Option<Marks>>,
 ) {
     // The **question** and not the active document: a source-driven tab's listing is
@@ -180,6 +265,23 @@ pub(crate) fn use_clear_marks(
     use_side_effect(move || {
         let _ = asked.read_ask();
         unmark(marked, Pane::Assembly);
+    });
+    // And the rows of an object's code, which are counted afresh with every answer that
+    // lands: a run of them is listing rows too, and would survive the rows shifting under
+    // it. Keyed on the reading's generation and compared against what it last was, since
+    // reading the state subscribes this to the asks the view makes as it scrolls, which
+    // change no row.
+    let counted = use_hook(|| Rc::new(RefCell::new(None::<u64>)));
+    use_side_effect(move || {
+        let generation = reading.read().generation;
+        let was = *counted.borrow();
+        if was == Some(generation) {
+            return;
+        }
+        *counted.borrow_mut() = Some(generation);
+        if was.is_some() {
+            unmark(marked, Pane::Assembly);
+        }
     });
     // Which file the Source pane was drawing the last time this ran. An `Rc<RefCell>`
     // and not a `State`: nothing renders from it.
