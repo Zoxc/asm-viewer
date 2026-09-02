@@ -93,6 +93,21 @@ them. `ResizableContainer` renders itself `.expanded()`, so it needs a parent al
 the `DockingArea` and nothing else: the open documents are tabs *in* it, so the bar over them is
 the document panel's own tab bar rather than a strip of the app's.
 
+The toolbar itself holds three controls: the two history chevrons and Open. `NavButton` calls the
+same `navigate` the mouse's side buttons do — a second spelling of the step would be a second set
+of rules about tabs, selection and recording — and **it reads `Hist` rather than peeking it**, which
+is the whole of how the pair stays current: a visit pushed anywhere, a close that drops entries and
+every move of the cursor, the one the button itself just made included, repaints both. A button
+with nothing in its direction is **dimmed rather than hidden**, the first disabled drawing in this
+app: hiding it would slide the other one under the pointer, and a reader who has been nowhere yet
+would never learn the pair is there. Disabled is the whole of the drawing — no hover wash, no press
+handler, and the chevron in `dimmed(icon_fg, pane_bg)` — while the tooltip stays, naming the
+direction where `entry_text` gives it nothing to name. `Nav::destination` is the one place the
+answer is worked out and `Nav::possible` is it asked as a question, so a live button and a step that
+does something cannot disagree. Headless, the runner can be asked whether a button washes under the
+pointer and whether it kept its box, and not what colour the chevron came out: an `SvgViewer`
+rasterises its colour into an image that is not in the element tree.
+
 Inside each panel is a `DockingArea` over a `DockArea` model. A `Tab` is two-kinded —
 `Tab::View(View)` for one of the seven views, `Tab::Document(DocId)` for an open document — because
 `DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. Both areas

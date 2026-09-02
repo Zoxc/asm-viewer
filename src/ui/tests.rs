@@ -709,6 +709,155 @@ fn the_document_menu_opens_and_closes() {
     assert_eq!(nodes(&test), shut, "the menu did not close");
 }
 
+/// The toolbar's two history buttons and nothing else, abutting at the window's corner so
+/// the test can work out where each is from [`toggle_size`] alone.
+fn nav_harness() -> impl IntoElement {
+    rect()
+        .expanded()
+        .horizontal()
+        .child(NavButton { back: true })
+        .child(NavButton { back: false })
+}
+
+/// The x each button was laid out at, back first. Deduplicated: a `TooltipContainer` wraps
+/// its child in a box of the child's own size, so every button is two nodes of one square.
+fn nav_button_columns(test: &TestingRunner) -> Vec<f32> {
+    let side = toggle_size();
+    let mut columns: Vec<f32> = test.find_many(|node, _| {
+        let area = node.layout().area;
+        (area.width() == side && area.height() == side).then_some(area.origin.x)
+    });
+    columns.dedup();
+    columns
+}
+
+/// Whether the button at `at` washes under the pointer, which is the only half of "drawn
+/// but disabled" the runner can be asked about: the chevron's own colour is baked into a
+/// rasterised SVG and is not in the element tree at all. The pointer is taken off the pair
+/// again, so the next question starts from nothing hovered.
+fn washes_under_the_pointer(test: &mut TestingRunner, at: (f64, f64)) -> bool {
+    test.move_cursor(at);
+    test.sync_and_update();
+    let washed = test
+        .find(|_, element| {
+            (element.style().background == Fill::Color(Palette::LIGHT.toggle_hover_bg))
+                .then_some(())
+        })
+        .is_some();
+
+    test.move_cursor((0.0, 90.0));
+    test.sync_and_update();
+    washed
+}
+
+fn press_at(test: &mut TestingRunner, at: (f64, f64)) {
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    test.sync_and_update();
+}
+
+/// The toolbar's buttons step the history, a button with nothing in its direction takes no
+/// press, and both of them follow the cursor the other one just moved.
+///
+/// Headless because the pair is nothing but a reading of `Hist`: that a press reaches
+/// `navigate` at all, that a dimmed button is inert, and that a button repaints because the
+/// cursor moved and not because anything re-rendered it are three claims about the wiring
+/// and none of them is visible to a unit test.
+#[test]
+fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+
+    let (mut test, states) =
+        TestingRunner::new(nav_harness, (200., 100.).into(), project_states!(), 1.);
+    test.sync_and_update();
+
+    let mut objects = states.objects;
+    objects.write().push(object);
+    let documents: Vec<Document> = symbols
+        .iter()
+        .take(3)
+        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .collect();
+    for document in &documents {
+        activate(
+            states.open,
+            states.history,
+            Some(document.clone()),
+            Visit::Went,
+        );
+    }
+    test.sync_and_update();
+    assert_eq!(states.history.peek().cursor(), Some(2));
+
+    let side = toggle_size();
+    let columns = nav_button_columns(&test);
+    assert_eq!(columns.len(), 2, "both buttons are in the bar");
+    let at = |x: f32| ((x + side / 2.0) as f64, (side / 2.0) as f64);
+    let (back, forward) = (at(columns[0]), at(columns[1]));
+
+    assert!(
+        washes_under_the_pointer(&mut test, back),
+        "back has two entries behind it and is drawn dead"
+    );
+    assert!(
+        !washes_under_the_pointer(&mut test, forward),
+        "there is nothing in front of the newest entry"
+    );
+
+    press_at(&mut test, back);
+    assert_eq!(states.history.peek().cursor(), Some(1));
+    assert!(
+        states.open.active().as_ref() == Some(&documents[1]),
+        "the step back did not land on the entry before it"
+    );
+    // Nothing re-rendered this button: it read the cursor the press beside it moved.
+    assert!(
+        washes_under_the_pointer(&mut test, forward),
+        "the forward button did not follow the cursor"
+    );
+
+    press_at(&mut test, back);
+    assert_eq!(states.history.peek().cursor(), Some(0));
+    assert!(
+        !washes_under_the_pointer(&mut test, back),
+        "back is on the oldest entry and still looks live"
+    );
+
+    // A press on a dimmed button is not a press at all.
+    press_at(&mut test, back);
+    assert_eq!(
+        states.history.peek().cursor(),
+        Some(0),
+        "a dimmed button navigated"
+    );
+
+    press_at(&mut test, forward);
+    assert_eq!(states.history.peek().cursor(), Some(1));
+    assert!(
+        states.open.active().as_ref() == Some(&documents[1]),
+        "the step forward did not land on the entry after it"
+    );
+}
+
+/// A button with nothing in its direction keeps its box: dimmed rather than hidden, so the
+/// pair does not shuffle under the pointer as the reader walks the history, and a reader
+/// who has been nowhere yet can still see that it is there.
+#[test]
+fn a_history_button_with_nowhere_to_go_is_still_drawn() {
+    let (mut test, _states) =
+        TestingRunner::new(nav_harness, (200., 100.).into(), project_states!(), 1.);
+    test.sync_and_update();
+
+    let side = toggle_size();
+    assert_eq!(
+        nav_button_columns(&test),
+        vec![0.0, side],
+        "an empty history left a button out of the bar"
+    );
+}
+
 /// A document has a tab in the panel exactly while it has an entry in the table, which is
 /// what makes "the panel's `tabs` vec is the list of open documents" true without a second
 /// list. `use_kept_position` leans on it directly.
@@ -3105,6 +3254,25 @@ fn every_wash_reads_against_the_pane_under_it() {
         let focus = step(palette.line_focus_bg, palette.asm_pane_bg);
         let pin = step(palette.line_pin_bg, palette.asm_pane_bg);
         assert!(pin > focus, "{theme} pin {pin} vs focus {focus}");
+    }
+}
+
+/// A control that cannot be used recedes without disappearing: `dimmed` lands between the
+/// surface it is drawn on and the colour it has when it is live. A floor rather than a
+/// value, the way the branch gutter's is -- it is meant to be quiet.
+#[test]
+fn a_dimmed_control_recedes_without_disappearing() {
+    for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
+        let live = contrast(palette.icon_fg, palette.pane_bg);
+        let dim = contrast(dimmed(palette.icon_fg, palette.pane_bg), palette.pane_bg);
+        assert!(
+            dim < live,
+            "{theme}: dimmed is {dim:.2} against the live {live:.2}"
+        );
+        assert!(
+            dim >= 1.5,
+            "{theme}: dimmed {dim:.2} has gone into the surface"
+        );
     }
 }
 

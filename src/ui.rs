@@ -87,6 +87,86 @@ pub(crate) use source_view::*;
 mod state;
 pub(crate) use state::*;
 
+/// One of the two history buttons at the left of the toolbar: the step it makes, drawn as
+/// the chevron pointing that way, with the entry it would land on in its tooltip.
+///
+/// **It reads `Hist` rather than peeking it**, and that is the whole of how the pair stays
+/// current: a visit pushed anywhere in the app, a close that drops entries, and every move
+/// of the cursor -- the one this button itself just made included -- repaints both.
+///
+/// A button with nothing in its direction is **dimmed rather than hidden**. Hiding it would
+/// move the button beside it under the pointer, and a reader who has not been anywhere yet
+/// would never learn the pair is there at all. Being disabled is the whole of the drawing:
+/// no hover wash, no press handler, and the chevron in [`dimmed`], which is `icon_fg` faded
+/// into the toolbar rather than a colour of its own that both palettes would have to keep
+/// in step. The tooltip stays, naming the direction where it cannot name a destination.
+#[derive(Clone, PartialEq)]
+struct NavButton {
+    /// Which way it steps. A `bool` and not a [`Nav`], whose third variant is a history
+    /// row's jump to an index and is not something a toolbar button can be.
+    back: bool,
+}
+
+impl Component for NavButton {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let open = use_open();
+        let history = use_consume::<Hist>().0;
+
+        let (nav, word, icon) = if self.back {
+            (Nav::Back, "Back", ("chevron-left", lucide::chevron_left()))
+        } else {
+            (
+                Nav::Forward,
+                "Forward",
+                ("chevron-right", lucide::chevron_right()),
+            )
+        };
+
+        // The read, and with it the subscription. Bound to a `let` of its own and dropped
+        // here: the press below writes the very state this looked at.
+        let destination = nav.destination(&history.read()).map(entry_text);
+        let live = destination.is_some();
+        let tooltip = match &destination {
+            Some(name) => format!("{word} to {name}"),
+            None => word.to_owned(),
+        };
+
+        let side = toggle_size();
+        let glyph = icon_size();
+
+        TooltipContainer::new(Tooltip::new(tooltip)).child(
+            rect()
+                .width(Size::px(side))
+                .height(Size::px(side))
+                .center()
+                .corner_radius(4.0)
+                .background(if live && hovering() {
+                    palette().toggle_hover_bg
+                } else {
+                    Color::TRANSPARENT
+                })
+                .maybe(live, |button| {
+                    button
+                        .on_pointer_over(move |_| hovering.set_if_modified(true))
+                        .on_pointer_out(move |_| hovering.set_if_modified(false))
+                        .on_press(move |_| navigate(open, history, nav))
+                })
+                .child(
+                    SvgViewer::new(icon)
+                        .width(Size::px(glyph))
+                        .height(Size::px(glyph))
+                        .color(if live {
+                            palette().icon_fg
+                        } else {
+                            dimmed(palette().icon_fg, palette().pane_bg)
+                        })
+                        .show_loader(false),
+                ),
+        )
+    }
+}
+
 fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl IntoElement {
     let on_open = move |_| {
         spawn(async move {
@@ -107,7 +187,16 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
     rect()
         .horizontal()
         .width(Size::fill())
+        .cross_align(Alignment::Center)
         .border(bottom_hairline())
+        .child(
+            rect()
+                .horizontal()
+                .margin(4.0)
+                .spacing(2.0)
+                .child(NavButton { back: true })
+                .child(NavButton { back: false }),
+        )
         .child(
             rect()
                 .margin(4.0)

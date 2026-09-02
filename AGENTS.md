@@ -76,7 +76,8 @@ command.
   `Driven`, which line a source-driven tab's assembly side follows and which symbol was chosen.
 - `src/history.rs` — back/forward navigation history.
 - `src/fonts.rs` — the desktop's font settings (KDE, Gnome, Win32) merged under the user's own.
-- `src/ui.rs` — the freya UI's root: its prelude, the list of its files, `toolbar` and `app`.
+- `src/ui.rs` — the freya UI's root: its prelude, the list of its files, `toolbar` with its two
+  history buttons, and `app`.
 - `src/ui/metrics.rs` — every measurement no component owns, and the fonts they follow.
 - `src/ui/palette.rs` — every colour, the theme it is resolved from, and the compositing rules.
 - `src/ui/state.rs` — the contexts provided once at the root and read with `use_consume`.

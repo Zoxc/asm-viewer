@@ -126,7 +126,13 @@ one item per part, so the unfinished half stays visible.
   It also settles the temporal-tab item under *Panels and tabs* from the other direction: that
   one exists because walking a symbol list leaves a tab behind per click, and a click that
   navigates in place leaves none. Decide the two together rather than building both.
-- [ ] Add `<`, `>` navigation buttons to the top bar.
+- [x] Add `<`, `>` navigation buttons to the top bar. Two chevrons at the left of the toolbar,
+  driving the same `navigate` the mouse's side buttons do, so every rule about tabs, selection
+  and history holds without a second spelling of it. Each names where it would land in its
+  tooltip, and each is **dimmed rather than hidden** when there is nothing that way: the pair
+  keeps its place under the pointer, and a reader who has been nowhere yet can still see it is
+  there. They read `Hist`, which is what repaints them as entries appear and as the cursor
+  moves.
 
 ## Assembly viewer
 

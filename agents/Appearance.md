@@ -26,6 +26,14 @@ for both. This is deliberately **not** freya's own theming — `ColorsSheet` nam
 roles, and the source pane's colours cannot be read from the element tree at all, being baked into
 a `SyntaxBlocks` when a file is *loaded*.
 
+**A disabled control is derived rather than a field.** `dimmed(color, surface)` is the colour the
+control has when it is live, faded into the ground it sits on at `DISABLED_ALPHA` through the same
+`blend` the washes use — so a dimmed drawing follows whatever colour the live one is given, in both
+themes, and there is no second value per theme to keep in step with the first. The toolbar's two
+history buttons are the only caller so far. Its test is a floor rather than a value, the way the
+branch gutter's is: `dimmed` must land strictly quieter than the live colour and no closer to the
+surface than 1.5, in both palettes.
+
 **A theme switch repaints by being asked for a colour.** `palette()` reads a thread-local
 `State<Appearance>` and hands back a `&'static` to one of the two `const`s, so `State::read`
 subscribes whichever scope is rendering: *asking for a colour is what subscribes a component to the

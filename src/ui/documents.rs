@@ -596,13 +596,24 @@ pub(crate) enum Nav {
 }
 
 impl Nav {
+    /// The entry this step would land on, or `None` when it would not move. What the
+    /// toolbar's two buttons name in their tooltips, and the one place the answer is
+    /// worked out: [`Nav::possible`] is this asked as a question, so a button that is live
+    /// and a step that does something cannot disagree.
+    pub(crate) fn destination(self, history: &History) -> Option<&Document> {
+        let cursor = history.cursor()?;
+        let index = match self {
+            Self::Back => cursor.checked_sub(1)?,
+            Self::Forward => cursor + 1,
+            Self::To(index) => (index != cursor).then_some(index)?,
+        };
+
+        history.entries().get(index)
+    }
+
     /// Whether there is an entry to step to.
     fn possible(self, history: &History) -> bool {
-        match self {
-            Self::Back => history.can_back(),
-            Self::Forward => history.can_forward(),
-            Self::To(index) => history.can_jump(index),
-        }
+        self.destination(history).is_some()
     }
 
     /// Move the cursor and hand back the entry it landed on.

@@ -295,6 +295,25 @@ pub(crate) fn blend(top: Color, bottom: Color) -> Color {
     )
 }
 
+/// How much of a disabled control's own colour survives the fade into the surface behind
+/// it. One number for both palettes, since what it produces is a composite of two values
+/// that are already carried over between them.
+const DISABLED_ALPHA: u8 = 100;
+
+/// A control that is drawn but cannot be used: the colour it has when it is live, faded
+/// into the surface it sits on.
+///
+/// Derived rather than a `Palette` field of its own. A disabled drawing follows whatever
+/// colour the control uses when it works, in both themes, with no second value per theme
+/// to keep in step with the first -- and `blend` is already the rule for "this colour over
+/// that ground", so the dimmed state is that rule applied to a foreground.
+pub(crate) fn dimmed(color: Color, surface: Color) -> Color {
+    blend(
+        Color::from_argb(DISABLED_ALPHA, color.r(), color.g(), color.b()),
+        surface,
+    )
+}
+
 /// The background of a code row: the pointer's own hover, the run of rows picked out to be
 /// copied, the cross-view highlight from the other pane, the stronger one a click pinned
 /// there, or any of them over any of the others.

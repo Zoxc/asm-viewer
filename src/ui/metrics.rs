@@ -73,7 +73,8 @@ pub(crate) const TAG_FONT_SIZE: f32 = 10.0;
 
 /// How long a list row's tooltip waits before it appears. Zero, against
 /// `TooltipContainer`'s 500ms default: a truncated name is read by sweeping the pointer
-/// down the list. The filter toggles keep the default.
+/// down the list. The filter toggles and the toolbar's two history buttons keep the
+/// default: neither says anything the eye has already read off the control.
 pub(crate) const TOOLTIP_DELAY: Duration = Duration::ZERO;
 
 /// How long a symbol may be under analysis before the panes admit they are waiting. Only
