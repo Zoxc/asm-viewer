@@ -952,3 +952,26 @@ fn an_alias_at_the_same_address_decodes_the_whole_run() {
         assert_eq!(assembly.instructions.len(), 3);
     }
 }
+
+/// Every section whose bytes read is kept, for the line info's sake; `code` is what tells
+/// the ones a listing of the object's code is made of. A relocatable object's one `.text`
+/// needs no bias.
+#[test]
+fn only_the_text_section_is_code_and_it_is_not_moved() {
+    let object = parse(&caller_and_target());
+    let names = |code: bool| {
+        let mut names: Vec<&str> = object
+            .sections
+            .iter()
+            .filter(|section| section.code == code)
+            .map(|section| section.name.as_str())
+            .collect();
+        names.sort_unstable();
+        names
+    };
+    assert_eq!(names(true), [".text"]);
+    assert!(names(false).contains(&".symtab"), "{:?}", names(false));
+    for section in &object.sections {
+        assert_eq!(section.bias, 0, "{}", section.name);
+    }
+}

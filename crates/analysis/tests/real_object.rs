@@ -416,3 +416,50 @@ fn the_source_still_says_what_the_object_says_it_does() {
     assert_eq!(at(36), "total = add(total, i);");
     assert_eq!(at(38), "return total;");
 }
+
+/// The `-ffunction-sections` object's three code sections all start at 0, and the parse
+/// lays them out the way a linker would — each after the last, rounded up — so a listing of
+/// the object's code has an address for every byte and the line info reads the same layout.
+#[test]
+fn split_sections_are_each_given_a_place_of_their_own() {
+    let object = parse(SPLIT);
+    let mut code: Vec<&Arc<analysis::Section>> = object
+        .sections
+        .iter()
+        .filter(|section| section.code)
+        .collect();
+    code.sort_by_key(|section| section.bias);
+
+    // gcc leaves the ordinary `.text` in too, empty; a zero-length section still takes an
+    // address of its own, so that two of them are two places.
+    assert_eq!(
+        code.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        [".text", ".text.add", ".text.twice", ".text.sum_to"]
+    );
+    assert!(code[0].data.is_empty());
+    let mut placed_end = 0;
+    for section in &code {
+        assert_eq!(section.address, 0);
+        assert!(
+            section.bias >= placed_end,
+            "{} overlaps the section before it",
+            section.name
+        );
+        assert_eq!(section.bias % 16, 0);
+        placed_end = section.bias + section.data.len() as u64;
+    }
+    assert_eq!(code[0].bias, 0);
+    assert_eq!(code[1].bias, 0x10, "an empty section still takes one grain");
+    assert_eq!(code[2].bias, 0x30, "add is 0x14 bytes, rounded up to 16");
+
+    // And a section that is not code is not moved, whatever its address.
+    for section in &object.sections {
+        if !section.code {
+            assert_eq!(section.bias, 0, "{}", section.name);
+        }
+    }
+
+    // The one `.text` build has nothing to move.
+    let flat = parse(FLAT);
+    assert!(flat.sections.iter().all(|section| section.bias == 0));
+}

@@ -151,9 +151,12 @@ load-bearing:
 - **An address alone is not a key in a relocatable object.** Sections there have no address until
   linked and rustc emits one `.text.<name>` per function, so every function lands on 0 and the line
   programs pile up (52 229 of 54 109 rows overlapped, measured on the 196-member rlib).
-  `line.rs` does what a linker does: `section_biases` gives each **text** section of a
-  **relocatable** object a place of its own, `relocate` adds the bias, and the query adds it and
-  subtracts it from every row returned. Both limits matter — a linked image holds real addresses
+  The parse does what a linker does: `section_biases` (`lib.rs`) gives each **text** section of a
+  **relocatable** object a place of its own, recorded on the section as `Section::bias` beside
+  `Section::code`; `line.rs` reads it from there, `relocate` adds the bias, and the query adds it
+  and subtracts it from every row returned. Decided at parse and not in `line.rs` because the
+  listing of an object's whole code is laid out by the same rule, and one layout
+  read twice cannot disagree with itself. Both limits matter — a linked image holds real addresses
   literally and must be left alone, and an absolute relocation in a debug section is often an
   offset into another `.debug_*` section rather than an address. Hence `Object::line_info` takes a
   `&Section`: a bare range is not a question the crate can answer.

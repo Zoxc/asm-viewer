@@ -188,7 +188,69 @@ pub struct Section {
     /// The addresses of this section's text symbols, sorted and **each once**: two symbols
     /// at one address are one entry here. The sync points a listing decodes from.
     pub symbols: Vec<u64>,
+
+    /// Whether the file marks this section as holding code (`SectionKind::Text`). Every
+    /// section whose bytes read is kept, since the line info needs the debug ones; this is
+    /// what tells the code apart for a listing of all of it.
+    pub code: bool,
+
+    /// Where the object's layout puts this section: what is added to an address in it to
+    /// place it in the one address space every section of the object shares. 0 for every
+    /// section of a linked image, whose addresses are real, and for a section that is not
+    /// code; in a relocatable object, where every code section starts at 0, an address of
+    /// its own for each. See [`section_biases`].
+    pub bias: u64,
 }
+
+/// Where each code section is placed in the one address space the object's line info is read
+/// in and its code is listed in; what [`Section::bias`] is set from.
+///
+/// **An address alone is not a key in a relocatable object.** Sections there have no address
+/// until linked and rustc emits one `.text.<name>` per function, so every function lands on 0
+/// and the line programs pile up. This does what a linker does and gives each code section a
+/// place of its own: a bias, added to every address relocated against that section
+/// (`line::relocate`) and subtracted again from every row a query returns.
+///
+/// Two limits, both load-bearing:
+///
+/// * **Relocatable objects only.** A linked image holds real addresses literally rather than
+///   through relocations; moving the few that are relocated would move them away from the
+///   rest.
+/// * **Code sections only.** An absolute relocation in a debug section is often an offset
+///   into another `.debug_*` section (`DW_AT_stmt_list`, `DW_FORM_strp`), which must come out
+///   exactly as it went in.
+pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u64> {
+    let mut biases = HashMap::new();
+    if file.kind() != ObjectKind::Relocatable {
+        return biases;
+    }
+
+    let mut next: u64 = 0;
+    for section in file.sections() {
+        if section.kind() != SectionKind::Text {
+            continue;
+        }
+
+        biases.insert(section.index(), next.wrapping_sub(section.address()));
+
+        // Somewhere for the next section to go. A zero-length section still takes an address
+        // of its own, so that two of them are two places. An object whose sections do not fit
+        // in the address space simply stops being biased past that point.
+        let Some(end) = next.checked_add(section.size().max(1)) else {
+            break;
+        };
+        let Some(aligned) = end.checked_next_multiple_of(SECTION_ALIGNMENT) else {
+            break;
+        };
+        next = aligned;
+    }
+
+    biases
+}
+
+/// What [`section_biases`] rounds each section's placement up to. Nothing depends on the
+/// value; the gap it leaves means an off-by-one cannot walk into the next section.
+const SECTION_ALIGNMENT: u64 = 16;
 
 /// How far [`SymbolData::estimate_size`]'s next-symbol derivation may reach (1 MiB) before
 /// it is treated as having said nothing. Not a claim about how long a function can be — five
@@ -475,6 +537,9 @@ fn declared_code(
 pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc<Object>> {
     let object = object::File::parse(data.bytes())
         .map(|file| {
+            // Where each code section goes, decided once here for the line info and the
+            // code listing both.
+            let biases = section_biases(&file);
             let mut sections: HashMap<SectionIndex, Section> = file
                 .sections()
                 .filter_map(|section| {
@@ -490,6 +555,8 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                             data,
                             symbols: Vec::new(),
                             relocations,
+                            code: section.kind() == SectionKind::Text,
+                            bias: biases.get(&section.index()).copied().unwrap_or(0),
                         },
                     ))
                 })

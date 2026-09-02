@@ -15,8 +15,7 @@
 use crate::{section_data, Object, Section, SymbolData};
 use gimli::{EndianArcSlice, RunTimeEndian};
 use object::{
-    Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget,
-    SectionIndex, SectionKind,
+    Object as _, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, SectionIndex,
 };
 use std::collections::HashMap;
 use std::ops::Range;
@@ -40,8 +39,9 @@ pub(crate) struct Dwarf {
     /// `Sync`, and [`Object`] is shared across threads as an `Arc`.
     context: Mutex<addr2line::Context<Reader>>,
 
-    /// Where each code section was placed in the address space the context reads in. See
-    /// [`section_biases`]; empty for a linked image, which needs none.
+    /// Where each code section was placed in the address space the context reads in: the
+    /// sections' own [`Section::bias`], see [`crate::section_biases`]. Empty for a linked
+    /// image, which needs none.
     biases: HashMap<SectionIndex, u64>,
 
     /// Every compilation unit that has been asked about, and the extent of each
@@ -59,11 +59,15 @@ pub(crate) struct Dwarf {
 impl Dwarf {
     /// Build the context for one object file, or [`None`] when it has no DWARF. Never an
     /// error: foreign debug info and corrupt debug info are both simply "no line info".
-    pub(crate) fn load(data: &crate::ObjectData) -> Option<Dwarf> {
-        without_panicking(|| Dwarf::load_inner(data)).flatten()
+    ///
+    /// `sections` are the object's own, for where the parse placed each of them
+    /// ([`Section::bias`]): the same layout the code listing reads, so a row's address and a
+    /// listing's agree by construction.
+    pub(crate) fn load(data: &crate::ObjectData, sections: &[Arc<Section>]) -> Option<Dwarf> {
+        without_panicking(|| Dwarf::load_inner(data, sections)).flatten()
     }
 
-    fn load_inner(data: &crate::ObjectData) -> Option<Dwarf> {
+    fn load_inner(data: &crate::ObjectData, sections: &[Arc<Section>]) -> Option<Dwarf> {
         let file = object::File::parse(data.bytes()).ok()?;
 
         // The cheap test first, so an object with no DWARF costs one section-table scan.
@@ -76,7 +80,11 @@ impl Dwarf {
             RunTimeEndian::Big
         };
 
-        let biases = section_biases(&file);
+        let biases: HashMap<SectionIndex, u64> = sections
+            .iter()
+            .filter(|section| section.bias != 0)
+            .map(|section| (section.index, section.bias))
+            .collect();
 
         let dwarf =
             gimli::Dwarf::load::<_, ()>(|id| Ok(load_section(&file, id, endian, &biases, &[])))
@@ -101,8 +109,8 @@ impl Dwarf {
         })
     }
 
-    /// How far the section with this index was moved by [`section_biases`]; 0 for a section
-    /// that was not moved, and for every section of a linked image.
+    /// How far the section with this index was moved by [`crate::section_biases`]; 0 for a
+    /// section that was not moved, and for every section of a linked image.
     fn bias(&self, section: SectionIndex) -> u64 {
         self.biases.get(&section).copied().unwrap_or(0)
     }
@@ -302,56 +310,7 @@ fn without_panicking<T>(f: impl FnOnce() -> T) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
 }
 
-/// Where each code section is placed in the address space the DWARF is read in.
-///
-/// **An address alone is not a key in a relocatable object.** Sections there have no address
-/// until linked and rustc emits one `.text.<name>` per function, so every function lands on 0
-/// and the line programs pile up. This does what a linker does and gives each code section a
-/// place of its own: a bias, added to every address relocated against that section
-/// ([`relocate`]) and subtracted again from every row a query returns.
-///
-/// Two limits, both load-bearing:
-///
-/// * **Relocatable objects only.** A linked image holds real addresses literally rather than
-///   through relocations; moving the few that are relocated would move them away from the
-///   rest.
-/// * **Code sections only.** An absolute relocation in a debug section is often an offset
-///   into another `.debug_*` section (`DW_AT_stmt_list`, `DW_FORM_strp`), which must come out
-///   exactly as it went in.
-fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u64> {
-    let mut biases = HashMap::new();
-    if file.kind() != ObjectKind::Relocatable {
-        return biases;
-    }
-
-    let mut next: u64 = 0;
-    for section in file.sections() {
-        if section.kind() != SectionKind::Text {
-            continue;
-        }
-
-        biases.insert(section.index(), next.wrapping_sub(section.address()));
-
-        // Somewhere for the next section to go. A zero-length section still takes an address
-        // of its own, so that two of them are two places. An object whose sections do not fit
-        // in the address space simply stops being biased past that point.
-        let Some(end) = next.checked_add(section.size().max(1)) else {
-            break;
-        };
-        let Some(aligned) = end.checked_next_multiple_of(SECTION_ALIGNMENT) else {
-            break;
-        };
-        next = aligned;
-    }
-
-    biases
-}
-
-/// What [`section_biases`] rounds each section's placement up to. Nothing depends on the
-/// value; the gap it leaves means an off-by-one cannot walk into the next section.
-const SECTION_ALIGNMENT: u64 = 16;
-
-/// One unit range list that [`section_biases`] left behind, and the bytes that make it read
+/// One unit range list that [`crate::section_biases`] left behind, and the bytes that make it read
 /// as a list of no ranges at all.
 struct StaleRangeList {
     section: gimli::SectionId,
@@ -623,7 +582,7 @@ pub struct Location<'a> {
 /// compiler-generated instructions belonging to no source line leave gaps, and
 /// [`row_at`](Self::row_at) returns [`None`] there rather than inventing a position.
 /// Non-overlapping is an invariant of this type, established by scoping the query to a
-/// section ([`section_biases`]) and by the clipping in [`Dwarf::line_info_inner`]; where two
+/// section ([`crate::section_biases`]) and by the clipping in [`Dwarf::line_info_inner`]; where two
 /// rows genuinely covered one address, the one that starts first keeps it.
 pub struct LineInfo {
     rows: Vec<LineRow>,
@@ -678,7 +637,7 @@ impl Object {
     /// DWARF context on the first call and reusing it afterwards.
     ///
     /// The section is not decoration: in a relocatable object every section starts at 0, so
-    /// `range` on its own does not say which code it means. See [`section_biases`].
+    /// `range` on its own does not say which code it means. See [`crate::section_biases`].
     ///
     /// [`None`] means "no line info" for every reason at once: no DWARF, debug info in a
     /// format this does not read (CodeView), DWARF that will not parse, or DWARF that says
@@ -706,7 +665,7 @@ impl Object {
     fn dwarf(&self) -> Option<&Dwarf> {
         self.dwarf
             .0
-            .get_or_init(|| Dwarf::load(&self.data))
+            .get_or_init(|| Dwarf::load(&self.data, &self.sections))
             .as_ref()
     }
 }
