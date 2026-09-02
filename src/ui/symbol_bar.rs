@@ -1,8 +1,10 @@
-//! The bar over the Assembly pane naming what that pane is drawing.
+//! The bar over the Assembly pane naming what that pane is drawing, and the section it
+//! expands into.
 //!
 //! Two rows -- the demangled name over the mangled original -- because the only other
 //! place a symbol is named is its tab, which is cut to `CHIP_NAME_CHARS` by `short_name`,
-//! and the mangled spelling appeared nowhere at all.
+//! and the mangled spelling appeared nowhere at all. Under a disclosure triangle is the
+//! rest of what is known about it, which is what the Info pane used to answer.
 
 use super::*;
 
@@ -84,20 +86,93 @@ impl Component for NameRow {
     }
 }
 
-/// The bar over the Assembly pane, naming what that pane is drawing.
+/// One fact under the bar: what it is on the left, what it says on the right, on one line
+/// however long that is.
+///
+/// Ellipsised and never wrapped, for the reason the names above are: a section as tall as
+/// the worst value is a section that is that tall for every other one.
+fn fact(name: &str, value: String) -> impl IntoElement {
+    field_row(
+        name,
+        rect()
+            .width(Size::flex(1.0))
+            .overflow(Overflow::Clip)
+            .child(
+                label()
+                    .text(value)
+                    .width(Size::fill())
+                    .max_lines(1)
+                    .text_overflow(TextOverflow::Ellipsis),
+            ),
+    )
+}
+
+/// The rest of what is known about what the bar names, which is what the Info pane
+/// answered before it. The two names are the bar's own rows and are not repeated here.
+fn facts(named: &Named) -> Vec<Element> {
+    match named {
+        Named::Symbol(symbol) => {
+            let data = &symbol.data;
+            vec![
+                fact(
+                    "Section",
+                    match &data.section {
+                        Some(section) => section.name.clone(),
+                        None => "none".to_owned(),
+                    },
+                )
+                .into_element(),
+                fact("Address", format!("{:016X}", data.address)).into_element(),
+                // The declared size is frequently 0 and is only ever displayed; `data_in`
+                // is the range `assembly` decodes and `line_info` is asked about.
+                fact("Declared", format!("{} bytes", data.size)).into_element(),
+                fact(
+                    "Extent",
+                    format!(
+                        "{} bytes",
+                        data.data_in(&symbol.object)
+                            .map(|bytes| bytes.len())
+                            .unwrap_or_default()
+                    ),
+                )
+                .into_element(),
+                fact("Object", symbol.object.name.clone()).into_element(),
+            ]
+        }
+        Named::Object(object) => vec![
+            fact("Format", format!("{:?}", object.format)).into_element(),
+            fact("Symbols", object.symbols.len().to_string()).into_element(),
+            fact("Path", object.path.display().to_string()).into_element(),
+        ],
+    }
+}
+
+/// The bar over the Assembly pane, naming what that pane is drawing, and the section it
+/// expands into.
 ///
 /// **The drawn symbol and never the selected one.** It is handed a [`Named`] worked out
 /// from the same [`Analyzed::showing`] the listing under it is built from, rather than
 /// reading `Active` the way the Info pane it replaces did: the two disagree for as long as
 /// the worker takes, and a bar naming a function the rows below it are not of is worse than
 /// no bar.
+///
+/// Open or shut is kept per tab in [`Expanded`] rather than in a `use_state` here, because
+/// both panes are mounted afresh for every document: a flag of this component's own would
+/// be gone the moment the reader looked at another tab.
 #[derive(Clone, PartialEq)]
 pub(crate) struct SymbolBar {
     pub(crate) named: Named,
+    /// The tab this bar is in, which is what its open-or-shut is filed under. `None` for a
+    /// tab the table has no id for, which cannot happen for a mounted pane and draws no
+    /// triangle rather than one that would do nothing.
+    pub(crate) tab: Option<DocId>,
 }
 
 impl Component for SymbolBar {
     fn render(&self) -> impl IntoElement {
+        let expanded = use_consume::<Expanded>().0;
+        let mut hovering = use_state(|| false);
+        let open = self.tab.is_some_and(|tab| expanded.read().contains(&tab));
         // The mangled row only where there is a demangling: `display()` falls back to the
         // mangled name, so a symbol that was never mangled would otherwise be named twice.
         let names: Vec<Element> = match &self.named {
@@ -126,6 +201,44 @@ impl Component for SymbolBar {
             .into()],
         };
 
+        // The objects tree's own disclosure idiom, down to the glyphs: a triangle in a
+        // fixed column, which is the toggle where a name is a copy.
+        let triangle = {
+            let mut expanded = expanded;
+            let tab = self.tab;
+
+            CursorArea::new().child(
+                rect()
+                    .width(Size::px(CHEVRON_WIDTH))
+                    .height(Size::px(list_row_height()))
+                    .main_align(Alignment::Center)
+                    .maybe(hovering(), |column| {
+                        column.background(palette().toggle_hover_bg)
+                    })
+                    .on_pointer_over(move |_| hovering.set_if_modified(true))
+                    .on_pointer_out(move |_| hovering.set_if_modified(false))
+                    .on_press(move |_| {
+                        let Some(tab) = tab else {
+                            return;
+                        };
+                        let mut expanded = expanded.write();
+                        if !expanded.remove(&tab) {
+                            expanded.insert(tab);
+                        }
+                    })
+                    .child(
+                        label()
+                            .text(match (self.tab.is_some(), open) {
+                                (false, _) => "",
+                                (true, false) => "\u{25b8}",
+                                (true, true) => "\u{25be}",
+                            })
+                            .color(palette().address_fg)
+                            .max_lines(1),
+                    ),
+            )
+        };
+
         rect()
             .width(Size::fill())
             .horizontal()
@@ -135,9 +248,9 @@ impl Component for SymbolBar {
             .padding(Gaps::new_symmetric(0.0, 8.0))
             .background(palette().header_bg)
             .border(bottom_hairline())
-            // The column the disclosure triangle will sit in, kept from the start so the
-            // names line up with themselves whether or not there is one.
-            .child(rect().width(Size::px(CHEVRON_WIDTH)))
+            // The triangle takes the first row's height and no more, so it sits beside the
+            // demangled name rather than centred down a bar that has grown a section.
+            .child(rect().width(Size::px(CHEVRON_WIDTH)).child(triangle))
             .child(
                 // A box of its own and not the names as the `flex` child directly: a flex
                 // child is measured from its content first, so a label placed there takes
@@ -145,7 +258,11 @@ impl Component for SymbolBar {
                 rect()
                     .width(Size::flex(1.0))
                     .overflow(Overflow::Clip)
-                    .children(names),
+                    .children(names)
+                    .children(match open {
+                        true => facts(&self.named),
+                        false => Vec::new(),
+                    }),
             )
     }
 }

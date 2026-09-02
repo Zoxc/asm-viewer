@@ -416,6 +416,9 @@ macro_rules! project_states {
                 active_document(&dock.read(), &docs.read())
             }))
         });
+        // Provided but not returned, like `Active`: nothing here asserts on it, and the
+        // Assembly pane's bar reads it wherever a harness mounts one.
+        $runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
 
         ProjectStates {
             proj: $runner
@@ -4112,14 +4115,15 @@ fn the_gutter_runs_straight_through_a_separator() {
 
 /// The tab a pane harness is mounted for, where the test needs it to be something other
 /// than the tab the listing in [`Analysis`] belongs to -- which is the disagreement the
-/// Assembly pane's bar has a rule about. Named around the dock's own `Tab`.
-#[derive(Clone)]
-struct PaneTab(Document);
+/// Assembly pane's bar has a rule about -- or needs to change it, which is what switching
+/// tabs does to this pane. Named around the dock's own `Tab`.
+#[derive(Clone, Copy)]
+struct PaneTab(State<Document>);
 
 /// The Assembly pane for the tab [`PaneTab`] names, over whatever listing is in
 /// [`Analysis`].
 fn tab_pane_harness() -> impl IntoElement {
-    let document = use_consume::<PaneTab>().0;
+    let document = use_consume::<PaneTab>().0.read().clone();
 
     rect().expanded().child(AssemblyPane { document })
 }
@@ -4187,7 +4191,7 @@ fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
         tab_pane_harness,
         (600., 300.).into(),
         move |runner| {
-            runner.provide_root_context(|| PaneTab(tab.clone()));
+            runner.provide_root_context(|| PaneTab(State::create(tab.clone())));
             listing_states!(runner, shown)
         },
         1.,
@@ -4215,7 +4219,7 @@ fn an_object_tab_is_named_by_its_object() {
         tab_pane_harness,
         (600., 300.).into(),
         move |runner| {
-            runner.provide_root_context(|| PaneTab(tab.clone()));
+            runner.provide_root_context(|| PaneTab(State::create(tab.clone())));
             runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
             project_states!(runner)
         },
@@ -4229,6 +4233,137 @@ fn an_object_tab_is_named_by_its_object() {
     assert!(
         drawn.contains(&"No symbol selected".to_owned()),
         "{drawn:?}"
+    );
+}
+
+/// The bar's disclosure triangle, wherever it was laid out.
+fn triangle_of(test: &TestingRunner) -> (f64, f64) {
+    match label_area(test, "\u{25b8}") {
+        Some(_) => centre_of(test, "\u{25b8}"),
+        None => centre_of(test, "\u{25be}"),
+    }
+}
+
+/// The section under the bar says what the Info pane said, and a little more -- the address
+/// and the object a symbol came from, neither of which was shown anywhere before.
+#[test]
+fn the_expanded_section_says_what_the_info_pane_said() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let section = sum_to
+        .data
+        .section
+        .as_ref()
+        .expect("sum_to is in a section")
+        .name
+        .clone();
+    let object = sum_to.object.name.clone();
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+
+    let (mut test, (states, _pinned, _marked)) = TestingRunner::new(
+        listing_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    // Opened, or the table has no id for this tab and the bar files its flag nowhere --
+    // which is a bar with no triangle to press.
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Assembly(Selection::Symbol(sum_to.clone()))),
+        Visit::Went,
+    );
+    settle(&mut test);
+    assert!(
+        !labels(&test).contains(&section),
+        "the section was open before anything was pressed"
+    );
+
+    let triangle = triangle_of(&test);
+    test.move_cursor(triangle);
+    test.press_cursor(triangle);
+    test.release_cursor(triangle);
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    for field in ["Section", "Address", "Declared", "Extent", "Object"] {
+        assert!(drawn.contains(&field.to_owned()), "{field}: {drawn:?}");
+    }
+    assert!(drawn.contains(&section), "{drawn:?}");
+    assert!(drawn.contains(&object), "{drawn:?}");
+    assert!(
+        drawn.contains(&format!("{:016X}", sum_to.data.address)),
+        "{drawn:?}"
+    );
+}
+
+/// **Open or shut is the tab's and not the pane's.** Both panes are mounted afresh for
+/// every document, so a flag inside this one would go with the tab the reader left -- and a
+/// section that shuts itself every time the reader looks at something else reads as a bug
+/// rather than as a setting.
+///
+/// Two objects rather than two symbols, an object being the selection that needs no
+/// analysis to be named; they are two parses of one file, so they say the same things and
+/// it is whether the section is there at all that answers.
+#[test]
+fn the_symbol_section_is_remembered_per_tab() {
+    let (_path, objects) = fixture_objects(2);
+    let (first, second) = (objects[0].clone(), objects[1].clone());
+    let tab = |object: &Arc<Object>| Document::Assembly(Selection::Object(object.clone()));
+
+    let (mut test, (states, showing)) = TestingRunner::new(
+        tab_pane_harness,
+        (600., 400.).into(),
+        {
+            let first = first.clone();
+            move |runner| {
+                let showing = runner
+                    .provide_root_context(|| PaneTab(State::create(tab(&first))))
+                    .0;
+                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
+                (project_states!(runner), showing)
+            }
+        },
+        1.,
+    );
+    // Both tabs open, or the table has no id for either and the bar files its flag nowhere.
+    let went = |target: Document| activate(states.open, states.history, Some(target), Visit::Went);
+    went(tab(&first));
+    went(tab(&second));
+    settle(&mut test);
+
+    let triangle = triangle_of(&test);
+    test.move_cursor(triangle);
+    test.press_cursor(triangle);
+    test.release_cursor(triangle);
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&"Format".to_owned()),
+        "the triangle did not open the section: {:?}",
+        labels(&test)
+    );
+
+    let mut showing = showing;
+    showing.set(tab(&second));
+    settle(&mut test);
+    assert!(
+        !labels(&test).contains(&"Format".to_owned()),
+        "the other tab came up with the first tab's section open: {:?}",
+        labels(&test)
+    );
+
+    showing.set(tab(&first));
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&"Format".to_owned()),
+        "the section was not there when the tab that opened it came back: {:?}",
+        labels(&test)
     );
 }
 

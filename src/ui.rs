@@ -285,6 +285,7 @@ pub fn app() -> impl IntoElement {
     let asm_at = use_provide_context(|| AsmAt(State::create(Positions::default()))).0;
     let src_at = use_provide_context(|| SrcAt(State::create(Positions::default()))).0;
     let driven = use_provide_context(|| Drives(State::create(Driven::default()))).0;
+    use_provide_context(|| Expanded(State::create(HashSet::new())));
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     let focused = use_provide_context(|| Focused(State::create(None))).0;
     let pinned = use_provide_context(|| Pinned(State::create(None))).0;

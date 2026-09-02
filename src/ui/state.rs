@@ -122,6 +122,25 @@ pub(crate) struct OpenDocs(pub(crate) State<Docs>);
 #[derive(Clone, Copy)]
 pub(crate) struct SrcAt(pub(crate) State<Positions<Document>>);
 
+/// Which tabs have the section under their Assembly pane's symbol bar open.
+///
+/// **Per tab and never in the pane**, which is mounted afresh for every document: a
+/// `use_state` there would collapse the section at every switch of tab, and a reader who
+/// opened it once would find it shut every time they came back.
+///
+/// **Keyed by [`DocId`] and not by [`Document`]**, unlike [`AsmAt`] and [`Drives`] beside
+/// it, and that is what makes it cost nothing: a `DocId` is `Copy + Hash` and holds no
+/// `Arc<Object>`, where a document does and would have to be forgotten in all three of
+/// `close_tab`, `close_others` and `close_binary` or a closed binary's bytes would be held
+/// for as long as the app ran. Ids are never handed out twice ([`Docs::open`]), so an entry
+/// a closed tab left behind can never be mistaken for another tab's -- it is dead weight of
+/// four bytes, and a reopened tab correctly opens with its section shut. The Objects tree's
+/// fold set makes the same argument.
+///
+/// Never saved: it is a view of a tab, like a filter.
+#[derive(Clone, Copy)]
+pub(crate) struct Expanded(pub(crate) State<HashSet<DocId>>);
+
 /// Which source line each source-driven tab's assembly side is driven from, shared
 /// through context. Beside [`AsmAt`]/[`SrcAt`] because it is the same kind of thing: a
 /// fact about a tab, made by a click in it and forgotten with it.

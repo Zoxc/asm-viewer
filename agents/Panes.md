@@ -79,6 +79,26 @@ box of their own inside the `flex` child rather than being it, `tree_name`'s tri
 measured from its content first, so a label placed there takes the width of its whole name and the
 ellipsis never happens.
 
+**The bar is the collapsed state of a section**, opened by a disclosure triangle in a column of its
+own -- the Objects tree's idiom down to the two glyphs, a triangle being the toggle where a name is
+a copy. What it opens is the rest of what is known: for a symbol its section, address, declared
+size, extent and the object it came from; for an object the format, the symbol count and the path.
+That is what the Info view answered, plus the address and the object, which were shown nowhere at
+all. Each fact is a `field_row` cut to one line for the reason the names are.
+
+**Open or shut is the tab's and not the pane's**, which is `Expanded` at the root: both panes are
+mounted afresh for every document, so a `use_state` here would shut the section every time the
+reader looked at another tab, and a setting that undoes itself reads as a bug.
+It is keyed by **`DocId` and not `Document`**, unlike `AsmAt`, `SrcAt` and `Drives` beside it, and
+that is what makes it free: a `DocId` is `Copy + Hash` and holds no `Arc<Object>`, where a document
+does and would have to be forgotten in all three of `close_tab`, `close_others` and `close_binary`
+or a closed binary's bytes would be held for as long as the app ran. Ids are never handed out twice,
+so an entry a closed tab left behind is four bytes of dead weight and can never be taken for another
+tab's -- a reopened tab correctly comes up shut. It is not persisted: a view of a tab, like a
+filter. A pane whose tab the table has no id for draws no triangle rather than one that would do
+nothing, which cannot happen for a mounted pane and is what the headless harnesses see when they
+mount one without opening it.
+
 **A click in a source-driven tab's own file is the only writer of `Driven`.** A click in a
 companion file is a pin and nothing more, and a click in the *assembly* pane never reaches that
 handler at all — which is what stops a listing from re-driving itself. Nothing else changes: the

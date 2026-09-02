@@ -1004,6 +1004,10 @@ impl AssemblyPane {
 impl Component for AssemblyPane {
     fn render(&self) -> impl IntoElement {
         let analysis = use_consume::<Analysis>().0.read().clone();
+        // The tab the bar's open-or-shut is filed under. Read and not peeked, the table
+        // being what says a document is open at all; the pane is mounted for one document
+        // and never another, so the answer does not change while it lives.
+        let tab = use_consume::<OpenDocs>().0.read().id_of(&self.document);
 
         rect()
             .expanded()
@@ -1013,7 +1017,7 @@ impl Component for AssemblyPane {
             .background(palette().asm_pane_bg)
             .maybe_child(
                 self.named(&analysis)
-                    .map(|named| SymbolBar { named }.into_element()),
+                    .map(|named| SymbolBar { named, tab }.into_element()),
             )
             .child(
                 rect()
