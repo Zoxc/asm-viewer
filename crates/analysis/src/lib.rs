@@ -10,8 +10,8 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use symbolic_demangle::{Demangle, DemangleOptions};
 
+mod demangle;
 pub mod disasm;
 mod line;
 
@@ -339,72 +339,8 @@ pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Optio
     Some(compressed.decompress().ok()?.into_owned())
 }
 
-/// The longest mangled name this crate will hand to a demangler.
-///
-/// **A demangler's recursion depth is the file's to choose**, and a stack overflow is an
-/// **abort** no `catch_unwind` turns back into "this symbol has no demangled name", so it has
-/// to be headed off before the call. `msvc-demangler` 0.11 has no recursion limit at all
-/// (one level per `P` byte) and `cpp_demangle`'s is deep enough that reaching it is megabytes
-/// of stack. Measured at roughly 10 KiB of stack per byte of name, so this and
-/// [`DEMANGLE_STACK`] are one bound. The longest name in any sample in the repo is 1038
-/// bytes; a name past the cap is displayed exactly as the file wrote it.
-const MAX_MANGLED_NAME: usize = 2048;
-
-/// The stack [`demangled`] runs on; see [`MAX_MANGLED_NAME`]. A *reservation*: pages are
-/// committed only as they are touched.
-const DEMANGLE_STACK: usize = 64 << 20;
-
-/// A name short enough to demangle on the caller's own stack: measured, the worst-case
-/// 64-byte name demangles inside 1 MiB while a 96-byte one overflows it. Below that line the
-/// thread is pure cost (~300 µs of create-and-join).
-const SHORT_MANGLED_NAME: usize = 64;
-
-/// Demangle one object's symbol names on a stack big enough for the deepest name among them
-/// — the caller's own where they are all short ([`SHORT_MANGLED_NAME`]), a thread of this
-/// crate's otherwise.
-///
-/// [`None`] in means a name with nothing to demangle (the entry point's); [`None`] out means
-/// no demangler recognised the name, it was longer than the cap, or the demangler panicked.
-///
-/// The `catch_unwind` is not general defensiveness: a scoped thread that panics makes
-/// `std::thread::scope` panic when the scope ends however the handle was joined, so without
-/// it one bad name would take out the parse.
-fn demangled(names: &[Option<&str>]) -> Vec<Option<String>> {
-    let work = || -> Vec<Option<String>> {
-        names
-            .iter()
-            .map(|name| {
-                let name = (*name).filter(|name| name.len() <= MAX_MANGLED_NAME)?;
-                std::panic::catch_unwind(|| {
-                    symbolic_common::Name::from(name).demangle(DemangleOptions::complete())
-                })
-                .ok()
-                .flatten()
-            })
-            .collect()
-    };
-
-    // The deepest any of them can recurse is the longest of them.
-    let deepest = names.iter().flatten().map(|name| name.len()).max();
-    match deepest {
-        None | Some(0) => return vec![None; names.len()],
-        Some(deepest) if deepest <= SHORT_MANGLED_NAME => return work(),
-        Some(_) => {}
-    }
-
-    // A thread that will not start is one more reason for a name to stay as it was written.
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(DEMANGLE_STACK)
-            .spawn_scoped(scope, work)
-            .ok()
-            .and_then(|handle| handle.join().ok())
-    })
-    .unwrap_or_else(|| vec![None; names.len()])
-}
-
 /// One symbol as the file states it, held while the whole object's names are demangled in
-/// one batch ([`demangled`]).
+/// one batch (see [`demangle`]).
 struct Pending {
     index: SymbolIndex,
     name: String,
@@ -636,22 +572,31 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                 }
             }
 
-            // One batch for the whole object, on a stack of its own; see `demangled`.
-            let names: Vec<Option<&str>> = pending
-                .iter()
-                .map(|symbol| symbol.mangled.then_some(symbol.name.as_str()))
-                .collect();
-            let demangled = demangled(&names);
-            drop(names);
+            // One batch for the whole object, on stacks of their own and on as many cores
+            // as the pool has; see `demangle`. The names are *moved* into the batch and
+            // moved back out below rather than copied into it: a shared batch is what lets
+            // a job outlive this frame, and 115k names is not a copy worth making for it.
+            let names: demangle::Names = Arc::new(
+                pending
+                    .iter_mut()
+                    .map(|symbol| symbol.mangled.then(|| std::mem::take(&mut symbol.name)))
+                    .collect(),
+            );
+            let demangled = demangle::batch(&names);
+            // Every job is done, so this is the only reference; the clone is unreachable
+            // and is there so that a job that somehow outlived its batch costs a copy
+            // rather than the names.
+            let names = Arc::try_unwrap(names).unwrap_or_else(|names| (*names).clone());
 
             let symbols: HashMap<_, _> = pending
                 .into_iter()
+                .zip(names)
                 .zip(demangled)
-                .map(|(symbol, demangled)| {
+                .map(|((symbol, name), demangled)| {
                     (
                         symbol.index,
                         Arc::new(SymbolData {
-                            name: symbol.name,
+                            name: name.unwrap_or(symbol.name),
                             demangled,
                             section: symbol.section,
                             address: symbol.address,

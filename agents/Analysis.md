@@ -62,7 +62,7 @@ which it is certainly describing something else: a stripped PE's export table is
 of the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which is 772 302 instructions
 decoded *per render*. `.pdata`/`RUNTIME_FUNCTION` is the real fix and is its own Goals item.
 
-**Names are demangled in one batch per object, on a stack sized for them** (`demangled`). A
+**Names are demangled in one batch per object, on stacks sized for them** (`demangle.rs`). A
 mangled name is bytes out of a string table, and it is the *file* that chooses how deep the
 demangler reading it recurses: `msvc-demangler` 0.11 has no recursion limit at all (`P` → pointee
 → type → pointee, one byte per level) and `cpp_demangle`'s is deep enough that reaching it is
@@ -71,22 +71,47 @@ overflow is an **abort**, which no `catch_unwind` turns back into "this symbol h
 name". Two bounds together: a name over `MAX_MANGLED_NAME` (2048 bytes, against a longest of 1038
 across every input tried) is not demangled at all, and the rest are demangled on a thread
 with `DEMANGLE_STACK` (64 MiB, a reservation and not a cost) — except where every name in the
-object is under `SHORT_MANGLED_NAME` (64), which is every fixture in the test suite and is the
-caller's own stack's business. A name no demangler will take is displayed exactly as the file
-wrote it, which is what an unrecognised name already did.
+object is under `SHORT_MANGLED_NAME` (64) and there are no more of them than one grain, which is
+every fixture in the test suite and is the caller's own stack's business. A name no demangler
+will take is displayed exactly as the file wrote it, which is what an unrecognised name already
+did.
 
-**Demangling is single-threaded, and it is the last of the open-time cost.** After the lazy
-line info, the lazy DWARF context, the lazy subprogram extents and the worker-thread
-disassembly, it is the only expensive thing left at open time that is not simply reading the
+**Demangling is the last of the open-time cost, and it is what this crate parallelises.** After
+the lazy line info, the lazy DWARF context, the lazy subprogram extents and the worker-thread
+disassembly, it was the only expensive thing left at open time that is not simply reading the
 file: 281 ms of the 331 MB binary's 1 437 ms, 78 ms of the 196-member rlib's 181 ms
 (release; debug numbers overstate every one of these and are not worth quoting). What is left
 beside it — the read and the walk of the symbol table — *is* the objects and symbols lists.
 
-`demangled` is one sequential `map` per object and `open_files_streaming` walks the objects in
-order, so an archive's 196 members demangle one after another on one core. Both levels are
-embarrassingly parallel and neither is exploited; that is `notes/Goals.md`'s open
-"multi threaded" item, and the constraint on it is the 64 MiB stack long names need, so a
-parallel version wants a bounded pool of big-stack threads rather than one per object.
+`demangle::batch` spreads one object's names across a **process-wide pool of big-stack threads**:
+`available_parallelism` capped at `MAX_THREADS` (8), each with `DEMANGLE_STACK`, started on the
+first batch that needs one (`OnceLock`) and kept for the life of the process. A pool and not a
+thread per object because 64 MiB is not a thread to create 237 times; capped at 8 because
+demangling is a fraction of an open and each thread keeps its deepest recursion committed once it
+has taken one. The jobs pull the batch in grains of `GRAIN` (256) names off one shared cursor
+rather than being dealt equal shares, since a name's cost is superlinear in its length and where
+the long ones sit is the file's business — an even split hands one thread the object's whole C++
+section. **The answer does not depend on the scheduling**: a grain is handed back over a channel
+with the index it started at and written there, so the vector is the batch's own order and two
+runs over one file agree. The names are *moved* into the shared batch (`demangle::Names`, an
+`Arc<Vec<Option<String>>>`) and moved back out of it in `parse_object`, because a job outlives the
+frame that submitted it and cannot borrow one; 115k names is not a copy worth making for that. A
+job never submits a job, which is why a bounded pool cannot deadlock itself however many opens are
+in flight, and a batch whose grain never comes back — a pool thread killed under it — leaves
+those names as the file wrote them rather than waiting. A pool that would not start at all falls
+back to the one big-stack thread this used to be.
+
+No dependency was added for it: `rayon` is in the lock already (transitively, under `image`), but
+its threads would still have to be a pool of this crate's own to get the stack size, which is the
+whole of what is hard here, and what is left over is a queue and a cursor.
+
+Measured release, best of 3, on a loaded machine (five other agents building): the app's own debug
+binary 1 701 → 1 414 ms and the crate's own rlib, now 237 members, 383 → 151 ms. The archive's
+share is larger than its demangling alone, because the old path also created and joined a 64 MiB
+thread per object. **Only demangling is parallel.** `open_files_streaming` still walks the paths
+and an archive's members in order on one thread, so objects reach the caller as they parse and in
+file order; parallelising that level is its own open item in `notes/Goals.md` and wants a reorder
+buffer to keep that order.
 
 **Persisting the demangled names was built and thrown away** — it is not in the history, and the
 `[D]` item in `notes/Goals.md` is the whole record of it. It worked and it was measured (a 37% average open, best on archives, worst on
@@ -285,5 +310,8 @@ object everything", shared by both. The rule that goes with them is the user rul
 test case every time something is found wrong, and **checked arithmetic in preference to a wider
 `catch_unwind`** — the guard is for a dependency's bug, never for ours. Note also what *cannot* be
 caught: a stack overflow aborts, so anything recursing over file-controlled input (the demanglers,
-above) has to be bounded before the call rather than wrapped.
+above) has to be bounded before the call rather than wrapped. `demangle/tests.rs` pins both halves
+of that for the pool — that a split batch answers in its own order, and that a 1000-level name in
+one lands on a pool thread and not on the submitter's stack, which is a test that does not fail
+but *aborts* when it is wrong.
 

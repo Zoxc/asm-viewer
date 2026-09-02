@@ -780,14 +780,28 @@ one item per part, so the unfinished half stays visible.
   and is kept only if that symbol is still selected, so a stale answer is discarded by a
   comparison rather than by a counter. The first symbol clicked on the app's own binary cost 589 ms
   on the UI thread and now costs a channel send.
-- [ ] Binary inspection should be multi threaded — in the sense of using more than one core,
-  which it does not. Everything above is *off* the UI thread but still sequential: `demangled`
-  is one `map` per object and `open_files_streaming` walks objects in order, so an archive's 196
-  members demangle one after another. Both levels are embarrassingly parallel, and demangling is
-  the whole of what is left to parallelise (281 ms of the app's own binary's 1 437 ms open). Note the
-  constraint before starting: long names are demangled on a thread with a 64 MiB stack because
-  the demanglers recurse per pointer, so a parallel version wants a bounded pool of big-stack
-  threads rather than one per object.
+- [x] Binary inspection uses more than one core, which is the whole of what demangling had left
+  to give. `demangle::batch` hands one object's names to a process-wide pool of threads with
+  64 MiB stacks — `available_parallelism` capped at 8, started on the first batch that needs one
+  and then kept — and they take the batch in grains of 256 names off one atomic cursor. A grain
+  is handed back with the index it started at and written there, so the answer is the batch's
+  own order whatever the scheduling did and two runs over one file agree. Grains are pulled as a
+  thread frees rather than dealt out up front, because a name's cost is superlinear in its
+  length and where the long ones sit is the file's business. Two costs went at once: the
+  demangling itself, and the 64 MiB thread that used to be created and joined once per object —
+  237 of them for the crate's own rlib. Release, best of 3, on a machine with five other agents
+  building on it: the app's own debug binary 1 701 → 1 414 ms, the rlib 383 → 151 ms. Streaming
+  is untouched, objects still reaching the sidebar as they parse and in file order. No
+  dependency was added for it: `rayon` is in the lock already, under `image`, but its threads
+  would still have to be a pool of this crate's own to get the stack size — which is the whole
+  of what is hard here — and what is left over is a queue and a cursor.
+- [ ] Parse an archive's members on more than one core as well. The second of the two levels,
+  and the one still sequential: `open_files_streaming` walks a file's members in order on one
+  thread, so the read, the section decompression and the symbol-table pass of the rlib's 237
+  members happen one after another even though the demangling inside each no longer does. What
+  it needs beyond the pool that now exists is a reorder buffer, since members have to be emitted
+  in file order for the Objects tree to be the same tree twice, and a rule for what a `Break`
+  from the caller means once members are in flight.
 - [D] Cache the demangled names between runs. **Built, measured and then thrown away** — it is
   not in this repo's history, deliberately, so this item is the whole record of it. The gain did
   not justify what it cost to carry. What it bought, per file, release, cold open
@@ -802,7 +816,8 @@ one item per part, so the unfinished half stays visible.
   a lot of machinery, and a wrong function name on screen is a bad failure, for a second and a
   half on the largest sample here.
   Undeferred by the open getting slower or the saving getting larger — parallel demangling above
-  attacks the same cost without persisting anything, and is the thing to try first.
+  was the thing to try first and has since taken that cost down without persisting anything, so
+  what is left to buy here is smaller than the numbers above.
 - [D] Cache inspection results in the project info. Neither `assembly()` nor `line_info()`
   memoizes, so leaving a listing and coming back re-derives it — 4–8 ms on the app's own binary,
   which is cheap enough that a keyed cache was deliberately not added on the way past: it would
