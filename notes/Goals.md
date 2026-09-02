@@ -570,9 +570,14 @@ one item per part, so the unfinished half stays visible.
   the buffer. Bounded three ways, each a different failure: a line with no newline is cut rather
   than accumulated, the oldest lines are dropped past a cap and the pane says how many, and the
   channel is bounded so backpressure reaches the program itself.
-- [ ] Follow the newest line of a running scratchpad's output. It has to be scrolled by hand
-  today, so a long run scrolls away from the reader. Needs the viewport height and a "the reader
-  has scrolled away, leave them there" rule — the same shape `reveal_row` already has.
+- [x] Follow the newest line of a running scratchpad's output. Arriving lines keep the pane
+  pinned to the bottom while the reader is at the bottom, a wheel away from there releases the
+  follow and leaves them where they are, and coming back to the bottom arms it again. Being at
+  the bottom is judged in rows against the viewport as it is now — `reveal_row`'s shape — and
+  never as a remembered row: past the output cap the oldest rows drop off the front and every
+  index shifts. A line arriving is not an occasion to re-judge, the newest row being below the
+  viewport by definition; the pane is keyed on the pad, so one pad's scrolling never breaks
+  another's follow.
 - [?] Use freya's tty for the scratchpad's output, in place of the list of coloured rows the
   run pane draws: a terminal would carry a program's own colours, cursor movement and
   progress bars, where the rows keep only which stream a line came from.

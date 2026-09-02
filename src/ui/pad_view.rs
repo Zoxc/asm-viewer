@@ -5,9 +5,12 @@
 //! Every bad dependency row is marked, not the first, and a failed build points back at a
 //! row structurally rather than by looking for a crate name in a sentence. stdout and
 //! stderr are told apart by colour and by nothing else -- stderr is not an error, it is
-//! the other stream, so it takes the palette's one warm hue rather than the red.
+//! the other stream, so it takes the palette's one warm hue rather than the red. The
+//! output pane follows the newest line while the reader is at the bottom of it and leaves
+//! them where they are the moment they are not.
 
 use super::*;
+use std::cell::Cell;
 
 /// The file a scratchpad's source is, as cargo and rustc spell it.
 pub(crate) const SOURCE_FILE: &str = "src/main.rs";
@@ -304,6 +307,180 @@ fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
         .into_element()
 }
 
+/// Follow the newest row: keep `controller` against the bottom of a list that is being
+/// appended to, for exactly as long as the reader is at the bottom of it.
+///
+/// One effect, and what it does depends on what woke it. **Lines arriving are not an
+/// occasion to re-judge where the reader is**: the row that has just been added is below
+/// the viewport by definition, so a run that asked would find the pane scrolled away on
+/// the first line of every run and never follow anything. So arriving lines only *spend*
+/// the answer, and a scroll, a resize -- and the scroll this effect itself makes -- are
+/// what write it.
+///
+/// The two ends of that are told apart by the output's **identity**, which is the pane's
+/// `PartialEq` again and not its length: at `MAX_OUTPUT_LINES` the oldest line drops off
+/// the front as a new one lands, so the count stops changing while the rows go on being
+/// replaced. For the same reason the bottom is worked out from the rows there are *now*
+/// and is never a row index written down on an earlier run -- every index shifts by one
+/// each time the cap drops a line. `output` is that identity, and `viewport` is the height
+/// of the rows' own box rather than the pane's -- the heading over them is no part of what
+/// scrolls.
+fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usize, length: usize) {
+    // Whether the pane is following. A `Cell` and not a `State`, `use_kept_position`'s
+    // `held` for the same reason: nothing renders from it, and a state would cost the
+    // pane a render on every wheel event.
+    let following = use_hook(|| Rc::new(Cell::new(true)));
+    // The list the last run saw, which is what tells lines arriving from the reader moving.
+    let seen = use_hook(|| Rc::new(Cell::new(None::<usize>)));
+
+    // With deps and not a bare `use_side_effect`, whose callback is built in a `use_hook`
+    // and would go on reading the first list this pane was ever handed.
+    use_side_effect_with_deps(
+        &(output, length, viewport),
+        move |&(output, length, viewport): &(usize, usize, f32)| {
+            // Subscribes this effect to the pane's own scroll, so it comes before any
+            // return: a run that did not read it is a run no wheel event wakes.
+            let (_, offset) = <(i32, i32)>::from(controller);
+
+            // Before the first layout there is no viewport to judge against and no bottom
+            // to scroll to. Nothing is written down either, so the run the size arrives on
+            // is the one that pins the pane for the first time.
+            if viewport <= 0.0 {
+                return;
+            }
+
+            let height = code_row_height();
+            let bottom = -((length as f32 * height - viewport).max(0.0) as i32);
+
+            if seen.replace(Some(output)) != Some(output) {
+                // Only when it moves: `scroll_to_y` notifies whether or not the position
+                // changes, and this effect is subscribed to what it writes.
+                if following.get() && offset != bottom {
+                    controller.scroll_to_y(bottom);
+                }
+                return;
+            }
+
+            // Judged in rows against the viewport as it is now, which is `reveal_row`'s
+            // shape. **The newest row being drawn at all** is what counts as being at the
+            // bottom, rather than being drawn entire: a scroll offset is a whole number of
+            // pixels where a list of rows is not, so a list clamped hard against its end
+            // stands a fraction of a pixel short of showing its last row and would arm
+            // nothing, ever.
+            let top = (-offset).max(0) as f32;
+            let newest = length.saturating_sub(1) as f32 * height;
+            following.set(newest < top + viewport);
+        },
+    );
+}
+
+/// What the program has written, under a line saying where the run got to.
+///
+/// A component of its own for the sake of [`use_follow_tail`]: **keyed on the pad**, so
+/// the scroll and the follow are that pad's output's and not one position dragged between
+/// them by a switch. What a switch costs is that a pad comes back following again, having
+/// been remounted -- the follow is what a pane arrives armed with rather than something
+/// carried across a switch, and the pad being looked at is the one whose scrolling is
+/// worth keeping.
+#[derive(Clone)]
+pub(crate) struct OutputPane {
+    pub(crate) pad: PadId,
+    pub(crate) lines: Arc<RunOutput>,
+    /// Where the run got to, and whether that is bad -- [`PadState::run_status`]'s answer.
+    pub(crate) status: String,
+    pub(crate) bad: bool,
+    pub(crate) key: DiffKey,
+}
+
+impl PartialEq for OutputPane {
+    fn eq(&self, other: &Self) -> bool {
+        self.pad == other.pad
+            && Arc::ptr_eq(&self.lines, &other.lines)
+            && self.status == other.status
+            && self.bad == other.bad
+    }
+}
+
+impl KeyExt for OutputPane {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for OutputPane {
+    fn render(&self) -> impl IntoElement {
+        let lines = self.lines.clone();
+        let length = lines.len();
+        let bad = self.bad;
+
+        let controller = use_scroll_controller(ScrollConfig::default);
+        // How tall the list is, which the follow needs to know where the bottom of it is.
+        // `VirtualScrollView` measures itself but keeps the answer, so the rect wrapping
+        // it is measured here instead -- the rect around *the rows*, the heading above
+        // them being no part of what scrolls.
+        let mut viewport = use_state(|| 0.0f32);
+        use_follow_tail(controller, viewport(), Arc::as_ptr(&lines).addr(), length);
+
+        rect()
+            .width(Size::fill())
+            .height(Size::flex(1.0))
+            .background(palette().asm_pane_bg)
+            .border(bottom_hairline())
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(list_row_height()))
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .padding(Gaps::new_symmetric(0.0, 12.0))
+                    .spacing(8.0)
+                    .content(Content::Flex)
+                    .overflow(Overflow::Clip)
+                    .child(label().text("Output").font_weight(FontWeight::BOLD))
+                    .child(
+                        label()
+                            .text(self.status.clone())
+                            .width(Size::flex(1.0))
+                            .color(match bad {
+                                true => palette().invalid_fg,
+                                false => palette().address_fg,
+                            })
+                            .max_lines(1),
+                    ),
+            )
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::fill())
+                    .on_sized(move |e: Event<SizedEventData>| {
+                        viewport.set_if_modified(e.area.height())
+                    })
+                    .child(
+                        // The lines go through the view's data and are not captured: the
+                        // builder closure is never compared across renders, so a captured
+                        // `Arc` would draw the first batch of output for ever.
+                        VirtualScrollView::new_with_data_controlled(
+                            OutputRows(lines),
+                            |index, rows: &OutputRows| match rows.0.line(index) {
+                                Some(line) => output_row(line),
+                                // Only reachable if the list shortened between the length
+                                // being read and the row being asked for, which the cap
+                                // cannot do.
+                                None => rect().height(Size::px(code_row_height())).into_element(),
+                            },
+                            controller,
+                        )
+                        .length(length)
+                        .item_size(code_row_height()),
+                    ),
+            )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
 /// What a pad is called on screen: the name the reader gave it, or — for one they have not
 /// named — the app's own label, which is its id in angle brackets.
 ///
@@ -456,53 +633,15 @@ impl Component for ScratchpadTab {
             .into_element();
 
         let output = state.run_status().map(|(text, bad)| {
-            let lines = state.output.clone();
-            let length = lines.len();
-
-            rect()
-                .width(Size::fill())
-                .height(Size::flex(1.0))
-                .background(palette().asm_pane_bg)
-                .border(bottom_hairline())
-                .child(
-                    rect()
-                        .width(Size::fill())
-                        .height(Size::px(list_row_height()))
-                        .horizontal()
-                        .cross_align(Alignment::Center)
-                        .padding(Gaps::new_symmetric(0.0, 12.0))
-                        .spacing(8.0)
-                        .content(Content::Flex)
-                        .overflow(Overflow::Clip)
-                        .child(label().text("Output").font_weight(FontWeight::BOLD))
-                        .child(
-                            label()
-                                .text(text)
-                                .width(Size::flex(1.0))
-                                .color(match bad {
-                                    true => palette().invalid_fg,
-                                    false => palette().address_fg,
-                                })
-                                .max_lines(1),
-                        ),
-                )
-                .child(
-                    // The lines go through `new_with_data` and are not captured: the builder
-                    // closure is never compared across renders, so a captured `Arc` would
-                    // draw the first batch of output for ever.
-                    VirtualScrollView::new_with_data(
-                        OutputRows(lines),
-                        |index, rows: &OutputRows| match rows.0.line(index) {
-                            Some(line) => output_row(line),
-                            // Only reachable if the list shortened between the length being
-                            // read and the row being asked for, which the cap cannot do.
-                            None => rect().height(Size::px(code_row_height())).into_element(),
-                        },
-                    )
-                    .length(length)
-                    .item_size(code_row_height()),
-                )
-                .into_element()
+            OutputPane {
+                pad: shown.clone(),
+                lines: state.output.clone(),
+                status: text,
+                bad,
+                key: DiffKey::None,
+            }
+            .key(shown.as_str().to_owned())
+            .into_element()
         });
 
         // A plain `ScrollView` and not a `VirtualScrollView`: these are one-label rows and

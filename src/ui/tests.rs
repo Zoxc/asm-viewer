@@ -4601,3 +4601,117 @@ fn a_run_that_cannot_start_says_why() {
     assert!(text.contains("No such file or directory"), "{text}");
     assert!(bad);
 }
+
+/// The lines a run has written, for [`output_harness`] to draw and a test to push into.
+#[derive(Clone, Copy)]
+struct RunLines(State<Arc<RunOutput>>);
+
+/// The run output pane on its own, at a size a test can count rows in. Only the pane and
+/// not the whole Scratchpad view: what is under test is where the rows are, and in the
+/// view the same pane is a third of what is left after the editor.
+fn output_harness() -> impl IntoElement {
+    let lines = use_consume::<RunLines>().0;
+
+    rect().expanded().content(Content::Flex).child(OutputPane {
+        pad: pad_id("pad"),
+        lines: lines.read().clone(),
+        status: "Running".to_owned(),
+        bad: false,
+        key: DiffKey::None,
+    })
+}
+
+/// One more line, exactly as an arriving [`RunEvent::Wrote`] adds it.
+fn wrote(mut lines: State<Arc<RunOutput>>, text: &str) {
+    Arc::make_mut(&mut lines.write()).push(crate::scratchpad::OutputLine {
+        stream: Stream::Out,
+        text: text.into(),
+    });
+}
+
+/// Which output lines the pane is actually drawing. A `VirtualScrollView` builds only the
+/// rows inside its viewport, so this is the answer to "where is the view", asked of the
+/// rows themselves rather than of a number the pane kept.
+fn drawn_lines(test: &TestingRunner) -> Vec<String> {
+    labels(test)
+        .into_iter()
+        .filter(|text| text.starts_with("line "))
+        .collect()
+}
+
+/// The output pane follows the newest line while the reader is at the bottom of it, lets
+/// go the moment they scroll away, and takes it up again when they come back.
+///
+/// Headless because every part of it is a laid-out one: whether the newest row is on
+/// screen is judged in rows against the viewport the pane was given, and the only honest
+/// way to ask where the view ended up is which rows it built.
+#[test]
+fn the_output_pane_follows_the_newest_line_until_the_reader_scrolls_away() {
+    let (mut test, lines) = TestingRunner::new(
+        output_harness,
+        (200., 200.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| RunLines(State::create(Arc::new(RunOutput::default()))))
+                .0
+        },
+        1.,
+    );
+    let settle = |test: &mut TestingRunner| {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+    };
+    settle(&mut test);
+
+    // Enough lines to overflow the viewport several times over.
+    for index in 0..12 {
+        wrote(lines, &format!("line {index}"));
+        settle(&mut test);
+    }
+
+    let following = drawn_lines(&test);
+    assert!(
+        following.contains(&"line 11".to_owned()),
+        "the newest line is not on screen: {following:?}"
+    );
+    assert!(
+        !following.contains(&"line 0".to_owned()),
+        "nothing scrolled at all: {following:?}"
+    );
+
+    // The escape hatch: a wheel away from the bottom.
+    test.scroll((100., 120.), (0., 100.));
+    settle(&mut test);
+    let away = drawn_lines(&test);
+    assert!(
+        !away.contains(&"line 11".to_owned()),
+        "the wheel moved nothing: {away:?}"
+    );
+
+    // And the follow is released, not merely interrupted: three more lines arrive and the
+    // reader is left looking at exactly the rows they scrolled to.
+    for index in 12..15 {
+        wrote(lines, &format!("line {index}"));
+        settle(&mut test);
+    }
+    assert_eq!(drawn_lines(&test), away, "an arriving line pulled the view");
+
+    // Back to the bottom by hand, which arms it again -- judged against the list as it is
+    // now, which is three lines longer than the one they scrolled away from.
+    test.scroll((100., 120.), (0., -1000.));
+    settle(&mut test);
+    let back = drawn_lines(&test);
+    assert!(
+        back.contains(&"line 14".to_owned()),
+        "the wheel did not reach the bottom: {back:?}"
+    );
+
+    wrote(lines, "line 15");
+    settle(&mut test);
+    let rearmed = drawn_lines(&test);
+    assert!(
+        rearmed.contains(&"line 15".to_owned()),
+        "coming back to the bottom did not take the follow up again: {rearmed:?}"
+    );
+}

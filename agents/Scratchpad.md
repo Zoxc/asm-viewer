@@ -269,9 +269,30 @@ the first one's last lines and its `Ended` would land in the second's output. **
 are told apart by colour and by nothing else**, and deliberately not by the red every invalid thing
 wears: stderr is not an error, it is the other stream, so it takes the palette's one warm hue.
 Between the two streams there is no order to preserve and none is claimed — two pipes read by two
-threads, which is all a terminal has either. Recorded, not built: the list does not follow the
-newest line, so a long run has to be scrolled; auto-follow needs the viewport height and a "the
-reader has scrolled away" rule, which is `reveal_row`'s shape and its own piece of work.
+threads, which is all a terminal has either.
+
+**The list follows the newest line, and the reader takes it back by scrolling away.** Arriving
+lines keep the pane pinned to the bottom while the reader is at the bottom; a wheel away from
+there releases it and leaves them exactly where they are however much arrives after; coming back
+to the bottom arms it again. Being at the bottom is judged **in rows against the viewport as it is
+now** — `reveal_row`'s shape, which is why the goal called this its sibling — and never as a row
+index written down earlier: past `MAX_OUTPUT_LINES` the oldest rows drop off the front and every
+index shifts by one for each line that lands. The whole of it is one effect, subscribed to the
+pane's own scroll, and **what it does depends on what woke it**. A line arriving is deliberately
+not an occasion to re-judge: the row that has just been added is below the viewport by definition,
+so a run that asked would find the pane scrolled away on the first line of every run and follow
+nothing, ever. So arriving lines only *spend* the answer, and a scroll, a resize — and the scroll
+the effect itself makes — are what write it. The two are told apart by the output's identity,
+which is `OutputRows`' `PartialEq` again rather than its length: at the cap the count stops
+changing while the rows go on being replaced. The one judgement it makes is that the newest row is
+drawn *at all* rather than drawn entire, because a scroll offset is a whole number of pixels where
+a list of rows is not, and a view clamped hard against its end stands a fraction of a pixel short.
+
+The pane is a component of its own, **keyed on the pad**, so that the scroll and the follow belong
+to that pad's output instead of being one position dragged between pads by a switch. What the key
+costs is that a pad comes back following again, having been remounted — the follow is what a pane
+arrives armed with rather than something carried across a switch, and it is the pad being looked
+at whose scrolling is worth keeping.
 
 **What stops a run**: its Stop button, its pad's rebuild, its pad's next run, and the window
 closing — the first three per pad, since another pad's program is about another executable, and
