@@ -55,19 +55,27 @@ pub fn text(instruction: &Instruction) -> String {
         .collect()
 }
 
+/// Where one of the committed, compiler-produced fixtures (`tests/fixtures/`) sits on disk.
+/// The path itself matters to one of them: a PE's `.pdb` is looked for **beside the
+/// binary**, so a test that wants the pair found has to parse the DLL under its real path.
+pub fn committed_fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name)
+}
+
 /// One of the committed, compiler-produced fixtures (`tests/fixtures/`) — the only inputs
 /// in the suite a real toolchain wrote. A missing one is a broken checkout, not a reason
 /// to skip: fail loudly and say how to put it back.
 pub fn committed_fixture(name: &str) -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(name);
+    let path = committed_fixture_path(name);
     std::fs::read(&path).unwrap_or_else(|error| {
         panic!(
             "{}: {error}\n\
              This fixture is committed to the repository, not generated. Restore it from \
-             git, or rebuild it with the command in tests/fixtures/line_fixture.c.",
+             git, or rebuild it with the command in tests/fixtures/line_fixture.c (the gcc \
+             objects) or tests/pdb.rs (the DLL and its PDB).",
             path.display()
         )
     })
@@ -1045,10 +1053,49 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     out
 }
 
+/// The CodeView record a linker leaves in a PE's debug directory, naming the `.pdb` it wrote
+/// beside the image and the identity (`guid`, `age`) that `.pdb` has to answer with.
+pub struct CodeViewRecord<'a> {
+    /// The 16 GUID bytes exactly as they sit in the file (Windows' mixed-endian layout).
+    pub guid: [u8; 16],
+    pub age: u32,
+    /// The recorded path, as the linker wrote it: the build machine's, or a bare name.
+    pub path: &'a str,
+}
+
+/// What [`pe_image`] is asked for. `entry` is an offset into `.text`, or [`None`] as in a
+/// resource-only DLL; `codeview` is the debug directory's one record, or [`None`] for an
+/// image built without `/DEBUG`.
+pub struct PeDll<'a> {
+    pub text: &'a [u8],
+    pub symbols: &'a [ExportedSymbol<'a>],
+    pub entry: Option<u64>,
+    pub codeview: Option<CodeViewRecord<'a>>,
+}
+
+/// [`pe_image`] without a debug directory, which is what every test before the PDB backend
+/// asked for.
+pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Vec<u8> {
+    pe_image(PeDll {
+        text,
+        symbols,
+        entry,
+        codeview: None,
+    })
+}
+
 /// An x86-64 PE **DLL** with an export directory and **no COFF symbol table**: the export
 /// table is then the only thing naming any code. Hand-assembled for the reason the ELF
-/// above is. `entry` is an offset into `.text`, or [`None`] as in a resource-only DLL.
-pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Vec<u8> {
+/// above is. With a [`CodeViewRecord`], `.rdata` also carries a debug directory of one
+/// `IMAGE_DEBUG_TYPE_CODEVIEW` entry pointing at an `RSDS` record — the shape `object`'s
+/// `pdb_info` reads — so a test can name any `.pdb` on disk from an image built in memory.
+pub fn pe_image(dll: PeDll) -> Vec<u8> {
+    let PeDll {
+        text,
+        symbols,
+        entry,
+        codeview,
+    } = dll;
     const FILE_ALIGNMENT: usize = 0x200;
     const SECTION_ALIGNMENT: u64 = 0x1000;
     /// DOS stub, `PE\0\0`, COFF header, PE32+ optional header and two section headers,
@@ -1116,6 +1163,30 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
     // Room for the data export to point at.
     rdata.resize(rdata.len() + 0x20, 0);
 
+    // The debug directory — one 28-byte `IMAGE_DEBUG_DIRECTORY` — and the CodeView record it
+    // points at, after everything the export table occupies. `object` reads the record by
+    // its *file* offset (`PointerToRawData`), so both that and the RVA are filled in.
+    let mut debug_directory = None;
+    if let Some(record) = codeview {
+        rdata.resize(rdata.len().next_multiple_of(4), 0);
+        let directory = rdata.len();
+        rdata.resize(directory + 28, 0);
+        let cv = rdata.len();
+        rdata.extend_from_slice(b"RSDS");
+        rdata.extend_from_slice(&record.guid);
+        put32(&mut rdata, record.age);
+        rdata.extend_from_slice(record.path.as_bytes());
+        rdata.push(0);
+        let cv_size = (rdata.len() - cv) as u32;
+
+        let entry = &mut rdata[directory..directory + 28];
+        entry[12..16].copy_from_slice(&2u32.to_le_bytes()); // IMAGE_DEBUG_TYPE_CODEVIEW
+        entry[16..20].copy_from_slice(&cv_size.to_le_bytes()); // SizeOfData
+        entry[20..24].copy_from_slice(&((rdata_rva as usize + cv) as u32).to_le_bytes());
+        entry[24..28].copy_from_slice(&((HEADERS + text_raw + cv) as u32).to_le_bytes());
+        debug_directory = Some(rdata_rva as usize + directory);
+    }
+
     let rdata_size = rdata.len();
     let rdata_raw = rdata_size.next_multiple_of(FILE_ALIGNMENT);
     let image_size = (rdata_rva + rdata_size as u64).next_multiple_of(SECTION_ALIGNMENT);
@@ -1151,6 +1222,11 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
                                                          // Data directory 0 is the export table.
     opt[112..116].copy_from_slice(&(rdata_rva as u32).to_le_bytes());
     opt[116..120].copy_from_slice(&(rdata_size as u32).to_le_bytes());
+    // Data directory 6 is the debug directory: one entry, when there is one.
+    if let Some(directory) = debug_directory {
+        opt[160..164].copy_from_slice(&(directory as u32).to_le_bytes());
+        opt[164..168].copy_from_slice(&28u32.to_le_bytes());
+    }
 
     // Section headers at 0x58 + 240 = 0x148.
     let headers = 0x148;
@@ -1224,6 +1300,21 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>)> {
             }),
         ),
         ("pe dll", pe_dll(TEXT, SYMBOLS, Some(4))),
+        // The same DLL naming a `.pdb` that is nowhere on disk: the debug directory is read
+        // and the search comes back empty, which is the common case for a stripped image.
+        (
+            "pe dll naming a pdb",
+            pe_image(PeDll {
+                text: TEXT,
+                symbols: SYMBOLS,
+                entry: Some(4),
+                codeview: Some(CodeViewRecord {
+                    guid: *b"0123456789abcdef",
+                    age: 3,
+                    path: "C:\\build\\fixture.pdb",
+                }),
+            }),
+        ),
     ]
 }
 

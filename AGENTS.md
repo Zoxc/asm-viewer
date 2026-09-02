@@ -47,9 +47,12 @@ on the `tree-sitter-language` ABI of the one `tree-sitter` the app and `freya-co
 
 Almost every fixture is built **in memory** with the `object` and `gimli` writers
 (`crates/analysis/tests/common/mod.rs`), so the suite needs nothing on disk and is green in a fresh
-checkout. The exception is `crates/analysis/tests/fixtures/`: one small C file and the two objects
-`gcc` produced from it, **committed** so the crate is pinned against DWARF a real toolchain emits.
-`tests/real_object.rs` reads them and fails loudly rather than skipping when they are missing.
+checkout. The exception is `crates/analysis/tests/fixtures/`: one small C file and, **committed**
+from it, the two objects `gcc` produced (so the crate is pinned against DWARF a real toolchain
+emits) and the DLL plus `.pdb` that `clang-cl` and rustup's `rust-lld` produced (so it is pinned
+against a real linker's PE debug directory and PDB, which nothing in memory can synthesize).
+`tests/real_object.rs` and `tests/pdb.rs` read them and fail loudly rather than skipping when
+they are missing; the build commands are in `line_fixture.c`'s header and `pdb.rs`'s.
 
 The measurements quoted in `agents/` were taken on two inputs `cargo build` produces: the app's
 own debug binary (~331 MB, one linked ELF, ~115k text symbols, ~267 MB of DWARF) and the `analysis`

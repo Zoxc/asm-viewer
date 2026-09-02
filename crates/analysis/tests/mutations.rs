@@ -30,8 +30,9 @@ const WHOLE_TRUNCATION: usize = 1024;
 const TRUNCATION_STRIDE: usize = 7;
 
 /// Every shape the crate can be asked about: relocatable objects with and without DWARF,
-/// real compiler output in DWARF 5, and the two linked images, whose export and
-/// entry-point paths (`declared_code`) no `.o` reaches at all.
+/// real compiler output in DWARF 5, the two linked images, whose export and entry-point
+/// paths (`declared_code`) no `.o` reaches at all, and a linker's real DLL with a debug
+/// directory naming a `.pdb`.
 fn corpus() -> Vec<(String, Vec<u8>)> {
     let mut corpus = vec![
         ("caller_and_target".to_owned(), caller_and_target()),
@@ -43,6 +44,10 @@ fn corpus() -> Vec<(String, Vec<u8>)> {
         (
             "line_fixture_split.o".to_owned(),
             committed_fixture("line_fixture_split.o"),
+        ),
+        (
+            "line_fixture.dll".to_owned(),
+            committed_fixture("line_fixture.dll"),
         ),
     ];
     corpus.extend(
@@ -233,9 +238,10 @@ fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
     fields
 }
 
-/// The same for a PE image: the COFF header, the PE32+ optional header, the export data
-/// directory, the section table, and the export directory it points at — what
-/// `declared_code` walks in an image with no symbol table.
+/// The same for a PE image: the COFF header, the PE32+ optional header, the export and
+/// debug data directories, the section table, the export directory it points at — what
+/// `declared_code` walks in an image with no symbol table — and the debug directory's
+/// entry and the CodeView record behind it, which is how a `.pdb` is named and matched.
 fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
     let mut fields = Vec::new();
     if data.len() < 0x40 || &data[..2] != b"MZ" {
@@ -254,7 +260,8 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
     }
 
     // Magic, AddressOfEntryPoint, BaseOfCode, ImageBase, SectionAlignment, FileAlignment,
-    // SizeOfImage, SizeOfHeaders, NumberOfRvaAndSizes, and the export data directory.
+    // SizeOfImage, SizeOfHeaders, NumberOfRvaAndSizes, the export data directory and the
+    // debug data directory.
     let opt = coff + 20;
     for (offset, width) in [
         (0usize, 2usize),
@@ -268,15 +275,22 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
         (108, 4),
         (112, 4),
         (116, 4),
+        (160, 4),
+        (164, 4),
     ] {
         fields.push((opt + offset, width));
+    }
+    if opt + 168 > data.len() {
+        return fields;
     }
 
     let sections = u16::from_le_bytes(data[coff + 2..coff + 4].try_into().unwrap()) as usize;
     let optional = u16::from_le_bytes(data[coff + 16..coff + 18].try_into().unwrap()) as usize;
     let table = opt + optional;
     let export_rva = u32::from_le_bytes(data[opt + 112..opt + 116].try_into().unwrap());
+    let debug_rva = u32::from_le_bytes(data[opt + 160..opt + 164].try_into().unwrap());
     let mut export = None;
+    let mut debug = None;
 
     for i in 0..sections {
         let base = table + i * 40;
@@ -288,12 +302,16 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
             fields.push((base + offset, width));
         }
 
-        // Where in the file the export directory is, if it is in this section.
+        // Where in the file the export directory and the debug directory are, if they are in
+        // this section.
         let size = u32::from_le_bytes(data[base + 8..base + 12].try_into().unwrap());
         let rva = u32::from_le_bytes(data[base + 12..base + 16].try_into().unwrap());
         let pointer = u32::from_le_bytes(data[base + 20..base + 24].try_into().unwrap()) as usize;
         if export_rva >= rva && export_rva < rva.saturating_add(size) {
             export = Some(pointer + (export_rva - rva) as usize);
+        }
+        if debug_rva != 0 && debug_rva >= rva && debug_rva < rva.saturating_add(size) {
+            debug = Some(pointer + (debug_rva - rva) as usize);
         }
     }
 
@@ -302,6 +320,21 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
     if let Some(base) = export.filter(|base| base + 40 <= data.len()) {
         for offset in [12usize, 16, 20, 24, 28, 32, 36] {
             fields.push((base + offset, 4));
+        }
+    }
+
+    // The debug directory's one entry — Type, SizeOfData, AddressOfRawData, PointerToRawData —
+    // and, through the last of those, the CodeView record: its `RSDS` signature, the four
+    // words of the GUID, and the age.
+    if let Some(base) = debug.filter(|base| base + 28 <= data.len()) {
+        for offset in [12usize, 16, 20, 24] {
+            fields.push((base + offset, 4));
+        }
+        let pointer = u32::from_le_bytes(data[base + 24..base + 28].try_into().unwrap()) as usize;
+        if pointer + 24 <= data.len() {
+            for offset in [0usize, 4, 8, 12, 16, 20] {
+                fields.push((pointer + offset, 4));
+            }
         }
     }
 
