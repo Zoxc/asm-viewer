@@ -190,6 +190,9 @@ one item per part, so the unfinished half stays visible.
   demangled name down to 21. The History rows take the same name through `entry_text`, which the
   two share; the whole name is still what a tooltip says and what the History filter matches, and
   the 40-character elision is still the last word for a name that is long anyway.
+- [ ] Fix the `<entry point>` tab name: the shortening in `naming.rs` reads a name as a
+  demangled path with generic arguments, and the angle brackets the app itself puts around
+  its one made-up name are not that. A tab for the entry point should say `<entry point>`.
 - [x] An expanding section under the Assembly tab to show more symbol info, replacing the Info
   tab. The bar above is its collapsed state, opened by a disclosure triangle in a column of its
   own — the Objects tree's idiom down to the two glyphs, a triangle being the toggle where a name
