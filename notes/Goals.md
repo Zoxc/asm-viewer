@@ -221,8 +221,9 @@ one item per part, so the unfinished half stays visible.
   placeholder names no address of its own. `Assembly::edge_from` pairs the span with the edge
   that says where it goes. It is a scroll within one symbol and **not** a navigation: the
   document does not change and nothing is pushed onto the history. It does move the
-  selection, the way clicking the target row would — the pin is `position` of the row landed
-  on, with the source side owed the scroll — so the two panes are lit where the reader has
+  selection, the way clicking the target row would: the row landed on becomes the picked-out
+  one, and its line is pinned with the source side owed the scroll — the first half holding
+  for an object with no line info, the second lighting both panes where the reader has
   arrived rather than where they left. A branch out of the symbol — a tail call — keeps its
   plain operand; making that one navigate like a call target is an item of its own.
 - [ ] Let a call target with no symbol be opened. `Code::relocation` answers a `Relocated`

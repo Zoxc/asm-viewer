@@ -3273,7 +3273,9 @@ macro_rules! listing_states {
     ($runner:expr, $shown:expr) => {{
         let states = project_states!($runner);
         $runner.provide_root_context(|| Focused(State::create(None)));
-        $runner.provide_root_context(|| Marked(State::create(None)));
+        let marked = $runner
+            .provide_root_context(|| Marked(State::create(None)))
+            .0;
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
         let pinned = $runner
@@ -3285,7 +3287,7 @@ macro_rules! listing_states {
                 ..Analyzed::default()
             }))
         });
-        (states, pinned)
+        (states, pinned, marked)
     }};
 }
 
@@ -3344,7 +3346,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // fifteenth, far enough down that a pane this tall is not showing it.
     let landing = "0000000000000061 ";
 
-    let (mut test, (states, pinned)) = TestingRunner::new(
+    let (mut test, (states, pinned, marked)) = TestingRunner::new(
         listing_harness,
         (500., 200.).into(),
         |runner| listing_states!(runner, shown),
@@ -3379,6 +3381,15 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     );
     // The selection followed it too, and the Source pane owes the scroll: the Assembly
     // pane has just been given one and must not be asked for a second.
+    // The row landed on is the picked-out one now, and the row the press started on is
+    // not: this is the half that holds whether or not the object carries line info.
+    let picked = marked.peek().expect("following a jump picked out no row");
+    assert_eq!(
+        picked.rows.rows().collect::<Vec<_>>(),
+        vec![14],
+        "the row picked out is not the one the jump lands on"
+    );
+
     let pin = pinned
         .peek()
         .clone()

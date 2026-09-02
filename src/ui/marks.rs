@@ -46,6 +46,22 @@ pub(crate) fn mark_press(mut marked: State<Option<Marks>>, shift: bool, pane: Pa
     marked.set_if_modified(Some(Marks { pane, rows }));
 }
 
+/// Pick out `row` alone, replacing whatever was picked out before.
+///
+/// What [`mark_press`] does for a click, minus the drag: this is for a control that lands
+/// the reader on a row they never pressed -- following a jump -- where the button is back
+/// up by the time the answer is known and a sweep from here would be a sweep nobody began.
+pub(crate) fn mark_row(mut marked: State<Option<Marks>>, pane: Pane, row: usize) {
+    marked.set_if_modified(Some(Marks {
+        pane,
+        rows: RowSelection {
+            anchor: row,
+            lead: row,
+            dragging: false,
+        },
+    }));
+}
+
 /// Sweep the run out to `row`, which does nothing unless a run is already started.
 pub(crate) fn mark_drag(mut marked: State<Option<Marks>>, pane: Pane, row: usize) {
     let Some(marks) = *marked.peek() else {

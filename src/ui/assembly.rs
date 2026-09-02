@@ -204,6 +204,7 @@ impl Component for BranchLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let mut pinned = use_consume::<Pinned>().0;
+        let marked = use_consume::<Marked>().0;
         let text = self.text.clone();
         let to = self.to;
         let at = self.at.clone();
@@ -234,6 +235,12 @@ impl Component for BranchLabel {
                     // to.
                     e.stop_propagation();
                     reveal_row(&mut controller, *viewport.peek(), to);
+                    // The row landed on becomes the picked-out one, replacing the row the
+                    // press started on -- which `pointer_down` has already marked, that
+                    // being the one handler a stopped press does not undo. This is the
+                    // half of "the selection follows the jump" that holds for a binary
+                    // with no line info at all, where the pin below has nothing to say.
+                    mark_row(marked, Pane::Assembly, to);
                     // The same rule the row itself obeys: a target the debug info places
                     // nowhere pins nothing rather than clearing what is pinned, so a jump
                     // into a prologue is not a way of losing the line the reader put

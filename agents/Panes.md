@@ -118,10 +118,13 @@ edge's target **and the pin a press on that row would have made** — `position(
 Source pane owed the scroll and the Assembly pane not, since it has just been given one. It is
 still **not a navigation**: the document does not change and nothing is pushed onto the history, so
 a Back that undid reading further down one function would be answering a question nobody asked. It
-is a selection, though. Arriving at a target and then having to click it to light it up made the
-reader say twice where they had gone, and the two panes would meanwhile be lit at the place the
-reader had just left. A target the debug info places nowhere pins nothing rather than clearing what
-is pinned, which is the rule the row itself obeys. The press is still stopped from bubbling — the
+is a selection, though, and **in both senses**. `mark_row` picks out the row landed on — replacing
+the row the press started on, which `pointer_down` has already marked, that being the one handler a
+stopped press does not undo — and this is the half that holds for an object with no line info at
+all. The pin is the other half, the cross-pane one, and a target the debug info places nowhere pins
+nothing rather than clearing what is pinned, which is the rule the row itself obeys. Arriving at a
+target and then having to click it to light it up made the reader say twice where they had gone,
+and both panes would meanwhile be lit at the place the reader had just left. The press is still stopped from bubbling — the
 row under it would otherwise pin the line the instruction being *left* came from, which is the one
 answer the click is not asking for. The
 listing's own `ScrollController` and its measured height are handed down to each row for it, the
