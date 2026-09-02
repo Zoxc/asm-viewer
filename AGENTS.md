@@ -72,6 +72,8 @@ command.
   source file, its build, and the pads there are in the order they were last opened.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
 - `src/tree.rs` — the Objects list's tree shape, and which files are still being read into it.
+- `src/files.rs` — the project's directory as a tree: read one level per unfold, forgotten on
+  the fold, and flattened into the rows the Files view draws.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
 - `src/rows.rs` — the run of rows a reader picks out to copy.
@@ -109,6 +111,8 @@ command.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.
 - `src/ui/bookmarks_view.rs` — the Bookmarks list: one row per bookmark, live against what is
   loaded and kept dimmed when it is not.
+- `src/ui/files_view.rs` — the Files view: the project's directory as a tree, a file's row
+  opening it as source and its menu offering it as a binary.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
 - `src/ui/source_view.rs` — the source side of one, and which file it is showing.
@@ -119,8 +123,9 @@ command.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — eleven small stateless pieces of drawing shared by unrelated panes.
 
-Six `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
-`project_view`, `filter_bar`, `bookmarks_view`, `pad`, `analyzed`); the rest is in `agents/UI.md`.
+Seven `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+`project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`); the rest is in
+`agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's tests
 are a file of their own** — `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at the
@@ -191,6 +196,9 @@ it cost here, and whether it was reported. Add the note with the workaround.
   `.corner_radius` do take plain `f32`.
 - `label()` and `paragraph()` do not implement `StyleExt`, so they have no `.background()` /
   `.border()`; wrap them in a `rect()`.
+- `spawn` ties a task to the scope it was called in, and a task whose scope is unmounted is
+  dropped — before its first poll, if that comes first. A handler on something the handler
+  itself takes down (a context menu's item, which the press closes) has to `spawn_forever`.
 
 ## Testing the UI
 

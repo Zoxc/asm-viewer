@@ -81,8 +81,9 @@ impl PartialEq for Selection {
 ///
 /// A tab holds one of these and has two sides — assembly and source — and the variant
 /// says which side the tab is *about* and therefore which one drives the other. A file is
-/// the string the debug info said and never a path this filesystem was asked about, which
-/// is why it is an `Arc<str>` and not a `PathBuf`.
+/// a string and not a `PathBuf`: the spelling the debug info said, or the project directory
+/// joined with a Files row's entries, which is deliberately the same spelling and is never
+/// canonicalised, since the two are compared as text and a file reached both ways is one tab.
 ///
 /// [`Code`](Document::Code) is a third kind: **all of one object's code** as one listing,
 /// the symbols drawn as labels inside it where they start. It is assembly-driven like a

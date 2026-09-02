@@ -8745,3 +8745,161 @@ fn an_instruction_rows_menu_bookmarks_its_symbol() {
         "the menu moved the reader"
     );
 }
+
+/// The Files panel and nothing else, with the context-menu viewer a right-click on an
+/// object's row needs, over the project's states.
+fn files_harness() -> impl IntoElement {
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(FilesTab)
+}
+
+/// A project directory of this test's own, named after the line that asked for it, and
+/// the panel mounted over it as the project's directory.
+fn files_over(line: u32) -> (TestingRunner, ProjectStates, PathBuf) {
+    let directory = run_directory(line).join("project");
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let (mut test, states) =
+        TestingRunner::new(files_harness, (300., 400.).into(), project_states!(), 1.);
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    settle(&mut test);
+    (test, states, directory)
+}
+
+fn press(test: &mut TestingRunner, text: &str) {
+    let at = centre_of(test, text);
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(test);
+}
+
+/// A directory's row folds: what is under it is not drawn until the row is pressed, is
+/// after, and is gone again after a second press.
+#[test]
+fn a_directory_row_unfolds_on_press() {
+    let (mut test, _states, directory) = files_over(line!());
+    std::fs::create_dir_all(directory.join("a")).expect("creating the test directory");
+    std::fs::write(directory.join("a/b.c"), "int x;\n").expect("writing the source");
+    // Made after the mount, so the root has to be read again to see it.
+    press(&mut test, "project");
+    press(&mut test, "project");
+
+    assert!(label_area(&test, "a").is_some());
+    assert!(label_area(&test, "b.c").is_none());
+
+    press(&mut test, "a");
+    assert!(label_area(&test, "b.c").is_some());
+
+    press(&mut test, "a");
+    assert!(label_area(&test, "b.c").is_none());
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Pressing a source file's row opens it as a source-driven tab, spelled as the project
+/// directory joined with the entry's own name, and the history records the visit.
+#[test]
+fn a_source_row_opens_a_source_driven_tab() {
+    let (mut test, states, directory) = files_over(line!());
+    let path = directory.join("x.c");
+    std::fs::write(&path, "int x;\n").expect("writing the source");
+    press(&mut test, "project");
+    press(&mut test, "project");
+    assert!(states.open.active().is_none());
+
+    press(&mut test, "x.c");
+
+    let document = Document::Source(Arc::from(&*path.to_string_lossy()));
+    assert!(states.open.active() == Some(document.clone()));
+    assert!(states
+        .history
+        .peek()
+        .recent()
+        .any(|(_, entry)| *entry == document));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A file's menu offers "Open file", which loads it the way the toolbar's Open does --
+/// the parser deciding whether it is an object -- and once it is loaded offers "Close
+/// file" instead, so a path is never opened twice.
+#[test]
+fn an_object_row_opens_from_its_menu() {
+    let (mut test, states, directory) = files_over(line!());
+    let (fixture, _) = fixture_objects(1);
+    let path = directory.join("fixture.o");
+    std::fs::copy(&fixture, &path).expect("copying the fixture");
+    press(&mut test, "project");
+    press(&mut test, "project");
+    assert!(states.objects.peek().is_empty());
+
+    let row = centre_of(&test, "fixture.o");
+    right_click(&mut test, row);
+    settle(&mut test);
+    assert!(label_area(&test, "Close file").is_none());
+    press(&mut test, "Open file");
+    let objects = states.objects;
+    pump(&mut test, || !objects.peek().is_empty());
+    assert!(objects.peek().iter().all(|object| object.path == path));
+
+    let row = centre_of(&test, "fixture.o");
+    right_click(&mut test, row);
+    settle(&mut test);
+    assert!(label_area(&test, "Open file").is_none());
+    assert!(label_area(&test, "Close file").is_some());
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A file past what the source cache will read opens nothing when pressed -- the tab
+/// could only say so -- and still has its menu, since what it is is not judged here.
+#[test]
+fn a_file_past_the_source_bound_does_nothing_when_pressed() {
+    let (mut test, states, directory) = files_over(line!());
+    let path = directory.join("huge.txt");
+    // Sparse, so the bound is crossed without writing it.
+    std::fs::File::create(&path)
+        .and_then(|file| file.set_len(source::MAX_SIZE + 1))
+        .expect("writing the file");
+    press(&mut test, "project");
+    press(&mut test, "project");
+
+    press(&mut test, "huge.txt");
+    assert!(states.open.active().is_none());
+
+    let row = centre_of(&test, "huge.txt");
+    right_click(&mut test, row);
+    settle(&mut test);
+    assert!(label_area(&test, "Open file").is_some());
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// With no directory set the panel says so and points at the Project view; setting one
+/// is what brings the tree up, and clearing it takes the tree down again.
+#[test]
+fn no_directory_draws_the_placeholder() {
+    let (mut test, states) =
+        TestingRunner::new(files_harness, (300., 400.).into(), project_states!(), 1.);
+    settle(&mut test);
+    assert!(label_area(&test, "No project directory. Set one in the Project view.").is_some());
+
+    let directory = run_directory(line!()).join("project");
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    std::fs::write(directory.join("main.rs"), "fn main() {}\n").expect("writing the source");
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    // Two settles: the write wakes the effect, the effect's write wakes the memo, and the
+    // memo's write is what the rows are drawn from.
+    settle(&mut test);
+    settle(&mut test);
+    assert!(label_area(&test, "No project directory. Set one in the Project view.").is_none());
+    assert!(label_area(&test, "main.rs").is_some());
+
+    proj.write().directory = String::from("   ");
+    settle(&mut test);
+    settle(&mut test);
+    assert!(label_area(&test, "main.rs").is_none());
+    assert!(label_area(&test, "No project directory. Set one in the Project view.").is_some());
+    let _ = std::fs::remove_dir_all(&directory);
+}

@@ -474,7 +474,12 @@ one item per part, so the unfinished half stays visible.
   the code says "pinned" of a symbol.
 - [ ] A bookmark control on the symbol bar, for the symbol being read, beside the two menus
   above.
-- [ ] Left panel to explore project directory / files.
+- [x] Left panel to explore project directory / files. The Files view: the project's directory
+  as a tree, read one level per unfold and re-read on a refold, which is the refresh; the tree
+  is the fold state. A file's row opens it as a source-driven tab, spelled the way the debug
+  info spells it so the two meet in one tab; its right-click offers "Open file", which is the
+  parser's to judge, or "Close file" once it is loaded. Nothing here judges what a file is
+  (`agents/Sidebar.md`).
 - [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
   by substring, whole word or regex, on the demangled name the row shows.
 - [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter

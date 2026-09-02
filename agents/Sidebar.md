@@ -1,7 +1,7 @@
 # The sidebar and the project view
 
 The four filtered lists, the Objects tree and its rows for files still being read, closing a
-binary, the Project view and a project switch.
+binary, the Files view over the project's directory, the Project view and a project switch.
 
 **The four sidebar lists filter themselves.** `FilterBar` is one component with four uses, and
 the `Filter` is a `use_state` in the owning tab rather than a root context — a filter is a view of a
@@ -96,6 +96,46 @@ instruction row, which is not the symbol and has to say what it would bookmark �
 one gets is the whole `entry_name`, what the row's tooltip says. The rows *consume* `Bookmarked` and
 `Objects` and peek them in the handler — a `read` would subscribe 115k symbol rows to every bookmark
 made. Nothing on the symbol bar does this yet (`notes/Goals.md`).
+
+**The Files view is the project's directory, read one level per unfold** (`src/ui/files_view.rs`
+over `src/files.rs`), and it is the first thing to read the `directory` the Project view sets. A
+project directory is arbitrarily large, so nothing walks it: `FileTree::new` reads the root's own
+entries and `toggle` reads one directory's when it is unfolded and forgets them when it is folded
+— so a refold is a re-read, which is the whole refresh story and why there is no file-watcher
+dependency. **The tree is the fold state**: a directory is unfolded exactly when its children have
+been read, so there is no expansion set beside it to keep in step, and the tree is a `use_state`
+in the tab, a view of a list and never part of the session, rebuilt by an effect whenever `Proj`'s
+directory string changes — a keystroke in the Project view's box costs one `read_dir` of a
+half-typed path, which fails cheaply. The root is a row like any other, named after the
+directory's last component, so refolding it is how the top level is refreshed; a root that cannot
+be read is a placeholder's job to say, as is a project with no directory at all, which points at
+the Project view and never stands the working directory in. The read is on the UI thread, one
+`read_dir` of one level per fold, the `pads_in` precedent: nothing is *analysed*, and a listing is
+what a file dialog does; a worker is the upgrade if a network mount ever makes a fold slow. Rows
+are directories first and then files, each by name without regard to case, and hidden entries are
+shown — `.git` and `target` fold away with one click. There is no filter bar: a filter over a
+lazily read tree can only see what is unfolded, and the search stories are the Symbols filter and
+`notes/Goals.md`'s source search.
+
+**A click opens a file as source; opening it as a binary is its menu, and the parser's call.**
+What a file *is* is not judged here — not by extension (this project's own binaries have none)
+and not by reading its head, which was tried and taken out: it made the view a second opinion
+about what an object is, and the parser already has the one that counts. So a press opens
+anything the source cache would read (`files::shows_as_source`: a regular file within
+`source::MAX_SIZE`, asked of the metadata, the one bound so a press cannot open a tab the pane
+would refuse), as `activate(.., Visit::Went)` on a `Document::Source` spelled as **the project
+directory joined with each entry's own name, never canonicalised**: `compiled_from` matches a
+file on the exact string `addr2line` renders, `DW_AT_comp_dir` joined with the file entry, so a
+tree-opened file joins with the debug info's — and shares a tab with a companion-opened one —
+exactly when the project directory is the directory the build ran in. Opening a binary is a
+deliberate act, so it is every file row's right-click, whose one item is **Open file** —
+`open_binaries` on that path, the toolbar's call, where `object` decides whether anything parses
+and a file that does not leaves nothing behind but a `…` row that goes when the load ends — or
+the Objects row's own **Close file** when the path is already loaded or loading, since opening a
+path twice puts a second copy of each of its objects in the list. That item spawns with
+`spawn_forever` and not `spawn`, a task belonging to the scope that spawned it and the menu's
+button being unmounted by the press that chose it (`AGENTS.md`'s gotchas). A directory has no
+menu.
 
 **The Project view** (`Tab::Project`) is what a project's `name` and `directory` are finally set
 from — two fields that round-tripped since 8d with nothing to write them. It is **one view and not

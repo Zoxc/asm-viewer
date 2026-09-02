@@ -16,7 +16,7 @@ use std::{
 /// The largest file this will read into memory. A bound on what a bad path can cost, not a
 /// guess at what source looks like: a debug-info string that happens to name a disk image
 /// must not be loaded to find that out.
-const MAX_SIZE: u64 = 16 * 1024 * 1024;
+pub const MAX_SIZE: u64 = 16 * 1024 * 1024;
 
 /// One source file: where it came from, and what it says. Splitting it into lines is the
 /// UI's syntax highlighter's job, which works in whole files and hands its own line breaks

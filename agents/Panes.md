@@ -50,8 +50,9 @@ being a landed pin's doing, which comes with a reveal of its own.
 
 A companion wears a **header naming its file**, which a subject does not: the strip already names
 a subject, and nothing else in the window would name a companion now that the Source pane has no
-strip of its own. Pressing that header opens the file as a source-driven tab, and until the project
-explorer and the source search land it is the only door into one. The **assembly** side of a
+strip of its own. Pressing that header opens the file as a source-driven tab, as pressing a source
+file's row in the Files view does (`agents/Sidebar.md`); until the source search lands those are
+the two doors into one. The **assembly** side of a
 source-driven tab draws the symbol the tab's driven line was compiled into, which is an ordinary
 `Analyzed::showing` like any other tab's; before a line has been clicked in it there is no
 question, so it says so.

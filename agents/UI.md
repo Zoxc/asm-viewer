@@ -15,11 +15,11 @@ names it had as a section; and each `mod x;` is followed by a `pub(crate) use x:
 name means what it always meant wherever it is written. Visibility is what the compiler
 asked for and no more, so the annotations *are* the list of what crosses a boundary.
 
-Six of the names are not the obvious one, and each avoids shadowing a crate module the
+Seven of the names are not the obvious one, and each avoids shadowing a crate module the
 prelude has already brought in: `ui::source_view` (not `source`), `ui::project_view` (not
-`project`), `ui::filter_bar` (not `filter`), `ui::bookmarks_view` (not `bookmarks`), `ui::pad`
-(not `scratchpad`) and `ui::analyzed` (not `analysis`, which is the crate `ui/tests.rs` calls
-into). One name genuinely collides:
+`project`), `ui::filter_bar` (not `filter`), `ui::bookmarks_view` (not `bookmarks`),
+`ui::files_view` (not `files`), `ui::pad` (not `scratchpad`) and `ui::analyzed` (not `analysis`,
+which is the crate `ui/tests.rs` calls into). One name genuinely collides:
 `freya::prelude` exports a `use_theme` of its own, so `ui/tests.rs` names ours explicitly —
 an explicit import wins over a glob, and that line is the disambiguation rather than a
 duplicate.
@@ -80,8 +80,10 @@ the line, or the function around it, last asked about was compiled into), `Pad`/
 switch closes all of them and reopens all of them.
 
 **One strip, three kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**:
-`Document::Assembly(Selection)` — an object or a function — `Document::Source(Arc<str>)`, the
-string the debug info said and never a path this filesystem was asked about, or
+`Document::Assembly(Selection)` — an object or a function — `Document::Source(Arc<str>)`, a
+file as a string and not a `PathBuf`: the spelling the debug info said, or the project directory
+joined with a Files row's entries, which is deliberately the same spelling and is never
+canonicalised (`agents/Sidebar.md`), or
 `Document::Code(Arc<Object>)`, **all of one object's code** as one listing with the symbols drawn
 as labels inside it (`agents/Panes.md`). A tab has two sides, assembly and source, and the
 variant says which side the tab is *about* and therefore which drives the other; an object's code
@@ -159,12 +161,13 @@ pointer and whether it kept its box, and not what colour the chevron came out: a
 rasterises its colour into an image that is not in the element tree.
 
 Inside each panel is a `DockingArea` over a `DockArea` model. A `Tab` is two-kinded —
-`Tab::View(View)` for one of the eight views, `Tab::Document(DocId)` for an open document — because
+`Tab::View(View)` for one of the nine views, `Tab::Document(DocId)` for an open document — because
 `DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. The
 count moves with the views: the **Info** view went — what it said about a symbol is the section
 under the Assembly pane's own bar now (`agents/Panes.md`), which is where a reader is already
 looking and which names the symbol being *drawn* where the view named the one selected — and the
-**Bookmarks** view came (`agents/Sidebar.md`). Nothing had to be migrated for either — the dock
+**Bookmarks** and **Files** views came (`agents/Sidebar.md`). Nothing had to be migrated for any of
+them — the dock
 layout is not persisted, so a removed view is a compile-time deletion, an added one starts where
 its default layout puts it, and there is no saved tab that can name one. Both areas
 use `Tab` as the payload and `use_drag` keeps one `DockDrag<Tab>` at the root. The outer split stays
@@ -242,7 +245,7 @@ draws, so subscribing to the panel for it would re-render every tab whenever any
 opened. Until the bookmark item, a lone tab opened no menu at all.
 
 The document panel's tab bar is the horizontally scrolling one the strip used to be (`chip_strip`),
-because documents are opened by the dozen; a view panel's stays a plain row, eight views always
+because documents are opened by the dozen; a view panel's stays a plain row, nine views always
 fitting. Two things bite there. freya appends one child more than there are tabs — a
 `rect().expanded()` drop zone for "past the last tab" — and `expanded()` is meaningless inside a
 horizontal scroll view, so it is given a width of its own. And a tab's name is elided **by character

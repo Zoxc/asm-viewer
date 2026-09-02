@@ -443,6 +443,7 @@ impl Tab {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum View {
     Objects,
+    Files,
     Symbols,
     History,
     Bookmarks,
@@ -456,6 +457,7 @@ impl View {
     fn title(self) -> &'static str {
         match self {
             View::Objects => "Objects",
+            View::Files => "Files",
             View::Symbols => "Symbols",
             View::History => "History",
             View::Bookmarks => "Bookmarks",
@@ -474,6 +476,7 @@ impl View {
     fn icon(self) -> Element {
         let (name, svg) = match self {
             View::Objects => ("package", lucide::package()),
+            View::Files => ("folder-tree", lucide::folder_tree()),
             View::Symbols => ("square-function", lucide::square_function()),
             View::History => ("history", lucide::history()),
             View::Bookmarks => ("bookmark", lucide::bookmark()),
@@ -498,6 +501,7 @@ impl View {
     fn view(self) -> Element {
         match self {
             View::Objects => ObjectsTab.into_element(),
+            View::Files => FilesTab.into_element(),
             View::Symbols => SymbolsTab.into_element(),
             View::History => HistoryTab.into_element(),
             View::Bookmarks => BookmarksTab.into_element(),
@@ -819,7 +823,7 @@ fn tab_drag(tab: Tab, docs: State<Docs>) -> Element {
         .into_element()
 }
 
-/// The bar a panel's tab headers sit in: a plain row for a view panel, whose eight views
+/// The bar a panel's tab headers sit in: a plain row for a view panel, whose nine views
 /// always fit, and [`chip_strip`] for the document panel, which is opened into by the
 /// dozen.
 fn tab_bar(ctx: TabBarContext<PanelId>, area: State<DockArea>) -> Element {

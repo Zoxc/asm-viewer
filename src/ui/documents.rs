@@ -402,6 +402,30 @@ pub(crate) fn tab_menu(
         .child(bookmark_item(bookmarks, objects, document, "Add bookmark"))
 }
 
+/// The menu a Files row over an object that is not loaded opens on a right-click: one
+/// item, opening it the way the toolbar's Open does. Built per press, like every menu
+/// here, and the states come in as arguments because no hook may run in a handler.
+pub(crate) fn open_menu(
+    objects: State<Vec<Arc<Object>>>,
+    loading: State<Loads>,
+    path: PathBuf,
+) -> Menu {
+    Menu::new().child(
+        MenuButton::new()
+            .on_press(move |_| {
+                let path = path.clone();
+                // `spawn_forever`, not `spawn`: a task belongs to the scope that spawned
+                // it, and this one's is the menu's button, which the press closes -- the
+                // load would be dropped before its first poll.
+                spawn_forever(async move {
+                    open_binaries(objects, loading, vec![path]).await;
+                });
+            })
+            // The opposite of the Objects row's "Close file", in the same word.
+            .child("Open file"),
+    )
+}
+
 /// The menu a file row opens on a right-click.
 ///
 /// Built per press, since it closes over the row's path. The states come in as an argument

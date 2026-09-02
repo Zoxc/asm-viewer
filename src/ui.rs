@@ -33,6 +33,7 @@ pub(crate) use analysis::{
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};
 pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs};
+pub(crate) use crate::files::{shows_as_source, FileRow, FileRows, FileTree, Fold};
 pub(crate) use crate::filter::{Filter, Matcher};
 pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::functions::{self, Function};
@@ -66,6 +67,8 @@ mod dock;
 pub(crate) use dock::*;
 mod documents;
 pub(crate) use documents::*;
+mod files_view;
+pub(crate) use files_view::*;
 mod filter_bar;
 pub(crate) use filter_bar::*;
 mod focus;
@@ -251,7 +254,7 @@ pub fn app() -> impl IntoElement {
     let docs = use_provide_context(|| OpenDocs(State::create(Docs::default()))).0;
     let sidebar_dock = use_state(|| {
         DockArea::column(vec![
-            vec![Tab::View(View::Objects)],
+            vec![Tab::View(View::Objects), Tab::View(View::Files)],
             vec![Tab::View(View::Symbols)],
             vec![
                 Tab::View(View::History),

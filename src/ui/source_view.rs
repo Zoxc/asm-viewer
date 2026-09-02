@@ -453,8 +453,7 @@ fn opening_row(lines: &SymbolLines, file: &Arc<str>) -> usize {
 
 /// The bar over the Source pane naming the file it is showing as a **companion** -- a
 /// subject gets none, being named by its own tab -- and opening that file as a
-/// source-driven tab when it is pressed, which until the project explorer lands is the only
-/// door into one.
+/// source-driven tab when it is pressed, the one door into one that is not a Files row.
 ///
 /// The states come in as arguments: this is called from inside a `match`, and a hook may
 /// only run unconditionally in a component's body.

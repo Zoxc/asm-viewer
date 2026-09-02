@@ -1,6 +1,7 @@
 mod bookmarks;
 mod compiled;
 mod docs;
+mod files;
 mod filter;
 mod fonts;
 mod functions;
