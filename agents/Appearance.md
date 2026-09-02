@@ -103,7 +103,13 @@ one font freya will not let an element set is the tooltip's, hardcoded in its th
 freya's own `light_theme()`/`dark_theme()` sheet, chosen by the appearance, which is the one place
 freya's theming is used for colour: the filter boxes, scrollbars, resizable handle, tooltips and
 context menu read their colours from it and from nothing else, and a white text box on a dark pane
-is not a theme switch.
+is not a theme switch. Overriding anything in that sheet is `Theme::set` with a whole
+`*ThemePreference` under its string key, each field a `Preference` that is either `Specific(v)` or
+`Reference("name")`, and a reference resolves against freya's own `ColorsSheet` and nothing else:
+it cannot be pointed at a `Palette` colour, a name that sheet does not know comes out silently as
+`primary`, and a reference on a field that is not a `Color` panics where it is resolved
+(`freya-components`' `theming/macros.rs:288-395`). Hence the tooltip's size, an `f32`, is a
+`Preference::Specific`.
 
 **A font change repaints the same way a theme change does, and moves the rows with it.** `fonts()`
 in `ui/metrics.rs` reads a thread-local `State<Arc<Fonts>>` exactly as `palette()` reads the appearance, so

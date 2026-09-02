@@ -29,6 +29,41 @@ freya 0.4 is **not** Dioxus-based: no `rsx!`, no `#[component]`, no `use_signal`
 API (`rect().width(Size::fill()).child(..)`) over its own `freya-core`. Most freya material online
 describes the older API and does not apply.
 
+**A `Component` carries no identity of its own.** `ComponentKey::default_key` hashes
+`TypeId::of::<Self>()` and nothing else (`freya-core`'s `element.rs`), and a scope is re-rendered
+only when its key or its props changed (`runner.rs:812`) — so every sibling of one type answers
+with the same key, and a list of them gives the diff nothing to tell two rows apart by. `.key(..)`
+comes from `KeyExt`, which the built-in elements implement and a component does not, so a
+component takes a key only where it is given somewhere to put one: the twelve keyed components
+here (`InstructionRow`, `SourceRow`, `SymbolRow`, `PadRow` and the rest) each hold a `DiffKey`
+field, implement `KeyExt::write_key` over it, and answer `render_key` with
+`self.key.clone().or(self.default_key())` — `.key(..)` writes the field and the `or` leaves the
+type's own key standing where a call site gives none. What goes into it is whatever identifies
+*that* row: an `Arc::as_ptr(..).addr()`, an instruction's address, an index.
+
+**A `Writable<T>` compares equal to every other one.** Its `eq` returns `true` outright
+(`freya-core`'s `lifecycle/writable.rs`), there being nothing to compare in the four closures it
+is; a `Readable<T>` made from a `State` or a `Memo` is the same, and only one made out of a
+plain value compares by value (`readable.rs:92,102`). Handing one down as a prop therefore never
+re-renders the component holding it, which is what makes a *mapped* one a hazard rather than a
+convenience: `into_writable().map(..)` captures its way in — a field of a `Filter`,
+`dependencies[index]` — and the component keeps the closures it was first given. A mapping that
+can change is safe only where the component holding it is unmounted when it does, which is what
+the scratchpad's editor and its dependency rows arrange (`agents/Scratchpad.md`), and never by
+handing it a new one.
+
+**`prevent_default` cancels the events an event derives; `stop_propagation` stops it bubbling.**
+One platform event becomes a queue of tree events, and a handler calling `prevent_default` makes
+the executor drop from the rest of that queue everything the emitted event names as cancellable
+(`ragnarok`'s `executor.rs:72-90`, over the table at `freya-core`'s `events/name.rs:179-219`): a
+`PointerPress` — which is what `on_press` is built on — cancels the `MouseUp` and the
+`GlobalPointerPress` beside it, a `MouseDown` its `PointerDown` and `GlobalPointerDown`, a
+`KeyDown` its `GlobalKeyDown`. That is the whole of how the filter bar's toggles keep an `Input`'s
+keyboard focus (`agents/Sidebar.md`), and it is the derivation `agents/Headless.md` works out for
+the `Menu` question read the other way. `stop_propagation` is the other axis and no substitute: it
+stops the walk up the ancestors, which for an event that does not bubble — a move, an enter, a
+leave, a global, a capture (`name.rs:248-254`) — is nothing at all.
+
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`, `Active` (the active `Document`), `Open` (the open tabs),
 `AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `Hist`, `Proj` (which project
