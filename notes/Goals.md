@@ -418,9 +418,15 @@ one item per part, so the unfinished half stays visible.
   tab chips are pointer targets, the sidebar lists have no cursor, and there is no way in to a
   filter box — which is the ranked-search item above seen from the other side. Note what it
   needs deciding first: what "the focused pane" means when either dock area can hold any view.
-- [ ] The archive row's object count should survive a narrow sidebar. A parent row ellipsises
-  its name before it drops the count column, so dragging the split far enough left eats the
-  count instead of the name. It reads correctly at the 300px the sidebar starts at.
+- [x] The archive row's object count survives a narrow sidebar. The count is a column of its
+  own — the digits and a gutter beside them — measured whole before the name is handed what
+  the columns leave, so dragging the split left is taken out of the name, which ellipsises, and
+  never out of the count. Half of it was already there and unrecorded: the row is laid out under
+  `Content::Flex` with the name as its one flex child, which is what keeps the count inside the
+  row's clip instead of past its edge. What was missing was the gutter, without which the name
+  grew right up to the digits and the ellipsis read as part of the number. A headless test pins
+  both halves, comparing a 150px pane against a 300px one rather than against a width of its
+  own: text is really shaped there, so a digit measures whatever fonts the machine has.
 
 ## Projects
 

@@ -81,6 +81,12 @@ pub(crate) const TAG_WIDTH: f32 = 34.0;
 /// The tag is written smaller than the row's own text.
 pub(crate) const TAG_FONT_SIZE: f32 = 10.0;
 
+/// The air an archive row's member count keeps to its left. Part of the count's own
+/// column and not of the name's: the name is the row's flex child, so whatever the count
+/// does not claim is what the name grows into, and without the gutter a sidebar dragged
+/// narrow runs the ellipsis straight into the digits.
+pub(crate) const COUNT_GUTTER: f32 = 6.0;
+
 /// How long a list row's tooltip waits before it appears. Zero, against
 /// `TooltipContainer`'s 500ms default: a truncated name is read by sweeping the pointer
 /// down the list. The filter toggles and the toolbar's two history buttons keep the

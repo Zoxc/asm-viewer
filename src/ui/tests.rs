@@ -1553,6 +1553,66 @@ fn leaving_a_project_while_a_file_is_read_drops_what_was_still_coming() {
         .is_err());
 }
 
+/// The Objects tree and nothing else, at whatever width the window is. A pane's width is
+/// all a row of it knows about the split, so the window is the split here.
+fn objects_harness() -> impl IntoElement {
+    rect().expanded().child(ObjectsTab)
+}
+
+/// Where the archive row's name and its member count were laid out, in a pane `width`
+/// wide. The runner is gone by the time the areas are handed back, so two widths are two
+/// mounts and never two runners at once.
+fn archive_row(width: f32, objects: &[Arc<Object>]) -> (Area, Area) {
+    let (mut test, mut states) = TestingRunner::new(
+        objects_harness,
+        (width, 300.).into(),
+        |runner| project_states!(runner),
+        1.,
+    );
+    states.objects.write().extend(objects.iter().cloned());
+    settle(&mut test);
+    (
+        label_area(&test, "line_fixture.o").expect("the archive has a row"),
+        label_area(&test, "3").expect("the row says how many members it has"),
+    )
+}
+
+/// A sidebar dragged narrow is taken out of the *name*. The member count keeps the width
+/// its digits need and the gutter beside them; the name is the row's flex child and gives
+/// up every pixel of the difference, which is what leaves the name ellipsised rather than
+/// the count pushed past the row's edge and clipped away with it.
+///
+/// The two mounts are compared against each other and never against a number of their
+/// own: text is really shaped here, so what a digit measures is whatever fonts the
+/// machine running the test has.
+#[test]
+fn a_narrow_sidebar_ellipsises_the_name_and_keeps_the_count() {
+    let (_path, objects) = fixture_objects(3);
+    let (wide_name, wide_count) = archive_row(300.0, &objects);
+    let (name, count) = archive_row(150.0, &objects);
+
+    assert_eq!(
+        count.width(),
+        wide_count.width(),
+        "the count was squeezed by a narrower pane"
+    );
+    assert!(
+        (wide_name.width() - name.width() - 150.0).abs() < 0.01,
+        "the name gave up {} of the 150 the pane lost",
+        wide_name.width() - name.width()
+    );
+    // The row is `Overflow::Clip` over a 5px horizontal padding, so a count past that edge
+    // is a count the reader never sees.
+    assert!(
+        count.max_x() <= 145.01,
+        "the count was pushed past the row's edge, where its clip takes it"
+    );
+    assert!(
+        count.min_x() - name.max_x() >= COUNT_GUTTER,
+        "the ellipsised name ran into the digits"
+    );
+}
+
 /// The analysis worker's work, handed in through a context so a test can substitute one
 /// that stops when it is told to.
 #[derive(Clone)]

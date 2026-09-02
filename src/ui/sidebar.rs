@@ -125,16 +125,25 @@ impl Component for ArchiveRow {
                 // of them matched -- the one thing about an archive that is not visible
                 // while it is folded shut. A file that has produced nothing yet shows no
                 // count rather than a zero.
+                //
+                // A column of its own, `COUNT_GUTTER` and all, rather than a label at the
+                // end of the row: the count is measured whole before the name is handed
+                // what the columns leave, so a sidebar dragged narrow ellipsises the name
+                // and never eats the digits, and the ellipsis never runs into them.
                 .child(
-                    label()
-                        .text(if self.members == 0 {
-                            String::new()
-                        } else {
-                            self.members.to_string()
-                        })
-                        .font_size(TAG_FONT_SIZE)
-                        .color(palette().address_fg)
-                        .max_lines(1),
+                    rect()
+                        .padding(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))
+                        .child(
+                            label()
+                                .text(if self.members == 0 {
+                                    String::new()
+                                } else {
+                                    self.members.to_string()
+                                })
+                                .font_size(TAG_FONT_SIZE)
+                                .color(palette().address_fg)
+                                .max_lines(1),
+                        ),
                 ),
         )
     }

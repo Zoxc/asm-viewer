@@ -27,6 +27,20 @@ state, drawing no disclosure triangle) since a search that folds its results awa
 nothing. Each row wears a text tag (`ELF`/`PE`/`COFF`/`MACH`/`AR`) rather than an icon, because
 nothing in Lucide's 1640 icons names an object format.
 
+**A tree row is four columns and one of them is elastic.** The triangle and the format tag are
+fixed widths every row keeps whether or not it has one, so the tags and the names line up down
+the list; an archive's member count is a column of its own, its digits and a `COUNT_GUTTER`
+beside them; and the name is the row's single `flex` child, which torin only works out under
+`Content::Flex`. The order that follows is the whole of `Goals.md`'s "the count should survive a
+narrow sidebar": the fixed columns and the count are measured whole and the name is handed what
+is left, so a sidebar dragged narrow is taken out of the name — which ellipsises — and never out
+of the count. Without the flex the name takes the remainder *before* the count is placed and the
+digits land past the row's edge, where its own `Overflow::Clip` eats them; without the gutter the
+name grows right up against them and the ellipsis reads as part of the number. Both halves are
+one headless test, which compares a 150px pane against a 300px one rather than against a width of
+its own, text being really shaped under the runner and a digit therefore measuring whatever fonts
+the machine has.
+
 **A file being read is a row before it has an object**, which is `notes/Goals.md`'s "an indicator
 for an object still being processed" — and the state is on the **file**, not on an object, because
 an object that has not been parsed does not exist: the unit part-way through is the one the reader
