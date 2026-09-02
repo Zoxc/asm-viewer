@@ -19,6 +19,15 @@ one item per part, so the unfinished half stays visible.
 - [x] Selecting one side highlights the other side. A click pins the position it points at
   and both panes keep it lit, in a stronger shade than the hover, until another click or
   another symbol.
+- [ ] Drop the assembly row's own hover wash and spend that colour on the pair instead.
+  There are two washes under the pointer today — `code_row_hover_bg`, which says only "the
+  pointer is here", and `line_focus_bg`, which says the far more useful "this row and that
+  source line are the same place". The first says what the pointer already says and competes
+  with the second for the reader's eye, so the row a listing is hovered on should draw
+  nothing of its own and the pair's colour should be the one that was being spent on it.
+  Both panes, since the mapping is symmetric. The contrast tests re-judge whatever is left
+  once one of the two washes is gone, and the question to settle first is whether the pair
+  wants the hover's colour outright or its own turned up to where the hover was.
 - [x] Have a function to find all source / assembly locations that match, producing a list on the
   other side. "Find all locations" on a source row or an instruction row asks the analysis
   worker for every symbol the line was compiled into over every open object, and the Locations
@@ -53,6 +62,20 @@ one item per part, so the unfinished half stays visible.
   fields the register's olive, literals the immediate's blue, function and module names the
   relocation target's near-black, punctuation the rest's grey, and comments and strings are
   two new entries of the palette's own.
+- [ ] Pull attributes, types and functions apart in the source side's highlighting. Three
+  of `syntax()`'s entries were mapped onto colours the assembly side already had, and the
+  result is that a Rust file reads as two colours: `attribute` and `type_` are both
+  `keyword_fg`, and `function` / `function_method` are `name_fg`, which is also plain text.
+  Each wants a colour of its own in the palette, defined light-first and turned through the
+  background for dark the way every other pair is:
+  - `attribute` a dark grey — `#[derive(..)]` is scaffolding around the code and should
+    recede, not read as loudly as `fn`.
+  - `type_` a dim red, so a type is told from the keyword introducing it.
+  - `function` and `function_method` a dim blue, so a call site is told from the plain text
+    around it.
+  All three go through the contrast test on the pane they are read on, and the question to
+  settle is whether the assembly side wants any of them too — a mnemonic is not a keyword
+  and an operand is not a variable, so the two sides may want to stop sharing here.
 - [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
   each language is a `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and
   deferred *per language* rather than as a whole: a grammar is a parser generator's worth of
@@ -217,6 +240,15 @@ one item per part, so the unfinished half stays visible.
   and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
   as the symbol needs; past five, the outermost lane is shared. Hovering a row draws its own
   branches darker, all the way to where they go.
+- [ ] Pixel-align the gutter's strokes. Every stroke in `gutter` is placed at a fractional
+  coordinate — `lane_x` is `LANE_WIDTH / 2.0` off a multiple, a vertical is cut at
+  `code_row_height() / 2.0`, and the whole row sits wherever a row height that is itself a
+  function of the font puts it — so a one-pixel line lands across two device pixels and is
+  drawn as two grey ones. It reads as blurred beside the crisp text next to it. What it needs
+  is the stroke's edges rounded to the device pixel grid rather than its centre placed on a
+  fraction, which means the scale factor reaching `gutter`, and a decision about whether the
+  arrowhead's diagonal is worth aligning at all or should simply be drawn a half-pixel wider.
+  Judged on a 1× display, where the fault is visible; on a 2× one it very nearly is not.
 - [x] Follow a jump by clicking its target offset, the way a call's relocation target is
   clicked. A branch's displacement (`jle 4Bh`) is a link where the listing holds the row it
   lands on — the same set the gutter draws an arrow for — and pressing it puts that row on
@@ -299,6 +331,16 @@ one item per part, so the unfinished half stays visible.
   `activate`, which is told why it is being called, so opening a document or going to one is a
   visit and switching to a tab that is already open is not.
 - [x] Don't insert duplicate history entries, bump existing ones instead.
+- [ ] A tab kind for a file, so an object or an archive can be opened and read about. Today
+  a row in the Objects list can only be expanded or closed, and everything the parse learnt
+  about the file — its format, architecture, sections, symbol counts, what its members are,
+  how long each took to read — is either shown nowhere or squeezed into the Info pane, which
+  is about a *symbol*. Opening a file row would give it a document of its own: the file's own
+  facts up top, its members listed for an archive, and the timings the read already measures
+  beside them, so "why was this slow" is a question the app can answer about itself. The
+  decisions are what document kind a file is (`Document` names a place in a binary or a file
+  today, and a whole binary is neither), and whether the timings are always collected or
+  gathered only when something asks.
 - [x] Tree view for objects, with an indicator per row for the file type. A file that
   contributed one object is one row; an archive is a parent row its members fold under,
   and the type is a short tag (`ELF`, `PE`, `COFF`, `MACH`, `AR`) rather than a picture —
@@ -315,6 +357,15 @@ one item per part, so the unfinished half stays visible.
   own text in full, which is what a name cut off at the pane's edge needs; the assembly
   and source rows deliberately have none, being code the pointer sweeps across rather than
   a name that could not fit.
+- [ ] Show a row's tooltip only when the row is actually cut off. A tooltip repeating a name
+  that is already fully on screen is noise the pointer drags behind it across a whole list —
+  and with the zero delay above it arrives the instant the pointer crosses a row. What it
+  needs is a comparison the app cannot presently make: freya reports a laid-out box but not
+  the width the text *wanted*, so "does it fit" has to come from somewhere — a measured
+  `longest_line()` on a row allowed its natural width, or the ellipsis being detectable, or
+  the row reporting its own overflow. Settling that is the goal; the rule once it is settled
+  is one line per list, and the same question decides it for the tab bar, whose tabs elide
+  too.
 - [x] Instant tooltip delay for list items. A truncated name in a list is read by sweeping
   the pointer down it, and freya's 500ms default made that useless, so every list row
   passes `TooltipContainer::delay` a zero. The filter toggles keep the default: theirs
@@ -438,6 +489,15 @@ one item per part, so the unfinished half stays visible.
   test holds along with the glyph's contrast over the composited wash. A component and not
   another line of the chip, because freya has no hover pseudo-state and the state has to be the
   ×'s own.
+- [ ] A shortcuts panel, listing every key and every mouse gesture the app answers to. There
+  is no way to find out what the app does today short of reading the source: Ctrl+C, Ctrl+A and
+  Escape in the two code panes, the mouse's side buttons going back and forward, shift-click
+  reaching a selection out, right-click's menus, and whatever the keyboard goal below adds.
+  A view like Settings, listing them by the view each belongs to. The one decision is whether
+  the list is written out by hand — honest, and wrong the first time someone adds a binding
+  without touching it — or generated from the handlers, which would mean bindings become data
+  the handlers read rather than matches they are written as. That refactor is the real content
+  of this item, and it is worth doing only if the keyboard goal below wants it too.
 - [ ] Reach the panels from the keyboard. Only the two code panes have key handlers at all: the
   tab chips are pointer targets, the sidebar lists have no cursor, and there is no way in to a
   filter box — which is the ranked-search item above seen from the other side. Note what it
