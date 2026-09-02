@@ -124,7 +124,9 @@ an instruction maps to and be scrolled to one from the other pane. Neither objec
 pane the reader is typing in, so the Scratchpad's editor *is* that component (`agents/Scratchpad.md`). What
 `freya-code-editor` does offer is its tree-sitter pipeline, public on its own: `SyntaxHighlighter` +
 `SyntaxBlocks` + an `EditorSyntaxTheme` turn a `Rope` into one list of `(Color, TextNode)` spans per
-line. The theme is the app's own (`Palette::syntax`), the grammars are ours, and an unknown
+line. The theme is the app's own (`Palette::syntax`), the grammars are ours — Rust, C and C++, and
+the TOML and JSON a project directory is full of, which the Files view opens and which get no
+function pass, a configuration file defining none — and an unknown
 extension degrades to one plain span per line. A file is parsed when loaded and cached in a
 `static` in `ui/highlight.rs` — parsing is stateful across lines, so it cannot be per row — and
 parsed **twice**: `SyntaxHighlighter` keeps its tree private, and the function spans the source

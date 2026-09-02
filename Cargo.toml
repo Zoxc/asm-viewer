@@ -22,6 +22,11 @@ freya = { version = "0.4", features = ["code-editor", "icons-lucide"] }
 tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
+# The two configuration languages a project directory is full of (`Cargo.toml`, a
+# `.cargo/config.toml`, a `package.json`), for the Files view's source tabs. `-ng` is the
+# maintained TOML grammar; the original `tree-sitter-toml` stopped at an older ABI.
+tree-sitter-toml-ng = "0.7"
+tree-sitter-json = "0.24"
 # The parser itself, for the one thing the highlighter's parse cannot be asked afterwards:
 # which lines each C or C++ function in a file spans (`src/functions.rs`; Rust has a scanner
 # of its own there, the grammar being behind the compiler). `SyntaxHighlighter` keeps its

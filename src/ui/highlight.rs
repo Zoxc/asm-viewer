@@ -55,6 +55,8 @@ impl Highlighted {
         // already costs.
         let functions = match file.path().extension().and_then(|ext| ext.to_str()) {
             Some("rs") => functions::rust::functions(file.text()),
+            // A configuration file defines no functions, so the second parse is not made.
+            Some("toml" | "json") => Vec::new(),
             _ => language
                 .as_ref()
                 .and_then(|language| {
@@ -87,6 +89,16 @@ pub(crate) fn language(path: &Path) -> Option<EditorLanguage> {
         "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hxx" | "hh" => {
             (tree_sitter_cpp::LANGUAGE, tree_sitter_cpp::HIGHLIGHT_QUERY)
         }
+        // The two configuration languages a project directory is full of, for the tabs
+        // the Files view opens: nothing is compiled from them, but `Cargo.toml` is read.
+        "toml" => (
+            tree_sitter_toml_ng::LANGUAGE,
+            tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+        ),
+        "json" => (
+            tree_sitter_json::LANGUAGE,
+            tree_sitter_json::HIGHLIGHTS_QUERY,
+        ),
         _ => return None,
     };
 

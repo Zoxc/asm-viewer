@@ -8903,3 +8903,34 @@ fn no_directory_draws_the_placeholder() {
     assert!(label_area(&test, "No project directory. Set one in the Project view.").is_some());
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// The two configuration grammars colour what they parse: a TOML key is a property and a
+/// JSON key is a special string, each the palette's own colour rather than the text's.
+#[test]
+fn toml_and_json_files_are_highlighted() {
+    let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
+    set_appearance(Appearance::Light);
+
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let toml = directory.join("Cargo.toml");
+    let json = directory.join("package.json");
+    std::fs::write(&toml, b"name = \"viewer\"\n").expect("writing the file");
+    std::fs::write(&json, b"{\"name\": 1}\n").expect("writing the file");
+
+    // The span at `at` on the first line.
+    let colour = |path: &Path, at: usize| {
+        let text = source_text(path).expect("the file");
+        let line = text.0.blocks.get_line(0);
+        line.get(at).expect("a span there").0
+    };
+    let theme = Palette::LIGHT.syntax();
+
+    assert_eq!(colour(&toml, 0), theme.property);
+    assert_ne!(theme.property, theme.text);
+    assert_eq!(colour(&json, 1), theme.string_special);
+    assert_ne!(theme.string_special, theme.text);
+
+    highlighted().clear();
+    let _ = std::fs::remove_dir_all(&directory);
+}
