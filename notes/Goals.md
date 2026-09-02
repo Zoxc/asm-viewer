@@ -480,6 +480,9 @@ one item per part, so the unfinished half stays visible.
   info spells it so the two meet in one tab; its right-click offers "Open file", which is the
   parser's to judge, or "Close file" once it is loaded. Nothing here judges what a file is
   (`agents/Sidebar.md`).
+- [ ] Only close the assembly view by default in a source-driven tab if its file is not in a
+  compiled language: a `Cargo.toml` or a `.json` opens with the source side alone, a `.rs` or
+  `.c` with both, as now.
 - [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
   by substring, whole word or regex, on the demangled name the row shows.
 - [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter
