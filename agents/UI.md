@@ -93,9 +93,13 @@ them. `ResizableContainer` renders itself `.expanded()`, so it needs a parent al
 the `DockingArea` and nothing else: the open documents are tabs *in* it, so the bar over them is
 the document panel's own tab bar rather than a strip of the app's.
 
-The toolbar itself holds three controls: the two history chevrons and Open. `NavButton` calls the
-same `navigate` the mouse's side buttons do — a second spelling of the step would be a second set
-of rules about tabs, selection and recording — and **it reads `Hist` rather than peeking it**, which
+The toolbar itself holds three controls: Open at its left edge and the two history chevrons at
+its right, held apart by a `Size::flex(1.0)` gap under `Content::Flex` — measured out of what the
+controls left over, where a `Size::fill()` gap would claim the bar and push them off its end. The
+pair sits at the corner so it stays under the same one however many neighbours Open grows.
+`NavButton` calls the same `navigate` the mouse's side buttons do — a second spelling of
+the step would be a second set of rules about tabs, selection and recording — and **it reads
+`Hist` rather than peeking it**, which
 is the whole of how the pair stays current: a visit pushed anywhere, a close that drops entries and
 every move of the cursor, the one the button itself just made included, repaints both. A button
 with nothing in its direction is **dimmed rather than hidden**, the first disabled drawing in this

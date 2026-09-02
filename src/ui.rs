@@ -187,8 +187,20 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
     rect()
         .horizontal()
         .width(Size::fill())
+        // `Content::Flex` so the gap below is measured last, out of what the two controls
+        // left over, rather than claiming the bar and pushing them off its right edge.
+        .content(Content::Flex)
         .cross_align(Alignment::Center)
         .border(bottom_hairline())
+        .child(
+            rect()
+                .margin(4.0)
+                .child(Button::new().on_press(on_open).child("Open")),
+        )
+        // The bar's controls sit at its two ends, so the pair the reader reaches for
+        // without looking stays under the same corner however many controls Open grows
+        // neighbours.
+        .child(rect().width(Size::flex(1.0)))
         .child(
             rect()
                 .horizontal()
@@ -196,11 +208,6 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
                 .spacing(2.0)
                 .child(NavButton { back: true })
                 .child(NavButton { back: false }),
-        )
-        .child(
-            rect()
-                .margin(4.0)
-                .child(Button::new().on_press(on_open).child("Open")),
         )
 }
 
