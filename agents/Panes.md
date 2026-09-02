@@ -1,8 +1,17 @@
 # The two panes of a document
 
-The Source pane and the Assembly pane: which file the source side draws, who writes a
-source-driven tab's line, how the panes point at each other, how a click from outside lands, the
-arrow gutter, and the run of rows a reader copies.
+The Source pane and the Assembly pane: which of the two is on the left, which file the source side
+draws, who writes a source-driven tab's line, how the panes point at each other, how a click from
+outside lands, the arrow gutter, and the run of rows a reader copies.
+
+**The side a tab is driven from is the left-hand pane.** An assembly-driven tab reads
+assembly-then-source and a source-driven one source-then-assembly, so in both the leading pane is
+the one the reader came here to read and the trailing one is what it resolves to. Only
+`DocumentBody` knows this; neither pane is told which side it was put on, so the swap is the order
+of two panels and nothing else, and everything the two share is keyed by which pane it is rather
+than by where the pane sits. The split's one remembered width is the exception and is kept by place
+on purpose (`agents/UI.md`): the handle stays where the reader left it across a switch of kind
+rather than jumping across the window.
 
 **The Source pane draws the active tab's source side**, and `source_side` is the one place either
 pane decides which file that is — so the pane and the effect that drops its picked-out rows cannot

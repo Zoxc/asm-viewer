@@ -71,7 +71,7 @@ all of that belongs to), `Loading` (the files on their way into `Objects`), `Foc
 `Marked`/`Shift`, `Land` (a line to pin the moment a document arrives), `Analysis` (what
 the worker has to say about the selected symbol), `Locations` (every symbol the line last
 asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
-`SplitRatio`/`Splits` (how wide a document's assembly side is), plus the memos `Symbols` and
+`SplitRatio`/`Splits` (how wide a document's leading side is), plus the memos `Symbols` and
 `Active`. The seven that a project *owns* travel together as a `ProjectStates`, since a project
 switch closes all of them and reopens all of them.
 
@@ -251,12 +251,21 @@ tab and a History row share; `entry_name` beside it is the whole name, which is 
 says and what the History filter matches — a generic argument no tab draws is still something a
 reader can search for.
 
-**A document's two sides live inside its tab.** `Tab::Document` renders `AssemblyPane` beside
-`SourcePane` in a `ResizableContainer` — not a nested `DockingArea`, which is a great deal of
-machinery for a two-way split. The cost is real and was taken deliberately: **the Source pane is no
-longer independently dockable**, since it is inside a document rather than beside one. Each pane
-takes its `Document` as a prop rather than reading `Active`, which is both synchronous and honest —
-only the active tab's content is mounted, so a pane is only ever built for the tab it belongs to.
+**A document's two sides live inside its tab.** `Tab::Document` renders the two panes in a
+`ResizableContainer` — not a nested `DockingArea`, which is a great deal of machinery for a two-way
+split. The cost is real and was taken deliberately: **the Source pane is no longer independently
+dockable**, since it is inside a document rather than beside one. Each pane takes its `Document` as
+a prop rather than reading `Active`, which is both synchronous and honest — only the active tab's
+content is mounted, so a pane is only ever built for the tab it belongs to.
+
+**Which pane comes first is the document's kind**: the side a tab is driven from leads, so
+`AssemblyPane` is on the left in an assembly-driven tab and `SourcePane` is on the left in a
+source-driven one. `DocumentBody` is the only thing that knows this — the panes themselves are
+handed no side and read none — so the swap is the order of two `.panel(..)` calls and nothing else.
+Everything the two panes share is keyed by pane *identity* and not by position (`Pane`, `Owed`,
+`Marked`, `AsmAt`/`SrcAt`), which is why swapping them moves no focus, no pin, no kept row and no
+picked-out run. The panes are two different component types, so a swap unmounts and remounts both;
+their rows come back where `use_kept_position` puts them.
 
 That unmounting is why the split ratio is held at the root (`SplitRatio`, with `Splits` the shared
 `ResizableContext` it is read back out of). A `ResizablePanel` registers at its `initial_size` in a
@@ -264,7 +273,13 @@ That unmounting is why the split ratio is held at the root (`SplitRatio`, with `
 initial sizes under new panel ids; what survives is a number the app keeps, fed in as `initial_size`
 and written back out while the split is on screen. One number for the app and not one per document:
 per-document would be a third `Positions`-shaped map to forget in `close_tab`, for a number nobody
-asked to differ per document.
+asked to differ per document. That number is **the leading panel's width and not the assembly
+pane's** — the one thing here deliberately kept by place rather than by pane. Both readings are
+coherent and this one moves nothing on screen: switching from an assembly-driven tab to a
+source-driven one leaves the handle exactly where the reader dragged it, where keeping it by pane
+would throw the two widths across the split at every switch of kind. The registry agrees with it by
+construction, since `apply_resize` speaks positions too: panel 0 is the leading pane in both kinds,
+so a drag means the same thing either way round.
 
 **A document is a place in a binary or a file; everything else is a view.** This is 8e's rule with
 Step 1's amendment — it used to end at "in a binary" — and everything below it is unchanged, so

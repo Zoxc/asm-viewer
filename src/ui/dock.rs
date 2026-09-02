@@ -842,15 +842,21 @@ fn tab_bar(ctx: TabBarContext<PanelId>, area: State<DockArea>) -> Element {
         .into_element()
 }
 
-/// One document, drawn: its assembly beside the source it was compiled from, in a
+/// One document, drawn: the side it is driven from beside the side that follows, in a
 /// `ResizableContainer` rather than a nested `DockingArea`.
+///
+/// **The driven side leads**, which is to say it is the left-hand pane: an assembly-driven
+/// tab draws its listing there and a source-driven tab its own file, because in both the
+/// leading pane is the one the reader came here to read and the trailing one is what it
+/// resolves to. The two panes are the same components either way -- neither knows which
+/// side of the split it was given -- so nothing but their order changes.
 ///
 /// Only the *active* tab's content is mounted, so this whole subtree -- both panes, both
 /// scroll controllers -- is built afresh on every switch of document, which is what
 /// `use_kept_position` is for.
 #[derive(Clone, PartialEq)]
-struct DocumentBody {
-    id: DocId,
+pub(crate) struct DocumentBody {
+    pub(crate) id: DocId,
 }
 
 impl Component for DocumentBody {
@@ -872,7 +878,7 @@ impl Component for DocumentBody {
         // `peek` and not `read`: `initial_size` is consulted once, in the panel's own
         // `use_hook` at mount, so subscribing here would be a subscription to nothing --
         // and a loop with the effect above.
-        let assembly = ratio.peek().clamp(1.0, 99.0);
+        let leading = ratio.peek().clamp(1.0, 99.0);
 
         // Not reachable -- the tab and the table entry are closed together -- but a render
         // is no place to panic.
@@ -883,6 +889,27 @@ impl Component for DocumentBody {
                 .into_element();
         };
 
+        // Which pane leads is the *document's* question and not the panels': the sizes
+        // stay with the two places, the reader's side and the side that follows it, so
+        // switching between the two kinds of tab leaves the handle where it was rather
+        // than jumping it across the split.
+        let (leads, follows) = match &document {
+            Document::Source(_) => (
+                SourcePane {
+                    document: document.clone(),
+                }
+                .into_element(),
+                AssemblyPane { document }.into_element(),
+            ),
+            Document::Assembly(_) => (
+                AssemblyPane {
+                    document: document.clone(),
+                }
+                .into_element(),
+                SourcePane { document }.into_element(),
+            ),
+        };
+
         ResizableContainer::new()
             .direction(Direction::Horizontal)
             .controller(splits)
@@ -890,16 +917,14 @@ impl Component for DocumentBody {
                 // `min_size` given rather than left to default: freya's default is a
                 // quarter of the initial size, so it would move with the reader's own
                 // drag instead of staying the floor.
-                ResizablePanel::new(PanelSize::percent(assembly))
+                ResizablePanel::new(PanelSize::percent(leading))
                     .min_size(10.0)
-                    .child(AssemblyPane {
-                        document: document.clone(),
-                    }),
+                    .child(leads),
             )
             .panel(
-                ResizablePanel::new(PanelSize::percent(100.0 - assembly))
+                ResizablePanel::new(PanelSize::percent(100.0 - leading))
                     .min_size(10.0)
-                    .child(SourcePane { document }),
+                    .child(follows),
             )
             .into_element()
     }

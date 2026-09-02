@@ -3960,6 +3960,117 @@ fn the_gutter_puts_its_strokes_on_whole_device_pixels() {
     }
 }
 
+/// A document's two panes as the dock mounts them: the same [`DocumentBody`] `tab_content`
+/// builds, over whichever document is active. The dock itself is left out -- the strip has
+/// no vote in which pane is which -- but the two states the split is held in are not, being
+/// what the panels are sized from.
+fn panes_harness() -> impl IntoElement {
+    let open = use_open();
+    // Read and not peeked: this is the harness's whole subscription to a tab being
+    // activated, and `Active` is a memo and a beat behind.
+    let id = {
+        let (dock, docs) = (open.dock.read(), open.docs.read());
+        active_document(&dock, &docs).and_then(|document| docs.id_of(&document))
+    };
+
+    rect()
+        .expanded()
+        .maybe_child(id.map(|id| DocumentBody { id }.into_element()))
+}
+
+/// **The side a tab is driven from is the left-hand pane.** An assembly-driven tab keeps
+/// its listing there with the file it was compiled from beside it; a source-driven tab is
+/// the other way round, the file the reader is reading leading and the symbol its clicked
+/// line compiled into following. Headless because the two panes are the same two
+/// components in both kinds of tab and neither is told where it was put, so only the boxes
+/// they were laid out in can say which side is which.
+#[test]
+fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    /// What the leading pane is given, as a percentage of the window.
+    const LEADING: f32 = 70.0;
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let mut studied = Studied::new(sum_to.clone());
+    // A companion file no filesystem has, so the source side of the assembly-driven tab is
+    // one findable label rather than a listing of somebody else's build directory.
+    studied.lines.file = Some("own.c".into());
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+
+    let (mut test, (states, _pinned, _marked)) = TestingRunner::new(
+        panes_harness,
+        (600., 300.).into(),
+        |runner| {
+            let states = listing_states!(runner, shown);
+            // The two `app()` provides beside the project's, which `DocumentBody` sizes
+            // its panels from. Deliberately *uneven*: the number is the leading pane's
+            // width in both kinds of tab, so the wide half moving with the swap is half of
+            // what is asserted below.
+            runner.provide_root_context(|| SplitRatio(State::create(LEADING)));
+            runner.provide_root_context(|| {
+                Splits(State::create(ResizableContext {
+                    direction: Direction::Horizontal,
+                    ..Default::default()
+                }))
+            });
+            states
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // The assembly side draws one 16-digit address per row and the source side one label
+    // saying the file could not be opened: where each of those was laid out is where that
+    // pane is.
+    let assembly_at = |test: &TestingRunner| {
+        test.find_many(|node, _element| {
+            (node.element().as_ref() as &dyn Any)
+                .downcast_ref::<LabelElement>()
+                .map(|label| label.text.to_string())
+                .filter(|text| text.trim_end().len() == 16)
+                .map(|_| node.layout().area.origin.x)
+        })
+        .into_iter()
+        .fold(f32::MAX, f32::min)
+    };
+    let source_at = |test: &TestingRunner, file: &str| {
+        label_area(test, &format!("Source file not found: {file}"))
+            .expect("the source side says it could not open the file")
+            .origin
+            .x
+    };
+
+    // Where the leading panel ends: its share of the window less the handle between the
+    // two. A pane's own padding is a few pixels and cannot carry a label across it.
+    let boundary = (600.0 - ResizableContext::HANDLE_SIZE) * LEADING / 100.0;
+    let went = |target: Document| activate(states.open, states.history, Some(target), Visit::Went);
+
+    went(Document::Assembly(Selection::Symbol(sum_to.clone())));
+    settle(&mut test);
+    let (asm, src) = (assembly_at(&test), source_at(&test, "own.c"));
+    assert!(
+        asm < boundary && boundary < src,
+        "an assembly-driven tab drew its listing at {asm} and its source at {src}"
+    );
+
+    let file = "/nowhere/main.rs";
+    went(Document::Source(Arc::from(file)));
+    settle(&mut test);
+    let (asm, src) = (assembly_at(&test), source_at(&test, file));
+    assert!(
+        src < boundary && boundary < asm,
+        "a source-driven tab drew its source at {src} and its listing at {asm}"
+    );
+}
+
 /// A component with no props at all, which is what every view in the app is. Its parent
 /// reads nothing coloured, so the theme has to reach it on its own.
 #[derive(PartialEq)]

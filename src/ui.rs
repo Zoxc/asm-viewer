@@ -268,7 +268,7 @@ pub fn app() -> impl IntoElement {
         }))
     })
     .0;
-    // 50.0: what the assembly side starts at, before anything is dragged.
+    // 50.0: what the leading side starts at, before anything is dragged.
     use_provide_context(|| SplitRatio(State::create(50.0)));
     use_provide_context(|| {
         Splits(State::create(ResizableContext {

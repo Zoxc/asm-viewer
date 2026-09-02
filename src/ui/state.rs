@@ -87,11 +87,15 @@ impl Open {
 #[derive(Clone, Copy)]
 pub(crate) struct ContentDock(pub(crate) State<DockArea>);
 
-/// How wide the assembly side of a document is, as a percentage. One number for the app,
-/// held out here because the container will not remember it: only the active tab's content
-/// is mounted, and a `ResizablePanel` registers at its `initial_size` in a `use_hook` and
-/// removes its entry in a `use_drop`, so a remount comes back at the initial sizes under
-/// new panel ids.
+/// How wide the **leading** side of a document is, as a percentage -- the side the tab is
+/// driven from, which `DocumentBody` draws on the left in both kinds of tab. Kept by place
+/// and not by pane, so switching from an assembly-driven tab to a source-driven one leaves
+/// the handle where the reader put it instead of throwing the two widths across the split.
+///
+/// One number for the app, held out here because the container will not remember it: only
+/// the active tab's content is mounted, and a `ResizablePanel` registers at its
+/// `initial_size` in a `use_hook` and removes its entry in a `use_drop`, so a remount comes
+/// back at the initial sizes under new panel ids.
 #[derive(Clone, Copy)]
 pub(crate) struct SplitRatio(pub(crate) State<f32>);
 

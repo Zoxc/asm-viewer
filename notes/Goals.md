@@ -462,9 +462,18 @@ one item per part, so the unfinished half stays visible.
   source-driven tab surviving a binary close, so the analysis lets go of a closed binary; and the
   reveal a click asks for is now looked at before it is taken, the listing that can answer it not
   being the one that is up when the click is made.
-- [ ] Put the source side of a source-driven tab on the left, the assembly on the right: the
-  side a tab is driven from is the side the reader is reading, and it sits where the assembly
-  does in an assembly-driven tab.
+- [x] The source side of a source-driven tab is on the left and its assembly on the right. The
+  side a tab is driven from leads in both kinds, so the pane the reader came here to read sits
+  where the assembly does in an assembly-driven tab and the side it resolves to sits beside it.
+  `DocumentBody` is the only thing that knows which way round a document goes — neither pane is
+  handed a side — so the swap is the order of two `.panel(..)` calls, and everything the two
+  panes share was already keyed by which pane it is rather than by where it sits: the focus, the
+  pin and the scroll each owes it, the picked-out run, and the row each side was left on. The
+  split's one remembered width was the one thing keyed by position, and was left that way
+  deliberately: it is now the *leading* pane's width rather than the assembly pane's, so
+  switching between the two kinds of tab leaves the handle where the reader dragged it instead of
+  throwing the two widths across the window. Panel 0 is the leading pane either way round, which
+  is what keeps the container's own drag arithmetic — positional too — agreeing with it.
 - [ ] Refactor the tabs away from freya's dock panels and onto components of the app's own,
   with a fixed panel for the tabs rather than one the reader can fold, split or drag documents
   out of.
