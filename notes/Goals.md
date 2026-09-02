@@ -137,10 +137,16 @@ one item per part, so the unfinished half stays visible.
 ## Assembly viewer
 
 - [ ] Bar under the Assembly tab with the full demangled + mangled symbol name.
-- [ ] Name the Assembly tab after the function — just `namespace/module::fn_name`, without the
-  extra generics, mangling, etc. (for Rust / C++). Answered from the other side: there is no
-  Assembly tab any more, a document's tab *is* named after its function. What is missing is the
-  shortening — a tab shows the whole demangled name cut at 40 characters, not `module::fn_name`.
+- [x] Name the Assembly tab after the function — just `namespace/module::fn_name`, without the
+  extra generics, mangling, etc. (for Rust / C++). There is no Assembly tab any more: a document's
+  tab *is* named after its function, and `src/naming.rs` cuts that name down to its last two path
+  segments. Generic arguments go however deep they nest, `<Vec<T> as IntoIterator>::into_iter` is
+  `Vec::into_iter`, a C++ argument list and the `const` after it go, `operator<<` is a name rather
+  than a bracket, and rustc's legacy `::h<hash>` suffix goes with them; the closure a symbol *is*
+  is kept, and only the innermost one. Over this app's own binary that is 151 characters of
+  demangled name down to 21. The History rows take the same name through `entry_text`, which the
+  two share; the whole name is still what a tooltip says and what the History filter matches, and
+  the 40-character elision is still the last word for a name that is long anyway.
 - [ ] An expanding section under the Assembly tab to show more symbol info, replacing the Info
   tab.
 - [x] Keep the `rip+` visible in a relocated rip-relative operand — `mov dword ptr [rip+<target>], 7`

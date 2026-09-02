@@ -194,6 +194,26 @@ count in Rust**, where every other truncation is a width: a `maximum_width` anyw
 it shrinkable, and a horizontal scroll view measures children against the space *left*, so tabs past
 the edge get no width and draw as a bare ×. Do not "fix" that back into a width.
 
+**A tab is named after the function, not after the whole demangled name** (`src/naming.rs`,
+`short_name`). The name a tab is given is its last two path segments and nothing else: generic
+arguments go however deep they nest, `<Vec<T> as IntoIterator>::into_iter` is `Vec::into_iter`, a
+C++ argument list and the `const` after it go, and rustc's legacy `::h<hash>` suffix goes with them.
+The one thing kept beyond two segments is the closure a symbol *is* — `render::{closure#0}` is not
+`render` — and only the innermost of them. Over the 142 804 text symbols of this app's own debug
+binary, that is 151 characters of demangled name down to 21. The character elision above is still
+there and still the last word, for the names that are long anyway.
+
+It is real parsing and not a `rsplit("::")`: `::` appears inside generic arguments, `operator<<`
+writes an angle bracket that opens no group, `fn(*mut c_void) -> *mut T` writes one that closes
+none, and an `extern "C"` puts a quoted run in the middle of a type. So it is a scanner, framework-
+free with its own `tests.rs` — written against names taken out of that binary — and it lives in the
+app rather than beside the demangling in `analysis`, because the crate has no use for it: it hands
+out the name the file states and the name the demangler made of it, and *how much of one to draw* is
+a question only a view has. `entry_text` is where it is applied and is the one spelling a document
+tab and a History row share; `entry_name` beside it is the whole name, which is what the tooltip
+says and what the History filter matches — a generic argument no tab draws is still something a
+reader can search for.
+
 **A document's two sides live inside its tab.** `Tab::Document` renders `AssemblyPane` beside
 `SourcePane` in a `ResizableContainer` — not a nested `DockingArea`, which is a great deal of
 machinery for a two-way split. The cost is real and was taken deliberately: **the Source pane is no

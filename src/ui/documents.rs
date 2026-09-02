@@ -498,9 +498,20 @@ pub(crate) async fn take_load(
     }
 }
 
-/// What a document is called where it is named in a list. A source file's *name* only; the
-/// whole path is in [`entry_tooltip`].
+/// What a document is called where it is named in a list. A source file's *name* only and
+/// a symbol's `module::fn_name` only ([`short_name`]); the whole of either is in
+/// [`entry_tooltip`].
 pub(crate) fn entry_text(entry: &Document) -> String {
+    match entry {
+        Document::Assembly(Selection::Symbol(_)) => short_name(&entry_name(entry)),
+        entry => entry_name(entry),
+    }
+}
+
+/// The whole of what a document is called: the demangled symbol name, the object's name,
+/// or the source file's path. What a filter reads, so that a generic argument is still
+/// something a reader can search for after the tab stopped drawing it.
+pub(crate) fn entry_name(entry: &Document) -> String {
     match entry {
         Document::Assembly(Selection::Object(object)) => object.name.clone(),
         Document::Assembly(Selection::Symbol(symbol)) => symbol
@@ -513,12 +524,12 @@ pub(crate) fn entry_text(entry: &Document) -> String {
     }
 }
 
-/// What hovering a document's tab or row says: the whole path for a file, what it draws
-/// for everything else.
+/// What hovering a document's tab or row says: the whole path for a file, the whole name
+/// for everything else -- which is where the rest of a shortened symbol name is.
 pub(crate) fn entry_tooltip(entry: &Document) -> String {
     match entry {
         Document::Source(file) => file.to_string(),
-        entry => entry_text(entry),
+        entry => entry_name(entry),
     }
 }
 

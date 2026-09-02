@@ -506,6 +506,55 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     );
 }
 
+/// The History panel and nothing else, over the project's states.
+fn history_harness() -> impl IntoElement {
+    rect().expanded().child(HistoryTab)
+}
+
+/// A row is named after the function and not after the whole of what the demangler said.
+/// `entry_text` is the one spelling a tab and a history row share, and it is [`short_name`]
+/// over the demangled name; the whole of it stays on the entry, where the tooltip and the
+/// filter read it.
+#[test]
+fn a_history_row_names_the_function_and_not_the_whole_symbol() {
+    let object = fixture_symbols()[0].object.clone();
+    let demangled =
+        "<viewer::ui::pad_view::ScratchpadTab as freya_core::element::Component>::render";
+    let symbol = Symbol {
+        object,
+        data: Arc::new(SymbolData {
+            name: "_RNvXsa_".to_owned(),
+            demangled: Some(demangled.to_owned()),
+            address: 0x1000,
+            section: None,
+            size: 0,
+        }),
+    };
+
+    let (mut test, states) =
+        TestingRunner::new(history_harness, (400., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Assembly(Selection::Symbol(symbol))),
+        Visit::Went,
+    );
+    test.sync_and_update();
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "ScratchpadTab::render"),
+        "the row is not named after the function: {drawn:?}"
+    );
+    assert!(
+        !drawn
+            .iter()
+            .any(|text| text.starts_with("<viewer::ui::pad_view")),
+        "the whole demangled name is on screen: {drawn:?}"
+    );
+}
+
 /// Nothing but the overflow control, so the press has one thing to land on.
 fn menu_harness() -> impl IntoElement {
     rect()

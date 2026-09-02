@@ -4,6 +4,7 @@ mod filter;
 mod fonts;
 mod history;
 mod lanes;
+mod naming;
 mod project;
 mod rows;
 mod scratchpad;

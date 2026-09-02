@@ -588,7 +588,9 @@ impl Component for HistoryTab {
             let visited = history.recent().len() > 0;
             let rows = history
                 .recent()
-                .filter(|(_, entry)| matcher.matches(&entry_text(entry)))
+                // The whole name and not the shortened one the row draws: the generic
+                // arguments a tab has no room for are still worth searching for.
+                .filter(|(_, entry)| matcher.matches(&entry_name(entry)))
                 .map(|(index, entry)| {
                     HistoryRow {
                         entry: entry.clone(),

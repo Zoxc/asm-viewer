@@ -33,6 +33,7 @@ pub(crate) use crate::filter::{Filter, Matcher};
 pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::history::History;
 pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
+pub(crate) use crate::naming::short_name;
 pub(crate) use crate::project::{
     self, Details, Document, Project, ProjectId, Recent, Selection, Session,
 };

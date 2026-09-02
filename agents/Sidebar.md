@@ -14,7 +14,9 @@ is `Matcher::Invalid`, a third answer that matches nothing *and* prints the reas
 matching everything hides a half-typed `(`. The toggles call `prevent_default` on their press, or
 an `Input` gives up its keyboard focus mid-word. Only the Symbols list needs a memo (`Filtered`,
 holding indices, and `None` for the unfiltered case so it costs what it did before there was a
-filter); Objects and History filter where their rows are built.
+filter); Objects and History filter where their rows are built. A History row draws the shortened
+name (`entry_text`) and is filtered on the whole one (`entry_name`), so a generic argument the row
+has no room for is still something a reader can search for.
 
 **The Objects list is a tree** (`src/tree.rs`). `ObjectTree::new` groups objects by *consecutive
 runs* of equal `Object::path` and flattens the result into `TreeRow`s — the tree is a shape in the
