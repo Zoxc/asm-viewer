@@ -1,6 +1,6 @@
 //! The x86 backend: the only module in the crate that mentions `iced-x86`.
 
-use super::{Code, Decoded, Disassembler, Instruction, SpanKind};
+use super::{Code, Disassembler, Instruction, SpanKind};
 use iced_x86::Formatter;
 use std::{cell::RefCell, rc::Rc};
 
@@ -11,7 +11,7 @@ pub(super) struct X86 {
 }
 
 impl Disassembler for X86 {
-    fn disassemble(&self, code: &Code<'_>) -> Decoded {
+    fn disassemble(&self, code: &Code<'_>) -> Vec<Instruction> {
         let mut decoder = iced_x86::Decoder::with_ip(
             self.bitness,
             code.bytes,
@@ -37,10 +37,7 @@ impl Disassembler for X86 {
 
         let mut instruction = iced_x86::Instruction::default();
 
-        let mut decoded = Decoded {
-            instructions: Vec::new(),
-            branches: Vec::new(),
-        };
+        let mut instructions = Vec::new();
 
         while decoder.can_decode() {
             decoder.decode_out(&mut instruction);
@@ -77,9 +74,6 @@ impl Disassembler for X86 {
             } else {
                 branch_target(&instruction)
             };
-            if let Some(target) = branch {
-                decoded.branches.push((decoded.instructions.len(), target));
-            }
 
             let mut inst = Instruction {
                 address: instruction.ip(),
@@ -88,6 +82,7 @@ impl Disassembler for X86 {
                 relocation,
                 relocation_span: None,
                 branch_span: None,
+                branch,
             };
 
             // The resolver takes the name, so at most one operand is substituted however
@@ -121,10 +116,10 @@ impl Disassembler for X86 {
                 inst.branch_span = None;
             }
 
-            decoded.instructions.push(inst);
+            instructions.push(inst);
         }
 
-        decoded
+        instructions
     }
 }
 

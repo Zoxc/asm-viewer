@@ -111,26 +111,18 @@ pub struct Relocated {
     pub target: Option<Arc<SymbolData>>,
 }
 
-/// What a backend hands back: one entry per instruction it read, plus every branch that
-/// named an address of its own.
-///
-/// The branches are `(index of the branching instruction, the address it names)` and stay
-/// addresses here, because a forward branch names an address no instruction has been decoded
-/// at yet. [`Assembly`] turns them into row indices once the whole symbol is decoded.
-pub struct Decoded {
-    pub instructions: Vec<Instruction>,
-    pub branches: Vec<(usize, u64)>,
-}
-
-/// One disassembler backend: given a symbol's bytes, the rows to draw for them.
+/// One disassembler backend: given a symbol's bytes, the rows to draw for them, in address
+/// order.
 ///
 /// A backend decodes from the first byte to the last and stops early rather than erroring —
-/// the bytes are whatever was in the file.
+/// the bytes are whatever was in the file. A branch's target stays an *address* on its row
+/// ([`Instruction::branch`]), because a forward branch names one no instruction has been
+/// decoded at yet; [`Assembly`] turns those into row indices once the whole symbol is decoded.
 ///
 /// Implementors are named concretely by `Assembly::decode` and never made into an object, so
 /// the trait is the shape a backend is written to and not a way to hold one.
 pub trait Disassembler {
-    fn disassemble(&self, code: &Code<'_>) -> Decoded;
+    fn disassemble(&self, code: &Code<'_>) -> Vec<Instruction>;
 }
 
 /// The kind of a formatted assembly text span: the disassembler-independent stand-in for a
@@ -164,14 +156,26 @@ pub struct Instruction {
     /// Where in [`format`](Self::format) this instruction's own branch displacement was
     /// printed — [`relocation_span`](Self::relocation_span)'s twin, and exclusive with it:
     /// a branch whose displacement is a relocation placeholder names no address of its
-    /// own, so a backend records a span for exactly the branches it reports in
-    /// [`Decoded::branches`].
+    /// own, so a backend records a span for exactly the rows whose [`branch`](Self::branch)
+    /// is set.
     ///
     /// It says where the number is and not that there is anywhere to go: the four kinds of
     /// branch [`Assembly::edges`] drops keep their span. A caller that wants to *follow*
     /// one pairs this with [`Assembly::edge_from`], which is what says the target has a
     /// row.
     pub branch_span: Option<usize>,
+
+    /// The address this instruction's own encoding branches to — a `jmp`, a `jcc`, a
+    /// `loop`, an `xbegin`; never a `call`, since control comes straight back. [`Some`]
+    /// exactly when [`branch_span`](Self::branch_span) is: a displacement that is a
+    /// relocation placeholder names nothing.
+    ///
+    /// The **address-keyed** answer, kept beside the index-keyed [`Assembly::edges`]: a
+    /// listing that is not one symbol's — a whole section's — cannot say up front whether
+    /// the target has a row, only where it is, and finds the row when it decodes there.
+    /// Nothing is judged here: a branch out of the symbol, into the middle of an
+    /// instruction, or `jmp $` all keep their address.
+    pub branch: Option<u64>,
 }
 
 pub struct Assembly {
@@ -222,27 +226,26 @@ impl Assembly {
     /// decode path, so monomorphising it is what lets a backend's per-instruction work
     /// inline into it.
     fn decoded<D: Disassembler>(backend: D, code: &Code<'_>) -> Self {
-        let decoded = backend.disassemble(code);
+        let instructions = backend.disassemble(code);
 
         // A backend decodes from the front, so these ascend and a target is one binary search
         // away. An address that is not in the list is a branch this symbol has no row for and
         // is dropped; see `edges`.
-        let addresses: Vec<u64> = decoded
-            .instructions
+        let addresses: Vec<u64> = instructions
             .iter()
             .map(|instruction| instruction.address)
             .collect();
-        let edges = decoded
-            .branches
-            .into_iter()
-            .filter_map(|(from, target)| {
-                let to = addresses.binary_search(&target).ok()?;
+        let edges = instructions
+            .iter()
+            .enumerate()
+            .filter_map(|(from, instruction)| {
+                let to = addresses.binary_search(&instruction.branch?).ok()?;
                 (to != from).then_some(BranchEdge { from, to })
             })
             .collect();
 
         Self {
-            instructions: decoded.instructions,
+            instructions,
             edges,
             undecodable: None,
         }

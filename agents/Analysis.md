@@ -239,7 +239,7 @@ reads as a symbol that holds no code. `assembly` still answers `None` for one th
 with no bytes at all. Nothing in the UI reads `undecodable` yet, so such an object currently draws
 an empty pane rather than the reason.
 
-The trait is **one call wide** (`Disassembler::disassemble(&Code) -> Decoded`) and is shaped by what
+The trait is **one call wide** (`Disassembler::disassemble(&Code) -> Vec<Instruction>`) and is shaped by what
 `Assembly` needs rather than by what a disassembler library offers. **The dispatch through it is
 generic and not dynamic**: `Assembly::decode` is the one `match` over the architecture, each arm
 naming a concrete backend, and `Assembly::decoded` — the whole decode path, the backend's call and
@@ -250,9 +250,9 @@ backend's formatting and span-mapping becoming inlinable into the per-instructio
 that a new architecture is a new arm rather than a new impl behind a registry, which is what a set
 closed at compile time wants anyway. `Code` is the bytes, the address
 they sit at, and one question — `Code::relocation`, asked per instruction, because a relocation
-names a byte range and never an operand number. `Decoded` is the rows plus each branch's *address*;
-turning those into row indices is `Assembly::decoded`'s binary search, so `edges`' drop rules hold
-for every backend rather than once per backend. What stays *behind* the seam is everything x86
+names a byte range and never an operand number. A row carries the *address* its own branch names
+(`Instruction::branch`); turning those into row indices is `Assembly::decoded`'s binary search, so
+`edges`' drop rules hold for every backend rather than once per backend. What stays *behind* the seam is everything x86
 spells its own way: the `SymbolResolver` substitution, the per-instruction `rip_relative_addresses`
 flip, `branch_target`'s flow-control judgement and `FormatterTextKind -> SpanKind`. Each instruction
 is formatted into an `Instruction` implementing `iced_x86::FormatterOutput`, capturing `(String,
@@ -284,10 +284,12 @@ that named an address, so a row has at most one link and the same three-child sp
 
 **Branch edges** (`Assembly::edges`) are the branches staying inside one symbol, for the arrow
 gutter. Both ends are **indices into `instructions`**, not addresses, because that is what a row
-can be asked about and it makes the answer independent of where the symbol sits. A backend hands
-back the *address* each branch names — a forward branch names one no instruction has been decoded
-at yet — and `Assembly::decoded` resolves them, which is what keeps the four rules below one
-decision rather than one per backend. `from`/`to` are in
+can be asked about and it makes the answer independent of where the symbol sits. A backend leaves
+the *address* each branch names on its row, `Instruction::branch` — a forward branch names one no
+instruction has been decoded at yet — and `Assembly::decoded` resolves them, which is what keeps
+the four rules below one decision rather than one per backend. The address stays on the row
+afterwards, judged by nothing: it is the address-keyed answer a listing of a whole section wants,
+where whether the target has a row is only known once the stretch it is in has been decoded. `from`/`to` are in
 *execution* order (a backward branch has `from > to`); `first()`/`last()`/`is_backward()` sit on
 top. A **call is not an edge** even when it lands inside the symbol, because control comes straight
 back. Four things are dropped rather than drawn, each of which would be a line to a place it does

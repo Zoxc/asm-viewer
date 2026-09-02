@@ -560,6 +560,8 @@ fn a_branch_out_of_the_symbol_is_not_an_edge() {
         "expected no edge, got {:?}",
         assembly.edges
     );
+    // The row still says where it goes: a listing of the whole section has a row there.
+    assert_eq!(assembly.instructions[0].branch, Some(3));
 }
 
 #[test]
@@ -582,6 +584,7 @@ fn a_relocated_branch_is_not_an_edge() {
     let assembly = assemble(&plain, "jumper");
     assert_eq!(text(&assembly.instructions[0]).trim_end(), "jmp       5");
     assert_eq!(edges(&assembly), [(0, 1)]);
+    assert_eq!(assembly.instructions[0].branch, Some(5));
 
     let relocated = parse(&elf_x86_64(
         &symbols,
@@ -601,6 +604,8 @@ fn a_relocated_branch_is_not_an_edge() {
         "expected no edge, got {:?}",
         assembly.edges
     );
+    // Nor does the row name an address: the placeholder is not one.
+    assert_eq!(assembly.instructions[0].branch, None);
 }
 
 #[test]
@@ -788,6 +793,7 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     let assembly = assemble(&object, "caller");
     assert_eq!(text(&assembly.instructions[0]).trim_end(), "call      5");
     assert_eq!(assembly.instructions[0].branch_span, None);
+    assert_eq!(assembly.instructions[0].branch, None);
 
     // A relocated `jmp target`: the displacement is a placeholder the name stands in for,
     // and the name is `relocation_span`'s. The two spans are exclusive.
@@ -840,6 +846,7 @@ fn a_branch_with_no_row_to_land_on_keeps_its_span() {
         branch_span(&assembly.instructions[0]),
         Some(("0", SpanKind::Address))
     );
+    assert_eq!(assembly.instructions[0].branch, Some(0));
     assert_eq!(assembly.edge_from(0), None);
 }
 
