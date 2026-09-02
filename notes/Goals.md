@@ -19,16 +19,21 @@ one item per part, so the unfinished half stays visible.
 - [x] Selecting one side highlights the other side. A click pins the position it points at
   and both panes keep it lit, in a stronger shade than the hover, until another click or
   another symbol.
-- [ ] Have a function to find all source / assembly locations that match, producing a list on the
-  other side. The crate's half is built: `Object::symbols_from_source` answers a file and a line
-  with the symbols compiled from it, out of a whole-object index built the first time an object
-  is asked. What is left is the UI's — asking it across every open object on the analysis
-  worker, and a panel to put the result in whose rows navigate. Note the scale before designing
-  the panel: one line answers with 9 374 symbols on this app's own binary.
+- [x] Have a function to find all source / assembly locations that match, producing a list on the
+  other side. "Find all locations" on a source row or an instruction row asks the analysis
+  worker for every symbol the line was compiled into over every open object, and the Locations
+  view — a sidebar tab beside History — lists them one row per symbol, the object after the
+  name, under a heading naming the line. A row is a symbol and not a range: the crate answers
+  symbols by design, and one line answers with 9 374 of them on this app's own binary, so
+  a range per hit would be seconds of DWARF walking behind every click. Pressing a row opens the
+  symbol and pins the line in it with both panes owed the scroll, which is where the range is.
 - [ ] A function to pick the generic instance of a source function. Same query, different
   presentation — "all symbols for this function, pick one" against "all locations for this line,
   list them" — so what is left is the picker and the rule for what choosing one does to each
-  kind of tab.
+  kind of tab. Half of it is there: the Locations view is that list under another header, and a
+  row chosen from a source-driven tab sets that tab's assembly side (`Driven::choice`, carried
+  in the ask) while one chosen from an assembly-driven tab opens the symbol. What is left is the
+  function-wide query and a control on the source side itself.
 - [x] An active navigation function where selection on one side moves the other side to the
   matching place — within one symbol. Clicking a source line scrolls the assembly to the
   first instruction it produced, clicking an instruction scrolls the source to its line, and

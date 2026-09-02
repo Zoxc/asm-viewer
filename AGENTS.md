@@ -83,7 +83,8 @@ target/debug/libanalysis.rlib libanalysis-sample.rlib`. Session state is restore
 - `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the document it stands for.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.
 - `src/tabs.rs` — `landing`, the rule a close obeys, `Positions`, where each tab was left, and
-  `Driven`, which line a source-driven tab's assembly side follows.
+  `Driven`, which line a source-driven tab's assembly side follows and, where the reader chose
+  among the many symbols it compiles into, which one.
 - `src/history.rs` — back/forward navigation history.
 - `src/fonts.rs` — the desktop's font settings, asked of KDE, Gnome or the Win32 API, merged
   under the user's own; in points until one conversion at the end.
@@ -108,6 +109,8 @@ asked for and no more, so the annotations *are* the list of what crosses a bound
   was left.
 - `src/ui/marks.rs` — the run of rows a reader picks out, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file parsed once when loaded, and the cache holding it.
+- `src/ui/locations.rs` — every symbol a line was compiled into, across every open object:
+  the question as the reader asks it, the answer that stands until the next, and the panel.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, the Info pane, and their rows.
@@ -690,8 +693,9 @@ describes the older API and does not apply.
 `use_consume`: `Objects`, `Active` (the active `Document`), `Open` (the open tabs),
 `AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `Hist`, `Proj` (which project
 all of that belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Pinned`,
-`Marked`/`Shift`, `Analysis` (what the worker has to say about
-the selected symbol), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
+`Marked`/`Shift`, `Land` (a line to pin the moment a document arrives), `Analysis` (what
+the worker has to say about the selected symbol), `Locations` (every symbol the line last
+asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
 `SplitRatio`/`Splits` (how wide a document's assembly side is), plus the memos `Symbols` and
 `Active`. The seven that a project *owns* travel together as a `ProjectStates`, since a project
 switch closes all of them and reopens all of them.
@@ -857,10 +861,13 @@ happens rather than on the way out, which is what survives the window merely bei
 the controller is *holding* is tracked in the hook — an `Rc<RefCell>`, not a `State`, since nothing
 renders from it — because it is not the tab the app is showing during the one run that has to move
 the view, and every write goes under the held one. And a `Pin::reveal` **wins** over a remembered
-position with nothing written to make it: the two are never owed at once, since this moves the view
-only when the tab changes while a click asking for a reveal changes no tab (and a selection change,
-which does, drops the pin), and when a reveal scrolls, the effect wakes on that scroll and records
-where it landed. `close_tab`/`close_binary` forget both of a tab's positions with the tab, which is
+position because the same effect makes both: `use_kept_position` is handed the pane's reveal as a
+closure and asks it first, applying the remembered row only when no scroll was made. The two *are*
+owed at once — a Locations row opens a symbol on a line, so the tab changes and the arriving one
+is owed a reveal — and two effects' scrolls land in whichever order the runtime wakes them; with
+the reveal first, it had marked itself made by the time the kept row was put over it, which reset
+both panes to the top. One effect has one order, and when a reveal scrolls, the effect wakes on
+that scroll and records where it landed. `close_tab`/`close_binary` forget both of a tab's positions with the tab, which is
 not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into — and the hook is
 handed the tab list precisely so that the run *after* a close, still holding the tab that has gone,
 cannot put it straight back. `close_tab` forgets the tab's driven line with them, which *is*
@@ -909,7 +916,14 @@ about parsing many objects at once and is a different job.)
 **The worker is asked a question, not handed a symbol.** An `Ask` is either the symbol an
 assembly-driven tab names outright or the source line a source-driven tab is driven from, where
 the symbol is whatever that line was compiled into — `compiled::compiled_from` over every open
-object, `compiled::pick` choosing among the many one line answers with. `ask(active, driven)` is
+object, `compiled::pick` choosing among the many one line answers with. Beside the line the ask
+carries the tab's **choice** (`Driven::choice`, a row pressed in the Locations panel), at the
+head of the ranking `pick` sees: it wins where the line compiled into it and the pick falls back
+as if none were made where it did not, and it is part of the ask because a different choice is
+a different question, or the listing already up would answer it. The choice is a `Symbol` and
+so holds its file's bytes, which the line beside it does not; `close_binary` releases every
+choice into the closing file (`Driven::release`) and leaves the lines, and nothing persists a
+choice — a restart falls back to the ranking. `ask(active, driven)` is
 the whole derivation and is a pure function; `Asked` is the pair of states it reads, and
 deliberately **not a `Memo`**, `Active` being one already and a memo over a memo being two beats
 behind — which matters because `peek_ask` is what decides whether an answer that has landed is
@@ -927,6 +941,36 @@ and about half a gigabyte for the one object in `viewer-sample`** — and every 
 binary searches. One click on a source row can therefore cost more than any click before it, it is
 not superseded once started, and every symbol click behind it waits. That is what `Analysing…` past
 `SLOW_ANALYSIS` is for.
+
+**A locate is the same query kept whole, answered into a state of its own** (`ui/locations.rs`).
+"Find all locations" on a source row or an instruction row asks `Question::Locate` of the same
+worker, and the answer -- `compiled_from`'s `Vec<Symbol>`, every symbol the line was compiled
+into over every open object -- lands in `Located`, not in `Analyzed`: it stands until the next
+ask whatever the reader opens meanwhile, so it is not a reading of the active document. A row
+of it is a **symbol and not a range inside one**, because the crate answers symbols by design
+and finding each hit's ranges would be a line-program walk per symbol under the context mutex,
+seconds for a line that answers with thousands and every symbol click waiting behind it;
+landing on the line inside the symbol is the pin's job (below). Three rules travel with it.
+**The queue is drained to the newest question of each kind** (`newest`), not the newest
+overall, since a locate is not a newer version of the listing question and drained to one a
+symbol click would silently cancel the locations, or the other way round; the listing is
+worked first, being what is on screen. The answer is kept only while its line is the one
+`asked` now -- the listing's comparison rule again, and there is no `pending` field, a line
+being pending exactly while `asked` and `found` disagree. And **a closed binary takes its
+locations with it** (`Found::retain_open`, in the effect reading `Objects` and on the answer
+landing), `Shown::still_open`'s rule in a second place: a `Symbol` holds the file's bytes and
+this list can hold thousands of them. Its one stated limit is the other direction: the answer is
+about the objects that were open when it was asked, so a file opened afterwards is not searched
+until the line is asked again -- which asking for the same line does, by dropping the stale
+answer. Asking also brings the Locations view to the top of whichever panel holds it, looked
+for through the content dock and then the area beside it; on the ask and never on the answer,
+so a reader who moved on is not pulled back. **What a row does depends on where the line was
+asked from** (`Located::subject`): from the file a source-driven tab is about — its own rows, or
+the assembly side that listing belongs to — a row is *chosen for that tab*, which stays where it
+is, is driven from the line and has its assembly side follow the symbol; from an assembly-driven
+tab, or once the asking tab has closed, a row opens the symbol as a tab of its own. Both go
+through `documents::land`, which takes the target document, so the pin and the landing are one
+rule for either.
 
 **`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at
 its head.** The head is the load-bearing part: nothing is pushed onto the history between two
@@ -994,7 +1038,12 @@ disagree about which listing is up. A **subject** is a source-driven tab's own f
 inside `Studied` and not out of `Active`, because the analysis arrives from a worker thread and
 anything reading the two separately sees them disagree for as long as the work takes. Only the
 symbol's *own* file is drawn, never the rest of `LineInfo::files`, since a Rust function inlines
-dozens.
+dozens -- with one exception: under a pin marked `landed` (made by a `Landing`, a click from
+outside both panes) whose file the listing's line info names, the companion is *that* file. A
+Locations row opens a symbol on a line, and a symbol whose prologue was inlined from elsewhere
+would otherwise open on that elsewhere, the line asked for sitting in a file that is not up and
+the reveal with nowhere to go. A pin made inside the panes changes no file, so clicking an
+inlined instruction leaves the symbol's own file on screen as it always did.
 
 A companion wears a **header naming its file**, which a subject does not: the strip already names
 a subject, and nothing else in the window would name a companion now that the Source pane has no
@@ -1044,6 +1093,18 @@ pin with the tab, so both panes fall back to the line the tab is driven from, or
 would show a listing with nothing lit and no reason given. None of this is a navigation: the
 selection does not change and nothing is pushed onto the
 history. `navigate` remains the only path for anything that does.
+
+**A click from outside both panes owes both a scroll, and lands through the change of document
+it makes.** A row in the Locations panel opens its symbol *and* pins the line, so `Pin::reveal`
+is a pair of flags (`Owed`) rather than an `Option<Pane>`: a click in one pane asks the other,
+a click in neither asks both, and each pane pays its own half. Opening is an `activate`, and the
+change of document that makes is exactly what `use_clear_focus` answers by dropping the pin --
+so the row does not pin; it leaves a `Landing` (`Land`, at the root) naming the document and
+the line, and that effect turns it into the pin when the document it names arrives.
+Whichever document arrives spends it, the one it named or another, since a landing left lying
+would pin a line in a document opened for some other reason later. A row whose symbol is
+already on top pins at once (`documents::land`), `activate` then changing nothing and no effect
+running.
 
 **The arrow gutter** draws every branch staying inside the symbol, with the layout in `src/lanes.rs`
 because a `VirtualScrollView` builds row *n* knowing nothing but *n* — a row has to be *told* which
