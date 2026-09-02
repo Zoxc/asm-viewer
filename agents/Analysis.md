@@ -124,19 +124,25 @@ binary format with its own checksum, and its corruption sweep found two ways for
 including a plausible wrong function name on screen. Parallel demangling attacks the same cost
 without persisting anything, and is the thing to try first.
 **Line info** (`line.rs`) is lazy and never touched at parse time. It answers two questions under
-one set of rules — the rows covering a range, and a subprogram's extent (`Object::subprogram_extent`,
-one DIE walk per unit visited, cached by unit offset) — so everything below holds for both. `Object::dwarf` is a
-`DwarfCache` caching *both* answers — the built `addr2line::Context` and the fact that there is
-none — so an object without debug info costs one section-table scan ever. `None` from `line_info`
-means "no line info" for every reason at once: no DWARF, foreign debug info (CodeView), DWARF that
-will not parse, or DWARF that says nothing about the range asked about. Four design points are
-load-bearing:
+one set of rules — the rows covering a range, and a function's declared extent
+(`Object::function_extent`) — so everything below holds for both. `line.rs` is a **seam** that names
+no debug format: `DebugInfo` holds one `Backend`, a closed enum dispatched by `match` the way
+`Assembly::decode` is, and `line/dwarf.rs` is the first backend and the only module that knows
+`gimli`/`addr2line` (a DIE walk per unit visited for the extent, cached by unit offset). Every
+backend's rows go through one `RowCollector`, whose `finish` is where `LineInfo`'s invariants are
+*made* (below), so they hold whoever produced the rows. `Object::debug_info` is a `DebugInfoCache`
+caching *both* answers — the built backend and the fact that there is none — so an object without
+debug info costs one section-table scan ever. `None` from `line_info` means "no line info" for
+every reason at once: no debug info, debug info in a format no backend reads (CodeView), debug info
+that will not parse, or debug info that says nothing about the range asked about. Four design
+points are load-bearing:
 
 - **No self-borrow.** Readers are `gimli::EndianArcSlice` — an `Arc<[u8]>` per DWARF section, built
   by copying, decompressing and relocating — so the context owns its data and is `'static` rather
   than making `Object` self-referential. Cost: one allocation per debug section on first query.
 - **`Sync` via a `Mutex`.** `addr2line::Context` caches parsed line programs in an `UnsafeCell`
-  behind `&self`, so it is `Send` but not `Sync`. `lib.rs` holds a `const _` assertion that
+  behind `&self`, so it is `Send` but not `Sync`; a backend's lock is its own, taken and released
+  per question. `lib.rs` holds a `const _` assertion that
   `Object: Send + Sync` so this cannot regress silently — beside three more, `Symbol`,
   `Assembly` and `LineInfo`, which are what crosses into the app's analysis worker and back
   (`ui/analyzed.rs`, `use_analysis`). A field that stops being shared-safe is then a compile error in
@@ -146,22 +152,23 @@ load-bearing:
   `Arc<LineInfo>` for the whole extent; the UI answers each instruction locally with
   `LineInfo::row_at`. Rows are ascending, non-overlapping, clipped to the range, and coalesced —
   but *not* contiguous. `line`/`column` are `Option`, because DWARF line 0 means "no line" and
-  column 0 means "left edge". Non-overlapping is an invariant *made* to hold in `line_info_inner`
-  by clipping after the sort, not a property of DWARF.
+  column 0 means "left edge". Non-overlapping is an invariant *made* to hold in
+  `RowCollector::finish` by clipping after the sort, not a property of any debug format.
 - **An address alone is not a key in a relocatable object.** Sections there have no address until
   linked and rustc emits one `.text.<name>` per function, so every function lands on 0 and the line
   programs pile up (52 229 of 54 109 rows overlapped, measured on the 196-member rlib).
   The parse does what a linker does: `section_biases` (`lib.rs`) gives each **text** section of a
   **relocatable** object a place of its own, recorded on the section as `Section::bias` beside
-  `Section::code`; `line.rs` reads it from there, `relocate` adds the bias, and the query adds it
-  and subtracts it from every row returned. Decided at parse and not in `line.rs` because the
+  `Section::code`; `line/dwarf.rs` reads it from there, `relocate` adds the bias, and the query
+  adds it and subtracts it from every row returned. Decided at parse and not in `line.rs` because the
   listing of an object's whole code is laid out by the same rule, and one layout
   read twice cannot disagree with itself. Both limits matter — a linked image holds real addresses
   literally and must be left alone, and an absolute relocation in a debug section is often an
   offset into another `.debug_*` section rather than an address. Hence `Object::line_info` takes a
   `&Section`: a bare range is not a question the crate can answer.
 
-The bias moves exactly what `relocate` moves, and a unit's declared ranges need not be among them.
+The bias moves exactly what `relocate` moves (`line/dwarf.rs`), and a unit's declared ranges need
+not be among them.
 A line program's `DW_LNE_set_address` is always relocated in a relocatable object, so a sequence
 always follows its section; a unit's range list usually does too, since DWARF 4 states a range as a
 pair of addresses and DWARF 5 has `DW_RLE_start_length` — but neither obliges a producer to. A
@@ -185,28 +192,30 @@ root-DIE pass costs 1.5% of a sweep of every symbol's line info and extent (200 
 **The reverse mapping is an index, and a whole-object one** (`line/source.rs`). "Which functions
 was this line compiled into" is not a question about one symbol, so it is not a query but a table:
 built on the **first source question against an object** and never before one, behind a `OnceLock`
-beside the two `Mutex`es, and empty rather than absent if building it panics. It is what Step 1d's
+on `DebugInfo` beside the backend — not inside one, because it is built from what every backend
+answers and not from any one's internals — and empty rather than absent if building it panics. It is what Step 1d's
 source-driven tab, Step 4's find-all and Step 5's instance picker each need, and it is the whole of
 what the crate owes them — *where inside* a symbol the line's code sits is the forward direction's
 question and is already answered, so a caller walks index → symbol → `line_info` → rows and there is
 one definition of "this line's rows" rather than two that can drift.
 
 The build is one pass and its **order is load-bearing**: every symbol's extent is taken *first*,
-before the context's lock is held, because `SymbolData::extent` reaches `Dwarf::extent_inner`, which
-takes that same lock, and a `Mutex` is not reentrant — computing an extent inside the row loop
-deadlocks the first object anyone asks. Then one `find_location_range(0, u64::MAX)` over the whole
-address space (safe where `subprogram_extent` had to decline `u64::MAX`: that unchecked `probe + 1`
-is in `find_units`, and this goes through `find_units_range`), with each row attributed to the
-symbols its addresses fall in. Addresses stay **biased** throughout, so the section bias that tells
-two functions at address 0 apart is applied once and never undone. The extent used is
-`SymbolData::extent` and not the next-symbol estimate: the index and `SymbolData::line_info` then
-cannot disagree about what a symbol covers, which is the invariant a caller walking index → symbol →
-rows depends on and the one a test asserts over every fixture, the two committed gcc objects
-included. **A file is matched exactly**, on the string `addr2line` renders — which is by
-construction the string `LineInfo::files` spells, so a name out of the forward direction can be
-handed straight back. Nothing here normalises a path or asks the filesystem about one; two objects
-whose `DW_AT_comp_dir` disagree do not join, and that is a cross-object question for whoever asks
-one.
+before the backend's lock is held, because `SymbolData::extent` reaches `DebugInfo::extent`, which
+takes that lock, and `DebugInfo::each_row` — the one thing the index asks a backend for — holds
+that same lock for its whole walk and a `Mutex` is not reentrant: computing an extent inside the
+visitor deadlocks the first object anyone asks. The DWARF backend's `each_row` is one
+`find_location_range(0, u64::MAX)` over the whole address space (safe where `extent` had to decline
+`u64::MAX`: that unchecked `probe + 1` is in `find_units`, and this goes through
+`find_units_range`), with each row attributed to the symbols its addresses fall in. Addresses stay
+**biased** throughout, so the section bias that tells two functions at address 0 apart is applied
+once and never undone. The extent used is `SymbolData::extent` and not the next-symbol estimate:
+the index and `SymbolData::line_info` then cannot disagree about what a symbol covers, which is the
+invariant a caller walking index → symbol → rows depends on and the one a test asserts over every
+fixture, the two committed gcc objects included. **A file is matched exactly**, on the string the
+backend renders — which is by construction the string `LineInfo::files` spells, so a name out of
+the forward direction can be handed straight back. Nothing here normalises a path or asks the
+filesystem about one; two objects whose `DW_AT_comp_dir` disagree do not join, and that is a
+cross-object question for whoever asks one.
 
 Measured, release, first ask: the 331 MB binary 2.2 s — **2.0 s of it the extent pass** and 0.23 s the
 line-program walk — for 2 096 files and 624 544 `(line, symbol)` pairs, 10 MB of them, taking the
@@ -218,15 +227,17 @@ and lets the index name a symbol whose own line info does not name the line back
 symbols is not theoretical: `core/src/ptr/mod.rs:848`, `drop_in_place`, answers with **9 374** of
 the 331 MB binary's symbols.
 
-`without_panicking` (a `catch_unwind`) wraps the context build and every query, for two known
-reachable bugs, both unchecked arithmetic in `addr2line` 0.21 on numbers a `.debug_*` section
-states and neither of them something this crate can validate without parsing the DWARF twice: a
-row's length is `next.address - row.address`, so a line program that moves its address backwards
-is a subtract-with-overflow panic on a file the user merely opened; and a unit's range is
+`without_panicking` (a `catch_unwind`) is `DebugInfo`'s and wraps the backend build and every
+question at the seam — one net, whichever backend is under it — for known reachable bugs in the
+dependencies behind it, all unchecked arithmetic on numbers a debug section states and none of
+them something this crate can validate without parsing the debug info twice. In `addr2line` 0.21:
+a row's length is `next.address - row.address`, so a line program that moves its address
+backwards is a subtract-with-overflow panic on a file the user merely opened; and a unit's range is
 `low_pc + high_pc`, which overflows for a unit whose length runs off the end of the address space
 — that one while the context is being *built*, which is why the guard is around the build too.
 What is *not* left to the guard is the third one: `find_units` asks about `probe + 1` unchecked,
-so `subprogram_extent` declines `u64::MAX` outright rather than catching the panic afterwards.
+so the DWARF backend's `extent` declines `u64::MAX` outright rather than catching the panic
+afterwards.
 
 **Disassembly** (`SymbolData::assembly`) goes through a seam — `disasm.rs` defines everything a
 caller sees and names no backend, `disasm/x86.rs` is the only module in the crate that mentions

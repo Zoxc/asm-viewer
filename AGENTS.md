@@ -60,10 +60,13 @@ command.
 ## Layout
 
 - `crates/analysis/src/lib.rs` — object parsing, disassembly, relocation resolution.
-- `crates/analysis/src/line.rs` — DWARF line info, lazy: an address range in, source rows out.
-  It and its one submodule are the only part that knows `gimli`/`addr2line`.
+- `crates/analysis/src/line.rs` — line info, lazy: an address range in, source rows out. The
+  seam: the two questions every backend answers, dispatched by `match`, and the one collector
+  that makes every answer's rows hold `LineInfo`'s invariants. Names no debug format.
+- `crates/analysis/src/line/dwarf.rs` — the DWARF backend, and the only part that knows
+  `gimli`/`addr2line`.
 - `crates/analysis/src/line/source.rs` — the same line info the other way: a file and a line,
-  out to the symbols compiled from them.
+  out to the symbols compiled from them, built on the seam and not on a backend.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
 - `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.

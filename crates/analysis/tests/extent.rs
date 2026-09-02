@@ -60,7 +60,7 @@ fn a_subprogram_extent_is_preferred_to_the_next_symbols_address() {
     let first = named(&object, "first");
 
     assert_eq!(first.estimate_size(), Some(10));
-    assert_eq!(first.dwarf_extent(&object), Some(6));
+    assert_eq!(first.debug_extent(&object), Some(6));
     assert_eq!(first.extent(&object), Some(6));
 
     // And the disassembly stops at the `ret` rather than running into four `int3`s.
@@ -77,7 +77,7 @@ fn a_symbol_no_subprogram_describes_keeps_the_estimate() {
     let object = parse(&fixture(&[(1, 2)], Some(0)));
     let first = named(&object, "first");
 
-    assert_eq!(first.dwarf_extent(&object), None);
+    assert_eq!(first.debug_extent(&object), None);
     assert_eq!(first.extent(&object), first.estimate_size());
     assert_eq!(first.extent(&object), Some(10));
 }
@@ -87,7 +87,7 @@ fn an_object_with_no_debug_info_at_all_keeps_the_estimate() {
     let object = parse(&common::caller_and_target());
     let caller = named(&object, "caller");
 
-    assert_eq!(caller.dwarf_extent(&object), None);
+    assert_eq!(caller.debug_extent(&object), None);
     assert_eq!(caller.extent(&object), Some(6));
 }
 
@@ -99,7 +99,7 @@ fn a_subprogram_reaching_past_the_next_symbol_is_clipped_to_it() {
     let object = parse(&fixture(&[(0, 12)], Some(0)));
     let first = named(&object, "first");
 
-    assert_eq!(first.dwarf_extent(&object), Some(12));
+    assert_eq!(first.debug_extent(&object), Some(12));
     assert_eq!(first.estimate_size(), Some(10));
     assert_eq!(first.extent(&object), Some(10));
 }
@@ -130,7 +130,7 @@ fn a_linked_image_is_asked_in_its_own_addresses() {
         .expect("the fixture has a .text");
 
     assert_eq!(first.address, 0);
-    assert_eq!(object.subprogram_extent(text, 0), Some(6));
+    assert_eq!(object.function_extent(text, 0), Some(6));
     assert_eq!(first.extent(&object), Some(6));
 }
 
@@ -189,8 +189,8 @@ fn two_functions_at_address_zero_get_their_own_extents() {
     assert_eq!(first.address, 0);
     assert_eq!(second.address, 0);
 
-    assert_eq!(first.dwarf_extent(&object), Some(6));
-    assert_eq!(second.dwarf_extent(&object), Some(2));
+    assert_eq!(first.debug_extent(&object), Some(6));
+    assert_eq!(second.debug_extent(&object), Some(2));
 
     // `first` is alone in its section, so the estimate runs to the section's end —
     // padding included — and DWARF is what trims it back to the function.

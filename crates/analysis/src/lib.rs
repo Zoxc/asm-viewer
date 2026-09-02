@@ -19,7 +19,7 @@ mod listing;
 use disasm::Code;
 
 pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
-pub use line::{DwarfCache, LineInfo, LineRow, Location};
+pub use line::{DebugInfoCache, LineInfo, LineRow, Location};
 pub use listing::{CodeListing, DecodedStretch, Gap, GapKind, Listing, Place, Placed, Stretch};
 // Re-exported so the viewer needs no `object` dependency of its own.
 pub use object::{Architecture, BinaryFormat, SectionIndex};
@@ -56,9 +56,9 @@ pub struct Object {
     /// The bytes this object was parsed from. See [`ObjectData`].
     pub data: ObjectData,
 
-    /// This object's DWARF, built on the first query and never at parse time. Nothing
-    /// constructs it: write `DwarfCache::default()`. See [`Object::line_info`].
-    pub dwarf: DwarfCache,
+    /// This object's debug info, built on the first query and never at parse time. Nothing
+    /// constructs it: write `DebugInfoCache::default()`. See [`Object::line_info`].
+    pub debug_info: DebugInfoCache,
 }
 
 /// A digest of a whole file's bytes: what tells "the same binary" from "one rebuilt
@@ -307,20 +307,20 @@ impl SymbolData {
         Some(next.checked_sub(self.address)?.min(MAX_DERIVED_SIZE))
     }
 
-    /// How many bytes of code this symbol is: the **smaller** of DWARF's
-    /// `DW_AT_low_pc`/`DW_AT_high_pc` and [`estimate_size`](Self::estimate_size), because
-    /// each bounds the other in a case the other gets wrong. The estimate over-reaches into
-    /// padding and over a function with no symbol; DWARF over-reaches when two symbols share
-    /// one subprogram (an alias, an assembler label, a split cold part), since `high_pc`
-    /// describes the *function*.
+    /// How many bytes of code this symbol is: the **smaller** of the extent the debug info
+    /// declares for the function (DWARF's `DW_AT_low_pc`/`DW_AT_high_pc`) and
+    /// [`estimate_size`](Self::estimate_size), because each bounds the other in a case the
+    /// other gets wrong. The estimate over-reaches into padding and over a function with no
+    /// symbol; the declared extent over-reaches when two symbols share one function (an
+    /// alias, an assembler label, a split cold part), since it describes the *function*.
     ///
     /// A zero estimate is treated as no estimate: a symbol placed exactly at the section's
-    /// end has no bytes to derive from, and DWARF may still know its extent.
+    /// end has no bytes to derive from, and the debug info may still know its extent.
     pub fn extent(&self, object: &Object) -> Option<u64> {
         let estimate = self.estimate_size().filter(|&size| size != 0);
-        match (self.dwarf_extent(object), estimate) {
-            (Some(dwarf), Some(estimate)) => Some(dwarf.min(estimate)),
-            (dwarf, estimate) => dwarf.or(estimate),
+        match (self.debug_extent(object), estimate) {
+            (Some(declared), Some(estimate)) => Some(declared.min(estimate)),
+            (declared, estimate) => declared.or(estimate),
         }
     }
 
@@ -712,7 +712,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         symbols_sorted: object.symbols_sorted,
         sections: object.sections,
         data,
-        dwarf: DwarfCache::default(),
+        debug_info: DebugInfoCache::default(),
     }))
 }
 

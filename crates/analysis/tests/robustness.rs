@@ -682,7 +682,7 @@ fn elf_with_names(names: &[Vec<u8>]) -> Vec<u8> {
 /// Defect: a section header may say its bytes live at the end of the address space, and
 /// the debug info may then claim a function running off the end of it. Four independent
 /// bounds have to hold at once, and this is the one input in the suite that walks all of
-/// them: `estimate_size`'s and `Dwarf::extent`'s checked adds, the caught panic from
+/// them: `estimate_size`'s and the DWARF backend's checked adds, the caught panic from
 /// `addr2line` 0.21's unchecked `low_pc + high_pc`, and `assembly` declining to decode a
 /// symbol with no extent rather than one decoded from an address that wrapped.
 #[test]

@@ -188,7 +188,7 @@ fn symbol(path: &str, name: &str) -> Symbol {
         symbols_sorted: vec![data.clone()],
         sections: Vec::new(),
         data: ObjectData::from(b"bytes".as_slice()),
-        dwarf: Default::default(),
+        debug_info: Default::default(),
     });
     Symbol { object, data }
 }

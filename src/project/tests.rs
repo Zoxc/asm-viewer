@@ -49,7 +49,7 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         symbols_sorted,
         sections: vec![section],
         data: ObjectData::from(bytes),
-        dwarf: Default::default(),
+        debug_info: Default::default(),
     })
 }
 

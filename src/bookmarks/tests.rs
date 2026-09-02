@@ -40,7 +40,7 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
         symbols_sorted,
         sections: vec![section],
         data: ObjectData::from(&b"a build"[..]),
-        dwarf: Default::default(),
+        debug_info: Default::default(),
     })
 }
 

@@ -42,7 +42,7 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
         symbols_sorted,
         sections: vec![section],
         data: ObjectData::from(b"bytes".as_slice()),
-        dwarf: Default::default(),
+        debug_info: Default::default(),
     })
 }
 

@@ -17,7 +17,7 @@ fn selection(name: &str) -> Document {
         symbols_sorted: Vec::new(),
         sections: Vec::new(),
         data: ObjectData::from(&b""[..]),
-        dwarf: Default::default(),
+        debug_info: Default::default(),
     })))
 }
 

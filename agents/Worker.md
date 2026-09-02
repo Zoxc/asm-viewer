@@ -13,7 +13,7 @@ lifetime, fed an `async_channel` of `Question`s, answering with a `Studied` (the
 requests *supersede*: a reader going down the symbol list issues one per row and wants the last
 one's answer, so the queue is drained to its newest entry each time round and the rest are dropped
 *before* being started. A thread each would put a whole run of clicks through the most expensive
-call in the crate at once for one useful answer, and `DwarfCache` is a `OnceLock`, so the losers
+call in the crate at once for one useful answer, and `DebugInfoCache` is a `OnceLock`, so the losers
 would block on the winner rather than race usefully. (The parallelism `notes/Goals.md` asks for is
 about parsing many objects at once and is a different job.)
 

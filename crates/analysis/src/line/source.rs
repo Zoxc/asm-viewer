@@ -4,17 +4,17 @@
 //! The forward direction ([`Object::line_info`]) is asked about one address range and answers
 //! with rows. Nothing there can answer "which functions was this line compiled into", which is
 //! a question about the whole object rather than about one symbol — so it is answered from an
-//! index, built on the first ask and never at parse time, the way [`super::DwarfCache`] builds
-//! the context itself.
+//! index, built on the first ask and never at parse time, the way [`super::DebugInfoCache`]
+//! builds the debug info itself.
 //!
 //! Two things are decided here and written down rather than left to be discovered:
 //!
-//! * **A file is matched exactly, on the string `addr2line` renders.** That is by construction
+//! * **A file is matched exactly, on the string the backend renders.** That is by construction
 //!   the string [`LineInfo::files`](super::LineInfo::files) spells, so a caller holding a file
 //!   name out of the forward direction can hand it straight back. Nothing here normalises a
-//!   path or asks the filesystem about one: a path in DWARF is what the producer said, not a
-//!   place. Two objects whose `DW_AT_comp_dir` disagree therefore do not join, which is a
-//!   cross-object question and not this crate's to answer.
+//!   path or asks the filesystem about one: a path in debug info is what the producer said,
+//!   not a place. Two objects whose `DW_AT_comp_dir` disagree therefore do not join, which is
+//!   a cross-object question and not this crate's to answer.
 //! * **The answer is symbols, not ranges.** Where inside a symbol the line's code sits is the
 //!   forward direction's question and is already answered, so a caller wanting the ranges asks
 //!   the symbol it was given. One definition of "which rows are this line's" rather than two
@@ -38,15 +38,16 @@
 //! That one line maps into many symbols is not theoretical: `core/src/ptr/mod.rs:848` —
 //! `drop_in_place` — answers with **9 374** of `viewer-sample`'s symbols.
 
-use super::{without_panicking, Dwarf};
+use super::{without_panicking, DebugInfo};
 use crate::{Object, SymbolData};
 use object::SymbolIndex;
 use std::collections::HashMap;
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-/// Every source file one object's DWARF names, and per file the `(line, symbol)` pairs its
-/// rows landed in — sorted by line and deduplicated, so a line range is two binary searches.
+/// Every source file one object's debug info names, and per file the `(line, symbol)` pairs
+/// its rows landed in — sorted by line and deduplicated, so a line range is two binary
+/// searches.
 ///
 /// Symbols are held as [`SymbolIndex`] rather than as `Arc<SymbolData>`: the index is a field
 /// of the object whose symbols they are, and keeping strong references from it to them would
@@ -56,8 +57,8 @@ pub(super) struct SourceIndex {
     files: HashMap<Arc<str>, Vec<(u32, SymbolIndex)>>,
 }
 
-/// One symbol's extent in the address space the DWARF is read in — biased, so it is directly
-/// comparable with the addresses the context answers with.
+/// One symbol's extent in the address space the debug info is read in — biased, so it is
+/// directly comparable with the addresses the backend answers with.
 struct SymbolRange {
     start: u64,
     end: u64,
@@ -72,50 +73,33 @@ struct SymbolRange {
 impl SourceIndex {
     /// Walk every line program once and invert it. A build that panics is an **empty** index,
     /// which is the same "says nothing" answer everything else in this module gives.
-    pub(super) fn build(object: &Object, dwarf: &Dwarf) -> SourceIndex {
-        without_panicking(|| SourceIndex::build_inner(object, dwarf)).unwrap_or_default()
+    pub(super) fn build(object: &Object, debug: &DebugInfo) -> SourceIndex {
+        without_panicking(|| SourceIndex::build_inner(object, debug)).unwrap_or_default()
     }
 
-    fn build_inner(object: &Object, dwarf: &Dwarf) -> SourceIndex {
-        // **Before the context lock, and this is load-bearing.** `SymbolData::extent` reaches
-        // `Dwarf::extent_inner`, which locks the context itself, and a `Mutex` is not
-        // reentrant — computing an extent inside the row loop below would deadlock the first
-        // object anyone asked a source question of.
-        let ranges = symbol_ranges(object, dwarf);
+    fn build_inner(object: &Object, debug: &DebugInfo) -> SourceIndex {
+        // **Before the row walk, and this is load-bearing.** `SymbolData::extent` reaches
+        // `DebugInfo::extent`, which takes the backend's own lock, and `each_row` holds that
+        // same lock for the whole walk — a `Mutex` is not reentrant, so computing an extent
+        // inside the visitor below would deadlock the first object anyone asked a source
+        // question of.
+        let ranges = symbol_ranges(object, debug);
 
-        // A poisoned lock means a previous query panicked; the context is only ever read, so
-        // recover rather than propagate. `line_info_inner`'s rule.
-        let context = dwarf.context.lock().unwrap_or_else(|e| e.into_inner());
+        // Keyed by the name each row spells, allocated once per distinct file: the visitor is
+        // handed a borrow that ends with the call, so the key cannot be the borrow itself.
+        let mut files: HashMap<Arc<str>, Vec<(u32, SymbolIndex)>> = HashMap::new();
 
-        // The whole address space in one pass. Safe where `subprogram_extent` had to decline
-        // `u64::MAX`: that unchecked `probe + 1` is in `find_units`, and this goes through
-        // `find_units_range`, which takes the bound as given.
-        let Ok(rows) = context.find_location_range(0, u64::MAX) else {
-            return SourceIndex::default();
-        };
-
-        // Keyed by the borrowed name while the context is alive, so a row costs no allocation
-        // and a file is turned into an `Arc<str>` once.
-        let mut files: HashMap<&str, Vec<(u32, SymbolIndex)>> = HashMap::new();
-
-        for (address, length, location) in rows {
-            // A row naming no file or no line points at nothing a reader could ask for.
-            // DWARF line 0 is already `None` by the time `addr2line` has spoken.
-            let (Some(file), Some(line)) = (location.file, location.line) else {
-                continue;
+        // The whole address space in one pass; every row the backend hands over names a file
+        // and a line, and covers at least one byte.
+        debug.each_row(&mut |range, file, line| {
+            let entry = match files.get_mut(file) {
+                Some(entry) => entry,
+                None => files.entry(Arc::from(file)).or_default(),
             };
-            let Some(end) = address.checked_add(length) else {
-                continue;
-            };
-            if address >= end {
-                continue;
+            for symbol in intersecting(&ranges, range.start, range.end) {
+                entry.push((line, symbol.symbol));
             }
-
-            let entry = files.entry(file).or_default();
-            for range in intersecting(&ranges, address, end) {
-                entry.push((line, range.symbol));
-            }
-        }
+        });
 
         let files = files
             .into_iter()
@@ -123,11 +107,9 @@ impl SourceIndex {
             .map(|(file, mut entries)| {
                 entries.sort_unstable_by_key(|(line, symbol)| (*line, symbol.0));
                 entries.dedup();
-                (Arc::from(file), entries)
+                (file, entries)
             })
             .collect();
-
-        drop(context);
 
         SourceIndex { files }
     }
@@ -145,19 +127,19 @@ impl SourceIndex {
     }
 }
 
-/// Every symbol of `object` that has bytes, as a range in the address space the DWARF is read
-/// in, sorted by start and carrying the running `max_end`.
+/// Every symbol of `object` that has bytes, as a range in the address space the debug info is
+/// read in, sorted by start and carrying the running `max_end`.
 ///
 /// The extent is [`SymbolData::extent`] and not the next-symbol estimate, because that is the
 /// extent everything else uses: it is what [`SymbolData::line_info`] asks about, so the index
 /// and the forward direction cannot disagree about what a symbol covers.
-fn symbol_ranges(object: &Object, dwarf: &Dwarf) -> Vec<SymbolRange> {
+fn symbol_ranges(object: &Object, debug: &DebugInfo) -> Vec<SymbolRange> {
     let mut ranges: Vec<SymbolRange> = object
         .symbols
         .iter()
         .filter_map(|(&symbol, data)| {
             let section = data.section.as_ref()?;
-            let start = data.address.checked_add(dwarf.bias(section.index))?;
+            let start = data.address.checked_add(debug.bias(section.index))?;
             let end = start.checked_add(data.extent(object)?)?;
             (start < end).then_some(SymbolRange {
                 start,
@@ -203,10 +185,10 @@ fn intersecting(
 impl Object {
     /// The symbols holding code compiled from `file`, over `lines`.
     ///
-    /// `file` is matched exactly against the string DWARF renders, which is what
+    /// `file` is matched exactly against the string the debug info renders, which is what
     /// [`LineInfo::files`](super::LineInfo::files) hands out. Empty for every reason at once:
-    /// no DWARF, debug info in a format this does not read, an empty range, a file this object
-    /// does not name, or a line no code came from.
+    /// no debug info, debug info in a format this does not read, an empty range, a file this
+    /// object does not name, or a line no code came from.
     ///
     /// The answer is deduplicated and in address order; **which of several is wanted is the
     /// caller's** — one line compiles into as many symbols as there are instantiations of it,
@@ -242,11 +224,11 @@ impl Object {
         if first > last {
             return Vec::new();
         }
-        let Some(dwarf) = self.dwarf() else {
+        let Some(debug) = self.debug_info() else {
             return Vec::new();
         };
 
-        let index = dwarf.index.get_or_init(|| SourceIndex::build(self, dwarf));
+        let index = debug.index.get_or_init(|| SourceIndex::build(self, debug));
 
         // One symbol answering for several of the lines asked about is one hit, not several.
         let mut found: Vec<SymbolIndex> = index

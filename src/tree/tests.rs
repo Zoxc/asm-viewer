@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use analysis::{Architecture, DwarfCache, ObjectData};
+use analysis::{Architecture, DebugInfoCache, ObjectData};
 
 use crate::filter::Filter;
 
@@ -17,7 +17,7 @@ fn object(path: &str, name: &str) -> Arc<Object> {
         symbols_sorted: Vec::new(),
         sections: Vec::new(),
         data: ObjectData::from(&[][..]),
-        dwarf: DwarfCache::default(),
+        debug_info: DebugInfoCache::default(),
     })
 }
 

@@ -505,8 +505,8 @@ fn recent_symbols(shown: Option<&Shown>, history: &History) -> Vec<Symbol> {
 /// Requests supersede: the queue is drained to its newest entry of each kind
 /// ([`newest`]), so what the reader clicked past is dropped before it is started.
 ///
-/// **One worker and not two**, now that there are two kinds of question: `dwarf.index` is
-/// a `OnceLock` and the source index's build holds the same `context` mutex `line_info`
+/// **One worker and not two**, now that there are two kinds of question: `DebugInfo::index`
+/// is a `OnceLock` and the source index's build holds the same backend mutex `line_info`
 /// and `extent` take, so a second thread asking a source question would block in
 /// `get_or_init` rather than race usefully -- and two producers writing one [`Analyzed`]
 /// would break the single `shown`/`pending` the panes read.
