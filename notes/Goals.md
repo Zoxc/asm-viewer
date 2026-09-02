@@ -186,7 +186,7 @@ one item per part, so the unfinished half stays visible.
   — but the section mode needs the same four answers keyed by address instead, so the question
   is whether those are generalised over what indexes them or written twice. Note that indices
   were deliberately chosen over addresses in the first place, so that a symbol's edges are
-  independent of where it sits; a section listing has no such need. **Scale**: `viewer-sample`'s `.text` is far past what
+  independent of where it sits; a section listing has no such need. **Scale**: the app's own binary's `.text` is far past what
   decoding eagerly on the analysis worker would answer in one go, so this wants the worker to
   answer for a *window* of the section rather than for a whole symbol.
   Note what it would make easy in return: the "gap or line before a jump target" item below, and
@@ -462,7 +462,7 @@ one item per part, so the unfinished half stays visible.
 - [x] A main view where you can see all project info: the project's name and directory, both
   editable, the id it is stored as, and every open binary with how many objects it contributed.
   It is a dockable view rather than a chip in the content strip, for the reason now written into
-  `AGENTS.md`: a document there is a *place in a binary*, and a project is not one.
+  `agents/UI.md`: a document there is a *place in a binary*, and a project is not one.
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
 - [x] Split project storage into toml? for user given settings and another file for opened tabs /
   cached binary inspection data. Three files now: `settings.toml` for the user's own preferences,
@@ -615,11 +615,11 @@ one item per part, so the unfinished half stays visible.
   *smaller* of it and the estimate: the estimate over-reaches into padding, but `high_pc`
   describes the function, so an alias or a split cold part inside one subprogram would otherwise
   swallow the next function. It stays lazy, behind the same cache, bias and `catch_unwind` the
-  line rows go through. On `libanalysis-sample.rlib` 3 704 of 3 705 symbols answer from DWARF;
-  on `viewer-sample` half do, the rest being C++ dependencies built without it.
+  line rows go through. On the `analysis` crate's own rlib 3 704 of 3 705 symbols answer from DWARF;
+  on the app's own binary half do, the rest being C++ dependencies built without it.
 - [x] Take entry points and exported DLL / dylib functions as symbols too. `declared_code`
   reads `dynamic_symbols`, `exports` and `entry` for a **linked image** — all declared, so
-  nothing is guessed at or scanned for — and `LLVM-24-rust-dev.dll` goes from zero functions to
+  nothing is guessed at or scanned for — and a prebuilt LLVM DLL goes from zero functions to
   22 918. One symbol per address, earliest source winning, since a repeated address makes the
   sorted list `estimate_size` searches answer 0; the section is found by looking the address up
   in the kept text sections, which is also what keeps exported *data* out. A relocatable object
@@ -654,21 +654,21 @@ one item per part, so the unfinished half stays visible.
   the newest request so the clicks a reader passed are dropped before being started rather than
   pushed through the most expensive call in the crate. An answer carries the symbol it is about
   and is kept only if that symbol is still selected, so a stale answer is discarded by a
-  comparison rather than by a counter. The first symbol clicked on `viewer-sample` cost 589 ms
+  comparison rather than by a counter. The first symbol clicked on the app's own binary cost 589 ms
   on the UI thread and now costs a channel send.
 - [ ] Binary inspection should be multi threaded — in the sense of using more than one core,
   which it does not. Everything above is *off* the UI thread but still sequential: `demangled`
   is one `map` per object and `open_files_streaming` walks objects in order, so an archive's 196
   members demangle one after another. Both levels are embarrassingly parallel, and demangling is
-  the whole of what is left to parallelise (281 ms of `viewer-sample`'s 1 437 ms open). Note the
+  the whole of what is left to parallelise (281 ms of the app's own binary's 1 437 ms open). Note the
   constraint before starting: long names are demangled on a thread with a 64 MiB stack because
   the demanglers recurse per pointer, so a parallel version wants a bounded pool of big-stack
   threads rather than one per object.
 - [D] Cache the demangled names between runs. **Built, measured and then thrown away** — it is
   not in this repo's history, deliberately, so this item is the whole record of it. The gain did
   not justify what it cost to carry. What it bought, per file, release, cold open
-  against warm: `viewer-sample` 1 589 → 1 174 ms (-26%), `libanalysis-sample.rlib` 111 → 31 ms
-  (-72%), `LLVM-24-rust-dev.dll` 542 → 479 ms (-12%), `librustc_data_structures` 5 → 1 ms (too
+  against warm: the app's own binary 1 589 → 1 174 ms (-26%), the `analysis` rlib 111 → 31 ms
+  (-72%), the LLVM DLL 542 → 479 ms (-12%), a 3.5 MB CodeView rlib 5 → 1 ms (too
   small to mean anything). **An average of roughly 37% across the three samples big enough to
   measure**, and about 25% weighted by the time actually spent rather than by file.
   Against that: a fourth place on disk outside both the project and the settings, an eviction
@@ -680,7 +680,7 @@ one item per part, so the unfinished half stays visible.
   Undeferred by the open getting slower or the saving getting larger — parallel demangling above
   attacks the same cost without persisting anything, and is the thing to try first.
 - [D] Cache inspection results in the project info. Neither `assembly()` nor `line_info()`
-  memoizes, so leaving a listing and coming back re-derives it — 4–8 ms on `viewer-sample`,
+  memoizes, so leaving a listing and coming back re-derives it — 4–8 ms on the app's own binary,
   which is cheap enough that a keyed cache was deliberately not added on the way past: it would
   be an unbounded pile of `Assembly`s for listings the reader has left. Deferred at the
   Goals → Steps split: a persisted cache would carry everything that killed the
@@ -728,12 +728,12 @@ one item per part, so the unfinished half stays visible.
   fixture is the regression test. Two `addr2line` arithmetic bugs found with them: one is now
   declined before the call, one stays wrapped.
 - [D] Don't run by default, make that opt-in as needed. Measured and declined, with the numbers
-  in `AGENTS.md`: everything expensive is *already* deferred — line info and the DWARF context to
+  in `agents/UI.md`: everything expensive is *already* deferred — line info and the DWARF context to
   the first query, subprogram extents behind the same cache, disassembly to selection. What is
   left at open time is reading the bytes and walking the symbol table, which is precisely what
   the Objects and Symbols lists *are*, so there is nothing to opt out of without opting out of
-  the app. The only remaining lever is deferring demangling (21% of `viewer-sample`, 47% of the
-  rlib in release), and it only defers to the first click on that object while costing a second
+  the app. The only remaining lever is deferring demangling (21% of the app's own binary, 47% of the
+  `analysis` rlib in release), and it only defers to the first click on that object while costing a second
   async stage feeding the symbol list. Undeferred by a future eager pass — the code-discovery
   goal above would be one.
 - [D] Prefer memory mapped files and minimal memory footprint, store locations into the mapped

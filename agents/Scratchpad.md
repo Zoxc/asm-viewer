@@ -1,0 +1,278 @@
+# Scratchpads
+
+A scratchpad is one source file the reader types into, built by cargo and opened as a binary like
+any other. The first half is the model and its storage (`src/scratchpad.rs`); the second is the
+view, the per-pad state and the one worker thread (`src/ui/pad.rs`, `src/ui/pad_view.rs`).
+
+## The model and its storage
+
+**A scratchpad is a generated cargo package, and the package is the storage**
+(`src/scratchpad.rs`). One directory per scratchpad under the same base `projects/` and `settings.toml` use
+plus `scratchpads/`, holding exactly what cargo needs: a `Cargo.toml` naming the crate, its
+pinned `edition` and its `[dependencies]`, and `src/main.rs`. Nothing describes a scratchpad
+*beside* that — every field of the model is already a field of the package — so `load_from` is
+the exact inverse of `write_to` rather than a second format that could disagree with what cargo
+is handed, and both files go down through the same `.tmp` + rename, which the source earns:
+`src/main.rs` is the reader's document. The manifest carries an empty `[workspace]`, so a
+scratchpad is its own workspace root wherever the state directory turns out to be. A scratchpad
+belongs to the **app** and not to a project: it lives here beside `projects/` rather than inside
+one, `Pad` is not one of the states a project switch closes, and a pad open in one project is
+the same pad in the next.
+
+**A pad is filed under an id, and the id is never shown.** `PadId` is what the directory, the
+order and the app's own table are keyed by; `Scratchpad::name` is what the reader calls it, and the
+two are separate so that a rename is a value changing and not a directory moving. That separation
+is what buys everything below it: a name may be empty, hold spaces or be written in any alphabet,
+two pads may be called the same thing, and the name box is an ordinary bound box with nothing to
+apply, nothing to refuse and no gesture to discover. The id is `ProjectId`'s treatment all the same
+— a newtype whose `Deserialize` goes through the checked constructor, because it is interpolated
+into a path *and* read back out of two files a user can edit: the order beside the pads, and every
+pad's own `Cargo.toml`, where it is what `[package] name` says. `check_name` is the one check, and
+the crate-name rules it applies are strictly stronger than what a safe path component needs. It has
+no `Display`, deliberately. That is also what gives the enumeration its rule:
+`Scratchpad::load_from` answers `None` for a manifest whose crate name is not an id, so **a
+directory `load_from` answers for is a pad and anything else is not**, repaired at the point of use
+and never on load.
+
+**The name lives in the package, under `[package.metadata]`** — the one place cargo reserves for a
+tool of its own and ignores itself — so "the package is the storage" still holds: nothing describes
+a pad beside its own directory, and `load_from` is still the exact inverse of `write_to`. It is
+*not* in the order file beside the ids, which is `recent_projects`' rule for a project's name: a
+copy there would be a second one to keep in step with the one the reader edits. A new pad is made
+with **no name at all**, an empty one being a real answer and not a missing one, and what stands in
+for it on screen is the UI's to decide — nothing is written into the package until the reader has
+said something.
+
+The crate name being the id rather than the name has a second payoff: **a rename does not move the
+artifact**. `reopen_binary` keys on the path cargo named, so a pad renamed between builds writes the
+same executable rather than leaving the last one open beside it.
+
+**Which pad opens is an order, `recents.toml`'s shape again**, in `scratchpads/recents.toml` —
+beside the pads rather than at the top of the state directory, so it is not a second file to tell
+apart from the projects' one, and a file where every sibling is a directory, so the listing steps
+over it with no special case. `PadOrder` is `Recents` verbatim, over ids: the front is what to
+open, `touch` answers whether anything *moved* (which is what keeps a startup that reopens the
+front pad from writing a file), and nothing prunes itself on load. **`pads()` is the order's ids
+then the pads it does not name**, in id order, and each row carries the name out of that pad's own
+package read at the moment the list is asked for — which is what lets the panel draw a pad nothing
+has ever opened. That second half is the difference from `recent_projects`, which lists only the
+projects a reader has opened: this is the list a reader picks a pad from, so a pad that fell off
+the end of `MAX_PAD_RECENTS` or was made outside the app has to be reachable — and it is the repo's
+one `read_dir`. A pad is remembered when it is **opened**, and only if there is a directory for it,
+which is what keeps the "nothing is written until there is something to say" rule: the pad a first
+run holds is in memory until something is typed into it.
+
+**A new pad is `new_pad`, and the claim is a `create_dir` that fails rather than opens** — the
+first free `pad-N`, `ProjectId::anonymous`'s shape and bound, stepping over an id another copy of
+the app already took. Unlike an anonymous project it **writes the package at once**: pressing New
+is a deliberate act, and a claimed directory with no package in it is not a pad and the listing
+would repair it away. The stem is `DEFAULT_ID`'s and deliberately without its number — the pad a
+first run opens is `pad` and New makes `pad-1`, `pad-2` — so New can never hand out the id of the
+pad the app is already holding, which it could if that one were `pad-1`: a pad nobody has typed in
+has claimed no directory for the `create_dir` to fail on.
+
+**There is no rename operation**, and that is the point of the id: renaming writes
+`Scratchpad::name` and the ordinary per-change save puts it on disk, exactly as typing in the
+source does. What went with it was a directory move that had to claim its target atomically, refuse
+a collision, rewrite the manifest and carry a buffer, a baseline and a place in the order across —
+all of it now unreachable. Deleting a pad is deliberately absent: it is the one operation here that
+destroys a reader's source, so it waits until it is asked for.
+
+A dependency is a `(name, version)` row and the **version is required** — a `*` is refused with
+its own reason, since a requirement whose answer changes with the day is the one thing a
+scratchpad must not have. Rows are checked against two grammars (a possible crate name, a
+possible version requirement) and never against crates.io: whether a crate exists is cargo's
+answer. Every bad row comes back as `(index, Problem)` so the editor can mark all of them at
+once, a repeat of one crate included — `[dependencies]` is a table, so the second row would
+otherwise silently win — and a scratchpad with a bad row **refuses to write** rather than
+generating a manifest that differs from what is on screen. **Building is blocking and belongs on
+a worker thread**, exactly as `open_files` is: `build_in` writes the package, runs `cargo build
+--message-format=json --color=never` with a null stdin, and hands back a value. The artifact path
+is what cargo *named*, never `target/debug/<crate>` derived from the name and the profile, which
+a `CARGO_TARGET_DIR`, a config above the directory or an executable suffix each make silently
+wrong. Turning that stream into a `Build` is a pure function of cargo's stdout, stderr and exit
+status, which is what lets a failed build be a test over a canned stream. Three answers, not two:
+the compiler said no (with cargo's own stderr kept, since `no matching package named ... found`
+is said there and nowhere else), or nothing was compiled at all.
+
+**Running is the artifact and not `cargo run`.** `run_in` spawns the executable `build_in` already
+asked cargo to name, in the scratchpad's own directory with a null stdin. Re-entering cargo would
+redo resolution to arrive back at that same path, could arrive at a *different* one (the reader has
+usually typed since, so what ran would not be what the diagnostics describe), would interleave
+cargo's progress into the stream the reader is reading as their program's output, and would make
+stopping meaningless — killing a `cargo run` kills cargo and leaves its child with nothing holding
+it. What the app is handed back is a `Running`, whose one job is `stop`: `Child::kill`, since
+`Child`'s own `Drop` neither waits nor kills, so a run abandoned rather than stopped goes on running
+with nothing that could ever find it again. A **grandchild is out of reach**, which would need the
+run in a process group of its own and a `libc` this crate does not carry. `stop_all` is the same
+thing for every run at once, off a `static`, because the window's close hook can read no state —
+`Saves`' reason exactly, and it sits beside `flush` in `main.rs`.
+
+**Output is streamed, not collected**, which is the whole difference from `build_in`'s
+run-it-and-return-the-output shape: a program that prints and then loops for ever has said
+something, and a value returned at exit would never say it. Two threads, one per pipe, hand each
+line to a callback as it arrives; whichever finishes last reaps the process and emits the one
+`Ended`. So a run is over when both pipes are at the end **and** the process is reaped — a program
+that hands its output to a grandchild outliving it reads as still running, which is the honest
+answer, since the output is still coming. The reap `try_wait`s on a poll rather than `wait`ing,
+because holding the `Child` is exactly what would make a stop wait for the process it is killing.
+**Three bounds, and each is a different failure**: `MAX_LINE` (4 KiB) cuts a line with no newline in
+it, so a program writing megabytes in one line is still *delivered* rather than accumulated;
+`MAX_OUTPUT_LINES` (5000) is what is kept, oldest first out, with `RunOutput::dropped` so the view
+can say the story is missing its beginning (a line cap and not a byte cap, because the view is a
+list of rows and a byte budget would make the row count depend on how long the lines happened to
+be); and the app's own `RUN_EVENTS`-bounded channel is backpressure that reaches the program itself
+— a full channel blocks the pipe thread, which fills the pipe, which blocks the writer.
+
+
+## The Scratchpad view
+
+**The Scratchpad page** (`Tab::Scratchpad`) is the pads there are down one side and the shown one
+beside it — its source, its crates, its build and what the compiler said. It is a *view* for the
+reason the settings page is: there is one of it, it resolves against no object, and neither code
+pane could draw one. That there are many *pads* does not make it many views: the pad list is the
+Scratchpad view's own side panel, because the content area's strip is deliberately not the place
+for a second document list (a chip there is a *place in a binary*). What it **builds** needs no
+rule at all — the executable goes through `open_files` and its functions are ordinary tabs.
+
+**That panel is a fixed width** (`PAD_LIST_WIDTH`) and not a `ResizableContainer`, unlike the two
+splits in this app a reader can drag: a dock tab that is not the active one in its panel is
+unmounted, and a `ResizablePanel` forgets its size on unmount, so a draggable width here would
+need a number kept at the root the way `SplitRatio` is — for something nobody has asked to drag.
+Its rows are a plain `ScrollView`, the History list's shape rather than the symbol list's, there
+being a handful of one-label rows, and each draws the pad's **name**. **`pad_label` is the one
+place that decides what that is**: the name the reader gave it, or — for a pad they have not named
+— the id in angle brackets, `<pad-3>`. That is `<entry point>`'s device in a second place, and it
+is the whole of why an id may be drawn at all: in brackets it is plainly the app's word and not a
+name someone chose, where a bare id would be offering itself as one. A flat "Unnamed" was the
+alternative and is worse — three fresh pads would be three identical rows. **The name box is an
+ordinary bound box**, the project view's exactly: it writes into the shown pad's own
+`Scratchpad::name` on every keystroke and the save effect writes the package, because nothing is
+filed under the name. Its placeholder is that same label, so an empty box says what the pad is
+called in the list beside it, and typing replaces it where a seeded name would have to be cleared
+first. The one thing the panel can be told no about is New, whose failure sits under
+the list as `Pads::refused` — at the root and not in the view, since an answer that landed while
+the reader was in another tab still has to be there when they come back.
+
+**Its editor is freya's own `CodeEditor`**, which the read-only source pane deliberately rejected.
+That is not a reversal: both of the pane's objections were about painting and scrolling a listing
+from *outside*, and neither survives a pane the reader is typing in — the one line it backgrounds
+is the caret's, which is the only current line an editor has, and nothing here wants to scroll it
+from elsewhere. What comes with it is a cursor, a selection, an undo history, the clipboard, IME
+preedit and an incremental tree-sitter re-parse per keystroke. Two things stay ours: the colours,
+mapped onto the palette (`EditorTheme` beside the `EditorSyntaxTheme` `Palette::syntax` already
+answers for), and the font — the component takes **one** family where everything else takes a
+chain, and the rest of the chain arrives by inheritance from the box around it, since freya appends
+a parent's families behind an element's own. Its line height is `code_row_height()` reached through the
+multiplier it wants, with half a pixel of slack because it multiplies and floors. The editor's
+`SyntaxBlocks` is `HIGHLIGHTED`'s hazard in a second place — colours resolved in at parse time, and
+`set_appearance`'s clear cannot reach inside a `CodeEditorData` — so an effect keyed on the
+appearance re-sets its theme and re-parses.
+
+**One worker thread owns every pad's directory.** Reading a scratchpad back, writing the
+package, listing the pads, claiming a new one, moving a renamed one and `cargo build` are all
+blocking, so all of them go to one `std::thread` fed an `async_channel`, `use_analysis`'s shape —
+one thread and not several, because the point is not only that the UI thread stays free but that a
+directory has a single writer, so a save cannot land inside the build that is reading what it
+writes. **Saves supersede, per pad, and builds never do**: a keystroke is a save, so the loop
+drains its queue while what it holds is one, and whatever is behind it is either a newer save or a
+build that writes the package itself. The **per pad** is a correctness rule and not a refinement —
+keyed on nothing, a save of one pad would be dropped in favour of a job for another, and that pad's
+package would quietly fall behind what is on screen, silently, since the pad that lost the write is
+the one nobody is looking at. So `superseded` replaces a save only while the job behind it names
+the same pad, and hands a job for another pad back to a hold-back queue rather than stepping over
+it. That a build of one pad delays another's save is accepted: the reader types in one pad at a
+time. Two builds cannot start at once, on the button (`enabled`) and in `request_build` both,
+because a build takes seconds and a second job queued behind the first would compile bytes that
+have since changed.
+
+**Everything the app holds about a scratchpad is per pad.** `Pads` is the table of them and which
+one is shown; `PadState` is one pad's own, and every field it has — what was read, what is being
+built, which run is going and what it has written — was already about one pad. A pad is in the
+table from the moment it is first shown and never leaves, so `Pads::state()` is never absent and no
+call site grows an `Option`. **Runs are per pad**: an event carries the pad beside the run number,
+so a program started in one pad goes on running and goes on writing into *its own* list while
+another pad is on screen, and its `Ended` stops the pad it belongs to rather than the one being
+looked at. What stops a run is unchanged and per pad — its Stop, its pad's rebuild, its pad's next
+run — and the window closing still stops every run everywhere, `stop_all` walking a `static` that
+never knew about pads in the first place. **Buffers are per pad too**: `PadText` is a
+`CodeEditorData` each rather than one replaced on every switch, so a pad comes back with the
+cursor, the selection and the undo history it was left with, and a rename moves its buffer with it.
+The editor is mounted only for a pad the table holds a buffer for, which is what makes its mapped
+`Writable` safe — a dependency row's two boxes are indexed the same way for the same reason.
+
+**Switching pads writes the one being left before it opens the next, and through the worker.** The
+jobs are one ordered queue, so a save queued ahead of the arriving pad's read lands ahead of it; a
+save left to the effect would not, the mirror into the model and the write out of it being two
+effects and the second woken by the first, so a click landing between them would leave the last
+keystroke unwritten. `save_if_changed` is the one comparison behind both callers — the effect, for
+the pad being typed into, and `show_pad`, for the pad being left — and the baseline it compares
+against travels in `PadJobs`, since a switch has to reach it from outside the hook that owns the
+loop. A pad already read is shown from what is held and is never read a second time.
+
+**Nothing is written until the disk has been read.** `PadState::opened` is `Saves::written`'s rule
+in a second place, and now per pad: the app boots holding `Scratchpad::default` and the reader's own
+source arrives a thread later, so a save in between would put the default over a scratchpad someone
+was keeping. The baseline is then seeded *by that answer*, so a run in which nothing is typed writes
+nothing and a scratchpad nobody opened leaves no directory behind. Startup is one question above
+that — `PadJob::List`, asked on mount, whose answer says which pad to open: the front of the order,
+or, when there is no order at all, the pad the app booted holding, opened like any other so that
+`opened_in` seeds its baseline without writing anything. `Scratchpad::write` refuses outright rather
+than generating a manifest that differs from the rows, so a bad row stops the source being written
+too — which the pane says over the rows, each of which says its own half. Every bad row is marked,
+not the first: `Scratchpad::problems` answers with `(index, Problem)` for all of them, and
+`Problem::half` says which of the row's two boxes to redden, because `Repeated` is a *name*
+collision and nothing in its wording says so.
+
+**A failed build points back at a row structurally, never by looking for a crate name in a
+sentence.** A rejected build with no compiler diagnostics at all is cargo refusing before it
+compiled anything, and `[dependencies]` is the only part of the generated package this pane can get
+wrong — so cargo's own stderr, where `no matching package named ... found` is said and nowhere
+else, is drawn under the rows. Once the compiler has spoken, the same stderr says only what the
+diagnostics list already does and is dropped.
+
+**Running does not sit on that worker, and stopping does not go near it.** `PadJob::Run` only
+starts the program and comes straight back — it goes to the worker because it forks and because the
+directory it hands the program is that thread's, not because it blocks. A run has no bound on how
+long it takes (an accidental `loop {}` is the ordinary case in a buffer someone is experimenting
+in), so a run queued like a build would freeze every save behind it and the reader could not edit
+their way out. A stop is the same argument turned around: queued behind a build it would arrive
+after the thing it was meant to interrupt, so it is a direct `Running::stop` from the handler.
+`RunState` has four states because `Starting` is the one a `bool` loses — a fork is fast but not
+instant, and a Stop pressed inside that window is remembered by leaving `Starting`, which is what
+makes the arriving handle unwanted and stopped where it lands. `Over(Stopped)` is written by the
+run's own `Ended` and never by the button, so the pane says "Stopped" when the process is gone
+rather than when it was asked. **Events carry a run number**, which `use_analysis` was at pains not
+to need: it can compare identities because an answer carries the `Symbol` it is about and that
+symbol predates the request, whereas the process an event is about does not exist until after the
+first bytes can be written. Stopping one program and starting another is one keypress, and untagged
+the first one's last lines and its `Ended` would land in the second's output. **stdout and stderr
+are told apart by colour and by nothing else**, and deliberately not by the red every invalid thing
+wears: stderr is not an error, it is the other stream, so it takes the palette's one warm hue.
+Between the two streams there is no order to preserve and none is claimed — two pipes read by two
+threads, which is all a terminal has either. Recorded, not built: the list does not follow the
+newest line, so a long run has to be scrolled; auto-follow needs the viewport height and a "the
+reader has scrolled away" rule, which is `reveal_row`'s shape and its own piece of work.
+
+**What stops a run**: its Stop button, its pad's rebuild, its pad's next run, and the window
+closing — the first three per pad, since another pad's program is about another executable, and
+the last still app-wide. A **rebuild** stops it for three separate sufficient reasons — cargo is
+about to write over the file the process *is*, `reopen_binary` is about to close the objects
+describing those bytes, and one pad has one output pane. The **next run** stops it because two generations of output arriving into one list
+is a pane with no answer to "what is this". An **edit** stops nothing, deliberately: a run is of an
+executable and not of the buffer, and a keystroke that killed the reader's program would make it
+impossible to take a note about what it printed. **Leaving the pad** stops nothing either — the
+program goes on and its lines go on landing in that pad's own list, which is what switching back
+shows. A **project switch** stops nothing either, and for
+a reason that is already settled — `Pad` is not one of the states in `ProjectStates`, because a
+scratchpad belongs to the app rather than to a project, so a switch never touches one and a pad
+open in one project is the same pad in the next.
+
+**A rebuild replaces rather than accumulates.** `reopen_binary` is `close_binary` followed by what
+the toolbar's Open does, in one handler: a binary is a **path** throughout this app — that is what
+`close_binary` closes by and what `project::binaries` derives the saved list from — and a rebuild
+writes the same path with different bytes, so two generations of one file cannot both be in the
+objects list. The cost is real and is the reader's: the tabs for that file's functions, their
+viewing positions and the history entries into them go with it. Keeping them would be `Rebuilt`'s
+resolve-by-name machinery pointed at a live state instead of at a session file.
+
