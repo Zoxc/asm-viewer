@@ -19,7 +19,7 @@ mod listing;
 use disasm::Code;
 
 pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
-pub use line::{DebugInfoCache, LineInfo, LineRow, Location};
+pub use line::{DebugInfoCache, LineInfo, LineRow, Location, SourceDigests, SourceHash};
 pub use listing::{CodeListing, DecodedStretch, Gap, GapKind, Listing, Place, Placed, Stretch};
 // Re-exported so the viewer needs no `object` dependency of its own.
 pub use object::{Architecture, BinaryFormat, SectionIndex};

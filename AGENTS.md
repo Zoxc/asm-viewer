@@ -41,7 +41,9 @@ Dependency versions are pinned by compatibility, not taste: the `tree-sitter-*` 
 on the `tree-sitter-language` ABI of the one `tree-sitter` the app and `freya-code-editor` share
 (`cargo tree -p viewer -d`), and `addr2line`
 0.21 / `gimli` 0.28 / `object` 0.32 must stay one copy each — check with `cargo tree -p analysis
--d` after touching any of them. The reasoning is in the `Cargo.toml` comments; keep them current.
+-d` after touching any of them — as must `fallible-iterator` 0.3, which `gimli` and `pdb2` share,
+and `digest` 0.10, which the three hash crates share. The reasoning is in the `Cargo.toml`
+comments; keep them current.
 
 ### Test fixtures
 
@@ -68,6 +70,8 @@ command.
   that makes every answer's rows hold `LineInfo`'s invariants. Names no debug format.
 - `crates/analysis/src/line/dwarf.rs` — the DWARF backend, and the only part that knows
   `gimli`/`addr2line`.
+- `crates/analysis/src/line/pdb.rs` — the PDB backend: a PE's `.pdb` found by its CodeView
+  record, matched by GUID and age, read a page at a time; the only part that knows `pdb2`.
 - `crates/analysis/src/line/source.rs` — the same line info the other way: a file and a line,
   out to the symbols compiled from them, built on the seam and not on a backend.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.

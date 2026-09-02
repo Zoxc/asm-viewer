@@ -119,7 +119,9 @@ impl Dwarf {
             let start = address.max(query.start).wrapping_sub(bias);
             let end = end.min(query.end).wrapping_sub(bias);
 
-            let file = location.file.map(|file| rows.file(file));
+            // DWARF 5 can record a file's MD5 too, but `addr2line` 0.21 renders the name
+            // without handing the entry back, so no hash travels with it for now.
+            let file = location.file.map(|file| rows.file(file, None));
             rows.push(start..end, file, location.line, location.column);
         }
 

@@ -926,9 +926,24 @@ one item per part, so the unfinished half stays visible.
   3.7 MB in the worst. `estimate_size` is capped at 1 MiB to stop that costing seconds per
   redraw, but an x86-64 image carries a `RUNTIME_FUNCTION` in `.pdata` stating both ends of
   every function with unwind info, which would make the gaps the cap exists for stop existing.
-- [ ] PDB line info, through the `pdb` crate: a linked PE names its `.pdb` in the debug
-  directory's CodeView record, so an `.exe`/`.dll` built with debug info gets a source view.
-  DWARF is read today and the PE sample has no debug sections at all.
+- [x] PDB line info, through the `pdb2` crate (the maintained fork of `pdb`; the one that shares
+  `fallible-iterator` with `gimli`): a linked PE names its `.pdb` in the debug directory's
+  CodeView record, so an `.exe`/`.dll` built with debug info gets a source view. A second
+  backend behind `line.rs`'s seam, answering the same two questions from the PDB's per-module
+  line tables and procedure lengths, with `section:offset` translated through the PDB's own
+  address map onto the image base. The `.pdb` is found at the recorded path, or beside the
+  binary under the recorded name or the binary's own, and taken only when its GUID **and** age
+  are the image's. Each file's recorded checksum travels with its name (`SourceHash`), so the
+  app can tell an edited source from the one compiled. Pinned by a committed
+  `line_fixture.dll` + `.pdb` built by clang-cl and rust-lld from the gcc fixtures' own C file
+  (`agents/Analysis.md`).
+- [ ] Map a PDB's source paths onto this machine: the names come out verbatim (`C:\...` from
+  MSVC, `/rustc/<hash>\library\...` from rustc), so the Source pane cannot open them where the
+  build was elsewhere. A root-to-root mapping saved with the project, with the recorded
+  checksum (`LineInfo::hash_of`) deciding among candidates rather than the name alone.
+- [ ] Carry DWARF 5's `DW_LNCT_MD5` the way the PDB's checksum is carried: clang records it,
+  gcc does not; `addr2line` 0.21 renders a file name without handing its entry back, so this
+  means rendering the name from `gimli`'s own `FileEntry` the way `addr2line` does.
 - [?] CodeView embedded in COFF (`.debug$S`/`.debug$T`), which is what a rustc `.rlib` member
   carries — a different container from a `.pdb` file and likely hand parsing, so it stays
   undecided on its own.

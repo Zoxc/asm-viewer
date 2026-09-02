@@ -23,6 +23,22 @@ gimli = { version = "0.28", default-features = false, features = ["read", "std",
 # add `rand` for a randomly seeded hasher, which would be the one crate this does add and
 # is the opposite of what a digest compared across runs needs.
 twox-hash = { version = "1.6.3", default-features = false }
+# PDB line info (`src/line/pdb.rs`). `pdb2` is the maintained fork of `pdb` 0.8 with the
+# same API; chosen over `pdb` itself because that one wants `fallible-iterator` 0.2 beside
+# the 0.3 `gimli` already brings, and over `pdb-addr2line` because it answers one address at
+# a time with no column and would add six crates. This adds exactly one, `scroll`: its
+# `fallible-iterator` 0.3 and `uuid` 1 are already in the tree. `cargo tree -p analysis -d`
+# reported the same two `hashbrown`s before and after, and nothing else.
+pdb2 = "0.10"
+# The digests a PDB records per source file (`SourceDigests`), so the app can tell a file it
+# opened apart from the one the binary was built from. All three share `digest` 0.10;
+# `sha1` and `digest` were already in the lock through the devtools feature's `tungstenite`,
+# so the default build gains `md-5`, `sha2` and the `digest` family it did not compile
+# before. Hashing lives here and not in the app so it is tested against known vectors
+# without a UI in the way.
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
 
 [dev-dependencies]
 # Test fixtures are built in memory with the writers rather than committed as blobs:

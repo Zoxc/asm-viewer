@@ -1,7 +1,8 @@
 # The analysis crate
 
-`crates/analysis` is framework-free: object parsing, the data model, demangling, lazy DWARF line
-info in both directions, the disassembler seam and the robustness suite. Nothing here knows freya.
+`crates/analysis` is framework-free: object parsing, the data model, demangling, lazy line info in
+both directions (from DWARF or a PDB), the disassembler seam and the robustness suite. Nothing
+here knows freya.
 
 **Parse pipeline** (`open_files_streaming` -> `parse_object`): each selected file is first tried as
 an `ArchiveFile` and every member parsed as a separate `Object`, then the file itself is *also*
@@ -57,10 +58,11 @@ address in that list — **clipped to the section's own bytes**, since that list
 the file and one wild `st_value` in it would otherwise cost the symbol *above* it its listing
 rather than only itself. Declared sizes are frequently 0 in ELF/COFF, which is why the
 derivation exists at all; the declared size is kept separately and only displayed. `SymbolData::extent` is the answer that is actually used, and
-prefers DWARF — a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc` — where the object has any,
-taking the **smaller** of the two: the estimate over-reaches into padding, but `high_pc` describes
-the *function*, so a second symbol inside one subprogram (an alias, an assembler label, a split
-cold part) would otherwise swallow the next function. The derivation is capped at
+prefers the extent the debug info declares — a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc`,
+or a PDB procedure's length — where the object has any, taking the **smaller** of the two: the
+estimate over-reaches into padding, but the declared extent describes the *function*, so a second
+symbol inside one function (an alias, an assembler label, a split cold part) would otherwise
+swallow the next function. The derivation is capped at
 `MAX_DERIVED_SIZE` (1 MiB) — not a claim about how long a function can be, but the point past
 which it is certainly describing something else: a stripped PE's export table is sparse, so nine
 of the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which is 772 302 instructions
@@ -81,7 +83,7 @@ will take is displayed exactly as the file wrote it, which is what an unrecognis
 did.
 
 **Demangling is the last of the open-time cost, and it is what this crate parallelises.** After
-the lazy line info, the lazy DWARF context, the lazy subprogram extents and the worker-thread
+the lazy line info, the lazy debug-info backend, the lazy function extents and the worker-thread
 disassembly, it was the only expensive thing left at open time that is not simply reading the
 file: 281 ms of the 331 MB binary's 1 437 ms, 78 ms of the 196-member rlib's 181 ms
 (release; debug numbers overstate every one of these and are not worth quoting). What is left
@@ -189,6 +191,39 @@ with relocations in `.debug_addr` is declined rather than judged, since DWARF 5'
 state their addresses there. Measured on the 196-member rlib the rule fires on nothing, and the
 root-DIE pass costs 1.5% of a sweep of every symbol's line info and extent (200 ms -> 203 ms).
 
+**The PDB backend** (`line/pdb.rs`) reads the other debug format a linked PE comes with: not
+sections in the image but a **second file**, so it is the one backend that touches the filesystem.
+`DebugInfo::load` tries DWARF first (a MinGW or clang PE can carry `.debug_*`) and a `.pdb` only
+for an object with none. **Finding it**: the debug directory's CodeView record — `object` already
+reads it, `pdb_info()` — names the `.pdb` by path, GUID and age; the path is the build machine's,
+so three candidates are tried in order: the recorded path where it is absolute, the recorded file
+name beside the binary, and the binary's own name with `.pdb` beside it. **Matching it**: GUID
+*and* age both, the GUID naming the build and the age the relink — an incremental relink keeps
+the GUID and bumps the age, and its `.pdb` then describes code the image no longer has, which is
+worse than none. The age compared is the DBI's, which the linker wrote; the info stream's own age
+is bumped by tools that rewrite a PDB afterwards (source indexing) and may legitimately exceed the
+image's. **Addresses**: a PDB states `section:offset`; every one goes through the PDB's own
+`AddressMap` to an RVA — which is also where an OMAP-rearranged image is undone, a path no fixture
+exercises beyond its identity form — and onto the image base with checked arithmetic, so answers
+are in the virtual address space a linked image's symbols already are, and a linked image has no
+section bias. **Per module, on demand**: line info in a PDB is per module (one object the linker
+took in), found from an address through the DBI's section contributions — a sorted table with a
+running `max_end`, `source.rs`'s `SymbolRange` shape, built at load; a module is decoded whole the
+first time an address in it is asked about (its rows through `RowCollector::finish` into one
+`LineInfo`, its `S_GPROC32`/`S_LPROC32` lengths into an extent table) and kept, the way the DWARF
+backend keeps a unit's subprogram extents. A row with no length — one whose successor sits below
+it, which only assemblers emit — is dropped rather than given an end. Line 0 and column 0 are
+`None` as in DWARF. `each_row` walks every module, so a first source question decodes the whole
+PDB, as the DWARF one parses every line program. **Two things a PDB has that DWARF-as-read does
+not**: a checksum per source file (`SourceHash`, MD5 unless the producer was told otherwise),
+carried on `LineInfo` beside the file name so a reader can tell the file they have from the one
+the compiler read (`SourceDigests::of` takes all three digests of a file's bytes at once, so a
+file read once answers any kind), and file names in the producer's spelling — `C:\...` from MSVC,
+`/rustc/<hash>\library\...` from rustc — handed out verbatim as DWARF's are. **What is not read**:
+public symbols as a source of names for a stripped image's unexported functions (its own goal),
+and `/DEBUG:FASTLINK` or stripped PDBs, which match and then answer nothing. The file stays open,
+read a page at a time through `BoundedFile`, never whole: `rustc_driver`'s PDB is 268 MB.
+
 **The reverse mapping is an index, and a whole-object one** (`line/source.rs`). "Which functions
 was this line compiled into" is not a question about one symbol, so it is not a query but a table:
 built on the **first source question against an object** and never before one, behind a `OnceLock`
@@ -237,7 +272,12 @@ backwards is a subtract-with-overflow panic on a file the user merely opened; an
 — that one while the context is being *built*, which is why the guard is around the build too.
 What is *not* left to the guard is the third one: `find_units` asks about `probe + 1` unchecked,
 so the DWARF backend's `extent` declines `u64::MAX` outright rather than catching the panic
-afterwards.
+afterwards. `pdb2` 0.10 has four of the same kind — a module's line data sliced at
+`start + size` unchecked, a line block's size less its header, `section:offset + length` as a
+plain `+`, a string-table name at a declared offset — all under the same net
+(`notes/upstream/pdb2.md`); and one that no guard catches, a stream directory's declared length
+allocated before a byte is read, answered the way `section_data` answers a lying compressed size:
+`BoundedFile` weighs every declared slice and their total against the file's length first.
 
 **Disassembly** (`SymbolData::assembly`) goes through a seam — `disasm.rs` defines everything a
 caller sees and names no backend, `disasm/x86.rs` is the only module in the crate that mentions

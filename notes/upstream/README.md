@@ -10,3 +10,4 @@ is only for what is not ours to fix.
 - [`freya.md`](freya.md) -- the UI framework, 0.4.3.
 - [`tree-sitter-rust.md`](tree-sitter-rust.md) -- the Rust grammar, 0.24.
 - [`tree-sitter-cpp.md`](tree-sitter-cpp.md) -- the C++ grammar, 0.23.
+- [`pdb2.md`](pdb2.md) -- the PDB reader, 0.10.2.

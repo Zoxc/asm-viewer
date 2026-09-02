@@ -5,9 +5,11 @@
 //! This file is the **seam**: what every backend answers and the rules every answer obeys,
 //! naming no debug format. The two questions — the rows covering an address range, and a
 //! function's declared extent — are asked of a [`DebugInfo`], which dispatches by `match` to
-//! the one backend the object has: [`dwarf`], which is the only module that knows `gimli` and
-//! `addr2line`. A row out of any backend goes through one [`RowCollector`], so the invariants
-//! [`LineInfo`] promises hold whoever produced them.
+//! the one backend the object has: [`dwarf`] for debug sections in the object itself, the
+//! only module that knows `gimli` and `addr2line`; [`pdb`] for a PE whose debug directory
+//! names a `.pdb` beside it, the only module that knows `pdb2`. A row out of any backend goes
+//! through one [`RowCollector`], so the invariants [`LineInfo`] promises hold whoever
+//! produced them.
 //!
 //! This is the forward direction — an address range in, source rows out. The reverse — a file
 //! and a line, out to the symbols compiled from them — is [`source`], a file of its own
@@ -20,6 +22,7 @@ use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
 mod dwarf;
+mod pdb;
 mod source;
 
 use source::SourceIndex;
@@ -45,6 +48,7 @@ pub(crate) struct DebugInfo {
 /// The formats read. A closed set dispatched by `match`, monomorphised, nothing boxed.
 enum Backend {
     Dwarf(dwarf::Dwarf),
+    Pdb(pdb::Pdb),
 }
 
 impl DebugInfo {
@@ -56,7 +60,12 @@ impl DebugInfo {
 
     fn load_inner(object: &Object) -> Option<DebugInfo> {
         let file = object::File::parse(object.data.bytes()).ok()?;
-        let backend = dwarf::Dwarf::load(&file, &object.sections).map(Backend::Dwarf)?;
+        // Debug sections in the object itself first — a MinGW or clang PE can carry DWARF
+        // — and a `.pdb` beside it only for an object that has none.
+        let backend = match dwarf::Dwarf::load(&file, &object.sections) {
+            Some(dwarf) => Backend::Dwarf(dwarf),
+            None => Backend::Pdb(pdb::Pdb::load(&file, &object.path)?),
+        };
         Some(DebugInfo {
             backend,
             index: OnceLock::new(),
@@ -64,10 +73,12 @@ impl DebugInfo {
     }
 
     /// How far the section with this index was moved by [`crate::section_biases`]; 0 for a
-    /// section that was not moved, and for every section of a linked image.
+    /// section that was not moved, and for every section of a linked image — which is the
+    /// only kind of object a `.pdb` describes.
     fn bias(&self, section: SectionIndex) -> u64 {
         match &self.backend {
             Backend::Dwarf(dwarf) => dwarf.bias(section),
+            Backend::Pdb(_) => 0,
         }
     }
 
@@ -75,6 +86,7 @@ impl DebugInfo {
     fn line_info(&self, section: &Section, range: Range<u64>) -> Option<Arc<LineInfo>> {
         without_panicking(|| match &self.backend {
             Backend::Dwarf(dwarf) => dwarf.line_info(dwarf.bias(section.index), range),
+            Backend::Pdb(pdb) => pdb.line_info(range),
         })
         .flatten()
         .map(Arc::new)
@@ -85,17 +97,19 @@ impl DebugInfo {
     fn extent(&self, section: &Section, address: u64) -> Option<u64> {
         without_panicking(|| match &self.backend {
             Backend::Dwarf(dwarf) => dwarf.extent(dwarf.bias(section.index), address),
+            Backend::Pdb(pdb) => pdb.extent(address),
         })
         .flatten()
     }
 
     /// Every row that names a file and a line, whatever the object, handed to `visit` as
     /// `(range, file, line)` in the **biased** address space ([`Section::bias`] already
-    /// applied). The backend's own lock is held for the whole walk, so `visit` must not ask
+    /// applied). A backend may hold its own lock for the whole walk, so `visit` must not ask
     /// this object anything — see [`source`] for the one caller and the order it keeps.
     fn each_row(&self, visit: &mut dyn FnMut(Range<u64>, &str, u32)) {
         without_panicking(|| match &self.backend {
             Backend::Dwarf(dwarf) => dwarf.each_row(visit),
+            Backend::Pdb(pdb) => pdb.each_row(visit),
         });
     }
 }
@@ -108,12 +122,58 @@ impl DebugInfo {
 /// row's length is `next.address - row.address`, and nothing stops a line program from moving
 /// its address backwards; and a range is `low_pc + high_pc` wherever `high_pc` is a length,
 /// which overflows for a length running off the end of the address space — that one while the
-/// context is being *built*, which is why the guard is around [`DebugInfo::load`] too.
+/// context is being *built*, which is why the guard is around [`DebugInfo::load`] too. In
+/// `pdb2` 0.10, a module's line data is sliced out of its stream at `start..start + size`
+/// unchecked, a line block's size has its header subtracted unchecked, and a section offset
+/// plus a length is a plain `+` (`notes/upstream/pdb2.md`).
 ///
 /// Sound because a panic leaves nothing half-written: a backend is only ever read, and the
 /// lock a panic poisons is recovered explicitly.
 fn without_panicking<T>(f: impl FnOnce() -> T) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+}
+
+/// A checksum the debug info records for a source file, so a reader can tell the file they
+/// have from the one the compiler read. Which algorithm is the producer's choice — MSVC,
+/// clang-cl and rustc write MD5 unless told otherwise — so a hash carries its own kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SourceHash {
+    Md5([u8; 16]),
+    Sha1([u8; 20]),
+    Sha256([u8; 32]),
+}
+
+/// All three digests of one file's bytes, computed together, so a file read once answers a
+/// [`SourceHash`] of any kind. The bytes hashed are the file's as read, not a decoding of
+/// them: the compiler hashed the bytes too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceDigests {
+    md5: [u8; 16],
+    sha1: [u8; 20],
+    sha256: [u8; 32],
+}
+
+impl SourceDigests {
+    pub fn of(bytes: &[u8]) -> SourceDigests {
+        use md5::Digest as _;
+        SourceDigests {
+            md5: md5::Md5::digest(bytes).into(),
+            sha1: sha1::Sha1::digest(bytes).into(),
+            sha256: sha2::Sha256::digest(bytes).into(),
+        }
+    }
+}
+
+impl SourceHash {
+    /// Whether the bytes these digests were taken of are the bytes this hash was recorded
+    /// for.
+    pub fn matches(&self, digests: &SourceDigests) -> bool {
+        match self {
+            SourceHash::Md5(hash) => *hash == digests.md5,
+            SourceHash::Sha1(hash) => *hash == digests.sha1,
+            SourceHash::Sha256(hash) => *hash == digests.sha256,
+        }
+    }
 }
 
 /// Rows as a backend hands them over, and the one path from there to a [`LineInfo`]: files
@@ -124,17 +184,20 @@ fn without_panicking<T>(f: impl FnOnce() -> T) -> Option<T> {
 pub(super) struct RowCollector {
     rows: Vec<LineRow>,
     files: Vec<Arc<str>>,
+    hashes: Vec<Option<SourceHash>>,
     indices: HashMap<Arc<str>, usize>,
 }
 
 impl RowCollector {
-    /// The index a file name will have in [`LineInfo::files`], interning it on first sight.
-    pub(super) fn file(&mut self, name: &str) -> usize {
+    /// The index a file name will have in [`LineInfo::files`], interning it on first sight
+    /// along with the hash recorded for it — the first hash seen for a name is the one kept.
+    pub(super) fn file(&mut self, name: &str, hash: Option<SourceHash>) -> usize {
         match self.indices.get(name) {
             Some(index) => *index,
             None => {
                 let name: Arc<str> = Arc::from(name);
                 self.files.push(name.clone());
+                self.hashes.push(hash);
                 self.indices.insert(name, self.files.len() - 1);
                 self.files.len() - 1
             }
@@ -166,7 +229,10 @@ impl RowCollector {
     /// info" are the same answer to a caller.
     pub(super) fn finish(self) -> Option<LineInfo> {
         let RowCollector {
-            mut rows, files, ..
+            mut rows,
+            files,
+            hashes,
+            ..
         } = self;
 
         // Units are visited in range order and rows within a unit ascend, but two units may
@@ -200,7 +266,11 @@ impl RowCollector {
             same
         });
 
-        (!rows.is_empty()).then(|| LineInfo { rows, files })
+        (!rows.is_empty()).then(|| LineInfo {
+            rows,
+            files,
+            hashes,
+        })
     }
 }
 
@@ -241,9 +311,28 @@ pub struct Location<'a> {
 pub struct LineInfo {
     rows: Vec<LineRow>,
     files: Vec<Arc<str>>,
+    /// Parallel to `files`: the checksum the debug info recorded for each, where it did.
+    hashes: Vec<Option<SourceHash>>,
 }
 
 impl LineInfo {
+    /// Line info from rows and files handed over directly, made to hold the invariants
+    /// below the way a backend's rows are, or [`None`] when no row covers anything. Each
+    /// row's `file` indexes `files` as given. For code that has line info to stand in for
+    /// what a backend would have said — a test of the app's panes, say — and nothing else.
+    pub fn new(rows: Vec<LineRow>, files: Vec<(Arc<str>, Option<SourceHash>)>) -> Option<LineInfo> {
+        let mut collector = RowCollector::default();
+        let indices: Vec<usize> = files
+            .iter()
+            .map(|(name, hash)| collector.file(name, *hash))
+            .collect();
+        for row in rows {
+            let file = row.file.and_then(|file| indices.get(file).copied());
+            collector.push(row.range, file, row.line, row.column);
+        }
+        collector.finish()
+    }
+
     /// Every row, ascending by address and non-overlapping.
     pub fn rows(&self) -> &[LineRow] {
         &self.rows
@@ -253,6 +342,13 @@ impl LineInfo {
     /// [`LineRow::file`] indexes into this.
     pub fn files(&self) -> &[Arc<str>] {
         &self.files
+    }
+
+    /// The checksum the debug info recorded for the file at this index of
+    /// [`files`](Self::files), or [`None`] where it recorded none (DWARF, as read here) or
+    /// the index is not a file's.
+    pub fn hash_of(&self, file: usize) -> Option<SourceHash> {
+        self.hashes.get(file).copied().flatten()
     }
 
     /// The row covering `address`, or [`None`] when no row does. The last row starting at or
@@ -294,12 +390,13 @@ impl Object {
     /// `range` on its own does not say which code it means. See [`crate::section_biases`].
     ///
     /// [`None`] means "no line info" for every reason at once: no debug info, debug info in a
-    /// format this does not read (CodeView), debug info that will not parse, or debug info
-    /// that says nothing about this range.
+    /// format this does not read (CodeView embedded in a COFF object), a `.pdb` that is
+    /// missing or not this image's, debug info that will not parse, or debug info that says
+    /// nothing about this range.
     ///
-    /// Worker-thread work by construction: the first call parses the debug info's tables, and
-    /// each call parses the line program of every unit covering the range, once per unit for
-    /// the object's lifetime.
+    /// Worker-thread work by construction: the first call parses the debug info's tables —
+    /// opening the `.pdb` beside a PE — and each call parses the line program of every unit
+    /// or module covering the range, once per unit for the object's lifetime.
     pub fn line_info(&self, section: &Section, range: Range<u64>) -> Option<Arc<LineInfo>> {
         self.debug_info()?.line_info(section, range)
     }
