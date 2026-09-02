@@ -135,7 +135,8 @@ invalidates in the same commit**: these are the record of why things are the way
 - **Nothing is analysed on the UI thread**, and nothing is cached in the UI: the worker's answer
   is held, not memoized.
 - **A document is a place in a binary or a file; everything else is a view.** `activate`,
-  `close_tab` and `close_binary` are the only three functions that change what is open.
+  `close_tab`, `close_others` and `close_binary` are the only four functions that change what is
+  open.
 - **Identity in the UI is `Arc` pointer identity**, never names or indices: list keys are
   `Arc::as_ptr(..).addr()` and prop `PartialEq`s are hand-written with `Arc::ptr_eq`.
 - **Asking for a colour or a font is what subscribes a scope to it** (`palette()`, `fonts()`);

@@ -850,6 +850,92 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
     assert!(states.open.active().is_none());
 }
 
+/// "Close other tabs" keeps the tab it was opened on and nothing else of the documents,
+/// lands on it when the one on screen is among those closing, lets go of the closed tabs'
+/// kept positions -- an assembly document's key holds the `Arc<Object>` it points into --
+/// and leaves a view sharing the panel alone, a view not being a document.
+#[test]
+fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let documents: Vec<Document> = symbols
+        .iter()
+        .take(3)
+        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .collect();
+
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    for document in &documents {
+        activate(
+            states.open,
+            states.history,
+            Some(document.clone()),
+            Visit::Went,
+        );
+    }
+    // A view dragged into the document panel, which the dock allows and this must not
+    // close: the × it has no place for is the whole of the argument.
+    {
+        let mut dock = states.open.dock;
+        let mut dock = dock.write();
+        let panel = dock.document_panel_mut().expect("the document panel");
+        panel.tabs.push(Tab::View(View::History));
+    }
+    let mut asm_at = states.asm_at;
+    for (row, document) in documents.iter().enumerate() {
+        asm_at.write().remember(document.clone(), row + 1);
+    }
+    test.sync_and_update();
+
+    // Opened on the middle tab while the last one is the tab on screen, so the landing is
+    // a move and not a tab simply staying where it was.
+    let keep = states
+        .open
+        .docs
+        .peek()
+        .id_of(&documents[1])
+        .expect("the kept tab is open");
+    close_others(
+        states.open,
+        states.history,
+        states.asm_at,
+        states.src_at,
+        states.driven,
+        keep,
+    );
+    test.sync_and_update();
+
+    assert!(states.open.documents() == documents[1..2]);
+    assert!(
+        states.open.active() == Some(documents[1].clone()),
+        "the tab on screen closed without landing on the one that was kept"
+    );
+    assert_eq!(
+        states.asm_at.peek().at(&documents[1]),
+        Some(2),
+        "the kept tab lost the row it was left at"
+    );
+    assert!(
+        states.asm_at.peek().at(&documents[0]).is_none()
+            && states.asm_at.peek().at(&documents[2]).is_none(),
+        "a closed tab's position was kept, and with it the binary it points into"
+    );
+    assert!(
+        states
+            .open
+            .dock
+            .peek()
+            .document_panel()
+            .is_some_and(|panel| panel.tabs.contains(&Tab::View(View::History))),
+        "a view in the document panel was closed with the documents"
+    );
+}
+
 /// The history records where the reader *went* and not what is on screen: opening a
 /// document is a visit, switching to an open tab is not, and the neighbour a close lands
 /// on is not either. An effect observing the active document could not tell them apart.

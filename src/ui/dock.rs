@@ -11,7 +11,8 @@
 use super::*;
 
 /// One document's tab header: the icon naming its kind, what it is called, an × that
-/// closes it, and the pane's own white when it is the one on screen.
+/// closes it, a right-click menu that closes the others, and the pane's own white when it
+/// is the one on screen.
 ///
 /// **Nothing here activates the tab.** freya wraps a tab header in a `DropZone` around a
 /// `rect().on_press(set_active)` around a `DragZone`, so pressing this makes it the
@@ -27,6 +28,7 @@ fn chip(
     active: bool,
     mut hovering: State<bool>,
     mut on_close: impl FnMut(Event<PressEventData>) + 'static,
+    mut on_menu: impl FnMut(Event<PressEventData>) + 'static,
 ) -> impl IntoElement {
     // The active chip takes the pane's own background, so it reads as the top edge of the
     // pane below it. The hover stays lighter than that, or it would be more prominent
@@ -51,6 +53,10 @@ fn chip(
             .border(right_hairline())
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
+            // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
+            // without it panics. A right-click is not a press, so this leaves the tab it
+            // was opened on where it is rather than activating it first.
+            .on_secondary_down(move |e: Event<PressEventData>| on_menu(e))
             .child(icon)
             .child(label().text(elide(&text)).max_lines(1))
             .child(
@@ -313,6 +319,7 @@ impl Component for DocumentHeader {
         };
         let closed = document.clone();
 
+        let id = self.id;
         chip(
             entry_icon(&document),
             entry_text(&document),
@@ -320,6 +327,25 @@ impl Component for DocumentHeader {
             self.active,
             hovering,
             move |_| close_tab(open, history, asm_at, src_at, driven, &closed),
+            move |e: Event<PressEventData>| {
+                // Read at the press rather than at the render: whether this tab has
+                // company is not something the header draws, so subscribing to the panel
+                // for it would re-render every tab whenever any one of them opened.
+                let others = open.dock.peek().document_panel().is_some_and(|panel| {
+                    panel
+                        .tabs
+                        .iter()
+                        .any(|tab| matches!(tab, Tab::Document(other) if *other != id))
+                });
+                // The only tab open offers no menu at all, rather than one whose single
+                // row would do nothing.
+                if others {
+                    ContextMenu::open_from_event(
+                        &e,
+                        tab_menu(open, history, asm_at, src_at, driven, id),
+                    );
+                }
+            },
         )
         .into_element()
     }

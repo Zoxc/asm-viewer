@@ -65,8 +65,8 @@ dragging a split must not re-render every pane that draws a document — `Memo` 
 `set_if_modified`, so a drag that changed no document wakes nothing. It is therefore **a beat
 behind**, a memo being recomputed by a task woken on a notify. That is right for anything that
 *renders* and wrong for anything that must be true inside one event handler, so `activate`,
-`close_tab`, `close_binary` and the save observer call `active_document` on the states directly and
-never read the memo. `use_kept_position` asks `Docs` for the same reason: it decides whether to
+`close_tab`, `close_others`, `close_binary` and the save observer call `active_document` on the
+states directly and never read the memo. `use_kept_position` asks `Docs` for the same reason: it decides whether to
 write a row down for a tab that may have just been closed, and a memo could still be reporting it
 open during exactly that run.
 
@@ -77,8 +77,8 @@ a restart with a view on top restores every tab and shows none of them. That is 
 derivation, and it was taken over the alternative, which is remembering the last document that was
 active there: memory rather than a reading of the dock, and the second source of truth back again.
 
-The invariant — the active document is one of the open tabs, or `None` — is held by three functions
-and nothing else: `activate`, `close_tab`, `close_binary`. **Every** site that would *open* a
+The invariant — the active document is one of the open tabs, or `None` — is held by four functions
+and nothing else: `activate`, `close_tab`, `close_others`, `close_binary`. **Every** site that would *open* a
 document calls `activate`, `navigate` included, because the history keeps an entry long after its
 tab was closed; pressing a tab needs none of them, freya's own header wrapper setting the panel's
 active tab, which *is* the change. `Selection` itself has **no "nothing" variant**: having none open
@@ -138,6 +138,17 @@ and therefore the active document. That is also why the × must `stop_propagatio
 first switch to the tab it is closing. The × is drawn for documents only — the views are furniture,
 one of a kind, with no way back once closed, where a document is always reachable again from the
 symbol list or the history.
+
+A right-click on a document's header opens a menu of one item, **Close other tabs**, which is
+`close_others`: the tab it was opened on stays, every other *document* in the panel goes, and a view
+sharing the panel is left where it is — it is not a document, and the × it has no place for is the
+same argument. Its own function rather than `close_tab` in a loop, because each of those would work
+out a landing of its own and walk the panel through every intermediate state, where the landing here
+is known before anything is removed: the kept tab, and only when the tab on screen is one of the
+ones closing. The header opens no menu at all when nothing else is open, rather than a menu whose
+one row would do nothing, and it asks the panel for that at the **press** — whether a tab has
+company is not something a header draws, so subscribing to the panel for it would re-render every
+tab whenever any one of them opened.
 
 The document panel's tab bar is the horizontally scrolling one the strip used to be (`chip_strip`),
 because documents are opened by the dozen; a view panel's stays a plain row, seven views always
@@ -207,7 +218,7 @@ owed at once — a Locations row opens a symbol on a line, so the tab changes an
 is owed a reveal — and two effects' scrolls land in whichever order the runtime wakes them; with
 the reveal first, it had marked itself made by the time the kept row was put over it, which reset
 both panes to the top. One effect has one order, and when a reveal scrolls, the effect wakes on
-that scroll and records where it landed. `close_tab`/`close_binary` forget both of a tab's positions with the tab, which is
+that scroll and records where it landed. `close_tab`/`close_others`/`close_binary` forget both of a tab's positions with the tab, which is
 not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into — and the hook is
 handed the tab list precisely so that the run *after* a close, still holding the tab that has gone,
 cannot put it straight back. `close_tab` forgets the tab's driven line with them, which *is*

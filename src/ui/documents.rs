@@ -1,8 +1,9 @@
 //! Opening a document, closing one, and moving between them.
 //!
 //! The invariant "the active document is one of the open tabs, or `None`" is held by
-//! [`activate`], [`close_tab`] and [`close_binary`] and by nothing else, so every path
-//! that opens a document -- [`navigate`] included -- goes through [`activate`].
+//! [`activate`], [`close_tab`], [`close_others`] and [`close_binary`] and by nothing else,
+//! so every path that opens a document -- [`navigate`] included -- goes through
+//! [`activate`].
 
 use super::*;
 
@@ -137,6 +138,106 @@ pub(crate) fn close_tab(
     }
 }
 
+/// Close every document tab except the one `keep` names, leaving the views in the panel
+/// alone and landing on the kept tab when the one on screen is among those closing.
+///
+/// The unit is the **tab** and not the binary, so this is [`close_tab`] many times over
+/// rather than [`close_binary`] with another filter: what each of them lets go of is the
+/// same -- the tab, its entry in the table, both of its kept positions and the line it was
+/// driven from -- and for the same reason, a [`Document::Assembly`] key holding the
+/// `Arc<Object>` it points into. Done in one pass rather than by calling [`close_tab`] in
+/// a loop: each of those would work out a landing of its own and walk the panel through
+/// every intermediate state, and the landing here is known from the start.
+///
+/// A view that shares the document panel is not a document and never closes; it also
+/// keeps the screen when it is the tab on top, since nothing it is showing is going away.
+pub(crate) fn close_others(
+    open: Open,
+    history: State<History>,
+    mut asm_at: State<Positions<Document>>,
+    mut src_at: State<Positions<Document>>,
+    mut driven: State<Driven>,
+    keep: DocId,
+) {
+    let Open { mut dock, mut docs } = open;
+    let kept = Tab::Document(keep);
+
+    // Which tabs go and whether the one on screen is among them, worked out before
+    // anything is removed and in a scope of its own, so no read guard is alive when the
+    // writes below start.
+    let (closing, was_showing) = {
+        let dock = dock.peek();
+        let Some(panel) = dock.document_panel() else {
+            return;
+        };
+        // A tab that is not in the panel any more keeps its neighbours: this is the menu
+        // of a tab that was closed while the menu was open.
+        if !panel.tabs.contains(&kept) {
+            return;
+        }
+        let closing: Vec<DocId> = panel
+            .tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                Tab::Document(id) if *id != keep => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let was_showing = matches!(panel.active_tab_id, Some(Tab::Document(id)) if id != keep);
+        (closing, was_showing)
+    };
+    if closing.is_empty() {
+        return;
+    }
+
+    // The documents themselves, since the positions and the driven lines are keyed by the
+    // document and not by its id. Taken before the table lets go of them.
+    let closed: Vec<Document> = {
+        let docs = docs.peek();
+        closing
+            .iter()
+            .filter_map(|id| docs.get(*id).cloned())
+            .collect()
+    };
+
+    {
+        let mut dock = dock.write();
+        if let Some(panel) = dock.document_panel_mut() {
+            panel
+                .tabs
+                .retain(|tab| !matches!(tab, Tab::Document(id) if closing.contains(id)));
+            if was_showing {
+                panel.active_tab_id = Some(kept);
+            }
+        }
+    }
+    {
+        let mut docs = docs.write();
+        for id in &closing {
+            docs.close(*id);
+        }
+    }
+
+    let held = |tab: &Document| !closed.contains(tab);
+    asm_at.write().forgetting(held);
+    src_at.write().forgetting(held);
+    {
+        // One guard rather than one write per tab: a write notifies whether or not it
+        // changed anything, and a dozen tabs closing is one change.
+        let mut driven = driven.write();
+        for tab in &closed {
+            driven.forget(tab);
+        }
+    }
+
+    // The kept tab goes through `activate` like every other change of active document,
+    // even though it is by construction already open.
+    if was_showing {
+        let document = docs.peek().get(keep).cloned();
+        activate(open, history, document, Visit::Moved);
+    }
+}
+
 /// Let go of the binary at `path`: drop every [`Object`] it contributed and answer for
 /// everything that was pointing at them.
 ///
@@ -254,6 +355,29 @@ pub(crate) fn land(
         at,
     }));
     activate(open, history, Some(target), Visit::Went);
+}
+
+/// The menu a document's tab opens on a right-click.
+///
+/// Built per press, as [`close_menu`] is, closing over the tab it was opened on; the
+/// states come in as arguments because this is called from an event handler, where no hook
+/// may run. The header only opens it when there is another document to close, so the one
+/// item here is never a row that does nothing.
+pub(crate) fn tab_menu(
+    open: Open,
+    history: State<History>,
+    asm_at: State<Positions<Document>>,
+    src_at: State<Positions<Document>>,
+    driven: State<Driven>,
+    keep: DocId,
+) -> Menu {
+    Menu::new().child(
+        MenuButton::new()
+            .on_press(move |_| close_others(open, history, asm_at, src_at, driven, keep))
+            // "tabs" and not "documents": the strip is what the reader is pointing at, and
+            // a view sharing the panel is a tab this leaves alone.
+            .child("Close other tabs"),
+    )
 }
 
 /// The menu a file row opens on a right-click.

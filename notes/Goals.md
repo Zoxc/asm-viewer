@@ -372,6 +372,12 @@ one item per part, so the unfinished half stays visible.
   in a tab: one preview tab reused by the next such selection, so walking down a list does
   not leave a tab behind per click. What promotes it into a tab that stays is a design
   decision for the step that builds it.
+- [x] Close the other tabs from a tab's context menu. A right-click on a document's tab offers
+  "Close other tabs", which keeps the tab it was opened on and closes every other document in
+  the panel; the panel lands on the kept tab when what was on screen is among the ones closing,
+  and stays where it is otherwise. A view sharing the document panel is left alone — it is not a
+  document, and having no × of its own is the same argument. A tab that is the only one open
+  offers no menu rather than a menu whose one row would do nothing.
 - [x] Reach a tab that has scrolled off the end of the bar. Documents are opened by the dozen
   and the bar scrolls, so a tab past the right-hand edge used to be reachable only by scrolling
   to it — and a reader had no way of seeing what was out there. A control at the right of the
