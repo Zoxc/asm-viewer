@@ -196,16 +196,24 @@ one item per part, so the unfinished half stays visible.
   answer. The assembly copies what the row draws — the address column and the instruction
   with the relocation target's name in its operand — and the source copies the file's own
   lines.
-- [D] Allow selection, of characters — deferred, with the reason read out of the freya
-  sources (`notes/Plan.md`, 7c). A scroll view is *not* what stops it: freya's selection is
-  a range of char offsets into a rope held by the editor, and its own `CodeEditor` selects
-  across the rows of a `VirtualScrollView` happily. What stops it is that the model wants
-  one rope, one line per row and **one `paragraph()` per line**, and an assembly row is a
-  gutter of rects, an address label and up to three separate elements — the middle one
-  being the clickable relocation target, which could only survive as an inline child whose
-  placeholder character is not a character of any rope. Character selection in the assembly
-  pane is a rewrite of the relocation link and the arrow gutter; the source pane could have
-  it cheaply but would then behave unlike the pane beside it.
+- [ ] Text selection, of characters, in both the assembly and the source pane: drag across
+  part of a line or across lines and Ctrl+C copies the text, the way an editor does, beside
+  the row selection above, which stays for whole runs. Was deferred, with the cost read out
+  of the freya sources (`notes/Plan.md`, 7c), and the cost stands: a scroll view is *not*
+  what stops it — freya's selection is a range of char offsets into a rope held by the
+  editor, and its own `CodeEditor` selects across the rows of a `VirtualScrollView` happily —
+  but the model wants one rope, one line per row and **one `paragraph()` per line**, and an
+  assembly row is a gutter of rects, an address label and up to three separate elements, the
+  middle one being the clickable relocation target, which could only survive as an inline
+  child whose placeholder character is not a character of any rope. So it is a rewrite of
+  the relocation link and the arrow gutter on the assembly side; the source side could have
+  it cheaply and is wanted in the same step, so the two panes keep behaving alike.
+- [ ] Ctrl+C copies whatever is selected, wherever it is: the run of rows in either pane
+  today, the characters once the goal above lands, and the other places text is picked out
+  -- a filter box, the scratchpad's editor, its diagnostics and its output -- so the one
+  binding has one meaning and never comes back with a page of disassembly for a word picked
+  out somewhere else. The key handlers are per pane on purpose (`agents/Panes.md`); this is
+  the rule that decides which of them answers, not a global handler.
 - [x] A separator before a row something jumps to, so the listing reads as the basic blocks
   it is rather than as one run of instructions. A **row of its own** and not a border on the
   row below: a block reads as separated from the one above rather than as underlined by it.
