@@ -321,15 +321,21 @@ impl Studied {
     }
 }
 
-/// What DWARF says about the selected symbol's instructions, and which of the files it
-/// names the Source pane draws beside it. The file is carried here, beside the info it
-/// comes from, so the two cannot disagree while the worker is still running.
+/// What DWARF says about the selected symbol's instructions, and where in them the Source
+/// pane opens: which of the files it names, and which line of that file. Both are carried
+/// here, beside the info they come from, so none of the three can disagree while the
+/// worker is still running.
 #[derive(Clone)]
 pub(crate) struct SymbolLines {
     pub(crate) info: Option<Arc<LineInfo>>,
     /// The file the symbol's first instruction was compiled from, falling back to the
     /// first file its rows name.
     pub(crate) file: Option<Arc<str>>,
+    /// The line of that file the symbol opens at -- where the Source pane lands a tab it
+    /// is showing for the first time, a symbol's own lines being what selecting it asked
+    /// for. `None` where the opening row names no line at all, and the pane then opens at
+    /// the top of the file as it did before.
+    pub(crate) line: Option<u32>,
 }
 
 impl PartialEq for SymbolLines {
@@ -342,22 +348,32 @@ impl PartialEq for SymbolLines {
 
         // The file compares by its text, not by pointer, for the reason `LinePos` does:
         // two `LineInfo`s naming one file hold two `Arc<str>`s of it.
-        same_info && self.file == other.file
+        same_info && self.file == other.file && self.line == other.line
     }
 }
 
 impl SymbolLines {
     fn new(symbol: &Symbol) -> SymbolLines {
         let info = symbol.data.line_info(&symbol.object);
-        let file = info.as_ref().and_then(|info| {
+        // The row the symbol's first instruction was compiled from, falling back to the
+        // first row that names a file at all: a prologue DWARF places on no line leaves
+        // `row_at` with nothing to say. **One row for both answers**, so the line the
+        // pane opens at is a line of the file it is showing and not of another.
+        let opening = info.as_ref().and_then(|info| {
             info.row_at(symbol.data.address)
+                .filter(|row| row.file.is_some())
+                .or_else(|| info.rows().iter().find(|row| row.file.is_some()))
+        });
+        let file = info.as_ref().and_then(|info| {
+            opening
                 .and_then(|row| row.file)
                 .and_then(|file| info.files().get(file))
                 .or_else(|| info.files().first())
                 .cloned()
         });
+        let line = opening.and_then(|row| row.line);
 
-        SymbolLines { info, file }
+        SymbolLines { info, file, line }
     }
 }
 

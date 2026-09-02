@@ -297,7 +297,12 @@ being left, and for a source-driven tab the question's tab is the file's and not
 symbol's, which is very likely not open at all. Keying the source side by the *file*, which is what the Source pane's own strip did,
 made two functions compiled from one file share a position they have no reason to share. What is
 kept is a **row**, clamped to what the tab holds *now*, so a rebuilt binary or a shortened file
-cannot come back past the end. Three things are
+cannot come back past the end. A tab nothing is remembered for opens at an **opening row** the
+caller hands in — `0` for the Assembly pane, whose first row is the symbol's own first line, and
+the symbol's own line for the Source pane (`opening_row`, off `SymbolLines::line`); a remembered
+row always wins over it, so it is the first open this answers and not every one. An opening row of
+`0` is left alone rather than scrolled to, since the effect runs a beat after the first render and
+setting the offset the pane already has would undo a wheel that got in. Three things are
 load-bearing. Reading the controller's position (`<(i32, i32)>::from`) is a `State::read`, which is
 what **subscribes the effect to the pane's own scroll**: every position is written down as it
 happens rather than on the way out, which is what survives the window merely being closed. The tab

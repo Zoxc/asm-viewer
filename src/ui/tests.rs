@@ -76,6 +76,7 @@ fn scrolling_harness() -> impl IntoElement {
         controller,
         &showing,
         rows,
+        0,
     );
 
     rect().expanded().child(
@@ -222,6 +223,7 @@ fn revealing_harness() -> impl IntoElement {
         controller,
         &showing,
         rows,
+        0,
     );
 
     rect().expanded().child(
@@ -3662,6 +3664,150 @@ fn the_gutter_runs_straight_through_a_separator() {
         crossing.count() > 0,
         "no lane is drawn through a separator, so the columns above prove nothing"
     );
+}
+
+/// Whether [`source_pane_harness`] has the pane mounted at all, which is how a test asks
+/// for the first open of a tab and then for a later one: `app()` mounts both panes afresh
+/// for every document, so an unmount and a remount is what leaving a tab and coming back
+/// does to this pane.
+#[derive(Clone, Copy)]
+struct Mounted(State<bool>);
+
+/// The Source pane over a listing the test puts into [`Analysis`] itself, with no worker
+/// between the two, mounted on demand. The document it draws is the tab the listing
+/// belongs to, which is what `app()` hands it.
+fn source_pane_harness() -> impl IntoElement {
+    let analysis = use_consume::<Analysis>().0;
+    let mounted = use_consume::<Mounted>().0;
+    let document = analysis
+        .read()
+        .shown
+        .as_ref()
+        .map(|shown| asked_of(&shown.ask))
+        .unwrap_or_else(|| Document::Source(Arc::from("")));
+
+    rect()
+        .expanded()
+        .maybe_child(mounted().then(|| SourcePane { document }.into_element()))
+}
+
+/// A tab opened for the first time puts its source side on the **symbol's own lines**,
+/// and not at the top of a file the symbol may be a hundred lines into. A row remembered
+/// for the tab still wins: this is the first open it answers and not every one.
+///
+/// Headless because the answer is a scroll offset a `VirtualScrollView` turns into rows,
+/// asked of the pane the way the reader asks it -- by which line numbers are drawn.
+#[test]
+fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let mut studied = Studied::new(sum_to.clone());
+    let line = studied
+        .lines
+        .line
+        .expect("the gcc fixture opens sum_to on a line");
+
+    // A file of this machine's own, the path the fixture's DWARF names being the build
+    // machine's, and long enough that the symbol's line is nowhere near the top of it.
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-opening-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("opening.c");
+    let text: String = (1..=200)
+        .map(|n| format!("int line_{n}(void);\n"))
+        .collect();
+    std::fs::write(&path, text).expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    studied.lines.file = Some(file.clone());
+    assert!(
+        line > CONTEXT_ROWS as u32 + 1,
+        "sum_to opens on line {line}, which is the top of the file anyway"
+    );
+
+    let document = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, (states, mounted)) = TestingRunner::new(
+        source_pane_harness,
+        (500., 300.).into(),
+        |runner| {
+            let mounted = runner
+                .provide_root_context(|| Mounted(State::create(true)))
+                .0;
+            let (states, _pinned, _marked) = listing_states!(runner, shown);
+            (states, mounted)
+        },
+        1.,
+    );
+    // Open before the first pass: a position is written down only for a tab that is open,
+    // which is what the second half of this test leans on.
+    activate(
+        states.open,
+        states.history,
+        Some(document.clone()),
+        Visit::Went,
+    );
+
+    // Which lines the gutter is drawing, which is where the pane is. The number carries
+    // the non-breaking space skia is stopped from trimming; the companion header's label
+    // is the file's name and parses as nothing.
+    let drawn = |test: &TestingRunner| {
+        let mut rows: Vec<u32> = labels(test)
+            .into_iter()
+            .filter_map(|text| {
+                text.strip_suffix('\u{a0}')
+                    .and_then(|number| number.parse().ok())
+            })
+            .collect();
+        rows.sort_unstable();
+        rows
+    };
+    let land = |test: &mut TestingRunner| {
+        for _ in 0..8 {
+            test.sync_and_update();
+        }
+        drawn(test)
+    };
+
+    let rows = land(&mut test);
+    assert!(
+        rows.contains(&line),
+        "the first open does not show line {line}, where sum_to begins: {rows:?}"
+    );
+    assert!(
+        !rows.contains(&1),
+        "the first open is at the top of the file rather than at the symbol: {rows:?}"
+    );
+    // With the margin a reveal keeps above the row it scrolls to, and no more: the line
+    // is meant to be readable in place, not pushed to the bottom of the pane.
+    let top = *rows.first().expect("the gutter drew no line numbers");
+    assert!(
+        (line.saturating_sub(CONTEXT_ROWS as u32)..=line).contains(&top),
+        "the pane opened at line {top}, not on sum_to's own line {line}"
+    );
+
+    // And a tab that has been somewhere comes back to where it was, over the symbol's
+    // own lines: the first open is the only one this answers.
+    let mut src_at = states.src_at;
+    src_at.write().remember(document.clone(), 120);
+    let mut mounted = mounted;
+    mounted.set(false);
+    land(&mut test);
+    mounted.set(true);
+
+    let rows = land(&mut test);
+    assert!(
+        rows.contains(&121) && !rows.contains(&line),
+        "the tab did not come back to the row it was left at: {rows:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A component with no props at all, which is what every view in the app is. Its parent

@@ -195,6 +195,11 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
 /// told where it is now. `length` is what the pane holds *now*, which is what makes the
 /// answer a row of this listing rather than of the one it was saved from.
 ///
+/// `opening` is where a tab **nothing is remembered for** lands -- the Source pane's
+/// symbol's own lines, and `0`, the top, for a pane or a symbol with nothing better to
+/// say. A row remembered for the tab always wins over it: it is the first open this
+/// answers and not every one.
+///
 /// Two things make it work, and both are about *when*:
 ///
 /// - **The effect is subscribed to the pane's own scroll**, because reading the
@@ -219,6 +224,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     mut controller: ScrollController,
     tab: &T,
     length: usize,
+    opening: usize,
 ) {
     // Which tab the controller is scrolled for. An `Rc<RefCell>` and not a `State`:
     // nothing renders from it, and a state would cost the pane a render per switch.
@@ -239,21 +245,27 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
         let switching = holding.as_ref() != Some(tab);
         let known = positions.peek().at(tab);
         let back_to = positions.peek().row(tab, *length);
+        // Clamped the way a remembered row is, and for the same reason: a symbol's line
+        // is a hint out of debug info and the file under it may have been cut short since.
+        let opening = opening.min(length.saturating_sub(1));
 
         // Whose row the offset above is, and where this run has to move the view to.
         let (owner, moving) = match (&holding, known) {
             // Still showing the tab the controller is scrolled for: nothing moves.
             (Some(held), _) if held == tab => (Some(tab.clone()), None),
             // A switch: the offset belongs to the tab being left, and the one arriving
-            // goes back to where it was, or to the top if it has never been seen.
+            // goes back to where it was, or to where a tab seen for the first time opens.
             (Some(out), Some(_)) => (Some(out.clone()), Some(back_to)),
-            (Some(out), None) => (Some(out.clone()), Some(0)),
+            (Some(out), None) => (Some(out.clone()), Some(opening)),
             // This pane's first run, on a tab it has a row for: a remount or a restored
             // session. Nothing to write down, everything to put back.
             (None, Some(_)) => (None, Some(back_to)),
-            // First run with nothing remembered: leave the view where it is, since this
-            // runs a beat after the first render and would undo a wheel that got in.
-            (None, None) => (Some(tab.clone()), None),
+            // First run with nothing remembered -- which, both panes being mounted afresh
+            // for every document, is the ordinary first open of a tab. It moves only for
+            // a pane that has somewhere to open at: a `0` is left alone rather than
+            // scrolled to, since this runs a beat after the first render and setting the
+            // offset it already has would undo a wheel that got in.
+            (None, None) => (Some(tab.clone()), (opening != 0).then_some(opening)),
         };
 
         if let Some(owner) = owner {

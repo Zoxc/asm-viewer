@@ -221,6 +221,9 @@ struct SourceList {
     /// is **not** the same as the file being shown: two functions compiled from one file
     /// are two tabs, and keying by the file would have them share a position.
     document: Document,
+    /// The row this tab opens at the first time it is shown, from [`opening_row`]. A row
+    /// remembered for the tab wins over it -- see `use_kept_position`.
+    opening: usize,
 }
 
 impl PartialEq for SourceList {
@@ -228,6 +231,7 @@ impl PartialEq for SourceList {
         self.source == other.source
             && Arc::ptr_eq(&self.file, &other.file)
             && self.document == other.document
+            && self.opening == other.opening
     }
 }
 
@@ -294,6 +298,7 @@ impl Component for SourceList {
             controller,
             &self.document,
             length,
+            self.opening,
         );
 
         let on_key_down = {
@@ -418,6 +423,25 @@ pub(crate) fn source_side(
     }
 }
 
+/// The row the Source pane opens a tab it has never shown at: the line the symbol itself
+/// opens at, backed off by the margin [`reveal_row`] keeps above the row it scrolls to, so
+/// a function's signature is not flush against the top of the pane.
+///
+/// **The top of the file where there is nothing better to say**, which is what selecting a
+/// symbol used to do in every case: an object with no line info, a symbol whose opening row
+/// DWARF places on no line, and a companion that is not the symbol's own file -- the last
+/// being a landed pin's doing, which comes with a reveal of its own and would otherwise be
+/// sent to a line of the wrong file.
+fn opening_row(lines: &SymbolLines, file: &Arc<str>) -> usize {
+    let line = lines
+        .line
+        .filter(|_| lines.file.as_ref() == Some(file))
+        .unwrap_or(0);
+    (line as usize)
+        .saturating_sub(1)
+        .saturating_sub(CONTEXT_ROWS as usize)
+}
+
 /// The bar over the Source pane naming the file it is showing as a **companion** -- a
 /// subject gets none, being named by its own tab -- and opening that file as a
 /// source-driven tab when it is pressed, which until the project explorer lands is the only
@@ -484,12 +508,19 @@ impl Component for SourcePane {
         };
 
         let file = side.file().clone();
-        let document = match &side {
-            SourceSide::Subject(file) => Document::Source(file.clone()),
+        // The tab, and the row it opens at the first time it is shown. A source-driven
+        // tab is a *file* the reader opened, so it opens where a file does, at the top;
+        // an assembly tab is a symbol, and the symbol's own lines are what asking for it
+        // asked to see.
+        let (document, opening) = match &side {
+            SourceSide::Subject(file) => (Document::Source(file.clone()), 0),
             // The *drawn* symbol's tab and not the active one: a row written down against
             // the tab that is arriving would be a row of the listing that is leaving.
             SourceSide::Companion(_) => match analysis.shown.as_ref() {
-                Some(shown) => asked_of(&shown.ask),
+                Some(shown) => (
+                    asked_of(&shown.ask),
+                    opening_row(&shown.studied.lines, &file),
+                ),
                 None => return rect().expanded().background(palette().pane_bg).into(),
             },
         };
@@ -515,6 +546,7 @@ impl Component for SourcePane {
                             source,
                             file,
                             document,
+                            opening,
                         }
                         .into_element(),
                         None => placeholder(format!("Source file not found: {file}")),

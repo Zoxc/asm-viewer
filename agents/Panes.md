@@ -18,6 +18,20 @@ would otherwise open on that elsewhere, the line asked for sitting in a file tha
 the reveal with nowhere to go. A pin made inside the panes changes no file, so clicking an
 inlined instruction leaves the symbol's own file on screen as it always did.
 
+**A tab opens its source side on the symbol's own lines**, which is what selecting a symbol
+asked to see: a function a hundred lines into its file was otherwise read from the top of the
+file for as long as it took to scroll. `SymbolLines` carries the **line** the symbol opens at
+beside the file it opens in, both taken from **one** line-info row — the row the first
+instruction was compiled from, else the first row naming a file at all — so the line can never
+be a line of some other file; both are worked out on the worker, beside the info they come from.
+`opening_row` turns that into the row `use_kept_position` opens a tab it has never shown at,
+backed off by the `CONTEXT_ROWS` a reveal keeps above the row it scrolls to. A row remembered
+for the tab wins over it, so this is the *first* open and not every one, and everything with
+nothing to say falls back to the top of the file as it always did: an object with no line info,
+a prologue DWARF places on no line, a source-driven tab (whose subject is a **file** the reader
+opened, and files open at the top), and a companion that is not the symbol's own file — the last
+being a landed pin's doing, which comes with a reveal of its own.
+
 A companion wears a **header naming its file**, which a subject does not: the strip already names
 a subject, and nothing else in the window would name a companion now that the Source pane has no
 strip of its own. Pressing that header opens the file as a source-driven tab, and until the project

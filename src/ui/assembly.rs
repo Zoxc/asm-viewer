@@ -781,6 +781,8 @@ impl Component for InstructionList {
             controller,
             &asked_of(&self.asked),
             length,
+            // The top: a listing *is* the symbol, so its first row is its own first line.
+            0,
         );
         let touching = hover()
             .map(|row| data.lanes.touching(row))

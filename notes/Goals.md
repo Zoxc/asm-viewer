@@ -115,12 +115,16 @@ one item per part, so the unfinished half stays visible.
   identifier names, rather than building name matching over demangled strings here.
 - [x] Navigating in assembly should also navigate source, within a symbol: clicking an
   instruction scrolls the source pane to the line it was compiled from.
-- [ ] Selecting another symbol should put the source pane on that symbol's own lines. Most of
-  the way there: the pane no longer inherits the offset the *previous* symbol left, and since
-  the one strip landed a tab remembers a row for *each of its two sides*, keyed by the
-  document, so two symbols compiled from one file no longer share a position. What is left is
-  the first open: a tab seen for the first time opens its source side at the top of the file
-  rather than at the symbol's own lines.
+- [x] Selecting another symbol puts the source pane on that symbol's own lines. The pane
+  never inherited the offset the *previous* symbol left, and since the one strip landed a
+  tab remembers a row for *each of its two sides*, keyed by the document, so two symbols
+  compiled from one file do not share a position. The first open was the half left: a tab
+  seen for the first time opened at the top of the file. `SymbolLines` now carries the
+  **line** the symbol opens at beside the file it opens in -- both off one line-info row,
+  worked out on the worker -- and `use_kept_position` takes an opening row a tab nothing is
+  remembered for lands at, three rows above that line so the signature is not flush against
+  the top. A remembered row still wins, and a symbol whose debug info places it nowhere
+  opens at the top of the file as before.
 - [x] Mouse buttons can navigate history so you can go back and forth.
 - [ ] Back and forward should be **per tab**, the way a browser's are: each tab keeps its own
   trail, the mouse buttons walk the trail of the tab on screen, and going back in one tab does
