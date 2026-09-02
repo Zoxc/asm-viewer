@@ -950,10 +950,17 @@ one item per part, so the unfinished half stays visible.
   open (release; one read of every module stream), `rustc.exe` from `<entry point>` to 412.
   Pinned by a second committed pair, `line_fixture_noexport.dll` + `.pdb`, the same object
   linked with no exports, which lists nothing alone and the three functions beside its PDB.
-- [ ] PDB public symbols as a further source: `S_PUB32` records in the publics stream, the
-  mangled names, for the functions no module's symbols describe (assembly, or a PDB built
-  without module symbols) — those in executable sections only, after the procedures, under
-  the same one-per-address rule, and through the demangler since these *are* mangled.
+- [x] PDB public symbols as a further source: `S_PUB32` records in the symbol records stream,
+  the decorated names, for the functions no module's symbols describe (a module without
+  debug info, thunks, assembler, a whole stripped PDB) — those flagged code or function and
+  landing in a kept text section, after the procedures as a sixth source in `declared_code`,
+  under the same one-per-address rule, size 0 like an export, and through the demangler since
+  these *are* mangled (`Pdb::publics`, read at parse with the procedures). `rustc_driver.dll`
+  goes from 70 728 symbols to 115 861 for 1.00 s -> 1.3 s of open (release; 55 ms is the walk,
+  the rest 45 133 more names demangled), `rustc.exe` from 412 to 415. Pinned by a third
+  committed pair, `line_fixture_public.dll` + `.pdb`: the same object linked with a C++ file
+  compiled without `/Z7`, whose one function the PDB names only as the public `?helper@@YAHXZ`
+  — listed, demangled, sized 0, no lines — while the no-export pair still lists exactly three.
 - [ ] Map a PDB's source paths onto this machine: the names come out verbatim (`C:\...` from
   MSVC, `/rustc/<hash>\library\...` from rustc), so the Source pane cannot open them where the
   build was elsewhere. A root-to-root mapping saved with the project, with the recorded

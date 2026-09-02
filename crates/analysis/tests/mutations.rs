@@ -11,14 +11,16 @@
 //! [`TRUNCATION_STRIDE`]-th length past [`WHOLE_TRUNCATION`] bytes. Which cases run is
 //! therefore fixed, and a sampled table is still represented end to end.
 //!
-//! **Four of the inputs are files on disk**, because a `.pdb` is a second file found beside
-//! its binary: each of the linker's two DLLs is parsed at a path with its pristine PDB
+//! **Six of the inputs are files on disk**, because a `.pdb` is a second file found beside
+//! its binary: each of the linker's three DLLs is parsed at a path with its pristine PDB
 //! beside it, so a mutation of the DLL that leaves the CodeView record intact goes on to
-//! open and match the PDB — at parse time now, for the procedures it names; and each PDB is
-//! mutated in turn, every mutation written beside its pristine DLL before the DLL is
-//! parsed. The second pair, the image that declares nothing, is the one whose every symbol
-//! is the PDB's, so a mutated PDB there is what the procedure walk is swept with. Each test
-//! writes under a directory of its own in the target directory, since the three run at once.
+//! open and match the PDB — at parse time now, for the procedures and publics it names; and
+//! each PDB is mutated in turn, every mutation written beside its pristine DLL before the
+//! DLL is parsed. The second and third pairs, the images that declare nothing, are the ones
+//! whose every symbol is the PDB's, so a mutated PDB there is what the procedure walk is
+//! swept with — and the third's has a function only its publics name, so the publics walk
+//! too. Each test writes under a directory of its own in the target directory, since the
+//! three run at once.
 
 mod common;
 
@@ -47,11 +49,13 @@ const TRUNCATION_STRIDE: usize = 7;
 /// and prime to 4096 so the cuts drift across the page boundaries an MSF is laid out on.
 const PDB_TRUNCATION_STRIDE: usize = 509;
 
-/// The two committed DLL + PDB pairs (`tests/pdb.rs`): the one whose three functions are
-/// exported, and the one that exports nothing and is named only by its PDB.
-const PAIRS: [(&str, &str); 2] = [
+/// The three committed DLL + PDB pairs (`tests/pdb.rs`): the one whose three functions are
+/// exported, the one that exports nothing and is named only by its PDB, and the one with a
+/// fourth function only that PDB's publics name.
+const PAIRS: [(&str, &str); 3] = [
     ("line_fixture.dll", "line_fixture.pdb"),
     ("line_fixture_noexport.dll", "line_fixture_noexport.pdb"),
+    ("line_fixture_public.dll", "line_fixture_public.pdb"),
 ];
 
 /// One input to the pipeline: the bytes, the path they are said to be at, and a file to put
@@ -98,7 +102,7 @@ fn scratch(test: &str) -> PathBuf {
 /// Every shape the crate can be asked about: relocatable objects with and without DWARF,
 /// real compiler output in DWARF 5, the two linked images, whose export and entry-point
 /// paths (`declared_code`) no `.o` reaches at all, one of them naming a `.pdb` that is
-/// nowhere, and the linker's two real DLLs each **beside its PDB**.
+/// nowhere, and the linker's three real DLLs each **beside its PDB**.
 fn corpus(test: &str) -> Vec<Case> {
     let mut corpus = vec![
         Case::in_memory("caller_and_target".to_owned(), caller_and_target()),
@@ -124,14 +128,16 @@ fn corpus(test: &str) -> Vec<Case> {
         fs::write(dir.join(pdb), committed_fixture(pdb)).unwrap();
         let data = committed_fixture(dll);
         // The pair is found where the sweep put it, so the mutations reach the PDB backend
-        // rather than a search that comes back empty — and for the image that declares
-        // nothing, having a symbol at all is the PDB having been read at parse.
+        // rather than a search that comes back empty — and for the images that declare
+        // nothing, having a symbol at all is the PDB having been read at parse. Any symbol
+        // with lines, not the first: the third pair's first by name is the public, which
+        // has none.
         let intact = parse_and_walk_at(&data, dir.join(dll)).expect("the DLL parses");
         assert!(
             intact
                 .symbols_sorted
-                .first()
-                .is_some_and(|symbol| symbol.line_info(&intact).is_some()),
+                .iter()
+                .any(|symbol| symbol.line_info(&intact).is_some()),
             "the PDB beside {dll} was not read"
         );
         corpus.push(Case {

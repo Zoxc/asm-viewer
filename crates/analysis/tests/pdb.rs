@@ -98,6 +98,7 @@ use std::sync::Arc;
 const DLL: &str = "line_fixture.dll";
 const PDB: &str = "line_fixture.pdb";
 const NOEXPORT_DLL: &str = "line_fixture_noexport.dll";
+const PUBLIC_DLL: &str = "line_fixture_public.dll";
 
 /// The source as the PDB spells it: `-ffile-compilation-dir` joined to the name given.
 const SOURCE: &str = "/fixture/line_fixture.c";
@@ -618,4 +619,70 @@ fn a_pdb_with_another_guid_adds_no_symbols() {
     other_guid[record + 4] ^= 0x01;
     let object = parse_at(&other_guid, committed_fixture_path(NOEXPORT_DLL));
     assert_eq!(names(&object), Vec::<&str>::new());
+}
+
+/// A function no module's symbols describe is named by the PDB's **publics**: the third pair
+/// parsed beside its PDB lists `helper` — as the linker spelled it, decorated, and demangled
+/// from that — at the address its public states, with no size, no extent and no line info,
+/// since a public is a name and an address and nothing else; and the three functions the
+/// modules do describe are still the procedures, with their lengths. Parsed at a path with
+/// no `.pdb` beside it, the image, which exports nothing, shows nothing.
+#[test]
+fn a_public_names_the_function_no_module_describes() {
+    let bytes = committed_fixture(PUBLIC_DLL);
+    let file = object::File::parse(bytes.as_slice()).expect("a PE image");
+    assert_eq!(file.symbols().count(), 0);
+    assert_eq!(file.exports().unwrap().len(), 0, "no /EXPORT");
+
+    let alone = parse_at(&bytes, scratch("public_alone").join("alone.dll"));
+    assert_eq!(names(&alone), Vec::<&str>::new());
+
+    let object = parse_at(&bytes, committed_fixture_path(PUBLIC_DLL));
+    assert_eq!(names(&object), ["?helper@@YAHXZ", "add", "sum_to", "twice"]);
+
+    let helper = symbol(&object, "?helper@@YAHXZ");
+    assert_eq!(helper.address, TEXT + 0x90);
+    assert_eq!(helper.size, 0, "a public declares no size");
+    assert_eq!(
+        helper.demangled.as_deref(),
+        Some("int helper(void)"),
+        "a public's name is the decorated one, and is demangled"
+    );
+    assert_eq!(helper.debug_extent(&object), None, "no module knows it");
+    assert!(
+        helper.line_info(&object).is_none(),
+        "no module has its lines"
+    );
+    let assembly = helper.assembly(&object).expect("helper decodes");
+    assert_eq!(assembly.instructions.len(), 2, "mov eax, 7; ret");
+
+    for (name, offset, len) in [
+        ("add", 0x00, 0x11),
+        ("twice", 0x20, 0x1b),
+        ("sum_to", 0x40, 0x49),
+    ] {
+        let symbol = symbol(&object, name);
+        assert_eq!(symbol.address, TEXT + offset, "{name}");
+        assert_eq!(symbol.size, len, "{name}: still the procedure's length");
+        assert_eq!(symbol.demangled, None, "{name}");
+    }
+    assert_eq!(rows(&line_info(&object, "add")).len(), 4);
+}
+
+/// Where a procedure already names an address, the public at that address adds no second
+/// symbol: the no-export pair's PDB holds a public for each of its three functions too, and
+/// the image still lists exactly three, under the procedures' names and with their lengths.
+#[test]
+fn a_public_never_displaces_a_procedure() {
+    let bytes = committed_fixture(NOEXPORT_DLL);
+    let object = parse_at(&bytes, committed_fixture_path(NOEXPORT_DLL));
+    assert_eq!(names(&object), ["add", "sum_to", "twice"]);
+    assert_eq!(object.symbols.len(), 3);
+    for (name, len) in [("add", 0x11), ("twice", 0x1b), ("sum_to", 0x49)] {
+        assert_eq!(
+            symbol(&object, name).size,
+            len,
+            "{name}: the procedure's length"
+        );
+    }
 }

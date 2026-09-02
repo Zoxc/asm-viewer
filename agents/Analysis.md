@@ -31,19 +31,30 @@ must not quietly turn into 196 hashes of the same 20 MB.
 kept — plus, for a **linked image only**, the code it declares elsewhere: `dynamic_symbols`,
 `exports` and `entry` (`declared_code`), and, for a PE whose `.pdb` is found beside it and
 matches, the **procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a nonzero length;
-`Pdb::procedures`, below). All of them are *declared* — the PDB's by a file matched to the image
-by GUID and age — so this keeps the "nothing is scanned for" rule; a prebuilt LLVM DLL with no
-COFF symbol table at all goes from zero functions to 22 918 on the strength of the exports, and
-`rustc_driver.dll` from its 15 241 exports to 70 728 symbols on the strength of its PDB, a
-stripped `rustc.exe` from `<entry point>` alone to 412. One symbol per address, earliest source
-winning (symbol table > dynamic symbol > export > entry point > PDB procedure), since an export
-is very often the symbol table's own function under a second name; the PDB comes last so a name
-the image itself states is never displaced by the debug file's spelling of it, and its 82 933
-procedures collapse to the 55 487 the image did not already name, folded functions sharing an
-address being one place. A procedure's name is the compiler's display name (`add`,
-`core::ptr::drop_in_place<T>`), which goes through the same demangling batch as an export's and
-comes out untouched, and its length is the symbol's *declared* size where an export's is 0; the
-extent used is still `SymbolData::extent`. The symbol table itself may hold two names for
+`Pdb::procedures`, below) and then its **publics** (`S_PUB32` flagged as code or a function;
+`Pdb::publics`). All of them are *declared* — the PDB's by a file matched to the image by GUID
+and age — so this keeps the "nothing is scanned for" rule; a prebuilt LLVM DLL with no COFF
+symbol table at all goes from zero functions to 22 918 on the strength of the exports, and
+`rustc_driver.dll` from its 15 241 exports to 70 728 symbols on the strength of its PDB's
+procedures and 115 861 with its publics, a stripped `rustc.exe` from `<entry point>` alone to
+412 and 415. One symbol per address, earliest source winning (symbol table > dynamic symbol >
+export > entry point > PDB procedure > PDB public), since an export is very often the symbol
+table's own function under a second name; the PDB comes last so a name the image itself states
+is never displaced by the debug file's spelling of it, and its 82 933 procedures collapse to the
+55 487 the image did not already name, folded functions sharing an address being one place. Its
+publics come after its procedures because a procedure carries a display name and a length and
+a public only a decorated name and an address; but the publics are the linker's table of every
+externally visible symbol, so they survive a **stripped** PDB (`/PDBSTRIPPED` keeps them and
+drops the module streams) and name what no module's symbols do — a module that shipped without
+debug info (2250 of `rustc_driver`'s 2907 have no stream), thunks, assembler code: 82 900 of its
+141 498 publics are flagged as functions (the other 58 598 are data, and `rust-lld` never sets
+the `code` flag alone), and 45 133 of those are addresses nothing else named. A procedure's name
+is the compiler's display name (`add`, `core::ptr::drop_in_place<T>`), which goes through the
+same demangling batch as an export's and comes out untouched; a public's is the decorated name
+as the linker saw it (`?add@@YAHHH@Z`, `_ZN4core3ptr…`, a plain `add` for C), and goes through
+the same batch to come out demangled, the raw spelling kept as `name`. A procedure's length is
+the symbol's *declared* size where an export's and a public's is 0; the extent used is still
+`SymbolData::extent`. The symbol table itself may hold two names for
 one address (an alias, an assembler label) and both are kept, but `Section::symbols` — the
 sorted list `estimate_size` binary-searches — holds each address **once**: a repeated entry
 made the search land on either twin and answer 0 for an aliased symbol, which in an object
@@ -237,21 +248,26 @@ a source of symbols**, the one debug format that is: a `/DEBUG` image has no COF
 so what the image declares is its exports and entry point and what the PDB knows is every
 function. `Pdb::procedures` walks every module's symbol stream once for its `S_GPROC32`/`S_LPROC32`
 records — name, `section:offset` through the address map onto the base, length — and
-`parse_object` takes them as the last source in `declared_code` (Data model, above). That makes
+`Pdb::publics` the symbol records stream once for its `S_PUB32` records flagged as code or a
+function — decorated name, `section:offset` the same way, no length — and `parse_object` takes
+them as the last two sources in `declared_code`, in that order (Data model, above). That makes
 it the **one eager path through the seam**: `DebugInfo::pdb(file, path)` finds and matches the
 `.pdb` as `load` would, declines a PE carrying DWARF of its own (the same "DWARF first" rule, asked
-of `Dwarf::present` without building a context), walks the procedures, and hands back the backend
-it built, which `parse_object` seeds into the object's `DebugInfoCache` (`preloaded`) so the
-first line question finds it there rather than opening the file again; an object parsed without
-it keeps the lazy path unchanged. The walk holds nothing of the module streams it reads but the
-procedures — a module asked about later is read again for its lines, which is exactly the
-first-question cost the lazy path had before, and holding every module's procedure table from the
-walk would only duplicate what the symbols now carry as their declared size while the stream
-still had to be read for its lines. The whole of it — open, match, walk — is under the seam's
-`without_panicking`, so a `pdb2` panic anywhere in it is "no PDB at parse" and the lazy path is
-left to try. **What is not read**: public symbols (`S_PUB32`, the mangled names, the only names a
-PDB has for a function no module's symbols describe — its own goal), and `/DEBUG:FASTLINK` or
-stripped PDBs, which match and then answer nothing. The file stays open, read a page at a time
+of `Dwarf::present` without building a context), walks the procedures and then the publics, and
+hands back the backend it built, which `parse_object` seeds into the object's `DebugInfoCache`
+(`preloaded`) so the first line question finds it there rather than opening the file again; an
+object parsed without it keeps the lazy path unchanged. The walks hold nothing of the streams
+they read but what they hand back — a module asked about later is read again for its lines,
+which is exactly the first-question cost the lazy path had before, and holding every module's
+procedure table from the walk would only duplicate what the symbols now carry as their declared
+size while the stream still had to be read for its lines; the symbol records stream (`pdb2`'s
+`global_symbols`, the one stream the publics are in, 229 318 records in `rustc_driver`'s) is
+read whole through `BoundedFile` and dropped with the walk, since nothing later asks it
+anything. The whole of it — open, match, both walks — is under the seam's `without_panicking`,
+so a `pdb2` panic anywhere in it is "no PDB at parse" and the lazy path is left to try. **What is
+not read**: `/DEBUG:FASTLINK` PDBs, which match and then answer nothing; a stripped PDB now
+answers its publics and nothing else — no procedures, no lines, no extents — which is the shape
+the third committed pair stands in for (below). The file stays open, read a page at a time
 through `BoundedFile`, never whole: `rustc_driver`'s PDB is 268 MB.
 **Measured**, release, on the samples, before the procedures were read: `rustc.exe` (110 KB, a
 3.7 MB PDB) opened in 1.5 ms, its first line question — finding and matching the PDB, reading the
@@ -270,7 +286,14 @@ question falls to 0.5 ms, the PDB being open and matched already; the first sour
 1.14 s to 496 MB, as before. `rustc.exe` opens in 3.9 ms for 412 symbols, from 0.3 ms for one.
 The open-time cost is the module streams' bytes: `pdb2` reads a module's stream whole, lines and
 all, where the symbols are its first substream, so a `Source` that read only that far would be
-the saving if the second is ever worth it.
+the saving if the second is ever worth it. **With the publics read too** (same machine, same
+harness, three runs each; the *before* re-measured that day at 0.99–1.01 s and 4.3–5.4 ms):
+`rustc_driver.dll` opens in 1.28–1.39 s for 115 861 symbols at 465 MB — the publics walk itself
+is 55 ms over 229 318 symbol records, the rest is 45 133 more names through the demangling
+batch, Rust's legacy-mangled ones up to 4059 bytes long (past `MAX_MANGLED_NAME`, so shown as
+written) — with the first line question still 0.5 ms and the first source question 1.3–1.5 s to
+525 MB, the index having more symbols to place. `rustc.exe` opens in 4.5–6 ms for 415 symbols:
+three publics beyond its 412 procedures.
 
 **The reverse mapping is an index, and a whole-object one** (`line/source.rs`). "Which functions
 was this line compiled into" is not a question about one symbol, so it is not a query but a table:
@@ -459,7 +482,7 @@ listings, and that is the sidebar's question.
 **"Never panic on any file input" is tested two ways, and they are different jobs.**
 `tests/mutations.rs` is the **search**: it takes every fixture the suite builds — both committed
 gcc objects, the synthesized DWARF one, the ELF `.so`, the PE DLL and the same DLL naming a
-`.pdb` that is nowhere — and the four that are files on disk, the linker's two DLLs each parsed
+`.pdb` that is nowhere — and the six that are files on disk, the linker's three DLLs each parsed
 **beside its PDB** and those PDBs themselves, and truncates each at every length, writes poison values (`0`,
 `u32::MAX`, `u64::MAX`, the file's own length…) into every numeric field of every header, section
 header, symbol and relocation — and, for the PDB, of the MSF superblock and stream directory, and
@@ -467,12 +490,13 @@ for the DLL of its debug directory and CodeView record — and splats pseudo-ran
 running the whole pipeline over each result. A `.pdb` being a second file found beside its
 binary, a mutated PDB is written beside its pristine DLL before that is parsed, under a directory
 per test in the target directory; a sanity check first asks each intact pair for line info, so the
-sweep is known to reach the backend and not a search that comes back empty — and for the pair
-whose image declares nothing, having a symbol at all is the procedure walk having run. It is
-sampled by an even stride and seeded from a constant (never `rand`, never the clock), so which
-cases run is fixed and it stays in single-digit seconds — 4.1 with both pairs, from 3.2 with one
-and 2.6 before the PDB, of which the reverse index costs a tenth and every section's listing, its
-first four stretches decoded, four tenths.
+sweep is known to reach the backend and not a search that comes back empty — and for the pairs
+whose image declares nothing, having a symbol at all is the procedure walk having run, and the
+third pair's fourth function is the publics walk having run. It is sampled by an even stride and
+seeded from a constant (never `rand`, never the clock), so which cases run is fixed and it stays
+in single-digit seconds — 4.8 with three pairs, from 4.1 with two, 3.2 with one and 2.6 before
+the PDB, of which the reverse index costs a tenth and every section's listing, its first four
+stretches decoded, four tenths.
 `tests/robustness.rs` is the **regression suite**: one named, minimal fixture per defect that was
 actually found, because a sweep that goes green tells you nothing about which bug it was that
 stopped happening. `common::parse_and_walk_at` is the one definition of "ask a parsed object

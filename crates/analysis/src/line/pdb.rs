@@ -32,6 +32,16 @@
 //! duplicate what the symbols now carry as their declared size, and the stream would still
 //! have to be read again for its lines.
 //!
+//! Behind the procedures come the **publics** ([`Pdb::publics`]): the linker's own table of
+//! every externally visible symbol, `S_PUB32` records in the symbol records stream, each a
+//! decorated name and an address and nothing else — no length, no lines. They are what
+//! survives a stripped PDB (`/PDBSTRIPPED` keeps the publics and drops every module stream),
+//! and what names a function in a module that shipped without debug info, a thunk, or
+//! assembler code: in `rustc_driver.dll`'s PDB 2250 of the 2907 modules have no stream at
+//! all. The walk takes the ones flagged as code or a function, and `parse_object` takes them
+//! after the procedures under its one-per-address rule, so a public is only ever the name of
+//! an address nothing else named. Read whole once at parse, held no longer than the walk.
+//!
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
 
 use super::{LineInfo, RowCollector, SourceHash};
@@ -52,8 +62,8 @@ pub(super) struct Pdb {
     /// Every stream read goes through `&mut PDB`, and `PDB` is `Send` but not `Sync`: the
     /// same Mutex-for-`Sync` reasoning as the DWARF backend's context. Taken per module
     /// loaded and released before the module is decoded, so no other lock nests under it;
-    /// held across the whole of [`Pdb::procedures`], which runs at parse before anything
-    /// else can ask.
+    /// held across the whole of [`Pdb::procedures`] and of [`Pdb::publics`], which run at
+    /// parse before anything else can ask.
     pdb: Mutex<PDB<'static, BoundedFile>>,
 
     /// The DBI stream, owned: modules are found in it by index.
@@ -100,6 +110,17 @@ pub(crate) struct Procedure {
     pub(crate) address: u64,
     /// The record's length, never 0.
     pub(crate) len: u64,
+}
+
+/// One public symbol a PDB names for code, as `parse_object` takes it: an `S_PUB32` record
+/// flagged as code or a function, its address already in the image's virtual address space.
+/// A public has no length.
+pub(crate) struct Public {
+    /// The name as the linker saw it — decorated (`?add@@YAHHH@Z`, `_ZN4core3ptr…`), or
+    /// plain for C — so the demangler has something to say about it where it has nothing
+    /// about a procedure's display name.
+    pub(crate) name: String,
+    pub(crate) address: u64,
 }
 
 /// One module's line info, decoded whole on first touch.
@@ -210,6 +231,40 @@ impl Pdb {
             }
         }
         procedures
+    }
+
+    /// Every public flagged as code or a function, in the order the symbol records stream
+    /// holds them. The stream is read whole once — it is the one stream the publics are in
+    /// — and dropped with the walk; a record that will not parse is skipped, and a malformed
+    /// tail stops the walk where it goes wrong and keeps what was read. Which of the two
+    /// flags a linker sets is its own: `rust-lld` marks a function `function` alone, so
+    /// either is taken, and the caller's code-section lookup is what keeps a public out of
+    /// the data sections. Two records at one address are both handed back — the caller's
+    /// one-per-address rule decides between them, and drops one at an address a procedure
+    /// already named.
+    pub(super) fn publics(&self) -> Vec<Public> {
+        let mut publics = Vec::new();
+        let mut pdb = self.pdb.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(table) = pdb.global_symbols() else {
+            return publics;
+        };
+        let mut symbols = table.iter();
+        while let Ok(Some(symbol)) = symbols.next() {
+            let Ok(pdb2::SymbolData::Public(public)) = symbol.parse() else {
+                continue;
+            };
+            if !(public.code || public.function) {
+                continue;
+            }
+            let Some(address) = self.address(public.offset) else {
+                continue;
+            };
+            publics.push(Public {
+                name: public.name.to_string().into_owned(),
+                address,
+            });
+        }
+        publics
     }
 
     /// A `section:offset` the PDB states, as an address in the image's own space: through

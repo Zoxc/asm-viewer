@@ -1,8 +1,8 @@
 //! Line-number information, read lazily out of what an [`Object`] was parsed from. The first
 //! query builds the backend, and an object with no debug info caches that answer too. The
 //! one exception is a PE whose `.pdb` is found and matches: [`DebugInfo::pdb`] opens it at
-//! parse time, because the procedures it names are symbols the image itself does not declare,
-//! and the backend built there is seeded into the object's cache
+//! parse time, because the procedures and publics it names are symbols the image itself does
+//! not declare, and the backend built there is seeded into the object's cache
 //! ([`DebugInfoCache::preloaded`]) so nothing is opened twice — the line tables themselves
 //! are still decoded on the first question about them.
 //!
@@ -30,7 +30,7 @@ mod dwarf;
 mod pdb;
 mod source;
 
-pub(crate) use pdb::Procedure;
+pub(crate) use pdb::{Procedure, Public};
 use source::SourceIndex;
 
 /// An [`Object`]'s debug info, or the fact that it has none, worked out at most once. Caching
@@ -92,20 +92,25 @@ impl DebugInfo {
 
     /// The PDB backend built **eagerly**, for `parse_object`: the `.pdb` a PE at `path` names
     /// — found and matched as [`load`](Self::load) would find it — together with every
-    /// procedure it records, which the parse takes as symbols. [`None`] for anything that
+    /// procedure it records and every public it names for code, which the parse takes as
+    /// symbols in that order. [`None`] for anything that
     /// is not a PE with a matching `.pdb`, and for a PE carrying DWARF of its own, which
     /// `load` would answer from that and not from the PDB: the two paths pick the same
     /// backend, and a parse never builds a DWARF context. Under the same net as `load`, the
     /// walk included, so a `pdb2` panic in either is "no PDB" and the lazy path is left to
     /// try again.
-    pub(crate) fn pdb(file: &object::File<'_>, path: &Path) -> Option<(DebugInfo, Vec<Procedure>)> {
+    pub(crate) fn pdb(
+        file: &object::File<'_>,
+        path: &Path,
+    ) -> Option<(DebugInfo, Vec<Procedure>, Vec<Public>)> {
         without_panicking(|| {
             if dwarf::Dwarf::present(file) {
                 return None;
             }
             let pdb = pdb::Pdb::load(file, path)?;
             let procedures = pdb.procedures();
-            Some((DebugInfo::of(Backend::Pdb(pdb)), procedures))
+            let publics = pdb.publics();
+            Some((DebugInfo::of(Backend::Pdb(pdb)), procedures, publics))
         })
         .flatten()
     }

@@ -17,7 +17,7 @@ mod line;
 mod listing;
 
 use disasm::Code;
-use line::{DebugInfo, Procedure};
+use line::{DebugInfo, Procedure, Public};
 
 pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
 pub use line::{DebugInfoCache, LineInfo, LineRow, Location, SourceDigests, SourceHash};
@@ -58,7 +58,7 @@ pub struct Object {
     pub data: ObjectData,
 
     /// This object's debug info, built on the first query — except for a PE whose matching
-    /// `.pdb` was opened at parse time for the procedures it names, whose backend is seeded
+    /// `.pdb` was opened at parse time for the symbols it names, whose backend is seeded
     /// here so it is not opened twice. Anything building an `Object` by hand writes
     /// `DebugInfoCache::default()`. See [`Object::line_info`].
     pub debug_info: DebugInfoCache,
@@ -433,8 +433,8 @@ struct DeclaredCode {
     name: Option<String>,
     address: u64,
     /// What the declaration itself said: a dynamic symbol's size, a PDB procedure's length,
-    /// and 0 for an export and the entry point. Kept for display only; the extent used
-    /// comes from [`SymbolData::extent`].
+    /// and 0 for an export, the entry point and a PDB public. Kept for display only; the
+    /// extent used comes from [`SymbolData::extent`].
     size: u64,
     /// The code section containing `address` — an export table and an entry point name an
     /// address and nothing else.
@@ -447,9 +447,10 @@ struct DeclaredCode {
 const ENTRY_POINT_NAME: &str = "<entry point>";
 
 /// The code a file declares outside its symbol table: its **entry point**, its **exports**,
-/// its ELF `.dynsym`, and the **procedures** of the `.pdb` a PE names, where that was found
-/// and matches (`procedures`, out of [`DebugInfo::pdb`]). A stripped shared library is
-/// otherwise a file with nothing in it, and a `/DEBUG` image has no symbol table at all.
+/// its ELF `.dynsym`, and the **procedures** and **publics** of the `.pdb` a PE names, where
+/// that was found and matches (`procedures` and `publics`, out of [`DebugInfo::pdb`]). A
+/// stripped shared library is otherwise a file with nothing in it, and a `/DEBUG` image has
+/// no symbol table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
 /// states outright, so the "nothing is scanned for" rule still holds.
 ///
@@ -460,10 +461,14 @@ const ENTRY_POINT_NAME: &str = "<entry point>";
 /// exported *data* out.
 ///
 /// **One symbol per address, earliest source winning** (symbol table > dynamic symbol >
-/// export > entry point > PDB procedure). An export is very often the symbol table's own
-/// function under its exported name, and a second `SymbolData` for it would be a second row
-/// in the list for one place in the file. The PDB comes last so a name the image itself
-/// states is never displaced by the debug file's spelling of it.
+/// export > entry point > PDB procedure > PDB public). An export is very often the symbol
+/// table's own function under its exported name, and a second `SymbolData` for it would be a
+/// second row in the list for one place in the file. The PDB comes last so a name the image
+/// itself states is never displaced by the debug file's spelling of it, and its publics
+/// after its procedures because a procedure carries a display name and a length where a
+/// public is a decorated name and an address: the publics name only what nothing else did —
+/// a function in a module that shipped without symbols, a thunk, assembler code, or every
+/// function of a stripped PDB.
 ///
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
@@ -472,6 +477,7 @@ fn declared_code(
     sections: &HashMap<SectionIndex, Section>,
     known: &mut HashSet<u64>,
     procedures: Vec<Procedure>,
+    publics: Vec<Public>,
 ) -> Vec<DeclaredCode> {
     let mut declared = Vec::new();
     if file.kind() == ObjectKind::Relocatable {
@@ -547,6 +553,13 @@ fn declared_code(
         take(Some(procedure.name), procedure.address, procedure.len);
     }
 
+    // And the publics behind them: a name for whatever address is still unnamed, and no
+    // length, as an export has none. A public in a data section — the flags are the
+    // linker's to set, and the section lookup is the rule — is dropped the same way.
+    for public in publics {
+        take(Some(public.name), public.address, 0);
+    }
+
     declared
 }
 
@@ -599,16 +612,18 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
             });
 
             // A PE's matching `.pdb` is opened here and not on the first line question,
-            // because the procedures it names are functions the image itself does not
-            // declare. The backend it builds is kept for the line questions later.
-            let (debug_info, procedures) = match DebugInfo::pdb(&file, &path) {
-                Some((info, procedures)) => (DebugInfoCache::preloaded(info), procedures),
-                None => (DebugInfoCache::default(), Vec::new()),
+            // because the procedures and publics it names are functions the image itself
+            // does not declare. The backend it builds is kept for the line questions later.
+            let (debug_info, procedures, publics) = match DebugInfo::pdb(&file, &path) {
+                Some((info, procedures, publics)) => {
+                    (DebugInfoCache::preloaded(info), procedures, publics)
+                }
+                None => (DebugInfoCache::default(), Vec::new(), Vec::new()),
             };
 
             // Declared code goes into the same sorted lists, because that list is what
             // `estimate_size` derives an extent from and a declaration carries none.
-            let declared = declared_code(&file, &sections, &mut known, procedures);
+            let declared = declared_code(&file, &sections, &mut known, procedures, publics);
             for code in &declared {
                 if let Some(section) = sections.get_mut(&code.section) {
                     section.symbols.push(code.address);
@@ -668,9 +683,10 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                         index: SymbolIndex(next + offset),
                         name: code.name.unwrap_or_else(|| ENTRY_POINT_NAME.to_owned()),
                         // An export's name is the file's, and on a Windows DLL very often
-                        // MSVC-mangled; a PDB procedure's is the compiler's display name,
-                        // which no demangler claims and so comes through as it is; the
-                        // entry point's is ours.
+                        // MSVC-mangled; a PDB public's is the linker's, decorated the same
+                        // way; a PDB procedure's is the compiler's display name, which no
+                        // demangler claims and so comes through as it is; the entry
+                        // point's is ours.
                         mangled: named,
                         section: section_map.get(&code.section).cloned(),
                         address: code.address,
