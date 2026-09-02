@@ -99,6 +99,21 @@ therefore pads horizontally only: a line must reach the row's top and bottom edg
 comes out dashed. Hovering a row draws its own branches darker, which needs a row *index* in
 `InstructionList` rather than `Focused` — a source position is many rows.
 
+**A row a branch lands on starts a block**, and says so with a hairline across its own top edge,
+so the listing reads as the basic blocks it is rather than as one unbroken run. The set is the
+gutter's own — `RowLanes::arrow`, worked out in `Lanes::new` beside the disassembly — and not
+`edges` asked a second time from the row, so the rule and the arrowhead it sits beside cannot
+disagree. It is a **border and not a gap**: a `VirtualScrollView` is given one `item_size` and
+every row must equal it, so a real gap means variable row heights or a spacer row of its own in
+the list, while a border is paint alone — the layout knows nothing about one — and is drawn
+inside the height the row already has. On the *top* edge, because a block starts at its target
+and the mark belongs to the row it starts rather than to the one above, which the scroll view may
+not have built at all. Only the targets: the row after a `ret` or an unconditional `jmp` also
+begins a block, but nothing below the disassembler says which instructions end a fall-through and
+that is crate work this mark did not need. The colour is `block_rule`, held quieter against the
+pane than `branch_fg` — it runs the whole width of the listing where the gutter's stroke is a few
+pixels long (`agents/Appearance.md`).
+
 **A branch's displacement is the other way to follow it**, drawn as a `BranchLabel` exactly where
 a call's resolved target is drawn as a `RelocationLabel` — `Instruction::branch_span` says which
 span to lift out, and the row is the same three children either way. Only where

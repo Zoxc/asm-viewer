@@ -6,7 +6,8 @@
 //! The gutter is drawn with **rects and not `canvas()`**, whose `RenderCallback` compares
 //! equal unconditionally -- exactly wrong for a row a scroll view recycles. And a row's
 //! height must equal the [`code_row_height`] the view over it was given, or scrolling
-//! misaligns.
+//! misaligns -- which is why the separator starting a basic block is a hairline inside the
+//! row's own top edge and not a gap above it.
 
 use super::*;
 
@@ -321,6 +322,24 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
         })
 }
 
+/// The hairline across the top of a row a branch lands on, so the listing reads as the
+/// basic blocks it is rather than as one unbroken run.
+///
+/// A **border and not a gap**: `VirtualScrollView` is given one `item_size` and every row
+/// has to equal it, so a real gap would mean variable row heights or a spacer row in the
+/// list, while a border is paint alone -- the layout knows nothing about one -- and is
+/// drawn inside the height the row already has. It is on the *top* edge because a block
+/// starts at its target, and the mark belongs to the row it starts rather than to the one
+/// above, which the scroll view may not even have built.
+fn block_rule() -> Border {
+    Border::new().fill(palette().block_rule).width(BorderWidth {
+        top: 1.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+    })
+}
+
 #[derive(Clone)]
 struct InstructionRow {
     data: AsmData,
@@ -488,6 +507,11 @@ impl Component for InstructionRow {
                 self.pinned,
                 self.selected,
             ))
+            // A branch lands here, so a block starts here. The set is the gutter's own --
+            // `RowLanes::arrow`, already worked out beside the disassembly -- and not
+            // `edges` asked a second time from the row: the mark and the arrowhead it sits
+            // beside cannot then disagree.
+            .maybe(self.arrows.lanes.arrow, |row| row.border(block_rule()))
             // The *down* and not the press: a drag is over by the time a press fires, so a
             // selection swept out with the button held has to begin as it goes down.
             .on_pointer_down(move |e: Event<PointerEventData>| {

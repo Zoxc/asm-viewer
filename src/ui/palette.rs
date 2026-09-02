@@ -56,6 +56,11 @@ pub(crate) struct Palette {
     pub(crate) branch_fg: Color,
     /// The same line while a branch of the row under the pointer runs down it.
     pub(crate) branch_hover_fg: Color,
+    /// The rule across the top of an instruction row a branch lands on, which is what makes
+    /// the listing read as the basic blocks it is. Recessive on purpose -- it runs the whole
+    /// width of the pane, where the gutter's stroke is a few pixels -- so it is quieter
+    /// against the pane than `branch_fg` is, and the palette test says so.
+    pub(crate) block_rule: Color,
     /// The run of rows a reader has picked out to copy. Translucent, and composited with
     /// the two washes above by `blend`.
     pub(crate) row_select_bg: Color,
@@ -109,6 +114,7 @@ impl Palette {
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
         branch_fg: Color::from_rgb(176, 188, 202),
         branch_hover_fg: Color::from_rgb(90, 116, 148),
+        block_rule: Color::from_rgb(211, 216, 222),
         row_select_bg: Color::from_argb(80, 96, 110, 128),
 
         address_fg: Color::from_rgb(118, 141, 169),
@@ -152,6 +158,7 @@ impl Palette {
         link_hover_bg: Color::from_af32rgb(0.25, 255, 255, 255),
         branch_fg: Color::from_rgb(96, 108, 124),
         branch_hover_fg: Color::from_rgb(150, 178, 210),
+        block_rule: Color::from_rgb(66, 72, 80),
         row_select_bg: Color::from_argb(90, 150, 165, 185),
 
         address_fg: Color::from_rgb(132, 156, 186),

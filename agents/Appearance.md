@@ -19,7 +19,11 @@ grounds the tab is on; and a visible-step floor for every wash over the row unde
 required to stay louder than the focus and the × required to move the tab it sits on further than
 the tab's own hover moves the bar — the one wash here that has to be told apart from *another
 highlight* rather than from a plain surface, since the pointer on the × lights the tab under it
-too. The code colours are named for what they mean, not for the pane they came from, and
+too. Two colours are drawings rather than text and are held inside the contrast test to floors of
+their own instead of to the 3.0: the gutter's branch line, which must not vanish into the pane and
+must be lit louder than it is at rest, and `block_rule`, the hairline starting a basic block,
+which must read against the pane and stay *quieter* than that branch line — it runs the whole
+width of the listing where the stroke beside it is a few pixels long. The code colours are named for what they mean, not for the pane they came from, and
 `Palette::syntax` maps `freya-code-editor`'s ~33 capture fields onto them. Beware
 `resolve_capture_color`: it treats a capture whose colour equals `text` as unmapped and walks *up*
 the dotted name, so giving a child field the text colour while its parent holds another silently

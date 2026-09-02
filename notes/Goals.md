@@ -170,13 +170,17 @@ one item per part, so the unfinished half stays visible.
   placeholder character is not a character of any rope. Character selection in the assembly
   pane is a rewrite of the relocation link and the arrow gutter; the source pane could have
   it cheaply but would then behave unlike the pane beside it.
-- [ ] A gap or a line before a row something jumps to, so the listing reads as the basic
-  blocks it is rather than as one run of instructions. The targets are already known —
-  `Assembly::edges` names them, and 7b's gutter draws an arrowhead on each. Note the
-  constraint before choosing between the two: `VirtualScrollView` is given one `item_size`
-  and `ROW_HEIGHT` must equal it or scrolling misaligns, so a real *gap* means variable row
-  heights (or a spacer row of its own in the list), while a hairline drawn inside the row's
-  own top edge costs nothing and cannot desynchronise anything.
+- [x] A hairline before a row something jumps to, so the listing reads as the basic blocks
+  it is rather than as one run of instructions. A line and not a gap, which the constraint
+  decided: `VirtualScrollView` is given one `item_size` and the row height must equal it, so a
+  real gap would mean variable row heights or a spacer row of its own in the list, while a
+  border on the row's own top edge is paint alone and cannot desynchronise the scroll. The
+  targets were already known and are not worked out again — `RowLanes::arrow`, the same set
+  7b's gutter draws an arrowhead on, carried to the row beside the lanes it already gets. Its
+  colour is `block_rule`, recessive by construction: it reads against the pane and stays
+  quieter than the branch line beside it in both palettes, which the palette test holds. The
+  row after a `ret` or an unconditional `jmp` starts a block too, but nothing below the
+  disassembler says which instructions end a fall-through, so that half is left.
 - [ ] A unified **section** view of code: the whole `.text` as one endless scroll, with the
   symbols drawn as labels *inside* the listing where they start — what `objdump -d` reads like.
   It is how you see what sits between two functions, what the padding is, and code no symbol

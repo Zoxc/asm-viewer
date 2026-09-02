@@ -3351,6 +3351,112 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     assert_eq!(states.history.peek().recent().count(), 0);
 }
 
+/// A row a branch lands on wears a hairline across its top edge, so the listing reads as
+/// the basic blocks it is -- and **the row is the height it always was**: a border is paint
+/// and not layout, which is the whole reason the mark is a rule inside the row rather than
+/// a gap above it. A row that is nobody's target wears nothing.
+///
+/// Headless because both halves are questions about the real tree: which of the rows a
+/// `VirtualScrollView` built carry the border, and what those rows measured once it was on
+/// them.
+#[test]
+fn a_row_a_branch_lands_on_starts_a_block() {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    let assembly = studied.assembly.clone().expect("the fixture disassembles");
+    // The rows the gutter already puts an arrowhead on, by address: the separator is that
+    // set drawn again and not a second answer of its own.
+    let mut targets: Vec<u64> = assembly
+        .edges
+        .iter()
+        .map(|edge| assembly.instructions[edge.to].address)
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    // Tall enough for the whole of `sum_to`, so what is drawn is what the symbol holds.
+    let (mut test, _) = TestingRunner::new(
+        listing_harness,
+        (500., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+
+    // Every element the separator was drawn on, by the area it was laid out in.
+    let ruled: Vec<Area> = test.find_many(|node, element| {
+        element
+            .style()
+            .borders
+            .iter()
+            .any(|border| border.fill == palette().block_rule && border.width.top > 0.0)
+            .then(|| node.layout().area)
+    });
+    // And every instruction row, by the address column it is drawn with -- sixteen hex
+    // digits and a trailing space, which nothing else in the listing is.
+    let rows: Vec<(u64, Area)> = test.find_many(|node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .map(|label| label.text.to_string())
+            .filter(|text| text.trim_end().len() == 16)
+            .and_then(|text| u64::from_str_radix(text.trim_end(), 16).ok())
+            .map(|address| (address, node.layout().area))
+    });
+
+    let drawn: Vec<u64> = rows.iter().map(|(address, _)| *address).collect();
+    let expected: Vec<u64> = targets
+        .iter()
+        .copied()
+        .filter(|address| drawn.contains(address))
+        .collect();
+    assert!(
+        expected.len() >= 2,
+        "the fixture's sum_to is branched to {} times: {expected:0X?}",
+        expected.len()
+    );
+    assert!(
+        drawn.len() > expected.len(),
+        "every drawn row is a branch target, so a mark on all of them would pass"
+    );
+
+    let mut started: Vec<u64> = rows
+        .iter()
+        .filter(|(_, area)| {
+            let middle = area.origin.y + area.height() / 2.0;
+            ruled
+                .iter()
+                .any(|row| row.origin.y <= middle && middle < row.origin.y + row.height())
+        })
+        .map(|(address, _)| *address)
+        .collect();
+    started.sort_unstable();
+    assert_eq!(
+        started, expected,
+        "the separators are not on the rows the branches land on"
+    );
+
+    // And the mark cost the row nothing: it is still exactly the `item_size` the scroll
+    // view over it was given, or every row below the first block would be drawn a pixel
+    // further down than the view believes.
+    for area in &ruled {
+        assert_eq!(
+            area.height(),
+            code_row_height(),
+            "the separator moved the row it is on"
+        );
+    }
+}
+
 /// A component with no props at all, which is what every view in the app is. Its parent
 /// reads nothing coloured, so the theme has to reach it on its own.
 #[derive(PartialEq)]
@@ -3574,6 +3680,16 @@ fn every_foreground_is_legible_on_its_own_surface() {
         let lit = contrast(palette.branch_hover_fg, palette.pane_bg);
         assert!(line >= 1.5, "{theme} branch_fg: {line:.2}");
         assert!(lit > line, "{theme} branch_hover_fg: {lit:.2} vs {line:.2}");
+
+        // The rule that starts a basic block runs the whole width of the pane where the
+        // gutter's stroke is a few pixels long, so it is held to a floor of its own and
+        // required to stay quieter than that stroke rather than merely legible.
+        let rule = contrast(palette.block_rule, palette.pane_bg);
+        assert!(rule >= 1.2, "{theme} block_rule: {rule:.2}");
+        assert!(
+            rule < line,
+            "{theme} block_rule: {rule:.2} vs branch_fg {line:.2}"
+        );
     }
 }
 
