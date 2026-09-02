@@ -340,10 +340,13 @@ length, writes poison values (`0`, `u32::MAX`, `u64::MAX`, the file's own length
 numeric field of every header, section header, symbol and relocation, and splats pseudo-random
 runs over it, running the whole pipeline over each result. It is sampled by an even stride and
 seeded from a constant (never `rand`, never the clock), so which cases run is fixed and it stays
-around two seconds — 2.1, of which the reverse index costs the last tenth. `tests/robustness.rs` is the **regression suite**: one named, minimal fixture
+around two and a half seconds — 2.6, of which the reverse index costs a tenth and every section's listing, its first four stretches decoded, four tenths. `tests/robustness.rs` is the **regression suite**: one named, minimal fixture
 per defect that was actually found, because a sweep that goes green tells you nothing about which
 bug it was that stopped happening. `common::parse_and_walk` is the one definition of "ask a parsed
-object everything", shared by both. The rule that goes with them is the user rule in `AGENTS.md`: a minimal
+object everything", shared by both — every symbol's extent, listing and line info, every
+section's DWARF, the reverse index, and every section's `Listing` with its first
+`MAX_LISTING_STRETCHES` (4) stretches decoded, since a decode is the symbol's disassembly over
+again and a section of any kind has a listing. The rule that goes with them is the user rule in `AGENTS.md`: a minimal
 test case every time something is found wrong, and **checked arithmetic in preference to a wider
 `catch_unwind`** — the guard is for a dependency's bug, never for ours. Note also what *cannot* be
 caught: a stack overflow aborts, so anything recursing over file-controlled input (the demanglers,

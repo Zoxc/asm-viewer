@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use analysis::{parse_object, Instruction, Object, SymbolData};
+use analysis::{parse_object, Instruction, Listing, Object, SymbolData};
 use object::write;
 use object::{
     Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
@@ -78,6 +78,12 @@ pub fn committed_fixture(name: &str) -> Vec<u8> {
 /// thousands of times and every symbol of every mutation is a line-info query apiece.
 const MAX_SOURCE_QUERIES: usize = 4;
 
+/// How many stretches of each section's listing [`parse_and_walk`] decodes. The skeleton is
+/// built whole, since it is the cheap half; a decode is the symbol's own disassembly again,
+/// and `Section` has no kind, so this walks a `.debug_info`'s listing as readily as a
+/// `.text`'s.
+const MAX_LISTING_STRETCHES: usize = 4;
+
 /// Parse, then walk everything a parsed object exposes, so a panic anywhere past
 /// `parse_object` is caught too.
 pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
@@ -125,6 +131,46 @@ pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
     // Build the DWARF context even for an object whose symbols were all dropped.
     for section in &object.sections {
         let _ = object.line_info(section, 0..u64::MAX);
+    }
+
+    // Every section's listing: the skeleton whole, the first few stretches decoded. What is
+    // asserted is what holds for any input — the stretches partition the section's bytes
+    // in order and a gap lies inside its stretch; the agreement with the symbol's own
+    // listing is a claim tested where the objects are honest, in `listing.rs`.
+    for section in &object.sections {
+        let listing = Listing::new(&object, section.clone());
+        let stretches = listing.stretches();
+        let end = section
+            .address
+            .saturating_add(section.data.len().try_into().unwrap_or(u64::MAX));
+        // No bytes, or none with room in the address space: nothing to list.
+        if section.address >= end {
+            assert!(stretches.is_empty());
+        } else {
+            assert_eq!(
+                stretches.first().map(|s| s.range.start),
+                Some(section.address)
+            );
+            assert_eq!(stretches.last().map(|s| s.range.end), Some(end));
+        }
+        for (index, stretch) in stretches.iter().enumerate() {
+            assert!(stretch.range.start < stretch.range.end);
+            if let Some(next) = stretches.get(index + 1) {
+                assert_eq!(stretch.range.end, next.range.start);
+            }
+            assert!(index == 0 || !stretch.symbols.is_empty());
+            assert_eq!(listing.stretch_at(stretch.range.start), Some(index));
+            if index < MAX_LISTING_STRETCHES {
+                let decoded = listing.decode(&object, index).expect("a stretch decodes");
+                if let Some(gap) = decoded.gap {
+                    assert!(gap.range.start >= stretch.range.start);
+                    assert!(gap.range.start < gap.range.end);
+                    assert_eq!(gap.range.end, stretch.range.end);
+                }
+            }
+        }
+        assert_eq!(listing.stretch_at(end), None);
+        assert_eq!(listing.decode(&object, stretches.len()).is_some(), false);
     }
 
     // The reverse direction, which builds a whole-object index the first time it is asked.

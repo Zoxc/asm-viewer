@@ -593,3 +593,35 @@ fn the_committed_objects_list_every_function_at_its_own_address() {
         assert_eq!(listing.stretches()[0].range.start, 0);
     }
 }
+
+/// A section whose `sh_addr` is the last address there is has bytes with no addresses to be
+/// at: nothing to list, and nothing to panic over. Found by the mutation sweep, where the
+/// section's end wrapping to its own start is the cheapest thing a poisoned header buys.
+#[test]
+fn a_section_at_the_end_of_the_address_space_lists_nothing() {
+    let mut data = caller_and_target();
+
+    // Point `.text` at `u64::MAX`, which the writer will not do for us.
+    {
+        use object::{Object as _, ObjectSection as _};
+        let file = object::File::parse(&data[..]).expect("the fixture parses");
+        let index = file
+            .section_by_name(".text")
+            .expect(".text is there")
+            .index()
+            .0;
+        let shoff = u64::from_le_bytes(data[0x28..0x30].try_into().unwrap()) as usize;
+        let shentsize = u16::from_le_bytes(data[0x3A..0x3C].try_into().unwrap()) as usize;
+        let header = shoff + index * shentsize;
+        // `sh_addr` is the third field of an ELF64 section header, after two 32-bit ones.
+        data[header + 16..header + 24].copy_from_slice(&u64::MAX.to_le_bytes());
+    }
+
+    let object = parse(&data);
+    let listing = listing_of(&object, ".text");
+    assert_eq!(listing.section().address, u64::MAX);
+    assert_eq!(listing.section().data.len(), 7);
+    assert!(listing.stretches().is_empty());
+    assert_eq!(listing.stretch_at(u64::MAX), None);
+    assert!(listing.decode(&object, 0).is_none());
+}

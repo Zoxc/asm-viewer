@@ -89,7 +89,8 @@ impl Listing {
     /// plus a leading one when the first symbol is not at its start. Decodes nothing.
     ///
     /// A symbol placed outside the section's bytes — a wild `st_value` — is left out; a
-    /// section with no bytes has no stretches.
+    /// section with no bytes has no stretches, and so does one placed at the very end of
+    /// the address space, whose bytes have no addresses to be at.
     pub fn new(object: &Object, section: Arc<Section>) -> Self {
         let end = section_end(&section);
 
