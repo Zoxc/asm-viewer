@@ -49,8 +49,9 @@ impl Dwarf {
     /// listing's agree by construction.
     pub(super) fn load(file: &object::File<'_>, sections: &[Arc<Section>]) -> Option<Dwarf> {
         // The cheap test first, so an object with no DWARF costs one section-table scan.
-        // `section_by_name` already knows ELF's `.zdebug_info` and Mach-O's `__debug_info`.
-        file.section_by_name(gimli::SectionId::DebugInfo.name())?;
+        if !Dwarf::present(file) {
+            return None;
+        }
 
         let endian = if file.is_little_endian() {
             RunTimeEndian::Little
@@ -84,6 +85,15 @@ impl Dwarf {
             biases,
             extents: Mutex::default(),
         })
+    }
+
+    /// Whether the object carries DWARF at all: one section-table scan for `.debug_info`.
+    /// `section_by_name` already knows ELF's `.zdebug_info` and Mach-O's `__debug_info`.
+    /// The same test [`load`](Self::load) starts with, so the seam's "DWARF first" rule can
+    /// be applied before a `.pdb` is opened without building the DWARF backend to ask.
+    pub(super) fn present(file: &object::File<'_>) -> bool {
+        file.section_by_name(gimli::SectionId::DebugInfo.name())
+            .is_some()
     }
 
     /// How far the section with this index was moved by [`crate::section_biases`]; 0 for a

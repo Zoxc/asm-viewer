@@ -940,6 +940,20 @@ one item per part, so the unfinished half stays visible.
   app can tell an edited source from the one compiled. Pinned by a committed
   `line_fixture.dll` + `.pdb` built by clang-cl and rust-lld from the gcc fixtures' own C file
   (`agents/Analysis.md`).
+- [x] PDB procedures as symbols: a PE whose matching `.pdb` is beside it lists every function
+  the PDB's modules record (`S_GPROC32`/`S_LPROC32` with a length, name as the compiler
+  spelled it, address through the PDB's address map, the length as the declared size), not
+  only what the image declares — a fifth source in `declared_code`, after the symbol table,
+  `.dynsym`, exports and entry point, so an image's own name is never displaced. The `.pdb` is
+  opened at parse for it, once, and the backend seeded for the line questions; the line tables
+  stay lazy. `rustc_driver.dll` goes from 15 241 symbols to 70 728 for 561 ms -> 1.00 s of
+  open (release; one read of every module stream), `rustc.exe` from `<entry point>` to 412.
+  Pinned by a second committed pair, `line_fixture_noexport.dll` + `.pdb`, the same object
+  linked with no exports, which lists nothing alone and the three functions beside its PDB.
+- [ ] PDB public symbols as a further source: `S_PUB32` records in the publics stream, the
+  mangled names, for the functions no module's symbols describe (assembly, or a PDB built
+  without module symbols) — those in executable sections only, after the procedures, under
+  the same one-per-address rule, and through the demangler since these *are* mangled.
 - [ ] Map a PDB's source paths onto this machine: the names come out verbatim (`C:\...` from
   MSVC, `/rustc/<hash>\library\...` from rustc), so the Source pane cannot open them where the
   build was elsewhere. A root-to-root mapping saved with the project, with the recorded

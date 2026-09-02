@@ -1,6 +1,10 @@
-//! Line-number information, read lazily out of what an [`Object`] was parsed from. Nothing
-//! here runs at parse time; the first query builds the backend, and an object with no debug
-//! info caches that answer too.
+//! Line-number information, read lazily out of what an [`Object`] was parsed from. The first
+//! query builds the backend, and an object with no debug info caches that answer too. The
+//! one exception is a PE whose `.pdb` is found and matches: [`DebugInfo::pdb`] opens it at
+//! parse time, because the procedures it names are symbols the image itself does not declare,
+//! and the backend built there is seeded into the object's cache
+//! ([`DebugInfoCache::preloaded`]) so nothing is opened twice — the line tables themselves
+//! are still decoded on the first question about them.
 //!
 //! This file is the **seam**: what every backend answers and the rules every answer obeys,
 //! naming no debug format. The two questions — the rows covering an address range, and a
@@ -19,18 +23,28 @@ use crate::{Object, Section, SymbolData};
 use object::SectionIndex;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 mod dwarf;
 mod pdb;
 mod source;
 
+pub(crate) use pdb::Procedure;
 use source::SourceIndex;
 
 /// An [`Object`]'s debug info, or the fact that it has none, worked out at most once. Caching
 /// the *absence* is what keeps a stripped binary from re-scanning its section table per query.
 #[derive(Default)]
 pub struct DebugInfoCache(OnceLock<Option<DebugInfo>>);
+
+impl DebugInfoCache {
+    /// A cache already holding the backend the parse built — [`DebugInfo::pdb`]'s — so the
+    /// first line question finds it there instead of opening the `.pdb` a second time.
+    pub(crate) fn preloaded(info: DebugInfo) -> DebugInfoCache {
+        DebugInfoCache(OnceLock::from(Some(info)))
+    }
+}
 
 /// One object's debug info, whichever format it is in, built once and kept for the object's
 /// lifetime.
@@ -66,10 +80,34 @@ impl DebugInfo {
             Some(dwarf) => Backend::Dwarf(dwarf),
             None => Backend::Pdb(pdb::Pdb::load(&file, &object.path)?),
         };
-        Some(DebugInfo {
+        Some(DebugInfo::of(backend))
+    }
+
+    fn of(backend: Backend) -> DebugInfo {
+        DebugInfo {
             backend,
             index: OnceLock::new(),
+        }
+    }
+
+    /// The PDB backend built **eagerly**, for `parse_object`: the `.pdb` a PE at `path` names
+    /// — found and matched as [`load`](Self::load) would find it — together with every
+    /// procedure it records, which the parse takes as symbols. [`None`] for anything that
+    /// is not a PE with a matching `.pdb`, and for a PE carrying DWARF of its own, which
+    /// `load` would answer from that and not from the PDB: the two paths pick the same
+    /// backend, and a parse never builds a DWARF context. Under the same net as `load`, the
+    /// walk included, so a `pdb2` panic in either is "no PDB" and the lazy path is left to
+    /// try again.
+    pub(crate) fn pdb(file: &object::File<'_>, path: &Path) -> Option<(DebugInfo, Vec<Procedure>)> {
+        without_panicking(|| {
+            if dwarf::Dwarf::present(file) {
+                return None;
+            }
+            let pdb = pdb::Pdb::load(file, path)?;
+            let procedures = pdb.procedures();
+            Some((DebugInfo::of(Backend::Pdb(pdb)), procedures))
         })
+        .flatten()
     }
 
     /// How far the section with this index was moved by [`crate::section_biases`]; 0 for a
@@ -395,8 +433,9 @@ impl Object {
     /// nothing about this range.
     ///
     /// Worker-thread work by construction: the first call parses the debug info's tables —
-    /// opening the `.pdb` beside a PE — and each call parses the line program of every unit
-    /// or module covering the range, once per unit for the object's lifetime.
+    /// unless the parse already opened the `.pdb` beside a PE for its procedures — and each
+    /// call parses the line program of every unit or module covering the range, once per
+    /// unit for the object's lifetime.
     pub fn line_info(&self, section: &Section, range: Range<u64>) -> Option<Arc<LineInfo>> {
         self.debug_info()?.line_info(section, range)
     }

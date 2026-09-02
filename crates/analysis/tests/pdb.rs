@@ -69,6 +69,7 @@ use std::sync::Arc;
 
 const DLL: &str = "line_fixture.dll";
 const PDB: &str = "line_fixture.pdb";
+const NOEXPORT_DLL: &str = "line_fixture_noexport.dll";
 
 /// The source as the PDB spells it: `-ffile-compilation-dir` joined to the name given.
 const SOURCE: &str = "/fixture/line_fixture.c";
@@ -509,4 +510,84 @@ fn an_absolute_recorded_path_is_tried_as_recorded() {
 
     let object = parse_at(&image("build\\build.pdb"), empty.join("image.dll"));
     assert!(symbol(&object, "add").line_info(&object).is_none());
+}
+
+/// The image that declares nothing shows nothing on its own — parsed at a path with no
+/// `.pdb` beside it, there is not one symbol — and, parsed where its `.pdb` is, shows the
+/// PDB's three procedures as symbols: named as the records name them, at the addresses the
+/// linker laid them out at, each with its line info and its declared length, and answering
+/// the reverse index as an export would.
+#[test]
+fn procedures_are_symbols_where_the_image_declares_none() {
+    let bytes = committed_fixture(NOEXPORT_DLL);
+    let file = object::File::parse(bytes.as_slice()).expect("a PE image");
+    assert_eq!(file.symbols().count(), 0);
+    assert_eq!(file.exports().unwrap().len(), 0, "no /EXPORT");
+    assert_eq!(
+        file.entry(),
+        file.relative_address_base(),
+        "/NOENTRY: an entry RVA of 0, which `object` adds the base to"
+    );
+
+    let alone = parse_at(&bytes, scratch("noexport_alone").join("alone.dll"));
+    assert_eq!(names(&alone), Vec::<&str>::new());
+
+    let object = parse_at(&bytes, committed_fixture_path(NOEXPORT_DLL));
+    assert_eq!(names(&object), ["add", "sum_to", "twice"]);
+    for (name, offset, len) in [
+        ("add", 0x00, 0x11),
+        ("twice", 0x20, 0x1b),
+        ("sum_to", 0x40, 0x49),
+    ] {
+        let symbol = symbol(&object, name);
+        assert_eq!(symbol.address, TEXT + offset, "{name}");
+        assert_eq!(
+            symbol.size, len,
+            "{name}: the procedure's length is the declared size"
+        );
+        assert_eq!(
+            symbol.demangled, None,
+            "{name}: a display name demangles to nothing"
+        );
+        assert_eq!(symbol.debug_extent(&object), Some(len), "{name}");
+        assert_eq!(symbol.extent(&object), Some(len), "{name}");
+        assert!(symbol.assembly(&object).is_some(), "{name} decodes");
+    }
+    assert_eq!(rows(&line_info(&object, "add")).len(), 4);
+    assert_eq!(rows(&line_info(&object, "twice")).len(), 5);
+    assert_eq!(rows(&line_info(&object, "sum_to")).len(), 14);
+
+    let at_23: Vec<String> = object
+        .symbols_at_line(SOURCE, 23)
+        .iter()
+        .map(|symbol| symbol.name.clone())
+        .collect();
+    assert_eq!(at_23, ["add"]);
+}
+
+/// Where an export already names an address, the PDB's procedure at that address adds no
+/// second symbol: the exported pair still lists exactly its three exports, under their
+/// exported names.
+#[test]
+fn a_procedure_never_displaces_an_export() {
+    let object = parse();
+    assert_eq!(names(&object), ["add", "sum_to", "twice"]);
+    assert_eq!(object.symbols.len(), 3);
+    for name in ["add", "twice", "sum_to"] {
+        assert_eq!(
+            symbol(&object, name).size,
+            0,
+            "{name}: an export declares no size"
+        );
+    }
+}
+
+/// A `.pdb` that is not this image's adds no symbols either, whatever it knows.
+#[test]
+fn a_pdb_with_another_guid_adds_no_symbols() {
+    let mut other_guid = committed_fixture(NOEXPORT_DLL);
+    let record = codeview_record(&other_guid);
+    other_guid[record + 4] ^= 0x01;
+    let object = parse_at(&other_guid, committed_fixture_path(NOEXPORT_DLL));
+    assert_eq!(names(&object), Vec::<&str>::new());
 }

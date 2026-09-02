@@ -73,7 +73,9 @@ command.
 - `crates/analysis/src/line/dwarf.rs` — the DWARF backend, and the only part that knows
   `gimli`/`addr2line`.
 - `crates/analysis/src/line/pdb.rs` — the PDB backend: a PE's `.pdb` found by its CodeView
-  record, matched by GUID and age, read a page at a time; the only part that knows `pdb2`.
+  record, matched by GUID and age, read a page at a time; the only part that knows `pdb2`. Also
+  the one eager path through the seam: opened at parse for the procedures it names, which
+  `parse_object` takes as symbols.
 - `crates/analysis/src/line/source.rs` — the same line info the other way: a file and a line,
   out to the symbols compiled from them, built on the seam and not on a backend.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.

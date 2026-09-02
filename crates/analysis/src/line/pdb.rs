@@ -18,11 +18,28 @@
 //! address in it is asked about — its rows into one [`LineInfo`], its procedures into a
 //! table of extents — and kept, the way the DWARF backend keeps a unit's subprogram extents.
 //!
+//! The PDB is also the one debug format that names functions the image does not: a `/DEBUG`
+//! image has no COFF symbol table, so a stripped `.exe` declares its entry point and a DLL
+//! its exports and nothing else, while the PDB knows every function. [`Pdb::procedures`]
+//! walks every module's symbols once for its `S_GPROC32`/`S_LPROC32` records — name,
+//! address, length — and `parse_object` takes them as symbols beside the image's own. That
+//! walk is at **parse time**, so the `.pdb` is opened there for an image that has one and
+//! the backend built then is the one kept for the line questions later (`DebugInfo::pdb`);
+//! the line tables are still decoded lazily. The walk reads each module's stream and keeps
+//! nothing of it but the procedures it hands back, and a module asked about later is read
+//! again — the simpler of the two shapes, and the re-read is exactly the first-question cost
+//! the lazy path had before: holding every module's procedure table from the walk would
+//! duplicate what the symbols now carry as their declared size, and the stream would still
+//! have to be read again for its lines.
+//!
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
 
 use super::{LineInfo, RowCollector, SourceHash};
 use object::Object as _;
-use pdb2::{AddressMap, DebugInformation, FallibleIterator, PdbInternalRva, StringTable, PDB};
+use pdb2::{
+    AddressMap, DebugInformation, FallibleIterator, PdbInternalRva, PdbInternalSectionOffset,
+    StringTable, PDB,
+};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -34,7 +51,9 @@ use std::sync::{Arc, Mutex};
 pub(super) struct Pdb {
     /// Every stream read goes through `&mut PDB`, and `PDB` is `Send` but not `Sync`: the
     /// same Mutex-for-`Sync` reasoning as the DWARF backend's context. Taken per module
-    /// loaded and released before the module is decoded, so no other lock nests under it.
+    /// loaded and released before the module is decoded, so no other lock nests under it;
+    /// held across the whole of [`Pdb::procedures`], which runs at parse before anything
+    /// else can ask.
     pdb: Mutex<PDB<'static, BoundedFile>>,
 
     /// The DBI stream, owned: modules are found in it by index.
@@ -70,6 +89,17 @@ struct Contribution {
     /// walk stops at; the same shape as `source.rs`'s `SymbolRange::max_end`.
     max_end: u64,
     module: usize,
+}
+
+/// One function a PDB names, as `parse_object` takes it: an `S_GPROC32`/`S_LPROC32` record
+/// with a length, its address already in the image's virtual address space.
+pub(crate) struct Procedure {
+    /// The name as the record spells it — the compiler's display name (`add`,
+    /// `core::ptr::drop_in_place<T>`), not a mangled one.
+    pub(crate) name: String,
+    pub(crate) address: u64,
+    /// The record's length, never 0.
+    pub(crate) len: u64,
 }
 
 /// One module's line info, decoded whole on first touch.
@@ -141,6 +171,52 @@ impl Pdb {
             contributions,
             modules: Mutex::default(),
         })
+    }
+
+    /// Every procedure with a length in every module, in module order and then the order
+    /// the module's symbols are in. One pass over every module stream, under the PDB's lock
+    /// for the whole walk; a module whose stream will not read, or a record that will not
+    /// parse, is skipped and the walk goes on. Two records at one address are both handed
+    /// back — the caller's one-per-address rule decides between them.
+    pub(super) fn procedures(&self) -> Vec<Procedure> {
+        let mut procedures = Vec::new();
+        let Ok(mut modules) = self.dbi.modules() else {
+            return procedures;
+        };
+        let mut pdb = self.pdb.lock().unwrap_or_else(|e| e.into_inner());
+        // A malformed tail stops the walk where it goes wrong and keeps what was read.
+        while let Ok(Some(module)) = modules.next() {
+            let Ok(Some(info)) = pdb.module_info(&module) else {
+                continue;
+            };
+            let Ok(mut symbols) = info.symbols() else {
+                continue;
+            };
+            while let Ok(Some(symbol)) = symbols.next() {
+                let Ok(pdb2::SymbolData::Procedure(procedure)) = symbol.parse() else {
+                    continue;
+                };
+                if procedure.len == 0 {
+                    continue;
+                }
+                let Some(address) = self.address(procedure.offset) else {
+                    continue;
+                };
+                procedures.push(Procedure {
+                    name: procedure.name.to_string().into_owned(),
+                    address,
+                    len: u64::from(procedure.len),
+                });
+            }
+        }
+        procedures
+    }
+
+    /// A `section:offset` the PDB states, as an address in the image's own space: through
+    /// the address map to an RVA and onto the image base, or [`None`] where either fails.
+    fn address(&self, offset: PdbInternalSectionOffset) -> Option<u64> {
+        let rva = offset.to_rva(&self.address_map)?;
+        self.image_base.checked_add(u64::from(rva.0))
     }
 
     /// The rows over `range`, out of every module contributing to it.
@@ -298,11 +374,7 @@ impl Pdb {
                 if procedure.len == 0 {
                     continue;
                 }
-                let Some(start) = procedure
-                    .offset
-                    .to_rva(&self.address_map)
-                    .and_then(|rva| self.image_base.checked_add(u64::from(rva.0)))
-                else {
+                let Some(start) = self.address(procedure.offset) else {
                     continue;
                 };
                 // Two procedures at one address is a function and its alias; the first one

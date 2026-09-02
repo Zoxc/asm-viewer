@@ -11,12 +11,14 @@
 //! [`TRUNCATION_STRIDE`]-th length past [`WHOLE_TRUNCATION`] bytes. Which cases run is
 //! therefore fixed, and a sampled table is still represented end to end.
 //!
-//! **Two of the inputs are files on disk**, because a `.pdb` is a second file found beside
-//! its binary: the linker's DLL is parsed at a path with the pristine PDB beside it, so a
-//! mutation of the DLL that leaves the CodeView record intact goes on to open and match the
-//! PDB; and the PDB is mutated in turn, each mutation written beside the pristine DLL before
-//! the DLL is parsed. Each test writes under a directory of its own in the target directory,
-//! since the three run at once.
+//! **Four of the inputs are files on disk**, because a `.pdb` is a second file found beside
+//! its binary: each of the linker's two DLLs is parsed at a path with its pristine PDB
+//! beside it, so a mutation of the DLL that leaves the CodeView record intact goes on to
+//! open and match the PDB — at parse time now, for the procedures it names; and each PDB is
+//! mutated in turn, every mutation written beside its pristine DLL before the DLL is
+//! parsed. The second pair, the image that declares nothing, is the one whose every symbol
+//! is the PDB's, so a mutated PDB there is what the procedure walk is swept with. Each test
+//! writes under a directory of its own in the target directory, since the three run at once.
 
 mod common;
 
@@ -45,8 +47,12 @@ const TRUNCATION_STRIDE: usize = 7;
 /// and prime to 4096 so the cuts drift across the page boundaries an MSF is laid out on.
 const PDB_TRUNCATION_STRIDE: usize = 509;
 
-const DLL: &str = "line_fixture.dll";
-const PDB: &str = "line_fixture.pdb";
+/// The two committed DLL + PDB pairs (`tests/pdb.rs`): the one whose three functions are
+/// exported, and the one that exports nothing and is named only by its PDB.
+const PAIRS: [(&str, &str); 2] = [
+    ("line_fixture.dll", "line_fixture.pdb"),
+    ("line_fixture_noexport.dll", "line_fixture_noexport.pdb"),
+];
 
 /// One input to the pipeline: the bytes, the path they are said to be at, and a file to put
 /// beside them first — the mutated PDB a pristine DLL is parsed next to.
@@ -92,7 +98,7 @@ fn scratch(test: &str) -> PathBuf {
 /// Every shape the crate can be asked about: relocatable objects with and without DWARF,
 /// real compiler output in DWARF 5, the two linked images, whose export and entry-point
 /// paths (`declared_code`) no `.o` reaches at all, one of them naming a `.pdb` that is
-/// nowhere, and the linker's real DLL **beside its PDB**.
+/// nowhere, and the linker's two real DLLs each **beside its PDB**.
 fn corpus(test: &str) -> Vec<Case> {
     let mut corpus = vec![
         Case::in_memory("caller_and_target".to_owned(), caller_and_target()),
@@ -114,38 +120,46 @@ fn corpus(test: &str) -> Vec<Case> {
 
     let dir = scratch(test).join("dll");
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join(PDB), committed_fixture(PDB)).unwrap();
-    let dll = committed_fixture(DLL);
-    // The pair is found where the sweep put it, so the mutations reach the PDB backend
-    // rather than a search that comes back empty.
-    let intact = parse_and_walk_at(&dll, dir.join(DLL)).expect("the DLL parses");
-    assert!(
-        intact.symbols_sorted[0].line_info(&intact).is_some(),
-        "the PDB beside the DLL was not read"
-    );
-    corpus.push(Case {
-        label: DLL.to_owned(),
-        data: dll,
-        path: dir.join(DLL),
-        beside: None,
-    });
+    for (dll, pdb) in PAIRS {
+        fs::write(dir.join(pdb), committed_fixture(pdb)).unwrap();
+        let data = committed_fixture(dll);
+        // The pair is found where the sweep put it, so the mutations reach the PDB backend
+        // rather than a search that comes back empty — and for the image that declares
+        // nothing, having a symbol at all is the PDB having been read at parse.
+        let intact = parse_and_walk_at(&data, dir.join(dll)).expect("the DLL parses");
+        assert!(
+            intact
+                .symbols_sorted
+                .first()
+                .is_some_and(|symbol| symbol.line_info(&intact).is_some()),
+            "the PDB beside {dll} was not read"
+        );
+        corpus.push(Case {
+            label: dll.to_owned(),
+            data,
+            path: dir.join(dll),
+            beside: None,
+        });
+    }
     corpus
 }
 
-/// The pristine DLL parsed beside one mutation of its PDB.
-fn pdb_cases(test: &str, mutations: Vec<(String, Vec<u8>)>) -> Vec<Case> {
+/// Each pristine DLL parsed beside every mutation `mutate` makes of its PDB.
+fn pdb_cases(test: &str, mutate: impl Fn(&[u8]) -> Vec<(String, Vec<u8>)>) -> Vec<Case> {
     let dir = scratch(test).join("pdb");
     fs::create_dir_all(&dir).unwrap();
-    let dll = committed_fixture(DLL);
-    mutations
-        .into_iter()
-        .map(|(label, pdb)| Case {
-            label: format!("{PDB} {label}"),
-            data: dll.clone(),
-            path: dir.join(DLL),
-            beside: Some((dir.join(PDB), pdb)),
-        })
-        .collect()
+    let mut cases = Vec::new();
+    for (dll, pdb) in PAIRS {
+        let data = committed_fixture(dll);
+        let mutations = mutate(&committed_fixture(pdb));
+        cases.extend(mutations.into_iter().map(|(label, bytes)| Case {
+            label: format!("{pdb} {label}"),
+            data: data.clone(),
+            path: dir.join(dll),
+            beside: Some((dir.join(pdb), bytes)),
+        }));
+    }
+    cases
 }
 
 /// Run the pipeline over every case, returning the labels of the ones that panicked.
@@ -182,14 +196,12 @@ fn truncation_at_every_length_does_not_panic() {
         }
     }
 
-    let pdb = committed_fixture(PDB);
-    let lengths = (0..pdb.len()).filter(|len| *len < 56 || len % PDB_TRUNCATION_STRIDE == 0);
-    cases.extend(pdb_cases(
-        TEST,
-        lengths
+    cases.extend(pdb_cases(TEST, |pdb| {
+        (0..pdb.len())
+            .filter(|len| *len < 56 || len % PDB_TRUNCATION_STRIDE == 0)
             .map(|len| (format!("truncated to {len}"), pdb[..len].to_vec()))
-            .collect(),
-    ));
+            .collect()
+    }));
 
     let failures = failures(cases);
     assert!(failures.is_empty(), "panicked on: {failures:?}");
@@ -229,10 +241,11 @@ fn field_targeted_corruption_does_not_panic() {
         }
     }
 
-    let pdb = committed_fixture(PDB);
-    let fields = pdb_fields(&pdb);
-    assert!(fields.len() > 8, "the PDB's fields were found");
-    cases.extend(pdb_cases(TEST, poisoned(&pdb, fields)));
+    cases.extend(pdb_cases(TEST, |pdb| {
+        let fields = pdb_fields(pdb);
+        assert!(fields.len() > 8, "the PDB's fields were found");
+        poisoned(pdb, fields)
+    }));
 
     let failures = failures(cases);
     assert!(failures.is_empty(), "panicked on: {failures:?}");
@@ -272,7 +285,7 @@ fn random_splats_do_not_panic() {
             cases.push(valid.mutated(format!("{} {label}", valid.label), data));
         }
     }
-    cases.extend(pdb_cases(TEST, splatted(&committed_fixture(PDB))));
+    cases.extend(pdb_cases(TEST, splatted));
 
     let failures = failures(cases);
     assert!(failures.is_empty(), "panicked on: {failures:?}");
