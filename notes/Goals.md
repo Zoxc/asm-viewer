@@ -941,9 +941,11 @@ one item per part, so the unfinished half stays visible.
   MSVC, `/rustc/<hash>\library\...` from rustc), so the Source pane cannot open them where the
   build was elsewhere. A root-to-root mapping saved with the project, with the recorded
   checksum (`LineInfo::hash_of`) deciding among candidates rather than the name alone.
-- [ ] Carry DWARF 5's `DW_LNCT_MD5` the way the PDB's checksum is carried: clang records it,
-  gcc does not; `addr2line` 0.21 renders a file name without handing its entry back, so this
-  means rendering the name from `gimli`'s own `FileEntry` the way `addr2line` does.
+- [ ] Check the source hash for DWARF too: carry DWARF 5's `DW_LNCT_MD5` the way the PDB's
+  checksum is carried (`LineInfo::hash_of`), so the Source pane's "this file differs from the
+  one the binary was built from" applies to an ELF or Mach-O as it does to a PE. clang records
+  the MD5, gcc does not; `addr2line` 0.21 renders a file name without handing its entry back,
+  so this means rendering the name from `gimli`'s own `FileEntry` the way `addr2line` does.
 - [?] CodeView embedded in COFF (`.debug$S`/`.debug$T`), which is what a rustc `.rlib` member
   carries — a different container from a `.pdb` file and likely hand parsing, so it stays
   undecided on its own.
