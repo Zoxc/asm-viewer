@@ -1,6 +1,6 @@
 //! The two panes pointing at each other, and each tab's memory of where it was left.
 //!
-//! `Focused` is where the *pointer* is and `Pinned` is where a *click* fixed them: two
+//! `Focused` is where the *pointer* is and `Anchored` is where a *click* fixed them: two
 //! states, because a pin a hover could overwrite is a pin a hover silently undoes.
 
 use super::*;
@@ -60,7 +60,7 @@ pub(crate) enum Pane {
 
 /// The source position a click fixed the two panes on.
 #[derive(Clone, PartialEq)]
-pub(crate) struct Pin {
+pub(crate) struct Anchor {
     pub(crate) at: LinePos,
     /// The panes that have yet to scroll `at` into view -- the other one from the pane
     /// clicked, or both for a click made in neither -- and none once they have. Separate
@@ -116,10 +116,11 @@ impl Owed {
     }
 }
 
-/// The pinned position, shared through context. `None` until something is clicked, and
-/// again whenever the selection changes (`use_clear_focus`).
+/// The anchored position, shared through context: the line a click fixed both panes on.
+/// `None` until something is clicked, and again whenever the selection changes
+/// (`use_clear_focus`).
 #[derive(Clone, Copy)]
-pub(crate) struct Pinned(pub(crate) State<Option<Pin>>);
+pub(crate) struct Anchored(pub(crate) State<Option<Anchor>>);
 
 /// The position `pane` still owes a scroll to, if it is owed one.
 ///
@@ -130,10 +131,10 @@ pub(crate) struct Pinned(pub(crate) State<Option<Pin>>);
 /// left meaning what it says -- the pane owes the scroll until it has made it -- and
 /// [`reveal_made`] is what clears it. A request nothing ever matches stays owed until the
 /// next click replaces it or [`use_clear_focus`] drops it with the tab.
-pub(crate) fn owed_reveal(pinned: State<Option<Pin>>, pane: Pane) -> Option<LinePos> {
+pub(crate) fn owed_reveal(anchored: State<Option<Anchor>>, pane: Pane) -> Option<LinePos> {
     // `read` and not `peek`: this is the subscription that wakes the caller's effect on
     // the next click, so it has to happen before any early return.
-    let pin = pinned.read();
+    let pin = anchored.read();
     match pin.as_ref() {
         Some(pin) if pin.reveal.owes(pane) => Some(pin.at.clone()),
         _ => None,
@@ -143,13 +144,13 @@ pub(crate) fn owed_reveal(pinned: State<Option<Pin>>, pane: Pane) -> Option<Line
 /// Say that `pane` has made the scroll it was owed. The pin itself stays, only `pane`'s
 /// half of `reveal` is cleared, so it is answered exactly once and a repeat click is a
 /// second request.
-pub(crate) fn reveal_made(mut pinned: State<Option<Pin>>, pane: Pane) {
-    let owed = matches!(pinned.peek().as_ref(), Some(pin) if pin.reveal.owes(pane));
+pub(crate) fn reveal_made(mut anchored: State<Option<Anchor>>, pane: Pane) {
+    let owed = matches!(anchored.peek().as_ref(), Some(pin) if pin.reveal.owes(pane));
     if !owed {
         return;
     }
 
-    if let Some(pin) = pinned.write().as_mut() {
+    if let Some(pin) = anchored.write().as_mut() {
         pin.reveal.paid(pane);
     }
 }
@@ -308,7 +309,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
 pub(crate) fn use_clear_focus(
     active: Memo<Option<Document>>,
     focused: State<Option<LineFocus>>,
-    pinned: State<Option<Pin>>,
+    anchored: State<Option<Anchor>>,
     landing: State<Option<Landing>>,
 ) {
     use_side_effect(move || {
@@ -316,7 +317,7 @@ pub(crate) fn use_clear_focus(
         // the landing is peeked, so setting one wakes nothing until the document does.
         let active = active.read().clone();
 
-        let (mut focused, mut pinned, mut landing) = (focused, pinned, landing);
+        let (mut focused, mut anchored, mut landing) = (focused, anchored, landing);
         focused.set_if_modified(None);
 
         let asked = landing.peek().clone();
@@ -325,11 +326,11 @@ pub(crate) fn use_clear_focus(
         }
         let landed = asked
             .filter(|landing| Some(&landing.tab) == active.as_ref())
-            .map(|landing| Pin {
+            .map(|landing| Anchor {
                 at: landing.at,
                 reveal: Owed::BOTH,
                 landed: true,
             });
-        pinned.set_if_modified(landed);
+        anchored.set_if_modified(landed);
     });
 }

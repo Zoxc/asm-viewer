@@ -464,9 +464,10 @@ one item per part, so the unfinished half stays visible.
 - [ ] Bookmarks panel for pinned symbols / functions — a list the reader adds to deliberately
   and that outlives the session, unlike the history, which records everywhere they went and
   drops the oldest. A sidebar panel beside Objects / Symbols / History, saved with the
-  project. Note the name clash before implementing: `Pinned` in `ui.rs` already means the
-  source position a click fixed the two panes on (a transient, one-at-a-time gesture), which
-  is a different thing from a bookmark — one of the two wants renaming.
+  project. The name clash this warned about is cleared: the context that was `Pinned` — the
+  source position a click fixed the two panes on, a transient, one-at-a-time gesture and
+  nothing like a bookmark — is `Anchored` now (`Anchor` the value), so nothing in the code
+  says "pinned" of a symbol.
 - [ ] Left panel to explore project directory / files.
 - [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
   by substring, whole word or regex, on the demangled name the row shows.

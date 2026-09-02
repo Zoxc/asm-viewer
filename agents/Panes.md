@@ -136,7 +136,7 @@ tree that would be most of the file again. Two things about
 `Rope::len_lines()`, which counts a phantom line after a trailing newline (hence `Highlighted::lines`).
 
 **The two panes point at each other** through two root contexts that are inputs, not derivations.
-`Focused` is where the *pointer* is; `Pinned` is where a *click* fixed them, which outlives the
+`Focused` is where the *pointer* is; `Anchored` is where a *click* fixed them, which outlives the
 pointer moving on. Two states and two shades, because a pin a hover can overwrite is a pin a hover
 silently undoes; `row_background` composites the translucent colours with `blend`. Three things are
 load-bearing: **a position is a file and a line** (`LinePos`), since an inlined header's line 42 is
@@ -156,7 +156,7 @@ selection does not change and nothing is pushed onto the
 history. `navigate` remains the only path for anything that does.
 
 **A click from outside both panes owes both a scroll, and lands through the change of document
-it makes.** A row in the Locations panel opens its symbol *and* pins the line, so `Pin::reveal`
+it makes.** A row in the Locations panel opens its symbol *and* pins the line, so `Anchor::reveal`
 is a pair of flags (`Owed`) rather than an `Option<Pane>`: a click in one pane asks the other,
 a click in neither asks both, and each pane pays its own half. Opening is an `activate`, and the
 change of document that makes is exactly what `use_clear_focus` answers by dropping the pin --

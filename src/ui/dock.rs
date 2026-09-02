@@ -415,7 +415,7 @@ impl Component for DocumentHeader {
 /// The two arms are asymmetric, which [`DockArea::on_drop`] enforces: **a document may
 /// only ever be in the designated document panel, while a view may be anywhere, that panel
 /// included.** One visible document is what lets `Analysis`, `Marked`, `Focused` and
-/// `Pinned` each hold one answer for the window.
+/// `Anchored` each hold one answer for the window.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Tab {
     View(View),

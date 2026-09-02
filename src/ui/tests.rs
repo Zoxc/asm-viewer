@@ -197,14 +197,14 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
 }
 
 /// [`scrolling_harness`] with the panes' reveal made through the kept position, as
-/// theirs is: a `Pin` whose line is taken as a row index of whatever tab is shown.
+/// theirs is: a `Anchor` whose line is taken as a row index of whatever tab is shown.
 fn revealing_harness() -> impl IntoElement {
     let tab = use_consume::<KeptTab>().0;
     let at = use_consume::<KeptAt>().0;
     let open = use_consume::<KeptOpen>().0;
     let length = use_consume::<KeptLength>().0;
     let mut top = use_consume::<KeptTop>().0;
-    let pinned = use_consume::<Pinned>().0;
+    let pinned = use_consume::<Anchored>().0;
 
     let controller = use_scroll_controller(ScrollConfig::default);
     let showing = tab.read().clone();
@@ -263,7 +263,7 @@ fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
                     .0,
                 runner.provide_root_context(|| KeptTop(State::create(0))).0,
                 runner
-                    .provide_root_context(|| Pinned(State::create(None)))
+                    .provide_root_context(|| Anchored(State::create(None)))
                     .0,
             )
         },
@@ -287,7 +287,7 @@ fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
     // for a row of tab "b" and the switch to it.
     test.scroll((50., 50.), (0., -300.));
     assert!(top_row(&mut test) > 0, "the wheel moved nothing");
-    pinned.set(Some(Pin {
+    pinned.set(Some(Anchor {
         at: LinePos {
             file: "b.rs".into(),
             line: 40,
@@ -2638,7 +2638,7 @@ fn closing_a_binary_takes_its_locations_with_it() {
 fn locations_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
     let focused = use_consume::<Focused>().0;
-    let pinned = use_consume::<Pinned>().0;
+    let pinned = use_consume::<Anchored>().0;
     let landing = use_consume::<Land>().0;
     use_clear_focus(active, focused, pinned, landing);
 
@@ -2649,7 +2649,7 @@ fn locations_harness() -> impl IntoElement {
 #[derive(Clone, Copy)]
 struct LocationStates {
     located: State<Located>,
-    pinned: State<Option<Pin>>,
+    pinned: State<Option<Anchor>>,
     landing: State<Option<Landing>>,
     analysis: State<Analyzed>,
 }
@@ -2659,7 +2659,7 @@ macro_rules! location_states {
         let states = project_states!($runner);
         $runner.provide_root_context(|| Focused(State::create(None)));
         let pinned = $runner
-            .provide_root_context(|| Pinned(State::create(None)))
+            .provide_root_context(|| Anchored(State::create(None)))
             .0;
         let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
         let located = $runner
@@ -2948,13 +2948,13 @@ fn a_landed_pin_names_the_companion_file() {
         ..Default::default()
     };
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
-    let file_of = |pin: Option<&Pin>| {
+    let file_of = |pin: Option<&Anchor>| {
         source_side(Some(&document), &analysis, pin)
             .expect("a companion")
             .file()
             .clone()
     };
-    let pin = |file: &str, landed: bool| Pin {
+    let pin = |file: &str, landed: bool| Anchor {
         at: LinePos {
             file: file.into(),
             line: 1,
@@ -3499,7 +3499,7 @@ fn a_source_row_inside_a_function_offers_its_instances() {
                 runner.provide_root_context(|| Focused(State::create(None)));
                 runner.provide_root_context(|| Marked(State::create(None)));
                 runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(|| Pinned(State::create(None)));
+                runner.provide_root_context(|| Anchored(State::create(None)));
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Subject(file.clone()));
                 let located = runner
@@ -3876,7 +3876,7 @@ fn a_reveal_the_listing_cannot_answer_is_left_owed() {
         (100., 100.).into(),
         |runner| {
             runner
-                .provide_root_context(|| Pinned(State::create(None)))
+                .provide_root_context(|| Anchored(State::create(None)))
                 .0
         },
         1.,
@@ -3884,7 +3884,7 @@ fn a_reveal_the_listing_cannot_answer_is_left_owed() {
     let mut pinned = pinned;
     test.sync_and_update();
 
-    pinned.set(Some(Pin {
+    pinned.set(Some(Anchor {
         at: at.clone(),
         reveal: Owed::by(Pane::Assembly),
         landed: false,
@@ -3909,7 +3909,7 @@ fn a_reveal_the_listing_cannot_answer_is_left_owed() {
     assert!(pinned.peek().as_ref().is_some_and(|pin| pin.at == at));
 
     // A second click on the same line is a second request.
-    pinned.set(Some(Pin {
+    pinned.set(Some(Anchor {
         at: at.clone(),
         reveal: Owed::by(Pane::Assembly),
         landed: false,
@@ -3944,7 +3944,7 @@ macro_rules! listing_states {
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
         let pinned = $runner
-            .provide_root_context(|| Pinned(State::create(None)))
+            .provide_root_context(|| Anchored(State::create(None)))
             .0;
         $runner.provide_root_context(|| {
             Analysis(State::create(Analyzed {
@@ -7361,7 +7361,7 @@ macro_rules! code_states {
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
         let pinned = $runner
-            .provide_root_context(|| Pinned(State::create(None)))
+            .provide_root_context(|| Anchored(State::create(None)))
             .0;
         $runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
         let reading = $runner
@@ -7691,7 +7691,7 @@ fn a_pin_in_the_section_view_opens_its_file_beside_it() {
 
     // A pin names a line of the fixture's source, which this machine does not have: the
     // pane names the file it went looking for, which is the whole of what is asked here.
-    pinned.set(Some(Pin {
+    pinned.set(Some(Anchor {
         at: LinePos {
             file: Arc::from("/fixture/line_fixture.c"),
             line: 5,
@@ -7718,7 +7718,7 @@ fn a_chunk_landing_drops_the_run_picked_out_over_it() {
         let active = use_consume::<Active>().0;
         let driven = use_consume::<Drives>().0;
         let analysis = use_consume::<Analysis>().0;
-        let pinned = use_consume::<Pinned>().0;
+        let pinned = use_consume::<Anchored>().0;
         let reading = use_consume::<Sections>().0;
         let marked = use_consume::<Marked>().0;
         use_clear_marks(
@@ -7829,8 +7829,8 @@ fn a_source_click_beside_the_section_view_reveals_its_instruction() {
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
 
-    // Pinned from the source side while `sum_to` is still empty rows: owed, and unpaid.
-    pinned.set(Some(Pin {
+    // Anchored from the source side while `sum_to` is still empty rows: owed, and unpaid.
+    pinned.set(Some(Anchor {
         at: at.clone(),
         reveal: Owed::by(Pane::Assembly),
         landed: false,

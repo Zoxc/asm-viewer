@@ -87,7 +87,7 @@ impl Component for SourceRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let mut focused = use_consume::<Focused>().0;
-        let mut pinned = use_consume::<Pinned>().0;
+        let mut pinned = use_consume::<Anchored>().0;
         let mut driven = use_consume::<Drives>().0;
         let marked = use_consume::<Marked>().0;
         let shift = use_consume::<Shift>().0;
@@ -188,7 +188,7 @@ impl Component for SourceRow {
                             .write()
                             .remember(Document::Source(at.file.clone()), at.line);
                     }
-                    pinned.set(Some(Pin {
+                    pinned.set(Some(Anchor {
                         at: at.clone(),
                         reveal: Owed::by(Pane::Assembly),
                         landed: false,
@@ -243,7 +243,7 @@ impl PartialEq for SourceList {
 impl Component for SourceList {
     fn render(&self) -> impl IntoElement {
         let focused = use_consume::<Focused>().0;
-        let pinned = use_consume::<Pinned>().0;
+        let pinned = use_consume::<Anchored>().0;
         let marked = use_consume::<Marked>().0;
         let rows = marked_rows(marked, Pane::Source);
         let a11y = use_a11y();
@@ -404,7 +404,7 @@ impl SourceSide {
 pub(crate) fn source_side(
     active: Option<&Document>,
     analysis: &Analyzed,
-    pin: Option<&Pin>,
+    pin: Option<&Anchor>,
 ) -> Option<SourceSide> {
     match active? {
         Document::Source(file) => Some(SourceSide::Subject(file.clone())),
@@ -500,7 +500,7 @@ impl Component for SourcePane {
         let analysis = use_consume::<Analysis>().0.read().clone();
         // The tab's own document and not `Active`, which is a memo and a beat behind: this
         // pane is only ever mounted for the tab it belongs to.
-        let pin = use_consume::<Pinned>().0.read().clone();
+        let pin = use_consume::<Anchored>().0.read().clone();
         let side = source_side(Some(&self.document), &analysis, pin.as_ref());
 
         let Some(side) = side else {

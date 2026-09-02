@@ -228,7 +228,7 @@ struct BranchLabel {
 impl Component for BranchLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let mut pinned = use_consume::<Pinned>().0;
+        let mut pinned = use_consume::<Anchored>().0;
         let marked = use_consume::<Marked>().0;
         let text = self.text.clone();
         let to = self.to;
@@ -272,7 +272,7 @@ impl Component for BranchLabel {
                     // there. The Assembly pane is not owed the scroll -- it has just been
                     // given one, above.
                     if let Some(at) = at.clone() {
-                        pinned.set(Some(Pin {
+                        pinned.set(Some(Anchor {
                             at,
                             reveal: Owed::by(Pane::Source),
                             landed: false,
@@ -556,7 +556,7 @@ impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let mut focused = use_consume::<Focused>().0;
-        let mut pinned = use_consume::<Pinned>().0;
+        let mut pinned = use_consume::<Anchored>().0;
         let marked = use_consume::<Marked>().0;
         let shift = use_consume::<Shift>().0;
         // Consumed here, in the render, because the menu handler may not run a hook.
@@ -770,7 +770,7 @@ impl Component for InstructionRow {
                 // clearing what is pinned: a click on a prologue byte is not a way of
                 // losing the line the reader put there.
                 if let Some(at) = at.clone() {
-                    pinned.set(Some(Pin {
+                    pinned.set(Some(Anchor {
                         at,
                         reveal: Owed::by(Pane::Source),
                         landed: false,
@@ -838,7 +838,7 @@ impl Component for InstructionList {
             .read()
             .as_ref()
             .map(|focus| focus.at.clone());
-        let pinned = use_consume::<Pinned>().0;
+        let pinned = use_consume::<Anchored>().0;
         // The pin, falling back to the line this listing was asked for. In a
         // source-driven tab those are the same thing until `use_clear_focus` drops the
         // pin with the tab, and coming back to a listing with nothing lit and no reason

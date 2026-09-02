@@ -294,7 +294,7 @@ pub fn app() -> impl IntoElement {
     use_provide_context(|| Expanded(State::create(HashSet::new())));
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     let focused = use_provide_context(|| Focused(State::create(None))).0;
-    let pinned = use_provide_context(|| Pinned(State::create(None))).0;
+    let pinned = use_provide_context(|| Anchored(State::create(None))).0;
     let landing = use_provide_context(|| Land(State::create(None))).0;
     let marked = use_provide_context(|| Marked(State::create(None))).0;
     let shift = use_provide_context(|| Shift(State::create(false))).0;

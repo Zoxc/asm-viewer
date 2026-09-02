@@ -253,7 +253,7 @@ pub(crate) fn use_clear_marks(
     active: Memo<Option<Document>>,
     asked: Asked,
     analysis: State<Analyzed>,
-    pinned: State<Option<Pin>>,
+    pinned: State<Option<Anchor>>,
     reading: State<Reading>,
     marked: State<Option<Marks>>,
 ) {

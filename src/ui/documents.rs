@@ -342,13 +342,13 @@ pub(crate) fn close_binary(
 pub(crate) fn land(
     open: Open,
     history: State<History>,
-    mut pinned: State<Option<Pin>>,
+    mut pinned: State<Option<Anchor>>,
     mut landing: State<Option<Landing>>,
     target: Document,
     at: LinePos,
 ) {
     if open.active().as_ref() == Some(&target) {
-        pinned.set(Some(Pin {
+        pinned.set(Some(Anchor {
             at,
             reveal: Owed::BOTH,
             landed: true,

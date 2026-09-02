@@ -68,7 +68,7 @@ leave, a global, a capture (`name.rs:248-254`) — is nothing at all.
 `use_consume`: `Objects`, `Active` (the active `Document`), `Open` (the open tabs),
 `AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `CodeAt` (where each code
 tab was left, as an address), `Hist`, `Proj` (which project
-all of that belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Pinned`,
+all of that belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Anchored`,
 `Marked`/`Shift`, `Land` (a line to pin the moment a document arrives), `Analysis` (what
 the worker has to say about the selected symbol), `Sections`/`Window` (what it has decoded of the
 object whose code is on screen, and the stretches the view wants next), `Locations` (every symbol
@@ -175,7 +175,7 @@ selection change re-renders only the panes that read it and never the root.
 the symbol list opens a document, and that document has to land *somewhere*; a dock has many panels
 and freya has no notion of "the panel documents belong to", so `DockArea::documents` names one.
 Three rules follow. `on_drop` refuses a document into any other panel — one visible document is what
-lets `Analysis`, `Marked`, `Focused` and `Pinned` each hold one answer for the window — and refuses
+lets `Analysis`, `Marked`, `Focused` and `Anchored` each hold one answer for the window — and refuses
 a `DocId` the table no longer knows, which is a drag that outlived its document and is the whole
 payoff of **ids never being reused**. A **view**, by contrast, may go anywhere, that panel included:
 Project, Settings and the Scratchpad start tabbed in it, to the left of the documents, where they
@@ -341,7 +341,7 @@ what **subscribes the effect to the pane's own scroll**: every position is writt
 happens rather than on the way out, which is what survives the window merely being closed. The tab
 the controller is *holding* is tracked in the hook — an `Rc<RefCell>`, not a `State`, since nothing
 renders from it — because it is not the tab the app is showing during the one run that has to move
-the view, and every write goes under the held one. And a `Pin::reveal` **wins** over a remembered
+the view, and every write goes under the held one. And a `Anchor::reveal` **wins** over a remembered
 position because the same effect makes both: `use_kept_position` is handed the pane's reveal as a
 closure and asks it first, applying the remembered row only when no scroll was made. The two *are*
 owed at once — a Locations row opens a symbol on a line, so the tab changes and the arriving one

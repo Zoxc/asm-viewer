@@ -404,7 +404,7 @@ impl Component for SectionList {
             .read()
             .as_ref()
             .map(|focus| focus.at.clone());
-        let pinned = use_consume::<Pinned>().0;
+        let pinned = use_consume::<Anchored>().0;
         let pin = pinned.read().as_ref().map(|pin| pin.at.clone());
         let marked = use_consume::<Marked>().0;
         let marks = marked_rows(marked, Pane::Assembly);
@@ -857,7 +857,7 @@ fn use_kept_place(
 pub(crate) fn show_in_code(
     open: Open,
     history: State<History>,
-    pinned: State<Option<Pin>>,
+    pinned: State<Option<Anchor>>,
     landing: State<Option<Landing>>,
     mut places: State<Positions<Document, Spot>>,
     object: Arc<Object>,
@@ -879,7 +879,7 @@ pub(crate) fn show_in_code(
 pub(crate) fn open_as_symbol(
     open: Open,
     history: State<History>,
-    pinned: State<Option<Pin>>,
+    pinned: State<Option<Anchor>>,
     landing: State<Option<Landing>>,
     symbol: Symbol,
     at: Option<LinePos>,

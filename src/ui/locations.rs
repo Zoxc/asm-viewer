@@ -380,7 +380,7 @@ impl Component for LocationRow {
         let mut hovering = use_state(|| false);
         let open = use_open();
         let history = use_consume::<Hist>().0;
-        let pinned = use_consume::<Pinned>().0;
+        let pinned = use_consume::<Anchored>().0;
         let landing = use_consume::<Land>().0;
         let driven = use_consume::<Drives>().0;
         let located = use_consume::<Locations>().0.peek().clone();
