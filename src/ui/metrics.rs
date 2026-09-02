@@ -133,6 +133,12 @@ pub(crate) const LANE_WIDTH: f32 = 7.0;
 /// How thick a branch line is, horizontal run and arrowhead included.
 pub(crate) const BRANCH_STROKE: f32 = 1.0;
 
+/// How thick the rule a separator row draws across its middle is. Its own constant and
+/// not [`BRANCH_STROKE`]: the two are drawn to the same weight today, but a rule that
+/// reads against the pane and a branch line that reads against the rule are two
+/// judgements, and the palette already keeps them apart.
+pub(crate) const BLOCK_RULE_STROKE: f32 = 1.0;
+
 /// How far the horizontal run reaches past the innermost lane, where the arrowhead sits.
 pub(crate) const ARROW_WIDTH: f32 = 7.0;
 

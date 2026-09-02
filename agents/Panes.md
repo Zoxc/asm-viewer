@@ -131,7 +131,11 @@ its centre line, so the joint is filled to the pixel instead of stopping inside 
 antialiased edge. All of it is relative to the gutter's own origin, which nothing inside a row can
 see: at 1× and 2× every offset above it is a whole number, and at 1.5× the pane's own padding
 decides. `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the axis-aligned ones on a
-26-pixel row, that being the even height the old placement was worst on.
+26-pixel row, that being the even height the old placement was worst on. The rule a separator
+row draws goes on the grid the same way and from the same answer — `Grid::stroke` over the
+middle of a row — so a rule and a horizontal run crossing one row sit in the same device
+pixels rather than half a pixel apart; `a_block_rule_lands_on_whole_device_pixels` measures the
+second off the first rather than working it out twice.
 
 **A row a branch lands on starts a block**, and the listing says so with a `SeparatorRow` above
 it — a **row of its own**, not a border on the row below, so a block reads as separated from the
@@ -158,9 +162,13 @@ looks like. **It takes the instruction rows' own three pixels of horizontal padd
 not cosmetic: without it every lane steps three pixels sideways at every block it crosses and each
 branch line comes out kinked — a fault the model cannot show, since the `RowLanes` handed to the
 rows were right the whole time, so `the_gutter_runs_straight_through_a_separator` asserts on the
-laid-out strokes. The rule is a rect of its own rather than a border, so it can be centred in the
-row, and it starts after the gutter rather than crossing it: the gutter is a column of unbroken
-branch lines and a rule struck through them reads as one of them breaking. Its colour is
+laid-out strokes. The rule is a rect of its own rather than a border — a border is drawn on an edge of
+the box it is given and the box here is a whole row — and it starts after the gutter rather than
+crossing it: the gutter is a column of unbroken branch lines and a rule struck through them reads
+as one of them breaking. It is placed by the grid and no longer centred by `cross_align`, which
+was the whole of what put it on a fraction: half of an even row height is a whole number and a
+one-pixel rect centred on one straddles the two pixels either side. The offset is a padding
+rather than an absolute position, so the rule still takes the width the row's flex leaves it. Its colour is
 `block_rule`, held quieter against the pane than `branch_fg` — it runs the width of the listing
 where the gutter's stroke is a few pixels long (`agents/Appearance.md`).
 

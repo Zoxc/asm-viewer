@@ -3810,6 +3810,85 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// The rule a separator row draws between two basic blocks is laid out on whole device
+/// pixels too, and in the same row of them the gutter's horizontal run takes -- a rule
+/// and a run crossing one row must not be half a pixel apart.
+///
+/// The same even row height as the gutter's own test, and for the same reason: centring a
+/// one-pixel rect in a 26px row put it at 12.5, spread over the two pixels either side.
+#[test]
+fn a_block_rule_lands_on_whole_device_pixels() {
+    // 10.5pt is 14 logical pixels, so a code row is 26.
+    set_fonts(fixed_fonts(9.0, 10.5));
+    assert_eq!(code_row_height(), 26.0);
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    let instructions = studied
+        .assembly
+        .as_ref()
+        .expect("the fixture disassembles sum_to")
+        .instructions
+        .len();
+    let separators = studied.lanes.listing_rows(instructions) - instructions;
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, _) = TestingRunner::new(
+        listing_harness,
+        (500., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+
+    let rules: Vec<Area> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        (element.style().background == Fill::Color(palette().block_rule)).then_some(area)
+    });
+    assert!(
+        separators > 0 && !rules.is_empty(),
+        "the fixture draws no separator, so there is no rule to place"
+    );
+
+    let whole = |edge: f32| edge == edge.round();
+    for area in &rules {
+        assert!(
+            whole(area.origin.y) && whole(area.origin.y + area.height()),
+            "a block rule was laid out at {area:?}, which is spread across two device \
+             pixels and drawn as two grey ones"
+        );
+    }
+
+    // And in the row of pixels the gutter's own horizontal run is drawn in, measured off
+    // the run rather than worked out again here: the two are one line across the row
+    // where a branch lands on a block boundary, and half a pixel apart reads as a step.
+    let runs: Vec<Area> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        (element.style().background == Fill::Color(palette().branch_fg)
+            && area.height() == BRANCH_STROKE
+            && area.width() > BRANCH_STROKE)
+            .then_some(area)
+    });
+    let run = runs
+        .first()
+        .expect("the fixture draws no horizontal run, so there is nothing to agree with");
+    // Where in its own row each sits. Every row is `code_row_height()` tall, so the
+    // listing's own origin drops out of both sides.
+    let within = |area: &Area| area.origin.y.rem_euclid(code_row_height());
+    for area in &rules {
+        assert_eq!(
+            within(area),
+            within(run),
+            "a block rule sits at {area:?}, not where the gutter's run crosses a row"
+        );
+    }
+}
+
 /// Every axis-aligned stroke of the gutter is laid out on whole device pixels, so a
 /// one-pixel line is one lit row of pixels and not two grey ones beside crisp text.
 ///

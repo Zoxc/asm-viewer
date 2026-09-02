@@ -369,15 +369,31 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
 /// The hairline a [`SeparatorRow`] draws across its middle, between the gutter and the
 /// listing's right edge.
 ///
-/// A rect of its own and not a border on the row, so that `cross_align` can centre it: a
-/// border is drawn on an edge of the box it is given, and the box here is a whole row.
-/// It starts after the gutter rather than crossing it, because the gutter is a column of
-/// unbroken branch lines and a rule struck through them reads as one of them breaking.
+/// A rect of its own and not a border on the row: a border is drawn on an edge of the box
+/// it is given, and the box here is a whole row. It starts after the gutter rather than
+/// crossing it, because the gutter is a column of unbroken branch lines and a rule struck
+/// through them reads as one of them breaking.
+///
+/// Put on the device pixel grid by its edges, exactly as the gutter's strokes are and
+/// from the same answer ([`Grid::stroke`] over the middle of a row), so that a rule and a
+/// horizontal run drawn on one row sit in the same device pixels. Centring it with
+/// `cross_align` was what put it on a fraction: half of an even row height is a whole
+/// number, and a one-pixel rect centred on one straddles the two pixels either side of
+/// it. The offset is a padding rather than an absolute position so the rule still takes
+/// the width the row's flex leaves it.
 fn block_rule() -> impl IntoElement {
+    let rule = pixel_grid().stroke(code_row_height() / 2.0, BLOCK_RULE_STROKE);
+
     rect()
         .width(Size::fill())
-        .height(Size::px(1.0))
-        .background(palette().block_rule)
+        .height(Size::px(code_row_height()))
+        .padding(Gaps::new(rule.near, 0.0, 0.0, 0.0))
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(rule.thick))
+                .background(palette().block_rule),
+        )
 }
 
 /// The row between two basic blocks: a full row of the listing, carrying the rule across
@@ -408,7 +424,6 @@ impl Component for SeparatorRow {
 
         rect()
             .horizontal()
-            .cross_align(Alignment::Center)
             .width(Size::fill())
             .height(Size::px(code_row_height()))
             // The same horizontal padding the instruction rows take. Without it the

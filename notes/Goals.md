@@ -268,7 +268,12 @@ one item per part, so the unfinished half stays visible.
   inside a row can see: at 1× and 2× every offset above it is whole, at 1.5× the pane's padding
   decides. `pixels::tests` pins the geometry and
   `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the laid-out strokes on a 26-pixel
-  row, the even height the old placement was worst on.
+  row, the even height the old placement was worst on. The separator row's rule went the same
+  way and from the same answer, `Grid::stroke` over the middle of a row: it was centred by
+  `cross_align` and so sat at 12.5 in a 26-pixel row, and a rule half a pixel off the gutter's
+  horizontal run reads as a step where a branch lands on a boundary.
+  `a_block_rule_lands_on_whole_device_pixels` measures the rule against the run rather than
+  working the answer out a second time.
 - [x] Follow a jump by clicking its target offset, the way a call's relocation target is
   clicked. A branch's displacement (`jle 4Bh`) is a link where the listing holds the row it
   lands on — the same set the gutter draws an arrow for — and pressing it puts that row on
