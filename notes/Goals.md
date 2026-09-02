@@ -170,11 +170,15 @@ one item per part, so the unfinished half stays visible.
   placeholder character is not a character of any rope. Character selection in the assembly
   pane is a rewrite of the relocation link and the arrow gutter; the source pane could have
   it cheaply but would then behave unlike the pane beside it.
-- [x] A hairline before a row something jumps to, so the listing reads as the basic blocks
-  it is rather than as one run of instructions. A line and not a gap, which the constraint
-  decided: `VirtualScrollView` is given one `item_size` and the row height must equal it, so a
-  real gap would mean variable row heights or a spacer row of its own in the list, while a
-  border on the row's own top edge is paint alone and cannot desynchronise the scroll. The
+- [x] A separator before a row something jumps to, so the listing reads as the basic blocks
+  it is rather than as one run of instructions. A **row of its own** and not a border on the
+  row below: a block reads as separated from the one above rather than as underlined by it.
+  `VirtualScrollView` is given one `item_size` and every row must equal it, so the separator
+  is `code_row_height()` like the rest and the rule is drawn centred inside it, clear of the
+  gutter — what it costs is a second index space, listing rows against instruction indices,
+  which `Lanes` converts between and nothing else may. It carries the lanes crossing it, and
+  the padding the instruction rows take, so a branch's line runs over the gap unbroken and
+  unkinked; and it takes the mark handlers so a sweep is not cut in half at every boundary. The
   targets were already known and are not worked out again — `RowLanes::arrow`, the same set
   7b's gutter draws an arrowhead on, carried to the row beside the lanes it already gets. Its
   colour is `block_rule`, recessive by construction: it reads against the pane and stays

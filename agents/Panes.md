@@ -94,20 +94,36 @@ therefore pads horizontally only: a line must reach the row's top and bottom edg
 comes out dashed. Hovering a row draws its own branches darker, which needs a row *index* in
 `InstructionList` rather than `Focused` — a source position is many rows.
 
-**A row a branch lands on starts a block**, and says so with a hairline across its own top edge,
-so the listing reads as the basic blocks it is rather than as one unbroken run. The set is the
-gutter's own — `RowLanes::arrow`, worked out in `Lanes::new` beside the disassembly — and not
-`edges` asked a second time from the row, so the rule and the arrowhead it sits beside cannot
-disagree. It is a **border and not a gap**: a `VirtualScrollView` is given one `item_size` and
-every row must equal it, so a real gap means variable row heights or a spacer row of its own in
-the list, while a border is paint alone — the layout knows nothing about one — and is drawn
-inside the height the row already has. On the *top* edge, because a block starts at its target
-and the mark belongs to the row it starts rather than to the one above, which the scroll view may
-not have built at all. Only the targets: the row after a `ret` or an unconditional `jmp` also
-begins a block, but nothing below the disassembler says which instructions end a fall-through and
-that is crate work this mark did not need. The colour is `block_rule`, held quieter against the
-pane than `branch_fg` — it runs the whole width of the listing where the gutter's stroke is a few
-pixels long (`agents/Appearance.md`).
+**A row a branch lands on starts a block**, and the listing says so with a `SeparatorRow` above
+it — a **row of its own**, not a border on the row below, so a block reads as separated from the
+one before rather than as underlined by it. The set is the gutter's own — `RowLanes::arrow`,
+worked out in `Lanes::new` beside the disassembly — and not `edges` asked a second time, so the
+separator and the arrowhead below it cannot disagree. Never above the first row: a boundary over
+the top of a symbol says nothing and would open the listing with a gap. Only the targets, too:
+the row after a `ret` or an unconditional `jmp` also begins a block, but nothing below the
+disassembler says which instructions end a fall-through, and that is crate work this did not
+need.
+
+A `VirtualScrollView` is given one `item_size` for the whole listing, so the separator is
+`code_row_height()` like every other row and the rule is drawn *inside* it, across its middle.
+What that costs is **two index spaces**, and `Lanes` is the only thing allowed to convert between
+them: `listing_rows`, `row_of` and `instruction_at`. An **instruction index** is what
+`AsmData::position`, the gutter, `Lanes::touching` and the branch edges speak; a **listing row**
+is what the scroll (`reveal_row`, `use_kept_position`) and the picked-out run (`Marked`,
+`on_listing_key`) speak. `InstructionRow` carries both and never mixes them. The separator draws
+the lanes that cross it — `Lanes::boundary`, the row below's `top` strokes run full height — so a
+branch's line is unbroken where the listing opens the gap under it, and it carries neither stub
+nor arrowhead, both of which belong to the row landed on. It takes the mark handlers too, so a
+sweep down the listing is not cut in half at every boundary, and it copies as the blank line it
+looks like. **It takes the instruction rows' own three pixels of horizontal padding**, which is
+not cosmetic: without it every lane steps three pixels sideways at every block it crosses and each
+branch line comes out kinked — a fault the model cannot show, since the `RowLanes` handed to the
+rows were right the whole time, so `the_gutter_runs_straight_through_a_separator` asserts on the
+laid-out strokes. The rule is a rect of its own rather than a border, so it can be centred in the
+row, and it starts after the gutter rather than crossing it: the gutter is a column of unbroken
+branch lines and a rule struck through them reads as one of them breaking. Its colour is
+`block_rule`, held quieter against the pane than `branch_fg` — it runs the width of the listing
+where the gutter's stroke is a few pixels long (`agents/Appearance.md`).
 
 **A branch's displacement is the other way to follow it**, drawn as a `BranchLabel` exactly where
 a call's resolved target is drawn as a `RelocationLabel` — `Instruction::branch_span` says which

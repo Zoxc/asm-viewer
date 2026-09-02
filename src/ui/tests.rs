@@ -3329,6 +3329,9 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     let forward_lands_on = line_at(0x61);
     let backward_starts_at = line_at(0x67);
     let backward_lands_on = line_at(0x4B);
+    // Instruction 14 is the row the forward jump lands on; the listing draws it lower than
+    // that, since every block boundary above it is a row of its own.
+    let landing_row = studied.lanes.row_of(14);
     // `LinePos` carries no `Debug` and is not given one for a test's benefit, so the
     // failures below spell a position out themselves.
     let spell = |at: &LinePos| format!("{}:{}", at.file, at.line);
@@ -3386,7 +3389,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     let picked = marked.peek().expect("following a jump picked out no row");
     assert_eq!(
         picked.rows.rows().collect::<Vec<_>>(),
-        vec![14],
+        vec![landing_row],
         "the row picked out is not the one the jump lands on"
     );
 
@@ -3440,14 +3443,15 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     assert_eq!(states.history.peek().recent().count(), 0);
 }
 
-/// A row a branch lands on wears a hairline across its top edge, so the listing reads as
-/// the basic blocks it is -- and **the row is the height it always was**: a border is paint
-/// and not layout, which is the whole reason the mark is a rule inside the row rather than
-/// a gap above it. A row that is nobody's target wears nothing.
+/// A row a branch lands on has a separator **row of its own** above it, so the listing
+/// reads as the basic blocks it is: the gap between two instruction rows across a boundary
+/// is two row heights where everywhere else it is one. A row that is nobody's target has
+/// nothing above it, and every row is still exactly the `item_size` the scroll view was
+/// given -- one number for the whole listing, which is why the separator is a row and not
+/// a taller one.
 ///
-/// Headless because both halves are questions about the real tree: which of the rows a
-/// `VirtualScrollView` built carry the border, and what those rows measured once it was on
-/// them.
+/// Headless because every part of it is a question about the real tree: which rows a
+/// `VirtualScrollView` built, where it put them, and what carries the rule.
 #[test]
 fn a_row_a_branch_lands_on_starts_a_block() {
     use freya::elements::label::LabelElement;
@@ -3482,13 +3486,9 @@ fn a_row_a_branch_lands_on_starts_a_block() {
     );
     settle(&mut test);
 
-    // Every element the separator was drawn on, by the area it was laid out in.
+    // Every rule the separators drew, by the area it was laid out in.
     let ruled: Vec<Area> = test.find_many(|node, element| {
-        element
-            .style()
-            .borders
-            .iter()
-            .any(|border| border.fill == palette().block_rule && border.width.top > 0.0)
+        (element.style().background == Fill::Color(palette().block_rule))
             .then(|| node.layout().area)
     });
     // And every instruction row, by the address column it is drawn with -- sixteen hex
@@ -3502,11 +3502,15 @@ fn a_row_a_branch_lands_on_starts_a_block() {
             .map(|address| (address, node.layout().area))
     });
 
+    let mut rows = rows;
+    rows.sort_by(|(_, a), (_, b)| a.origin.y.total_cmp(&b.origin.y));
     let drawn: Vec<u64> = rows.iter().map(|(address, _)| *address).collect();
+    // The first row is never separated -- a boundary over the top of the symbol says
+    // nothing -- so it is not among the gaps this counts.
     let expected: Vec<u64> = targets
         .iter()
         .copied()
-        .filter(|address| drawn.contains(address))
+        .filter(|address| drawn.iter().skip(1).any(|drawn| drawn == address))
         .collect();
     assert!(
         expected.len() >= 2,
@@ -3514,36 +3518,150 @@ fn a_row_a_branch_lands_on_starts_a_block() {
         expected.len()
     );
     assert!(
-        drawn.len() > expected.len(),
-        "every drawn row is a branch target, so a mark on all of them would pass"
+        drawn.len() > expected.len() + 1,
+        "every drawn row is a branch target, so a gap above all of them would pass"
     );
 
-    let mut started: Vec<u64> = rows
-        .iter()
-        .filter(|(_, area)| {
-            let middle = area.origin.y + area.height() / 2.0;
-            ruled
-                .iter()
-                .any(|row| row.origin.y <= middle && middle < row.origin.y + row.height())
-        })
-        .map(|(address, _)| *address)
-        .collect();
-    started.sort_unstable();
+    // The whole of the claim: consecutive instruction rows sit one row height apart, and
+    // two apart exactly where a branch lands -- which is the separator taking a row.
+    let height = code_row_height();
+    let mut separated: Vec<u64> = Vec::new();
+    // Where a rule is owed: the separator row's own middle, which is the midpoint of the
+    // two instruction rows it holds apart -- their labels being centred in them.
+    let mut middles: Vec<f32> = Vec::new();
+    for pair in rows.windows(2) {
+        let [(_, above), (address, below)] = pair else {
+            continue;
+        };
+        let gap = below.origin.y - above.origin.y;
+        if (gap - height * 2.0).abs() < 0.5 {
+            separated.push(*address);
+            let centre = |area: &Area| area.origin.y + area.height() / 2.0;
+            middles.push((centre(above) + centre(below)) / 2.0);
+        } else {
+            assert!(
+                (gap - height).abs() < 0.5,
+                "the rows above {address:0X} are {gap} apart, neither one row nor two"
+            );
+        }
+    }
+    separated.sort_unstable();
     assert_eq!(
-        started, expected,
-        "the separators are not on the rows the branches land on"
+        separated, expected,
+        "the separator rows are not above the rows the branches land on"
     );
 
-    // And the mark cost the row nothing: it is still exactly the `item_size` the scroll
-    // view over it was given, or every row below the first block would be drawn a pixel
-    // further down than the view believes.
-    for area in &ruled {
-        assert_eq!(
-            area.height(),
-            code_row_height(),
-            "the separator moved the row it is on"
+    // The pitch above is the height claim: every row is exactly the `item_size` the scroll
+    // view was given, or the rows would drift out of the pitch a virtual list lays them
+    // out on. What is left to say is that the rule lives *inside* its row rather than
+    // adding to it, and that nothing else in the listing carries one.
+    assert_eq!(
+        ruled.len(),
+        expected.len(),
+        "the rule is drawn {} times for {} separators",
+        ruled.len(),
+        expected.len()
+    );
+    // And it is centred in the row it is drawn in, and clear of the gutter: a rule struck
+    // through the branch lines would read as one of them breaking.
+    let gutter_right = rows
+        .iter()
+        .map(|(_, area)| area.origin.x)
+        .fold(f32::MAX, f32::min);
+    for middle in &middles {
+        assert!(
+            ruled.iter().any(|area| {
+                (area.origin.y + area.height() / 2.0 - middle).abs() <= 1.0
+                    && area.height() <= 1.0
+                    && area.origin.x <= gutter_right
+            }),
+            "no hairline centred at {middle} and clear of the gutter at {gutter_right}: \
+             {ruled:?}"
         );
     }
+}
+
+/// The gutter runs straight through a separator: its lanes are drawn in the same columns
+/// there as in the rows above and below, and a branch crossing a boundary is drawn the
+/// whole height of it rather than stopping at the gap.
+///
+/// This is what was wrong when the separator first landed. An instruction row takes three
+/// pixels of horizontal padding and the separator took none, so every lane stepped three
+/// pixels sideways at every block it crossed and each branch line in the listing came out
+/// kinked. Nothing else in the suite could see it: the model `Lanes` hands the rows was
+/// right the whole time, and only the laid-out strokes say where they really went.
+#[test]
+fn the_gutter_runs_straight_through_a_separator() {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    let lanes = studied.lanes.clone();
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, _) = TestingRunner::new(
+        listing_harness,
+        (500., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+
+    // The gutter's vertical strokes only: the horizontal run to the listing and the two
+    // strokes of an arrowhead are the same colour and are not in a lane.
+    let height = code_row_height();
+    let strokes: Vec<Area> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        (element.style().background == Fill::Color(palette().branch_fg)
+            && area.width() == BRANCH_STROKE
+            && area.height() >= height / 2.0)
+            .then_some(area)
+    });
+
+    let mut columns: Vec<String> = strokes
+        .iter()
+        .map(|area| area.origin.x.to_string())
+        .collect();
+    columns.sort();
+    columns.dedup();
+    assert!(
+        lanes.width >= 2,
+        "the fixture draws {} lane, so one column would pass",
+        lanes.width
+    );
+    assert_eq!(
+        columns.len(),
+        lanes.width,
+        "the gutter is drawn in {} columns for {} lanes: {columns:?}",
+        columns.len(),
+        lanes.width
+    );
+
+    // And a lane really does cross a boundary: a stroke a whole row tall, drawn where no
+    // instruction row is -- which is the separator.
+    let rows: Vec<f32> = test.find_many(|node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .map(|label| label.text.to_string())
+            .filter(|text| text.trim_end().len() == 16)
+            .map(|_| node.layout().area.origin.y + node.layout().area.height() / 2.0)
+    });
+    let crossing = strokes.iter().filter(|area| {
+        area.height() == height
+            && !rows
+                .iter()
+                .any(|centre| (area.origin.y + height / 2.0 - centre).abs() < 1.0)
+    });
+    assert!(
+        crossing.count() > 0,
+        "no lane is drawn through a separator, so the columns above prove nothing"
+    );
 }
 
 /// A component with no props at all, which is what every view in the app is. Its parent

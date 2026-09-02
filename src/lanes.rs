@@ -55,6 +55,9 @@ pub struct PlacedEdge {
 pub struct Lanes {
     rows: Vec<RowLanes>,
     placed: Vec<PlacedEdge>,
+    /// The instructions a separator row is drawn above, ascending: every row a branch
+    /// lands on except the symbol's first. See [`Lanes::listing_rows`].
+    separators: Vec<usize>,
     /// How many lanes the gutter is drawn with: the deepest nesting this symbol reaches,
     /// capped at [`MAX_LANES`], and 0 for a symbol whose gutter is not drawn at all.
     pub(crate) width: usize,
@@ -77,6 +80,7 @@ impl Lanes {
                 rows: Vec::new(),
                 placed: Vec::new(),
                 width: 0,
+                separators: Vec::new(),
             };
         }
 
@@ -142,10 +146,18 @@ impl Lanes {
             }
         }
 
+        // Every instruction a branch lands on begins a basic block, and the listing draws
+        // a separator above each. Never above the first: a boundary over the top of the
+        // symbol says nothing, and an empty row there would be a gap the listing opens
+        // with. Sorted by construction, which is what lets the two index spaces below be
+        // a binary search rather than a scan.
+        let separators = (1..instructions).filter(|&row| rows[row].arrow).collect();
+
         Lanes {
             rows,
             placed,
             width,
+            separators,
         }
     }
 
@@ -153,6 +165,64 @@ impl Lanes {
     /// a panic.
     pub fn row(&self, index: usize) -> RowLanes {
         self.rows.get(index).copied().unwrap_or_default()
+    }
+
+    /// What a separator above the instruction at `index` draws in the gutter: the lanes
+    /// that carry on across the boundary, and nothing else.
+    ///
+    /// A lane is drawn through it exactly when the row below has that lane coming *down*
+    /// into it (`top`), so a branch's line is unbroken where the listing opens a gap
+    /// under it. No stub and no arrowhead: the corner and the arrowhead belong to the row
+    /// the branch actually lands on, and drawing either here would be a second one.
+    pub fn boundary(&self, index: usize) -> RowLanes {
+        let below = self.row(index);
+        let mut lanes = [Vertical::default(); MAX_LANES];
+        for lane in 0..MAX_LANES {
+            let through = below.lanes[lane].top;
+            lanes[lane] = Vertical {
+                top: through,
+                bottom: through,
+            };
+        }
+
+        RowLanes {
+            lanes,
+            stub: None,
+            arrow: false,
+        }
+    }
+
+    /// How many rows the listing draws for `instructions` instructions: one each, plus the
+    /// separators.
+    ///
+    /// The two index spaces this and the next two convert between are the whole cost of
+    /// the separator being a row rather than a border: **an instruction index is what the
+    /// gutter, the line info and the branch edges speak**, and a listing row is what the
+    /// `VirtualScrollView`, the scroll and the picked-out run speak. Nothing else may
+    /// confuse them.
+    pub fn listing_rows(&self, instructions: usize) -> usize {
+        instructions + self.separators.len()
+    }
+
+    /// The listing row the instruction at `index` is drawn in: itself, plus every
+    /// separator that comes at or before it.
+    pub fn row_of(&self, index: usize) -> usize {
+        index + self.separators.partition_point(|&at| at <= index)
+    }
+
+    /// The instruction the listing's `row` draws, or [`None`] where it is a separator.
+    ///
+    /// `row_of` climbs by one or two and never falls, so the answer is the last
+    /// instruction drawn at or above `row` -- and it is a separator exactly when that
+    /// instruction is drawn higher up than `row`.
+    pub fn instruction_at(&self, row: usize) -> Option<usize> {
+        // The count of separators at or above `row` in *listing* terms: a separator sits
+        // at `row_of(at) - 1`, so it is at or above `row` when `row_of(at) <= row + 1`.
+        let above = self
+            .separators
+            .partition_point(|&at| self.row_of(at) <= row + 1);
+        let index = row.checked_sub(above)?;
+        (self.row_of(index) == row).then_some(index)
     }
 
     /// The edges that start or end at `row`. An edge merely passing through is not one of

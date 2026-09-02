@@ -188,7 +188,8 @@ impl Component for RelocationLabel {
 struct BranchLabel {
     /// The operand as the disassembler printed it, which is what a reader is clicking.
     text: String,
-    /// The row the branch lands on, from the edge the gutter draws.
+    /// The listing row the branch lands on -- the instruction's row and not its index,
+    /// since the scroll and the picked-out run are both in listing space.
     to: usize,
     /// Where that row points on the source side, or `None` where the debug info places it
     /// nowhere. The target's own position and not this row's: the pin is the one a click
@@ -350,28 +351,77 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
         })
 }
 
-/// The hairline across the top of a row a branch lands on, so the listing reads as the
-/// basic blocks it is rather than as one unbroken run.
+/// The hairline a [`SeparatorRow`] draws across its middle, between the gutter and the
+/// listing's right edge.
 ///
-/// A **border and not a gap**: `VirtualScrollView` is given one `item_size` and every row
-/// has to equal it, so a real gap would mean variable row heights or a spacer row in the
-/// list, while a border is paint alone -- the layout knows nothing about one -- and is
-/// drawn inside the height the row already has. It is on the *top* edge because a block
-/// starts at its target, and the mark belongs to the row it starts rather than to the one
-/// above, which the scroll view may not even have built.
-fn block_rule() -> Border {
-    Border::new().fill(palette().block_rule).width(BorderWidth {
-        top: 1.0,
-        right: 0.0,
-        bottom: 0.0,
-        left: 0.0,
-    })
+/// A rect of its own and not a border on the row, so that `cross_align` can centre it: a
+/// border is drawn on an edge of the box it is given, and the box here is a whole row.
+/// It starts after the gutter rather than crossing it, because the gutter is a column of
+/// unbroken branch lines and a rule struck through them reads as one of them breaking.
+fn block_rule() -> impl IntoElement {
+    rect()
+        .width(Size::fill())
+        .height(Size::px(1.0))
+        .background(palette().block_rule)
+}
+
+/// The row between two basic blocks: a full row of the listing, carrying the rule across
+/// its middle and the gutter's crossing lanes down its left.
+///
+/// A row of its own and not a border on the row below, so that a block reads as separated
+/// from the one above rather than as underlined by it. It is exactly `code_row_height()`,
+/// like every other row -- the `VirtualScrollView`'s `item_size` is one number for the
+/// whole listing -- which is what the second index space in [`Lanes`] is for.
+#[derive(Clone, PartialEq)]
+struct SeparatorRow {
+    /// The listing row this is, for the picked-out run: a sweep that crosses a boundary
+    /// must not stop tracking the pointer, and a copy takes the blank line it draws.
+    row: usize,
+    /// Whether it is inside the picked-out run.
+    selected: bool,
+    /// The gutter's width for the whole symbol, and the lanes crossing this boundary.
+    width: usize,
+    arrows: RowArrows,
+}
+
+impl Component for SeparatorRow {
+    fn render(&self) -> impl IntoElement {
+        let marked = use_consume::<Marked>().0;
+        let shift = use_consume::<Shift>().0;
+        let row = self.row;
+        let width = self.width;
+
+        rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .width(Size::fill())
+            .height(Size::px(code_row_height()))
+            // The same horizontal padding the instruction rows take. Without it the
+            // gutter's lines step three pixels sideways at every boundary they cross.
+            .padding(Gaps::new_symmetric(0.0, 3.0))
+            .background(row_background(false, false, false, self.selected))
+            // The same two handlers the instruction rows carry, so a sweep down the
+            // listing is not cut in half by every boundary it crosses.
+            .on_pointer_down(move |e: Event<PointerEventData>| {
+                if e.button() == Some(MouseButton::Left) {
+                    mark_press(marked, *shift.peek(), Pane::Assembly, row);
+                }
+            })
+            .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, row))
+            .maybe(width > 0, |el| el.child(gutter(width, self.arrows)))
+            .child(block_rule())
+    }
 }
 
 #[derive(Clone)]
 struct InstructionRow {
     data: AsmData,
+    /// Which instruction this row draws.
     index: usize,
+    /// Which row of the listing it is drawn in, which is `index` plus every separator
+    /// above it. The picked-out run and the scroll speak this one; everything else --
+    /// the gutter, the line info, the branch edges -- speaks `index`. See [`Lanes`].
+    row: usize,
     /// What this row draws in the gutter, worked out by the list for the reason `focused`
     /// is: the lanes lit in row 40 belong to a branch of row 12.
     arrows: RowArrows,
@@ -400,6 +450,7 @@ impl PartialEq for InstructionRow {
     fn eq(&self, other: &Self) -> bool {
         self.data == other.data
             && self.index == other.index
+            && self.row == other.row
             && self.focused == other.focused
             && self.pinned == other.pinned
             && self.selected == other.selected
@@ -428,6 +479,7 @@ impl Component for InstructionRow {
         let subject = self.data.subject.clone();
         let mut hover = self.hover;
         let index = self.index;
+        let row = self.row;
         let width = self.data.lanes.width;
         let instruction = &self.data.assembly.instructions[self.index];
 
@@ -458,7 +510,7 @@ impl Component for InstructionRow {
         ) {
             (Some(span), Some(edge)) => instruction.format.get(span).map(|(text, _)| BranchLabel {
                 text: text.clone(),
-                to: edge.to,
+                to: self.data.lanes.row_of(edge.to),
                 at: self.data.position(edge.to),
                 controller: self.controller,
                 viewport: self.viewport,
@@ -536,16 +588,11 @@ impl Component for InstructionRow {
                 self.pinned,
                 self.selected,
             ))
-            // A branch lands here, so a block starts here. The set is the gutter's own --
-            // `RowLanes::arrow`, already worked out beside the disassembly -- and not
-            // `edges` asked a second time from the row: the mark and the arrowhead it sits
-            // beside cannot then disagree.
-            .maybe(self.arrows.lanes.arrow, |row| row.border(block_rule()))
             // The *down* and not the press: a drag is over by the time a press fires, so a
             // selection swept out with the button held has to begin as it goes down.
             .on_pointer_down(move |e: Event<PointerEventData>| {
                 if e.button() == Some(MouseButton::Left) {
-                    mark_press(marked, *shift.peek(), Pane::Assembly, index);
+                    mark_press(marked, *shift.peek(), Pane::Assembly, row);
                 }
             })
             .on_pointer_over(move |_| {
@@ -557,7 +604,7 @@ impl Component for InstructionRow {
                 // Sweeping a selection out to here, in the handler the cross-view focus
                 // already uses -- a second `pointer_over` would answer the same event
                 // twice.
-                mark_drag(marked, Pane::Assembly, index);
+                mark_drag(marked, Pane::Assembly, row);
             })
             .on_pointer_out(move |_| {
                 hovering.set_if_modified(false);
@@ -698,7 +745,11 @@ impl Component for InstructionList {
                 Ask::Symbol(_) => None,
             },
         };
-        let length = data.assembly.instructions.len();
+        // The listing's rows, which is the instructions plus a separator above every row a
+        // branch lands on. Everything below that scrolls, picks out or counts rows is in
+        // this space; `AsmData::position`, the gutter and the edges are in the
+        // instructions'. `Lanes` converts, and is the only thing that may.
+        let length = data.lanes.listing_rows(data.assembly.instructions.len());
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll a pin is owed, which wins over it.
         let docs = use_consume::<OpenDocs>().0;
@@ -723,7 +774,7 @@ impl Component for InstructionList {
                         return false;
                     };
                     reveal_made(pinned, Pane::Assembly);
-                    reveal_row(controller, *viewport.peek(), index);
+                    reveal_row(controller, *viewport.peek(), data.lanes.row_of(index));
                     true
                 }
             },
@@ -737,10 +788,13 @@ impl Component for InstructionList {
 
         let on_key_down = {
             let assembly = self.assembly.clone();
-            on_listing_key(marked, Pane::Assembly, length, move |index| {
-                assembly
-                    .instructions
-                    .get(index)
+            let lanes = self.lanes.clone();
+            // A separator copies as the blank line it is drawn as, so a run lifted out of
+            // the listing keeps the blocks apart on the way to the clipboard.
+            on_listing_key(marked, Pane::Assembly, length, move |row| {
+                lanes
+                    .instruction_at(row)
+                    .and_then(|index| assembly.instructions.get(index))
                     .map(asm_line)
                     .unwrap_or_default()
             })
@@ -763,23 +817,45 @@ impl Component for InstructionList {
                         rows,
                     },
                     move |i, rows: &AsmRows| {
-                        let (focused, pinned) = rows.lit(i);
+                        let selected = rows.rows.is_some_and(|run| run.contains(i));
+                        let Some(index) = rows.data.lanes.instruction_at(i) else {
+                            // A separator, which belongs to the instruction below it: the
+                            // lanes it carries are that row's, and it lights with them
+                            // but never draws their corner.
+                            let below = rows.data.lanes.instruction_at(i + 1).unwrap_or(0);
+                            let mut lit = lanes::lit(&rows.touching, below);
+                            lit.corner = false;
+
+                            return SeparatorRow {
+                                row: i,
+                                selected,
+                                width: rows.data.lanes.width,
+                                arrows: RowArrows {
+                                    lanes: rows.data.lanes.boundary(below),
+                                    lit,
+                                },
+                            }
+                            .into();
+                        };
+
+                        let (focused, pinned) = rows.lit(index);
                         InstructionRow {
                             data: rows.data.clone(),
-                            index: i,
+                            index,
+                            row: i,
                             focused,
                             pinned,
-                            selected: rows.rows.is_some_and(|run| run.contains(i)),
+                            selected,
                             arrows: RowArrows {
-                                lanes: rows.data.lanes.row(i),
-                                lit: lanes::lit(&rows.touching, i),
+                                lanes: rows.data.lanes.row(index),
+                                lit: lanes::lit(&rows.touching, index),
                             },
                             hover,
                             controller,
                             viewport,
                             key: DiffKey::None,
                         }
-                        .key(rows.data.assembly.instructions[i].address)
+                        .key(rows.data.assembly.instructions[index].address)
                         .into()
                     },
                     controller,

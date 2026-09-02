@@ -181,3 +181,96 @@ fn an_edge_past_the_end_is_not_drawn() {
     assert_eq!(lanes.touching(0).len(), 0);
     assert!(!lanes.row(0).arrow);
 }
+
+/// The listing's rows against the symbol's instructions. Every row a branch lands on gets
+/// a separator above it, so the two spaces drift apart by one per block, and the round
+/// trip has to hold for every row of both: `instruction_at` is the inverse of `row_of`
+/// where there is one, and `None` exactly where there is not.
+#[test]
+fn a_separator_row_sits_above_every_row_a_branch_lands_on() {
+    // The `sum_to` shape: a jump forward to row 4 and one back up to row 1, so rows 1 and
+    // 4 begin a block and rows 0, 2, 3, 5 and 6 do not.
+    let lanes = Lanes::new(&edges(&[(0, 4), (5, 1)]), 7);
+    assert_eq!(lanes.listing_rows(7), 9);
+
+    // Instruction -> row, and the drift is one per separator already passed.
+    let rows: Vec<usize> = (0..7).map(|index| lanes.row_of(index)).collect();
+    assert_eq!(rows, vec![0, 2, 3, 4, 6, 7, 8]);
+
+    // Row -> instruction, which must be the exact inverse: the two separator rows answer
+    // nothing and every other row answers the instruction that named it.
+    let drawn: Vec<Option<usize>> = (0..9).map(|row| lanes.instruction_at(row)).collect();
+    assert_eq!(
+        drawn,
+        vec![
+            Some(0),
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(4),
+            Some(5),
+            Some(6),
+        ]
+    );
+}
+
+/// A symbol whose first instruction is branched to gets no separator over its head: a
+/// boundary above the top of a listing says nothing, and the row would be a gap the
+/// symbol opens with.
+#[test]
+fn the_first_row_never_gets_a_separator() {
+    let lanes = Lanes::new(&edges(&[(3, 0)]), 5);
+    assert_eq!(lanes.row(0).arrow, true, "the branch still lands there");
+    assert_eq!(lanes.listing_rows(5), 5);
+    assert_eq!(lanes.row_of(0), 0);
+    assert_eq!(
+        (0..5)
+            .map(|row| lanes.instruction_at(row))
+            .collect::<Vec<_>>(),
+        (0..5).map(Some).collect::<Vec<_>>()
+    );
+}
+
+/// A symbol with no branches at all is one row per instruction, and a separator drawn
+/// over nothing carries no lanes.
+#[test]
+fn a_symbol_that_branches_nowhere_is_one_row_per_instruction() {
+    let lanes = Lanes::new(&[], 4);
+    assert_eq!(lanes.listing_rows(4), 4);
+    assert_eq!(lanes.row_of(3), 3);
+    assert_eq!(lanes.instruction_at(3), Some(3));
+    assert_eq!(lanes.boundary(3), RowLanes::default());
+}
+
+/// The separator carries the lanes that cross it and neither of the row's own marks: the
+/// line a branch is drawn with must not break where the listing opens a gap under it, and
+/// the arrowhead belongs to the row the branch lands on.
+#[test]
+fn a_separator_carries_the_lanes_that_cross_it() {
+    // Row 4 is the target of the forward branch drawn in lane 0 and is crossed by the
+    // backward one, which reaches from row 1 to row 5.
+    let lanes = Lanes::new(&edges(&[(0, 4), (5, 1)]), 7);
+    let boundary = lanes.boundary(4);
+    let below = lanes.row(4);
+
+    assert!(!boundary.arrow, "the separator drew a second arrowhead");
+    assert!(
+        boundary.stub.is_none(),
+        "the separator drew a second corner"
+    );
+    for lane in 0..MAX_LANES {
+        let through = below.lanes[lane].top;
+        assert_eq!(
+            boundary.lanes[lane],
+            Vertical {
+                top: through,
+                bottom: through,
+            },
+            "lane {lane} does not carry on across the boundary"
+        );
+    }
+    // And at least one lane really does cross, or the assertion above holds vacuously.
+    assert!(boundary.lanes.iter().any(|lane| lane.top));
+}
