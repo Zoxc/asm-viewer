@@ -215,7 +215,8 @@ backend keeps a unit's subprogram extents. A row with no length — one whose su
 it, which only assemblers emit — is dropped rather than given an end. Line 0 and column 0 are
 `None` as in DWARF. `each_row` walks every module, so a first source question decodes the whole
 PDB, as the DWARF one parses every line program. **Two things a PDB has that DWARF-as-read does
-not**: a checksum per source file (`SourceHash`, MD5 unless the producer was told otherwise),
+not**: a checksum per source file (`SourceHash`: MD5 from clang-cl and rustc, SHA-256 from MSVC
+since 2022, as the samples' CRT objects show),
 carried on `LineInfo` beside the file name so a reader can tell the file they have from the one
 the compiler read (`SourceDigests::of` takes all three digests of a file's bytes at once, so a
 file read once answers any kind), and file names in the producer's spelling — `C:\...` from MSVC,
@@ -223,6 +224,15 @@ file read once answers any kind), and file names in the producer's spelling — 
 public symbols as a source of names for a stripped image's unexported functions (its own goal),
 and `/DEBUG:FASTLINK` or stripped PDBs, which match and then answer nothing. The file stays open,
 read a page at a time through `BoundedFile`, never whole: `rustc_driver`'s PDB is 268 MB.
+**Measured**, release, on the samples: `rustc.exe` (110 KB, a 3.7 MB PDB) opens in 1.5 ms, its
+first line question — finding and matching the PDB, reading the DBI, address map and string table,
+decoding the first module — 5.6 ms, and the first source question, every module decoded, 11 ms at
+5 MB resident. `rustc_driver.dll` (194 MB, 15 241 exports, the 268 MB PDB) opens in 738 ms; the
+first line question is 74 ms, the next hundred symbols 293 ms together — a module decoded whole
+per new module touched, then binary searches — and the first source question 1.05 s, taking the
+process from 381 MB to 466 MB with every module's rows held. Against the DWARF side's 2.2 s and
++470 MB on a 331 MB binary that is the same shape at half the cost; the `modules().nth(m)` walk
+per module load was not worth a table of offsets.
 
 **The reverse mapping is an index, and a whole-object one** (`line/source.rs`). "Which functions
 was this line compiled into" is not a question about one symbol, so it is not a query but a table:

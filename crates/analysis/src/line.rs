@@ -134,8 +134,8 @@ fn without_panicking<T>(f: impl FnOnce() -> T) -> Option<T> {
 }
 
 /// A checksum the debug info records for a source file, so a reader can tell the file they
-/// have from the one the compiler read. Which algorithm is the producer's choice — MSVC,
-/// clang-cl and rustc write MD5 unless told otherwise — so a hash carries its own kind.
+/// have from the one the compiler read. Which algorithm is the producer's choice — clang-cl
+/// and rustc write MD5, MSVC since 2022 SHA-256 — so a hash carries its own kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SourceHash {
     Md5([u8; 16]),
