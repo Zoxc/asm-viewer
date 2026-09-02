@@ -34,6 +34,27 @@
 //! build records; nothing asserts on either.
 //!
 //! The DLL is 2.5 KB and the PDB 72 KB — an MSF file's smallest shape, 18 pages of 4 KB.
+//!
+//! A **second pair**, `line_fixture_noexport.dll` + `.pdb`, is the same object linked with
+//! no `/EXPORT`s at all, so the image declares nothing — no symbol table, no exports, no
+//! entry point — and every name it shows is the PDB's. From `tests/fixtures/`, with exactly:
+//!
+//! ```text
+//! clang-cl --target=x86_64-pc-windows-msvc /c /Z7 /Od /GS- -ffile-compilation-dir=/fixture \
+//!     /clang:-gcolumn-info /Foline_fixture_noexport.obj line_fixture.c
+//! "$(rustc +stable --print sysroot)"/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
+//!     -flavor link /DEBUG /Brepro /PDBALTPATH:line_fixture_noexport.pdb \
+//!     /PDBSOURCEPATH:/fixture /NODEFAULTLIB /NOENTRY /DLL \
+//!     /OUT:line_fixture_noexport.dll /PDB:line_fixture_noexport.pdb line_fixture_noexport.obj
+//! rm line_fixture_noexport.obj
+//! ```
+//!
+//! built with the same clang 22.1.8 (Fedora 22.1.8-4.fc44) and the `rust-lld` of rustc 1.98.0
+//! (88d9e12ae 2026-08-18). `/Fo` takes its name attached — with a space `clang-cl` reads a
+//! bare `/Fo` and names the object after the source, which is how the first recipe's
+//! `/Fo line_fixture.obj` happened to work. No `.lib` is written for an image exporting
+//! nothing. `/Brepro` hashes the contents, so the two pairs have different GUIDs and neither
+//! PDB matches the other's DLL. Same 2.5 KB and 72 KB.
 
 mod common;
 
