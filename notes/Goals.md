@@ -681,6 +681,19 @@ one item per part, so the unfinished half stays visible.
   assembly font silently padded the sidebar. Each `item_size` comes from the height its own rows
   draw at, which is what keeps a scroll view and its rows from disagreeing; saved viewing
   positions are rows, so they survive a font change naming the same instruction.
+- [ ] Move a settings file that will not parse aside instead of ignoring it, and say where it
+  went. Today a stale or hand-broken file is silently ignored and the next write overwrites it,
+  so the reader loses whatever was in it without ever being told — which is the one place
+  "persisted formats need no backward compatibility" costs something real. The file goes into an
+  `incompatible/` directory that **mirrors the structure it came from**, so a project's own
+  files keep the shape they had rather than being flattened into one heap of `session.toml`s.
+  Nothing there is ever overwritten: a name already taken gets a number prefix, and the claim
+  has to be made the way an anonymous project's directory is — a create that fails rather than
+  opens — since a second copy of the app may be moving the same file at the same moment. Then a
+  popup naming every path written, because a rescue the reader never hears about is the same as
+  no rescue. The decisions are which files this covers (`settings.toml` alone, or every
+  persisted file — `project.toml`, `session.toml`, the recents list), and where the directory
+  sits relative to each of them.
 
 ## Scratchpad
 
