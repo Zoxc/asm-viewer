@@ -31,8 +31,12 @@ kept — plus, for a **linked image only**, the code it declares elsewhere: `dyn
 `exports` and `entry` (`declared_code`). All three are *declared*, so this keeps the "nothing is
 scanned for" rule; a prebuilt LLVM DLL with no COFF symbol table at all goes from zero
 functions to 22 918 on the strength of it. One symbol per address, earliest source winning
-(symbol table > dynamic symbol > export > entry point), because `Section::symbols` is the sorted
-list `estimate_size` searches and a repeated address makes it answer 0. The section comes from
+(symbol table > dynamic symbol > export > entry point), since an export is very often the
+symbol table's own function under a second name. The symbol table itself may hold two names for
+one address (an alias, an assembler label) and both are kept, but `Section::symbols` — the
+sorted list `estimate_size` binary-searches — holds each address **once**: a repeated entry
+made the search land on either twin and answer 0 for an aliased symbol, which in an object
+without DWARF was a function with no listing at all. The section comes from
 looking the address up in the kept **text** sections, which doubles as the filter keeping exported
 *data* out. A relocatable object is skipped entirely: `entry()` answers 0 for a `.o`, and 0 there
 is a real function's first byte. The entry point has no name and is called `<entry point>` — angle

@@ -907,3 +907,41 @@ fn spans_of(instruction: &analysis::Instruction, kind: SpanKind) -> Vec<&str> {
         .map(|(text, _)| text.as_str())
         .collect()
 }
+
+/// Two names for one address — an alias, an assembler label — are two symbols but one
+/// place in the section, and both decode the whole run. `Section::symbols` used to hold the
+/// address twice, and a binary search landing on the first twin derived an extent of 0 from
+/// the second: in an object without DWARF that was a function with no listing.
+#[test]
+fn an_alias_at_the_same_address_decodes_the_whole_run() {
+    let object = parse(&elf_x86_64(
+        &[
+            TextSymbol {
+                name: "alias",
+                bytes: &[],
+            },
+            TextSymbol {
+                name: "function",
+                bytes: &[0x90, 0x90, 0xC3],
+            },
+            TextSymbol {
+                name: "next",
+                bytes: &[0xC3],
+            },
+        ],
+        &[],
+    ));
+
+    let alias = symbol(&object, "alias");
+    let function = symbol(&object, "function");
+    assert_eq!(alias.address, function.address);
+    let section = alias.section.as_ref().expect("alias has a section");
+    assert_eq!(section.symbols, vec![0, 3]);
+
+    for symbol in [&alias, &function] {
+        assert_eq!(symbol.estimate_size(), Some(3));
+        assert_eq!(symbol.extent(&object), Some(3));
+        let assembly = symbol.assembly(&object).expect("the run disassembles");
+        assert_eq!(assembly.instructions.len(), 3);
+    }
+}

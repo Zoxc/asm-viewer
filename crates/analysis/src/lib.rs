@@ -181,7 +181,8 @@ pub struct Section {
 
     pub relocations: HashMap<u64, Relocation>,
 
-    // A sorted list of symbol positions
+    /// The addresses of this section's text symbols, sorted and **each once**: two symbols
+    /// at one address are one entry here. The sync points a listing decodes from.
     pub symbols: Vec<u64>,
 }
 
@@ -243,8 +244,8 @@ impl SymbolData {
     /// one subprogram (an alias, an assembler label, a split cold part), since `high_pc`
     /// describes the *function*.
     ///
-    /// A zero estimate is treated as no estimate: two text symbols at one address make the
-    /// next-address derivation answer 0.
+    /// A zero estimate is treated as no estimate: a symbol placed exactly at the section's
+    /// end has no bytes to derive from, and DWARF may still know its extent.
     pub fn extent(&self, object: &Object) -> Option<u64> {
         let estimate = self.estimate_size().filter(|&size| size != 0);
         match (self.dwarf_extent(object), estimate) {
@@ -383,8 +384,9 @@ const ENTRY_POINT_NAME: &str = "<entry point>";
 /// exported *data* out.
 ///
 /// **One symbol per address, earliest source winning** (symbol table > dynamic symbol >
-/// export > entry point). Not cosmetic: `Section::symbols` is the sorted list
-/// [`SymbolData::estimate_size`] binary-searches, and a repeated address makes it answer 0.
+/// export > entry point). An export is very often the symbol table's own function under
+/// its exported name, and a second `SymbolData` for it would be a second row in the list
+/// for one place in the file.
 ///
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
@@ -518,7 +520,12 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
             let section_map: HashMap<SectionIndex, Arc<Section>> = sections
                 .into_iter()
                 .map(|(index, mut section)| {
+                    // Sorted for the binary searches over it, and each address once: two
+                    // symbols at one address (an alias, an assembler label) are one place
+                    // in the section, and a repeated entry would make `estimate_size`
+                    // answer 0 for whichever of the two the search landed on.
                     section.symbols.sort_unstable();
+                    section.symbols.dedup();
                     (index, Arc::new(section))
                 })
                 .collect();
