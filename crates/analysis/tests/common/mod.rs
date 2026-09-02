@@ -93,9 +93,15 @@ const MAX_SOURCE_QUERIES: usize = 4;
 const MAX_LISTING_STRETCHES: usize = 4;
 
 /// Parse, then walk everything a parsed object exposes, so a panic anywhere past
-/// `parse_object` is caught too.
+/// `parse_object` is caught too. The object is placed at a path nothing sits beside.
 pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
-    let object = parse_object(data.into(), "fuzz".into(), PathBuf::from("/fuzz"))?;
+    parse_and_walk_at(data, PathBuf::from("/fuzz"))
+}
+
+/// [`parse_and_walk`] with the object placed at `path`, which is where a PE's `.pdb` is
+/// looked for: the one way the walk reaches the PDB backend.
+pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
+    let object = parse_object(data.into(), "fuzz".into(), path)?;
 
     for symbol in &object.symbols_sorted {
         let _ = symbol.estimate_size();

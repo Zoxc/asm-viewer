@@ -1,7 +1,7 @@
 //! The search behind `robustness.rs`: every fixture the suite builds, mutated three ways
 //! — truncated, poisoned field by field, and splatted with random bytes — with the whole
-//! pipeline run over each result (`common::parse_and_walk`). A mutated file may parse into
-//! anything at all; the only failure is a panic.
+//! pipeline run over each result (`common::parse_and_walk_at`). A mutated file may parse
+//! into anything at all; the only failure is a panic.
 //!
 //! **Everything here is deterministic and bounded**, so a failure is reproducible from its
 //! label alone and the suite stays in single-digit seconds: the pseudo-random bytes are
@@ -10,12 +10,23 @@
 //! rather than by picking — at most [`MAX_FIELDS`] numeric fields per file, and every
 //! [`TRUNCATION_STRIDE`]-th length past [`WHOLE_TRUNCATION`] bytes. Which cases run is
 //! therefore fixed, and a sampled table is still represented end to end.
+//!
+//! **Two of the inputs are files on disk**, because a `.pdb` is a second file found beside
+//! its binary: the linker's DLL is parsed at a path with the pristine PDB beside it, so a
+//! mutation of the DLL that leaves the CodeView record intact goes on to open and match the
+//! PDB; and the PDB is mutated in turn, each mutation written beside the pristine DLL before
+//! the DLL is parsed. Each test writes under a directory of its own in the target directory,
+//! since the three run at once.
 
 mod common;
 
 use common::{
-    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, garbage, survivors,
+    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, garbage,
+    parse_and_walk_at,
 };
+use std::fs;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 
 /// At most this many numeric fields are poisoned per file. The committed objects have 371
 /// and 471 of them, and a stride over the whole table finds the same classes of defect.
@@ -29,49 +40,158 @@ const WHOLE_TRUNCATION: usize = 1024;
 /// same alignment inside every structure it walked past.
 const TRUNCATION_STRIDE: usize = 7;
 
+/// The PDB's own truncation stride: it is 72 KB and every case is a file written, so every
+/// length of its 56-byte superblock and then every this-many-th. Odd, for the reason above,
+/// and prime to 4096 so the cuts drift across the page boundaries an MSF is laid out on.
+const PDB_TRUNCATION_STRIDE: usize = 509;
+
+const DLL: &str = "line_fixture.dll";
+const PDB: &str = "line_fixture.pdb";
+
+/// One input to the pipeline: the bytes, the path they are said to be at, and a file to put
+/// beside them first — the mutated PDB a pristine DLL is parsed next to.
+struct Case {
+    label: String,
+    data: Vec<u8>,
+    path: PathBuf,
+    beside: Option<(PathBuf, Vec<u8>)>,
+}
+
+impl Case {
+    /// Bytes at a path nothing sits beside, which is every fixture built in memory.
+    fn in_memory(label: String, data: Vec<u8>) -> Case {
+        Case {
+            label,
+            data,
+            path: PathBuf::from("/fuzz"),
+            beside: None,
+        }
+    }
+
+    /// The same bytes-and-place, mutated: what every sweep below builds from a corpus entry.
+    fn mutated(&self, label: String, data: Vec<u8>) -> Case {
+        Case {
+            label,
+            data,
+            path: self.path.clone(),
+            beside: None,
+        }
+    }
+}
+
+/// A directory of this test's own under the target directory. Not emptied: every file a
+/// case needs is written before the case runs, over whatever an earlier run left.
+fn scratch(test: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("mutations")
+        .join(test);
+    fs::create_dir_all(&dir).expect("a scratch directory");
+    dir
+}
+
 /// Every shape the crate can be asked about: relocatable objects with and without DWARF,
 /// real compiler output in DWARF 5, the two linked images, whose export and entry-point
-/// paths (`declared_code`) no `.o` reaches at all, and a linker's real DLL with a debug
-/// directory naming a `.pdb`.
-fn corpus() -> Vec<(String, Vec<u8>)> {
+/// paths (`declared_code`) no `.o` reaches at all, one of them naming a `.pdb` that is
+/// nowhere, and the linker's real DLL **beside its PDB**.
+fn corpus(test: &str) -> Vec<Case> {
     let mut corpus = vec![
-        ("caller_and_target".to_owned(), caller_and_target()),
-        ("dwarf".to_owned(), dwarf_fixture(&[(0, 6), (1, 2)])),
-        (
+        Case::in_memory("caller_and_target".to_owned(), caller_and_target()),
+        Case::in_memory("dwarf".to_owned(), dwarf_fixture(&[(0, 6), (1, 2)])),
+        Case::in_memory(
             "line_fixture.o".to_owned(),
             committed_fixture("line_fixture.o"),
         ),
-        (
+        Case::in_memory(
             "line_fixture_split.o".to_owned(),
             committed_fixture("line_fixture_split.o"),
-        ),
-        (
-            "line_fixture.dll".to_owned(),
-            committed_fixture("line_fixture.dll"),
         ),
     ];
     corpus.extend(
         declared_code_images()
             .into_iter()
-            .map(|(label, data)| (label.to_owned(), data)),
+            .map(|(label, data)| Case::in_memory(label.to_owned(), data)),
     );
+
+    let dir = scratch(test).join("dll");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(PDB), committed_fixture(PDB)).unwrap();
+    let dll = committed_fixture(DLL);
+    // The pair is found where the sweep put it, so the mutations reach the PDB backend
+    // rather than a search that comes back empty.
+    let intact = parse_and_walk_at(&dll, dir.join(DLL)).expect("the DLL parses");
+    assert!(
+        intact.symbols_sorted[0].line_info(&intact).is_some(),
+        "the PDB beside the DLL was not read"
+    );
+    corpus.push(Case {
+        label: DLL.to_owned(),
+        data: dll,
+        path: dir.join(DLL),
+        beside: None,
+    });
     corpus
+}
+
+/// The pristine DLL parsed beside one mutation of its PDB.
+fn pdb_cases(test: &str, mutations: Vec<(String, Vec<u8>)>) -> Vec<Case> {
+    let dir = scratch(test).join("pdb");
+    fs::create_dir_all(&dir).unwrap();
+    let dll = committed_fixture(DLL);
+    mutations
+        .into_iter()
+        .map(|(label, pdb)| Case {
+            label: format!("{PDB} {label}"),
+            data: dll.clone(),
+            path: dir.join(DLL),
+            beside: Some((dir.join(PDB), pdb)),
+        })
+        .collect()
+}
+
+/// Run the pipeline over every case, returning the labels of the ones that panicked.
+fn failures(cases: Vec<Case>) -> Vec<String> {
+    cases
+        .into_iter()
+        .filter_map(|case| {
+            if let Some((path, bytes)) = &case.beside {
+                fs::write(path, bytes).expect("writing the file beside the binary");
+            }
+            catch_unwind(AssertUnwindSafe(|| {
+                parse_and_walk_at(&case.data, case.path.clone())
+            }))
+            .err()
+            .map(|_| case.label)
+        })
+        .collect()
 }
 
 /// A file that stops part-way through is the commonest malformed file there is. Every
 /// prefix has to come back as an object or as nothing.
 #[test]
 fn truncation_at_every_length_does_not_panic() {
-    let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
-    for (name, valid) in corpus() {
-        let lengths =
-            (0..valid.len()).filter(|len| *len <= WHOLE_TRUNCATION || len % TRUNCATION_STRIDE == 0);
+    const TEST: &str = "truncation";
+    let mut cases = Vec::new();
+    for valid in corpus(TEST) {
+        let lengths = (0..valid.data.len())
+            .filter(|len| *len <= WHOLE_TRUNCATION || len % TRUNCATION_STRIDE == 0);
         for len in lengths {
-            cases.push((format!("{name} truncated to {len}"), valid[..len].to_vec()));
+            cases.push(valid.mutated(
+                format!("{} truncated to {len}", valid.label),
+                valid.data[..len].to_vec(),
+            ));
         }
     }
 
-    let failures = survivors(cases.iter().map(|(label, data)| (label.clone(), &data[..])));
+    let pdb = committed_fixture(PDB);
+    let lengths = (0..pdb.len()).filter(|len| *len < 56 || len % PDB_TRUNCATION_STRIDE == 0);
+    cases.extend(pdb_cases(
+        TEST,
+        lengths
+            .map(|len| (format!("truncated to {len}"), pdb[..len].to_vec()))
+            .collect(),
+    ));
+
+    let failures = failures(cases);
     assert!(failures.is_empty(), "panicked on: {failures:?}");
 }
 
@@ -79,27 +199,42 @@ fn truncation_at_every_length_does_not_panic() {
 /// interesting, where writing `u64::MAX` into it always does. Every field a parser reads as
 /// a count, an offset or a size takes each of [`poisons`] in turn.
 ///
-/// This is the sweep that reaches `addr2line` 0.21's two unchecked additions, caught by
-/// `without_panicking` in `src/line.rs` — this test is green *because* they are.
+/// This is the sweep that reaches `addr2line` 0.21's two unchecked additions and `pdb2`
+/// 0.10's, caught by `without_panicking` in `src/line.rs` — this test is green *because*
+/// they are.
 #[test]
 fn field_targeted_corruption_does_not_panic() {
-    let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
-    for (name, valid) in corpus() {
-        let mut fields = elf_fields(&valid);
-        fields.extend(pe_fields(&valid));
+    const TEST: &str = "fields";
+    let poisoned = |valid: &[u8], fields: Vec<(usize, usize)>| -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
         // Sampled by an even stride, never by picking; see the module docs.
         let stride = 1 + fields.len() / MAX_FIELDS;
         for (offset, width) in fields.into_iter().step_by(stride) {
             for value in poisons(valid.len()) {
-                let mut data = valid.clone();
+                let mut data = valid.to_vec();
                 let bytes = value.to_le_bytes();
                 data[offset..offset + width].copy_from_slice(&bytes[..width]);
-                cases.push((format!("{name}: [{offset}+{width}] = {value:#x}"), data));
+                out.push((format!("[{offset}+{width}] = {value:#x}"), data));
             }
+        }
+        out
+    };
+
+    let mut cases = Vec::new();
+    for valid in corpus(TEST) {
+        let mut fields = elf_fields(&valid.data);
+        fields.extend(pe_fields(&valid.data));
+        for (label, data) in poisoned(&valid.data, fields) {
+            cases.push(valid.mutated(format!("{}: {label}", valid.label), data));
         }
     }
 
-    let failures = survivors(cases.iter().map(|(label, data)| (label.clone(), &data[..])));
+    let pdb = committed_fixture(PDB);
+    let fields = pdb_fields(&pdb);
+    assert!(fields.len() > 8, "the PDB's fields were found");
+    cases.extend(pdb_cases(TEST, poisoned(&pdb, fields)));
+
+    let failures = failures(cases);
     assert!(failures.is_empty(), "panicked on: {failures:?}");
 }
 
@@ -107,8 +242,9 @@ fn field_targeted_corruption_does_not_panic() {
 /// valid file at pseudo-random places, for what a field-targeted sweep never names.
 #[test]
 fn random_splats_do_not_panic() {
-    let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
-    for (name, valid) in corpus() {
+    const TEST: &str = "splats";
+    let splatted = |valid: &[u8]| -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
         for seed in 1..200u64 {
             // Everything about a case comes out of its seed, so its label reproduces it.
             let mut state = seed | 1;
@@ -119,17 +255,26 @@ fn random_splats_do_not_panic() {
                 state
             };
 
-            let mut data = valid.clone();
+            let mut data = valid.to_vec();
             for _ in 0..=(next() % 4) {
                 let at = next() as usize % data.len();
                 let end = (at + 1 + next() as usize % 16).min(data.len());
                 data[at..end].copy_from_slice(&garbage(next(), end - at));
             }
-            cases.push((format!("{name} splat seed {seed}"), data));
+            out.push((format!("splat seed {seed}"), data));
+        }
+        out
+    };
+
+    let mut cases = Vec::new();
+    for valid in corpus(TEST) {
+        for (label, data) in splatted(&valid.data) {
+            cases.push(valid.mutated(format!("{} {label}", valid.label), data));
         }
     }
+    cases.extend(pdb_cases(TEST, splatted(&committed_fixture(PDB))));
 
-    let failures = survivors(cases.iter().map(|(label, data)| (label.clone(), &data[..])));
+    let failures = failures(cases);
     assert!(failures.is_empty(), "panicked on: {failures:?}");
 }
 
@@ -147,6 +292,72 @@ fn poisons(len: usize) -> [u64; 8] {
         len as u64,
         len as u64 + 1,
     ]
+}
+
+/// Every `(offset, width)` in an MSF 7.0 file — a `.pdb` — that its reader takes as a count,
+/// an offset or a size: the superblock (page size, free page map, pages used, directory
+/// size, the page holding the directory's page list), that page list, and the stream
+/// directory's own numbers — how many streams, each one's size, and each one's first page.
+fn pdb_fields(data: &[u8]) -> Vec<(usize, usize)> {
+    const MAGIC: &[u8] = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0";
+    let mut fields = Vec::new();
+    if data.len() < 56 || !data.starts_with(MAGIC) {
+        return fields;
+    }
+    let u32_at = |offset: usize| -> Option<usize> {
+        data.get(offset..offset + 4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) as usize)
+    };
+    for offset in [32usize, 36, 40, 44, 52] {
+        fields.push((offset, 4));
+    }
+
+    let (Some(page_size), Some(directory_size), Some(map_page)) =
+        (u32_at(32), u32_at(44), u32_at(52))
+    else {
+        return fields;
+    };
+    if page_size == 0 {
+        return fields;
+    }
+
+    // The directory's page list, one page number per page of the directory.
+    let map = map_page * page_size;
+    let directory_pages = directory_size.div_ceil(page_size);
+    for i in 0..directory_pages {
+        if map + 4 * i + 4 <= data.len() {
+            fields.push((map + 4 * i, 4));
+        }
+    }
+
+    // The directory itself: the stream count, the sizes, then every stream's page numbers,
+    // of which the first is taken.
+    let Some(directory) = u32_at(map).map(|page| page * page_size) else {
+        return fields;
+    };
+    let Some(streams) = u32_at(directory) else {
+        return fields;
+    };
+    fields.push((directory, 4));
+    let mut pages_at = directory + 4 + 4 * streams;
+    for i in 0..streams {
+        let Some(size) = u32_at(directory + 4 + 4 * i) else {
+            break;
+        };
+        fields.push((directory + 4 + 4 * i, 4));
+        // A size of `u32::MAX` is a stream that does not exist and has no pages.
+        let pages = if size == u32::MAX as usize {
+            0
+        } else {
+            size.div_ceil(page_size)
+        };
+        if pages > 0 && pages_at + 4 <= data.len() {
+            fields.push((pages_at, 4));
+        }
+        pages_at += 4 * pages;
+    }
+
+    fields
 }
 
 /// Every `(offset, width)` in an ELF64 that a parser reads as a count, an offset or a

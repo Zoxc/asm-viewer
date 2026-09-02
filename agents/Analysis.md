@@ -410,18 +410,28 @@ listings, and that is the sidebar's question.
 
 **"Never panic on any file input" is tested two ways, and they are different jobs.**
 `tests/mutations.rs` is the **search**: it takes every fixture the suite builds — both committed
-gcc objects, the synthesized DWARF one, the ELF `.so` and the PE DLL — and truncates it at every
-length, writes poison values (`0`, `u32::MAX`, `u64::MAX`, the file's own length…) into every
-numeric field of every header, section header, symbol and relocation, and splats pseudo-random
-runs over it, running the whole pipeline over each result. It is sampled by an even stride and
-seeded from a constant (never `rand`, never the clock), so which cases run is fixed and it stays
-around two and a half seconds — 2.6, of which the reverse index costs a tenth and every section's listing, its first four stretches decoded, four tenths. `tests/robustness.rs` is the **regression suite**: one named, minimal fixture
-per defect that was actually found, because a sweep that goes green tells you nothing about which
-bug it was that stopped happening. `common::parse_and_walk` is the one definition of "ask a parsed
-object everything", shared by both — every symbol's extent, listing and line info, every
-section's DWARF, the reverse index, and every section's `Listing` with its first
-`MAX_LISTING_STRETCHES` (4) stretches decoded, since a decode is the symbol's disassembly over
-again and a section of any kind has a listing. The rule that goes with them is the user rule in `AGENTS.md`: a minimal
+gcc objects, the synthesized DWARF one, the ELF `.so`, the PE DLL and the same DLL naming a
+`.pdb` that is nowhere — and the two that are files on disk, the linker's DLL parsed **beside its
+PDB** and that PDB itself, and truncates each at every length, writes poison values (`0`,
+`u32::MAX`, `u64::MAX`, the file's own length…) into every numeric field of every header, section
+header, symbol and relocation — and, for the PDB, of the MSF superblock and stream directory, and
+for the DLL of its debug directory and CodeView record — and splats pseudo-random runs over it,
+running the whole pipeline over each result. A `.pdb` being a second file found beside its
+binary, a mutated PDB is written beside the pristine DLL before that is parsed, under a directory
+per test in the target directory; a sanity check first asks the intact pair for line info, so the
+sweep is known to reach the backend and not a search that comes back empty. It is sampled by an
+even stride and seeded from a constant (never `rand`, never the clock), so which cases run is
+fixed and it stays in single-digit seconds — 3.2, up from 2.6 before the PDB, of which the reverse
+index costs a tenth and every section's listing, its first four stretches decoded, four tenths.
+`tests/robustness.rs` is the **regression suite**: one named, minimal fixture per defect that was
+actually found, because a sweep that goes green tells you nothing about which bug it was that
+stopped happening. `common::parse_and_walk_at` is the one definition of "ask a parsed object
+everything", shared by both — every symbol's extent, listing and line info, every section's line
+info, the reverse index, and every section's `Listing` with its first `MAX_LISTING_STRETCHES` (4)
+stretches decoded, since a decode is the symbol's disassembly over again and a section of any kind
+has a listing. The PDB sweep found nothing the seam's guard did not already catch, and it cannot
+find the one defect that is not a panic — the declared stream length `pdb2` would allocate before
+reading — which `BoundedFile` answers by construction (`notes/upstream/pdb2.md`). The rule that goes with them is the user rule in `AGENTS.md`: a minimal
 test case every time something is found wrong, and **checked arithmetic in preference to a wider
 `catch_unwind`** — the guard is for a dependency's bug, never for ours. Note also what *cannot* be
 caught: a stack overflow aborts, so anything recursing over file-controlled input (the demanglers,
