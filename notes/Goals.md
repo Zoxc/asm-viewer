@@ -400,6 +400,8 @@ one item per part, so the unfinished half stays visible.
   split view*. None of those four is measured, which is where this starts: the rule is worth
   keeping, and an atomic write of a few hundred bytes may still be cheaper than the channel it
   would take to move it.
+- [ ] Make the line-number gutter gray, in the scratchpad's editor and in the Source pane alike,
+  so the numbers read as a margin beside the code and not as a column of it.
 
 ## Panels and tabs
 
