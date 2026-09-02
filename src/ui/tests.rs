@@ -5049,6 +5049,92 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
     );
 }
 
+/// A source file the debug info recorded a checksum for is compared with the file the pane
+/// opened: a row over the source says so when the bytes differ, and nothing is said over a
+/// file that matches or over one no checksum was recorded for. Headless because the notice
+/// is a row the pane draws or does not; the file is a temporary one holding `abc`, whose
+/// MD5 is the published vector, and the line info naming it is built by hand as the PDB
+/// backend would have built it.
+#[test]
+fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
+    use analysis::{LineInfo, LineRow, SourceHash};
+
+    let dir = std::env::temp_dir().join(format!("viewer-stale-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the temp directory is writable");
+    let path = dir.join("own.c");
+    std::fs::write(&path, b"abc").expect("the temp directory is writable");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a UTF-8 temp path"));
+
+    let compiled = SourceHash::Md5([
+        0x90, 0x01, 0x50, 0x98, 0x3c, 0xd2, 0x4f, 0xb0, 0xd6, 0x96, 0x3f, 0x7d, 0x28, 0xe1, 0x7f,
+        0x72,
+    ]);
+    let another = SourceHash::Md5([0; 16]);
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+
+    for (recorded, flagged) in [
+        (Some(another), true),
+        (Some(compiled), false),
+        (None, false),
+    ] {
+        let mut studied = Studied::new(sum_to.clone());
+        let rows = vec![LineRow {
+            range: sum_to.data.address..sum_to.data.address + 1,
+            file: Some(0),
+            line: Some(1),
+            column: None,
+        }];
+        studied.lines.info = LineInfo::new(rows, vec![(file.clone(), recorded)]).map(Arc::new);
+        studied.lines.file = Some(file.clone());
+        studied.lines.line = Some(1);
+        let shown = Shown {
+            ask: Ask::Symbol(sum_to.clone()),
+            studied,
+        };
+
+        let (mut test, (states, _pinned, _marked, _landing)) = TestingRunner::new(
+            panes_harness,
+            (600., 300.).into(),
+            |runner| {
+                let states = listing_states!(runner, shown);
+                runner.provide_root_context(|| SplitRatio(State::create(50.0)));
+                runner.provide_root_context(|| {
+                    Splits(State::create(ResizableContext {
+                        direction: Direction::Horizontal,
+                        ..Default::default()
+                    }))
+                });
+                states
+            },
+            1.,
+        );
+        settle(&mut test);
+        activate(
+            states.open,
+            states.history,
+            Some(Document::Assembly(Selection::Symbol(sum_to.clone()))),
+            Visit::Went,
+        );
+        settle(&mut test);
+
+        // The file itself is up either way: the notice is over it, not instead of it.
+        assert!(
+            label_area(&test, &format!("Source file not found: {file}")).is_none(),
+            "{recorded:?}: the file was not opened"
+        );
+        assert_eq!(
+            label_area(&test, STALE_SOURCE).is_some(),
+            flagged,
+            "{recorded:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A component with no props at all, which is what every view in the app is. Its parent
 /// reads nothing coloured, so the theme has to reach it on its own.
 #[derive(PartialEq)]

@@ -77,3 +77,35 @@ fn a_missing_file_is_remembered_as_missing() {
     assert!(load(&path).is_none());
     let _ = fs::remove_file(&path);
 }
+
+/// The digests are of the bytes as read, so a file answers the checksum the compiler took
+/// of it — the published vectors for `abc`, here — and not one taken of other bytes.
+#[test]
+fn a_file_matches_the_checksum_of_its_own_bytes() {
+    fn hex<const N: usize>(text: &str) -> [u8; N] {
+        let bytes: Vec<u8> = (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect();
+        bytes.try_into().unwrap()
+    }
+    let md5 = SourceHash::Md5(hex("900150983cd24fb0d6963f7d28e17f72"));
+    let sha1 = SourceHash::Sha1(hex("a9993e364706816aba3e25717850c26c9cd0d89d"));
+    let sha256 = SourceHash::Sha256(hex(
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    ));
+
+    let path = write("abc.c", b"abc");
+    let file = SourceFile::read(&path, MAX_SIZE).expect("a readable file");
+    for hash in [md5, sha1, sha256] {
+        assert!(file.matches(hash), "{hash:?}");
+    }
+    let _ = fs::remove_file(&path);
+
+    let path = write("abd.c", b"abd");
+    let edited = SourceFile::read(&path, MAX_SIZE).expect("a readable file");
+    for hash in [md5, sha1, sha256] {
+        assert!(!edited.matches(hash), "{hash:?}");
+    }
+    let _ = fs::remove_file(&path);
+}

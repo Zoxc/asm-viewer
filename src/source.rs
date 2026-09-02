@@ -6,6 +6,7 @@
 //! every render, and caching only the successes would make a path that is not on this
 //! machine the expensive case.
 
+use analysis::{SourceDigests, SourceHash};
 use std::{
     collections::HashMap,
     fs,
@@ -24,6 +25,10 @@ pub const MAX_SIZE: u64 = 16 * 1024 * 1024;
 pub struct SourceFile {
     path: PathBuf,
     text: String,
+    /// The digests of the bytes as read — before the lossy decode, since the compiler
+    /// hashed the bytes too — taken once with the file, so a pane asking on every render
+    /// compares two arrays.
+    digests: SourceDigests,
 }
 
 impl SourceFile {
@@ -35,6 +40,12 @@ impl SourceFile {
     /// The file's contents, decoded lossily.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Whether this file is the one a checksum out of the debug info was taken of: the
+    /// file the binary was built from, and not that file edited since.
+    pub fn matches(&self, hash: SourceHash) -> bool {
+        hash.matches(&self.digests)
     }
 
     /// Read a file, or [`None`] for anything that is not a readable text-sized regular
@@ -56,6 +67,7 @@ impl SourceFile {
 
         Some(SourceFile {
             path: path.to_path_buf(),
+            digests: SourceDigests::of(&bytes),
             text: String::from_utf8_lossy(&bytes).into_owned(),
         })
     }

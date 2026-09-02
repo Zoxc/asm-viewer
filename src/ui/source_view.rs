@@ -451,6 +451,25 @@ fn opening_row(lines: &SymbolLines, file: &Arc<str>) -> usize {
         .saturating_sub(CONTEXT_ROWS as usize)
 }
 
+/// What the Source pane says over a file whose bytes are not the ones the debug info's
+/// checksum was taken of: the file is shown, since it is still the best thing to show, but
+/// its line numbers are the compiler's and not necessarily this file's.
+pub(crate) const STALE_SOURCE: &str = "This file differs from the one the binary was built from";
+
+/// One row over the source rows saying [`STALE_SOURCE`], drawn only when it is so. In the
+/// header's own colours: a notice about the file, in the place the file is named.
+fn stale_banner() -> Element {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .width(Size::fill())
+        .height(Size::px(list_row_height()))
+        .padding(Gaps::new_symmetric(0.0, 8.0))
+        .background(palette().header_bg)
+        .child(label().text(STALE_SOURCE).color(palette().text_fg))
+        .into()
+}
+
 /// The bar over the Source pane naming the file it is showing as a **companion** -- a
 /// subject gets none, being named by its own tab -- and opening that file as a
 /// source-driven tab when it is pressed, the one door into one that is not a Files row.
@@ -542,6 +561,17 @@ impl Component for SourcePane {
             },
         };
 
+        // Whether the file on disk is the one the binary was built from, by the checksum
+        // the debug info recorded for it — where it recorded one, and where the file
+        // opened at all. Compared against the *drawn* symbol's line info, for a subject
+        // and a companion alike: it is the one place a recorded checksum comes from.
+        let stale = analysis
+            .shown
+            .as_ref()
+            .and_then(|shown| shown.studied.lines.hash_for(&file))
+            .zip(source::load(Path::new(&*file)))
+            .is_some_and(|(recorded, opened)| !opened.matches(recorded));
+
         rect()
             .expanded()
             // The header takes its own height and the list is given the rest, which torin
@@ -552,6 +582,7 @@ impl Component for SourcePane {
                 SourceSide::Companion(file) => Some(companion_header(open, history, file.clone())),
                 SourceSide::Subject(_) => None,
             })
+            .maybe_child(stale.then(stale_banner))
             .child(
                 rect()
                     .width(Size::fill())

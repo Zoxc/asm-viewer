@@ -57,6 +57,20 @@ source-driven tab draws the symbol the tab's driven line was compiled into, whic
 `Analyzed::showing` like any other tab's; before a line has been clicked in it there is no
 question, so it says so.
 
+**The Source pane checks the file it opened against the checksum the debug info recorded**, where
+it recorded one. A PDB carries a hash per source file (MD5 unless the producer was told
+otherwise; `LineInfo::hash_of`, `SourceHash`), and `source::load` takes all three digests of a
+file's bytes as it reads them (`SourceDigests`, once per file, cached with it) — so the pane
+compares two arrays per render and says, in one row over the source rows, that *this file differs
+from the one the binary was built from* when they disagree. The file is still shown, being the
+best thing there is to show; what the row says is that its line numbers are the compiler's and not
+necessarily this file's. The recorded hash is looked up **by the name the pane is showing** in the
+drawn symbol's line info (`SymbolLines::hash_for`), for a subject and a companion alike, since that
+is the one place a checksum comes from; no hash, or a match, says nothing, and DWARF as read
+carries none yet (`notes/Goals.md`). Verify, not locate: a hash that disagrees does not send the
+pane looking for another file with that name — that is the path-mapping goal's, and the hash is
+what will pick among its candidates.
+
 **The Assembly pane wears a bar naming what it is drawing**, in both spellings: the demangled name
 over the mangled original, `src/ui/symbol_bar.rs`. Until it there was one place a symbol was named
 -- its tab, where `short_name` has cut it to a `module::fn_name` and `elide` to forty characters --

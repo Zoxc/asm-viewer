@@ -438,6 +438,16 @@ impl SymbolLines {
 
         SymbolLines { info, file, line }
     }
+
+    /// The checksum the debug info recorded for `file`, one of the files these rows name, or
+    /// [`None`] when it names no such file or recorded none for it. Looked up by the name
+    /// the pane is showing rather than carried per file, so a landed pin's file and the
+    /// symbol's own are answered the same way.
+    pub(crate) fn hash_for(&self, file: &str) -> Option<analysis::SourceHash> {
+        let info = self.info.as_ref()?;
+        let index = info.files().iter().position(|named| **named == *file)?;
+        info.hash_of(index)
+    }
 }
 
 /// What [`use_analysis_with`] needs of the question: a **read**, which subscribes the
