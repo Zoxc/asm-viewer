@@ -461,13 +461,19 @@ one item per part, so the unfinished half stays visible.
   walk a restore uses for binaries that have changed, and `Project::binaries` follows the
   objects and is written to disk at once. A member row offers nothing: the file is the unit
   that closes, so the row above it is the one that closes it.
-- [ ] Bookmarks panel for pinned symbols / functions — a list the reader adds to deliberately
+- [x] Bookmarks panel for pinned symbols / functions — a list the reader adds to deliberately
   and that outlives the session, unlike the history, which records everywhere they went and
   drops the oldest. A sidebar panel beside Objects / Symbols / History, saved with the
-  project. The name clash this warned about is cleared: the context that was `Pinned` — the
-  source position a click fixed the two panes on, a transient, one-at-a-time gesture and
-  nothing like a bookmark — is `Anchored` now (`Anchor` the value), so nothing in the code
-  says "pinned" of a symbol.
+  project (`project.toml`, being what the user said; `agents/Persistence.md`). Added and
+  removed from a right-click on a Symbols row or a History row, on a document's tab, or on an
+  instruction row in the assembly view ("Bookmark symbol"); a bookmark whose binary is
+  closed is kept and drawn dimmed rather than dropped, and comes back when the binary does
+  (`agents/Sidebar.md`). The name clash this warned about is cleared: the context that was
+  `Pinned` — the source position a click fixed the two panes on, a transient, one-at-a-time
+  gesture and nothing like a bookmark — is `Anchored` now (`Anchor` the value), so nothing in
+  the code says "pinned" of a symbol.
+- [ ] A bookmark control on the symbol bar, for the symbol being read, beside the two menus
+  above.
 - [ ] Left panel to explore project directory / files.
 - [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
   by substring, whole word or regex, on the demangled name the row shows.

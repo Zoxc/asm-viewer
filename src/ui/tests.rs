@@ -390,7 +390,7 @@ fn project_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// The nine contexts `app()` provides, in one `ProjectStates`. A macro and not a
+/// The ten contexts `app()` provides, in one `ProjectStates`. A macro and not a
 /// function: the runner's type is `freya_core::integration::Runner`, which freya's prelude
 /// does not re-export, so naming it would mean naming a crate the app does not depend on.
 macro_rules! project_states {
@@ -445,6 +445,9 @@ macro_rules! project_states {
                 .0,
             history: $runner
                 .provide_root_context(|| Hist(State::create(History::default())))
+                .0,
+            bookmarks: $runner
+                .provide_root_context(|| Bookmarked(State::create(Bookmarks::default())))
                 .0,
         }
     }};
@@ -8358,4 +8361,387 @@ fn a_caps_lock_that_acts_as_ctrl_is_learnt_from_its_release() {
     assert!(*ctrl.peek(), "the learnt key's press does not count");
     keys.up(&caps, Modifiers::CONTROL);
     assert!(!*ctrl.peek());
+}
+
+/// The Bookmarks panel and nothing else, with the context-menu viewer a right-click on a
+/// row needs, over the project's states.
+fn bookmarks_harness() -> impl IntoElement {
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(BookmarksTab)
+}
+
+/// A bookmark of `symbol`, the way a gesture on a live document would make one.
+fn bookmark_of(document: &Document) -> Bookmark {
+    Bookmark {
+        name: entry_name(document),
+        document: SavedDocument::from_document(document),
+    }
+}
+
+/// Pressing a live bookmark is a navigation: the place becomes the active document and
+/// the history records the visit, exactly as a press in the Symbols list does.
+#[test]
+fn a_bookmark_row_opens_its_place() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+
+    let (mut test, states) = TestingRunner::new(
+        bookmarks_harness,
+        (300., 300.).into(),
+        project_states!(),
+        1.,
+    );
+    let (mut objects, mut bookmarks) = (states.objects, states.bookmarks);
+    objects.set(vec![wanted.object.clone()]);
+    bookmarks.set(Bookmarks::from_entries(vec![bookmark_of(&document)]));
+    settle(&mut test);
+    assert!(states.open.active().is_none());
+
+    let press = centre_of(&test, "sum_to");
+    test.move_cursor(press);
+    test.press_cursor(press);
+    test.release_cursor(press);
+    settle(&mut test);
+
+    assert!(states.open.active() == Some(document.clone()));
+    assert!(states
+        .history
+        .peek()
+        .recent()
+        .any(|(_, entry)| *entry == document));
+}
+
+/// A bookmark outlives its binary: with the object gone the row is still drawn, under the
+/// name it was made with, and a press on it goes nowhere. Opening the binary again brings
+/// it back to life without the list having changed.
+#[test]
+fn a_bookmark_is_kept_when_its_binary_closes() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+
+    let (mut test, states) = TestingRunner::new(
+        bookmarks_harness,
+        (300., 300.).into(),
+        project_states!(),
+        1.,
+    );
+    let (mut objects, mut bookmarks) = (states.objects, states.bookmarks);
+    bookmarks.set(Bookmarks::from_entries(vec![bookmark_of(&document)]));
+    settle(&mut test);
+
+    // Dead: nothing loaded. Drawn, inert.
+    let press = centre_of(&test, "sum_to");
+    test.move_cursor(press);
+    test.press_cursor(press);
+    test.release_cursor(press);
+    settle(&mut test);
+    assert!(states.open.active().is_none());
+    assert_eq!(bookmarks.peek().entries().len(), 1);
+
+    // Alive again once the object is there, with the list untouched.
+    objects.set(vec![wanted.object.clone()]);
+    settle(&mut test);
+    let press = centre_of(&test, "sum_to");
+    test.move_cursor(press);
+    test.press_cursor(press);
+    test.release_cursor(press);
+    settle(&mut test);
+    assert!(states.open.active() == Some(document));
+}
+
+/// A dead bookmark matches no document, so its row's own menu is how it goes: right-click,
+/// "Remove bookmark", and the list is shorter by that one.
+#[test]
+fn a_bookmark_row_is_removed_from_its_menu() {
+    let symbols = fixture_symbols();
+    let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let file = Document::Source(Arc::from("/src/main.rs"));
+
+    let (mut test, states) = TestingRunner::new(
+        bookmarks_harness,
+        (300., 300.).into(),
+        project_states!(),
+        1.,
+    );
+    let mut bookmarks = states.bookmarks;
+    bookmarks.set(Bookmarks::from_entries(vec![
+        bookmark_of(&document),
+        bookmark_of(&file),
+    ]));
+    settle(&mut test);
+
+    let row = centre_of(&test, "main.rs");
+    right_click(&mut test, row);
+    let entry = centre_of(&test, "Remove bookmark");
+    test.move_cursor(entry);
+    test.press_cursor(entry);
+    test.release_cursor(entry);
+    settle(&mut test);
+
+    let left = bookmarks.peek().entries().to_vec();
+    let left: Vec<&str> = left.iter().map(|entry| entry.name.as_str()).collect();
+    assert_eq!(left, [symbols[0].data.display()]);
+}
+
+/// The Symbols list with the context-menu viewer a right-click on a row needs, over the
+/// project's states and the `Symbols` memo `app()` derives from the objects.
+fn symbols_harness() -> impl IntoElement {
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(SymbolsTab)
+}
+
+/// The History list, the same way.
+fn history_menu_harness() -> impl IntoElement {
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(HistoryTab)
+}
+
+/// The project's states plus the `Symbols` memo, built over the objects the way `app()`
+/// builds it.
+macro_rules! symbol_states {
+    () => {
+        |runner: &mut _| {
+            let states = project_states!(runner);
+            let objects = states.objects;
+            runner.provide_root_context(move || {
+                Symbols(Memo::create(move || {
+                    SymbolList(Arc::new(
+                        objects
+                            .read()
+                            .iter()
+                            .flat_map(|object| {
+                                object.symbols_sorted.iter().cloned().map(|data| Symbol {
+                                    object: object.clone(),
+                                    data,
+                                })
+                            })
+                            .collect(),
+                    ))
+                }))
+            });
+            states
+        }
+    };
+}
+
+/// Presses the one entry of the menu a right-click at `row` opened, and says what it read.
+fn choose_from_menu(test: &mut TestingRunner, row: (f64, f64), entry: &str) {
+    right_click(test, row);
+    let at = centre_of(test, entry);
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(test);
+}
+
+/// A right-click on a symbol row offers to bookmark it, and the bookmark made is the row's
+/// symbol under its whole name; the same gesture on a bookmarked symbol offers to remove it,
+/// and does.
+#[test]
+fn a_symbol_row_bookmarks_its_symbol_from_its_menu() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+
+    let (mut test, states) =
+        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut objects, bookmarks) = (states.objects, states.bookmarks);
+    objects.set(vec![wanted.object.clone()]);
+    settle(&mut test);
+
+    let row = centre_of(&test, "sum_to");
+    choose_from_menu(&mut test, row, "Add bookmark");
+    let made = bookmarks.peek().entries().to_vec();
+    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    assert_eq!(
+        made,
+        [Bookmark {
+            name: entry_name(&document),
+            document: SavedDocument::from_document(&document),
+        }]
+    );
+    assert!(
+        states.open.active().is_none(),
+        "a right-click is not a press"
+    );
+
+    // Offered the other way round now, and taken.
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"Remove bookmark".to_owned()), "{drawn:?}");
+    assert!(!drawn.contains(&"Add bookmark".to_owned()), "{drawn:?}");
+    let at = centre_of(&test, "Remove bookmark");
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(&mut test);
+    assert!(bookmarks.peek().entries().is_empty());
+}
+
+/// A history row offers the same, for whatever kind of place it is: a file's row makes a
+/// bookmark of the file.
+#[test]
+fn a_history_row_bookmarks_its_place_from_its_menu() {
+    let file = Document::Source(Arc::from("/src/main.rs"));
+    let (mut test, states) = TestingRunner::new(
+        history_menu_harness,
+        (300., 300.).into(),
+        project_states!(),
+        1.,
+    );
+    activate(states.open, states.history, Some(file.clone()), Visit::Went);
+    settle(&mut test);
+
+    let row = centre_of(&test, "main.rs");
+    choose_from_menu(&mut test, row, "Add bookmark");
+    let made = states.bookmarks.peek().entries().to_vec();
+    assert_eq!(
+        made,
+        [Bookmark {
+            name: "main.rs".into(),
+            document: SavedDocument::Source {
+                path: "/src/main.rs".into(),
+            },
+        }]
+    );
+}
+
+/// A document's own header with the context-menu viewer a right-click on it needs. It
+/// takes its document the way `close_harness` does, from the panel's first document tab.
+fn header_menu_harness() -> impl IntoElement {
+    let open = use_open();
+    let id = open.dock.read().document_panel().and_then(|panel| {
+        panel.tabs.iter().find_map(|tab| match tab {
+            Tab::Document(id) => Some(*id),
+            Tab::View(_) => None,
+        })
+    });
+
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .maybe_child(id.map(|id| {
+            DocumentHeader {
+                id,
+                active: true,
+                key: DiffKey::None,
+            }
+            .into_element()
+        }))
+}
+
+/// A tab's menu bookmarks the tab's document, and opens for a lone tab -- without the one
+/// row that would do nothing -- where it used to open nothing at all; with company, both
+/// rows are there.
+#[test]
+fn a_tabs_menu_bookmarks_its_document() {
+    let symbols = fixture_symbols();
+    let (first, second) = (
+        Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+    );
+    let (mut test, states) = TestingRunner::new(
+        header_menu_harness,
+        (300., 100.).into(),
+        project_states!(),
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    activate(
+        states.open,
+        states.history,
+        Some(first.clone()),
+        Visit::Went,
+    );
+    settle(&mut test);
+
+    let tab = centre_of(&test, &entry_text(&first));
+    right_click(&mut test, tab);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"Add bookmark".to_owned()), "{drawn:?}");
+    assert!(
+        !drawn.contains(&"Close other tabs".to_owned()),
+        "a lone tab offered to close the others: {drawn:?}"
+    );
+    let item = centre_of(&test, "Add bookmark");
+    press_at(&mut test, item);
+    settle(&mut test);
+    assert_eq!(
+        states.bookmarks.peek().entries().to_vec(),
+        [bookmark_of(&first)]
+    );
+
+    activate(states.open, states.history, Some(second), Visit::Went);
+    settle(&mut test);
+    right_click(&mut test, tab);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"Close other tabs".to_owned()), "{drawn:?}");
+    assert!(drawn.contains(&"Remove bookmark".to_owned()), "{drawn:?}");
+}
+
+/// An instruction row's menu bookmarks the symbol the row is code of, and says so, the
+/// row being an instruction and not the symbol.
+#[test]
+fn an_instruction_rows_menu_bookmarks_its_symbol() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, (states, _pinned, _marked, _landing)) = TestingRunner::new(
+        menu_listing_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![sum_to.object.clone()]);
+    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    activate(
+        states.open,
+        states.history,
+        Some(symbol.clone()),
+        Visit::Went,
+    );
+    settle(&mut test);
+
+    let row = centre_of(&test, &format!("{first:016X} "));
+    right_click(&mut test, row);
+    let item = centre_of(&test, "Bookmark symbol");
+    press_at(&mut test, item);
+    settle(&mut test);
+
+    assert_eq!(
+        states.bookmarks.peek().entries().to_vec(),
+        [bookmark_of(&symbol)]
+    );
+    assert!(
+        states.open.active() == Some(symbol),
+        "the menu moved the reader"
+    );
 }

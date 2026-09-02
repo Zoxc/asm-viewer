@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData};
 
 use super::*;
+use crate::bookmarks::Bookmark;
 
 /// A bare `Object` with the given text symbols — only the fields the mapping reads.
 fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
@@ -23,7 +24,7 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         bias: 0,
     });
 
-    let symbols_sorted: Vec<Arc<SymbolData>> = symbols
+    let mut symbols_sorted: Vec<Arc<SymbolData>> = symbols
         .iter()
         .map(|(name, address)| {
             Arc::new(SymbolData {
@@ -35,6 +36,9 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
             })
         })
         .collect();
+    // The order the parser leaves them in, and what `find_symbol` searches by; a fixture
+    // may give them in any order.
+    symbols_sorted.sort_by(|a, b| a.name.cmp(&b.name));
 
     Arc::new(Object {
         path: PathBuf::from(path),
@@ -1005,7 +1009,8 @@ fn recorded(
     session: Session,
 ) -> Option<(Project, Option<Session>)> {
     let unchanged = saves.given.clone();
-    saves.record(unchanged, binaries, session)
+    let bookmarks = saves.bookmarks.clone();
+    saves.record(unchanged, binaries, bookmarks, session)
 }
 
 fn written(
@@ -1037,6 +1042,7 @@ fn opening_a_binary_is_written_at_once() {
                 name: None,
                 directory: None,
                 binaries: paths(&["/tmp/lib.a"]),
+                bookmarks: Vec::new(),
             },
             Some(session_with(None)),
         ))
@@ -1146,6 +1152,7 @@ fn a_record_keeps_the_name_the_project_was_given() {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
         binaries: paths(&["/tmp/vmlinux"]),
+        bookmarks: Vec::new(),
     };
     saves.opened(ProjectId::new("kernel-1").expect("an id"), &named);
 
@@ -1166,6 +1173,7 @@ fn reopening_seeds_the_name_but_not_the_baseline() {
         name: Some("kernel".into()),
         directory: None,
         binaries: paths(&["/tmp/vmlinux"]),
+        bookmarks: Vec::new(),
     };
     saves.opened(ProjectId::new("kernel-1").expect("an id"), &loaded);
 
@@ -1194,6 +1202,7 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
         .record(
             named.clone(),
             paths(&["/tmp/lib.a"]),
+            Vec::new(),
             session_with(Some("a.o")),
         )
         .expect("a write");
@@ -1203,6 +1212,7 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
             name: named.name.clone(),
             directory: named.directory.clone(),
             binaries: paths(&["/tmp/lib.a"]),
+            bookmarks: Vec::new(),
         }
     );
     // The session was not owed, and is still pending: the rename did not take it along.
@@ -1211,7 +1221,12 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
 
     // And the same name recorded again is not a second write.
     assert_eq!(
-        saves.record(named, paths(&["/tmp/lib.a"]), session_with(Some("a.o"))),
+        saves.record(
+            named,
+            paths(&["/tmp/lib.a"]),
+            Vec::new(),
+            session_with(Some("a.o"))
+        ),
         None
     );
 }
@@ -1229,7 +1244,7 @@ fn clearing_a_name_is_a_change_too() {
     );
 
     let written = saves
-        .record(Details::default(), Vec::new(), Session::new())
+        .record(Details::default(), Vec::new(), Vec::new(), Session::new())
         .expect("a write");
     assert_eq!(written.0.name, None);
     assert_eq!(written.1, None);
@@ -1245,6 +1260,7 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
         name: None,
         directory: None,
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
+        bookmarks: Vec::new(),
     };
     saves.opened(ProjectId::new("kernel-1").expect("an id"), &loaded);
 
@@ -1253,7 +1269,7 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
         directory: None,
     };
     let written = saves
-        .record(named, Vec::new(), Session::new())
+        .record(named, Vec::new(), Vec::new(), Session::new())
         .expect("a write");
     assert_eq!(written.0.name.as_deref(), Some("kernel"));
     assert_eq!(written.0.binaries, loaded.binaries);
@@ -1264,6 +1280,7 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
         .record(
             saves.given.clone(),
             paths(&["/tmp/vmlinux"]),
+            Vec::new(),
             Session::new(),
         )
         .expect("a write");
@@ -1296,6 +1313,7 @@ fn entering_a_project_empties_every_baseline() {
                 directory: entered.directory.clone(),
             },
             Vec::new(),
+            Vec::new(),
             Session::new()
         ),
         None
@@ -1317,6 +1335,7 @@ fn a_project() -> Project {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
         binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+        bookmarks: Vec::new(),
     }
 }
 
@@ -1607,6 +1626,7 @@ fn the_recent_view_names_each_project_from_its_own_file() {
                 name: Some(name.to_owned()),
                 directory: Some(PathBuf::from("/src").join(name)),
                 binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+                bookmarks: Vec::new(),
             },
         )
         .expect("saving the project");
@@ -1661,7 +1681,7 @@ fn a_code_document_is_saved_by_its_object_and_found_again() {
             object_name: "b.o".into(),
         }
     );
-    let found = saved.resolve(&objects, &Rebuilt::default());
+    let found = saved.resolve(&objects, &Rebuilt::Paths(Default::default()));
     assert!(
         found == Some(document.clone()),
         "the code document comes back"
@@ -1673,9 +1693,11 @@ fn a_code_document_is_saved_by_its_object_and_found_again() {
 
     // Gone with its object, and degrading to nothing rather than to another object.
     let rest: Vec<Arc<Object>> = objects[..1].to_vec();
-    assert!(saved.resolve(&rest, &Rebuilt::default()).is_none());
     assert!(saved
-        .resolve_or_degrade(&rest, &Rebuilt::default())
+        .resolve(&rest, &Rebuilt::Paths(Default::default()))
+        .is_none());
+    assert!(saved
+        .resolve_or_degrade(&rest, &Rebuilt::Paths(Default::default()))
         .is_none());
 
     // And it survives the round trip through TOML in a tab.
@@ -1807,4 +1829,190 @@ fn a_symbol_tab_saves_no_address() {
     assert_eq!(session.tabs[0].asm_row, 4);
     assert_eq!(session.tabs[0].asm_address, None);
     assert!(!toml::to_string(&session).unwrap().contains("asm_address"));
+}
+
+/// The binary search finds the whole run of a name wherever it sits in the list, and a
+/// name that is not there — before, between or after the ones that are — finds nothing.
+#[test]
+fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
+    let object = object(
+        "/tmp/lib.a",
+        "a.o",
+        // Deliberately out of order: `built` sorts them as the parser would.
+        &[
+            ("zeta", 5),
+            ("alpha", 1),
+            ("mid", 3),
+            ("mid", 4),
+            ("beta", 2),
+        ],
+    );
+    let objects = [object.clone()];
+    let unchanged = Rebuilt::Paths(Default::default());
+    let rebuilt = Rebuilt::Paths(HashSet::from([PathBuf::from("/tmp/lib.a")]));
+    let find = |name: &str, address: u64, rebuilt: &Rebuilt| {
+        saved_symbol("a.o", name, address)
+            .resolve(&objects, rebuilt)
+            .and_then(|found| found.symbol().map(|symbol| symbol.data.clone()))
+    };
+
+    for (name, address) in [
+        ("alpha", 1),
+        ("beta", 2),
+        ("mid", 3),
+        ("mid", 4),
+        ("zeta", 5),
+    ] {
+        let found = find(name, address, &unchanged).expect(name);
+        assert_eq!((found.name.as_str(), found.address), (name, address));
+    }
+    // Two `mid`s and a stale address: neither is picked, rebuilt or not.
+    assert!(find("mid", 9, &unchanged).is_none());
+    assert!(find("mid", 9, &rebuilt).is_none());
+    // A lone name at a stale address is, under a rebuild only.
+    assert!(find("beta", 9, &unchanged).is_none());
+    assert_eq!(find("beta", 9, &rebuilt).map(|data| data.address), Some(2));
+    for name in ["aardvark", "gamma", "omega"] {
+        assert!(find(name, 1, &rebuilt).is_none(), "{name}");
+    }
+}
+
+/// A bookmark is what the user said, so it is `project.toml`'s: the one table in that file,
+/// after every plain value, and inside it the name before its document's table.
+#[test]
+fn bookmarks_are_written_after_the_binaries_and_name_first() {
+    let project = Project {
+        bookmarks: vec![
+            Bookmark {
+                name: "kernel::start".into(),
+                document: saved_symbol("a.o", "_ZN6kernel5startE", 6),
+            },
+            Bookmark {
+                name: "main.rs".into(),
+                document: SavedDocument::Source {
+                    path: "/src/main.rs".into(),
+                },
+            },
+        ],
+        ..a_project()
+    };
+    let text = round_trip(&project);
+
+    let binaries = text.find("binaries = ").expect("the binaries");
+    let first = text.find("[[bookmarks]]").expect("a bookmark");
+    assert!(binaries < first, "{text}");
+    assert!(
+        !text[..first].contains("\n["),
+        "a table before the bookmarks\n{text}"
+    );
+
+    let name = text
+        .find("name = \"kernel::start\"")
+        .expect("the bookmark's name");
+    let document = text
+        .find("[bookmarks.document.Symbol]")
+        .expect("its document");
+    assert!(first < name && name < document, "{text}");
+    assert!(text.contains("[bookmarks.document.Source]"), "{text}");
+
+    // And none at all is a key that is absent, not an empty list.
+    assert!(!round_trip(&a_project()).contains("bookmarks"));
+}
+
+/// A bookmarks change is written at once and to `project.toml` alone, like a rename: it
+/// lets go of no binary, so it cannot leave the two files disagreeing, and it writes back
+/// the binaries the file already lists rather than the app's own.
+#[test]
+fn a_bookmarks_change_writes_the_project_file_alone() {
+    let mut saves = Saves::new();
+    let reopened = Project {
+        bookmarks: vec![Bookmark {
+            name: "caller".into(),
+            document: saved_symbol("a.o", "caller", 0),
+        }],
+        ..a_project()
+    };
+    saves.opened(id("project-1"), &reopened);
+
+    // Seeded: the same bookmarks are no change, while the parse has yet to land.
+    let unchanged = saves.record(
+        saves.given.clone(),
+        Vec::new(),
+        reopened.bookmarks.clone(),
+        Session::new(),
+    );
+    assert!(unchanged.is_none());
+
+    let mut added = reopened.bookmarks.clone();
+    added.push(Bookmark {
+        name: "target".into(),
+        document: saved_symbol("a.o", "target", 6),
+    });
+    let (project, session) = saves
+        .record(
+            saves.given.clone(),
+            Vec::new(),
+            added.clone(),
+            Session::new(),
+        )
+        .expect("a write");
+    assert!(session.is_none(), "the session went with it");
+    assert_eq!(project.bookmarks, added);
+    assert_eq!(
+        project.binaries, reopened.binaries,
+        "the listed binaries, not the app's"
+    );
+
+    // Removing them all is a change too, written as an absent key.
+    let (project, _) = saves
+        .record(saves.given.clone(), Vec::new(), Vec::new(), Session::new())
+        .expect("a write");
+    assert!(project.bookmarks.is_empty());
+}
+
+/// A saved place read by name alone, which is what a bookmark is: the same symbol as the
+/// strict rule finds in an unchanged file, the moved symbol in a rebuilt one, and nothing
+/// where two symbols share the name and neither sits at the saved address.
+#[test]
+fn resolving_by_name_agrees_with_the_strict_rule_and_survives_a_rebuild() {
+    let objects = objects();
+    let saved = saved_symbol("a.o", "target", 6);
+    let strict = saved.resolve(&objects, &Rebuilt::Paths(Default::default()));
+    assert!(strict.is_some());
+    assert!(saved.resolve_by_name(&objects) == strict);
+
+    // Rebuilt: `target` moved from 6 to 96 and is still found; nothing in any session
+    // says the file changed, and nothing has to.
+    let rebuilt = vec![built(
+        "/tmp/lib.a",
+        "a.o",
+        &[("caller", 0), ("target", 96)],
+        b"the second build",
+    )];
+    let expected = Document::Assembly(Selection::Symbol(Symbol {
+        object: rebuilt[0].clone(),
+        data: rebuilt[0].symbols_sorted[1].clone(),
+    }));
+    assert!(saved.resolve_by_name(&rebuilt) == Some(expected));
+
+    // Two of one name, neither at the saved address: refused, as under a rebuild.
+    let twins = vec![built(
+        "/tmp/lib.a",
+        "a.o",
+        &[("target", 32), ("target", 64)],
+        b"the second build",
+    )];
+    assert!(saved.resolve_by_name(&twins).is_none());
+    assert!(saved_symbol("a.o", "target", 64)
+        .resolve_by_name(&twins)
+        .is_some());
+
+    // A symbol whose object is not loaded at all is nothing, and a file is always itself.
+    assert!(saved_symbol("c.o", "target", 6)
+        .resolve_by_name(&objects)
+        .is_none());
+    let file = SavedDocument::Source {
+        path: "/src/main.rs".into(),
+    };
+    assert!(file.resolve_by_name(&[]) == Some(Document::Source(Arc::from("/src/main.rs"))));
 }

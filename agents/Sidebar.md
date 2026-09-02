@@ -1,9 +1,9 @@
 # The sidebar and the project view
 
-The three filtered lists, the Objects tree and its rows for files still being read, closing a
+The four filtered lists, the Objects tree and its rows for files still being read, closing a
 binary, the Project view and a project switch.
 
-**The three sidebar lists filter themselves.** `FilterBar` is one component with three uses, and
+**The four sidebar lists filter themselves.** `FilterBar` is one component with four uses, and
 the `Filter` is a `use_state` in the owning tab rather than a root context — a filter is a view of a
 list, never part of the session. `filter.rs` compiles every filter to one `regex::Regex`, plain
 patterns included, because the three toggles *are* three regex constructs: a `RegexBuilder` flag
@@ -14,9 +14,9 @@ is `Matcher::Invalid`, a third answer that matches nothing *and* prints the reas
 matching everything hides a half-typed `(`. The toggles call `prevent_default` on their press, or
 an `Input` gives up its keyboard focus mid-word. Only the Symbols list needs a memo (`Filtered`,
 holding indices, and `None` for the unfiltered case so it costs what it did before there was a
-filter); Objects and History filter where their rows are built. A History row draws the shortened
-name (`entry_text`) and is filtered on the whole one (`entry_name`), so a generic argument the row
-has no room for is still something a reader can search for.
+filter); Objects, History and Bookmarks filter where their rows are built. A History row draws
+the shortened name (`entry_text`) and is filtered on the whole one (`entry_name`), so a generic
+argument the row has no room for is still something a reader can search for.
 
 **Pressing an object opens all of its code** as one listing (`Document::Code`, `agents/UI.md`),
 which is the one thing an object has to show that a symbol does not; the file's own facts are the
@@ -70,6 +70,32 @@ three decisions inside it matter: the selection **follows the tabs**
 rather than degrading (a file takes its objects and their symbols together, so there is nothing to
 fall back to); the history **drops** through the same `History::rebuilt` walk a restore uses, so
 the two cannot drift; and the unit is the **path**, so one file opened twice closes once.
+
+**The Bookmarks list is the reader's own** (`src/ui/bookmarks_view.rs` over `src/bookmarks.rs`;
+`agents/Persistence.md` for where it is saved), where the History is the app's record of where they
+went: a row is added on purpose and stays until it is removed on purpose. Three things follow. A
+row is **live or dead by resolution**: the tab reads `Objects` and `Bookmarked` together and asks
+`SavedDocument::resolve_by_name` for each entry where the rows are built, so a binary opening or
+closing re-resolves every row, and that is the whole mechanism — `close_binary` forgets nothing
+here, since the list holds no `Arc` to forget, and reopening the binary brings a bookmark back
+without the list having changed. A **dead row is drawn, dimmed, and does nothing**: `tree_name`'s
+dimming, the loading-file-row idiom, with no press or hover handler at all, the way a history
+button with nowhere to go has none; dropping it would be the history's rule, and a reader's own
+list must not shrink behind their back. And a live row's press is `activate(.., Visit::Went)` like
+a Symbols row's, never `navigate`, since a bookmark is a place and not a position in the history.
+The row draws the **stored name** even when live — `short_name` of it for a symbol, the whole in the
+tooltip and under the filter, as a History row does — so a row does not change its spelling when
+its binary goes. Right-click offers **Remove bookmark**, by index rather than by place, because a
+dead row is exactly the one that resolves to no place and the one it is most wanted on. **A
+bookmark is made wherever the thing it is about is under the pointer**, through one `bookmark_item`
+(`bookmarks_view.rs`): a right-click on a Symbols row or a History row (`bookmark_menu`, that item
+alone), on a document's tab (`agents/UI.md`), or on an instruction row in either assembly listing
+(`agents/Panes.md`). It reads "Add bookmark" or "Remove bookmark" by `Bookmarks::matching` at the
+press, so a symbol that moved under a rebuild still reads as bookmarked — "Bookmark symbol" on an
+instruction row, which is not the symbol and has to say what it would bookmark — and the name a new
+one gets is the whole `entry_name`, what the row's tooltip says. The rows *consume* `Bookmarked` and
+`Objects` and peek them in the handler — a `read` would subscribe 115k symbol rows to every bookmark
+made. Nothing on the symbol bar does this yet (`notes/Goals.md`).
 
 **The Project view** (`Tab::Project`) is what a project's `name` and `directory` are finally set
 from — two fields that round-tripped since 8d with nothing to write them. It is **one view and not

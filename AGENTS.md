@@ -82,6 +82,8 @@ command.
 - `src/tabs.rs` — `landing`, the rule a close obeys; `Positions`, where each tab was left;
   `Driven`, which line a source-driven tab's assembly side follows and which symbol was chosen.
 - `src/history.rs` — back/forward navigation history.
+- `src/bookmarks.rs` — the reader's bookmarks: a saved place and the name it was made under,
+  in the order they were added; saved in `project.toml`, live only against what is loaded.
 - `src/naming.rs` — a demangled name cut down to the `module::fn_name` a tab is called by.
 - `src/fonts.rs` — the desktop's font settings (KDE, Gnome, Win32) merged under the user's own.
 - `src/functions.rs` — the functions a source file defines, by the lines they span, and which
@@ -105,6 +107,8 @@ command.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.
+- `src/ui/bookmarks_view.rs` — the Bookmarks list: one row per bookmark, live against what is
+  loaded and kept dimmed when it is not.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
 - `src/ui/source_view.rs` — the source side of one, and which file it is showing.
@@ -115,8 +119,8 @@ command.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — eleven small stateless pieces of drawing shared by unrelated panes.
 
-Five `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
-`project_view`, `filter_bar`, `pad`, `analyzed`); the rest is in `agents/UI.md`.
+Six `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+`project_view`, `filter_bar`, `bookmarks_view`, `pad`, `analyzed`); the rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's tests
 are a file of their own** — `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at the

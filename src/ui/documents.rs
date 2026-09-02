@@ -365,26 +365,41 @@ pub(crate) fn land(
 
 /// The menu a document's tab opens on a right-click.
 ///
-/// Built per press, as [`close_menu`] is, closing over the tab it was opened on; the
-/// states come in as arguments because this is called from an event handler, where no hook
-/// may run. The header only opens it when there is another document to close, so the one
-/// item here is never a row that does nothing.
+/// The menu a document's header opens on a right-click: **Close other tabs** where the tab
+/// has company, and the bookmark item for the tab's document always. Built per press, as
+/// [`close_menu`] is, closing over the tab it was opened on; the states come in as
+/// arguments because this is called from an event handler, where no hook may run. The
+/// header says whether there is another document to close, so the one row that would do
+/// nothing is left out rather than drawn dead.
 pub(crate) fn tab_menu(
-    open: Open,
-    history: State<History>,
-    asm_at: State<Positions<Document>>,
-    src_at: State<Positions<Document>>,
-    code_at: State<Positions<Document, Spot>>,
-    driven: State<Driven>,
+    states: ProjectStates,
     keep: DocId,
+    others: bool,
+    document: Document,
 ) -> Menu {
-    Menu::new().child(
-        MenuButton::new()
-            .on_press(move |_| close_others(open, history, asm_at, src_at, code_at, driven, keep))
-            // "tabs" and not "documents": the strip is what the reader is pointing at, and
-            // a view sharing the panel is a tab this leaves alone.
-            .child("Close other tabs"),
-    )
+    let ProjectStates {
+        open,
+        history,
+        asm_at,
+        src_at,
+        code_at,
+        driven,
+        bookmarks,
+        objects,
+        ..
+    } = states;
+
+    Menu::new()
+        .maybe_child(others.then(|| {
+            MenuButton::new()
+                .on_press(move |_| {
+                    close_others(open, history, asm_at, src_at, code_at, driven, keep)
+                })
+                // "tabs" and not "documents": the strip is what the reader is pointing at,
+                // and a view sharing the panel is a tab this leaves alone.
+                .child("Close other tabs")
+        }))
+        .child(bookmark_item(bookmarks, objects, document, "Add bookmark"))
 }
 
 /// The menu a file row opens on a right-click.
@@ -553,8 +568,14 @@ pub(crate) fn entry_icon(entry: &Document) -> Element {
         Document::Code(_) => ("scroll-text", lucide::scroll_text()),
     };
 
+    document_glyph((name, svg))
+}
+
+/// One of the three glyphs above, at the interface font's own size and in the palette's
+/// `icon_fg`; what [`entry_icon`] and a bookmark row's icon are both made of.
+pub(crate) fn document_glyph(source: impl Into<ImageSource>) -> Element {
     let side = icon_size();
-    SvgViewer::new((name, svg))
+    SvgViewer::new(source)
         .width(Size::px(side))
         .height(Size::px(side))
         .color(palette().icon_fg)

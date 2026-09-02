@@ -24,6 +24,7 @@ use std::{
 use analysis::{Object, Symbol, SymbolData};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::bookmarks::Bookmark;
 use crate::history::History;
 use crate::tabs::{Driven, Positions, Spot};
 
@@ -223,6 +224,10 @@ pub struct Project {
     pub directory: Option<PathBuf>,
     /// The paths that were opened, deduplicated, in the order they were opened.
     pub binaries: Vec<PathBuf>,
+    /// The places the reader bookmarked, in the order they did. The one array of tables
+    /// in this file, so it comes last; absent rather than empty when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bookmarks: Vec<Bookmark>,
 }
 
 impl Project {
@@ -430,8 +435,14 @@ fn recent_projects_in(base: &Path) -> Vec<Recent> {
 /// (a name that names two symbols and no longer names an address resolves to neither).
 /// The saved **row** is not either, being a claim about a listing this build no longer
 /// has.
-#[derive(Debug, Default)]
-struct Rebuilt(HashSet<PathBuf>);
+#[derive(Debug)]
+enum Rebuilt {
+    /// The paths whose saved digest no longer matches the file loaded under them.
+    Paths(HashSet<PathBuf>),
+    /// Every path, whatever the digests say: what a bookmark resolves under
+    /// ([`SavedDocument::resolve_by_name`]), being saved against no digest at all.
+    Every,
+}
 
 impl Rebuilt {
     /// Compare every saved digest against the file loaded under that path now. Only a
@@ -451,11 +462,14 @@ impl Rebuilt {
                 rebuilt.insert(path.clone());
             }
         }
-        Rebuilt(rebuilt)
+        Rebuilt::Paths(rebuilt)
     }
 
     fn changed(&self, path: &Path) -> bool {
-        self.0.contains(path)
+        match self {
+            Rebuilt::Paths(paths) => paths.contains(path),
+            Rebuilt::Every => true,
+        }
     }
 }
 
@@ -467,7 +481,7 @@ impl Rebuilt {
 /// `PathBuf` because it is what the debug info said and not something this filesystem was
 /// asked about; writing it as a path would invite [`write_toml`]'s non-UTF-8
 /// refusal on a value that was UTF-8 all along.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SavedDocument {
     Object {
         path: PathBuf,
@@ -570,12 +584,30 @@ impl SavedDocument {
         Some(Document::Assembly(selection))
     }
 
+    /// What this names against whatever is loaded, believing the **name** over the address
+    /// whether or not the file is known to have changed: [`Rebuilt::Every`]'s reading of
+    /// [`SavedDocument::resolve`]. What a bookmark resolves by.
+    ///
+    /// It is the answer the digest-aware rule gives wherever the two could be compared. An
+    /// unchanged file still holds the exact name-and-address pair the place was saved
+    /// with, so the exact match wins there as it does under the strict rule; a rebuilt file
+    /// is read exactly as a rebuilt file is. And a bookmark cannot be read the other way:
+    /// `Session::digests` is the digest at the last *session* save, not at the bookmark's
+    /// making, so on the second launch after a rebuild the file would read as unchanged and
+    /// a stale address would drop a bookmark the reader made on purpose.
+    pub fn resolve_by_name(&self, objects: &[Arc<Object>]) -> Option<Document> {
+        self.resolve(objects, &Rebuilt::Every)
+    }
+
     /// The symbol a saved place names, under a file that either is or is not the one it
     /// was saved against.
     ///
-    /// **Unchanged** (or never hashed): the name *and* the address, which is what tells
-    /// two same-named symbols apart. Only this case stops at the first match, over a
-    /// `symbols_sorted` that is 115k entries on the repo's own binary.
+    /// The candidates are the run of `symbols_sorted` that carries the name, found by two
+    /// binary searches over a list that is sorted by name — 115k entries on the repo's own
+    /// binary.
+    ///
+    /// **Unchanged** (or never hashed): the name *and* the address, which is what tells two
+    /// same-named symbols apart.
     ///
     /// **Rebuilt**: the name, with the address as a tie-breaker only. An exact match is
     /// still preferred; failing that, a name that names exactly one symbol resolves to
@@ -588,32 +620,17 @@ impl SavedDocument {
         address: u64,
         rebuilt: bool,
     ) -> Option<&'a Arc<SymbolData>> {
-        if !rebuilt {
-            return object
-                .symbols_sorted
-                .iter()
-                .find(|data| data.name == name && data.address == address);
+        let sorted = &object.symbols_sorted;
+        let from = sorted.partition_point(|data| data.name.as_str() < name);
+        let named = &sorted[from..];
+        let named = &named[..named.partition_point(|data| data.name == name)];
+
+        let exact = named.iter().find(|data| data.address == address);
+        match (exact, rebuilt, named) {
+            (Some(data), _, _) => Some(data),
+            (None, true, [one]) => Some(one),
+            (None, _, _) => None,
         }
-
-        let mut exact = None;
-        let mut named = None;
-        let mut names = 0usize;
-
-        for data in &object.symbols_sorted {
-            if data.name != name {
-                continue;
-            }
-            names += 1;
-            if data.address == address {
-                exact = Some(data);
-            }
-            named.get_or_insert(data);
-        }
-
-        exact.or(match names == 1 {
-            true => named,
-            false => None,
-        })
     }
 
     /// The same, degrading instead of failing: a symbol that is gone falls back to its
@@ -814,6 +831,9 @@ struct Saves {
     /// baseline is the state the app boots into and only this one is restored
     /// synchronously.
     given: Details,
+    /// The bookmarks as last written: the other baseline seeded by [`Saves::opened`], since
+    /// they too are restored synchronously, out of the file and not out of a parse.
+    bookmarks: Vec<Bookmark>,
     /// The binaries the app was last seen holding. Empty to start with, deliberately not
     /// the ones loaded at startup: they arrive asynchronously, so a baseline holding them
     /// would read the still-empty boot state as a change and write an empty project over
@@ -841,6 +861,7 @@ impl Saves {
                 name: None,
                 directory: None,
             },
+            bookmarks: Vec::new(),
             binaries: Vec::new(),
             listed: Vec::new(),
             session: Session::new(),
@@ -858,6 +879,7 @@ impl Saves {
             name: self.given.name.clone(),
             directory: self.given.directory.clone(),
             binaries,
+            bookmarks: self.bookmarks.clone(),
         }
     }
 
@@ -871,6 +893,7 @@ impl Saves {
             name: project.name.clone(),
             directory: project.directory.clone(),
         };
+        self.bookmarks = project.bookmarks.clone();
         self.binaries = Vec::new();
         self.listed = project.binaries.clone();
         self.session = Session::new();
@@ -884,19 +907,22 @@ impl Saves {
     /// A **binaries** change goes to disk at once and carries whatever session was
     /// pending with it, which is what keeps `session.toml` from ever naming a tab into a
     /// binary `project.toml` no longer lists. A **rename** is immediate too but writes
-    /// `project.toml` alone, since it lets go of no binary. Everything else — a
-    /// selection, a tab, a history entry — only marks the session pending. Nothing here
-    /// has to say which is which: which file a field lives in is what decides it.
+    /// `project.toml` alone, since it lets go of no binary, and so is a change to the
+    /// **bookmarks**, for the same reason. Everything else — a selection, a tab, a history
+    /// entry — only marks the session pending. Nothing here has to say which is which:
+    /// which file a field lives in is what decides it.
     fn record(
         &mut self,
         details: Details,
         binaries: Vec<PathBuf>,
+        bookmarks: Vec<Bookmark>,
         session: Session,
     ) -> Option<(Project, Option<Session>)> {
         let binaries_changed = self.binaries != binaries;
         let details_changed = self.given != details;
+        let bookmarks_changed = self.bookmarks != bookmarks;
 
-        if !binaries_changed && !details_changed {
+        if !binaries_changed && !details_changed && !bookmarks_changed {
             if *self.latest() != session {
                 self.pending = Some(session);
             }
@@ -904,6 +930,7 @@ impl Saves {
         }
 
         self.given = details;
+        self.bookmarks = bookmarks;
         self.binaries = binaries.clone();
         // A write that is not about the binaries keeps the ones already in the file; see
         // [`Saves::listed`].
@@ -1037,11 +1064,16 @@ pub fn start_new() -> Option<ProjectId> {
 /// Take note of the project the app is now in, writing it out immediately if it is a
 /// change that must not be lost and marking it pending otherwise. Cheap enough to call on
 /// every state change.
-pub fn record(details: Details, binaries: Vec<PathBuf>, session: Session) {
+pub fn record(
+    details: Details,
+    binaries: Vec<PathBuf>,
+    bookmarks: Vec<Bookmark>,
+    session: Session,
+) {
     // The write happens under the lock, so two writes can never reach the file out of
     // the order they were decided in.
     let mut saves = saves();
-    let Some((project, session)) = saves.record(details, binaries, session) else {
+    let Some((project, session)) = saves.record(details, binaries, bookmarks, session) else {
         return;
     };
     let Some(directory) = writing_into(&mut saves) else {

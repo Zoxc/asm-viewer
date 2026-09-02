@@ -151,6 +151,12 @@ pub(crate) struct Drives(pub(crate) State<Driven>);
 #[derive(Clone, Copy)]
 pub(crate) struct Hist(pub(crate) State<History>);
 
+/// Where the reader chose to be able to come back to: the project's bookmarks, in their
+/// saved shape and nothing more. Whether one is live is asked of [`Objects`] where it is
+/// drawn, so a closed binary takes no bookmark with it and holds no `Arc` through one.
+#[derive(Clone, Copy)]
+pub(crate) struct Bookmarked(pub(crate) State<Bookmarks>);
+
 /// The project the app is in, as the project view holds it.
 ///
 /// Two of its three fields are `String`s where [`Details`] has `Option`s, because this is
@@ -281,6 +287,7 @@ pub(crate) struct ProjectStates {
     /// Which line each source-driven tab's assembly side is driven from.
     pub(crate) driven: State<Driven>,
     pub(crate) history: State<History>,
+    pub(crate) bookmarks: State<Bookmarks>,
 }
 
 /// What is open, as a component sees it: the document panel and the id table together.
@@ -304,6 +311,7 @@ pub(crate) fn use_project_states() -> ProjectStates {
         src_at: use_consume::<SrcAt>().0,
         driven: use_consume::<Drives>().0,
         history: use_consume::<Hist>().0,
+        bookmarks: use_consume::<Bookmarked>().0,
     }
 }
 

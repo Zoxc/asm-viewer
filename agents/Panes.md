@@ -180,7 +180,11 @@ place-keeping hook reading the map for exactly this; then `land` with the instru
 it has one, or a plain `activate` where it has none. Nothing new was added to `Landing` for it: a
 landing is a line, and the address travels as the tab's place. The same menu in the code listing
 offers the door the other way, "Open as symbol" (`open_as_symbol`): the symbol's own tab, landed
-on the row's line where it has one -- so a label is not the only way back.
+on the row's line where it has one -- so a label is not the only way back. Both listings' menus end
+with "Bookmark symbol" -- the symbol the row is code of, which in the code listing is the stretch's
+own -- through the same `bookmark_item` the sidebar rows and a tab's header use
+(`agents/Sidebar.md`), worded for a row that is an instruction and not the symbol; with it the menu
+always has something to offer, so a row opens one whether or not it has a line or a door.
 
 **The arrow gutter** draws every branch staying inside the symbol, with the layout in `src/lanes.rs`
 because a `VirtualScrollView` builds row *n* knowing nothing but *n* — a row has to be *told* which

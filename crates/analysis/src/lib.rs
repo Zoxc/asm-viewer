@@ -48,6 +48,9 @@ pub struct Object {
     /// symbol's bytes say nothing about how to read themselves.
     pub architecture: Architecture,
     pub symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
+    /// The same symbols **sorted by name**, byte order. The Symbols list draws it in that
+    /// order and a saved place is found in it by binary search, so anything building an
+    /// `Object` by hand has to sort it the same way.
     pub symbols_sorted: Vec<Arc<SymbolData>>,
     pub sections: Vec<Arc<Section>>,
     /// The bytes this object was parsed from. See [`ObjectData`].

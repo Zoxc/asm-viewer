@@ -566,9 +566,16 @@ impl Component for InstructionRow {
         let history = use_consume::<Hist>().0;
         let landing = use_consume::<Land>().0;
         let code_at = use_consume::<CodeAt>().0;
+        let bookmarked = use_consume::<Bookmarked>().0;
+        let objects = use_consume::<Objects>().0;
         // The source-driven tab this listing is the assembly side of, if it is one: a
         // location found from it is chosen for it.
         let subject = self.data.subject.clone();
+        // The symbol this row is code of, in either listing: what the menu bookmarks.
+        let symbol_document = Document::Assembly(Selection::Symbol(Symbol {
+            object: self.data.object.clone(),
+            data: self.data.symbol.clone(),
+        }));
         let mut hover = self.hover;
         let row = self.row;
         let width = self.data.width;
@@ -717,52 +724,55 @@ impl Component for InstructionRow {
                 }
                 release_focus(focused, focus.as_ref());
             })
-            // The menu: the line's locations, where the debug info gives the row a line,
-            // and the row shown among its neighbours, where it is not already.
-            .maybe(at.is_some() || neighbours.is_some() || alone.is_some(), {
+            // The menu: the line's locations, where the debug info gives the row a line;
+            // the row shown among its neighbours, where it is not already; and the symbol
+            // bookmarked, always.
+            .on_secondary_down({
                 let at = at.clone();
-                move |row| {
-                    row.on_secondary_down(move |e: Event<PressEventData>| {
-                        let menu = match &at {
-                            Some(at) => {
-                                locate_menu(located, dock, at.clone(), subject.clone(), None)
-                            }
-                            None => Menu::new(),
-                        };
-                        let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {
-                            let at = at.clone();
-                            MenuButton::new()
-                                .on_press(move |_| {
-                                    show_in_code(
-                                        open,
-                                        history,
-                                        pinned,
-                                        landing,
-                                        code_at,
-                                        object.clone(),
-                                        address,
-                                        at.clone(),
-                                    )
-                                })
-                                .child("Show in unified view")
-                        }));
-                        let menu = menu.maybe_child(alone.clone().map(|symbol| {
-                            let at = at.clone();
-                            MenuButton::new()
-                                .on_press(move |_| {
-                                    open_as_symbol(
-                                        open,
-                                        history,
-                                        pinned,
-                                        landing,
-                                        symbol.clone(),
-                                        at.clone(),
-                                    )
-                                })
-                                .child("Open as symbol")
-                        }));
-                        ContextMenu::open_from_event(&e, menu);
-                    })
+                move |e: Event<PressEventData>| {
+                    let menu = match &at {
+                        Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None),
+                        None => Menu::new(),
+                    };
+                    let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {
+                        let at = at.clone();
+                        MenuButton::new()
+                            .on_press(move |_| {
+                                show_in_code(
+                                    open,
+                                    history,
+                                    pinned,
+                                    landing,
+                                    code_at,
+                                    object.clone(),
+                                    address,
+                                    at.clone(),
+                                )
+                            })
+                            .child("Show in unified view")
+                    }));
+                    let menu = menu.maybe_child(alone.clone().map(|symbol| {
+                        let at = at.clone();
+                        MenuButton::new()
+                            .on_press(move |_| {
+                                open_as_symbol(
+                                    open,
+                                    history,
+                                    pinned,
+                                    landing,
+                                    symbol.clone(),
+                                    at.clone(),
+                                )
+                            })
+                            .child("Open as symbol")
+                    }));
+                    let menu = menu.child(bookmark_item(
+                        bookmarked,
+                        objects,
+                        symbol_document.clone(),
+                        "Bookmark symbol",
+                    ));
+                    ContextMenu::open_from_event(&e, menu);
                 }
             })
             .on_press(move |_| {

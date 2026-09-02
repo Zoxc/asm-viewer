@@ -1,3 +1,4 @@
+mod bookmarks;
 mod compiled;
 mod docs;
 mod filter;

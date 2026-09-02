@@ -257,26 +257,32 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         code_at,
         driven,
         history,
+        bookmarks,
     } = states;
 
     use_side_effect(move || {
-        // Reading these subscribes the effect to them: any change re-runs it. Each
+        // Reading these subscribes the effect to them: any change re-runs it.
         let objects = objects.read();
-        project::record(proj.read().details(), project::binaries(&objects), {
-            // The dock and the table rather than `Active`, which is a memo and so a
-            // beat behind.
-            let (dock, docs) = (open.dock.read(), open.docs.read());
-            Session::from_state(
-                &objects,
-                &open_documents(&dock, &docs),
-                &asm_at.read(),
-                &src_at.read(),
-                &code_at.read(),
-                &driven.read(),
-                active_document(&dock, &docs).as_ref(),
-                &history.read(),
-            )
-        });
+        project::record(
+            proj.read().details(),
+            project::binaries(&objects),
+            bookmarks.read().entries().to_vec(),
+            {
+                // The dock and the table rather than `Active`, which is a memo and so a
+                // beat behind.
+                let (dock, docs) = (open.dock.read(), open.docs.read());
+                Session::from_state(
+                    &objects,
+                    &open_documents(&dock, &docs),
+                    &asm_at.read(),
+                    &src_at.read(),
+                    &code_at.read(),
+                    &driven.read(),
+                    active_document(&dock, &docs).as_ref(),
+                    &history.read(),
+                )
+            },
+        );
     });
 }
 
@@ -302,11 +308,12 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates) {
         };
 
         // Synchronously, and before anything else here: `project::reopen` has just
-        // seeded the save policy's baseline from this same project, and the two have to
+        // seeded the save policy's baselines from this same project, and the two have to
         // agree by the time the first effect runs or the save observer would see the
-        // name as a change and write it straight back out.
-        let mut proj = states.proj;
+        // name, or the bookmarks, as a change and write them straight back out.
+        let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
         proj.set(OpenProject::opened(id, &project));
+        bookmarks.set(Bookmarks::from_entries(project.bookmarks.clone()));
 
         restore_project(states, project, session);
     });
@@ -395,7 +402,9 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
 /// functions that hold the invariants and never by writing the lists.
 ///
 /// A closing binary deliberately leaves source-driven tabs standing, so they are closed
-/// here; the history is emptied outright, which is the one thing no walk reaches.
+/// here; the history is emptied outright, which is the one thing no walk reaches. The
+/// bookmarks are not touched: they are the file's content, and the project coming in sets
+/// them the way it sets the name.
 pub(crate) fn clear_project(states: ProjectStates) {
     let ProjectStates {
         objects,
@@ -444,8 +453,9 @@ fn switch_project(states: ProjectStates, id: ProjectId) {
     };
 
     clear_project(states);
-    let mut proj = states.proj;
+    let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
     proj.set(OpenProject::opened(id, &project));
+    bookmarks.set(Bookmarks::from_entries(project.bookmarks.clone()));
     restore_project(states, project, session);
 }
 
@@ -456,6 +466,7 @@ fn new_project(states: ProjectStates) {
     };
 
     clear_project(states);
-    let mut proj = states.proj;
+    let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
     proj.set(OpenProject::opened(id, &Project::default()));
+    bookmarks.set(Bookmarks::default());
 }

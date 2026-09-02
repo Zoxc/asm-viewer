@@ -30,6 +30,7 @@ pub(crate) use analysis::{
     Symbol, SymbolData,
 };
 
+pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};
 pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs};
 pub(crate) use crate::filter::{Filter, Matcher};
@@ -40,7 +41,7 @@ pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::project::{
-    self, Details, Document, Project, ProjectId, Recent, Selection, Session,
+    self, Details, Document, Project, ProjectId, Recent, SavedDocument, Selection, Session,
 };
 pub(crate) use crate::rows::RowSelection;
 pub(crate) use crate::scratchpad::{
@@ -59,6 +60,8 @@ mod analyzed;
 pub(crate) use analyzed::*;
 mod assembly;
 pub(crate) use assembly::*;
+mod bookmarks_view;
+pub(crate) use bookmarks_view::*;
 mod dock;
 pub(crate) use dock::*;
 mod documents;
@@ -250,7 +253,11 @@ pub fn app() -> impl IntoElement {
         DockArea::column(vec![
             vec![Tab::View(View::Objects)],
             vec![Tab::View(View::Symbols)],
-            vec![Tab::View(View::History), Tab::View(View::Locations)],
+            vec![
+                Tab::View(View::History),
+                Tab::View(View::Bookmarks),
+                Tab::View(View::Locations),
+            ],
         ])
     });
     let content_dock = use_state(|| {
@@ -293,6 +300,7 @@ pub fn app() -> impl IntoElement {
     let driven = use_provide_context(|| Drives(State::create(Driven::default()))).0;
     use_provide_context(|| Expanded(State::create(HashSet::new())));
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
+    let bookmarks = use_provide_context(|| Bookmarked(State::create(Bookmarks::default()))).0;
     let focused = use_provide_context(|| Focused(State::create(None))).0;
     let pinned = use_provide_context(|| Anchored(State::create(None))).0;
     let landing = use_provide_context(|| Land(State::create(None))).0;
@@ -313,6 +321,7 @@ pub fn app() -> impl IntoElement {
         code_at,
         driven,
         history,
+        bookmarks,
     };
     use_save_on_change(states);
     use_clear_focus(active, focused, pinned, landing);

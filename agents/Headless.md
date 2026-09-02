@@ -356,7 +356,7 @@ The shape every test in `ui.rs` follows:
    under test is whether its rows survive the list being shortened. Mount the pane only when the
    pane is the question.
 2. **Contexts through the setup closure**, returned as a tuple the body keeps. When the set is
-   the app's own, use the `project_states!` macro: it provides all nine of `ProjectStates` in
+   the app's own, use the `project_states!` macro: it provides all ten of `ProjectStates` in
    `app()`'s order, including the `Active` memo derived from the dock and the docs, so a test
    drives what the app drives. It is a macro and not a function because the runner's type is
    `freya_core::integration::Runner`, which freya's prelude does not re-export and this crate

@@ -15,10 +15,11 @@ names it had as a section; and each `mod x;` is followed by a `pub(crate) use x:
 name means what it always meant wherever it is written. Visibility is what the compiler
 asked for and no more, so the annotations *are* the list of what crosses a boundary.
 
-Five of the names are not the obvious one, and each avoids shadowing a crate module the
+Six of the names are not the obvious one, and each avoids shadowing a crate module the
 prelude has already brought in: `ui::source_view` (not `source`), `ui::project_view` (not
-`project`), `ui::filter_bar` (not `filter`), `ui::pad` (not `scratchpad`) and `ui::analyzed`
-(not `analysis`, which is the crate `ui/tests.rs` calls into). One name genuinely collides:
+`project`), `ui::filter_bar` (not `filter`), `ui::bookmarks_view` (not `bookmarks`), `ui::pad`
+(not `scratchpad`) and `ui::analyzed` (not `analysis`, which is the crate `ui/tests.rs` calls
+into). One name genuinely collides:
 `freya::prelude` exports a `use_theme` of its own, so `ui/tests.rs` names ours explicitly —
 an explicit import wins over a glob, and that line is the disambiguation rather than a
 duplicate.
@@ -67,14 +68,15 @@ leave, a global, a capture (`name.rs:248-254`) — is nothing at all.
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`, `Active` (the active `Document`), `Open` (the open tabs),
 `AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `CodeAt` (where each code
-tab was left, as an address), `Hist`, `Proj` (which project
-all of that belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Anchored`,
+tab was left, as an address), `Hist`, `Bookmarked` (the project's bookmarks, in their saved
+shape), `Proj` (which project all of that belongs to), `Loading` (the files on their way into
+`Objects`), `Focused`, `Anchored`,
 `Marked`/`Shift`, `Land` (a line to pin the moment a document arrives), `Analysis` (what
 the worker has to say about the selected symbol), `Sections`/`Window` (what it has decoded of the
 object whose code is on screen, and the stretches the view wants next), `Locations` (every symbol
 the line, or the function around it, last asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
 `SplitRatio`/`Splits` (how wide a document's leading side is), plus the memos `Symbols` and
-`Active`. The eight that a project *owns* travel together as a `ProjectStates`, since a project
+`Active`. The nine that a project *owns* travel together as a `ProjectStates`, since a project
 switch closes all of them and reopens all of them.
 
 **One strip, three kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**:
@@ -157,13 +159,14 @@ pointer and whether it kept its box, and not what colour the chevron came out: a
 rasterises its colour into an image that is not in the element tree.
 
 Inside each panel is a `DockingArea` over a `DockArea` model. A `Tab` is two-kinded —
-`Tab::View(View)` for one of the seven views, `Tab::Document(DocId)` for an open document — because
-`DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. Seven
-and not eight since the **Info** view went: what it said about a symbol is the section under the
-Assembly pane's own bar now (`agents/Panes.md`), which is where a reader is already looking and
-which names the symbol being *drawn* where the view named the one selected. Nothing had to be
-migrated for it — the dock layout is not persisted, so a removed view is a compile-time deletion
-and there is no saved tab that can name one. Both areas
+`Tab::View(View)` for one of the eight views, `Tab::Document(DocId)` for an open document — because
+`DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. The
+count moves with the views: the **Info** view went — what it said about a symbol is the section
+under the Assembly pane's own bar now (`agents/Panes.md`), which is where a reader is already
+looking and which names the symbol being *drawn* where the view named the one selected — and the
+**Bookmarks** view came (`agents/Sidebar.md`). Nothing had to be migrated for either — the dock
+layout is not persisted, so a removed view is a compile-time deletion, an added one starts where
+its default layout puts it, and there is no saved tab that can name one. Both areas
 use `Tab` as the payload and `use_drag` keeps one `DockDrag<Tab>` at the root. The outer split stays
 a `ResizableContainer` because docking cannot express a literal 300px. A drag carries only the tab,
 so the area receiving a drop evicts it from the other through a wired-up
@@ -225,19 +228,21 @@ the header reads a step above it. The headless pair is
 `a_press_beside_the_glyph_still_closes_the_tab`, which presses inside the target and nowhere near
 the glyph, and `the_close_target_lights_under_the_pointer`.
 
-A right-click on a document's header opens a menu of one item, **Close other tabs**, which is
+A right-click on a document's header opens a menu of two items. **Close other tabs** is
 `close_others`: the tab it was opened on stays, every other *document* in the panel goes, and a view
 sharing the panel is left where it is — it is not a document, and the × it has no place for is the
 same argument. Its own function rather than `close_tab` in a loop, because each of those would work
 out a landing of its own and walk the panel through every intermediate state, where the landing here
 is known before anything is removed: the kept tab, and only when the tab on screen is one of the
-ones closing. The header opens no menu at all when nothing else is open, rather than a menu whose
-one row would do nothing, and it asks the panel for that at the **press** — whether a tab has
-company is not something a header draws, so subscribing to the panel for it would re-render every
-tab whenever any one of them opened.
+ones closing. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the sidebar rows
+and the instruction rows use (`agents/Sidebar.md`), for the tab's own document. The first row is
+left out when nothing else is open, rather than drawn as a row that would do nothing, and the header
+asks the panel for that at the **press** — whether a tab has company is not something a header
+draws, so subscribing to the panel for it would re-render every tab whenever any one of them
+opened. Until the bookmark item, a lone tab opened no menu at all.
 
 The document panel's tab bar is the horizontally scrolling one the strip used to be (`chip_strip`),
-because documents are opened by the dozen; a view panel's stays a plain row, seven views always
+because documents are opened by the dozen; a view panel's stays a plain row, eight views always
 fitting. Two things bite there. freya appends one child more than there are tabs — a
 `rect().expanded()` drop zone for "past the last tab" — and `expanded()` is meaningless inside a
 horizontal scroll view, so it is given a width of its own. And a tab's name is elided **by character

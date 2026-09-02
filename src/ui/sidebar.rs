@@ -277,6 +277,10 @@ impl Component for SymbolRow {
         let mut hovering = use_state(|| false);
         let open = use_open();
         let history = use_consume::<Hist>().0;
+        // Consumed, never read: 115k rows subscribed to the bookmarks would re-render the
+        // whole list on every bookmark made.
+        let bookmarked = use_consume::<Bookmarked>().0;
+        let objects = use_consume::<Objects>().0;
         let symbol = self.symbols.0[self.index].clone();
         let text = symbol
             .data
@@ -284,6 +288,7 @@ impl Component for SymbolRow {
             .as_ref()
             .unwrap_or(&symbol.data.name)
             .clone();
+        let document = Document::Assembly(Selection::Symbol(symbol.clone()));
 
         let background = if self.selected {
             palette().selected_bg
@@ -309,6 +314,12 @@ impl Component for SymbolRow {
                         history,
                         Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
                         Visit::Went,
+                    );
+                })
+                .on_secondary_down(move |e: Event<PressEventData>| {
+                    ContextMenu::open_from_event(
+                        &e,
+                        bookmark_menu(bookmarked, objects, document.clone()),
                     );
                 })
                 .child(label().text(text).max_lines(1)),
@@ -350,8 +361,11 @@ impl Component for HistoryRow {
         // Consuming does not subscribe -- only reading would, and this row only hands an
         // index back to `navigate`.
         let history = use_consume::<Hist>().0;
+        let bookmarked = use_consume::<Bookmarked>().0;
+        let objects = use_consume::<Objects>().0;
         let index = self.index;
         let text = entry_text(&self.entry);
+        let entry = self.entry.clone();
 
         let background = if self.current {
             palette().selected_bg
@@ -375,6 +389,12 @@ impl Component for HistoryRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| navigate(open, history, Nav::To(index)))
+                .on_secondary_down(move |e: Event<PressEventData>| {
+                    ContextMenu::open_from_event(
+                        &e,
+                        bookmark_menu(bookmarked, objects, entry.clone()),
+                    );
+                })
                 .child(entry_icon(&self.entry))
                 .child(label().text(text).max_lines(1)),
         )

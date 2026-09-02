@@ -25,10 +25,10 @@ write that has something to say** (`open_project`, reached only from `record`/`f
 in which nothing was ever opened leaves nothing behind.
 
 **Each project is two files, and the line between them is the one the save policy already
-drew.** `project.toml` is what the user *said* — `name`, `directory`, `binaries` — and is written
-**at once**, because a binaries change is what `Saves` writes immediately. `session.toml` is what
-the app *noticed* — `shown`, `digests`, `selection`, `tabs`, `sources`, `history` — and is the
-file rewritten every thirty seconds. So the file a user might keep, copy or hand-edit is exactly
+drew.** `project.toml` is what the user *said* — `name`, `directory`, `binaries`, `bookmarks` — and
+is written **at once**, because a binaries change is what `Saves` writes immediately. `session.toml`
+is what the app *noticed* — `digests`, `active`, `tabs`, `history` — and is the file rewritten
+every thirty seconds. So the file a user might keep, copy or hand-edit is exactly
 the one that changes only when they do something. Three things follow, and they are why it is two
 files rather than two tables: a `session.toml` that will not parse loses a scroll position and
 not the list of binaries; the directory *is* the project, so a run killed between `create_dir` and
@@ -45,6 +45,20 @@ the reader did nothing. `Recents::touch` answers whether anything moved, so reop
 already at the front writes nothing. The recent-projects view reads each row's
 name out of that project's own `project.toml`, never out of this file: a name copied in here would
 be a second copy to keep in step with the one the user edits.
+
+**Bookmarks are `project.toml`'s** (`src/bookmarks.rs`; the Step 15 panel over them is the UI's
+half). A bookmark is a place the reader chose to be able to come back to, which is the deliberate
+side of the split, so the list is written at once like a rename; and it is a `SavedDocument` with
+the **name it was made under** beside it, because a saved symbol carries only its mangled name and a
+bookmark whose binary is closed has nothing else to be drawn by. The list holds no `Arc`: a bookmark
+*outlives* the binary it points into — a reader's own list must not shrink behind their back, where
+the history's rule is to drop — so whether one is live is a question asked of the objects loaded
+now, wherever it is drawn, and never a fact the list keeps — and so is whether a document *is*
+bookmarked (`Bookmarks::matching`), since a rebuild moves a symbol while its entry keeps the
+address it was made at, and the two saved forms would never agree again about a bookmark the panel
+is drawing live. Nothing about it is in `session.toml`:
+`clear_project` leaves the state alone and the incoming project sets it the way it sets the name,
+and `close_binary` has nothing to forget.
 
 Inside those files, identity is **path + object name + symbol name + address** for a place in a
 binary and **the path itself** for a source file, never pointers; that mapping lives in exactly two
@@ -73,9 +87,10 @@ the listing that row is a row of is not there to come back to. Nothing resolves 
 and not a place, so a rebuilt binary takes the two rows with it and leaves the line, which is
 simply asked again out of what is loaded now. `resolve_tabs` answers with a named `RestoredTab`
 rather than a tuple, the rows and the line no longer surviving the same things. **Field order within these structs is load-bearing**: TOML emits plain values
-before tables, so every field of `Project` being a plain value is what lets `binaries` sit beside
-the name, `SavedTab`'s two rows must precede its `document`, and `SavedHistory::cursor` its
-`entries`. Getting it wrong fails at *runtime*, not at compile time, and a round trip through real
+before tables, so `binaries` sits beside the name only because every other field of `Project` is
+a plain value and `bookmarks` — the one array of tables in that file — comes last, `SavedTab`'s
+two rows must precede its `document`, `SavedHistory::cursor` its `entries`, and a `Bookmark`'s
+`name` its `document`. Getting it wrong fails at *runtime*, not at compile time, and a round trip through real
 TOML per struct is what holds it.
 
 `Session::digests` is the digest each binary had when the session was saved, keyed by path — in
@@ -98,24 +113,28 @@ and a file-close go through, carrying the cursor to the last survivor at or befo
 
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
 two of the three things driving it sit outside the component tree. `record(details, binaries,
-session)` is called on every state change and compares each against its baseline: a change to the
-`binaries` writes **both files immediately**; a change to the user-given `details` — the name and
-the directory — writes **`project.toml` alone**, since a rename lets go of no binary and so cannot
-leave the two files disagreeing; a change to only the session marks it **pending** — a tab because
-it is expressed against the binaries rather than the other way round, costs one click to remake,
-and arrives on every navigation, `activate` opening one on the way to each change of document.
-Nothing in `record` has to *say* which is which: which file a field lives in is what decides it,
-and `Written` is how it says which half it decided. `flush()` writes the pending
+bookmarks, session)` is called on every state change and compares each against its baseline: a
+change to the `binaries` writes **both files immediately**; a change to the user-given `details` —
+the name and the directory — or to the `bookmarks` writes **`project.toml` alone**, since neither
+lets go of a binary and so neither can leave the two files disagreeing; a change to only the
+session marks it **pending** — a tab because it is expressed against the binaries rather than the
+other way round, costs one click to remake, and arrives on every navigation, `activate` opening one
+on the way to each change of document. Nothing in `record` has to *say* which is which: which file
+a field lives in is what decides it, and the `Option<Session>` beside the `Project` it hands back
+is how it says which half it decided. `flush()` writes the pending
 session — on a 30s timer and from the window's close hook, which is the one exit hook freya 0.4
 offers (`WindowConfig::with_on_close`, a `Send` callback that cannot read any `State`, which is
 exactly why the policy is a static).
 
-**Every baseline is the state the app boots into**, which is why two of them start empty and one
-does not. The binaries and the session are restored *asynchronously* — the app boots holding
+**Every baseline is the state the app boots into**, which is why two of them start empty and two
+do not. The binaries and the session are restored *asynchronously* — the app boots holding
 nothing and fills in when the parse lands — so seeding them from the loaded project would make the
 first comparison see the still-empty boot state as a change and write an empty project over a good
-one. `Saves::given` *is* seeded by `reopen`, because the name and directory are restored
-*synchronously*, into the state the project view renders, before a single effect has run. Until 8e
+one. `Saves::given` and `Saves::bookmarks` *are* seeded by `reopen`, because the name, the
+directory and the bookmarks are restored *synchronously*, into `Proj` and `Bookmarked`, before a
+single effect has run — an effect's first run is a later pass than the render whose `use_hook`
+set them (`agents/Headless.md`), so registering the save observer before the restore is not what
+keeps them apart and does not have to be. Until 8e
 that field was a value `Saves` **carried** across the calls rather than a baseline, for want of
 anything on screen holding a name; the project view holds one now (`Proj`), so a rename arrives
 through `record` like everything else and the special case is gone. `Saves::listed` is the one

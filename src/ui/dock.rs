@@ -335,11 +335,11 @@ pub(crate) const DOCUMENT_MENU_WIDTH: f32 = 26.0;
 /// One open document's tab header. A component rather than a plain function because it has
 /// a hover state of its own, which a view header has no need of.
 #[derive(Clone)]
-struct DocumentHeader {
-    id: DocId,
+pub(crate) struct DocumentHeader {
+    pub(crate) id: DocId,
     /// Whether this is the tab its panel is showing.
-    active: bool,
-    key: DiffKey,
+    pub(crate) active: bool,
+    pub(crate) key: DiffKey,
 }
 
 impl PartialEq for DocumentHeader {
@@ -357,12 +357,9 @@ impl KeyExt for DocumentHeader {
 impl Component for DocumentHeader {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
-        let open = use_open();
-        let history = use_consume::<Hist>().0;
-        let asm_at = use_consume::<AsmAt>().0;
-        let src_at = use_consume::<SrcAt>().0;
-        let code_at = use_consume::<CodeAt>().0;
-        let driven = use_consume::<Drives>().0;
+        // Consumed here, in the render, for the menu: its handler may not run a hook.
+        let states = use_project_states();
+        let open = states.open;
 
         // Not reachable -- a tab and its table entry are closed together -- but a render
         // is no place to panic.
@@ -371,6 +368,7 @@ impl Component for DocumentHeader {
         };
 
         let id = self.id;
+        let subject = document.clone();
         chip(
             entry_icon(&document),
             entry_text(&document),
@@ -381,21 +379,16 @@ impl Component for DocumentHeader {
             move |e: Event<PressEventData>| {
                 // Read at the press rather than at the render: whether this tab has
                 // company is not something the header draws, so subscribing to the panel
-                // for it would re-render every tab whenever any one of them opened.
+                // for it would re-render every tab whenever any one of them opened. The
+                // only tab open still gets its menu, the bookmark item being about the
+                // tab itself; what it does without is the one row that would do nothing.
                 let others = open.dock.peek().document_panel().is_some_and(|panel| {
                     panel
                         .tabs
                         .iter()
                         .any(|tab| matches!(tab, Tab::Document(other) if *other != id))
                 });
-                // The only tab open offers no menu at all, rather than one whose single
-                // row would do nothing.
-                if others {
-                    ContextMenu::open_from_event(
-                        &e,
-                        tab_menu(open, history, asm_at, src_at, code_at, driven, id),
-                    );
-                }
+                ContextMenu::open_from_event(&e, tab_menu(states, id, others, subject.clone()));
             },
         )
         .into_element()
@@ -452,6 +445,7 @@ pub(crate) enum View {
     Objects,
     Symbols,
     History,
+    Bookmarks,
     Locations,
     Project,
     Settings,
@@ -464,6 +458,7 @@ impl View {
             View::Objects => "Objects",
             View::Symbols => "Symbols",
             View::History => "History",
+            View::Bookmarks => "Bookmarks",
             View::Locations => "Locations",
             View::Project => "Project",
             View::Settings => "Settings",
@@ -481,6 +476,7 @@ impl View {
             View::Objects => ("package", lucide::package()),
             View::Symbols => ("square-function", lucide::square_function()),
             View::History => ("history", lucide::history()),
+            View::Bookmarks => ("bookmark", lucide::bookmark()),
             View::Locations => ("map-pin", lucide::map_pin()),
             View::Project => ("folder-open", lucide::folder_open()),
             View::Settings => ("settings", lucide::settings()),
@@ -504,6 +500,7 @@ impl View {
             View::Objects => ObjectsTab.into_element(),
             View::Symbols => SymbolsTab.into_element(),
             View::History => HistoryTab.into_element(),
+            View::Bookmarks => BookmarksTab.into_element(),
             View::Locations => LocationsTab.into_element(),
             View::Project => ProjectTab.into_element(),
             View::Settings => SettingsTab.into_element(),
@@ -822,7 +819,7 @@ fn tab_drag(tab: Tab, docs: State<Docs>) -> Element {
         .into_element()
 }
 
-/// The bar a panel's tab headers sit in: a plain row for a view panel, whose seven views
+/// The bar a panel's tab headers sit in: a plain row for a view panel, whose eight views
 /// always fit, and [`chip_strip`] for the document panel, which is opened into by the
 /// dozen.
 fn tab_bar(ctx: TabBarContext<PanelId>, area: State<DockArea>) -> Element {
