@@ -19,6 +19,8 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         address: 0,
         relocations: HashMap::new(),
         symbols: symbols.iter().map(|(_, address)| *address).collect(),
+        code: true,
+        bias: 0,
     });
 
     let symbols_sorted: Vec<Arc<SymbolData>> = symbols

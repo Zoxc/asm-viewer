@@ -15,6 +15,8 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
         address: 0,
         relocations: HashMap::new(),
         symbols: (0..symbols.len() as u64).collect(),
+        code: true,
+        bias: 0,
     });
 
     let symbols_sorted: Vec<Arc<SymbolData>> = symbols
