@@ -244,7 +244,7 @@ pub fn app() -> impl IntoElement {
     let sidebar_dock = use_state(|| {
         DockArea::column(vec![
             vec![Tab::View(View::Objects)],
-            vec![Tab::View(View::Symbols), Tab::View(View::Info)],
+            vec![Tab::View(View::Symbols)],
             vec![Tab::View(View::History), Tab::View(View::Locations)],
         ])
     });

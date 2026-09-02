@@ -190,8 +190,17 @@ one item per part, so the unfinished half stays visible.
   demangled name down to 21. The History rows take the same name through `entry_text`, which the
   two share; the whole name is still what a tooltip says and what the History filter matches, and
   the 40-character elision is still the last word for a name that is long anyway.
-- [ ] An expanding section under the Assembly tab to show more symbol info, replacing the Info
-  tab.
+- [x] An expanding section under the Assembly tab to show more symbol info, replacing the Info
+  tab. The bar above is its collapsed state, opened by a disclosure triangle in a column of its
+  own — the Objects tree's idiom down to the two glyphs, a triangle being the toggle where a name
+  is a copy. It answers what the Info view answered, plus the address and the object a symbol came
+  from, neither of which was shown anywhere: section, address, declared size and extent for a
+  symbol; format, symbol count and path for an object, which is the other case the view had. Open
+  or shut is kept **per tab** and never saved, since both panes are mounted afresh for every
+  document and a flag in the pane would shut the section every time the reader looked elsewhere.
+  It is keyed by `DocId` and not by `Document`, so it holds no closed binary's bytes and needs
+  forgetting in none of the three closing paths. The view is then gone — eight dockable views
+  become seven — and nothing had to be migrated with it, the dock layout not being persisted.
 - [x] Keep the `rip+` visible in a relocated rip-relative operand — `mov dword ptr [rip+<target>], 7`
   rather than `mov dword ptr [<target>], 7` — when you can navigate to the target.
 - [x] Don't zero-pad the target of a jump or a call. `jle short 000000000000004Bh` spent the
@@ -321,7 +330,9 @@ one item per part, so the unfinished half stays visible.
   `ResizablePanel` / `ResizableHandle`), which also makes the split user-resizable.
 - [x] Docking panels: a `DockingArea` inside each half of the split, with Objects, Symbols, Info
   and Assembly as tabs that can be dragged between the two areas, stacked into one panel as real
-  tabs, or split further.
+  tabs, or split further. Two of those four are no longer views: an assembly listing is half of a
+  *document* rather than a pane of its own, and the Info view has since been folded into the bar
+  over that listing.
 - [x] A dark mode, in the same palette rather than a second one — the light colours carried
   over at dark-mode lightness, so the two themes are recognisably one design. Every relationship
   in the light palette is preserved through the dark one; the translucent washes were re-judged
@@ -338,7 +349,7 @@ one item per part, so the unfinished half stays visible.
 - [x] Use freya's icon libraries where they suit, panel titles at least — an icon beside
   Objects / Symbols / Info / History / Assembly / Source in the tab bar. `freya`'s
   `icons-lucide` feature is on and `Tab::icon` names one glyph per view (`package`,
-  `square-function`, `info`, `history`, `binary`, `file-code`), drawn at the interface
+  `square-function`, `history`, `binary`, `file-code`; `info` went with the Info view), drawn at the interface
   font's size times 1.25 and in the palette's new `icon_fg`. The two places that had
   settled for text were weighed again with the dependency in and both keep it: Lucide does
   carry `case-sensitive` / `whole-word` / `regex`, but rendered at the toggles' 22px they
@@ -379,8 +390,8 @@ one item per part, so the unfinished half stays visible.
 - [ ] A tab kind for a file, so an object or an archive can be opened and read about. Today
   a row in the Objects list can only be expanded or closed, and everything the parse learnt
   about the file — its format, architecture, sections, symbol counts, what its members are,
-  how long each took to read — is either shown nowhere or squeezed into the Info pane, which
-  is about a *symbol*. Opening a file row would give it a document of its own: the file's own
+  how long each took to read — is either shown nowhere or squeezed into the section under the
+  Assembly pane's symbol bar, which is about a *symbol*. Opening a file row would give it a document of its own: the file's own
   facts up top, its members listed for an archive, and the timings the read already measures
   beside them, so "why was this slow" is a question the app can answer about itself. The
   decisions are what document kind a file is (`Document` names a place in a binary or a file

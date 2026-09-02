@@ -1,5 +1,5 @@
-//! The three lists a reader browses a binary with -- Objects, Symbols and History -- the
-//! Info pane beside them, and the rows each is built out of.
+//! The three lists a reader browses a binary with -- Objects, Symbols and History -- and
+//! the rows each is built out of.
 //!
 //! The Objects list is a **tree that is a shape in the data and never in the element
 //! tree** -- a `VirtualScrollView` is told a length and asked for row *n*, so `tree.rs`
@@ -383,33 +383,6 @@ impl Component for HistoryRow {
     }
 }
 
-fn symbol_info(symbol: &Symbol) -> impl IntoElement {
-    let data = &symbol.data;
-
-    rect()
-        .width(Size::fill())
-        .child(info_line(format!("Symbol: `{}`", data.name)))
-        .maybe_child(
-            data.demangled
-                .as_ref()
-                .map(|demangled| info_line(format!("Demangled: `{}`", demangled))),
-        )
-        .maybe_child(
-            data.section
-                .as_ref()
-                .map(|section| info_line(format!("Section: `{}`", section.name))),
-        )
-        .child(info_line(format!("Declared size: {} bytes", data.size)))
-        // The declared size is frequently 0 and is only ever displayed; `data_in` is the
-        // range `assembly` decodes and `line_info` is asked about.
-        .child(info_line(format!(
-            "Extent: {} bytes",
-            data.data_in(&symbol.object)
-                .map(|bytes| bytes.len())
-                .unwrap_or_default()
-        )))
-}
-
 #[derive(PartialEq)]
 pub(crate) struct ObjectsTab;
 
@@ -539,32 +512,6 @@ impl Component for SymbolsTab {
             .length(length)
             .item_size(list_row_height()),
         )
-    }
-}
-
-#[derive(PartialEq)]
-pub(crate) struct InfoTab;
-
-impl Component for InfoTab {
-    fn render(&self) -> impl IntoElement {
-        let current = use_consume::<Active>().0.read().clone();
-
-        match &current {
-            None => placeholder("Nothing selected"),
-            Some(Document::Source(_)) => placeholder("No symbol selected"),
-            Some(Document::Assembly(Selection::Object(object))) => rect()
-                .expanded()
-                .background(palette().pane_bg)
-                .child(info_line(format!("Object: `{}`", object.name)))
-                .child(info_line(format!("Format: {:?}", object.format)))
-                .child(info_line(format!("Symbols: {:?}", object.symbols.len())))
-                .into(),
-            Some(Document::Assembly(Selection::Symbol(symbol))) => rect()
-                .expanded()
-                .background(palette().pane_bg)
-                .child(ScrollView::new().child(symbol_info(symbol).into_element()))
-                .into(),
-        }
     }
 }
 

@@ -449,7 +449,6 @@ impl Tab {
 pub(crate) enum View {
     Objects,
     Symbols,
-    Info,
     History,
     Locations,
     Project,
@@ -462,7 +461,6 @@ impl View {
         match self {
             View::Objects => "Objects",
             View::Symbols => "Symbols",
-            View::Info => "Info",
             View::History => "History",
             View::Locations => "Locations",
             View::Project => "Project",
@@ -480,7 +478,6 @@ impl View {
         let (name, svg) = match self {
             View::Objects => ("package", lucide::package()),
             View::Symbols => ("square-function", lucide::square_function()),
-            View::Info => ("info", lucide::info()),
             View::History => ("history", lucide::history()),
             View::Locations => ("map-pin", lucide::map_pin()),
             View::Project => ("folder-open", lucide::folder_open()),
@@ -504,7 +501,6 @@ impl View {
         match self {
             View::Objects => ObjectsTab.into_element(),
             View::Symbols => SymbolsTab.into_element(),
-            View::Info => InfoTab.into_element(),
             View::History => HistoryTab.into_element(),
             View::Locations => LocationsTab.into_element(),
             View::Project => ProjectTab.into_element(),

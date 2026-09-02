@@ -149,7 +149,12 @@ rasterises its colour into an image that is not in the element tree.
 
 Inside each panel is a `DockingArea` over a `DockArea` model. A `Tab` is two-kinded —
 `Tab::View(View)` for one of the seven views, `Tab::Document(DocId)` for an open document — because
-`DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. Both areas
+`DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. Seven
+and not eight since the **Info** view went: what it said about a symbol is the section under the
+Assembly pane's own bar now (`agents/Panes.md`), which is where a reader is already looking and
+which names the symbol being *drawn* where the view named the one selected. Nothing had to be
+migrated for it — the dock layout is not persisted, so a removed view is a compile-time deletion
+and there is no saved tab that can name one. Both areas
 use `Tab` as the payload and `use_drag` keeps one `DockDrag<Tab>` at the root. The outer split stays
 a `ResizableContainer` because docking cannot express a literal 300px. A drag carries only the tab,
 so the area receiving a drop evicts it from the other through a wired-up
@@ -291,7 +296,8 @@ with it, and `entry_text` knows what to call it. A project view, the settings pa
 scratchpad's editor are none of that: they resolve against no object, they are no file on disk the
 panes could open, there is one of each rather than many, and neither pane could draw one. So they
 are **dockable views** — a `Tab` — which is the mechanism the app already has for "a pane with its
-own state that the reader can put where they like", and which `InfoTab` was already an instance of.
+own state that the reader can put where they like", and which the three sidebar lists were already
+instances of.
 A third `Document` variant was the alternative and buys a tab in a strip nothing else would put a
 second entry in, at the price of five answers nobody wants: what `resolve` does with it after a
 restart, what `Document::in_file` says when a binary closes, what the panes draw for it, what the
