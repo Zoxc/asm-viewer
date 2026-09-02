@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use analysis::{parse_object, Instruction, Listing, Object, SymbolData};
+use analysis::{parse_object, CodeListing, Instruction, Listing, Object, Place, SymbolData};
 use object::write;
 use object::{
     Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
@@ -171,6 +171,31 @@ pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
         }
         assert_eq!(listing.stretch_at(end), None);
         assert_eq!(listing.decode(&object, stretches.len()).is_some(), false);
+    }
+
+    // And all of the code as one listing: the sections placed in order without overlap,
+    // every stretch found again at its placed address. Nothing decoded — the per-section
+    // walk above did that.
+    let code = CodeListing::new(&object);
+    let mut placed_end = None;
+    for (index, placed) in code.sections().iter().enumerate() {
+        let range = placed.range();
+        assert!(range.start < range.end);
+        assert!(placed_end.is_none_or(|end| end <= range.start));
+        placed_end = Some(range.end);
+        assert_eq!(code.section_of(placed.listing.section()), Some(index));
+        for (stretch, s) in placed.listing.stretches().iter().enumerate() {
+            let at = placed.place(s.range.start);
+            assert!(range.contains(&at));
+            assert_eq!(
+                code.at(at),
+                Some(Place {
+                    section: index,
+                    stretch
+                })
+            );
+        }
+        assert_ne!(code.at(range.end).map(|place| place.section), Some(index));
     }
 
     // The reverse direction, which builds a whole-object index the first time it is asked.

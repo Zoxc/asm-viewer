@@ -20,7 +20,7 @@ use disasm::Code;
 
 pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
 pub use line::{DwarfCache, LineInfo, LineRow, Location};
-pub use listing::{DecodedStretch, Gap, GapKind, Listing, Stretch};
+pub use listing::{CodeListing, DecodedStretch, Gap, GapKind, Listing, Place, Placed, Stretch};
 // Re-exported so the viewer needs no `object` dependency of its own.
 pub use object::{Architecture, BinaryFormat, SectionIndex};
 
@@ -34,6 +34,7 @@ const _: fn() = || {
     assert_send_sync::<Assembly>();
     assert_send_sync::<LineInfo>();
     assert_send_sync::<Listing>();
+    assert_send_sync::<CodeListing>();
     assert_send_sync::<DecodedStretch>();
 };
 

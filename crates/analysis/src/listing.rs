@@ -92,11 +92,9 @@ impl Listing {
     /// section with no bytes has no stretches, and so does one placed at the very end of
     /// the address space, whose bytes have no addresses to be at.
     pub fn new(object: &Object, section: Arc<Section>) -> Self {
-        let end = section_end(&section);
-
         // The object's symbols in this section, by pointer identity: two sections of a
         // relocatable object share address 0, so an address alone says nothing.
-        let mut in_section: Vec<(u64, usize, &Arc<SymbolData>)> = object
+        let in_section = object
             .symbols
             .iter()
             .filter(|(_, symbol)| {
@@ -105,9 +103,21 @@ impl Listing {
                     .as_ref()
                     .is_some_and(|own| Arc::ptr_eq(own, &section))
             })
-            .filter(|(_, symbol)| section.address <= symbol.address && symbol.address < end)
-            .map(|(index, symbol)| (symbol.address, index.0, symbol))
+            .map(|(index, symbol)| (symbol.address, index.0, symbol.clone()))
             .collect();
+        Self::from_symbols(section, in_section)
+    }
+
+    /// The skeleton from the symbols already picked out for `section`, as
+    /// `(address, symbol index, symbol)` in any order. Split from [`new`](Self::new) so a
+    /// listing of every section is one pass over the object's symbols and not one per
+    /// section.
+    fn from_symbols(
+        section: Arc<Section>,
+        mut in_section: Vec<(u64, usize, Arc<SymbolData>)>,
+    ) -> Self {
+        let end = section_end(&section);
+        in_section.retain(|&(address, ..)| section.address <= address && address < end);
         // The map's order is the hash seed's; the file's is the symbol index.
         in_section.sort_unstable_by_key(|&(address, index, _)| (address, index));
 
@@ -130,7 +140,7 @@ impl Listing {
             let next = after.first().map_or(end, |&(next, ..)| next);
             stretches.push(Stretch {
                 range: address..next,
-                symbols: here.iter().map(|&(_, _, symbol)| symbol.clone()).collect(),
+                symbols: here.iter().map(|(_, _, symbol)| symbol.clone()).collect(),
             });
             rest = after;
         }
@@ -207,4 +217,139 @@ impl Listing {
 fn section_end(section: &Section) -> u64 {
     let length: u64 = section.data.len().try_into().unwrap_or(u64::MAX);
     section.address.saturating_add(length)
+}
+
+/// Every code section of one object as one listing, in the one address space the parse laid
+/// them out in: what a reader scrolling "all the code" scrolls.
+///
+/// Each section keeps its own [`Listing`] and is **placed** at [`Section::bias`] past its
+/// own address. A linked image's sections already sit at distinct addresses and have no
+/// bias, so a placed address is the address; a relocatable object's code sections all start
+/// at 0 and the parse gave each a place of its own (`section_biases`), the same one its line
+/// info is read at. The air the layout leaves between two sections is nothing's bytes and is
+/// not a gap: [`at`](Self::at) answers [`None`] there.
+///
+/// Sections are in placed order. A code section with no bytes — gcc leaves an empty `.text`
+/// beside its `.text.<name>`s — is left out, and so is one whose placed range overlaps the
+/// section before it, which a file's headers can claim but nothing can draw.
+pub struct CodeListing {
+    sections: Vec<Placed>,
+}
+
+/// One code section in a [`CodeListing`]: its listing, and where the layout put it.
+pub struct Placed {
+    pub listing: Listing,
+    range: Range<u64>,
+}
+
+impl Placed {
+    /// What is added to an address in this section to place it.
+    pub fn bias(&self) -> u64 {
+        self.listing.section().bias
+    }
+
+    /// The placed addresses this section's bytes occupy.
+    pub fn range(&self) -> Range<u64> {
+        self.range.clone()
+    }
+
+    /// The placed address of an address in this section.
+    pub fn place(&self, address: u64) -> u64 {
+        address.wrapping_add(self.bias())
+    }
+
+    /// The address in this section of a placed address.
+    pub fn local(&self, placed: u64) -> u64 {
+        placed.wrapping_sub(self.bias())
+    }
+}
+
+/// A place in a [`CodeListing`]: which of its sections, and which stretch of that.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Place {
+    pub section: usize,
+    pub stretch: usize,
+}
+
+impl CodeListing {
+    /// The skeleton of every code section, decoding nothing: one pass over the object's
+    /// symbols, bucketed by section, and a sort of each section's own.
+    pub fn new(object: &Object) -> Self {
+        let code: Vec<&Arc<Section>> = object
+            .sections
+            .iter()
+            .filter(|section| section.code)
+            .collect();
+        let mut buckets: Vec<Vec<(u64, usize, Arc<SymbolData>)>> = vec![Vec::new(); code.len()];
+        for (index, symbol) in &object.symbols {
+            let Some(own) = symbol.section.as_ref() else {
+                continue;
+            };
+            if let Some(at) = code.iter().position(|section| Arc::ptr_eq(section, own)) {
+                buckets[at].push((symbol.address, index.0, symbol.clone()));
+            }
+        }
+
+        let mut placed: Vec<Placed> = code
+            .into_iter()
+            .zip(buckets)
+            .filter_map(|(section, symbols)| {
+                let start = section.address.wrapping_add(section.bias);
+                let length: u64 = section.data.len().try_into().unwrap_or(u64::MAX);
+                let end = start.saturating_add(length);
+                (start < end).then(|| Placed {
+                    listing: Listing::from_symbols(section.clone(), symbols),
+                    range: start..end,
+                })
+            })
+            .collect();
+        placed.sort_by_key(|placed| (placed.range.start, placed.listing.section().index.0));
+
+        let mut sections: Vec<Placed> = Vec::with_capacity(placed.len());
+        for next in placed {
+            if sections
+                .last()
+                .is_none_or(|last| last.range.end <= next.range.start)
+            {
+                sections.push(next);
+            }
+        }
+        Self { sections }
+    }
+
+    /// The code sections, in placed order.
+    pub fn sections(&self) -> &[Placed] {
+        &self.sections
+    }
+
+    /// Which of [`sections`](Self::sections) is `section`, by identity; [`None`] for one
+    /// that is not code, has no bytes, or was dropped for overlapping.
+    pub fn section_of(&self, section: &Section) -> Option<usize> {
+        self.sections
+            .iter()
+            .position(|placed| std::ptr::eq(&**placed.listing.section(), section))
+    }
+
+    /// Where a placed address is: the section it falls in and the stretch of that section.
+    /// [`None`] between two sections, and outside every one.
+    pub fn at(&self, placed: u64) -> Option<Place> {
+        let after = self
+            .sections
+            .partition_point(|section| section.range.start <= placed);
+        let section = after.checked_sub(1)?;
+        let found = &self.sections[section];
+        if !found.range.contains(&placed) {
+            return None;
+        }
+        let stretch = found.listing.stretch_at(found.local(placed))?;
+        Some(Place { section, stretch })
+    }
+
+    /// [`Listing::decode`] for the stretch at `place`.
+    pub fn decode(&self, object: &Object, place: Place) -> Option<DecodedStretch> {
+        self.sections
+            .get(place.section)?
+            .listing
+            .decode(object, place.stretch)
+    }
 }

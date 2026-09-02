@@ -336,6 +336,27 @@ invariant test over every fixture shape and both committed gcc objects — the s
 the section exactly, every symbol inside it is at one label, each stretch's code is the symbol's
 own row for row, and the gap starts exactly where the extent stops — and a test per decision.
 
+**All of an object's code is one listing** (`CodeListing`), because the function view's unit — a
+symbol — is not the section's: rustc and `-ffunction-sections` put every function in a section of
+its own, all at address 0, and a per-section listing of those is a listing of one function each.
+A `CodeListing` is every `Section::code` section with bytes, each with its own `Listing`, **placed**
+at `Section::bias` past its address and ordered by where it landed. That layout is the parse's
+(`section_biases`), the same one the line info is read at, so a placed address means one thing to
+both. A linked image's sections have real, distinct addresses and no bias, so there a placed
+address *is* the address; a relocatable object's code sections each get a place of their own. The
+air the layout leaves between two sections is nobody's bytes — `at` answers `None` there — and a
+section boundary is a label for the view to draw, not a gap. Two things are left out rather than
+listed: a code section with no bytes (gcc leaves an empty `.text` beside the split ones; it has a
+place in the layout, so the biases the tests pin skip a grain for it) and a section whose placed
+range overlaps the one before it, which a header can claim and nothing can draw. Built in one pass
+over the object's symbols, bucketed by section, rather than one scan per section, since a large
+crate's CGU has thousands of both. Branches compose with it for free: in a linked image a branch's
+address is unique across sections, so `Instruction::branch` is already the placed key; in a
+relocatable object a jump to another function is a relocation, `branch` is `None`, and the
+relocation target is a symbol, which its section's listing places. The unit stays the object — an
+archive's members share no addresses — so "all the code" of an archive is a list of objects' code
+listings, and that is the sidebar's question.
+
 **"Never panic on any file input" is tested two ways, and they are different jobs.**
 `tests/mutations.rs` is the **search**: it takes every fixture the suite builds — both committed
 gcc objects, the synthesized DWARF one, the ELF `.so` and the PE DLL — and truncates it at every

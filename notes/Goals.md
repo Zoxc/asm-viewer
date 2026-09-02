@@ -263,7 +263,9 @@ one item per part, so the unfinished half stays visible.
   each the symbol's own listing plus the bytes from its extent to the next label as a gap, and
   a stretch is decoded when asked for and counted then; the skeleton is the addresses alone and
   costs nothing. A gap is shown as bytes and never decoded — bytes no symbol claims are not
-  known to be code. **Identity**: `Assembly::edges`, `Lanes`, the
+  known to be code. And it is *all* the object's code, not one section's: every code section
+  placed in the layout the parse gives them (`CodeListing`), which is what makes one function
+  per section — rustc's shape — read as one listing rather than as many of one function. **Identity**: `Assembly::edges`, `Lanes`, the
   per-tab viewing row and the copy-a-run selection are all indices into *one symbol's*
   instructions. Being a separate mode is what makes that affordable — none of it has to change
   — but the section mode needs the same four answers keyed by address instead, so the question

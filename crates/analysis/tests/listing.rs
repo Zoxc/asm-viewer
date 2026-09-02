@@ -4,7 +4,7 @@
 
 mod common;
 
-use analysis::{parse_object, Architecture, GapKind, Listing, Object, Section};
+use analysis::{parse_object, Architecture, CodeListing, GapKind, Listing, Object, Place, Section};
 use common::{
     caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
     elf_x86_64_with_dwarf, named, parse, pe_dll, text, DwarfFixture, DwarfRow, DwarfSection,
@@ -624,4 +624,233 @@ fn a_section_at_the_end_of_the_address_space_lists_nothing() {
     assert!(listing.stretches().is_empty());
     assert_eq!(listing.stretch_at(u64::MAX), None);
     assert!(listing.decode(&object, 0).is_none());
+}
+
+/// Two functions in two sections, both at 0, as `-ffunction-sections` and rustc emit them.
+fn two_sections() -> Vec<u8> {
+    elf_x86_64_with_dwarf(DwarfFixture {
+        comp_dir: "/src",
+        files: &["main.c"],
+        sections: &[
+            DwarfSection {
+                name: Some(".text.first"),
+                symbols: &[TextSymbol {
+                    name: "first",
+                    bytes: &[0x90, 0x90, 0x90, 0x90, 0x90, 0xC3],
+                }],
+                rows: &[DwarfRow {
+                    address: 0,
+                    file: 0,
+                    line: 10,
+                    column: 0,
+                }],
+                length: 6,
+                subprograms: &[],
+                base_symbol: Some(0),
+            },
+            DwarfSection {
+                name: Some(".text.second"),
+                symbols: &[TextSymbol {
+                    name: "second",
+                    bytes: &[0x90, 0xC3],
+                }],
+                rows: &[DwarfRow {
+                    address: 0,
+                    file: 0,
+                    line: 20,
+                    column: 0,
+                }],
+                length: 2,
+                subprograms: &[],
+                base_symbol: Some(0),
+            },
+        ],
+        unit_ranges: UnitRanges::Relocated,
+    })
+}
+
+/// The section names of a code listing, in placed order.
+fn placed_names(code: &CodeListing) -> Vec<&str> {
+    code.sections()
+        .iter()
+        .map(|placed| placed.listing.section().name.as_str())
+        .collect()
+}
+
+fn placed_ranges(code: &CodeListing) -> Vec<(u64, u64)> {
+    code.sections()
+        .iter()
+        .map(|placed| (placed.range().start, placed.range().end))
+        .collect()
+}
+
+/// The invariants a code listing holds for any object: the placed sections ascend without
+/// overlapping, every code section with bytes is there once, every stretch is found again
+/// at its placed address, the air between sections is nowhere, and decoding through the
+/// code listing is decoding the section's own.
+#[test]
+fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
+    for (name, object) in corpus() {
+        let code = CodeListing::new(&object);
+        let with_bytes = object
+            .sections
+            .iter()
+            .filter(|section| section.code && !section.data.is_empty())
+            .count();
+        assert_eq!(code.sections().len(), with_bytes, "{name}");
+
+        let mut placed_end = 0;
+        for (index, placed) in code.sections().iter().enumerate() {
+            let range = placed.range();
+            let section = placed.listing.section();
+            assert!(
+                placed_end <= range.start,
+                "{name}: {} overlaps",
+                section.name
+            );
+            assert_eq!(range.start, section.address + section.bias, "{name}");
+            assert_eq!(range.end - range.start, section.data.len() as u64);
+            placed_end = range.end;
+            assert_eq!(code.section_of(section), Some(index), "{name}");
+
+            for (stretch, s) in placed.listing.stretches().iter().enumerate() {
+                let at = placed.place(s.range.start);
+                assert_eq!(placed.local(at), s.range.start);
+                let place = Place {
+                    section: index,
+                    stretch,
+                };
+                assert_eq!(code.at(at), Some(place), "{name}: {}", section.name);
+                assert_eq!(code.at(placed.place(s.range.end - 1)), Some(place));
+
+                let through = code.decode(&object, place).expect("decodes");
+                let own = placed.listing.decode(&object, stretch).expect("decodes");
+                assert_eq!(through.gap, own.gap);
+                assert_eq!(
+                    through.code.map(|c| c.instructions.len()),
+                    own.code.map(|c| c.instructions.len())
+                );
+            }
+        }
+        for section in &object.sections {
+            if !section.code {
+                assert_eq!(code.section_of(section), None, "{name}: {}", section.name);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_relocatable_objects_sections_are_placed_one_after_another() {
+    let object = parse(&two_sections());
+    let code = CodeListing::new(&object);
+
+    // Both at 0 in the file; the second placed one grain after the first.
+    assert_eq!(placed_names(&code), [".text.first", ".text.second"]);
+    assert_eq!(placed_ranges(&code), [(0, 6), (16, 18)]);
+    assert_eq!(code.sections()[1].bias(), 16);
+
+    assert_eq!(
+        code.at(0),
+        Some(Place {
+            section: 0,
+            stretch: 0
+        })
+    );
+    assert_eq!(code.at(5).map(|place| place.section), Some(0));
+    assert_eq!(code.at(6), None, "the air after first is nowhere");
+    assert_eq!(code.at(15), None);
+    assert_eq!(
+        code.at(16),
+        Some(Place {
+            section: 1,
+            stretch: 0
+        })
+    );
+    assert_eq!(code.at(18), None);
+
+    // The listing at the place is the section's own, symbol and all.
+    let second = code.sections()[1].listing.stretches()[0]
+        .symbol()
+        .expect("second is labelled");
+    assert_eq!(second.name, "second");
+    assert_eq!(second.address, 0, "the symbol keeps the file's address");
+    let decoded = code
+        .decode(
+            &object,
+            Place {
+                section: 1,
+                stretch: 0,
+            },
+        )
+        .expect("second decodes");
+    assert_eq!(decoded.code.map(|code| code.instructions.len()), Some(2));
+
+    // And the line info reads the same layout: each function's own line, not the other's.
+    let first = named(&object, "first");
+    let rows = first.line_info(&object).expect("first has line info");
+    assert_eq!(rows.rows()[0].line, Some(10));
+    let rows = second.line_info(&object).expect("second has line info");
+    assert_eq!(rows.rows()[0].line, Some(20));
+}
+
+#[test]
+fn the_committed_split_object_is_three_functions_in_a_row() {
+    let split = committed("line_fixture_split.o");
+    let code = CodeListing::new(&split);
+
+    // gcc's empty `.text` has a place in the layout but no bytes to list.
+    assert_eq!(
+        placed_names(&code),
+        [".text.add", ".text.twice", ".text.sum_to"]
+    );
+    let starts: Vec<u64> = code.sections().iter().map(|p| p.range().start).collect();
+    assert_eq!(starts, [0x10, 0x30, 0x50]);
+    for (index, placed) in code.sections().iter().enumerate() {
+        assert_eq!(placed.listing.stretches().len(), 1);
+        assert_eq!(
+            code.at(placed.range().start),
+            Some(Place {
+                section: index,
+                stretch: 0
+            })
+        );
+    }
+
+    // The one-`.text` build is the same three functions in one section, unmoved.
+    let flat = committed("line_fixture.o");
+    let code = CodeListing::new(&flat);
+    assert_eq!(placed_names(&code), [".text"]);
+    assert_eq!(code.sections()[0].range().start, 0);
+    assert_eq!(code.sections()[0].listing.stretches().len(), 3);
+}
+
+#[test]
+fn a_linked_image_is_placed_at_its_own_addresses() {
+    const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3];
+    let object = parse(&pe_dll(
+        TEXT,
+        &[ExportedSymbol {
+            name: "first",
+            offset: 0,
+            size: 0,
+            code: true,
+        }],
+        Some(4),
+    ));
+    let code = CodeListing::new(&object);
+
+    assert_eq!(placed_names(&code), [".text"]);
+    let placed = &code.sections()[0];
+    assert_eq!(placed.bias(), 0);
+    assert_eq!(placed.range().start, TEXT_ADDRESS);
+    assert_eq!(placed.place(TEXT_ADDRESS + 4), TEXT_ADDRESS + 4);
+    assert_eq!(
+        code.at(TEXT_ADDRESS + 4),
+        Some(Place {
+            section: 0,
+            stretch: 1
+        })
+    );
+    assert_eq!(code.at(TEXT_ADDRESS - 1), None);
 }
