@@ -6,7 +6,7 @@
 pub(crate) use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
-    ops::ControlFlow,
+    ops::{ControlFlow, RangeInclusive},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, LazyLock, Mutex, MutexGuard},
@@ -34,6 +34,7 @@ pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs};
 pub(crate) use crate::filter::{Filter, Matcher};
 pub(crate) use crate::fonts::{self, Font, Fonts};
+pub(crate) use crate::functions::{self, Function};
 pub(crate) use crate::history::History;
 pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 pub(crate) use crate::naming::short_name;

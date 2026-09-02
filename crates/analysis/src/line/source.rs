@@ -42,7 +42,7 @@ use super::{without_panicking, Dwarf};
 use crate::{Object, SymbolData};
 use object::SymbolIndex;
 use std::collections::HashMap;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
 /// Every source file one object's DWARF names, and per file the `(line, symbol)` pairs its
@@ -219,16 +219,26 @@ impl Object {
         let Some(last) = lines.end.checked_sub(1) else {
             return Vec::new();
         };
-        self.symbols_between(file, lines.start, last)
+        self.symbols_from_lines(file, lines.start..=last)
     }
 
     /// [`symbols_from_source`](Self::symbols_from_source) for one line, which is the common
     /// question and the one spelling of it that stays right at `u32::MAX`.
     pub fn symbols_at_line(&self, file: &str, line: u32) -> Vec<Arc<SymbolData>> {
-        self.symbols_between(file, line, line)
+        self.symbols_from_lines(file, line..=line)
     }
 
-    fn symbols_between(&self, file: &str, first: u32, last: u32) -> Vec<Arc<SymbolData>> {
+    /// [`symbols_from_source`](Self::symbols_from_source) over an **inclusive** range, which
+    /// is the shape the index answers in ([`SourceIndex::lookup`]) and the one a caller
+    /// holding a function's first and last line has: a function ending on `u32::MAX` is a
+    /// range the half-open form cannot spell, and one line is `line..=line` without the
+    /// arithmetic. The other two are thin forms of this.
+    pub fn symbols_from_lines(
+        &self,
+        file: &str,
+        lines: RangeInclusive<u32>,
+    ) -> Vec<Arc<SymbolData>> {
+        let (first, last) = (*lines.start(), *lines.end());
         if first > last {
             return Vec::new();
         }

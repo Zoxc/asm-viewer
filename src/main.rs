@@ -2,6 +2,7 @@ mod compiled;
 mod docs;
 mod filter;
 mod fonts;
+mod functions;
 mod history;
 mod lanes;
 mod naming;

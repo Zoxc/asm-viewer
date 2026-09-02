@@ -78,6 +78,27 @@ test.sync_and_update();
 Verified: that arrives as `ctrl=true code=KeyC`, where `press_key` arrives as
 `ctrl=false code=Unidentified`.
 
+**A right-click is `send_event` too** -- every cursor method hardcodes `MouseButton::Left` -- and
+three things go with it, all verified by `a_source_row_inside_a_function_offers_its_instances`
+(`right_click` in `ui/tests.rs`). The harness must mount `ContextMenuViewer::new()` in an
+ancestor scope, as `app()` does on its root: `ContextMenu::get()` panics without one. The popup
+is placed at the last **global pointer move** (`context_menu.rs:151-153`), not at the event's
+point, so `move_cursor` to the row and `sync_and_update` first. And send the `MouseUp` as well
+as the `MouseDown`: the menu opens on the down, and the up of the same gesture is the one global
+press the viewer swallows -- left out, the swallow takes the click on an entry instead and the
+menu stays open, which is what the first draft of that test saw.
+
+```rust
+test.move_cursor(at);
+test.sync_and_update();
+for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+    test.send_event(PlatformEvent::Mouse { name, cursor: at.into(), button: Some(MouseButton::Right) });
+    test.sync_and_update();
+}
+```
+
+`PlatformEvent` and `MouseEventName` are `freya::prelude::platform`'s, not the prelude's own.
+
 **Keyboard events go to the focused node and nowhere else.** `send_event` passes
 `self.accessibility.focused_node_id()` (`lib.rs:417`), and `measure_potential_events` matches a
 location-less event against that node alone (`ragnarok-0.4.3/src/measurement.rs:79-92`). A key

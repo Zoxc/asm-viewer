@@ -36,13 +36,16 @@ one item per part, so the unfinished half stays visible.
   symbols by design, and one line answers with 9 374 of them on this app's own binary, so
   a range per hit would be seconds of DWARF walking behind every click. Pressing a row opens the
   symbol and pins the line in it with both panes owed the scroll, which is where the range is.
-- [ ] A function to pick the generic instance of a source function. Same query, different
+- [x] A function to pick the generic instance of a source function. Same query, different
   presentation — "all symbols for this function, pick one" against "all locations for this line,
-  list them" — so what is left is the picker and the rule for what choosing one does to each
-  kind of tab. Half of it is there: the Locations view is that list under another header, and a
-  row chosen from a source-driven tab sets that tab's assembly side (`Driven::choice`, carried
-  in the ask) while one chosen from an assembly-driven tab opens the symbol. What is left is the
-  function-wide query and a control on the source side itself.
+  list them" — so it is the Locations view under another heading ("N instances of `foo`"),
+  asked for by a second entry in a source row's context menu, offered where a function encloses
+  the row. The function's lines are the source's (`src/functions.rs`: a scanner of our own for
+  Rust, the grammar losing whole files to `const impl`; the tree-sitter parse for C and C++),
+  not DWARF's; every symbol holding code from them is listed, an
+  inlined caller included, in the crate's order, and the panel's filter narrows to a name. A row
+  chooses as a location row does (`Driven::choice`, from the row the menu was opened on), and
+  the row lit is the symbol drawn, so the choice shows in a source-driven tab.
 - [x] An active navigation function where selection on one side moves the other side to the
   matching place — within one symbol. Clicking a source line scrolls the assembly to the
   first instruction it produced, clicking an instruction scrolls the source to its line, and
@@ -97,7 +100,8 @@ one item per part, so the unfinished half stays visible.
   emphasis nit, and neither is wanted yet.
 - [ ] Read and highlight source files on a background thread. Everything a *binary* costs is off
   the UI thread already; the source side is not. `source_text` reads the file off disk
-  (`source::load`) and runs the whole tree-sitter parse (`Highlighted::new`) inside a render, so
+  (`source::load`) and runs the whole tree-sitter parse (`Highlighted::new`, twice: the
+  highlighter's and the one the function spans are read off) inside a render, so
   the frame that first shows a file pays for both, and a large file pays for them visibly. Two
   caches keep it to once per file — `source.rs`'s own and `HIGHLIGHTED` — but that once is a
   frame, and one of them is emptied deliberately: the spans carry the palette's colours baked
@@ -105,7 +109,8 @@ one item per part, so the unfinished half stays visible.
   screen at the moment the window is repainting. `use_analysis`'s shape is what this wants — one
   worker for the app's lifetime, a channel, and a pane that goes on drawing what it has until the
   answer lands. Two things to check before starting, since neither is a move: whether what
-  crosses is `Send` at all (a `Highlighted` is a `Rope` and a `SyntaxBlocks`, and the highlighter
+  crosses is `Send` at all (a `Highlighted` is a `Rope`, a `SyntaxBlocks` and the function
+  spans, and the highlighter
   is `freya-code-editor`'s), and which palette a parse off the thread resolves its colours
   against, the answer having to be the one the rows are drawn in when it arrives.
 

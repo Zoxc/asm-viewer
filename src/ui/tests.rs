@@ -2072,7 +2072,7 @@ fn the_queue_keeps_the_newest_question_of_each_kind() {
     let symbols = fixture_symbols();
     let at = a_line_of(&symbols[0]);
     let locate = || Question::Locate {
-        at: at.clone(),
+        query: Query::line(at.clone()),
         objects: Vec::new(),
     };
 
@@ -2133,14 +2133,14 @@ fn a_lines_locations_come_back_from_every_open_object() {
     objects.set(vec![wanted.object.clone(), twin.clone()]);
     test.sync_and_update();
 
-    located.write().asked = Some(at.clone());
-    assert!(located.peek().pending() == Some(&at));
+    located.write().asked = Some(Query::line(at.clone()));
+    assert!(located.peek().pending() == Some(&Query::line(at.clone())));
     pump(&mut test, || located.peek().found.is_some());
 
     let state = located.peek().clone();
     assert!(state.pending().is_none());
     let found = state.found.expect("the line was looked for");
-    assert!(found.at == at);
+    assert!(found.of.at == at);
     let names: Vec<&str> = found
         .symbols
         .0
@@ -2156,13 +2156,13 @@ fn a_lines_locations_come_back_from_every_open_object() {
         file: at.file.clone(),
         line: 999_999,
     };
-    located.write().asked = Some(barren.clone());
+    located.write().asked = Some(Query::line(barren.clone()));
     pump(&mut test, || {
         located
             .peek()
             .found
             .as_ref()
-            .is_some_and(|found| found.at == barren)
+            .is_some_and(|found| found.of.at == barren)
     });
     let state = located.peek().clone();
     assert!(state.pending().is_none());
@@ -2175,21 +2175,24 @@ fn a_lines_locations_come_back_from_every_open_object() {
 #[test]
 fn locations_for_a_line_no_longer_asked_about_are_dropped() {
     let symbols = fixture_symbols();
-    let (first, second) = (a_line_of(&symbols[0]), a_line_of(&symbols[1]));
+    let (first, second) = (
+        Query::line(a_line_of(&symbols[0])),
+        Query::line(a_line_of(&symbols[1])),
+    );
     assert!(
         first != second,
         "the fixture's first two symbols share a line"
     );
 
-    let (started, starts) = async_channel::unbounded::<LinePos>();
+    let (started, starts) = async_channel::unbounded::<Query>();
     let (gate, gated) = async_channel::unbounded::<()>();
     let work = move |question: Question| {
-        let Question::Locate { at, objects } = question else {
+        let Question::Locate { query, objects } = question else {
             panic!("this test asks only about locations");
         };
-        let _ = started.send_blocking(at.clone());
+        let _ = started.send_blocking(query.clone());
         let _ = gated.recv_blocking();
-        answer(Question::Locate { at, objects })
+        answer(Question::Locate { query, objects })
     };
 
     let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
@@ -2225,7 +2228,7 @@ fn locations_for_a_line_no_longer_asked_about_are_dropped() {
 
     gate.send_blocking(()).expect("the gate");
     pump(&mut test, || located.peek().found.is_some());
-    assert!(located.peek().found.as_ref().expect("answered").at == second);
+    assert!(located.peek().found.as_ref().expect("answered").of == second);
     assert!(located.peek().pending().is_none());
 }
 
@@ -2266,7 +2269,7 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
     asking.set(Some(Ask::Symbol(symbols[1].clone())));
     pump(&mut test, || !starts.is_empty());
     starts.recv_blocking().expect("the worker started");
-    located.write().asked = Some(at.clone());
+    located.write().asked = Some(Query::line(at.clone()));
     asking.set(Some(Ask::Symbol(symbol.clone())));
     settle(&mut test);
 
@@ -2287,7 +2290,7 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
         .found
         .clone()
         .expect("the locate was answered");
-    assert!(found.at == at);
+    assert!(found.of.at == at);
     assert!(!found.symbols.0.is_empty());
     assert!(analysis.peek().pending.is_none());
 }
@@ -2315,7 +2318,7 @@ fn closing_a_binary_takes_its_locations_with_it() {
     objects.set(vec![wanted.object.clone(), twin.clone()]);
     test.sync_and_update();
 
-    located.write().asked = Some(at.clone());
+    located.write().asked = Some(Query::line(at.clone()));
     pump(&mut test, || located.peek().found.is_some());
     assert_eq!(
         located
@@ -2336,7 +2339,7 @@ fn closing_a_binary_takes_its_locations_with_it() {
         test.sync_and_update();
     }
     let found = located.peek().found.clone().expect("the answer stands");
-    assert!(found.at == at);
+    assert!(found.of.at == at);
     assert_eq!(found.symbols.0.len(), 1);
     assert!(Arc::ptr_eq(&found.symbols.0[0].object, &twin));
 
@@ -2363,7 +2366,7 @@ fn closing_a_binary_takes_its_locations_with_it() {
         test.sync_and_update();
     }
     let state = located.peek().clone();
-    assert!(state.asked == Some(at.clone()));
+    assert!(state.asked == Some(Query::line(at.clone())));
     assert!(state.found.expect("stands").symbols.0.is_empty());
 }
 
@@ -2387,6 +2390,7 @@ struct LocationStates {
     located: State<Located>,
     pinned: State<Option<Pin>>,
     landing: State<Option<Landing>>,
+    analysis: State<Analyzed>,
 }
 
 macro_rules! location_states {
@@ -2400,12 +2404,16 @@ macro_rules! location_states {
         let located = $runner
             .provide_root_context(|| Locations(State::create(Located::default())))
             .0;
+        let analysis = $runner
+            .provide_root_context(|| Analysis(State::create(Analyzed::default())))
+            .0;
         (
             states,
             LocationStates {
                 located,
                 pinned,
                 landing,
+                analysis,
             },
         )
     }};
@@ -2459,7 +2467,7 @@ fn the_locations_panel_draws_a_row_per_symbol() {
     settle(&mut test);
     assert!(labels(&test).contains(&"Nothing looked for yet".to_owned()));
 
-    located.write().asked = Some(at.clone());
+    located.write().asked = Some(Query::line(at.clone()));
     settle(&mut test);
     let finding = format!(
         "Finding locations for {}:{}\u{2026}",
@@ -2468,12 +2476,15 @@ fn the_locations_panel_draws_a_row_per_symbol() {
     );
     assert!(labels(&test).contains(&finding), "{:?}", labels(&test));
 
-    located.write().found = Some(Found::new(at.clone(), Vec::new()));
+    located.write().found = Some(Found::new(Query::line(at.clone()), Vec::new()));
     settle(&mut test);
     let nothing = format!("No code compiled from {}:{}", file_name(&at.file), at.line);
     assert!(labels(&test).contains(&nothing), "{:?}", labels(&test));
 
-    located.write().found = Some(Found::new(at.clone(), vec![wanted.clone(), twin]));
+    located.write().found = Some(Found::new(
+        Query::line(at.clone()),
+        vec![wanted.clone(), twin],
+    ));
     settle(&mut test);
     let drawn = labels(&test);
     let heading = format!("2 locations for {}:{}", file_name(&at.file), at.line);
@@ -2512,8 +2523,8 @@ fn a_location_row_opens_its_symbol() {
         1.,
     );
     let mut located = location.located;
-    located.write().asked = Some(at.clone());
-    located.write().found = Some(Found::new(at.clone(), vec![wanted.clone()]));
+    located.write().asked = Some(Query::line(at.clone()));
+    located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
     assert!(states.open.active().is_none());
 
@@ -2560,8 +2571,8 @@ fn a_location_row_lands_on_its_line() {
         Some(Document::Assembly(Selection::Symbol(symbols[0].clone()))),
         Visit::Went,
     );
-    located.write().asked = Some(at.clone());
-    located.write().found = Some(Found::new(at.clone(), vec![wanted.clone()]));
+    located.write().asked = Some(Query::line(at.clone()));
+    located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
     assert!(location.pinned.peek().is_none());
 
@@ -2822,9 +2833,9 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     );
     let mut located = location.located;
     activate(states.open, states.history, Some(tab.clone()), Visit::Went);
-    located.write().asked = Some(at.clone());
+    located.write().asked = Some(Query::line(at.clone()));
     located.write().subject = Some(at.file.clone());
-    located.write().found = Some(Found::new(at.clone(), vec![wanted.clone()]));
+    located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
 
     let row = label_area(&test, "sum_to").expect("the row is drawn");
@@ -2916,6 +2927,386 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
     );
 }
 
+/// A function is the same question over its lines: asked of every line the gcc fixture's
+/// three functions span, the worker answers with each **once**, though each function's
+/// rows name most of its lines, and the answer stays about the row it was asked from.
+#[test]
+fn an_instance_query_answers_each_symbol_once() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    // `add` is on 21-24, `twice` on 26-29 and `sum_to` on 31-39 of the fixture; the
+    // comment above them holds no code at all.
+    let function = |name: &str, lines: RangeInclusive<u32>| Function {
+        name: name.to_owned(),
+        lines,
+    };
+    let query = Query::function(at.clone(), &function("everything", 21..=39));
+
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        |runner| analysis_states!(runner, answer),
+        1.,
+    );
+    let (mut objects, mut located) = (objects, located);
+    objects.set(vec![wanted.object.clone()]);
+    test.sync_and_update();
+
+    located.write().asked = Some(query.clone());
+    assert!(located.peek().pending() == Some(&query));
+    pump(&mut test, || located.peek().found.is_some());
+    let found = located.peek().found.clone().expect("answered");
+    assert!(found.of == query);
+    assert!(found.of.at == at);
+    let names: Vec<&str> = found
+        .symbols
+        .0
+        .iter()
+        .map(|symbol| symbol.data.name.as_str())
+        .collect();
+    assert_eq!(names, ["add", "twice", "sum_to"]);
+
+    // The one function alone, and the lines nothing was compiled from.
+    let query = Query::function(at.clone(), &function("sum_to", 31..=39));
+    located.write().asked = Some(query.clone());
+    pump(&mut test, || {
+        located
+            .peek()
+            .found
+            .as_ref()
+            .is_some_and(|found| found.of == query)
+    });
+    let found = located.peek().found.clone().expect("answered");
+    assert_eq!(found.symbols.0.len(), 1);
+    assert_eq!(found.symbols.0[0].data.name, "sum_to");
+
+    let query = Query::function(at.clone(), &function("comment", 1..=19));
+    located.write().asked = Some(query.clone());
+    pump(&mut test, || {
+        located
+            .peek()
+            .found
+            .as_ref()
+            .is_some_and(|found| found.of == query)
+    });
+    assert!(located
+        .peek()
+        .found
+        .as_ref()
+        .expect("answered")
+        .symbols
+        .0
+        .is_empty());
+}
+
+/// Asked about a function, the panel says so in each of its states: it names the
+/// function rather than a line, and its rows are instances.
+#[test]
+fn the_locations_panel_names_the_function_an_instance_query_is_of() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let twin = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let at = a_line_of(&wanted);
+    let query = Query::function(
+        at.clone(),
+        &Function {
+            name: "sum_to".to_owned(),
+            lines: 31..=39,
+        },
+    );
+
+    let (mut test, (_states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut located = location.located;
+
+    located.write().asked = Some(query.clone());
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&"Finding instances of sum_to\u{2026}".to_owned()),
+        "{:?}",
+        labels(&test)
+    );
+
+    located.write().found = Some(Found::new(query.clone(), Vec::new()));
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&"No code compiled from sum_to".to_owned()),
+        "{:?}",
+        labels(&test)
+    );
+
+    located.write().found = Some(Found::new(query.clone(), vec![wanted.clone()]));
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&"1 instance of sum_to".to_owned()),
+        "{:?}",
+        labels(&test)
+    );
+
+    located.write().found = Some(Found::new(query, vec![wanted, twin]));
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"2 instances of sum_to".to_owned()),
+        "{drawn:?}"
+    );
+    assert_eq!(
+        drawn.iter().filter(|text| **text == "sum_to").count(),
+        2,
+        "{drawn:?}"
+    );
+}
+
+/// The row lit is the symbol the panes are **drawing**, not the active document: in a
+/// source-driven tab the active document is a file, and the lit row is the one answer
+/// the panel gives to which instance the tab's assembly side is on.
+#[test]
+fn the_row_lit_is_the_symbol_drawn_and_not_the_active_document() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let twin = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let at = a_line_of(&wanted);
+    let tab = Document::Source(at.file.clone());
+
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let (mut located, mut analysis) = (location.located, location.analysis);
+    activate(states.open, states.history, Some(tab.clone()), Visit::Went);
+    located.write().asked = Some(Query::line(at.clone()));
+    located.write().found = Some(Found::new(
+        Query::line(at.clone()),
+        vec![wanted.clone(), twin.clone()],
+    ));
+    settle(&mut test);
+
+    // Where the two rows are, by the labels they carry, in the answer's order.
+    let rows: Vec<Area> = test.find_many(|node, _element| {
+        use freya::elements::label::LabelElement;
+        use std::any::Any;
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .filter(|label| label.text == "sum_to")
+            .map(|_| node.layout().area)
+    });
+    assert_eq!(rows.len(), 2, "two rows are drawn");
+    let lit = |test: &TestingRunner| -> Vec<f32> {
+        test.find_many(|node, element| {
+            (element.style().background == Fill::Color(palette().selected_bg))
+                .then_some(node.layout().area.origin.y)
+        })
+    };
+    let holds = |row: &Area, y: f32| row.origin.y >= y && row.origin.y < y + list_row_height();
+
+    // Nothing drawn: nothing lit, though a tab is active.
+    assert!(lit(&test).is_empty(), "a row is lit with nothing drawn");
+
+    // The twin drawn for the tab: its row and not the first's.
+    analysis.write().shown = Some(Shown {
+        ask: Ask::Source {
+            at: at.clone(),
+            chosen: Some(twin.clone()),
+        },
+        studied: Studied::new(twin.clone()),
+    });
+    settle(&mut test);
+    let lit_rows = lit(&test);
+    assert_eq!(lit_rows.len(), 1, "{lit_rows:?}");
+    assert!(
+        holds(&rows[1], lit_rows[0]),
+        "the lit row is not the twin's"
+    );
+    assert!(!holds(&rows[0], lit_rows[0]));
+
+    // The other drawn: the light moves.
+    analysis.write().shown = Some(Shown {
+        ask: Ask::Source {
+            at: at.clone(),
+            chosen: Some(wanted.clone()),
+        },
+        studied: Studied::new(wanted.clone()),
+    });
+    settle(&mut test);
+    let lit_rows = lit(&test);
+    assert_eq!(lit_rows.len(), 1, "{lit_rows:?}");
+    assert!(
+        holds(&rows[0], lit_rows[0]),
+        "the lit row is not the first's"
+    );
+}
+
+/// The file a source-driven tab is about, for [`source_menu_harness`].
+#[derive(Clone)]
+struct Subject(Arc<str>);
+
+/// The Source pane over a source-driven tab, with the viewer a context menu needs in an
+/// ancestor scope -- which `app()` mounts on the root and no other harness here does.
+fn source_menu_harness() -> impl IntoElement {
+    let file = use_consume::<Subject>().0;
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(SourcePane {
+            document: Document::Source(file),
+        })
+}
+
+/// Where the label reading `text` is, as a point to put the pointer on.
+fn centre_of(test: &TestingRunner, text: &str) -> (f64, f64) {
+    let area = label_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn"));
+    (
+        (area.origin.x + area.width() / 2.0) as f64,
+        (area.origin.y + area.height() / 2.0) as f64,
+    )
+}
+
+/// A right-click, which no `TestingRunner` method sends. The popup is placed at the last
+/// global pointer move and not at the event's point, so the pointer is moved there first;
+/// and the button is released, because the menu opens on the down and the up of the same
+/// gesture is the one global press `ContextMenuViewer` swallows -- left out, it would
+/// swallow the click on an entry instead and the menu would stay open.
+fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
+    use freya::prelude::platform::{MouseEventName, PlatformEvent};
+
+    test.move_cursor(at);
+    test.sync_and_update();
+    for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+        test.send_event(PlatformEvent::Mouse {
+            name,
+            cursor: at.into(),
+            button: Some(MouseButton::Right),
+        });
+        test.sync_and_update();
+    }
+    settle(test);
+}
+
+/// A source row inside a function offers that function's instances beside the line's
+/// locations, and choosing them asks for the function's lines from that row, chosen for
+/// the tab; a row outside any function offers the line alone.
+#[test]
+fn a_source_row_inside_a_function_offers_its_instances() {
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-instances-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("instances.c");
+    std::fs::write(
+        &path,
+        "int add(int a, int b)\n{\n    return a + b;\n}\n\nint x;\n",
+    )
+    .expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+
+    let (mut test, (states, located)) = TestingRunner::new(
+        source_menu_harness,
+        (500., 400.).into(),
+        {
+            let file = file.clone();
+            move |runner| {
+                let states = project_states!(runner);
+                runner.provide_root_context(|| Focused(State::create(None)));
+                runner.provide_root_context(|| Marked(State::create(None)));
+                runner.provide_root_context(|| Shift(State::create(false)));
+                runner.provide_root_context(|| Pinned(State::create(None)));
+                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
+                runner.provide_root_context(|| Subject(file.clone()));
+                let located = runner
+                    .provide_root_context(|| Locations(State::create(Located::default())))
+                    .0;
+                (states, located)
+            }
+        },
+        1.,
+    );
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Source(file.clone())),
+        Visit::Went,
+    );
+    settle(&mut test);
+
+    // The third row, by its gutter number, is inside `add`.
+    let row = centre_of(&test, "3\u{a0}");
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find all locations".to_owned()),
+        "{drawn:?}"
+    );
+    assert!(
+        drawn.contains(&"Find instances of add".to_owned()),
+        "{drawn:?}"
+    );
+
+    let entry = centre_of(&test, "Find instances of add");
+    test.move_cursor(entry);
+    test.press_cursor(entry);
+    test.release_cursor(entry);
+    settle(&mut test);
+    let at = LinePos {
+        file: file.clone(),
+        line: 3,
+    };
+    let asked = located.peek().asked.clone().expect("the entry asked");
+    assert!(
+        asked
+            == Query::function(
+                at,
+                &Function {
+                    name: "add".to_owned(),
+                    lines: 1..=4,
+                }
+            )
+    );
+    assert!(located.peek().subject.as_deref() == Some(&*file));
+    assert!(
+        !labels(&test).contains(&"Find instances of add".to_owned()),
+        "the menu stayed open"
+    );
+
+    // The sixth row is outside any function.
+    let row = centre_of(&test, "6\u{a0}");
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find all locations".to_owned()),
+        "{drawn:?}"
+    );
+    assert!(
+        !drawn.iter().any(|text| text.starts_with("Find instances")),
+        "{drawn:?}"
+    );
+}
+
 /// The sidebar's dock, which `app()` keeps as a local state and a test has to provide
 /// somewhere.
 #[derive(Clone, Copy)]
@@ -2974,12 +3365,12 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     };
     assert!(on_top(sidebar) == Some(Tab::View(View::History)));
 
-    find_locations(located, content, at.clone(), None);
+    find_locations(located, content, Query::line(at.clone()), None);
     assert!(on_top(sidebar) == Some(Tab::View(View::Locations)));
-    assert!(located.peek().pending() == Some(&at));
+    assert!(located.peek().pending() == Some(&Query::line(at.clone())));
     pump(&mut test, || located.peek().found.is_some());
     let found = located.peek().found.clone().expect("answered");
-    assert!(found.at == at);
+    assert!(found.of.at == at);
     assert_eq!(found.symbols.0.len(), 1);
 
     // The same line again is asked again, out of whatever is open now.
@@ -3001,8 +3392,8 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
         1,
         "an answer re-asked itself when an object was opened"
     );
-    find_locations(located, content, at.clone(), None);
-    assert!(located.peek().pending() == Some(&at));
+    find_locations(located, content, Query::line(at.clone()), None);
+    assert!(located.peek().pending() == Some(&Query::line(at.clone())));
     pump(&mut test, || {
         located
             .peek()

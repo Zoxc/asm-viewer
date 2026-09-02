@@ -111,6 +111,31 @@ fn a_range_answers_for_every_line_in_it_and_says_each_symbol_once() {
     assert!(object.symbols_from_source(MAIN, 10..10).is_empty());
 }
 
+/// The inclusive spelling is the same question -- a function's first and last line, as a
+/// caller holds them -- and the one that reaches the last line a `u32` can name.
+#[test]
+fn an_inclusive_range_asks_the_same_question_as_the_half_open_one() {
+    let object = parse(&shared_line());
+
+    assert_eq!(
+        named(object.symbols_from_lines(MAIN, 10..=11)),
+        named(object.symbols_from_source(MAIN, 10..12))
+    );
+    assert_eq!(named(object.symbols_from_lines(MAIN, 11..=11)), ["first"]);
+    // `first` holds both 10 and 11 and is still one hit.
+    assert_eq!(
+        named(object.symbols_from_lines(MAIN, 10..=11)),
+        ["first", "second"]
+    );
+    // Reaching the end of the line space is expressible, and answers out of what is there.
+    assert_eq!(
+        named(object.symbols_from_lines(MAIN, 11..=u32::MAX)),
+        ["first"]
+    );
+    // A range running backwards asks about nothing.
+    assert!(object.symbols_from_lines(MAIN, 11..=10).is_empty());
+}
+
 #[test]
 fn nothing_is_invented_for_a_line_a_file_or_an_object_that_says_nothing() {
     let object = parse(&shared_line());

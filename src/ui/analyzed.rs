@@ -3,7 +3,7 @@
 //!
 //! Two kinds of job go to the one worker: a **listing** -- the symbol the panes draw,
 //! named outright or resolved from a source line -- and a **locate**, every symbol a line
-//! was compiled into, for the Locations panel. They supersede separately: the queue is
+//! or a function was compiled into, for the Locations panel. They supersede separately: the queue is
 //! drained to the newest of *each*, since a reader who asked for a line's locations and
 //! then clicked a symbol wants both answers.
 
@@ -78,9 +78,9 @@ pub(crate) enum Question {
         /// head. See [`compiled::pick`].
         recent: Vec<Symbol>,
     },
-    /// Every symbol `at` was compiled into, for the Locations panel.
+    /// Every symbol `query`'s lines were compiled into, for the Locations panel.
     Locate {
-        at: LinePos,
+        query: Query,
         objects: Vec<Arc<Object>>,
     },
 }
@@ -125,8 +125,8 @@ pub(crate) enum Answer {
     /// `studied` is `None` only for a source line no open object holds code from -- the
     /// one listing question that can name no symbol at all.
     Listing { ask: Ask, studied: Option<Studied> },
-    /// The symbols `at` was compiled into, over the objects the question carried.
-    Located { at: LinePos, symbols: Vec<Symbol> },
+    /// The symbols `query` was compiled into, over the objects the question carried.
+    Located { query: Query, symbols: Vec<Symbol> },
 }
 
 /// The expensive work, and the one definition of what an answer is: a third kind of
@@ -144,7 +144,7 @@ pub(crate) fn answer(question: Question) -> Answer {
             objects,
             recent,
         } => {
-            let candidates = compiled::compiled_from(&objects, &at.file, at.line);
+            let candidates = compiled::compiled_from(&objects, &at.file, at.line..=at.line);
             // The choice at the head of the ranking: it wins where the line compiled
             // into it, and where it did not the pick falls back as if none were made.
             let ranked: Vec<Symbol> = chosen.iter().cloned().chain(recent).collect();
@@ -154,9 +154,9 @@ pub(crate) fn answer(question: Question) -> Answer {
                 studied,
             }
         }
-        Question::Locate { at, objects } => Answer::Located {
-            symbols: compiled::compiled_from(&objects, &at.file, at.line),
-            at,
+        Question::Locate { query, objects } => Answer::Located {
+            symbols: compiled::compiled_from(&objects, &query.at.file, query.lines()),
+            query,
         },
     }
 }
@@ -486,15 +486,15 @@ pub(crate) fn use_analysis_with(
             while let Ok(answer) = answers.recv().await {
                 let (ask, studied) = match answer {
                     Answer::Listing { ask, studied } => (ask, studied),
-                    Answer::Located { at, symbols } => {
-                        // The same rule as below, against the line the panel is asking
-                        // about now; and the same rule as `Shown::still_open`, applied
+                    Answer::Located { query, symbols } => {
+                        // The same rule as below, against the question the panel is
+                        // asking now; and the same rule as `Shown::still_open`, applied
                         // per symbol, so a binary closed while the worker ran is not put
                         // back by its answer.
-                        if located.peek().asked.as_ref() != Some(&at) {
+                        if located.peek().asked.as_ref() != Some(&query) {
                             continue;
                         }
-                        let mut found = Found::new(at, symbols);
+                        let mut found = Found::new(query, symbols);
                         found.retain_open(&objects.peek());
                         let mut next = located.peek().clone();
                         next.found = Some(found);
@@ -646,11 +646,11 @@ pub(crate) fn use_analysis_with(
     // A file closed afterwards is the effect below.
     use_side_effect(move || {
         let pending = located.read().pending().cloned();
-        let Some(at) = pending else {
+        let Some(query) = pending else {
             return;
         };
         let _ = requests_for_locate.try_send(Question::Locate {
-            at,
+            query,
             objects: objects.peek().clone(),
         });
     });

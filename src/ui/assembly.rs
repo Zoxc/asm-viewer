@@ -656,7 +656,7 @@ impl Component for InstructionRow {
                     row.on_secondary_down(move |e: Event<PressEventData>| {
                         ContextMenu::open_from_event(
                             &e,
-                            locate_menu(located, dock, at.clone(), subject.clone()),
+                            locate_menu(located, dock, at.clone(), subject.clone(), None),
                         );
                     })
                 }

@@ -17,11 +17,19 @@ analysis = { path = "crates/analysis" }
 # cursor, a selection, an undo history and an incremental re-parse per keystroke.
 freya = { version = "0.4", features = ["code-editor", "icons-lucide"] }
 # The grammars the highlighter parses with; that crate deliberately ships none. Their
-# `tree-sitter-language` must be the one `freya-code-editor`'s `tree-sitter` 0.26 uses,
-# or the `Language` handed over is a different type.
+# `tree-sitter-language` must be the one the `tree-sitter` below and `freya-code-editor`'s
+# share, or the `Language` handed over is a different type.
 tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
+# The parser itself, for the one thing the highlighter's parse cannot be asked afterwards:
+# which lines each C or C++ function in a file spans (`src/functions.rs`; Rust has a scanner
+# of its own there, the grammar being behind the compiler). `SyntaxHighlighter` keeps its
+# tree private, so the file is parsed a second time and the spans are kept. Not a new
+# crate in the build: this is the `tree-sitter` already compiled under `freya-code-editor`,
+# and the version is pinned to what the lock holds so that there is one copy and the
+# grammars' `Language` is the same type on both sides. `cargo tree -d` is how that stays true.
+tree-sitter = "0.26"
 rfd = "0.17"
 # The filter bars' matching engine (`src/filter.rs`), and not a new crate in the build:
 # regex 1 is already compiled in this tree, as a dependency of both `env_logger` and the

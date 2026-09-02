@@ -1,9 +1,14 @@
-//! Every symbol a source line was compiled into, across every open object: the question
-//! as the reader asks it, the answer that stands until the next one, and the panel that
-//! draws it.
+//! Every symbol a source line -- or the function around it -- was compiled into, across
+//! every open object: the question as the reader asks it, the answer that stands until
+//! the next one, and the panel that draws it.
 //!
 //! The query is [`compiled::compiled_from`], which the worker already runs for a
-//! source-driven tab and then keeps one candidate of. This keeps them all. A row of the
+//! source-driven tab and then keeps one candidate of. This keeps them all. Asked of a
+//! function's lines it is the **instance picker**: a generic function compiles into one
+//! symbol per instantiation times one per object, and this is where a reader says which
+//! of them the source is read against, the row's press being the same choice either way.
+//! Every symbol holding code from those lines is listed, an inlined caller included, in
+//! the crate's own order; the filter over the rows is how a name is narrowed to. A row of the
 //! answer is a **symbol** and not a range inside one: the crate answers symbols by design
 //! (where inside a symbol the line's code sits is the forward direction's question), and
 //! finding each hit's ranges would be one line-program walk per symbol under the DWARF
@@ -18,14 +23,99 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(crate) struct Locations(pub(crate) State<Located>);
 
+/// What the panel is asked for: a line, or the function around one.
+///
+/// `at` is the row the question was asked from in either case -- what a row of the
+/// answer lands on, and what a source-driven tab is driven from when a row is chosen
+/// for it -- and the scope says which lines the symbols are wanted for.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Query {
+    pub(crate) at: LinePos,
+    pub(crate) scope: Scope,
+}
+
+/// The lines a [`Query`] is about.
+#[derive(Clone, PartialEq)]
+pub(crate) enum Scope {
+    /// The one line at `Query::at`.
+    Line,
+    /// The whole of the function around it, as the source spells it
+    /// ([`functions::enclosing`]).
+    Function {
+        name: String,
+        lines: RangeInclusive<u32>,
+    },
+}
+
+impl Query {
+    /// The question about one line.
+    pub(crate) fn line(at: LinePos) -> Query {
+        Query {
+            at,
+            scope: Scope::Line,
+        }
+    }
+
+    /// The question about the whole of `function`, asked from `at`.
+    pub(crate) fn function(at: LinePos, function: &Function) -> Query {
+        Query {
+            at,
+            scope: Scope::Function {
+                name: function.name.clone(),
+                lines: function.lines.clone(),
+            },
+        }
+    }
+
+    /// The lines the symbols are wanted for.
+    pub(crate) fn lines(&self) -> RangeInclusive<u32> {
+        match &self.scope {
+            Scope::Line => self.at.line..=self.at.line,
+            Scope::Function { lines, .. } => lines.clone(),
+        }
+    }
+
+    /// What the panel calls the question: `file:line`, or the function's name.
+    fn spell(&self) -> String {
+        match &self.scope {
+            Scope::Line => spell(&self.at),
+            Scope::Function { name, .. } => name.clone(),
+        }
+    }
+
+    /// The whole of it, for the heading's tooltip: the file's path, and for a function
+    /// the lines of it that were asked about.
+    fn tooltip(&self) -> String {
+        match &self.scope {
+            Scope::Line => self.at.file.to_string(),
+            Scope::Function { lines, .. } => {
+                format!("{}:{}\u{2013}{}", self.at.file, lines.start(), lines.end())
+            }
+        }
+    }
+
+    /// The heading over `count` rows: what they are, and what they are of.
+    fn heading(&self, count: usize) -> String {
+        let (one, many) = match self.scope {
+            Scope::Line => ("location for", "locations for"),
+            Scope::Function { .. } => ("instance of", "instances of"),
+        };
+        format!(
+            "{count} {} {}",
+            if count == 1 { one } else { many },
+            self.spell()
+        )
+    }
+}
+
 /// What was asked, and what it came to.
 ///
-/// There is no `pending` field: a line is being looked for exactly while it is `asked`
+/// There is no `pending` field: a question is being looked for exactly while it is `asked`
 /// and `found` is not about it, which [`Located::pending`] reads off the two.
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Located {
-    /// The line whose locations are wanted, or `None` until anything has been asked.
-    pub(crate) asked: Option<LinePos>,
+    /// The question whose symbols are wanted, or `None` until anything has been asked.
+    pub(crate) asked: Option<Query>,
     /// The file of the source-driven tab the line was asked from, when it was asked
     /// from one: a row is then **chosen for that tab** -- its assembly side follows the
     /// symbol -- rather than opened as a tab of its own. Asked from an assembly-driven
@@ -36,29 +126,29 @@ pub(crate) struct Located {
 }
 
 impl Located {
-    /// The line being looked for and not yet found.
-    pub(crate) fn pending(&self) -> Option<&LinePos> {
+    /// The question being looked for and not yet found.
+    pub(crate) fn pending(&self) -> Option<&Query> {
         let asked = self.asked.as_ref()?;
-        let found = self.found.as_ref().map(|found| &found.at);
+        let found = self.found.as_ref().map(|found| &found.of);
         (found != Some(asked)).then_some(asked)
     }
 }
 
-/// The answer to one line: every symbol compiled from it, over the objects that were
-/// open when it was asked, in the crate's own order -- object by object and by address
-/// within one, which is a tie-break and not a ranking.
+/// The answer to one question: every symbol compiled from its lines, over the objects
+/// that were open when it was asked, in the crate's own order -- object by object and by
+/// address within one, which is a tie-break and not a ranking.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Found {
-    pub(crate) at: LinePos,
+    pub(crate) of: Query,
     /// [`SymbolList`] and not a `Vec`, so handing it to the rows is a pointer compare
     /// rather than a walk of thousands.
     pub(crate) symbols: SymbolList,
 }
 
 impl Found {
-    pub(crate) fn new(at: LinePos, symbols: Vec<Symbol>) -> Found {
+    pub(crate) fn new(of: Query, symbols: Vec<Symbol>) -> Found {
         Found {
-            at,
+            of,
             symbols: SymbolList(Arc::new(symbols)),
         }
     }
@@ -90,10 +180,10 @@ impl Found {
     }
 }
 
-/// Ask for every location of `at`, and bring the panel that will answer to the front.
-/// The one writer of [`Located::asked`].
+/// Ask `query`, and bring the panel that will answer to the front. The one writer of
+/// [`Located::asked`].
 ///
-/// Asking for the line already answered asks again: the objects may have changed since,
+/// Asking the question already answered asks again: the objects may have changed since,
 /// and the answer is about the objects that were open when it was asked. Dropping the
 /// stale answer is what makes the effect send the question, there being no `pending` to
 /// set. The panel is looked for in `dock` and then in the area beside it, since a view
@@ -102,14 +192,14 @@ impl Found {
 pub(crate) fn find_locations(
     mut located: State<Located>,
     mut dock: State<DockArea>,
-    at: LinePos,
+    query: Query,
     subject: Option<Arc<str>>,
 ) {
     let mut next = located.peek().clone();
-    if next.found.as_ref().is_some_and(|found| found.at == at) {
+    if next.found.as_ref().is_some_and(|found| found.of == query) {
         next.found = None;
     }
-    next.asked = Some(at);
+    next.asked = Some(query);
     next.subject = subject;
     located.set(next);
 
@@ -122,22 +212,34 @@ pub(crate) fn find_locations(
     }
 }
 
-/// The menu a source row or an instruction row opens on a right-click: one entry, since
-/// finding the line's locations is the one thing a row is asked for that a click does
-/// not do. Built per press, as `close_menu` is, closing over the row's line; the states
-/// come in as arguments because this is called from an event handler, where no hook may
-/// run.
+/// The menu a source row or an instruction row opens on a right-click: the line's
+/// locations, and -- for a source row inside a function -- the function's instances,
+/// the two things a row is asked for that a click does not do. Built per press, as
+/// `close_menu` is, closing over the row's line; the states come in as arguments because
+/// this is called from an event handler, where no hook may run.
 pub(crate) fn locate_menu(
     located: State<Located>,
     dock: State<DockArea>,
     at: LinePos,
     subject: Option<Arc<str>>,
+    function: Option<Function>,
 ) -> Menu {
-    Menu::new().child(
+    let line = Query::line(at.clone());
+    let instances = function.map(|function| {
+        let query = Query::function(at, &function);
+        let subject = subject.clone();
         MenuButton::new()
-            .on_press(move |_| find_locations(located, dock, at.clone(), subject.clone()))
-            .child("Find all locations"),
-    )
+            .on_press(move |_| find_locations(located, dock, query.clone(), subject.clone()))
+            .child(format!("Find instances of {}", function.name))
+    });
+
+    Menu::new()
+        .child(
+            MenuButton::new()
+                .on_press(move |_| find_locations(located, dock, line.clone(), subject.clone()))
+                .child("Find all locations"),
+        )
+        .maybe_child(instances)
 }
 
 /// A line as the panel names it: the file's own name and the line, the full path being
@@ -146,12 +248,19 @@ fn spell(at: &LinePos) -> String {
     format!("{}:{}", file_name(&at.file), at.line)
 }
 
-/// The Locations view: the line that was asked about, over every symbol it answered with.
+/// The Locations view: what was asked about, over every symbol it answered with.
 ///
 /// `HistoryTab`'s shape with `SymbolsTab`'s list: a filter over a `VirtualScrollView`,
 /// through the same `Filtered` memo, because one line answers with thousands. What the
 /// pane says is decided in one `match` off [`Located`]'s two fields, so "nothing asked",
 /// "being looked for", "found nothing" and the rows cannot disagree about which they are.
+///
+/// The row lit is the symbol the panes are **drawing** -- `Analysis`, not `Active` --
+/// because for a source-driven tab the active document is a file, and the whole point of
+/// choosing a row for one is that its assembly side changes; the lit row is the one
+/// answer the panel gives to which instance is up. Reading `Analysis` wakes the tab on
+/// the worker's `pending` and `slow` flips too, which the rows' data compares equal
+/// across, so nothing below re-renders for them.
 #[derive(PartialEq)]
 pub(crate) struct LocationsTab;
 
@@ -169,39 +278,39 @@ impl Component for LocationsTab {
             Filtered::new(symbols, &filter.read().matcher())
         });
         let filtered = filtered.read().clone();
-        let selected = match &*use_consume::<Active>().0.read() {
-            Some(Document::Assembly(Selection::Symbol(symbol))) => Some(symbol.clone()),
-            _ => None,
-        };
+        let selected = use_consume::<Analysis>()
+            .0
+            .read()
+            .shown
+            .as_ref()
+            .map(|shown| shown.studied.symbol.clone());
         let state = located.read().clone();
 
         let body: Element = match (&state.asked, state.pending(), &state.found) {
             (None, _, _) => placeholder("Nothing looked for yet"),
-            (Some(at), Some(_), _) => {
-                placeholder(format!("Finding locations for {}\u{2026}", spell(at)))
+            (
+                Some(Query {
+                    scope: Scope::Line, ..
+                }),
+                Some(query),
+                _,
+            ) => placeholder(format!("Finding locations for {}\u{2026}", query.spell())),
+            (Some(_), Some(query), _) => {
+                placeholder(format!("Finding instances of {}\u{2026}", query.spell()))
             }
-            (Some(at), None, Some(found)) if found.symbols.0.is_empty() => {
-                placeholder(format!("No code compiled from {}", spell(at)))
+            (Some(query), None, Some(found)) if found.symbols.0.is_empty() => {
+                placeholder(format!("No code compiled from {}", query.spell()))
             }
-            (Some(at), None, Some(found)) => {
+            (Some(query), None, Some(found)) => {
                 // Said over the list rather than in the tab's title: the rows are not
                 // the answer to anything until the question is in view with them.
-                let heading = format!(
-                    "{} {} for {}",
-                    found.symbols.0.len(),
-                    if found.symbols.0.len() == 1 {
-                        "location"
-                    } else {
-                        "locations"
-                    },
-                    spell(at)
-                );
+                let heading = query.heading(found.symbols.0.len());
                 let length = filtered.len();
                 rect()
                     .expanded()
                     .content(Content::Flex)
                     .child(row_tooltip(
-                        at.file.to_string(),
+                        query.tooltip(),
                         section_heading(&heading, None),
                     ))
                     .child(
@@ -247,7 +356,7 @@ impl Component for LocationsTab {
 struct LocationRow {
     symbols: SymbolList,
     index: usize,
-    /// Whether this is the symbol on screen.
+    /// Whether this is the symbol the panes are drawing.
     selected: bool,
     key: DiffKey,
 }
@@ -275,7 +384,7 @@ impl Component for LocationRow {
         let landing = use_consume::<Land>().0;
         let driven = use_consume::<Drives>().0;
         let located = use_consume::<Locations>().0.peek().clone();
-        let at = located.found.as_ref().map(|found| found.at.clone());
+        let at = located.found.as_ref().map(|found| found.of.at.clone());
         let subject = located.subject.clone();
         let symbol = self.symbols.0[self.index].clone();
         let name = symbol.data.display().to_owned();
@@ -317,7 +426,9 @@ impl Component for LocationRow {
                     };
                     // Asked from a source-driven tab that is still open: chosen for it.
                     // The choice is the tab's, and the tab is driven from the line the
-                    // locations are of, so its assembly side becomes this symbol.
+                    // question was asked from, so its assembly side becomes this symbol
+                    // -- for an instance, provided the instance holds code from that
+                    // line, which `compiled::pick` falls back from where it does not.
                     let tab = subject.clone().map(Document::Source);
                     let tab = tab.filter(|tab| open.docs.peek().id_of(tab).is_some());
                     let target = match tab {

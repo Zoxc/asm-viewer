@@ -69,8 +69,8 @@ leave, a global, a capture (`name.rs:248-254`) — is nothing at all.
 `AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `Hist`, `Proj` (which project
 all of that belongs to), `Loading` (the files on their way into `Objects`), `Focused`, `Pinned`,
 `Marked`/`Shift`, `Land` (a line to pin the moment a document arrives), `Analysis` (what
-the worker has to say about the selected symbol), `Locations` (every symbol the line last
-asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
+the worker has to say about the selected symbol), `Locations` (every symbol the line, or the
+function around it, last asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
 `SplitRatio`/`Splits` (how wide a document's leading side is), plus the memos `Symbols` and
 `Active`. The seven that a project *owns* travel together as a `ProjectStates`, since a project
 switch closes all of them and reopens all of them.

@@ -161,10 +161,15 @@ impl Component for SourceRow {
                 // A location found from the file a source-driven tab is about is chosen
                 // for that tab; from a companion it opens the symbol.
                 let subject = self.drives.then(|| self.file.clone());
+                // The function this row is a line of, looked for on the press and not
+                // per render: it is a walk of the file's functions, and a row is
+                // rendered far more often than it is right-clicked.
+                let source = self.source.clone();
                 move |e: Event<PressEventData>| {
+                    let function = functions::enclosing(&source.0.functions, at.line).cloned();
                     ContextMenu::open_from_event(
                         &e,
-                        locate_menu(located, dock, at.clone(), subject.clone()),
+                        locate_menu(located, dock, at.clone(), subject.clone(), function),
                     );
                 }
             })

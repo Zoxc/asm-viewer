@@ -1,31 +1,40 @@
 //! The symbols a source line was compiled into, and which of them a tab follows.
 //!
 //! The crate answers a file and a line with the symbols holding code from it
-//! ([`Object::symbols_at_line`]), one object at a time. This asks that of every object
+//! ([`Object::symbols_from_lines`]), one object at a time. This asks that of every object
 //! that is open and then chooses, because one line compiles into as many symbols as there
 //! are instantiations of it, times as many objects as hold one — 9 374 of them for
 //! `core/src/ptr/mod.rs:848` on this app's own binary.
+//!
+//! A function is the same question over its lines: every symbol holding code from any of
+//! them, each once, which is how the picker lists a generic function's instances.
 //!
 //! Both halves are blocking: the first ask against an object builds its whole index, which
 //! is seconds on a large one. They belong on the analysis worker and nowhere else.
 
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use analysis::{Object, Symbol};
 
-/// Every symbol in `objects` holding code compiled from `file` at `line`, object by object
-/// and, within one, in the crate's own address-then-name order.
+/// Every symbol in `objects` holding code compiled from `file` over `lines`, object by
+/// object and, within one, in the crate's own address-then-name order. A symbol holding
+/// code from several of the lines is one hit; one line is `line..=line`.
 ///
 /// `file` is matched exactly, on the string the debug info said: two objects whose
 /// `DW_AT_comp_dir` disagree do not join, and nothing here asks the filesystem about a
 /// path.
-pub fn compiled_from(objects: &[Arc<Object>], file: &str, line: u32) -> Vec<Symbol> {
+pub fn compiled_from(
+    objects: &[Arc<Object>],
+    file: &str,
+    lines: RangeInclusive<u32>,
+) -> Vec<Symbol> {
     objects
         .iter()
         .flat_map(|object| {
             object
-                .symbols_at_line(file, line)
+                .symbols_from_lines(file, lines.clone())
                 .into_iter()
                 .map(|data| Symbol {
                     object: object.clone(),

@@ -13,8 +13,8 @@ impl PartialEq for SourceText {
     }
 }
 
-/// A source file ready to be drawn: its text as a rope, and the coloured spans
-/// tree-sitter produced for each of its lines.
+/// A source file ready to be drawn: its text as a rope, the coloured spans tree-sitter
+/// produced for each of its lines, and the functions it defines by the lines they span.
 ///
 /// `SyntaxBlocks` has two traps: `get_line` unwraps rather than answering `None`, and it
 /// holds one block per `Rope::len_lines()` -- which counts a phantom line after a trailing
@@ -24,17 +24,21 @@ pub(crate) struct Highlighted {
     pub(crate) blocks: SyntaxBlocks,
     /// How many rows the pane draws, which is *not* `blocks.len()`.
     pub(crate) lines: usize,
+    /// Every function in the file, outer before inner, for a row to say which one it is
+    /// a line of. Empty for a file no grammar parses.
+    pub(crate) functions: Vec<Function>,
 }
 
 impl Highlighted {
     fn new(file: &SourceFile) -> Highlighted {
         let rope = Rope::from_str(file.text());
         let theme = palette().syntax();
+        let language = language(file.path());
 
         let mut highlighter = SyntaxHighlighter::new();
         // A language of `None` is not a failure: the highlighter then hands back one
         // plain span per line in the theme's text colour.
-        highlighter.set_language(language(file.path()).as_ref(), &theme);
+        highlighter.set_language(language.as_ref(), &theme);
 
         let mut blocks = SyntaxBlocks::default();
         highlighter.parse(&rope, &mut blocks, None, &theme);
@@ -43,10 +47,30 @@ impl Highlighted {
             .len()
             .saturating_sub(usize::from(file.text().ends_with('\n')));
 
+        // The function spans: Rust by the scanner of its own (`functions::rust`, the
+        // grammar being behind the compiler), C and C++ parsed a second time with the
+        // same grammar -- `SyntaxHighlighter` keeps its tree private, and what is wanted
+        // of it is a few hundred bytes kept against a tree that would be most of the
+        // file again. Milliseconds, once per file, in the same render the highlighting
+        // already costs.
+        let functions = match file.path().extension().and_then(|ext| ext.to_str()) {
+            Some("rs") => functions::rust::functions(file.text()),
+            _ => language
+                .as_ref()
+                .and_then(|language| {
+                    let mut parser = tree_sitter::Parser::new();
+                    parser.set_language(&language.language).ok()?;
+                    let tree = parser.parse(file.text(), None)?;
+                    Some(functions::functions(&tree, file.text().as_bytes()))
+                })
+                .unwrap_or_default(),
+        };
+
         Highlighted {
             rope,
             blocks,
             lines,
+            functions,
         }
     }
 }

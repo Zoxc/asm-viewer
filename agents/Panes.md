@@ -55,7 +55,9 @@ handler at all — which is what stops a listing from re-driving itself. Nothing
 active document does not, so nothing is pushed onto the history, the tab already being where the
 reader is. A line is kept per tab rather than one for the window, and it is a `u32` and holds no
 `Arc<Object>`, so it survives its binary being closed and the next ask simply answers out of what
-is left.
+is left. A right-click on a source row is neither a pin nor a drive: it opens `locate_menu` --
+the line's locations and, inside a function as the file's parse says, the function's instances
+-- both answered in the Locations view (`agents/Worker.md`), whose rows are what choose.
 
 The rows are the app's own (`SourceRow`, a `VirtualScrollView`), **not** freya's `CodeEditor`,
 which paints a line background only for the cursor's row and keeps its scroll state private —
@@ -65,8 +67,14 @@ pane the reader is typing in, so the Scratchpad's editor *is* that component (`a
 `freya-code-editor` does offer is its tree-sitter pipeline, public on its own: `SyntaxHighlighter` +
 `SyntaxBlocks` + an `EditorSyntaxTheme` turn a `Rope` into one list of `(Color, TextNode)` spans per
 line. The theme is the app's own (`Palette::syntax`), the grammars are ours, and an unknown
-extension degrades to one plain span per line. A file is parsed once when loaded and cached in a
-`static` in `ui/highlight.rs` — parsing is stateful across lines, so it cannot be per row. Two things about
+extension degrades to one plain span per line. A file is parsed when loaded and cached in a
+`static` in `ui/highlight.rs` — parsing is stateful across lines, so it cannot be per row — and
+parsed **twice**: `SyntaxHighlighter` keeps its tree private, and the function spans the source
+row's menu needs (`src/functions.rs`, "the function this line is inside") are read off a second
+parse with the same grammar for C and C++, and for Rust off a scanner of our own
+(`functions/rust.rs`), the grammar losing whole files of the standard library to `const impl`
+(`notes/upstream/tree-sitter-rust.md`); either way a few hundred bytes are kept against a
+tree that would be most of the file again. Two things about
 `SyntaxBlocks` bite: `get_line` unwraps rather than answering `None`, and it holds one block per
 `Rope::len_lines()`, which counts a phantom line after a trailing newline (hence `Highlighted::lines`).
 

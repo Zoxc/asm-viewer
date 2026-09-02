@@ -38,7 +38,8 @@ Fedora it needs `freetype-devel fontconfig-devel libglvnd-devel wayland-devel` t
 is not a supported linker.
 
 Dependency versions are pinned by compatibility, not taste: the `tree-sitter-*` grammars must sit
-on the `tree-sitter-language` ABI that `freya-code-editor`'s `tree-sitter` uses, and `addr2line`
+on the `tree-sitter-language` ABI of the one `tree-sitter` the app and `freya-code-editor` share
+(`cargo tree -p viewer -d`), and `addr2line`
 0.21 / `gimli` 0.28 / `object` 0.32 must stay one copy each — check with `cargo tree -p analysis
 -d` after touching any of them. The reasoning is in the `Cargo.toml` comments; keep them current.
 
@@ -81,6 +82,8 @@ command.
 - `src/history.rs` — back/forward navigation history.
 - `src/naming.rs` — a demangled name cut down to the `module::fn_name` a tab is called by.
 - `src/fonts.rs` — the desktop's font settings (KDE, Gnome, Win32) merged under the user's own.
+- `src/functions.rs` — the functions a source file defines, by the lines they span, and which
+  one a line is inside; `functions/rust.rs` is the scanner that finds Rust's without the grammar.
 - `src/ui.rs` — the freya UI's root: its prelude, the list of its files, `toolbar` with its two
   history buttons, and `app`.
 - `src/ui/metrics.rs` — every measurement no component owns, and the fonts they follow.
@@ -89,8 +92,10 @@ command.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
 - `src/ui/focus.rs` — the two panes pointing at each other, and where each side of a tab was left.
 - `src/ui/marks.rs` — the run of rows a reader picks out, and what Ctrl+C copies.
-- `src/ui/highlight.rs` — a source file parsed once when loaded, and the cache holding it.
-- `src/ui/locations.rs` — every symbol a line was compiled into: the question, the answer, the panel.
+- `src/ui/highlight.rs` — a source file parsed when loaded, its spans and its functions, and the
+  cache holding it.
+- `src/ui/locations.rs` — every symbol a line, or the function around it, was compiled into: the
+  question, the answer, the panel.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, the Info pane, and their rows.
@@ -132,6 +137,9 @@ invalidates in the same commit**: these are the record of why things are the way
 - `agents/Sidebar.md` — the filtered lists, the Objects tree, closing a binary, the Project view.
 - `agents/Appearance.md` — the palette, theme switching, fonts, row heights, the Settings page.
 - `agents/Headless.md` — `freya-testing` as it actually behaves, checked against its sources.
+
+Bugs and gaps in dependencies are in `notes/upstream/`, one file per crate: what was hit, what
+it cost here, and whether it was reported. Add the note with the workaround.
 
 ## Rules that hold everywhere
 

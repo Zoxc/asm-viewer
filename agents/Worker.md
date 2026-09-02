@@ -50,8 +50,16 @@ not superseded once started, and every symbol click behind it waits. That is wha
 "Find all locations" on a source row or an instruction row asks `Question::Locate` of the same
 worker, and the answer -- `compiled_from`'s `Vec<Symbol>`, every symbol the line was compiled
 into over every open object -- lands in `Located`, not in `Analyzed`: it stands until the next
-ask whatever the reader opens meanwhile, so it is not a reading of the active document. A row
-of it is a **symbol and not a range inside one**, because the crate answers symbols by design
+ask whatever the reader opens meanwhile, so it is not a reading of the active document. The
+question is a `Query`: the row it was asked from and a `Scope`, one line or **the whole of the
+function around it** -- Step 5's instance picker, which is the same panel under another heading
+("N instances of `foo`"), asked for by a second entry in the source row's menu. The function's
+lines come from the source and not from DWARF (`src/functions.rs`: a scanner of our own for
+Rust, since the grammar loses whole files to syntax it does not know, and the tree-sitter parse
+for C and C++): "the function the reader is on" is a source notion, `DW_AT_decl_line` is one line and disagrees with the line program by the prologue, and a
+symbol's own rows over-cover wherever something was inlined into it. Every symbol holding code
+from those lines is listed, an inlined caller included, in the crate's order; the panel's
+filter is how a name is narrowed to. A row of it is a **symbol and not a range inside one**, because the crate answers symbols by design
 and finding each hit's ranges would be a line-program walk per symbol under the context mutex,
 seconds for a line that answers with thousands and every symbol click waiting behind it;
 landing on the line inside the symbol is the pin's job (`agents/Panes.md`). Three rules travel with it.
@@ -74,14 +82,18 @@ the assembly side that listing belongs to — a row is *chosen for that tab*, wh
 is, is driven from the line and has its assembly side follow the symbol; from an assembly-driven
 tab, or once the asking tab has closed, a row opens the symbol as a tab of its own. Both go
 through `documents::land`, which takes the target document, so the pin and the landing are one
-rule for either.
+rule for either. An instance row is chosen the same way, from the row the menu was opened on,
+so the tab is driven from that line; where the instance holds no code from it, `pick` falls
+back as it does for any choice. **The row lit in the panel is the symbol drawn** (`Analysis`),
+not the active document: for a source-driven tab the active document is a file, and the lit row
+is the one thing on screen that says which instance its assembly side is on.
 
 **`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at
 its head.** The head is the load-bearing part: nothing is pushed onto the history between two
 clicks in one function, so without it reading down the lines of a generic function would walk
 across its instantiations. Below the tie-break the order is the crate's own — the lowest-addressed
-symbol of the first object that answered — which is arbitrary and is said to be arbitrary; Step 5's
-picker is where a reader says which instance they meant.
+symbol of the first object that answered — which is arbitrary and is said to be arbitrary; the
+instance picker above is where a reader says which instance they meant.
 
 **An answer can now outlive the document that named it, and one rule stops it.** A symbol question
 is a tab into one object and that tab closes with its file, so before this nothing in the analysis
