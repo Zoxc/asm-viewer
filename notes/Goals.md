@@ -8,6 +8,10 @@ not decided on yet — and `- [D]` one that is deferred, with the reason why on 
 Only check an item off when all of it is done. A goal that is only partly done gets split into
 one item per part, so the unfinished half stays visible.
 
+A goal that is done can be moved into `notes/specs/`, written there as the rule it settled; it
+leaves this list when it is. That is a move made on request, like everything else about specs
+(`notes/specs/README.md`).
+
 ## Source / assembly split view
 
 - [x] Have a source view and an assembly view side by side. This is the default layout of the
@@ -154,25 +158,6 @@ one item per part, so the unfinished half stays visible.
   the top. A remembered row still wins, and a symbol whose debug info places it nowhere
   opens at the top of the file as before.
 - [x] Mouse buttons can navigate history so you can go back and forth.
-- [x] Back and forward are **per tab**, the way a browser's are: each tab keeps its own trail
-  (`Docs` maps a tab's id to a `History` and the document it shows is the trail's current
-  entry), the mouse buttons and the chevrons walk the trail of the tab on screen, and going
-  back in one tab does not move another. With it, the rules that only make sense together. A
-  click **inside** a tab — a relocation link, the companion header — navigates **in place**,
-  replacing what the tab shows and leaving the place left one Back away; Ctrl+click opens a
-  new tab beside the current one instead, as do "Open as symbol", "Show in unified view" and
-  the unified view's Ctrl-press on a label. A click **outside** a tab — a row in Symbols,
-  Objects, Bookmarks, Locations, Files or History — opens its place in the **temporal** tab
-  (below), and a tab already showing the place is raised instead. The History panel stays
-  **global**, one record of everywhere the reader has been across every tab with no cursor of
-  its own (`Visits`), the row of the place the tab on screen shows marked, since that is what
-  makes it a way of finding somewhere you were rather than a second copy of a tab's own trail.
-  The four decisions: the two `Positions` maps and `Driven` are keyed **per tab and place**
-  (`Entry`), so Back restores the rows each side was left at; `session.toml` saves **the whole
-  trail** per tab, capped at 50, so Back works across a restart; `close_binary` closes a tab
-  whose *current* place is in the file and thins every other trail, the cursor carried; and a
-  click in the History panel is a click from outside, into the temporal tab. New tabs open
-  beside the tab on screen.
 - [x] Navigating brings back each pane's caret and selection with the place. Back, Forward, a
   switch of tab and a place a tab has been at before put back what the reader had picked out in
   **both** panes -- the companion's run in an assembly-driven tab, the listing's in a
@@ -202,16 +187,6 @@ one item per part, so the unfinished half stays visible.
   ever worked out for it, so the bar names the object there instead. The names are ellipsised
   rather than wrapped, this repo's samples reaching 1038 bytes mangled, and **pressing one copies
   it**, which with the tooltip is the whole of how the rest of a long name is got at.
-- [x] Name the Assembly tab after the function — just `namespace/module::fn_name`, without the
-  extra generics, mangling, etc. (for Rust / C++). There is no Assembly tab any more: a document's
-  tab *is* named after its function, and `src/naming.rs` cuts that name down to its last two path
-  segments. Generic arguments go however deep they nest, `<Vec<T> as IntoIterator>::into_iter` is
-  `Vec::into_iter`, a C++ argument list and the `const` after it go, `operator<<` is a name rather
-  than a bracket, and rustc's legacy `::h<hash>` suffix goes with them; the closure a symbol *is*
-  is kept, and only the innermost one. Over this app's own binary that is 151 characters of
-  demangled name down to 21. The History rows take the same name through `entry_text`, which the
-  two share; the whole name is still what a tooltip says and what the History filter matches, and
-  the 40-character elision is still the last word for a name that is long anyway.
 - [ ] Fix the `<entry point>` tab name: the shortening in `naming.rs` reads a name as a
   demangled path with generic arguments, and the angle brackets the app itself puts around
   its two made-up names — `<entry point>`, and `<function 0x…>` for a function only an
@@ -694,13 +669,6 @@ one item per part, so the unfinished half stays visible.
 - [ ] Let the views close — Project, Settings, the Scratchpad and the rest — and add a menu at
   the top left of the window to reopen them. Today a view has no × because there is no way back
   once it is closed; the menu is that way back, so the × can come.
-- [x] Selecting a symbol in a view opens a "temporal" tab when the symbol is not already open
-  in a tab: one preview tab reused by the next such selection — each selection pushed onto its
-  trail, so Back inside it walks the rows clicked — so walking down a list does not leave a tab
-  behind per click. It opens beside the tab on screen, is drawn with an **italic** name and
-  stays in its slot. What promotes it into a tab that stays: Ctrl+click on the place it shows,
-  a double-click on its header, or a link followed in place inside it; Back and Forward do not.
-  It is saved with the session as the tab it is, flag and all.
 - [x] Close the other tabs from a tab's context menu. A right-click on a document's tab offers
   "Close other tabs", which keeps the tab it was opened on and closes every other document in
   the panel; the panel lands on the kept tab when what was on screen is among the ones closing,
@@ -821,16 +789,6 @@ one item per part, so the unfinished half stays visible.
   It is a dockable view rather than a chip in the content strip, for the reason now written into
   `agents/UI.md`: a document there is a *place in a binary*, and a project is not one.
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
-- [x] Split project storage into toml? for user given settings and another file for opened tabs /
-  cached binary inspection data. Three files now: `settings.toml` for the user's own preferences,
-  `projects/<id>/project.toml` for what the user *said* about a project (its name, its directory,
-  its binaries) and `projects/<id>/session.toml` for what the app *noticed* (tabs, sources, the
-  shown file, the selection, the history, the per-tab rows, the binary digests). The line is the
-  one the save policy already drew: the first is written the moment the user acts, the second on
-  the thirty-second flush — so the file worth keeping or hand-editing is exactly the one that
-  changes only when they do something. A corrupt session then costs a scroll position rather
-  than the list of binaries, and a binaries change writes both, so a session can never name a
-  tab into a binary the project has let go of.
 - [x] Save the navigation history.
 - [x] Opening binary files saves immediately.
 - [x] User project changes should save immediately. `project::record` writes at once when

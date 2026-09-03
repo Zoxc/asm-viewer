@@ -11,6 +11,11 @@ Standing instructions from the user.
   `rustfmt.toml`: the defaults are what the formatted files already follow.
 - Don't reference an uncommitted file from a committed one.
 - Keep `notes/Goals.md` current. It is the checklist of planned features.
+- `notes/specs/` is what a finished feature does, one file per area with a section per
+  feature, moved there from `notes/Goals.md`. **Never write or change a spec without asking the
+  user first**; read the spec files to gauge the writing style, keep development history and
+  implementation detail out, and make a second pass to cut what can go
+  (`notes/specs/README.md`).
 - **Adding a goal is not a request to do it.** "Add a goal: …" means write the item down and
   stop there; the checklist is where work is planned, not where it is started. Implement one
   only when asked for the thing itself.
@@ -187,6 +192,11 @@ invalidates in the same commit**: these are the record of why things are the way
 - `agents/Sidebar.md` — the filtered lists, the Objects tree, closing a binary, the Project view.
 - `agents/Appearance.md` — the palette, theme switching, fonts, row heights, the Settings page.
 - `agents/Headless.md` — `freya-testing` as it actually behaves, checked against its sources.
+
+What the app *does* — the rules a finished feature follows — is in `notes/specs/`, one file per
+area with a section per feature, moved there from `notes/Goals.md` once the goal is done. A spec
+says what and an `agents/` note says why; neither repeats the other, and a spec is only written
+or changed on the user's say-so (`notes/specs/README.md`).
 
 Bugs and gaps in dependencies are in `notes/upstream/`, one file per crate: what was hit, what
 it cost here, and whether it was reported. Add the note with the workaround. Each file may end

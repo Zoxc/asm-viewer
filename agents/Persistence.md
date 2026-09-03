@@ -188,8 +188,8 @@ than silently vanishing.
 **The settings are a file of their own, above the projects** (`src/settings.rs`, `settings.toml`
 at the top of the state directory beside `recents.toml`, since a setting is the user's and not any
 one project's; same atomic `.tmp` + rename, same "a missing, unreadable or corrupt file is simply
-the default"). This was the first slice of the storage split `notes/Goals.md` asks for under
-*Projects*, and the same cut runs through each project: what the app **noticed** changes on every
+the default"). This was the first slice of the storage split `notes/specs/Storage.md` states,
+and the same cut runs through each project: what the app **noticed** changes on every
 click, what the user **said** changes when they say so, so they have different rates, different
 save policies and different consequences when one of them will not parse. `Settings` is the theme choice (`Theme`: light, dark or follow the desktop) and a
 `FontSetting` — a family and a size — for each of the interface and fixed-width fonts. **Every
