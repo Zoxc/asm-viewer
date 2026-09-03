@@ -21,16 +21,18 @@
 //!   that can drift.
 //!
 //! **What it costs, measured** (release, first ask against a fully parsed file). On
-//! `viewer-sample` — one object, 115 577 symbols, 267 MB of DWARF — 2.2 s, of which **2.0 s is
-//! taking every symbol's extent** and 0.23 s is the line-program walk; the index is 2 096 files
-//! and 624 544 `(line, symbol)` pairs, 10 MB of them, and holding the line programs the walk
-//! parsed takes the process from 756 MB to 1.23 GB. On `libanalysis-sample.rlib` — 196 objects,
-//! 4 164 symbols — 94 ms for all of them together, 862 files and 25 870 pairs. Every ask after
-//! the first is two binary searches: 5 µs, or 750 µs for the worst line in the repo.
+//! `viewer-sample` — one object, 115 577 symbols, 267 MB of DWARF — **0.43 s**, down from
+//! 2.2 s of which 2.0 s was taking every symbol's extent: its `.eh_frame` now states 115 096 of
+//! them and the DIE walk is left the 481 it does not cover, so the 0.23 s line-program walk is
+//! most of what remains; the index is 2 096 files and 624 544 `(line, symbol)` pairs, 10 MB of
+//! them, and holding the line programs the walk parsed takes the process from 756 MB to
+//! 1.23 GB. On `libanalysis-sample.rlib` — 196 objects, 4 164 symbols — 94 ms for all of them
+//! together, 862 files and 25 870 pairs. Every ask after the first is two binary searches:
+//! 5 µs, or 750 µs for the worst line in the repo.
 //!
-//! So the extent pass was nine tenths of the build, and it is paid deliberately: a DIE walk
-//! for every symbol no unwind entry covers — the whole object, before `.eh_frame` was read —
-//! which is what an extent that agrees with
+//! The extent pass was nine tenths of the build while it was a DIE walk of the whole object,
+//! and that walk is still what a symbol no unwind entry covers pays, deliberately: it is what
+//! an extent that agrees with
 //! [`SymbolData::line_info`] costs. Attributing by [`SymbolData::estimate_size`] instead would
 //! be one binary search per row and no DWARF at all, and would let the index name a symbol
 //! whose own line info does not name the line back — the one thing a caller walking index →

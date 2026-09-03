@@ -75,7 +75,15 @@ functions nothing named; every entry's begin is covered), opening in 545–595 m
 `rustc_driver.dll` from 115 861 to 234 070 on 218 434 entries (118 209 nameless — functions
 neither its exports nor its PDB's procedures and publics name), opening in 1.26–1.43 s from
 1.19–1.31; and the C-API `LLVM-C.dll` from its 1 221 exports to 59 407, in 420–450 ms from
-370–390. A procedure's name
+370–390. On ELF the table adds no symbol while the symbol table is there — every one of
+`librustc_driver.so`'s 172 169 FDEs begins at a `.symtab` function, `st_size` equal to the
+FDE's length in all 197 375 — and names everything once it is gone: a stripped copy goes from
+the 16 728 functions its `.dynsym` names to 172 169, opening in 400–540 ms from 300–345.
+Reading the table costs at open — `viewer-sample`, 114 321 FDEs, opens in 1.26–1.28 s from
+1.04–1.23, the unstripped `librustc_driver.so` in 2.8–2.9 s from 2.5–2.7 — and pays back at
+the first extent: every covered symbol's is stated (115 096 of `viewer-sample`'s 115 577,
+197 375 of the `.so`'s 197 381) where it was a DWARF walk, which is what the reverse index's
+first ask below is made of. A procedure's name
 is the compiler's display name (`add`, `core::ptr::drop_in_place<T>`), which goes through the
 same demangling batch as an export's and comes out untouched; a public's is the decorated name
 as the linker saw it (`?add@@YAHHH@Z`, `_ZN4core3ptr…`, a plain `add` for C), and goes through
@@ -368,13 +376,16 @@ the forward direction can be handed straight back. Nothing here normalises a pat
 filesystem about one; two objects whose `DW_AT_comp_dir` disagree do not join, and that is a
 cross-object question for whoever asks one.
 
-Measured, release, first ask: the 331 MB binary 2.2 s — **2.0 s of it the extent pass** and 0.23 s the
-line-program walk — for 2 096 files and 624 544 `(line, symbol)` pairs, 10 MB of them, taking the
-process from 756 MB to 1.23 GB with the parsed line programs held; the 196-member rlib 94 ms
-for all 196 objects, 862 files, 25 870 pairs. Every ask afterwards is two binary searches (5 µs).
-The extent pass being nine tenths of it is the price of that agreement, and it is a DIE walk of the
-whole object — the cheap alternative, attributing by `estimate_size`, is one binary search per row
-and lets the index name a symbol whose own line info does not name the line back. One line into many
+Measured, release, first ask: the 331 MB binary **0.43 s**, down from 2.2 s of which 2.0 s was
+the extent pass, once `.eh_frame` stated 115 096 of its 115 577 extents and the DIE walk was left
+the 481 no FDE covers; the 0.23 s line-program walk is now most of it — for 2 096 files and
+624 544 `(line, symbol)` pairs, 10 MB of them, taking the process from 756 MB to 1.23 GB with
+the parsed line programs held; the 196-member rlib 94 ms for all 196 objects, 862 files, 25 870
+pairs. Every ask afterwards is two binary searches (5 µs). The extent pass was nine tenths of it
+as a DIE walk of the whole object, and that walk is still what a symbol without an unwind entry
+pays, deliberately — the cheap alternative, attributing by `estimate_size`, is one binary search
+per row and lets the index name a symbol whose own line info does not name the line back. One
+line into many
 symbols is not theoretical: `core/src/ptr/mod.rs:848`, `drop_in_place`, answers with **9 374** of
 the 331 MB binary's symbols.
 
@@ -487,7 +498,8 @@ view a stable structure to scroll while instructions arrive. **A stretch is deco
 `SymbolData::assembly`'s answer, so the section and the symbol view cannot disagree, and the
 bytes from `SymbolData::extent` to the next label are the stretch's `Gap`. The step that planned
 this had the gaps "known up front", and they deliberately are not — the extent is a DWARF walk
-that costs 2.0 s over the 331 MB binary (the reverse index's measurement), and the skeleton has
+that cost 2.0 s over the 331 MB binary before its `.eh_frame` was read (the reverse index's
+measurement), and the skeleton has
 to cost nothing. **A gap is never decoded.** Bytes no symbol claims are not known to be code —
 alignment padding, a jump table MSVC put after the function, a stripped local — and decoding
 them would print the confident page of nonsense `undecodable` exists to prevent, so a gap is

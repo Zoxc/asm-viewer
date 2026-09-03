@@ -1038,7 +1038,11 @@ one item per part, so the unfinished half stays visible.
   they lie the committed `.o`'s FDEs fall inside `.text` and would hand `sum_to` an extent of
   4 — which the reader refuses and a test pins. A `.cold` part has an FDE of its own and no
   chained flag, so stripped it is a `<function 0x…>` of its own. Mach-O's `__eh_frame` is
-  one match arm away and untested, so not taken.
+  one match arm away and untested, so not taken. Measured, release: the stripped copy goes
+  from 16 728 symbols to 172 169, opening in 400–540 ms from 300–345; reading the table costs
+  the unstripped `.so` 2.8–2.9 s to open from 2.5–2.7 and `viewer-sample` 1.26–1.28 s from
+  1.04–1.23, and the reverse index's first ask on `viewer-sample` falls from 2.2 s to 0.43 s,
+  115 096 of its 115 577 extents now stated and 481 still walked.
 - [ ] Take a nonzero `st_size` before the DWARF extent walk. The `.eh_frame` measurement
   says `st_size` was exact for every one of `librustc_driver.so`'s 197 375 functions, while
   `SymbolData::extent` never reads it: an ELF with a symbol table and no `.eh_frame` (built
@@ -1147,8 +1151,9 @@ one item per part, so the unfinished half stays visible.
   symbol list is what the reader is waiting for, while `SourceIndex` — a file and a line out to
   the symbols compiled from them — is what the first "find all locations" and the first click
   in a source-driven tab ask for. It is built on the first ask today (`OnceLock::get_or_init` in
-  `line.rs`, deliberately never at parse time), so that click pays 2.2 s on this app's own
-  binary, of which 2.0 s is the extent pass. That is on the worker and not on the UI thread, so
+  `line.rs`, deliberately never at parse time), so that click pays 0.43 s on this app's own
+  binary — 2.2 s before its `.eh_frame` stated the extents, 2.0 s of which was the extent
+  pass. That is on the worker and not on the UI thread, so
   nothing is blocked — what is wrong is that it is seconds late every first time, and the wait
   is spent after the reader has asked rather than while they were reading the symbol list.
   Four things to decide before starting. Whether it runs on the demangling pool now that there
