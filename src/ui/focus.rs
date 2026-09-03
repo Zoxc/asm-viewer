@@ -1,7 +1,8 @@
-//! The two panes pointing at each other, and each tab's memory of where it was left.
+//! A place in a file, the two panes named as a pair, the landing a click from outside
+//! them makes, and each tab's memory of where it was left.
 //!
-//! `Focused` is where the *pointer* is and `Anchored` is where a *click* fixed them: two
-//! states, because a pin a hover could overwrite is a pin a hover silently undoes.
+//! What the two panes say to each other is in `marks.rs`: each pane's picked-out run is
+//! what the other pane lights the pair of, and owes a scroll to.
 
 use super::*;
 
@@ -16,41 +17,6 @@ pub(crate) struct LinePos {
     pub(crate) line: u32,
 }
 
-/// Which row put the focus where it is. It is the pair, position and origin, that
-/// `release_focus` compares: two instructions compiled from one source line share a
-/// position but not an address.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FocusOrigin {
-    /// The assembly row for the instruction at this address.
-    Instruction(u64),
-    /// The source row for the focused line itself.
-    Source,
-}
-
-#[derive(Clone, PartialEq)]
-pub(crate) struct LineFocus {
-    pub(crate) at: LinePos,
-    pub(crate) from: FocusOrigin,
-}
-
-/// The cross-view focus, shared through context. `None` while the pointer is on neither
-/// pane.
-#[derive(Clone, Copy)]
-pub(crate) struct Focused(pub(crate) State<Option<LineFocus>>);
-
-/// Give up the focus a row set when the pointer leaves it, unless another row has taken it
-/// over since.
-///
-/// **A row cannot clear the focus unconditionally**: `EventName::cmp` (freya-core
-/// `events/name.rs`) leaves the order of the leaving row's `pointerout` and the entering
-/// row's `pointerover` undefined, so this clears only what this row itself put there --
-/// origin included, which is what keeps two instructions of one source line apart.
-pub(crate) fn release_focus(mut focused: State<Option<LineFocus>>, mine: Option<&LineFocus>) {
-    if mine.is_some() && focused.peek().as_ref() == mine {
-        focused.set(None);
-    }
-}
-
 /// One of the two panes that show code.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Pane {
@@ -58,110 +24,13 @@ pub(crate) enum Pane {
     Source,
 }
 
-/// The source position a click fixed the two panes on.
-#[derive(Clone, PartialEq)]
-pub(crate) struct Anchor {
-    pub(crate) at: LinePos,
-    /// The panes that have yet to scroll `at` into view -- the other one from the pane
-    /// clicked, or both for a click made in neither -- and none once they have. Separate
-    /// from `at` so that clicking the same line twice is two requests.
-    pub(crate) reveal: Owed,
-    /// Whether this pin was made by a [`Landing`] -- a click from outside both panes --
-    /// which names the **file** the Source pane shows as well as the line, where a click
-    /// inside them cannot change which file is up. See `source_side`.
-    pub(crate) landed: bool,
-}
-
-/// Which of the two panes still owe a scroll to a pin. A pair of flags and not an
-/// `Option<Pane>`: a click in one pane asks the other, but a row in the Locations panel
-/// is a click in neither and asks both.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct Owed {
-    pub(crate) assembly: bool,
-    pub(crate) source: bool,
-}
-
-impl Owed {
-    pub(crate) const BOTH: Owed = Owed {
-        assembly: true,
-        source: true,
-    };
-
-    /// A scroll owed by `pane` alone.
-    pub(crate) fn by(pane: Pane) -> Owed {
-        match pane {
-            Pane::Assembly => Owed {
-                assembly: true,
-                source: false,
-            },
-            Pane::Source => Owed {
-                assembly: false,
-                source: true,
-            },
-        }
-    }
-
-    fn owes(self, pane: Pane) -> bool {
-        match pane {
-            Pane::Assembly => self.assembly,
-            Pane::Source => self.source,
-        }
-    }
-
-    fn paid(&mut self, pane: Pane) {
-        match pane {
-            Pane::Assembly => self.assembly = false,
-            Pane::Source => self.source = false,
-        }
-    }
-}
-
-/// The anchored position, shared through context: the line a click fixed both panes on.
-/// `None` until something is clicked, and again whenever the selection changes
-/// (`use_clear_focus`).
-#[derive(Clone, Copy)]
-pub(crate) struct Anchored(pub(crate) State<Option<Anchor>>);
-
-/// The position `pane` still owes a scroll to, if it is owed one.
-///
-/// **A look and not a take.** The click that pins is, in a source-driven tab, the click
-/// that asks for the listing, so the run this wakes is still holding the *previous* one,
-/// in which no row matches. Consuming the request there would spend it on a listing that
-/// cannot answer it and the one that can would arrive to nothing owed. So the field is
-/// left meaning what it says -- the pane owes the scroll until it has made it -- and
-/// [`reveal_made`] is what clears it. A request nothing ever matches stays owed until the
-/// next click replaces it or [`use_clear_focus`] drops it with the tab.
-pub(crate) fn owed_reveal(anchored: State<Option<Anchor>>, pane: Pane) -> Option<LinePos> {
-    // `read` and not `peek`: this is the subscription that wakes the caller's effect on
-    // the next click, so it has to happen before any early return.
-    let pin = anchored.read();
-    match pin.as_ref() {
-        Some(pin) if pin.reveal.owes(pane) => Some(pin.at.clone()),
-        _ => None,
-    }
-}
-
-/// Say that `pane` has made the scroll it was owed. The pin itself stays, only `pane`'s
-/// half of `reveal` is cleared, so it is answered exactly once and a repeat click is a
-/// second request.
-pub(crate) fn reveal_made(mut anchored: State<Option<Anchor>>, pane: Pane) {
-    let owed = matches!(anchored.peek().as_ref(), Some(pin) if pin.reveal.owes(pane));
-    if !owed {
-        return;
-    }
-
-    if let Some(pin) = anchored.write().as_mut() {
-        pin.reveal.paid(pane);
-    }
-}
-
-/// A line to pin the moment `tab` becomes the active document.
+/// A line to pick out the moment `tab` becomes the active document.
 ///
 /// What a click from outside the two panes -- a row in the Locations panel -- needs and
 /// a click inside them does not: opening the document is an `activate`, and the change of
-/// document that makes is exactly what [`use_clear_focus`] answers by dropping the pin,
-/// so a pin set in the same handler would be gone a beat later. Left here instead, for
-/// that effect to turn into the pin when the document it names arrives.
+/// document that makes is exactly what `use_land` answers by dropping both panes' runs,
+/// so a run picked out in the same handler would be gone a beat later. Left here instead,
+/// for that effect to turn into the source pane's run when the document it names arrives.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Landing {
     pub(crate) tab: Document,
@@ -217,7 +86,7 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
 /// when a row in the Locations panel opens a symbol on a line, and two effects' scrolls
 /// land in whichever order the runtime wakes them -- with the reveal first, it had
 /// marked itself made by the time the kept row was put over it. One effect has one
-/// order. `reveal` reads the pin, which is what wakes this on a click inside a tab.
+/// order. `reveal` reads the marks, which is what wakes this on a click inside a tab.
 pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     mut positions: State<Positions<T>>,
     is_open: impl Fn(&T) -> bool + 'static,
@@ -294,43 +163,5 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
         if let Some(row) = moving {
             controller.scroll_to_y(-((row as f32 * code_row_height()) as i32));
         }
-    });
-}
-
-/// Forget the cross-view focus and the pin whenever the active document changes: both are
-/// positions inside the drawn symbol's line info. Navigating from a relocation label
-/// leaves the pointer sitting on a row, so the focus need never be released the ordinary
-/// way, and a pin has no ordinary way at all.
-///
-/// The one exception is a [`Landing`] naming the document that has just arrived, which
-/// becomes the pin instead, owed by both panes. A landing is spent by whichever document
-/// arrives, the one it named or another: it is for the next arrival only, and one left
-/// lying would pin a line in a document opened for some other reason later.
-pub(crate) fn use_clear_focus(
-    active: Memo<Option<Document>>,
-    focused: State<Option<LineFocus>>,
-    anchored: State<Option<Anchor>>,
-    landing: State<Option<Landing>>,
-) {
-    use_side_effect(move || {
-        // Subscribes the effect to the active document, which is all it wants from it;
-        // the landing is peeked, so setting one wakes nothing until the document does.
-        let active = active.read().clone();
-
-        let (mut focused, mut anchored, mut landing) = (focused, anchored, landing);
-        focused.set_if_modified(None);
-
-        let asked = landing.peek().clone();
-        if asked.is_some() {
-            landing.set(None);
-        }
-        let landed = asked
-            .filter(|landing| Some(&landing.tab) == active.as_ref())
-            .map(|landing| Anchor {
-                at: landing.at,
-                reveal: Owed::BOTH,
-                landed: true,
-            });
-        anchored.set_if_modified(landed);
     });
 }

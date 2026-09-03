@@ -171,6 +171,34 @@ fn lighting_a_row_lights_the_lanes_of_its_own_branches() {
     );
 }
 
+/// A run of listing rows is converted back to the instructions it holds before the
+/// edges are asked about: a separator at either end belongs to the instruction below it,
+/// so one opening the run is inside it and one closing the run is not, and a run that is
+/// one separator holds nothing. The edges lit are the ones with an end in the run, in
+/// one pass, so a run over the whole listing costs the edges and not the rows.
+#[test]
+fn a_run_of_rows_lights_the_branches_of_the_instructions_it_holds() {
+    // Landing rows 5 and 7 each get a separator above them: instruction 5 is drawn at
+    // row 6 and instruction 7 at row 9.
+    let lanes = Lanes::new(&edges(&[(1, 7), (3, 5)]), 9);
+    assert_eq!(lanes.row_of(5), 6);
+    assert_eq!(lanes.row_of(7), 9);
+
+    assert_eq!(lanes.instructions_in(0..=3), Some(0..=3));
+    // The separator at row 5 opens the run: instruction 5 is inside.
+    assert_eq!(lanes.instructions_in(5..=6), Some(5..=5));
+    // And closes it: the instruction below is outside.
+    assert_eq!(lanes.instructions_in(3..=5), Some(3..=4));
+    assert_eq!(lanes.instructions_in(5..=5), None);
+    assert_eq!(lanes.instructions_in(4..=2), None);
+
+    // The branch from 1 to 7 is lit by a run holding either end and by none between.
+    assert_eq!(lanes.touching_any(0..=1), lanes.touching(1));
+    assert_eq!(lanes.touching_any(7..=8), lanes.touching(7));
+    assert!(lanes.touching_any(2..=2).is_empty());
+    assert_eq!(lanes.touching_any(0..=8).len(), 2);
+}
+
 /// An edge naming a row that is not there is dropped rather than panicking. `analysis`
 /// does not produce one; a corrupted object it has not seen might.
 #[test]

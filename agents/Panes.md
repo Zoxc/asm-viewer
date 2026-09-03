@@ -1,8 +1,8 @@
 # The two panes of a document
 
 The Source pane and the Assembly pane: which of the two is on the left, which file the source side
-draws, who writes a source-driven tab's line, how the panes point at each other, how a click from
-outside lands, the arrow gutter, and the run of rows a reader copies.
+draws, who writes a source-driven tab's line, how each pane's picked-out run lights the other, how
+a click from outside lands, the arrow gutter, and what a run copies.
 
 **The side a tab is driven from is the left-hand pane.** An assembly-driven tab reads
 assembly-then-source and a source-driven one source-then-assembly, so in both the leading pane is
@@ -20,19 +20,20 @@ disagree about which listing is up. A **subject** is a source-driven tab's own f
 inside `Studied` and not out of `Active`, because the analysis arrives from a worker thread and
 anything reading the two separately sees them disagree for as long as the work takes. Only the
 symbol's *own* file is drawn, never the rest of `LineInfo::files`, since a Rust function inlines
-dozens -- with one exception: under a pin marked `landed` (made by a `Landing`, a click from
-outside both panes) whose file the listing's line info names, the companion is *that* file. A
-Locations row opens a symbol on a line, and a symbol whose prologue was inlined from elsewhere
-would otherwise open on that elsewhere, the line asked for sitting in a file that is not up and
-the reveal with nowhere to go. A pin made inside the panes changes no file, so clicking an
-inlined instruction leaves the symbol's own file on screen as it always did. **In an object's
-code the companion is the pinned line's file** and nothing before a pin -- the listing draws
-no symbol of its own, and an instruction row pins the line it was compiled from, file and all --
-and the tab opens on that line; the pane says "Click an instruction" until then. The other way
-round, a click on a source row beside it owes the listing a scroll to the instruction compiled
-from that line, which `use_kept_place`'s reveal pays out of whichever held stretch has one and
-leaves owed while none does -- the stretch may not be decoded yet, and the answer that decodes it
-wakes the effect again.
+dozens -- with one exception: when the source pane's picked-out run is in another file the
+listing's line info names, the companion is *that* file. A `Landing` (a click from outside both
+panes) plants the run in the file the line is in, and a symbol whose prologue was inlined from
+elsewhere would otherwise open on that elsewhere, the line asked for sitting in a file that is
+not up and the reveal with nowhere to go. A run picked out inside the pane is in the file already
+shown, and a click on an inlined instruction picks nothing out on this side, so neither changes
+which file is up. **In an object's code the companion is the file of the pressed instruction**
+and nothing before a press -- the listing draws no symbol of its own, and an instruction row's
+run is a run of the file the row was compiled from (`Picked::file`) -- and the tab opens on that
+row's line; the pane says "Click an instruction" until then. The other way round, a click on a
+source row beside it owes the listing a scroll to the instruction compiled from that line, which
+`use_kept_place`'s reveal pays out of whichever held stretch has one and leaves owed while none
+does -- the stretch may not be decoded yet, and the answer that decodes it wakes the effect
+again.
 
 **A tab opens its source side on the symbol's own lines**, which is what selecting a symbol
 asked to see: a function a hundred lines into its file was otherwise read from the top of the
@@ -46,7 +47,7 @@ for the tab wins over it, so this is the *first* open and not every one, and eve
 nothing to say falls back to the top of the file as it always did: an object with no line info,
 a prologue DWARF places on no line, a source-driven tab (whose subject is a **file** the reader
 opened, and files open at the top), and a companion that is not the symbol's own file — the last
-being a landed pin's doing, which comes with a reveal of its own.
+being a landing's doing, which comes with a reveal of its own.
 
 A companion wears a **header naming its file**, which a subject does not: the strip already names
 a subject, and nothing else in the window would name a companion now that the Source pane has no
@@ -121,13 +122,13 @@ filter. A pane whose tab the table has no id for draws no triangle rather than o
 nothing, which cannot happen for a mounted pane and is what the headless harnesses see when they
 mount one without opening it.
 
-**A click in a source-driven tab's own file is the only writer of `Driven`.** A click in a
-companion file is a pin and nothing more, and a click in the *assembly* pane never reaches that
-handler at all — which is what stops a listing from re-driving itself. Nothing else changes: the
+**A click in a source-driven tab's own file is the only writer of `Driven` inside the panes.**
+A click in a companion file picks the line out and nothing more, and a click in the *assembly*
+pane never reaches that handler at all — which is what stops a listing from re-driving itself. Nothing else changes: the
 active document does not, so nothing is pushed onto the history, the tab already being where the
 reader is. A line is kept per tab rather than one for the window, and it is a `u32` and holds no
 `Arc<Object>`, so it survives its binary being closed and the next ask simply answers out of what
-is left. A right-click on a source row is neither a pin nor a drive: it opens `locate_menu` --
+is left. A right-click on a source row is neither a selection nor a drive: it opens `locate_menu` --
 the line's locations and, inside a function as the file's parse says, the function's instances
 -- both answered in the Locations view (`agents/Worker.md`), whose rows are what choose.
 
@@ -152,40 +153,58 @@ tree that would be most of the file again. Two things about
 `SyntaxBlocks` bite: `get_line` unwraps rather than answering `None`, and it holds one block per
 `Rope::len_lines()`, which counts a phantom line after a trailing newline (hence `Highlighted::lines`).
 
-**The two panes point at each other** through two root contexts that are inputs, not derivations.
-`Focused` is where the *pointer* is; `Anchored` is where a *click* fixed them, which outlives the
-pointer moving on. Two states and two shades, because a pin a hover can overwrite is a pin a hover
-silently undoes; `row_background` composites the translucent colours with `blend`. Three things are
-load-bearing: **a position is a file and a line** (`LinePos`), since an inlined header's line 42 is
-not line 42 of the open file — the one `Arc` in the UI compared by *contents*; **a row cannot clear
-the focus unconditionally**, because `EventName::cmp` leaves the order of the leaving and entering
-rows' handlers undefined, so `release_focus` clears only what this row put there and `LineFocus`
-carries a `FocusOrigin`; and **the scroll is a request, answered once** — `owed_reveal` only
-*looks*, `reveal_made` is what clears it, and `reveal_row` does nothing when the row is already on
-screen. The split is not tidiness: in a source-driven tab the click that pins is the click that
-asks for the listing, so the run it wakes is still holding the previous one, in which no row
-matches — a single take would spend the request there and the listing that can answer it would
-arrive to nothing owed. A request nothing matches stays owed until the next click replaces it or
-the tab changes. **And the ask is the pin** for a source-driven tab: `use_clear_focus` drops the
-pin with the tab, so both panes fall back to the line the tab is driven from, or coming back to one
-would show a listing with nothing lit and no reason given. None of this is a navigation: the
-selection does not change and nothing is pushed onto the
-history. `navigate` remains the only path for anything that does.
+**The two panes point at each other through their picked-out runs**, and through nothing the
+pointer does. `Marked` holds one run per pane (`Marks`, two `Picked`s, `ui/marks.rs`), and what
+a pane draws in green is the *pair*: the rows of it that are the same place as the other pane's
+run -- the instructions a picked-out line was compiled from, the line a picked-out instruction
+came from, every one of them and not the first. A run is a `RowSelection` of listing rows plus
+the file it is a run of, so the assembly side pairs a row by asking the row's own
+`AsmData::position` against the run's file and lines, and the source side pairs a line by
+turning the run's rows into positions -- `Studied::places` for a symbol's listing, `code_places`
+over the held stretches for an object's code, through the rows the section view shares as
+`CodeRows` -- and keeping the lines of its own file. `row_background` is three colours -- the
+pair's green, the selection's grey, and a deeper green for a row that is both -- and nothing
+else lights a row: no hover, no pin.
+There was a pin, and a hover; both went in one step (`notes/Goals.md`), because the hover said
+what the pointer already says and a pin was a second selection under another name, and one
+selection for the window meant picking out an instruction lost the run on the source side. Three
+things are load-bearing: **a position is a file and a line** (`LinePos`), since an inlined
+header's line 42 is not line 42 of the open file — the one `Arc` in the UI compared by
+*contents*; **a run is dropped only when its listing goes** — the assembly's when the question
+changes or the rows are counted afresh, the source's when the pane moves *off the run's file*
+(`use_clear_marks`) and not whenever the file changes, since a landing plants a run in the file
+the pane is about to show and the switch it causes must not be what drops it; and **the scroll
+is a request, answered once** — `Picked::owed` says which panes have yet to scroll to the run,
+`owed_reveal` only *looks*, `reveal_made` is what clears a pane's flag, and `reveal_row` does
+nothing when the row is already on screen. A click in one pane owes the other; a landing owes
+both. The split is not tidiness: in a source-driven tab the click that picks a line out is the
+click that asks for the listing, so the run it wakes is still holding the previous one, in which
+no row matches — a single take would spend the request there and the listing that can answer it
+would arrive to nothing owed. A request nothing matches stays owed until the next click replaces
+it or the run is dropped with its listing. **And the ask is the run** for a source-driven tab:
+`use_land` drops both runs with the document and plants the driven line as the source pane's,
+with nothing owed, or coming back to one would show a listing with nothing lit and no reason
+given. None of this is a navigation: the selection does not change and nothing is pushed onto
+the history. `navigate` remains the only path for anything that does. **Both rows do the
+left button and the right in one `pointer_down`**: freya's `on_secondary_down` is
+`on_pointer_down` under another name and an element keeps one handler per event, so the row
+that set both kept the menu and never started its run (`secondary`, `notes/upstream/freya.md`).
 
 **A click from outside both panes owes both a scroll, and lands through the change of document
-it makes.** A row in the Locations panel opens its symbol *and* pins the line, so `Anchor::reveal`
-is a pair of flags (`Owed`) rather than an `Option<Pane>`: a click in one pane asks the other,
-a click in neither asks both, and each pane pays its own half. Opening is an `activate`, and the
-change of document that makes is exactly what `use_clear_focus` answers by dropping the pin --
-so the row does not pin; it leaves a `Landing` (`Land`, at the root) naming the document and
-the line, and that effect turns it into the pin when the document it names arrives.
+it makes.** A row in the Locations panel opens its symbol *and* picks the line out, so
+`Picked::owed` is a pair of flags (`Owed`) rather than an `Option<Pane>`: a click in one pane
+asks the other, a click in neither asks both, and each pane pays its own half -- the source pane
+to its own run, the assembly pane to the pair. Opening is an `activate`, and the change of
+document that makes is exactly what `use_land` answers by dropping both runs -- so the row does
+not pick anything out; it leaves a `Landing` (`Land`, at the root) naming the document and the
+line, and that effect turns it into the source pane's run when the document it names arrives.
 Whichever document arrives spends it, the one it named or another, since a landing left lying
-would pin a line in a document opened for some other reason later. A row whose symbol is
-already on top pins at once (`documents::land`), `activate` then changing nothing and no effect
-running. **Two doors join the two views** and both go through the same functions. A **Ctrl**-press on a
+would pick a line out in a document opened for some other reason later. A row whose symbol is
+already on top picks the line out at once (`documents::land`), `activate` then changing nothing
+and no effect running. **Two doors join the two views** and both go through the same functions. A **Ctrl**-press on a
 label in an object's code opens the symbol's own tab, an `activate` and a visit like any opening
 from a list; a plain press picks the row out like any other, since a label is a row of the
-listing first. Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift`, both kept by
+listing first, though a label's row is a row of no file. Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift`, both kept by
 `ModifierKeys`), a freya pointer event carrying no modifiers, and the label lights as a link only
 while it is held. A Caps Lock the desktop has made into Ctrl names itself Caps Lock in every event,
 so it is learnt from its first release (`ModifierKeys`' doc, `notes/upstream/freya.md`).
@@ -215,11 +234,13 @@ past that, since the corner and the arrowhead survive sharing and only the joini
 ambiguous. It is drawn with **rects**, not `canvas()`, whose `RenderCallback` has a `PartialEq`
 returning `true` unconditionally — exactly wrong for a row a scroll view recycles. `InstructionRow`
 therefore pads horizontally only: a line must reach the row's top and bottom edges or the column
-comes out dashed. Hovering a row draws its own branches darker, which needs the hovered *row* in
-`InstructionList` rather than `Focused` — a source position is many rows. It is kept as a
-**listing row** and not an instruction index, so that one state can serve a listing of many
-symbols; the list converts it back through `Lanes` where it works out what the hovered row
-touches, and a separator under the pointer lights nothing.
+comes out dashed. Picking rows out draws their own branches darker (`branch_lit_fg`), which is
+the pane's own run and not the pair: a source position is many rows. The run is **listing
+rows** and not instruction indices, so that one state can serve a listing of many symbols; the
+list converts it back through `Lanes::instructions_in` and asks `Lanes::touching_any` once for
+the run, one pass over the edges rather than one per row, and a run that is one separator
+lights nothing. In an object's code that is done per held stretch, each stretch's lanes
+speaking its own instructions.
 
 **Every stroke in it is put on the device pixel grid by its edges.** freya lays a window out in
 logical pixels and multiplies the whole tree by the window's scale factor on the way to Skia,
@@ -275,7 +296,7 @@ is what the scroll (`reveal_row`, `use_kept_position`) and the picked-out run (`
 three things about the listing it is in, through `AsmData`, so that the same row serves a
 listing that is not one symbol's: `base`, the listing row the symbol's first instruction row is
 drawn at, added to every row `Lanes` answers (a branch label's target is `base + row_of`);
-`bias`, added to every address the row draws, copies or names in its focus (`Section::bias`,
+`bias`, added to every address the row draws or copies (`Section::bias`,
 what tells two functions of a relocatable object apart when both are at 0); and `width`, the
 gutter's lane count, the symbol's own when it is read alone. On its own, a symbol's listing
 hands in 0, 0 and its lanes' width, and nothing about it changed. The separator draws
@@ -349,29 +370,28 @@ a call's resolved target is drawn as a `RelocationLabel` — `Instruction::branc
 span to lift out, and the row is the same three children either way. Only where
 `Assembly::edge_from` finds an edge, which is the set the gutter has an arrow for: a tail call
 keeps its plain operand, having no row here to be pointed at. Pressing it is `reveal_row` on the
-edge's target **and the pin a press on that row would have made** — `position(edge.to)`, with the
-Source pane owed the scroll and the Assembly pane not, since it has just been given one. It is
-still **not a navigation**: the document does not change and nothing is pushed onto the history, so
-a Back that undid reading further down one function would be answering a question nobody asked. It
-is a selection, though, and **in both senses**. `mark_row` picks out the row landed on — replacing
-the row the press started on, which `pointer_down` has already marked, that being the one handler a
-stopped press does not undo — and this is the half that holds for an object with no line info at
-all. The pin is the other half, the cross-pane one, and a target the debug info places nowhere pins
-nothing rather than clearing what is pinned, which is the rule the row itself obeys. Arriving at a
-target and then having to click it to light it up made the reader say twice where they had gone,
-and both panes would meanwhile be lit at the place the reader had just left. The press is still stopped from bubbling — the
-row under it would otherwise pin the line the instruction being *left* came from, which is the one
-answer the click is not asking for. The
-listing's own `ScrollController` and its measured height are handed down to each row for it, the
-way the hovered index already is: both are the list's handles and neither changes while it lives.
+edge's target **and the run a press on that row would have made** — `mark_row`, the row landed on
+alone, of the target's file (`position(edge.to)`), with the Source pane owed the scroll and the
+Assembly pane not, since it has just been given one. It is still **not a navigation**: the
+document does not change and nothing is pushed onto the history, so a Back that undid reading
+further down one function would be answering a question nobody asked. It is a selection, though,
+and in both of a selection's senses: the row picked out, which holds for an object with no line
+info at all, and the pair lit on the other side where the target has a line. Arriving at a target
+and then having to click it to light it up made the reader say twice where they had gone, and
+both panes would meanwhile be lit at the place the reader had just left. The press is still
+stopped from bubbling — the row under it would otherwise keep the row the instruction being
+*left* is in picked out, which is the one answer the click is not asking for. The listing's own
+`ScrollController` and its measured height are handed down to each row for it: both are the
+list's handles and neither changes while it lives.
 
 **A run of rows can be picked out and copied** in both panes (press, sweep or shift-click, Ctrl+C;
 Ctrl+A takes the listing, Escape drops it). Character selection is deliberately absent: freya's
 selection is char offsets into a rope wanting one `paragraph()` per line, and an instruction row is
-a gutter of rects, an address label and up to three elements. The state is `Marked`, holding a
-`RowSelection` **and its pane** — one selection for the window, because Ctrl+C must have one
-answer. The press is `pointer_down` (a press event arrives only once the button is back up) and the
-sweep is the existing `pointer_over`. Shift is watched globally at the root, because a freya
+a gutter of rects, an address label and up to three elements. The state is `Marked`, holding one
+`Picked` **per pane** (`Marks`) — independent, each the other pane's pair and the scroll it owes —
+and Ctrl+C copies the run of the pane whose box has the keyboard. The press is `pointer_down` (a
+press event arrives only once the button is back up), in the same handler as the right button's
+menu (`secondary`), and the sweep is the existing `pointer_over`. Shift is watched globally at the root, because a freya
 pointer event carries no modifiers at all. The key handlers are on each pane's own focusable box
 and deliberately not global, or a Ctrl+C meant for a filter box would come back as a page of
 disassembly. Runs are dropped by `use_clear_marks` at the root, not by an effect inside each list —

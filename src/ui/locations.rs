@@ -13,7 +13,8 @@
 //! (where inside a symbol the line's code sits is the forward direction's question), and
 //! finding each hit's ranges would be one line-program walk per symbol under the DWARF
 //! context's mutex -- seconds for a line that answers with thousands, with every symbol
-//! click waiting behind it. Landing on the line inside the symbol is the pin's job instead.
+//! click waiting behind it. Landing on the line inside the symbol is the picked-out run's job
+//! instead.
 
 use super::*;
 
@@ -380,7 +381,7 @@ impl Component for LocationRow {
         let mut hovering = use_state(|| false);
         let open = use_open();
         let history = use_consume::<Hist>().0;
-        let pinned = use_consume::<Anchored>().0;
+        let marked = use_consume::<Marked>().0;
         let landing = use_consume::<Land>().0;
         let driven = use_consume::<Drives>().0;
         let located = use_consume::<Locations>().0.peek().clone();
@@ -440,7 +441,7 @@ impl Component for LocationRow {
                         }
                         None => Document::Assembly(Selection::Symbol(symbol.clone())),
                     };
-                    land(open, history, pinned, landing, target, at);
+                    land(open, history, marked, landing, target, at);
                 })
                 .child(tree_name(name, false))
                 // Capped rather than measured, or a long member name would take the row

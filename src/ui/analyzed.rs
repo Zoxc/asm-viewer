@@ -324,7 +324,8 @@ impl Analyzed {
             (None, None, _) => Showing::Message(match document {
                 Document::Assembly(_) => "No symbol selected",
                 Document::Source(_) => "Click a source line",
-                // The listing beside this asks nothing; its source side follows a pin.
+                // The listing beside this asks nothing; its source side follows the
+                // instruction picked out in it.
                 Document::Code(_) => "Click an instruction",
             }),
         }
@@ -381,6 +382,36 @@ impl Studied {
             lanes,
             lines,
         }
+    }
+}
+
+impl Studied {
+    /// The source position the instruction at `index` was compiled from, or `None` where
+    /// the debug info gives it none: no line info at all, an address no row covers, or a
+    /// row naming no file or sitting on DWARF's line 0.
+    pub(crate) fn position(&self, index: usize) -> Option<LinePos> {
+        let lines = self.lines.info.as_ref()?;
+        let address = self.assembly.as_ref()?.instructions.get(index)?.address;
+        let row = lines.row_at(address)?;
+        Some(LinePos {
+            file: lines.files().get(row.file?)?.clone(),
+            line: row.line?,
+        })
+    }
+
+    /// The positions the instructions drawn in the listing rows `rows` were compiled
+    /// from, `base` being the listing row this symbol's first instruction row is drawn
+    /// at. One per instruction placed somewhere, in listing order; a run of rows that is
+    /// separators alone answers nothing.
+    pub(crate) fn places(&self, rows: RangeInclusive<usize>, base: usize) -> Vec<LinePos> {
+        let first = rows.start().saturating_sub(base);
+        let Some(last) = rows.end().checked_sub(base) else {
+            return Vec::new();
+        };
+        let Some(indices) = self.lanes.instructions_in(first..=last) else {
+            return Vec::new();
+        };
+        indices.filter_map(|index| self.position(index)).collect()
     }
 }
 
@@ -441,7 +472,7 @@ impl SymbolLines {
 
     /// The checksum the debug info recorded for `file`, one of the files these rows name, or
     /// [`None`] when it names no such file or recorded none for it. Looked up by the name
-    /// the pane is showing rather than carried per file, so a landed pin's file and the
+    /// the pane is showing rather than carried per file, so a landed run's file and the
     /// symbol's own are answered the same way.
     pub(crate) fn hash_for(&self, file: &str) -> Option<analysis::SourceHash> {
         let info = self.info.as_ref()?;
@@ -625,7 +656,7 @@ pub(crate) fn use_analysis_with(
                 match landed {
                     Some(shown) => next.shown = Some(shown),
                     // A question that named no symbol leaves the listing that is up --
-                    // the click loses the pin's highlight and nothing else, which is what
+                    // the click lights no pair in it and nothing else, which is what
                     // says it landed nowhere -- but **only when that listing is this
                     // tab's own**, or a source line holding no code would leave another
                     // tab's function on screen for good.

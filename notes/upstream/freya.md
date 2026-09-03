@@ -14,6 +14,15 @@ opening event's point (`context_menu.rs:151-153`), which is invisible in the app
 a headless test that never moved the pointer. **Cost:** the test moves it first
 (`right_click` in `ui/tests.rs`; `agents/Headless.md`).
 
+**`on_secondary_down` is `on_pointer_down` under another name** (`extensions.rs:358-372`:
+it installs a `pointer_down` handler that forwards the right button), and an element keeps
+one handler per event, so an element given both keeps whichever was set last. The two code
+panes' rows set both -- the left button's down starts the picked-out run, the right's opens
+the menu -- and the row's run silently never started. **Cost:** one `on_pointer_down`
+doing both, the right button mapped by `secondary` (`ui/marks.rs`);
+`picking_out_a_row_below_a_separator_lights_that_rows_own_branch` presses a row and would
+have caught it.
+
 **`SyntaxHighlighter` keeps its `Tree` private** (`syntax.rs:120-125`), with no accessor,
 so anything else wanted from the parse -- the function spans for C and C++ -- is a second
 parse of the file (`ui/highlight.rs`). Not a bug; a gap worth a PR for a `tree()` getter.

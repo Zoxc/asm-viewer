@@ -13,21 +13,39 @@ one item per part, so the unfinished half stays visible.
 - [x] Have a source view and an assembly view side by side. This is the default layout of the
   content area: the source a symbol was compiled from beside its assembly.
 - [x] Map between the two views — an instruction knows its source line and both panes show
-  it: hovering either side lights up what it maps to on the other.
-- [x] Hovering one side highlights the other side. One source line is many instructions and
-  every one of them lights up, not just the first.
-- [x] Selecting one side highlights the other side. A click pins the position it points at
-  and both panes keep it lit, in a stronger shade than the hover, until another click or
-  another symbol.
-- [ ] Drop the assembly row's own hover wash and spend that colour on the pair instead.
-  There are two washes under the pointer today — `code_row_hover_bg`, which says only "the
-  pointer is here", and `line_focus_bg`, which says the far more useful "this row and that
-  source line are the same place". The first says what the pointer already says and competes
-  with the second for the reader's eye, so the row a listing is hovered on should draw
-  nothing of its own and the pair's colour should be the one that was being spent on it.
-  Both panes, since the mapping is symmetric. The contrast tests re-judge whatever is left
-  once one of the two washes is gone, and the question to settle first is whether the pair
-  wants the hover's colour outright or its own turned up to where the hover was.
+  it: a run of rows picked out on either side lights up what it maps to on the other.
+- [x] Each pane keeps a selection of its own, in grey, and the green marks the pair: the
+  rows of this pane that are the same place as the other pane's selection. Nothing answers
+  to the pointer in either pane, and there is no pin. This replaced three earlier answers
+  in one step — hovering either side lit its pair on the other, a click pinned the position
+  in a stronger shade of the same green until the next, and the assembly row's own hover
+  wash (`code_row_hover_bg`) had already been dropped for the pair's — because the hover
+  said what the pointer already says, the pin was a second selection under another name,
+  and one selection for the window (below) meant picking out an instruction lost the source
+  run the reader was reading from. What the pin carried moved onto the selection (`Picked`,
+  `ui/marks.rs`): the scroll the other pane owes a click, paid once and left owed while the
+  listing that can pay it has not arrived; the line a Locations row or a "Show in unified
+  view" lands on, planted as the source pane's run with both panes owed; the companion
+  file beside an object's code, the file of the pressed instruction; and a source-driven
+  tab's driven line, planted as the source pane's run when the tab comes back. The arrow
+  gutter lights the branches of the picked-out instructions instead of the hovered row's.
+  The code listing's Ctrl-link cue is on the label, in the relocation link's own wash, a
+  row drawing nothing under the pointer. The scratchpad editor's cursor line borrows the
+  pair's green. Found on the way: freya's `on_secondary_down` had replaced the rows'
+  `pointer_down`, so a press in either pane had never picked its row out
+  (`notes/upstream/freya.md`).
+- [ ] Mark, in the Source pane's line-number gutter, the lines that have assembly: a reader
+  scanning a file should be able to tell at a glance which lines the symbol on the other side
+  was compiled from and which produced nothing, without hovering each one. The answer is the
+  symbol's own line info, which `SymbolLines` already holds and `AsmData::position` already
+  reads the other way round, so the gutter needs the set of lines the rows name and a mark
+  beside each, in a colour the palette gets a field for.
+- [ ] The same the other way: mark, in the Assembly pane, the instructions that have a source
+  line, so a reader can tell the rows the debug info places somewhere from the ones it places
+  nowhere — a prologue, padding, an inlined stretch from a file the pane is not showing — without
+  hovering each. `AsmData::position` is already the question per row; what is missing is a mark
+  in the row for a `Some`, in the same colour as the source gutter's, and a decision about
+  where in an instruction row it goes, the gutter there being the branch arrows' already.
 - [x] Have a function to find all source / assembly locations that match, producing a list on the
   other side. "Find all locations" on a source row or an instruction row asks the analysis
   worker for every symbol the line was compiled into over every open object, and the Locations
@@ -35,7 +53,8 @@ one item per part, so the unfinished half stays visible.
   name, under a heading naming the line. A row is a symbol and not a range: the crate answers
   symbols by design, and one line answers with 9 374 of them on this app's own binary, so
   a range per hit would be seconds of DWARF walking behind every click. Pressing a row opens the
-  symbol and pins the line in it with both panes owed the scroll, which is where the range is.
+  symbol and picks the line out in it with both panes owed the scroll, which is where the range
+  is.
 - [x] A function to pick the generic instance of a source function. Same query, different
   presentation — "all symbols for this function, pick one" against "all locations for this line,
   list them" — so it is the Locations view under another heading ("N instances of `foo`"),
@@ -211,10 +230,21 @@ one item per part, so the unfinished half stays visible.
   Displacements and immediates are a separate `iced-x86` option and are left as they were.
 - [x] Allow selection, of rows. Both panes: click a row, shift-click or drag to reach out
   to another, Ctrl+C copies the run as text, Ctrl+A takes the whole listing and Escape
-  drops it. One selection for the window rather than one per pane, so Ctrl+C has one
-  answer. The assembly copies what the row draws — the address column and the instruction
+  drops it. One selection per pane (the split-view item above): Ctrl+C copies the run of
+  the pane the keyboard is in, the key handlers being on each pane's own box. The assembly
+  copies what the row draws — the address column and the instruction
   with the relocation target's name in its operand — and the source copies the file's own
   lines.
+- [ ] Horizontal scroll in the assembly and the source pane. A row wider than the pane -- a
+  long source line, an instruction with a long relocation name -- is cut at the pane's edge
+  and cannot be reached. The scratchpad's run output already answers the same question
+  (`a_wide_output_line_is_reached_by_scrolling_sideways`): a `VirtualScrollView` scrolls
+  sideways as far as its widest drawn row, but only when the rows are measured to their
+  content, and both code panes' rows fill the pane (`width(Size::fill())`), which is what
+  makes their backgrounds -- the selection, the pair -- run the whole width. So a row wants
+  its text measured and its wash drawn to the pane's width, or the wash comes out as wide
+  as the text; and the gutter's strokes are positioned from the row's left edge and must
+  scroll with it.
 - [ ] Text selection, of characters, in both the assembly and the source pane: drag across
   part of a line or across lines and Ctrl+C copies the text, the way an editor does, beside
   the row selection above, which stays for whole runs. Was deferred, with the cost read out
@@ -293,8 +323,8 @@ one item per part, so the unfinished half stays visible.
 - [x] Have arrows for jumps. A gutter left of the addresses draws every branch that stays
   inside the symbol as a line from its row to its target's, with an arrowhead where it lands
   and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
-  as the symbol needs; past five, the outermost lane is shared. Hovering a row draws its own
-  branches darker, all the way to where they go.
+  as the symbol needs; past five, the outermost lane is shared. Picking a row out draws its
+  own branches darker, all the way to where they go.
 - [x] Pixel-align the gutter's strokes. Every stroke in `gutter` is now placed by its **edges**
   through `Grid` (`src/pixels.rs`), which rounds them to the device pixel grid rather than
   putting a centre on a fraction and letting a one-pixel line come out as two grey ones. The
@@ -330,9 +360,9 @@ one item per part, so the unfinished half stays visible.
   that says where it goes. It is a scroll within one symbol and **not** a navigation: the
   document does not change and nothing is pushed onto the history. It does move the
   selection, the way clicking the target row would: the row landed on becomes the picked-out
-  one, and its line is pinned with the source side owed the scroll — the first half holding
-  for an object with no line info, the second lighting both panes where the reader has
-  arrived rather than where they left. A branch out of the symbol — a tail call — keeps its
+  one, of the target's file, with the source side owed the scroll — the run holding for an
+  object with no line info, the file and the scroll lighting the other pane where the reader
+  has arrived rather than where they left. A branch out of the symbol — a tail call — keeps its
   plain operand; making that one navigate like a call target is an item of its own.
 - [ ] Show the current symbol as a breadcrumb in the unified view. The bar over the pane names
   the object for a code tab, and nothing on screen says which function the rows under the
@@ -341,7 +371,7 @@ one item per part, so the unfinished half stays visible.
   already what the kept place is worked out from (`section::Rows::row`), so the bar could name
   that symbol beside the object, object › symbol, and pressing it would be the "Open as symbol"
   door in one more place. Whether it follows the top row or the pointer is the one decision:
-  the top row is stable and the pointer is what a hover already lights.
+  the top row is stable and the pointer lights nothing.
 - [ ] Let a call target with no symbol be opened. `Code::relocation` answers a `Relocated`
   whose `target` is `None` whenever the relocation points at something the object has no text
   symbol for — a section, a data symbol, an undefined import — and the operand is then drawn
@@ -473,10 +503,9 @@ one item per part, so the unfinished half stays visible.
   removed from a right-click on a Symbols row or a History row, on a document's tab, or on an
   instruction row in the assembly view ("Bookmark symbol"); a bookmark whose binary is
   closed is kept and drawn dimmed rather than dropped, and comes back when the binary does
-  (`agents/Sidebar.md`). The name clash this warned about is cleared: the context that was
-  `Pinned` — the source position a click fixed the two panes on, a transient, one-at-a-time
-  gesture and nothing like a bookmark — is `Anchored` now (`Anchor` the value), so nothing in
-  the code says "pinned" of a symbol.
+  (`agents/Sidebar.md`). The name clash this warned about is gone with the pin itself: the
+  position a click fixed the two panes on is a selection now (`Picked`, `ui/marks.rs`), and
+  nothing in the code says "pinned" of anything.
 - [ ] A bookmark control on the symbol bar, for the symbol being read, beside the two menus
   above.
 - [x] Left panel to explore project directory / files. The Files view: the project's directory
@@ -508,8 +537,8 @@ one item per part, so the unfinished half stays visible.
   the shape makes it impossible to break. What it buys is that a reader arranges documents the way
   they already arrange the views — tabbed together, split, or dragged aside — and that there is one
   kind of tab header to change instead of two. A document may only ever live in that panel, since
-  one visible document is what lets the analysis, the picked-out rows and the two panes' focus each
-  hold one answer for the window; a view may go anywhere, that panel included. The Source pane
+  one visible document is what lets the analysis and the picked-out rows each hold one answer
+  for the window; a view may go anywhere, that panel included. The Source pane
   stops being independently dockable in return, being inside a document rather than beside one.
   A view being the tab on top means there is *no* active document, which is what keeps the
   derivation honest and is the one visible edge: the analysis clears and the session records
@@ -531,7 +560,7 @@ one item per part, so the unfinished half stays visible.
   function and reading down a generic function would otherwise walk across its instantiations.
   Below the tie-break the order is the crate's own and is arbitrary; picking deliberately is the
   generic-instance item above. A line no object holds code from leaves the listing that is up and
-  loses only the pin's highlight, which is what says the click landed nowhere. Two things came out
+  lights no pair in it, which is what says the click landed nowhere. Two things came out
   of it that were not in the ask: an answer can now outlive the document that named it, a
   source-driven tab surviving a binary close, so the analysis lets go of a closed binary; and the
   reveal a click asks for is now looked at before it is taken, the listing that can answer it not
@@ -541,8 +570,8 @@ one item per part, so the unfinished half stays visible.
   where the assembly does in an assembly-driven tab and the side it resolves to sits beside it.
   `DocumentBody` is the only thing that knows which way round a document goes — neither pane is
   handed a side — so the swap is the order of two `.panel(..)` calls, and everything the two
-  panes share was already keyed by which pane it is rather than by where it sits: the focus, the
-  pin and the scroll each owes it, the picked-out run, and the row each side was left on. The
+  panes share was already keyed by which pane it is rather than by where it sits: the picked-out
+  runs and the scroll each owes the other's, and the row each side was left on. The
   split's one remembered width was the one thing keyed by position, and was left that way
   deliberately: it is now the *leading* pane's width rather than the assembly pane's, so
   switching between the two kinds of tab leaves the handle where the reader dragged it instead of

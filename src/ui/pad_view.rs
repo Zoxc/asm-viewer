@@ -344,9 +344,10 @@ impl Component for SourceEditor {
                     // already says in both code panes -- a character selection here where
                     // it is a run of rows there, and the same question either way.
                     .highlight(palette().row_select_bg)
-                    // "You are here", which is `code_row_hover_bg`'s job in the other two
-                    // panes. Safe to reuse, the editor painting no pointer hover at all.
-                    .line_selected_background(palette().code_row_hover_bg)
+                    // "You are here": the cursor's line, in the green the two code panes
+                    // light the other side's place in. Safe to reuse, the editor being
+                    // no pane's pair.
+                    .line_selected_background(palette().pair_bg)
                     .gutter_selected(palette().text_fg)
                     .gutter_unselected(palette().address_fg)
                     .whitespace(palette().punctuation_fg),

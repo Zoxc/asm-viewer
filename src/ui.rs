@@ -304,10 +304,8 @@ pub fn app() -> impl IntoElement {
     use_provide_context(|| Expanded(State::create(HashSet::new())));
     let history = use_provide_context(|| Hist(State::create(History::default()))).0;
     let bookmarks = use_provide_context(|| Bookmarked(State::create(Bookmarks::default()))).0;
-    let focused = use_provide_context(|| Focused(State::create(None))).0;
-    let pinned = use_provide_context(|| Anchored(State::create(None))).0;
     let landing = use_provide_context(|| Land(State::create(None))).0;
-    let marked = use_provide_context(|| Marked(State::create(None))).0;
+    let marked = use_provide_context(|| Marked(State::create(Marks::default()))).0;
     let shift = use_provide_context(|| Shift(State::create(false))).0;
     let ctrl = use_provide_context(|| Ctrl(State::create(false))).0;
     let caps_is_ctrl = use_state(|| false);
@@ -327,7 +325,7 @@ pub fn app() -> impl IntoElement {
         bookmarks,
     };
     use_save_on_change(states);
-    use_clear_focus(active, focused, pinned, landing);
+    use_land(active, marked, landing, driven);
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.
@@ -353,6 +351,7 @@ pub fn app() -> impl IntoElement {
     let located = use_provide_context(|| Locations(State::create(Located::default()))).0;
     let reading = use_provide_context(|| Sections(State::create(Reading::default()))).0;
     let window = use_provide_context(|| Window(State::create(None))).0;
+    use_provide_context(|| CodeRows(State::create(None)));
     use_reading_of(active, objects, reading, window);
     // The question and not the active document: a source-driven tab's assembly side
     // changes when a line in it is clicked, which changes no document.
@@ -361,7 +360,7 @@ pub fn app() -> impl IntoElement {
         asked, objects, history, analysis, located, reading, window, answer,
     );
     // After the analysis: the file the Source pane draws is what the analysis says it is.
-    use_clear_marks(active, asked, analysis, pinned, reading, marked);
+    use_clear_marks(active, asked, analysis, reading, marked);
 
     // At the root rather than in the view: an inactive dock tab is unmounted, and neither
     // a buffer being typed into nor a program that was started can live there. The buffers

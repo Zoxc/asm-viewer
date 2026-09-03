@@ -25,7 +25,7 @@ fn harness() -> impl IntoElement {
             .height(Size::px(20.0))
             .on_pointer_down(move |e: Event<PointerEventData>| {
                 if e.button() == Some(MouseButton::Left) {
-                    mark_press(marked, false, Pane::Assembly, index);
+                    mark_press(marked, false, Pane::Assembly, None, index);
                 }
             })
             .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, index))
@@ -197,14 +197,15 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
 }
 
 /// [`scrolling_harness`] with the panes' reveal made through the kept position, as
-/// theirs is: a `Anchor` whose line is taken as a row index of whatever tab is shown.
+/// theirs is: the source pane's run, whose first row is taken as a row index of whatever
+/// tab is shown.
 fn revealing_harness() -> impl IntoElement {
     let tab = use_consume::<KeptTab>().0;
     let at = use_consume::<KeptAt>().0;
     let open = use_consume::<KeptOpen>().0;
     let length = use_consume::<KeptLength>().0;
     let mut top = use_consume::<KeptTop>().0;
-    let pinned = use_consume::<Anchored>().0;
+    let marked = use_consume::<Marked>().0;
 
     let controller = use_scroll_controller(ScrollConfig::default);
     let showing = tab.read().clone();
@@ -213,11 +214,13 @@ fn revealing_harness() -> impl IntoElement {
         at,
         move |tab: &String| open.peek().contains(tab),
         move |controller: &mut ScrollController| {
-            let Some(at) = owed_reveal(pinned, Pane::Assembly) else {
-                return false;
+            let row = match owed_reveal(marked, Pane::Assembly) {
+                None => return false,
+                Some(Owing::Own(rows)) => *rows.rows().start(),
+                Some(Owing::Pair(pair)) => *pair.rows.rows().start(),
             };
-            reveal_made(pinned, Pane::Assembly);
-            reveal_row(controller, 100.0, at.line as usize);
+            reveal_made(marked, Pane::Assembly);
+            reveal_row(controller, 100.0, row);
             true
         },
         controller,
@@ -249,7 +252,7 @@ fn revealing_harness() -> impl IntoElement {
 /// putting the arriving tab at its top would undo the scroll the reveal made.
 #[test]
 fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
-    let (mut test, (tab, top, pinned)) = TestingRunner::new(
+    let (mut test, (tab, top, marked)) = TestingRunner::new(
         revealing_harness,
         (100., 100.).into(),
         |runner| {
@@ -263,13 +266,13 @@ fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
                     .0,
                 runner.provide_root_context(|| KeptTop(State::create(0))).0,
                 runner
-                    .provide_root_context(|| Anchored(State::create(None)))
+                    .provide_root_context(|| Marked(State::create(Marks::default())))
                     .0,
             )
         },
         1.,
     );
-    let (mut tab, mut pinned) = (tab, pinned);
+    let (mut tab, mut marked) = (tab, marked);
     test.sync_and_update();
 
     let top_row = |test: &mut TestingRunner| {
@@ -287,21 +290,17 @@ fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
     // for a row of tab "b" and the switch to it.
     test.scroll((50., 50.), (0., -300.));
     assert!(top_row(&mut test) > 0, "the wheel moved nothing");
-    pinned.set(Some(Anchor {
-        at: LinePos {
-            file: "b.rs".into(),
-            line: 40,
-        },
-        reveal: Owed::by(Pane::Assembly),
-        landed: false,
-    }));
+    marked.set(Marks {
+        assembly: None,
+        source: Some(picked_row(40, "b.rs", Owed::by(Pane::Assembly))),
+    });
     tab.set("b".to_owned());
     let landed = top_row(&mut test);
     assert!(
         (30..=40).contains(&landed),
         "the arriving tab was put at row {landed} rather than at the revealed row"
     );
-    assert!(owed_reveal(pinned, Pane::Assembly).is_none());
+    assert!(owed_reveal(marked, Pane::Assembly).is_none());
 }
 
 fn area(groups: Vec<Vec<Tab>>) -> DockArea {
@@ -1961,6 +1960,40 @@ fn a_line_of(symbol: &Symbol) -> LinePos {
     }
 }
 
+/// A run of the one row `row` of `file`, picked out in the source pane with `owed` yet to
+/// scroll to it.
+fn picked_row(row: usize, file: &str, owed: Owed) -> Picked {
+    Picked {
+        rows: RowSelection {
+            anchor: row,
+            lead: row,
+            dragging: false,
+        },
+        file: Some(file.into()),
+        owed,
+    }
+}
+
+/// The same for the line `at`, as a landing plants it.
+fn picked_line(at: &LinePos, owed: Owed) -> Picked {
+    picked_row((at.line as usize).saturating_sub(1), &at.file, owed)
+}
+
+/// The line the source pane's run is of, where it is one row.
+fn source_line(marked: State<Marks>) -> Option<LinePos> {
+    let marks = marked.peek();
+    let picked = marks.source.as_ref()?;
+    Some(LinePos {
+        file: picked.file.clone()?,
+        line: picked.rows.anchor as u32 + 1,
+    })
+}
+
+/// Whether `pane` still owes a scroll to the other pane's run.
+fn owes_pair(marked: State<Marks>, pane: Pane) -> bool {
+    matches!(owed_reveal(marked, pane), Some(Owing::Pair(_)))
+}
+
 /// The step's own claim: a source line is a question the worker answers with the symbol
 /// that line was compiled into, over every object that is open.
 #[test]
@@ -2640,10 +2673,10 @@ fn closing_a_binary_takes_its_locations_with_it() {
 /// row's press is answered by it.
 fn locations_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let focused = use_consume::<Focused>().0;
-    let pinned = use_consume::<Anchored>().0;
+    let marked = use_consume::<Marked>().0;
     let landing = use_consume::<Land>().0;
-    use_clear_focus(active, focused, pinned, landing);
+    let driven = use_consume::<Drives>().0;
+    use_land(active, marked, landing, driven);
 
     rect().expanded().child(LocationsTab)
 }
@@ -2652,7 +2685,7 @@ fn locations_harness() -> impl IntoElement {
 #[derive(Clone, Copy)]
 struct LocationStates {
     located: State<Located>,
-    pinned: State<Option<Anchor>>,
+    marked: State<Marks>,
     landing: State<Option<Landing>>,
     analysis: State<Analyzed>,
 }
@@ -2660,9 +2693,8 @@ struct LocationStates {
 macro_rules! location_states {
     ($runner:expr) => {{
         let states = project_states!($runner);
-        $runner.provide_root_context(|| Focused(State::create(None)));
-        let pinned = $runner
-            .provide_root_context(|| Anchored(State::create(None)))
+        let marked = $runner
+            .provide_root_context(|| Marked(State::create(Marks::default())))
             .0;
         let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
         let located = $runner
@@ -2675,7 +2707,7 @@ macro_rules! location_states {
             states,
             LocationStates {
                 located,
-                pinned,
+                marked,
                 landing,
                 analysis,
             },
@@ -2838,7 +2870,7 @@ fn a_location_row_lands_on_its_line() {
     located.write().asked = Some(Query::line(at.clone()));
     located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
-    assert!(location.pinned.peek().is_none());
+    assert!(location.marked.peek().source.is_none());
 
     let row = label_area(&test, "sum_to").expect("the row is drawn");
     let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
@@ -2849,25 +2881,37 @@ fn a_location_row_lands_on_its_line() {
 
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
     assert!(states.open.active() == Some(document));
-    let pin = location.pinned.peek().clone().expect("the line was pinned");
-    assert!(pin.at == at);
-    assert!(pin.reveal == Owed::BOTH);
+    assert!(
+        source_line(location.marked) == Some(at.clone()),
+        "the line was not picked out"
+    );
+    let picked = location
+        .marked
+        .peek()
+        .source
+        .clone()
+        .expect("checked above");
+    assert!(picked.owed == Owed::BOTH);
     assert!(
         location.landing.peek().is_none(),
         "the landing was not spent by the document it named"
     );
-    // Both panes are owed the scroll, and each pays its own.
-    assert!(owed_reveal(location.pinned, Pane::Assembly).as_ref() == Some(&at));
-    assert!(owed_reveal(location.pinned, Pane::Source).as_ref() == Some(&at));
-    reveal_made(location.pinned, Pane::Source);
-    assert!(owed_reveal(location.pinned, Pane::Assembly).as_ref() == Some(&at));
-    assert!(owed_reveal(location.pinned, Pane::Source).is_none());
+    // Both panes are owed the scroll -- the source pane to its own run, the assembly
+    // pane to the pair -- and each pays its own.
+    assert!(owes_pair(location.marked, Pane::Assembly));
+    assert!(matches!(
+        owed_reveal(location.marked, Pane::Source),
+        Some(Owing::Own(_))
+    ));
+    reveal_made(location.marked, Pane::Source);
+    assert!(owes_pair(location.marked, Pane::Assembly));
+    assert!(owed_reveal(location.marked, Pane::Source).is_none());
 }
 
-/// Landing on the document already on top pins at once: `activate` then changes
-/// nothing, so no effect would run to spend a landing.
+/// Landing on the document already on top picks the line out at once: `activate` then
+/// changes nothing, so no effect would run to spend a landing.
 #[test]
-fn landing_on_the_document_already_on_top_pins_at_once() {
+fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
     let symbols = fixture_symbols();
     let wanted = symbols
         .iter()
@@ -2894,7 +2938,7 @@ fn landing_on_the_document_already_on_top_pins_at_once() {
     land(
         states.open,
         states.history,
-        location.pinned,
+        location.marked,
         location.landing,
         document.clone(),
         at.clone(),
@@ -2903,28 +2947,20 @@ fn landing_on_the_document_already_on_top_pins_at_once() {
         location.landing.peek().is_none(),
         "a landing was left to an effect that cannot run"
     );
-    assert!(location
-        .pinned
-        .peek()
-        .as_ref()
-        .is_some_and(|pin| pin.at == at));
+    assert!(source_line(location.marked) == Some(at.clone()));
     settle(&mut test);
     assert!(
-        location
-            .pinned
-            .peek()
-            .as_ref()
-            .is_some_and(|pin| pin.at == at),
-        "the pin was dropped though no document changed"
+        source_line(location.marked) == Some(at.clone()),
+        "the run was dropped though no document changed"
     );
     assert!(states.open.active() == Some(document));
 }
 
-/// The companion file follows a **landed** pin when the symbol's line info names its
-/// file, and the symbol's own file otherwise -- so a Locations row opens on the file the
-/// line is in, while a click inside the panes changes no file.
+/// The companion file follows the source pane's run when the symbol's line info names
+/// its file, and is the symbol's own file otherwise -- so a Locations row opens on the
+/// file the line is in, while a run in a file the listing knows nothing of changes none.
 #[test]
-fn a_landed_pin_names_the_companion_file() {
+fn a_run_in_a_file_the_listing_names_is_the_companion() {
     let symbols = fixture_symbols();
     let wanted = symbols
         .iter()
@@ -2951,33 +2987,27 @@ fn a_landed_pin_names_the_companion_file() {
         ..Default::default()
     };
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
-    let file_of = |pin: Option<&Anchor>| {
-        source_side(Some(&document), &analysis, pin)
+    let marks = |file: Option<&str>| Marks {
+        assembly: None,
+        source: file.map(|file| picked_row(0, file, Owed::BOTH)),
+    };
+    let file_of = |file: Option<&str>| {
+        source_side(Some(&document), &analysis, &marks(file))
             .expect("a companion")
             .file()
             .clone()
-    };
-    let pin = |file: &str, landed: bool| Anchor {
-        at: LinePos {
-            file: file.into(),
-            line: 1,
-        },
-        reveal: Owed::BOTH,
-        landed,
     };
 
     // A distinct allocation of a file the info names, as the app hands about.
     let elsewhere: String = named[0].to_string();
     assert!(file_of(None) == own);
-    assert!(file_of(Some(&pin(&elsewhere, true))).as_ref() == elsewhere.as_str());
-    // Not landed: the same pin changes nothing.
-    assert!(file_of(Some(&pin(&elsewhere, false))) == own);
-    // Landed but naming a file the symbol knows nothing of: nothing to switch to.
-    assert!(file_of(Some(&pin("nowhere.rs", true))) == own);
-    // And a source-driven tab's subject is its own file whatever is pinned.
+    assert!(file_of(Some(&elsewhere)).as_ref() == elsewhere.as_str());
+    // A run in a file the symbol knows nothing of: nothing to switch to.
+    assert!(file_of(Some("nowhere.rs")) == own);
+    // And a source-driven tab's subject is its own file whatever is picked out.
     let subject = Document::Source("subject.rs".into());
     assert!(
-        source_side(Some(&subject), &analysis, Some(&pin(&elsewhere, true)))
+        source_side(Some(&subject), &analysis, &marks(Some(&elsewhere)))
             .expect("a subject")
             .file()
             .as_ref()
@@ -3121,11 +3151,7 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     );
     assert!(states.driven.peek().choice(&tab) == Some(wanted.clone()));
     assert_eq!(states.driven.peek().line(&tab), Some(at.line));
-    assert!(location
-        .pinned
-        .peek()
-        .as_ref()
-        .is_some_and(|pin| pin.at == at));
+    assert!(source_line(location.marked) == Some(at.clone()));
     // Which is the question the tab now asks.
     assert!(
         ask(Some(&tab), &states.driven.peek())
@@ -3156,7 +3182,7 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
 }
 
 /// A landing is for the next arrival only: whichever document arrives spends it, and
-/// one for another document pins nothing.
+/// one for another document picks nothing out.
 #[test]
 fn a_landing_is_spent_by_whichever_document_arrives() {
     let symbols = fixture_symbols();
@@ -3184,8 +3210,8 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
     settle(&mut test);
 
     assert!(
-        location.pinned.peek().is_none(),
-        "a landing pinned a line in another document"
+        location.marked.peek().source.is_none(),
+        "a landing picked a line out in another document"
     );
     assert!(
         location.landing.peek().is_none(),
@@ -3499,10 +3525,9 @@ fn a_source_row_inside_a_function_offers_its_instances() {
             let file = file.clone();
             move |runner| {
                 let states = project_states!(runner);
-                runner.provide_root_context(|| Focused(State::create(None)));
-                runner.provide_root_context(|| Marked(State::create(None)));
+                runner.provide_root_context(|| Marked(State::create(Marks::default())));
                 runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(|| Anchored(State::create(None)));
+                runner.provide_root_context(|| CodeRows(State::create(None)));
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Subject(file.clone()));
                 let located = runner
@@ -3874,51 +3899,49 @@ fn a_reveal_the_listing_cannot_answer_is_left_owed() {
         line: 42,
     };
 
-    let (mut test, pinned) = TestingRunner::new(
+    let (mut test, marked) = TestingRunner::new(
         project_harness,
         (100., 100.).into(),
         |runner| {
             runner
-                .provide_root_context(|| Anchored(State::create(None)))
+                .provide_root_context(|| Marked(State::create(Marks::default())))
                 .0
         },
         1.,
     );
-    let mut pinned = pinned;
+    let mut marked = marked;
     test.sync_and_update();
 
-    pinned.set(Some(Anchor {
-        at: at.clone(),
-        reveal: Owed::by(Pane::Assembly),
-        landed: false,
-    }));
+    let click = |marked: &mut State<Marks>| {
+        marked.set(Marks {
+            assembly: None,
+            source: Some(picked_line(&at, Owed::by(Pane::Assembly))),
+        })
+    };
+    click(&mut marked);
     test.sync_and_update();
 
     // The pane that is owed it looks, twice, and the request is still there both times:
     // the first look is the listing being left, the second the one that arrived.
-    assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
-    assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
+    assert!(owes_pair(marked, Pane::Assembly));
+    assert!(owes_pair(marked, Pane::Assembly));
     // And the other pane is owed nothing: a click asks the pane it was not made in.
-    assert!(owed_reveal(pinned, Pane::Source).is_none());
+    assert!(owed_reveal(marked, Pane::Source).is_none());
     // Which is also what a `reveal_made` from it must not undo.
-    reveal_made(pinned, Pane::Source);
+    reveal_made(marked, Pane::Source);
     test.sync_and_update();
-    assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
+    assert!(owes_pair(marked, Pane::Assembly));
 
-    // Made, and so owed exactly once. The pin itself stays: it is what lights the rows.
-    reveal_made(pinned, Pane::Assembly);
+    // Made, and so owed exactly once. The run itself stays: it is what lights the rows.
+    reveal_made(marked, Pane::Assembly);
     test.sync_and_update();
-    assert!(owed_reveal(pinned, Pane::Assembly).is_none());
-    assert!(pinned.peek().as_ref().is_some_and(|pin| pin.at == at));
+    assert!(owed_reveal(marked, Pane::Assembly).is_none());
+    assert!(source_line(marked) == Some(at.clone()));
 
     // A second click on the same line is a second request.
-    pinned.set(Some(Anchor {
-        at: at.clone(),
-        reveal: Owed::by(Pane::Assembly),
-        landed: false,
-    }));
+    click(&mut marked);
     test.sync_and_update();
-    assert!(owed_reveal(pinned, Pane::Assembly).as_ref() == Some(&at));
+    assert!(owes_pair(marked, Pane::Assembly));
 }
 
 /// The Assembly pane over a listing the test puts into [`Analysis`] itself, with no worker
@@ -3940,15 +3963,12 @@ fn listing_harness() -> impl IntoElement {
 macro_rules! listing_states {
     ($runner:expr, $shown:expr) => {{
         let states = project_states!($runner);
-        $runner.provide_root_context(|| Focused(State::create(None)));
         let marked = $runner
-            .provide_root_context(|| Marked(State::create(None)))
+            .provide_root_context(|| Marked(State::create(Marks::default())))
             .0;
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
-        let pinned = $runner
-            .provide_root_context(|| Anchored(State::create(None)))
-            .0;
+        $runner.provide_root_context(|| CodeRows(State::create(None)));
         $runner.provide_root_context(|| {
             Analysis(State::create(Analyzed {
                 shown: Some($shown),
@@ -3960,7 +3980,7 @@ macro_rules! listing_states {
         $runner.provide_root_context(|| Sections(State::create(Reading::default())));
         $runner.provide_root_context(|| Window(State::create(None)));
         let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
-        (states, pinned, marked, landing)
+        (states, marked, landing)
     }};
 }
 
@@ -3990,7 +4010,7 @@ fn scrolling_past_a_separator_keeps_every_row_its_own() {
         studied,
     };
 
-    let (mut test, (_states, _pinned, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, _marked, _landing)) = TestingRunner::new(
         listing_harness,
         (500., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -4017,12 +4037,12 @@ fn scrolling_past_a_separator_keeps_every_row_its_own() {
     );
 }
 
-/// Pressing a branch's displacement puts the row it lands on on screen **and pins the line
-/// that row was compiled from** -- the pin a press on the target row itself would have
-/// made, with the Source pane owed the scroll and the Assembly pane not, since it has just
-/// been given one. It is still not a navigation: the document does not change and nothing
-/// is pushed onto the history, so a Back button never has to undo reading further down the
-/// same function.
+/// Pressing a branch's displacement puts the row it lands on on screen **and picks that
+/// row out** -- the run a press on the target row itself would have made, of the file the
+/// target was compiled from, with the Source pane owed the scroll and the Assembly pane
+/// not, since it has just been given one. It is still not a navigation: the document does
+/// not change and nothing is pushed onto the history, so a Back button never has to undo
+/// reading further down the same function.
 ///
 /// Headless because every part of it is a question about the real tree: which spans a row
 /// is drawn out of, which rows a `VirtualScrollView` built, where the operand was laid
@@ -4034,38 +4054,32 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
     let studied = Studied::new(sum_to.clone());
-    // The lines this test tells apart, worked out from the line info rather than from the
-    // pane. The fixture has two branches and only the second is any use for telling *which*
-    // row was pinned: the forward `jmp` and the row at 61h it lands on are both line 35, so
-    // it is the backward one -- 67h, line 35, landing on 4Bh, line 36 -- that says the pin
-    // followed the jump instead of staying where the press started. The test asserts that
-    // pairing before it leans on it.
-    let line_at = |address: u64| {
-        let info = studied
-            .lines
-            .info
-            .as_ref()
-            .expect("the gcc fixture carries line info");
-        let row = info.row_at(address).expect("the address is in a line row");
-        LinePos {
-            file: info.files()[row.file.expect("the row names a file")].clone(),
-            line: row.line.expect("the row names a line"),
-        }
+    // The rows this test tells apart, worked out from the lanes rather than from the
+    // pane: the row the forward `jmp` lands on, and for the backward jump both its own
+    // row and its target's, since the press starts on the one and must end up on the
+    // other.
+    let assembly = studied.assembly.clone().expect("sum_to decodes");
+    let row_at = |address: u64| {
+        let index = assembly
+            .instructions
+            .iter()
+            .position(|instruction| instruction.address == address)
+            .unwrap_or_else(|| panic!("no instruction at {address:X}"));
+        studied.lanes.row_of(index)
     };
-    let forward_lands_on = line_at(0x61);
-    let backward_starts_at = line_at(0x67);
-    let backward_lands_on = line_at(0x4B);
-    // Instruction 14 is the row the forward jump lands on; the listing draws it lower than
-    // that, since every block boundary above it is a row of its own.
-    let landing_row = studied.lanes.row_of(14);
-    // `LinePos` carries no `Debug` and is not given one for a test's benefit, so the
-    // failures below spell a position out themselves.
-    let spell = |at: &LinePos| format!("{}:{}", at.file, at.line);
-    assert!(
-        backward_starts_at != backward_lands_on,
-        "the backward jump and its target share {}, so a pin cannot tell them apart",
-        spell(&backward_lands_on)
-    );
+    let landing_row = row_at(0x61);
+    let backward_row = row_at(0x67);
+    let backward_lands_on = row_at(0x4B);
+    let target_file = studied
+        .position(
+            assembly
+                .instructions
+                .iter()
+                .position(|instruction| instruction.address == 0x61)
+                .expect("checked above"),
+        )
+        .expect("the row the jump lands on is on a line")
+        .file;
 
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
@@ -4075,7 +4089,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // fifteenth, far enough down that a pane this tall is not showing it.
     let landing = "0000000000000061 ";
 
-    let (mut test, (states, pinned, marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, marked, _landing)) = TestingRunner::new(
         listing_harness,
         (500., 200.).into(),
         |runner| listing_states!(runner, shown),
@@ -4112,32 +4126,32 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // pane has just been given one and must not be asked for a second.
     // The row landed on is the picked-out one now, and the row the press started on is
     // not: this is the half that holds whether or not the object carries line info.
-    let picked = marked.peek().expect("following a jump picked out no row");
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("following a jump picked out no row");
     assert_eq!(
         picked.rows.rows().collect::<Vec<_>>(),
         vec![landing_row],
         "the row picked out is not the one the jump lands on"
     );
-
-    let pin = pinned
-        .peek()
-        .clone()
-        .expect("following a jump pinned nothing");
     assert!(
-        pin.at == forward_lands_on,
-        "the pin is {} where the jump lands on {}",
-        spell(&pin.at),
-        spell(&forward_lands_on)
+        picked.file.as_ref() == Some(&target_file),
+        "the run is of {:?} where the jump lands in {target_file}",
+        picked.file
     );
-    assert!(pin.reveal.source, "the source side was not owed the scroll");
     assert!(
-        !pin.reveal.assembly,
+        picked.owed.source,
+        "the source side was not owed the scroll"
+    );
+    assert!(
+        !picked.owed.assembly,
         "the listing was asked to scroll twice"
     );
 
-    // And again on the backward jump, which is the one whose line differs from its
-    // target's: the press lands on 67h, line 35, and what is pinned afterwards is 4Bh's
-    // line 36 -- the row jumped *to*, not the row the pointer was over.
+    // And again on the backward jump: the press lands on 67h, and what is picked out
+    // afterwards is 4Bh's row -- the row jumped *to*, not the row the pointer was over.
     let operand = label_area(&test, "4Bh").expect("the backward jump is on screen now");
     let at = (
         (operand.origin.x + operand.width() as f32 / 2.0) as f64,
@@ -4148,20 +4162,19 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     test.release_cursor(at);
     settle(&mut test);
 
-    let pin = pinned
+    let picked = marked
         .peek()
+        .assembly
         .clone()
-        .expect("the backward jump pinned nothing");
-    assert!(
-        pin.at == backward_lands_on,
-        "the pin is {} where the backward jump lands on {}",
-        spell(&pin.at),
-        spell(&backward_lands_on)
+        .expect("the backward jump picked out no row");
+    assert_eq!(
+        picked.rows.rows().collect::<Vec<_>>(),
+        vec![backward_lands_on],
+        "the row picked out is not the one the backward jump lands on"
     );
     assert!(
-        pin.at != backward_starts_at,
-        "the press bubbled into the row and pinned where it started, {}",
-        spell(&backward_starts_at)
+        !picked.rows.contains(backward_row),
+        "the press bubbled into the row and picked out where it started"
     );
 
     // Still not a navigation: nothing was opened or visited by either press.
@@ -4432,7 +4445,7 @@ fn the_assembly_pane_names_the_symbol_in_both_spellings() {
         studied: Studied::new(symbol.clone()),
     };
 
-    let (mut test, (_states, _pinned, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, _marked, _landing)) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -4464,7 +4477,7 @@ fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
     };
     let tab = Document::Assembly(Selection::Symbol(elsewhere.clone()));
 
-    let (mut test, (_states, _pinned, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, _marked, _landing)) = TestingRunner::new(
         tab_pane_harness,
         (600., 300.).into(),
         move |runner| {
@@ -4542,7 +4555,7 @@ fn the_expanded_section_says_what_the_info_pane_said() {
         studied: Studied::new(sum_to.clone()),
     };
 
-    let (mut test, (states, _pinned, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
         listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),
@@ -4718,7 +4731,7 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
             let mounted = runner
                 .provide_root_context(|| Mounted(State::create(true)))
                 .0;
-            let (states, _pinned, _marked, _landing) = listing_states!(runner, shown);
+            let (states, _marked, _landing) = listing_states!(runner, shown);
             (states, mounted)
         },
         1.,
@@ -4983,7 +4996,7 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
         studied,
     };
 
-    let (mut test, (states, _pinned, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
         |runner| {
@@ -5096,7 +5109,7 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
             studied,
         };
 
-        let (mut test, (states, _pinned, _marked, _landing)) = TestingRunner::new(
+        let (mut test, (states, _marked, _landing)) = TestingRunner::new(
             panes_harness,
             (600., 300.).into(),
             |runner| {
@@ -5393,9 +5406,9 @@ fn every_foreground_is_legible_on_its_own_surface() {
         // The branch gutter is a diagram and is drawn quiet deliberately, so its floor is
         // only against a line that has disappeared into the pane altogether.
         let line = contrast(palette.branch_fg, palette.asm_pane_bg);
-        let lit = contrast(palette.branch_hover_fg, palette.asm_pane_bg);
+        let lit = contrast(palette.branch_lit_fg, palette.asm_pane_bg);
         assert!(line >= 1.5, "{theme} branch_fg: {line:.2}");
-        assert!(lit > line, "{theme} branch_hover_fg: {lit:.2} vs {line:.2}");
+        assert!(lit > line, "{theme} branch_lit_fg: {lit:.2} vs {line:.2}");
 
         // The rule that starts a basic block runs the whole width of the pane where the
         // gutter's stroke is a few pixels long, so it is held to a floor of its own and
@@ -5425,13 +5438,12 @@ fn every_wash_reads_against_the_pane_under_it() {
 
     for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
         for (name, wash, ground) in [
+            ("pair_bg", palette.pair_bg, palette.asm_pane_bg),
             (
-                "code_row_hover_bg",
-                palette.code_row_hover_bg,
+                "pair_selected_bg",
+                palette.pair_selected_bg,
                 palette.asm_pane_bg,
             ),
-            ("line_focus_bg", palette.line_focus_bg, palette.asm_pane_bg),
-            ("line_pin_bg", palette.line_pin_bg, palette.asm_pane_bg),
             ("row_select_bg", palette.row_select_bg, palette.asm_pane_bg),
             ("drop_preview_bg", palette.drop_preview_bg, palette.pane_bg),
             // The × on a tab sits on either of two grounds and has to say the same thing
@@ -5454,9 +5466,11 @@ fn every_wash_reads_against_the_pane_under_it() {
             assert!(step >= 10, "{theme} {name}: {step} levels");
         }
 
-        let focus = step(palette.line_focus_bg, palette.asm_pane_bg);
-        let pin = step(palette.line_pin_bg, palette.asm_pane_bg);
-        assert!(pin > focus, "{theme} pin {pin} vs focus {focus}");
+        // A row that is both picked out and the pair has to be told from one that is only
+        // the pair: the same green, moved further.
+        let pair = step(palette.pair_bg, palette.asm_pane_bg);
+        let both = step(palette.pair_selected_bg, palette.asm_pane_bg);
+        assert!(both > pair + 20, "{theme} pair {pair} vs both {both}");
 
         // And the × has to be told apart from the tab under it, which is lit at the same
         // time: the two hovers differ by strength on the same surface, the close moving
@@ -5873,7 +5887,7 @@ fn a_swept_run_survives_the_button_coming_up() {
         |runner| {
             runner.provide_root_context(|| Shift(State::create(false)));
             runner
-                .provide_root_context(|| Marked(State::create(None)))
+                .provide_root_context(|| Marked(State::create(Marks::default())))
                 .0
         },
         1.,
@@ -5883,18 +5897,18 @@ fn a_swept_run_survives_the_button_coming_up() {
     test.press_cursor((10., 10.));
     test.move_cursor((10., 30.));
     test.sync_and_update();
-    assert_eq!(marked.peek().unwrap().rows.rows(), 0..=1);
+    assert_eq!(marked.peek().assembly.as_ref().unwrap().rows.rows(), 0..=1);
 
     // The line that panicked, and the assertion that it no longer does is the test
     // getting this far at all.
     test.release_cursor((10., 30.));
-    assert_eq!(marked.peek().unwrap().rows.rows(), 0..=1);
+    assert_eq!(marked.peek().assembly.as_ref().unwrap().rows.rows(), 0..=1);
 
     // And the gesture really is over: a row entered afterwards is the pointer passing
     // over it, which is the panes' hover and not a sweep.
     test.move_cursor((10., 50.));
     test.sync_and_update();
-    assert_eq!(marked.peek().unwrap().rows.rows(), 0..=1);
+    assert_eq!(marked.peek().assembly.as_ref().unwrap().rows.rows(), 0..=1);
 }
 
 /// The scratchpad worker's work, handed in through a context so a test can answer without
@@ -7300,14 +7314,14 @@ fn a_wide_output_line_is_reached_by_scrolling_sideways() {
     );
 }
 
-/// The hovered row is kept as a **listing row**, so one state can serve a listing of many
-/// symbols, and the list converts it back to the instruction it is before asking `Lanes`
-/// what that instruction touches. Below a separator the two spaces differ by one, so a
-/// hover there lights the branch of the instruction under the pointer only if the
-/// conversion is made -- taken as an index, it would light some other row's branch, or
-/// none.
+/// The picked-out run is **listing rows**, so one state can serve a listing of many
+/// symbols, and the list converts it back to the instructions it holds before asking
+/// `Lanes` what they touch. Below a separator the two spaces differ by one, so a press
+/// there lights the branch of the instruction pressed only if the conversion is made --
+/// taken as an index, it would light some other row's branch, or none. And the pointer
+/// alone lights nothing: only a run does.
 #[test]
-fn hovering_a_row_below_a_separator_lights_that_rows_own_branch() {
+fn picking_out_a_row_below_a_separator_lights_that_rows_own_branch() {
     let sum_to = fixture_symbols()
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
@@ -7343,24 +7357,330 @@ fn hovering_a_row_below_a_separator_lights_that_rows_own_branch() {
 
     let lit = |test: &TestingRunner| -> usize {
         test.find_many(|_node, element| {
-            (element.style().background == Fill::Color(palette().branch_hover_fg)).then_some(())
+            (element.style().background == Fill::Color(palette().branch_lit_fg)).then_some(())
         })
         .len()
     };
-    assert_eq!(lit(&test), 0, "nothing is lit before the pointer arrives");
+    assert_eq!(
+        lit(&test),
+        0,
+        "nothing is lit before anything is picked out"
+    );
 
     let row = label_area(&test, &address).expect("the branching row is drawn");
+    let at = (
+        (row.origin.x + 5.0) as f64,
+        (row.origin.y + row.height() / 2.0) as f64,
+    );
+    test.move_cursor(at);
+    settle(&mut test);
+    assert_eq!(lit(&test), 0, "the pointer alone lit a branch");
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(&mut test);
+    assert!(
+        lit(&test) > 0,
+        "picking out row {} (instruction {}) lit no stroke of its branch",
+        lanes.row_of(edge.from),
+        edge.from
+    );
+}
+
+/// Each pane keeps a run of its own: a press in one leaves the other's where it was, and
+/// letting go ends whichever drag is under way without touching the rows of either.
+#[test]
+fn a_press_in_one_pane_leaves_the_others_run_alone() {
+    let (mut test, marked) = TestingRunner::new(
+        project_harness,
+        (100., 100.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| Marked(State::create(Marks::default())))
+                .0
+        },
+        1.,
+    );
+    test.sync_and_update();
+
+    mark_press(marked, false, Pane::Source, Some("a.c".into()), 3);
+    mark_press(marked, false, Pane::Assembly, None, 7);
+    let marks = marked.peek().clone();
+    let source = marks.source.as_ref().expect("the source run was dropped");
+    let assembly = marks
+        .assembly
+        .as_ref()
+        .expect("the assembly run was not started");
+    assert_eq!(source.rows.rows(), 3..=3);
+    assert_eq!(assembly.rows.rows(), 7..=7);
+    assert!(source.file.as_deref() == Some("a.c"));
+    // Each asks the other pane for the scroll, and neither its own.
+    assert!(source.owed == Owed::by(Pane::Assembly));
+    assert!(assembly.owed == Owed::by(Pane::Source));
+
+    // A reach in one pane is a reach in that pane alone.
+    mark_press(marked, true, Pane::Assembly, None, 9);
+    let marks = marked.peek().clone();
+    assert_eq!(marks.assembly.as_ref().unwrap().rows.rows(), 7..=9);
+    assert_eq!(marks.source.as_ref().unwrap().rows.rows(), 3..=3);
+
+    mark_release(marked);
+    let marks = marked.peek().clone();
+    assert!(!marks.assembly.as_ref().unwrap().rows.dragging);
+    assert!(!marks.source.as_ref().unwrap().rows.dragging);
+    assert_eq!(marks.source.as_ref().unwrap().rows.rows(), 3..=3);
+}
+
+/// A line picked out in the source pane lights, in the listing, every instruction it was
+/// compiled from and nothing else -- and the pointer lights nothing: moving over the rows
+/// leaves the pair as it was and picks nothing out.
+#[test]
+fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    let at = a_line_of(&sum_to);
+    let assembly = studied.assembly.clone().expect("sum_to decodes");
+    // How many instructions the line produced, which is how many rows should light.
+    let compiled = (0..assembly.instructions.len())
+        .filter(|&index| studied.position(index).as_ref() == Some(&at))
+        .count();
+    assert!(compiled > 0, "the line produced no instruction");
+    // A row that is not one of them, for the pointer to pass over.
+    let other = (0..assembly.instructions.len())
+        .find(|&index| studied.position(index).as_ref() != Some(&at))
+        .expect("sum_to has an instruction on another line");
+    let other = format!("{:016X} ", assembly.instructions[other].address);
+
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+        listing_harness,
+        (500., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    let mut marked = marked;
+    settle(&mut test);
+
+    let wearing = |test: &TestingRunner, colour: Color| -> usize {
+        test.find_many(|_node, element| {
+            (element.style().background == Fill::Color(colour)).then_some(())
+        })
+        .len()
+    };
+    assert_eq!(
+        wearing(&test, palette().pair_bg),
+        0,
+        "a pair is lit with nothing picked out"
+    );
+
+    marked.set(Marks {
+        assembly: None,
+        source: Some(picked_line(&at, Owed::default())),
+    });
+    settle(&mut test);
+    assert_eq!(
+        wearing(&test, palette().pair_bg),
+        compiled,
+        "the rows lit are not the instructions the line was compiled from"
+    );
+
+    // The pointer over a row that is not one of them: nothing changes.
+    let row = label_area(&test, &other).expect("the other row is drawn");
     test.move_cursor((
         (row.origin.x + 5.0) as f64,
         (row.origin.y + row.height() / 2.0) as f64,
     ));
     settle(&mut test);
-    assert!(
-        lit(&test) > 0,
-        "hovering row {} (instruction {}) lit no stroke of its branch",
-        lanes.row_of(edge.from),
-        edge.from
+    assert_eq!(
+        wearing(&test, palette().pair_bg),
+        compiled,
+        "the pointer moved the pair"
     );
+    assert_eq!(
+        wearing(&test, palette().row_select_bg),
+        0,
+        "the pointer picked a row out"
+    );
+    assert!(marked.peek().assembly.is_none());
+}
+
+/// An instruction picked out in the listing lights, in the source pane, the line it was
+/// compiled from; one placed nowhere lights no line. The line info is built by hand over a
+/// file of this machine's own, so the pane can open it.
+#[test]
+fn a_picked_out_instruction_lights_its_line() {
+    use analysis::{LineInfo, LineRow};
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let directory =
+        std::env::temp_dir().join(format!("assembly-viewer-pair-test-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("pair.c");
+    let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
+    std::fs::write(&path, text).expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+
+    let mut studied = Studied::new(sum_to.clone());
+    let first = studied
+        .assembly
+        .as_ref()
+        .expect("sum_to decodes")
+        .instructions[0]
+        .address;
+    // The first instruction on line 5, and nothing else placed anywhere.
+    studied.lines.info = LineInfo::new(
+        vec![LineRow {
+            range: first..first + 1,
+            file: Some(0),
+            line: Some(5),
+            column: None,
+        }],
+        vec![(file.clone(), None)],
+    )
+    .map(Arc::new);
+    studied.lines.file = Some(file.clone());
+    studied.lines.line = Some(5);
+    let placed = studied.lanes.row_of(0);
+    let unplaced = studied.lanes.row_of(1);
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let document = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let (mut test, (states, marked)) = TestingRunner::new(
+        source_pane_harness,
+        (500., 600.).into(),
+        |runner| {
+            runner.provide_root_context(|| Mounted(State::create(true)));
+            let (states, marked, _landing) = listing_states!(runner, shown);
+            (states, marked)
+        },
+        1.,
+    );
+    let mut marked = marked;
+    activate(states.open, states.history, Some(document), Visit::Went);
+    settle(&mut test);
+    settle(&mut test);
+
+    // Which line numbers sit in a row lit as the pair: the number label inside a rect
+    // wearing `pair_bg`.
+    let paired = |test: &TestingRunner| -> Vec<u32> {
+        let lit: Vec<Area> = test.find_many(|node, element| {
+            (element.style().background == Fill::Color(palette().pair_bg))
+                .then_some(node.layout().area)
+        });
+        labels_with_areas(test)
+            .into_iter()
+            .filter(|(_, area)| lit.iter().any(|row| row.contains_rect(area)))
+            .filter_map(|(text, _)| {
+                text.strip_suffix('\u{a0}')
+                    .and_then(|number| number.parse().ok())
+            })
+            .collect()
+    };
+    assert!(
+        paired(&test).is_empty(),
+        "a line is lit with nothing picked out"
+    );
+
+    marked.set(Marks {
+        assembly: Some(picked_row(placed, &file, Owed::default())),
+        source: None,
+    });
+    settle(&mut test);
+    assert_eq!(
+        paired(&test),
+        vec![5],
+        "the instruction's line is not the one lit"
+    );
+
+    marked.set(Marks {
+        assembly: Some(picked_row(unplaced, &file, Owed::default())),
+        source: None,
+    });
+    settle(&mut test);
+    assert!(
+        paired(&test).is_empty(),
+        "an instruction placed nowhere lit {:?}",
+        paired(&test)
+    );
+}
+
+/// Every label on screen with the area it was laid out in.
+fn labels_with_areas(test: &TestingRunner) -> Vec<(String, Area)> {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    test.find_many(|node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .map(|label| (label.text.to_string(), node.layout().area))
+    })
+}
+
+/// A source-driven tab comes back with the line it is driven from picked out, so the
+/// listing of that line's instructions says which line and why -- and with no scroll
+/// owed, the kept positions being what puts each side back. Another document arriving
+/// drops it.
+#[test]
+fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
+    let symbols = fixture_symbols();
+    let file: Arc<str> = "driven.c".into();
+    let tab = Document::Source(file.clone());
+
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut driven = states.driven;
+    driven.write().remember(tab.clone(), 7);
+    activate(states.open, states.history, Some(tab.clone()), Visit::Went);
+    settle(&mut test);
+
+    let expected = LinePos {
+        file: file.clone(),
+        line: 7,
+    };
+    assert!(
+        source_line(location.marked) == Some(expected.clone()),
+        "the driven line was not picked out"
+    );
+    let picked = location
+        .marked
+        .peek()
+        .source
+        .clone()
+        .expect("checked above");
+    assert!(
+        picked.owed == Owed::default(),
+        "a scroll was owed to the driven line"
+    );
+
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Assembly(Selection::Symbol(symbols[0].clone()))),
+        Visit::Went,
+    );
+    settle(&mut test);
+    assert!(
+        location.marked.peek().source.is_none(),
+        "the run outlived its tab"
+    );
+
+    activate(states.open, states.history, Some(tab), Visit::Went);
+    settle(&mut test);
+    assert!(source_line(location.marked) == Some(expected));
 }
 
 /// The address a copied line spells is the listing's, which is the instruction's own plus
@@ -7443,15 +7763,12 @@ fn code_harness() -> impl IntoElement {
 macro_rules! code_states {
     ($runner:expr, $reading:expr) => {{
         let states = project_states!($runner);
-        $runner.provide_root_context(|| Focused(State::create(None)));
         let marked = $runner
-            .provide_root_context(|| Marked(State::create(None)))
+            .provide_root_context(|| Marked(State::create(Marks::default())))
             .0;
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
-        let pinned = $runner
-            .provide_root_context(|| Anchored(State::create(None)))
-            .0;
+        $runner.provide_root_context(|| CodeRows(State::create(None)));
         $runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
         let reading = $runner
             .provide_root_context(|| Sections(State::create($reading)))
@@ -7463,7 +7780,7 @@ macro_rules! code_states {
         let ctrl = $runner
             .provide_root_context(|| Ctrl(State::create(false)))
             .0;
-        (states, pinned, marked, reading, window, landing, ctrl)
+        (states, marked, reading, window, landing, ctrl)
     }};
 }
 
@@ -7573,13 +7890,12 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
     let rows = rows_of(&reading);
-    let (mut test, (states, _pinned, _marked, sections, _window, _landing, _ctrl)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, (states, _marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
     let mut sections = sections;
     let document = Document::Code(object.clone());
     // Open, as a tab is in the app: a place is written down only for an open tab.
@@ -7676,13 +7992,12 @@ fn scrolling_asks_for_a_buffer_of_screens_nearest_the_reader_first() {
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
     let rows = rows_of(&reading);
-    let (mut test, (_states, _pinned, _marked, _sections, window, _landing, _ctrl)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, (_states, _marked, _sections, window, _landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
     settle(&mut test);
     settle(&mut test);
 
@@ -7757,20 +8072,21 @@ fn code_source_harness() -> impl IntoElement {
     }
 }
 
-/// Beside an object's code the Source pane draws the file of whatever the reader pinned
-/// in it, and nothing until they have: the listing draws no symbol of its own to name one.
+/// Beside an object's code the Source pane draws the file of whatever the reader picked
+/// out in it, and nothing until they have: the listing draws no symbol of its own to
+/// name one.
 #[test]
-fn a_pin_in_the_section_view_opens_its_file_beside_it() {
+fn a_run_in_the_section_view_opens_its_file_beside_it() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (_states, pinned, ..)) = TestingRunner::new(
+    let (mut test, (_states, marked, ..)) = TestingRunner::new(
         code_source_harness,
         (600., 300.).into(),
         |runner| code_states!(runner, reading),
         1.,
     );
-    let mut pinned = pinned;
+    let mut marked = marked;
     settle(&mut test);
     assert!(
         labels(&test).contains(&"Click an instruction".to_string()),
@@ -7778,23 +8094,24 @@ fn a_pin_in_the_section_view_opens_its_file_beside_it() {
         labels(&test)
     );
 
-    // A pin names a line of the fixture's source, which this machine does not have: the
-    // pane names the file it went looking for, which is the whole of what is asked here.
-    pinned.set(Some(Anchor {
-        at: LinePos {
-            file: Arc::from("/fixture/line_fixture.c"),
-            line: 5,
-        },
-        reveal: Owed::by(Pane::Source),
-        landed: false,
-    }));
+    // The run is of a file of the fixture's source, which this machine does not have:
+    // the pane names the file it went looking for, which is the whole of what is asked
+    // here.
+    marked.set(Marks {
+        assembly: Some(picked_row(
+            4,
+            "/fixture/line_fixture.c",
+            Owed::by(Pane::Source),
+        )),
+        source: None,
+    });
     settle(&mut test);
     let drawn = labels(&test);
     assert!(
         drawn
             .iter()
             .any(|text| text.contains("/fixture/line_fixture.c")),
-        "the pinned line's file is not what the pane went to: {drawn:?}"
+        "the run's file is not what the pane went to: {drawn:?}"
     );
 }
 
@@ -7807,14 +8124,12 @@ fn a_chunk_landing_drops_the_run_picked_out_over_it() {
         let active = use_consume::<Active>().0;
         let driven = use_consume::<Drives>().0;
         let analysis = use_consume::<Analysis>().0;
-        let pinned = use_consume::<Anchored>().0;
         let reading = use_consume::<Sections>().0;
         let marked = use_consume::<Marked>().0;
         use_clear_marks(
             active,
             crate::ui::analyzed::Asked { active, driven },
             analysis,
-            pinned,
             reading,
             marked,
         );
@@ -7824,19 +8139,21 @@ fn a_chunk_landing_drops_the_run_picked_out_over_it() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (_states, _pinned, marked, sections, _window, _landing, _ctrl)) =
-        TestingRunner::new(
-            marks_harness,
-            (100., 100.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, (_states, marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
+        marks_harness,
+        (100., 100.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
     let mut sections = sections;
     settle(&mut test);
 
-    mark_row(marked, Pane::Assembly, 3);
+    mark_row(marked, None, 3);
     settle(&mut test);
-    assert!(marked.peek().is_some(), "the run was not picked out");
+    assert!(
+        marked.peek().assembly.is_some(),
+        "the run was not picked out"
+    );
 
     // An ask: the same state written, no row changed.
     let mut asked = sections.peek().clone();
@@ -7847,7 +8164,7 @@ fn a_chunk_landing_drops_the_run_picked_out_over_it() {
     });
     sections.set(asked);
     settle(&mut test);
-    assert!(marked.peek().is_some(), "an ask dropped the run");
+    assert!(marked.peek().assembly.is_some(), "an ask dropped the run");
 
     // An answer: the rows are counted afresh, and the run with them.
     let mut landed = sections.peek().clone();
@@ -7855,7 +8172,7 @@ fn a_chunk_landing_drops_the_run_picked_out_over_it() {
     sections.set(landed);
     settle(&mut test);
     assert!(
-        marked.peek().is_none(),
+        marked.peek().assembly.is_none(),
         "the rows changed under the run and it stayed"
     );
 }
@@ -7907,26 +8224,25 @@ fn a_source_click_beside_the_section_view_reveals_its_instruction() {
     };
     let at = a_line_of(&sum_to);
     let reading = reading_of(&object, &[]);
-    let (mut test, (_states, pinned, _marked, sections, _window, _landing, _ctrl)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
-    let (mut pinned, mut sections) = (pinned, sections);
+    let (mut test, (_states, marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let (mut marked, mut sections) = (marked, sections);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
 
-    // Anchored from the source side while `sum_to` is still empty rows: owed, and unpaid.
-    pinned.set(Some(Anchor {
-        at: at.clone(),
-        reveal: Owed::by(Pane::Assembly),
-        landed: false,
-    }));
+    // Picked out on the source side while `sum_to` is still empty rows: owed, and
+    // unpaid.
+    marked.set(Marks {
+        assembly: None,
+        source: Some(picked_line(&at, Owed::by(Pane::Assembly))),
+    });
     settle(&mut test);
     assert!(
-        owed_reveal(pinned, Pane::Assembly).is_some(),
+        owes_pair(marked, Pane::Assembly),
         "the reveal was paid with nothing to pay it"
     );
 
@@ -7937,7 +8253,7 @@ fn a_source_click_beside_the_section_view_reveals_its_instruction() {
     settle(&mut test);
     settle(&mut test);
     assert!(
-        owed_reveal(pinned, Pane::Assembly).is_none(),
+        owed_reveal(marked, Pane::Assembly).is_none(),
         "the reveal is still owed"
     );
     let drawn = address_labels(&test);
@@ -7961,13 +8277,12 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, _pinned, _marked, _sections, _window, _landing, ctrl)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, (states, _marked, _sections, _window, _landing, ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
     activate(states.open, states.history, Some(code.clone()), Visit::Went);
@@ -8036,7 +8351,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _pinned, _marked, landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, landing)) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),
@@ -8076,13 +8391,12 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, pinned, _marked, _sections, _window, landing, _ctrl)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, (states, marked, _sections, _window, landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
     let code = Document::Code(object.clone());
     activate(states.open, states.history, Some(code.clone()), Visit::Went);
     settle(&mut test);
@@ -8092,7 +8406,7 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     show_in_code(
         states.open,
         states.history,
-        pinned,
+        marked,
         landing,
         states.code_at,
         object.clone(),
@@ -8225,13 +8539,12 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
             .clone(),
     };
     let reading = reading_of(&object, &[1]);
-    let (mut test, (states, _pinned, _marked, _sections, _window, landing, _ctrl)) =
-        TestingRunner::new(
-            menu_code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, (states, _marked, _sections, _window, landing, _ctrl)) = TestingRunner::new(
+        menu_code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
     let code = Document::Code(object.clone());
     activate(states.open, states.history, Some(code), Visit::Went);
     settle(&mut test);
@@ -8288,19 +8601,18 @@ struct PaneObject(Arc<Object>);
 fn a_unified_view_asks_for_its_skeleton_once_the_reading_is_its_own() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
-    let (mut test, (states, _pinned, _marked, sections, window, _landing, _ctrl)) =
-        TestingRunner::new(
-            app_like_code_harness,
-            (600., 300.).into(),
-            {
-                let object = object.clone();
-                move |runner| {
-                    runner.provide_root_context(|| PaneObject(object.clone()));
-                    code_states!(runner, Reading::default())
-                }
-            },
-            1.,
-        );
+    let (mut test, (states, _marked, sections, window, _landing, _ctrl)) = TestingRunner::new(
+        app_like_code_harness,
+        (600., 300.).into(),
+        {
+            let object = object.clone();
+            move |runner| {
+                runner.provide_root_context(|| PaneObject(object.clone()));
+                code_states!(runner, Reading::default())
+            }
+        },
+        1.,
+    );
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -8358,13 +8670,12 @@ fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
             }
         )]
     ));
-    let (mut test, (_states, _pinned, _marked, sections, _window, _landing, _ctrl)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, (_states, _marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
     let mut sections = sections;
     settle(&mut test);
     assert!(labels(&test).contains(&"dq\u{a0}".to_string()));
@@ -8799,7 +9110,7 @@ fn an_instruction_rows_menu_bookmarks_its_symbol() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _pinned, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),

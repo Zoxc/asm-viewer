@@ -51,7 +51,7 @@ pub(crate) struct AsmData {
     /// code. What `lanes` answers in rows is relative to the symbol, and this is what the
     /// scroll and the picked-out run -- which speak the listing's rows -- have it added.
     pub(crate) base: usize,
-    /// What is added to every address drawn, copied or named in a focus: 0 for a symbol
+    /// What is added to every address drawn or copied: 0 for a symbol
     /// read on its own, and the section's place in the object's layout
     /// (`Section::bias`) in a listing of all its code, where two functions of a
     /// relocatable object are both at 0 and have to be told apart.
@@ -91,49 +91,48 @@ impl AsmData {
             line: row.line?,
         })
     }
+
+    /// Whether the instruction at `index` is the same place as a line of the source
+    /// pane's picked-out run `pair`: compiled from that file, on one of those lines. One
+    /// source line is many instructions and every one of them is lit, so this asks each
+    /// row's own position rather than looking for the first match. An instruction the
+    /// debug info places nowhere is never paired.
+    pub(crate) fn paired(&self, index: usize, pair: Option<&Picked>) -> bool {
+        let Some(pair) = pair else {
+            return false;
+        };
+        let Some(at) = self.position(index) else {
+            return false;
+        };
+        pair.file.as_ref() == Some(&at.file)
+            && (at.line as usize)
+                .checked_sub(1)
+                .is_some_and(|row| pair.rows.contains(row))
+    }
 }
 
-/// What the instruction rows are built from: the disassembly, the two positions the source
-/// pane is pointing at, and the branches of the row the pointer is on. Kept apart from
-/// `AsmData` so that a hover cannot re-run anything the disassembly drives.
+/// What the instruction rows are built from: the disassembly, the source pane's run --
+/// whose pair the rows light -- and this pane's own, with the branches of the rows in
+/// it. Kept apart from `AsmData` so that a selection cannot re-run anything the
+/// disassembly drives.
 #[derive(Clone, PartialEq)]
 struct AsmRows {
     data: AsmData,
-    focus: Option<LinePos>,
-    pin: Option<LinePos>,
-    /// The edges starting or ending at the hovered row, which every row the gutter draws
-    /// them through has to know about. Worked out once here rather than per row.
+    /// The source pane's picked-out run, or `None` when there is none.
+    pair: Option<Picked>,
+    /// The edges starting or ending at a picked-out row, which every row the gutter
+    /// draws them through has to know about. Worked out once here rather than per row.
     touching: Vec<PlacedEdge>,
-    /// The run of rows picked out to be copied, or `None` when the selection is the source
-    /// pane's or there is none.
+    /// The run of rows picked out here, or `None` when there is none.
     rows: Option<RowSelection>,
 }
 
 /// What one row draws in the gutter: its own lanes, and how much of it belongs to a branch
-/// of the row under the pointer.
+/// of a picked-out row.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct RowArrows {
     pub(crate) lanes: RowLanes,
     pub(crate) lit: Lit,
-}
-
-impl AsmRows {
-    /// Whether the instruction at `index` is what the pointer is on in the source pane,
-    /// and whether it is what a click pinned there. One source line is many instructions
-    /// and every one of them lights up, so this asks each row's own position rather than
-    /// looking for the first match.
-    ///
-    /// An instruction the debug info places nowhere is neither, which `Option`'s own `==`
-    /// would get wrong in the case where nothing is focused either.
-    fn lit(&self, index: usize) -> (bool, bool) {
-        let Some(at) = self.data.position(index) else {
-            return (false, false);
-        };
-        (
-            self.focus.as_ref() == Some(&at),
-            self.pin.as_ref() == Some(&at),
-        )
-    }
 }
 
 /// The clickable name of a relocation target, in place of the meaningless numeric operand.
@@ -216,8 +215,8 @@ struct BranchLabel {
     /// since the scroll and the picked-out run are both in listing space.
     to: usize,
     /// Where that row points on the source side, or `None` where the debug info places it
-    /// nowhere. The target's own position and not this row's: the pin is the one a click
-    /// on the row being jumped to would have made.
+    /// nowhere. The target's own position and not this row's: the run is the one a click
+    /// on the row being jumped to would have made, of that row's file.
     at: Option<LinePos>,
     /// The listing's own scroll, and how tall it is: `reveal_row` needs both, and needs
     /// them at the moment of the press rather than at the render that drew this label.
@@ -228,7 +227,6 @@ struct BranchLabel {
 impl Component for BranchLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let mut pinned = use_consume::<Anchored>().0;
         let marked = use_consume::<Marked>().0;
         let text = self.text.clone();
         let to = self.to;
@@ -243,7 +241,7 @@ impl Component for BranchLabel {
                         .corner_radius(6.0)
                         .border(
                             Border::new()
-                                .fill(palette().branch_hover_fg)
+                                .fill(palette().branch_lit_fg)
                                 .width(BorderWidth {
                                     top: 0.0,
                                     right: 0.0,
@@ -255,32 +253,20 @@ impl Component for BranchLabel {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |e: Event<PressEventData>| {
-                    // Or the press bubbles into the row and pins the line *this*
-                    // instruction came from, where the reader asked for the one it jumps
-                    // to.
+                    // Or the press bubbles into the row, which would keep the row *this*
+                    // instruction is picked out, where the reader asked for the one it
+                    // jumps to.
                     e.stop_propagation();
                     reveal_row(&mut controller, *viewport.peek(), to);
                     // The row landed on becomes the picked-out one, replacing the row the
                     // press started on -- which `pointer_down` has already marked, that
-                    // being the one handler a stopped press does not undo. This is the
-                    // half of "the selection follows the jump" that holds for a binary
-                    // with no line info at all, where the pin below has nothing to say.
-                    mark_row(marked, Pane::Assembly, to);
-                    // The same rule the row itself obeys: a target the debug info places
-                    // nowhere pins nothing rather than clearing what is pinned, so a jump
-                    // into a prologue is not a way of losing the line the reader put
-                    // there. The Assembly pane is not owed the scroll -- it has just been
-                    // given one, above.
-                    if let Some(at) = at.clone() {
-                        pinned.set(Some(Anchor {
-                            at,
-                            reveal: Owed::by(Pane::Source),
-                            landed: false,
-                        }));
-                    }
+                    // being the one handler a stopped press does not undo. The source
+                    // pane owes the scroll to the target's line, where it has one; this
+                    // pane has just been given its own, above.
+                    mark_row(marked, at.as_ref().map(|at| at.file.clone()), to);
                 })
                 .child(label().text(text).max_lines(1).color(if hovering() {
-                    palette().branch_hover_fg
+                    palette().branch_lit_fg
                 } else {
                     kind_color(SpanKind::Address)
                 })),
@@ -327,7 +313,7 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
     };
 
     // The horizontal run and the arrowhead are the two ends of one gesture, so both are
-    // lit exactly when a branch of the hovered row has an end in this one.
+    // lit exactly when a branch of a picked-out row has an end in this one.
     let lit = arrows.lit.corner;
 
     let stroke = move |left: f32, top: f32, wide: f32, tall: f32, lit: bool| {
@@ -336,7 +322,7 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
             .width(Size::px(wide))
             .height(Size::px(tall))
             .background(if lit {
-                palette().branch_hover_fg
+                palette().branch_lit_fg
             } else {
                 palette().branch_fg
             })
@@ -480,12 +466,13 @@ impl Component for SeparatorRow {
             // The same horizontal padding the instruction rows take. Without it the
             // gutter's lines step three pixels sideways at every boundary they cross.
             .padding(Gaps::new_symmetric(0.0, 3.0))
-            .background(row_background(false, false, false, self.selected))
+            .background(row_background(false, self.selected))
             // The same two handlers the instruction rows carry, so a sweep down the
-            // listing is not cut in half by every boundary it crosses.
+            // listing is not cut in half by every boundary it crosses. A run started on
+            // a separator is a row of no file: the boundary is nobody's line.
             .on_pointer_down(move |e: Event<PointerEventData>| {
                 if e.button() == Some(MouseButton::Left) {
-                    mark_press(marked, *shift.peek(), Pane::Assembly, row);
+                    mark_press(marked, *shift.peek(), Pane::Assembly, None, row);
                 }
             })
             .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, row))
@@ -508,27 +495,20 @@ pub(crate) struct InstructionRow {
     /// one; everything else -- the gutter, the line info, the branch edges -- speaks
     /// `index`. See [`Lanes`].
     pub(crate) row: usize,
-    /// What this row draws in the gutter, worked out by the list for the reason `focused`
+    /// What this row draws in the gutter, worked out by the list for the reason `paired`
     /// is: the lanes lit in row 40 belong to a branch of row 12.
     pub(crate) arrows: RowArrows,
-    /// Where the pointer is, as a **listing row**, which this row writes and does not
-    /// read. A row and not an instruction index so that one state serves a listing of
-    /// many symbols; the list converts. Kept out of the `PartialEq` below: it is the same
-    /// handle for the whole life of the list.
-    pub(crate) hover: State<Option<usize>>,
     /// The listing's scroll and its height, for a branch operand to scroll to the row it
-    /// names. Out of the `PartialEq` for the same reason `hover` is: both are the list's
-    /// own handles and neither changes while it lives.
+    /// names. Out of the `PartialEq` below: both are the list's own handles and neither
+    /// changes while it lives.
     pub(crate) controller: ScrollController,
     pub(crate) viewport: State<f32>,
-    /// Whether the source line the pointer is on is the one this instruction was compiled
-    /// from. Worked out by the list rather than read here, so that a focus moving between
-    /// two instructions of one line leaves every row untouched.
-    pub(crate) focused: bool,
-    /// Whether the source line a click pinned is that same line.
-    pub(crate) pinned: bool,
-    /// Whether this row is one of the run picked out to be copied. Worked out by the list
-    /// too, so a row re-renders on its own membership changing and not on every row a drag
+    /// Whether this instruction was compiled from a line of the source pane's picked-out
+    /// run. Worked out by the list rather than read here, so that a run growing by a
+    /// line leaves every row not on it untouched.
+    pub(crate) paired: bool,
+    /// Whether this row is one of the run picked out here. Worked out by the list too,
+    /// so a row re-renders on its own membership changing and not on every row a drag
     /// passes over.
     pub(crate) selected: bool,
     pub(crate) key: DiffKey,
@@ -539,8 +519,7 @@ impl PartialEq for InstructionRow {
         self.data == other.data
             && self.index == other.index
             && self.row == other.row
-            && self.focused == other.focused
-            && self.pinned == other.pinned
+            && self.paired == other.paired
             && self.selected == other.selected
             && self.arrows == other.arrows
     }
@@ -554,9 +533,6 @@ impl KeyExt for InstructionRow {
 
 impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
-        let mut focused = use_consume::<Focused>().0;
-        let mut pinned = use_consume::<Anchored>().0;
         let marked = use_consume::<Marked>().0;
         let shift = use_consume::<Shift>().0;
         // Consumed here, in the render, because the menu handler may not run a hook.
@@ -576,7 +552,6 @@ impl Component for InstructionRow {
             object: self.data.object.clone(),
             data: self.data.symbol.clone(),
         }));
-        let mut hover = self.hover;
         let row = self.row;
         let width = self.data.width;
         let instruction = &self.data.assembly.instructions[self.index];
@@ -592,13 +567,8 @@ impl Component for InstructionRow {
         });
 
         // Where this row points on the source side. Worked out once here rather than in
-        // each of the three handlers, which all need the same answer.
+        // each of the handlers, which all need the same answer.
         let at = self.data.position(self.index);
-        let focus = at.clone().map(|at| LineFocus {
-            at,
-            from: FocusOrigin::Instruction(address),
-        });
-        let taken = focus.clone();
 
         let relocation = instruction
             .relocation
@@ -690,46 +660,29 @@ impl Component for InstructionRow {
             // edges, and padding there would break every line in the column once per row.
             .padding(Gaps::new_symmetric(0.0, 3.0))
             .assembly_font()
-            .background(row_background(
-                hovering(),
-                self.focused,
-                self.pinned,
-                self.selected,
-            ))
+            // Nothing of this row's own under the pointer: it is lit by the source pane's
+            // run, where it is the same place, and by this pane's, where it is in it.
+            .background(row_background(self.paired, self.selected))
             // The *down* and not the press: a drag is over by the time a press fires, so a
-            // selection swept out with the button held has to begin as it goes down.
-            .on_pointer_down(move |e: Event<PointerEventData>| {
-                if e.button() == Some(MouseButton::Left) {
-                    mark_press(marked, *shift.peek(), Pane::Assembly, row);
-                }
-            })
-            .on_pointer_over(move |_| {
-                hovering.set_if_modified(true);
-                // Two hovers: this row's own background, and the row shared with the
-                // whole list, which the gutter uses for rows the pointer is nowhere near.
-                hover.set_if_modified(Some(row));
-                focused.set_if_modified(taken.clone());
-                // Sweeping a selection out to here, in the handler the cross-view focus
-                // already uses -- a second `pointer_over` would answer the same event
-                // twice.
-                mark_drag(marked, Pane::Assembly, row);
-            })
-            .on_pointer_out(move |_| {
-                hovering.set_if_modified(false);
-                // `pointerout` on the row being left and `pointerover` on the row being
-                // entered are not ordered against each other, so a row may only take back
-                // what is still its own. See `release_focus`.
-                if *hover.peek() == Some(row) {
-                    hover.set(None);
-                }
-                release_focus(focused, focus.as_ref());
-            })
-            // The menu: the line's locations, where the debug info gives the row a line;
-            // the row shown among its neighbours, where it is not already; and the symbol
-            // bookmarked, always.
-            .on_secondary_down({
+            // selection swept out with the button held has to begin as it goes down. The
+            // run is a run of the file this row was compiled from, which is what the
+            // source pane shows beside an object's code. The right button's down is the
+            // menu, **in the same handler**: `on_secondary_down` is `on_pointer_down`
+            // under another name and would replace this one (`secondary`).
+            .on_pointer_down({
+                let file = at.as_ref().map(|at| at.file.clone());
                 let at = at.clone();
-                move |e: Event<PressEventData>| {
+                move |e: Event<PointerEventData>| {
+                    if e.button() == Some(MouseButton::Left) {
+                        mark_press(marked, *shift.peek(), Pane::Assembly, file.clone(), row);
+                        return;
+                    }
+                    let Some(e) = secondary(e) else {
+                        return;
+                    };
+                    // The menu: the line's locations, where the debug info gives the
+                    // row a line; the row shown among its neighbours, where it is not
+                    // already; and the symbol bookmarked, always.
                     let menu = match &at {
                         Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None),
                         None => Menu::new(),
@@ -741,7 +694,7 @@ impl Component for InstructionRow {
                                 show_in_code(
                                     open,
                                     history,
-                                    pinned,
+                                    marked,
                                     landing,
                                     code_at,
                                     object.clone(),
@@ -758,7 +711,7 @@ impl Component for InstructionRow {
                                 open_as_symbol(
                                     open,
                                     history,
-                                    pinned,
+                                    marked,
                                     landing,
                                     symbol.clone(),
                                     at.clone(),
@@ -775,18 +728,8 @@ impl Component for InstructionRow {
                     ContextMenu::open_from_event(&e, menu);
                 }
             })
-            .on_press(move |_| {
-                // An instruction the debug info places nowhere pins nothing rather than
-                // clearing what is pinned: a click on a prologue byte is not a way of
-                // losing the line the reader put there.
-                if let Some(at) = at.clone() {
-                    pinned.set(Some(Anchor {
-                        at,
-                        reveal: Owed::by(Pane::Source),
-                        landed: false,
-                    }));
-                }
-            })
+            // Sweeping a selection out to here: the one thing the pointer does to a row.
+            .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, row))
             // Nothing at all for a symbol that branches nowhere inside itself, which most
             // do: an empty column would still be a column.
             .maybe(width > 0, |el| el.child(gutter(width, self.arrows)))
@@ -821,8 +764,8 @@ struct InstructionList {
     /// worker catches up the pane is still drawing the listing being left. Two things
     /// come out of it -- [`asked_of`], the tab whose viewing position this is (the file's
     /// tab for a source-driven one, never the resolved symbol's, which is very likely not
-    /// open at all), and the line a source-driven tab is driven from, which lights its
-    /// rows when nothing is pinned.
+    /// open at all), and the file a source-driven tab is about, which its rows' menus
+    /// choose a location for.
     asked: Ask,
     lanes: Arc<Lanes>,
     lines: SymbolLines,
@@ -840,29 +783,10 @@ impl PartialEq for InstructionList {
 
 impl Component for InstructionList {
     fn render(&self) -> impl IntoElement {
-        // Only the position, not the origin the focus also carries: a focus moving between
-        // two instructions compiled from one line leaves this data equal and the whole list
-        // untouched.
-        let focus = use_consume::<Focused>()
-            .0
-            .read()
-            .as_ref()
-            .map(|focus| focus.at.clone());
-        let pinned = use_consume::<Anchored>().0;
-        // The pin, falling back to the line this listing was asked for. In a
-        // source-driven tab those are the same thing until `use_clear_focus` drops the
-        // pin with the tab, and coming back to a listing with nothing lit and no reason
-        // given is worse than lighting the line it is of.
-        let pin = pinned
-            .read()
-            .as_ref()
-            .map(|pin| pin.at.clone())
-            .or(match &self.asked {
-                Ask::Source { at, .. } => Some(at.clone()),
-                Ask::Symbol(_) => None,
-            });
         let marked = use_consume::<Marked>().0;
         let rows = marked_rows(marked, Pane::Assembly);
+        // The source pane's run, whose pair these rows light.
+        let pair = pair_of(marked, Pane::Assembly);
         // The box the keyboard reaches this pane through: a `pointer_down` anywhere inside
         // it bubbles to here and asks for focus, which is what makes Ctrl+C mean this
         // listing.
@@ -873,11 +797,6 @@ impl Component for InstructionList {
         // asked for is on screen already. `VirtualScrollView` measures itself but keeps
         // the answer, so the rect wrapping it is measured here instead.
         let mut viewport = use_state(|| 0.0f32);
-
-        // Which listing row the pointer is on, which the rows write and the gutter reads.
-        // It lives here because it is what the rows *around* the pointer need: hovering
-        // a `jne` lights its line all the way down to where it lands.
-        let hover = use_state(|| None::<usize>);
 
         let data = AsmData {
             assembly: self.assembly.clone(),
@@ -902,7 +821,7 @@ impl Component for InstructionList {
         // instructions'. `Lanes` converts, and is the only thing that may.
         let length = data.lanes.listing_rows(data.assembly.instructions.len());
         // Where this tab was left, put back when it is switched to and written down as it
-        // is scrolled -- and the scroll a pin is owed, which wins over it.
+        // is scrolled -- and the scroll this pane owes a run, which wins over it.
         let docs = use_consume::<OpenDocs>().0;
         use_kept_position(
             use_consume::<AsmAt>().0,
@@ -910,22 +829,28 @@ impl Component for InstructionList {
             {
                 let data = data.clone();
                 move |controller: &mut ScrollController| {
-                    let Some(at) = owed_reveal(pinned, Pane::Assembly) else {
-                        return false;
+                    let row = match owed_reveal(marked, Pane::Assembly) {
+                        None => return false,
+                        Some(Owing::Own(rows)) => *rows.rows().start(),
+                        // The first instruction compiled from a line of the source
+                        // pane's run. Nothing at all when the lines produced no
+                        // instruction here -- ones the optimiser folded away, or
+                        // belonging to another function, or, in a source-driven tab,
+                        // the listing this very click is asking for not having arrived
+                        // yet. Scrolling somewhere arbitrary would be worse than not
+                        // scrolling, and **the request is left owed**, so the listing
+                        // that can answer it still finds it.
+                        Some(Owing::Pair(pair)) => {
+                            let Some(index) = (0..data.assembly.instructions.len())
+                                .find(|&index| data.paired(index, Some(&pair)))
+                            else {
+                                return false;
+                            };
+                            data.lanes.row_of(index)
+                        }
                     };
-                    // Nothing at all when the line produced no instruction here -- one
-                    // the optimiser folded away, or one belonging to another function,
-                    // or, in a source-driven tab, the listing this very click is asking
-                    // for not having arrived yet. Scrolling somewhere arbitrary would be
-                    // worse than not scrolling, and **the request is left owed**, so the
-                    // listing that can answer it still finds it.
-                    let Some(index) = (0..data.assembly.instructions.len())
-                        .find(|&index| data.position(index).as_ref() == Some(&at))
-                    else {
-                        return false;
-                    };
-                    reveal_made(pinned, Pane::Assembly);
-                    reveal_row(controller, *viewport.peek(), data.lanes.row_of(index));
+                    reveal_made(marked, Pane::Assembly);
+                    reveal_row(controller, *viewport.peek(), row);
                     true
                 }
             },
@@ -935,11 +860,11 @@ impl Component for InstructionList {
             // The top: a listing *is* the symbol, so its first row is its own first line.
             0,
         );
-        // The hovered row is a listing row, and `touching` speaks instructions: a
-        // separator under the pointer lights nothing.
-        let touching = hover()
-            .and_then(|row| data.lanes.instruction_at(row))
-            .map(|index| data.lanes.touching(index))
+        // The picked-out run is listing rows, and `touching` speaks instructions: a run
+        // that is one separator lights nothing.
+        let touching = rows
+            .and_then(|run| data.lanes.instructions_in(run.rows()))
+            .map(|indices| data.lanes.touching_any(indices))
             .unwrap_or_default();
 
         let on_key_down = {
@@ -967,8 +892,7 @@ impl Component for InstructionList {
                 VirtualScrollView::new_with_data_controlled(
                     AsmRows {
                         data,
-                        focus,
-                        pin,
+                        pair,
                         touching,
                         rows,
                     },
@@ -999,19 +923,16 @@ impl Component for InstructionList {
                             .into();
                         };
 
-                        let (focused, pinned) = rows.lit(index);
                         InstructionRow {
+                            paired: rows.data.paired(index, rows.pair.as_ref()),
                             data: rows.data.clone(),
                             index,
                             row: i,
-                            focused,
-                            pinned,
                             selected,
                             arrows: RowArrows {
                                 lanes: rows.data.lanes.row(index),
                                 lit: lanes::lit(&rows.touching, index),
                             },
-                            hover,
                             controller,
                             viewport,
                             key: DiffKey::None,

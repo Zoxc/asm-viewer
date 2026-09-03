@@ -335,24 +335,21 @@ pub(crate) fn close_binary(
     }
 }
 
-/// Open `target` on `at`: activate it, and pin the line in it with both panes owed the
-/// scroll -- at once when the document is already on top, since `activate` then changes
-/// nothing and no effect would run, and otherwise as a [`Landing`] for the change of
-/// document to turn into the pin. A visit either way, as any opening from a list is.
+/// Open `target` on `at`: activate it, and pick the line out in the source pane with
+/// both panes owed the scroll -- at once when the document is already on top, since
+/// `activate` then changes nothing and no effect would run, and otherwise as a
+/// [`Landing`] for the change of document to turn into the run. A visit either way, as
+/// any opening from a list is.
 pub(crate) fn land(
     open: Open,
     history: State<History>,
-    mut pinned: State<Option<Anchor>>,
+    marked: State<Marks>,
     mut landing: State<Option<Landing>>,
     target: Document,
     at: LinePos,
 ) {
     if open.active().as_ref() == Some(&target) {
-        pinned.set(Some(Anchor {
-            at,
-            reveal: Owed::BOTH,
-            landed: true,
-        }));
+        mark_line(marked, at.file, at.line, Owed::BOTH);
         return;
     }
 

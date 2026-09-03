@@ -86,7 +86,7 @@ from those lines is listed, an inlined caller included, in the crate's order; th
 filter is how a name is narrowed to. A row of it is a **symbol and not a range inside one**, because the crate answers symbols by design
 and finding each hit's ranges would be a line-program walk per symbol under the context mutex,
 seconds for a line that answers with thousands and every symbol click waiting behind it;
-landing on the line inside the symbol is the pin's job (`agents/Panes.md`). Three rules travel with it.
+landing on the line inside the symbol is the picked-out run's job (`agents/Panes.md`). Three rules travel with it.
 **The queue is drained to the newest question of each kind** (`newest`), not the newest
 overall, since a locate is not a newer version of the listing question and drained to one a
 symbol click would silently cancel the locations, or the other way round; the listing is
@@ -107,8 +107,8 @@ asked from** (`Located::subject`): from the file a source-driven tab is about �
 the assembly side that listing belongs to — a row is *chosen for that tab*, which stays where it
 is, is driven from the line and has its assembly side follow the symbol; from an assembly-driven
 tab, or once the asking tab has closed, a row opens the symbol as a tab of its own. Both go
-through `documents::land`, which takes the target document, so the pin and the landing are one
-rule for either. An instance row is chosen the same way, from the row the menu was opened on,
+through `documents::land`, which takes the target document, so the line picked out and the
+landing are one rule for either. An instance row is chosen the same way, from the row the menu was opened on,
 so the tab is driven from that line; where the instance holds no code from it, `pick` falls
 back as it does for any choice. **The row lit in the panel is the symbol drawn** (`Analysis`),
 not the active document: for a source-driven tab the active document is a file, and the lit row
@@ -157,8 +157,8 @@ pane decides what it is drawing, so the two cannot disagree. `showing` takes the
 not a word from its caller, which is what keeps that true: it spells "Click a source line" where a
 symbol tab says "No symbol selected". `answered` is the last question answered *whatever it
 answered with*, which is the one thing a listing cannot say for itself — a source line no object
-holds code from leaves the listing that is up, losing only the pin's highlight, which is what says
-the click landed nowhere, and it is kept only while that listing is `asked_of` the same tab. Two things follow
+holds code from leaves the listing that is up, lighting no pair in it, which is what says the
+click landed nowhere, and it is kept only while that listing is `asked_of` the same tab. Two things follow
 from `shown` being the drawn symbol rather than the selected one: `InstructionList` is mounted only
 for a listing that exists, so `use_kept_position` cannot write a pending tab down at row 0 before a
 row of it has been seen; and the Source pane's companion file comes out of `Analysis` rather than
@@ -168,7 +168,7 @@ out of `Active`, so it cannot name a file the previous symbol was compiled from,
 **Nothing is cached in the UI, deliberately.** `SymbolData::assembly` does not memoize — it decodes
 afresh and hands back a new `Arc<Assembly>` — and `Object::line_info` caches the DWARF context and
 the subprogram extents but re-walks the covering units' line programs per call. What the `Analysis`
-state gives is the one thing a re-render needed: the answer is *held*, so a hover, a theme change or
+state gives is the one thing a re-render needed: the answer is *held*, so a selection, a theme change or
 a resize costs nothing where the old shape re-decoded in `render`. A second, keyed cache would be an
 unbounded pile of `Assembly`s for listings the reader has left, to save a few milliseconds on a
 symbol they have already been shown. `Reading::held` is not that cache: it is the section view's

@@ -112,8 +112,10 @@ command.
 - `src/ui/palette.rs` — every colour, the theme it is resolved from, and the compositing rules.
 - `src/ui/state.rs` — the contexts provided once at the root and read with `use_consume`.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
-- `src/ui/focus.rs` — the two panes pointing at each other, and where each side of a tab was left.
-- `src/ui/marks.rs` — the run of rows a reader picks out, and what Ctrl+C copies.
+- `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes, and
+  where each side of a tab was left.
+- `src/ui/marks.rs` — the run of rows picked out in each pane, the pair it lights on the other
+  side, the scroll it owes, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file parsed when loaded, its spans and its functions, and the
   cache holding it.
 - `src/ui/locations.rs` — every symbol a line, or the function around it, was compiled into: the
@@ -164,8 +166,8 @@ invalidates in the same commit**: these are the record of why things are the way
 - `agents/UI.md` — freya 0.4, the root contexts, documents and the dock, per-tab positions,
   opening a binary, and how the UI is tested.
 - `agents/Worker.md` — the one analysis worker: asks, locates, supersession, what shows meanwhile.
-- `agents/Panes.md` — the Source and Assembly panes: companion files, `Driven`, focus and pin,
-  landing, the arrow gutter, copying rows.
+- `agents/Panes.md` — the Source and Assembly panes: companion files, `Driven`, the two runs and
+  the pair, landing, the arrow gutter, copying rows.
 - `agents/Sidebar.md` — the filtered lists, the Objects tree, closing a binary, the Project view.
 - `agents/Appearance.md` — the palette, theme switching, fonts, row heights, the Settings page.
 - `agents/Headless.md` — `freya-testing` as it actually behaves, checked against its sources.

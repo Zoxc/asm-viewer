@@ -38,9 +38,36 @@ pub(crate) struct CodeAt(pub(crate) State<Positions<Document, Spot>>);
 /// drawn from the old rows, would find no bytes and no listing in the new reading. Drawn
 /// from this pair, a row always finds what it was counted from; the newer reading is
 /// drawn from once it has rows of its own.
-struct Built {
-    rows: Rows,
-    reading: Reading,
+pub(crate) struct Built {
+    pub(crate) rows: Rows,
+    pub(crate) reading: Reading,
+}
+
+/// The rows the section view is drawing, shared through context: [`None`] until the
+/// skeleton has come, and rebuilt by the view's place-keeping effect with every answer.
+/// At the root and not in the view because the Source pane beside an object's code reads
+/// them too, to find the lines the picked-out instructions were compiled from.
+#[derive(Clone, Copy)]
+pub(crate) struct CodeRows(pub(crate) State<Option<Arc<Built>>>);
+
+/// The positions the instructions drawn in the listing rows `rows` of an object's code
+/// were compiled from, in listing order, over the stretches held -- which is the window
+/// around the reader, so a run over the whole listing costs what is decoded and no more.
+pub(crate) fn code_places(built: Option<&Built>, rows: RangeInclusive<usize>) -> Vec<LinePos> {
+    let Some(built) = built else {
+        return Vec::new();
+    };
+    built
+        .reading
+        .held
+        .iter()
+        .filter_map(|(&flat, stretched)| {
+            let studied = stretched.code.as_ref()?;
+            let base = built.rows.body_start(flat)?;
+            Some(studied.places(rows.clone(), base))
+        })
+        .flatten()
+        .collect()
 }
 
 impl std::ops::Deref for Built {
@@ -52,7 +79,7 @@ impl std::ops::Deref for Built {
 }
 
 /// What the rows are built from: the rows themselves with the stretches decoded, and the
-/// three things a hover or a click changes.
+/// three things a click changes.
 #[derive(Clone)]
 struct SectionRows {
     /// [`None`] until the skeleton has come: the list is mounted all the same, with no
@@ -60,12 +87,11 @@ struct SectionRows {
     /// moves it -- a `VirtualScrollView` resets the offset as it mounts.
     rows: Option<Arc<Built>>,
     object: Arc<Object>,
-    focus: Option<LinePos>,
-    pin: Option<LinePos>,
-    /// The listing row under the pointer, and the edges of its instruction, for the
-    /// gutter of every row those run through.
-    hovered: Option<usize>,
-    touching: Vec<PlacedEdge>,
+    /// The source pane's picked-out run, whose pair the instruction rows light.
+    pair: Option<Picked>,
+    /// The edges starting or ending at a picked-out instruction, by the stretch they
+    /// are in, for the gutter of every row those run through.
+    touching: Vec<(usize, Vec<PlacedEdge>)>,
     marks: Option<RowSelection>,
 }
 
@@ -78,9 +104,7 @@ impl PartialEq for SectionRows {
         };
         same_rows
             && Arc::ptr_eq(&self.object, &other.object)
-            && self.focus == other.focus
-            && self.pin == other.pin
-            && self.hovered == other.hovered
+            && self.pair == other.pair
             && self.touching == other.touching
             && self.marks == other.marks
     }
@@ -251,8 +275,11 @@ impl Component for TextRow {
         let row = self.row;
         let opens = self.opens.clone();
         // A label lights as a link only while Ctrl is held, which is when a press is one.
+        // The cue is the label's, in the relocation link's own wash, and the row draws
+        // nothing under the pointer: an assembly row's only wash is its pair's, and a
+        // listing of an object's code has no pair to light.
         let link = opens.is_some() && ctrl();
-        let background = row_background(hovering() && link, false, false, self.selected);
+        let background = row_background(false, self.selected);
 
         rect()
             .horizontal()
@@ -264,7 +291,8 @@ impl Component for TextRow {
             .background(background)
             .on_pointer_down(move |e: Event<PointerEventData>| {
                 if e.button() == Some(MouseButton::Left) {
-                    mark_press(marked, *shift.peek(), Pane::Assembly, row);
+                    // A row of no file: a label or a header is nobody's line.
+                    mark_press(marked, *shift.peek(), Pane::Assembly, None, row);
                 }
             })
             .on_pointer_over(move |_| {
@@ -309,19 +337,25 @@ impl Component for TextRow {
                     .max_lines(1)
             }))
             .child(
-                label()
-                    .text(self.text.clone())
-                    .color(if hovering() && link {
-                        palette().name_hover_fg
-                    } else {
-                        self.color
+                rect()
+                    .maybe(hovering() && link, |rect| {
+                        rect.background(palette().link_hover_bg).corner_radius(6.0)
                     })
-                    .font_weight(if self.bold {
-                        FontWeight::BOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .max_lines(1),
+                    .child(
+                        label()
+                            .text(self.text.clone())
+                            .color(if hovering() && link {
+                                palette().name_hover_fg
+                            } else {
+                                self.color
+                            })
+                            .font_weight(if self.bold {
+                                FontWeight::BOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .max_lines(1),
+                    ),
             )
     }
 
@@ -354,10 +388,10 @@ impl Component for EmptyRow {
         rect()
             .width(Size::fill())
             .height(Size::px(code_row_height()))
-            .background(row_background(false, false, false, self.selected))
+            .background(row_background(false, self.selected))
             .on_pointer_down(move |e: Event<PointerEventData>| {
                 if e.button() == Some(MouseButton::Left) {
-                    mark_press(marked, *shift.peek(), Pane::Assembly, row);
+                    mark_press(marked, *shift.peek(), Pane::Assembly, None, row);
                 }
             })
             .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, row))
@@ -399,24 +433,17 @@ impl Component for SectionList {
         let window = use_consume::<Window>().0;
         // Reading it is what redraws the listing as answers land.
         let reading = reading_state.read().clone();
-        let focus = use_consume::<Focused>()
-            .0
-            .read()
-            .as_ref()
-            .map(|focus| focus.at.clone());
-        let pinned = use_consume::<Anchored>().0;
-        let pin = pinned.read().as_ref().map(|pin| pin.at.clone());
         let marked = use_consume::<Marked>().0;
         let marks = marked_rows(marked, Pane::Assembly);
+        let pair = pair_of(marked, Pane::Assembly);
         let docs = use_consume::<OpenDocs>().0;
         let code_at = use_consume::<CodeAt>().0;
         let a11y = use_a11y();
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);
-        let hover = use_state(|| None::<usize>);
         // The rows, produced by the place-keeping effect and rendered from here, so that
         // new rows and the offset that keeps the reader's place under them land together.
-        let rows = use_state(|| None::<Arc<Built>>);
+        let rows = use_consume::<CodeRows>().0;
 
         let object = self.object.clone();
         let about = reading.is_about(&object);
@@ -428,18 +455,22 @@ impl Component for SectionList {
         use_kept_place(
             code_at,
             move |document: &Document| docs.peek().id_of(document).is_some(),
-            // The scroll a pin made on the source side owes this pane: the row of the
-            // instruction compiled from that line, in whichever held stretch has one.
-            // Left owed while none does -- the stretch may not be decoded yet, and the
-            // answer that decodes it wakes this again.
+            // The scroll this pane owes: to the source pane's run, the row of the first
+            // instruction compiled from one of its lines, in whichever held stretch has
+            // one. Left owed while none does -- the stretch may not be decoded yet, and
+            // the answer that decodes it wakes this again.
             move |controller: &mut ScrollController, built: &Built| {
-                let Some(at) = owed_reveal(pinned, Pane::Assembly) else {
-                    return false;
+                let row = match owed_reveal(marked, Pane::Assembly) {
+                    None => return false,
+                    Some(Owing::Own(rows)) => *rows.rows().start(),
+                    Some(Owing::Pair(pair)) => {
+                        let Some(row) = row_compiled_from(built, &built.reading, &pair) else {
+                            return false;
+                        };
+                        row
+                    }
                 };
-                let Some(row) = row_compiled_from(built, &built.reading, &at) else {
-                    return false;
-                };
-                reveal_made(pinned, Pane::Assembly);
+                reveal_made(marked, Pane::Assembly);
                 reveal_row(controller, *viewport.peek(), row);
                 true
             },
@@ -463,18 +494,25 @@ impl Component for SectionList {
         let built = rows.read().clone().filter(|_| about);
         let length = built.as_ref().map_or(0, |rows| rows.len());
 
-        let touching = hover()
-            .and_then(|row| {
-                let built = built.as_ref()?;
-                match built.row(row)? {
-                    Row::Instruction { stretch, index } => {
-                        let studied = built.reading.held.get(&stretch)?.code.as_ref()?;
-                        Some(studied.lanes.touching(index))
-                    }
-                    _ => None,
-                }
-            })
-            .unwrap_or_default();
+        // The branches touching a picked-out instruction, stretch by held stretch: the
+        // run is listing rows and each stretch's lanes speak its own instructions.
+        let touching: Vec<(usize, Vec<PlacedEdge>)> = match (&built, marks) {
+            (Some(built), Some(run)) => built
+                .reading
+                .held
+                .iter()
+                .filter_map(|(&flat, stretched)| {
+                    let studied = stretched.code.as_ref()?;
+                    let base = built.body_start(flat)?;
+                    let first = run.rows().start().saturating_sub(base);
+                    let last = run.rows().end().checked_sub(base)?;
+                    let indices = studied.lanes.instructions_in(first..=last)?;
+                    let edges = studied.lanes.touching_any(indices);
+                    (!edges.is_empty()).then_some((flat, edges))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
 
         let on_key_down = {
             let rows = built.clone();
@@ -497,13 +535,11 @@ impl Component for SectionList {
                     SectionRows {
                         rows: built,
                         object,
-                        focus,
-                        pin,
-                        hovered: hover(),
+                        pair,
                         touching,
                         marks,
                     },
-                    move |i, data: &SectionRows| build_row(i, data, hover, controller, viewport),
+                    move |i, data: &SectionRows| build_row(i, data, controller, viewport),
                     controller,
                 )
                 .length(length)
@@ -517,7 +553,6 @@ impl Component for SectionList {
 fn build_row(
     i: usize,
     data: &SectionRows,
-    hover: State<Option<usize>>,
     controller: ScrollController,
     viewport: State<f32>,
 ) -> Element {
@@ -525,6 +560,14 @@ fn build_row(
         return rect().height(Size::px(code_row_height())).into_element();
     };
     let selected = data.marks.is_some_and(|run| run.contains(i));
+    // The edges lit in `stretch`, which is the stretch's own entry and nothing when it
+    // has none.
+    let touching = |stretch: usize| -> &[PlacedEdge] {
+        data.touching
+            .iter()
+            .find(|(flat, _)| *flat == stretch)
+            .map_or(&[][..], |(_, edges)| edges.as_slice())
+    };
     let text = |address: Option<u64>,
                 text: String,
                 color: Color,
@@ -610,34 +653,18 @@ fn build_row(
             let address = asm.assembly.instructions[index]
                 .address
                 .wrapping_add(asm.bias);
-            let at = asm.position(index);
-            let (focused, pinned) = match &at {
-                Some(at) => (
-                    data.focus.as_ref() == Some(at),
-                    data.pin.as_ref() == Some(at),
-                ),
-                None => (false, false),
-            };
-            let lit = if data.hovered.and_then(|row| rows.row(row)).is_some_and(
-                |hovered| matches!(hovered, Row::Instruction { stretch: s, .. } if s == stretch),
-            ) {
-                lanes::lit(&data.touching, index)
-            } else {
-                Lit::default()
-            };
+            let paired = asm.paired(index, data.pair.as_ref());
             InstructionRow {
                 arrows: RowArrows {
                     lanes: asm.lanes.row(index),
-                    lit,
+                    lit: lanes::lit(touching(stretch), index),
                 },
                 data: asm,
                 index,
                 row: i,
-                hover,
                 controller,
                 viewport,
-                focused,
-                pinned,
+                paired,
                 selected,
                 key: DiffKey::None,
             }
@@ -651,13 +678,7 @@ fn build_row(
             let address = asm.assembly.instructions[below]
                 .address
                 .wrapping_add(asm.bias);
-            let mut lit = if data.hovered.and_then(|row| rows.row(row)).is_some_and(
-                |hovered| matches!(hovered, Row::Instruction { stretch: s, .. } if s == stretch),
-            ) {
-                lanes::lit(&data.touching, below)
-            } else {
-                Lit::default()
-            };
+            let mut lit = lanes::lit(touching(stretch), below);
             lit.corner = false;
             SeparatorRow {
                 row: i,
@@ -848,16 +869,16 @@ fn use_kept_place(
 
 /// Show the instruction at `address` -- placed, in `object`'s code -- among its
 /// neighbours: the object's code tab, opened on that address, with the line the
-/// instruction was compiled from pinned in both panes where it has one.
+/// instruction was compiled from picked out in the source pane where it has one.
 ///
 /// The place is written **before** the tab is opened, the order a restore uses, so the
 /// pane's first run finds it; when the code tab is already on top the write is what moves
-/// the view, `use_kept_place` reading the map for exactly this. The pin goes through
+/// the view, `use_kept_place` reading the map for exactly this. The line goes through
 /// `land`, which knows whether the tab is on top.
 pub(crate) fn show_in_code(
     open: Open,
     history: State<History>,
-    pinned: State<Option<Anchor>>,
+    marked: State<Marks>,
     landing: State<Option<Landing>>,
     mut places: State<Positions<Document, Spot>>,
     object: Arc<Object>,
@@ -869,7 +890,7 @@ pub(crate) fn show_in_code(
         .write()
         .remember(code.clone(), Spot { address, rows: 0 });
     match at {
-        Some(at) => land(open, history, pinned, landing, code, at),
+        Some(at) => land(open, history, marked, landing, code, at),
         None => activate(open, history, Some(code), Visit::Went),
     }
 }
@@ -879,31 +900,30 @@ pub(crate) fn show_in_code(
 pub(crate) fn open_as_symbol(
     open: Open,
     history: State<History>,
-    pinned: State<Option<Anchor>>,
+    marked: State<Marks>,
     landing: State<Option<Landing>>,
     symbol: Symbol,
     at: Option<LinePos>,
 ) {
     let tab = Document::Assembly(Selection::Symbol(symbol));
     match at {
-        Some(at) => land(open, history, pinned, landing, tab, at),
+        Some(at) => land(open, history, marked, landing, tab, at),
         None => activate(open, history, Some(tab), Visit::Went),
     }
 }
 
-/// The listing row of the first held instruction compiled from `at`, if any is.
-fn row_compiled_from(rows: &Rows, reading: &Reading, at: &LinePos) -> Option<usize> {
+/// The listing row of the first held instruction compiled from a line of the source
+/// pane's run `pair`, if any is.
+fn row_compiled_from(rows: &Rows, reading: &Reading, pair: &Picked) -> Option<usize> {
     reading.held.iter().find_map(|(&flat, stretched)| {
         let studied = stretched.code.as_ref()?;
         let assembly = studied.assembly.as_ref()?;
-        let info = studied.lines.info.as_ref()?;
-        let index = assembly.instructions.iter().position(|instruction| {
-            info.row_at(instruction.address).is_some_and(|row| {
-                row.line == Some(at.line)
-                    && row
-                        .file
-                        .and_then(|file| info.files().get(file))
-                        .is_some_and(|file| *file == at.file)
+        let index = (0..assembly.instructions.len()).find(|&index| {
+            studied.position(index).is_some_and(|at| {
+                pair.file.as_ref() == Some(&at.file)
+                    && (at.line as usize)
+                        .checked_sub(1)
+                        .is_some_and(|row| pair.rows.contains(row))
             })
         })?;
         Some(rows.body_start(flat)? + studied.lanes.row_of(index))

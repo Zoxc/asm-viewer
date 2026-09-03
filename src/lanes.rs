@@ -12,6 +12,7 @@
 //! edges, whose ends are rarely on screen together, that are pushed out there.
 
 use analysis::BranchEdge;
+use std::ops::RangeInclusive;
 
 /// How many lanes the gutter is ever drawn with.
 pub(crate) const MAX_LANES: usize = 5;
@@ -225,18 +226,49 @@ impl Lanes {
         (self.row_of(index) == row).then_some(index)
     }
 
-    /// The edges that start or end at `row`. An edge merely passing through is not one of
-    /// them: it has nothing to do with the row it crosses.
-    pub fn touching(&self, row: usize) -> Vec<PlacedEdge> {
+    /// The instructions drawn in the listing rows `rows`, as a range of their indices, or
+    /// [`None`] when the rows hold none -- a run that is one separator. A separator at
+    /// either end is left out: it belongs to the instruction below it, which is inside
+    /// the run when the separator opens it and outside when the separator closes it.
+    pub fn instructions_in(&self, rows: RangeInclusive<usize>) -> Option<RangeInclusive<usize>> {
+        let (first, last) = (*rows.start(), *rows.end());
+        if first > last {
+            return None;
+        }
+        // The first instruction at or below `first`, and the last at or above `last`:
+        // `instruction_at` answers the instruction drawn at or above a row, so a
+        // separator at `first` moves down one row and one at `last` moves up.
+        let from = self
+            .instruction_at(first)
+            .or_else(|| self.instruction_at(first.checked_add(1)?))?;
+        let to = self
+            .instruction_at(last)
+            .or_else(|| self.instruction_at(last.checked_sub(1)?))?;
+        (from <= to).then_some(from..=to)
+    }
+
+    /// The edges that start or end at an instruction in `rows` -- the same question
+    /// [`Lanes::touching`] answers for one row, asked once for a run of them, in one pass
+    /// over the edges rather than one per row.
+    pub fn touching_any(&self, rows: RangeInclusive<usize>) -> Vec<PlacedEdge> {
         self.placed
             .iter()
             .copied()
-            .filter(|edge| edge.first == row || edge.last == row)
+            .filter(|edge| rows.contains(&edge.first) || rows.contains(&edge.last))
             .collect()
+    }
+
+    /// The edges that start or end at `row`. An edge merely passing through is not one of
+    /// them: it has nothing to do with the row it crosses. The one-row case of
+    /// [`Lanes::touching_any`], which is what the app asks; kept for the tests, which ask
+    /// row by row.
+    #[cfg(test)]
+    pub fn touching(&self, row: usize) -> Vec<PlacedEdge> {
+        self.touching_any(row..=row)
     }
 }
 
-/// How much of one row belongs to a branch of the row the pointer is on.
+/// How much of one row belongs to a branch of a picked-out row.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Lit {
     /// The lanes such a branch is drawn in, at this row. A lane rather than an edge,
@@ -250,7 +282,8 @@ pub struct Lit {
     pub corner: bool,
 }
 
-/// What the edges in `touching` (from [`Lanes::touching`]) light up at `row`.
+/// What the edges in `touching` (from [`Lanes::touching`] or [`Lanes::touching_any`]) light
+/// up at `row`.
 pub fn lit(touching: &[PlacedEdge], row: usize) -> Lit {
     let mut lit = Lit::default();
     for edge in touching {

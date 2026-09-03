@@ -70,8 +70,9 @@ leave, a global, a capture (`name.rs:248-254`) — is nothing at all.
 `AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `CodeAt` (where each code
 tab was left, as an address), `Hist`, `Bookmarked` (the project's bookmarks, in their saved
 shape), `Proj` (which project all of that belongs to), `Loading` (the files on their way into
-`Objects`), `Focused`, `Anchored`,
-`Marked`/`Shift`, `Land` (a line to pin the moment a document arrives), `Analysis` (what
+`Objects`), `Marked` (each pane's picked-out run, and what it owes the other) with `Shift`
+and `Ctrl`, `Land` (a line to pick out the moment a document arrives), `CodeRows` (the section
+view's rows, which the Source pane beside it reads too), `Analysis` (what
 the worker has to say about the selected symbol), `Sections`/`Window` (what it has decoded of the
 object whose code is on screen, and the stretches the view wants next), `Locations` (every symbol
 the line, or the function around it, last asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
@@ -181,7 +182,7 @@ selection change re-renders only the panes that read it and never the root.
 the symbol list opens a document, and that document has to land *somewhere*; a dock has many panels
 and freya has no notion of "the panel documents belong to", so `DockArea::documents` names one.
 Three rules follow. `on_drop` refuses a document into any other panel — one visible document is what
-lets `Analysis`, `Marked`, `Focused` and `Anchored` each hold one answer for the window — and refuses
+lets `Analysis` and `Marked` each hold one answer for the window — and refuses
 a `DocId` the table no longer knows, which is a drag that outlived its document and is the whole
 payoff of **ids never being reused**. A **view**, by contrast, may go anywhere, that panel included:
 Project, Settings and the Scratchpad start tabbed in it, to the left of the documents, where they
@@ -285,8 +286,8 @@ content is mounted, so a pane is only ever built for the tab it belongs to.
 source-driven one. `DocumentBody` is the only thing that knows this — the panes themselves are
 handed no side and read none — so the swap is the order of two `.panel(..)` calls and nothing else.
 Everything the two panes share is keyed by pane *identity* and not by position (`Pane`, `Owed`,
-`Marked`, `AsmAt`/`SrcAt`), which is why swapping them moves no focus, no pin, no kept row and no
-picked-out run. The panes are two different component types, so a swap unmounts and remounts both;
+`Marks`, `AsmAt`/`SrcAt`), which is why swapping them moves no picked-out run, no pair, no owed
+scroll and no kept row. The panes are two different component types, so a swap unmounts and remounts both;
 their rows come back where `use_kept_position` puts them.
 
 That unmounting is why the split ratio is held at the root (`SplitRatio`, with `Splits` the shared
@@ -349,8 +350,8 @@ what **subscribes the effect to the pane's own scroll**: every position is writt
 happens rather than on the way out, which is what survives the window merely being closed. The tab
 the controller is *holding* is tracked in the hook — an `Rc<RefCell>`, not a `State`, since nothing
 renders from it — because it is not the tab the app is showing during the one run that has to move
-the view, and every write goes under the held one. And a `Anchor::reveal` **wins** over a remembered
-position because the same effect makes both: `use_kept_position` is handed the pane's reveal as a
+the view, and every write goes under the held one. And a reveal a run is owed (`Picked::owed`)
+**wins** over a remembered position because the same effect makes both: `use_kept_position` is handed the pane's reveal as a
 closure and asks it first, applying the remembered row only when no scroll was made. The two *are*
 owed at once — a Locations row opens a symbol on a line, so the tab changes and the arriving one
 is owed a reveal — and two effects' scrolls land in whichever order the runtime wakes them; with

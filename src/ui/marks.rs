@@ -1,20 +1,95 @@
-//! A run of rows picked out to be copied, in either of the two code panes. One selection
-//! for the window, so Ctrl+C has one answer, which is why the pane is part of it.
+//! The run of rows picked out in each of the two code panes, and what each run means to
+//! the other pane: the rows there that are the same place are lit, and a scroll to the
+//! first of them is owed once. One run per pane, independent of the other's; nothing
+//! here answers to the pointer.
 
 use super::*;
 
-/// The run of rows a reader has picked out to be copied, and which pane it is in. Picking
-/// a row in one pane drops whatever the other had.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) struct Marks {
-    pane: Pane,
+/// The run of rows a reader has picked out in one pane.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Picked {
     pub(crate) rows: RowSelection,
+    /// The file the run is read in: the source pane's own file for its run, and for the
+    /// assembly pane's the file the pressed row was compiled from -- which is what the
+    /// source pane shows beside an object's code. `None` where the row has no line.
+    pub(crate) file: Option<Arc<str>>,
+    /// Which panes still owe a scroll to this run: the other pane, for a click made in
+    /// this one, and both for a run picked from outside them (a [`Landing`]). Each is
+    /// cleared as it is paid, so a repeat click is a second request.
+    pub(crate) owed: Owed,
 }
 
-/// The picked-out rows, shared through context. `None` until something is picked, and
-/// again whenever the listing under it is replaced.
+/// Which of the two panes still owe a scroll to a run. A pair of flags and not an
+/// `Option<Pane>`: a click in one pane asks the other, but a row in the Locations panel
+/// is a click in neither and asks both.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Owed {
+    pub(crate) assembly: bool,
+    pub(crate) source: bool,
+}
+
+impl Owed {
+    pub(crate) const BOTH: Owed = Owed {
+        assembly: true,
+        source: true,
+    };
+
+    /// A scroll owed by `pane` alone.
+    pub(crate) fn by(pane: Pane) -> Owed {
+        match pane {
+            Pane::Assembly => Owed {
+                assembly: true,
+                source: false,
+            },
+            Pane::Source => Owed {
+                assembly: false,
+                source: true,
+            },
+        }
+    }
+
+    fn owes(self, pane: Pane) -> bool {
+        match pane {
+            Pane::Assembly => self.assembly,
+            Pane::Source => self.source,
+        }
+    }
+
+    fn paid(&mut self, pane: Pane) {
+        match pane {
+            Pane::Assembly => self.assembly = false,
+            Pane::Source => self.source = false,
+        }
+    }
+}
+
+/// The two panes' runs. Either is `None` until something is picked out there, and again
+/// whenever the listing under it is replaced.
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct Marks {
+    pub(crate) assembly: Option<Picked>,
+    pub(crate) source: Option<Picked>,
+}
+
+impl Marks {
+    pub(crate) fn of(&self, pane: Pane) -> &Option<Picked> {
+        match pane {
+            Pane::Assembly => &self.assembly,
+            Pane::Source => &self.source,
+        }
+    }
+
+    fn of_mut(&mut self, pane: Pane) -> &mut Option<Picked> {
+        match pane {
+            Pane::Assembly => &mut self.assembly,
+            Pane::Source => &mut self.source,
+        }
+    }
+}
+
+/// The picked-out rows of both panes, shared through context.
 #[derive(Clone, Copy)]
-pub(crate) struct Marked(pub(crate) State<Option<Marks>>);
+pub(crate) struct Marked(pub(crate) State<Marks>);
 
 /// Whether Shift is held, which is what turns a click into "reach to here". Its own state,
 /// written from the root's *global* key handlers, because a freya pointer event carries no
@@ -106,92 +181,213 @@ impl ModifierKeys {
     }
 }
 
-/// The rows picked out in `pane`, and nothing when the selection is the other pane's.
-/// Reads rather than peeks: this is the subscription that repaints as the run grows.
-pub(crate) fn marked_rows(marked: State<Option<Marks>>, pane: Pane) -> Option<RowSelection> {
-    (*marked.read())
-        .filter(|marks| marks.pane == pane)
-        .map(|marks| marks.rows)
+/// The right button's half of a `pointer_down`, as the press a context menu opens from,
+/// or `None` for any other button.
+///
+/// freya's `on_secondary_down` is `on_pointer_down` under another name, and an element
+/// keeps one handler per event, so a row that picks itself out on the down and opens a
+/// menu on the down has to do both in one handler -- the later of the two would replace
+/// the earlier and the press would pick out nothing (`notes/upstream/freya.md`).
+pub(crate) fn secondary(e: Event<PointerEventData>) -> Option<Event<PressEventData>> {
+    e.try_map(|data| match data {
+        PointerEventData::Mouse(mouse) if mouse.button == Some(MouseButton::Right) => {
+            Some(PressEventData::Mouse(mouse))
+        }
+        _ => None,
+    })
 }
 
-/// Start a run at `row`, or -- with Shift held, in the pane the run is already in --
-/// reach out to it from wherever that run started.
-pub(crate) fn mark_press(mut marked: State<Option<Marks>>, shift: bool, pane: Pane, row: usize) {
-    let rows = match *marked.peek() {
-        Some(marks) if shift && marks.pane == pane => marks.rows.extended(row),
-        // The one-row run a press starts, which is a drag until the button comes up.
-        _ => RowSelection {
-            anchor: row,
-            lead: row,
-            dragging: true,
+/// The other pane from `pane`.
+fn other(pane: Pane) -> Pane {
+    match pane {
+        Pane::Assembly => Pane::Source,
+        Pane::Source => Pane::Assembly,
+    }
+}
+
+/// The rows picked out in `pane`. Reads rather than peeks: this is the subscription that
+/// repaints as the run grows.
+pub(crate) fn marked_rows(marked: State<Marks>, pane: Pane) -> Option<RowSelection> {
+    marked.read().of(pane).as_ref().map(|picked| picked.rows)
+}
+
+/// The run picked out in the *other* pane from `pane`, which is what `pane` lights the
+/// pair of. Reads, for the same reason [`marked_rows`] does.
+pub(crate) fn pair_of(marked: State<Marks>, pane: Pane) -> Option<Picked> {
+    marked.read().of(other(pane)).clone()
+}
+
+/// Start a run at `row` in `pane`, or -- with Shift held and a run already there -- reach
+/// out to it from wherever that run started. `file` is what the pressed row is a row of
+/// (see [`Picked::file`]); a reach keeps the file the run began in.
+///
+/// The other pane's run is left alone: the two are independent.
+pub(crate) fn mark_press(
+    mut marked: State<Marks>,
+    shift: bool,
+    pane: Pane,
+    file: Option<Arc<str>>,
+    row: usize,
+) {
+    let current = marked.peek().of(pane).clone();
+    let picked = match current {
+        Some(picked) if shift => Picked {
+            rows: picked.rows.extended(row),
+            ..picked
+        },
+        // The one-row run a press starts, which is a drag until the button comes up. The
+        // other pane owes it a scroll: a click here asks the other side to show the
+        // same place.
+        _ => Picked {
+            rows: RowSelection {
+                anchor: row,
+                lead: row,
+                dragging: true,
+            },
+            file,
+            owed: Owed::by(other(pane)),
         },
     };
 
-    marked.set_if_modified(Some(Marks { pane, rows }));
+    let mut marks = marked.peek().clone();
+    *marks.of_mut(pane) = Some(picked);
+    marked.set_if_modified(marks);
 }
 
-/// Pick out `row` alone, replacing whatever was picked out before.
+/// Pick out `row` of the assembly pane alone, replacing whatever was picked out there.
 ///
 /// What [`mark_press`] does for a click, minus the drag: this is for a control that lands
 /// the reader on a row they never pressed -- following a jump -- where the button is back
 /// up by the time the answer is known and a sweep from here would be a sweep nobody began.
-pub(crate) fn mark_row(mut marked: State<Option<Marks>>, pane: Pane, row: usize) {
-    marked.set_if_modified(Some(Marks {
-        pane,
+/// The source pane owes the scroll; the assembly pane has just been given one.
+pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: usize) {
+    let mut marks = marked.peek().clone();
+    marks.assembly = Some(Picked {
         rows: RowSelection {
             anchor: row,
             lead: row,
             dragging: false,
         },
-    }));
+        file,
+        owed: Owed::by(Pane::Source),
+    });
+    marked.set_if_modified(marks);
 }
 
-/// Sweep the run out to `row`, which does nothing unless a run is already started.
-pub(crate) fn mark_drag(mut marked: State<Option<Marks>>, pane: Pane, row: usize) {
-    let Some(marks) = *marked.peek() else {
+/// Pick out the one row `line` of `file` in the source pane, as a click from outside the
+/// panes does: a [`Landing`], or the line a source-driven tab is driven from. `owed`
+/// says which panes have yet to scroll to it.
+pub(crate) fn mark_line(mut marked: State<Marks>, file: Arc<str>, line: u32, owed: Owed) {
+    let row = (line as usize).saturating_sub(1);
+    let mut marks = marked.peek().clone();
+    marks.source = Some(Picked {
+        rows: RowSelection {
+            anchor: row,
+            lead: row,
+            dragging: false,
+        },
+        file: Some(file),
+        owed,
+    });
+    marked.set_if_modified(marks);
+}
+
+/// Sweep `pane`'s run out to `row`, which does nothing unless a run is already started.
+pub(crate) fn mark_drag(mut marked: State<Marks>, pane: Pane, row: usize) {
+    let Some(picked) = marked.peek().of(pane).clone() else {
         return;
     };
-    if marks.pane != pane {
-        return;
-    }
-
     // Only while the button is down: a row entered with no button held is the pointer
     // merely passing over it.
-    if !marks.rows.dragging {
+    if !picked.rows.dragging {
         return;
     }
 
-    marked.set_if_modified(Some(Marks {
-        rows: marks.rows.extended(row),
-        ..marks
-    }));
+    let mut marks = marked.peek().clone();
+    *marks.of_mut(pane) = Some(Picked {
+        rows: picked.rows.extended(row),
+        ..picked
+    });
+    marked.set_if_modified(marks);
 }
 
-/// End the gesture. The run stays: letting go ends the drag, not the selection.
+/// End the gesture, in whichever pane it was made. The run stays: letting go ends the
+/// drag, not the selection.
 ///
 /// The read is a `let` of its own and **not** the scrutinee of an `if let`: an `if let`
 /// holds its temporary until the end of its *body*, so the write inside would be a
 /// mutable borrow taken while the `peek` guard was still out, which panics.
-pub(crate) fn mark_release(mut marked: State<Option<Marks>>) {
-    let current = *marked.peek();
-
-    if let Some(marks) = current {
-        // The rows it holds are untouched: letting go is the end of the gesture and not
-        // the end of the selection.
-        marked.set_if_modified(Some(Marks {
-            rows: RowSelection {
-                dragging: false,
-                ..marks.rows
-            },
-            ..marks
-        }));
+pub(crate) fn mark_release(mut marked: State<Marks>) {
+    let mut marks = marked.peek().clone();
+    if let Some(picked) = marks.assembly.as_mut() {
+        picked.rows.dragging = false;
     }
+    if let Some(picked) = marks.source.as_mut() {
+        picked.rows.dragging = false;
+    }
+    marked.set_if_modified(marks);
 }
 
-/// Drop `pane`'s selection, and leave the other pane's alone.
-fn unmark(mut marked: State<Option<Marks>>, pane: Pane) {
-    if marked.peek().is_some_and(|marks| marks.pane == pane) {
-        marked.set(None);
+/// Drop `pane`'s run, and leave the other pane's alone.
+fn unmark(mut marked: State<Marks>, pane: Pane) {
+    if marked.peek().of(pane).is_none() {
+        return;
+    }
+    let mut marks = marked.peek().clone();
+    *marks.of_mut(pane) = None;
+    marked.set(marks);
+}
+
+/// What `pane` still owes a scroll to.
+pub(crate) enum Owing {
+    /// Its own run, picked from outside the panes, whose first row it has yet to show.
+    Own(RowSelection),
+    /// The other pane's run, whose pair here it has yet to bring into view.
+    Pair(Picked),
+}
+
+/// The scroll `pane` still owes, if it is owed one.
+///
+/// **A look and not a take.** The click that picks a line out is, in a source-driven
+/// tab, the click that asks for the listing, so the run this wakes is still holding the
+/// *previous* one, in which no row matches. Consuming the request there would spend it on
+/// a listing that cannot answer it and the one that can would arrive to nothing owed. So
+/// the flag is left meaning what it says -- the pane owes the scroll until it has made
+/// it -- and [`reveal_made`] is what clears it. A request nothing ever matches stays owed
+/// until the next click replaces it or the run is dropped with its listing.
+pub(crate) fn owed_reveal(marked: State<Marks>, pane: Pane) -> Option<Owing> {
+    // `read` and not `peek`: this is the subscription that wakes the caller's effect on
+    // the next click, so it has to happen before any early return.
+    let marks = marked.read();
+    if let Some(own) = marks.of(pane).as_ref().filter(|own| own.owed.owes(pane)) {
+        return Some(Owing::Own(own.rows));
+    }
+    marks
+        .of(other(pane))
+        .as_ref()
+        .filter(|pair| pair.owed.owes(pane))
+        .map(|pair| Owing::Pair(pair.clone()))
+}
+
+/// Say that `pane` has made the scroll it was owed. The runs themselves stay, only
+/// `pane`'s flag is cleared, so it is answered exactly once and a repeat click is a
+/// second request.
+pub(crate) fn reveal_made(mut marked: State<Marks>, pane: Pane) {
+    let owed = {
+        let marks = marked.peek();
+        let owes = |picked: &Option<Picked>| picked.as_ref().is_some_and(|p| p.owed.owes(pane));
+        owes(&marks.assembly) || owes(&marks.source)
+    };
+    if !owed {
+        return;
+    }
+
+    let mut marks = marked.write();
+    if let Some(picked) = marks.assembly.as_mut() {
+        picked.owed.paid(pane);
+    }
+    if let Some(picked) = marks.source.as_mut() {
+        picked.owed.paid(pane);
     }
 }
 
@@ -199,9 +395,10 @@ fn unmark(mut marked: State<Option<Marks>>, pane: Pane) {
 ///
 /// Goes on the pane's own focusable box and **not** on a global key handler, which would
 /// fire while a filter bar had the keyboard and — sorting last (`EventName::cmp`) — would
-/// win, turning a copy out of the filter box into a page of disassembly.
+/// win, turning a copy out of the filter box into a page of disassembly. And it is the
+/// pane's own run that is copied: each pane has one, and the keyboard is in one of them.
 pub(crate) fn on_listing_key(
-    marked: State<Option<Marks>>,
+    marked: State<Marks>,
     pane: Pane,
     rows: usize,
     line: impl Fn(usize) -> String + 'static,
@@ -213,7 +410,7 @@ pub(crate) fn on_listing_key(
 
         match &e.key {
             Key::Character(character) if command && character == "c" => {
-                let picked = (*marked.peek()).filter(|marks| marks.pane == pane);
+                let picked = marked.peek().of(pane).clone();
                 if let Some(picked) = picked {
                     // Failing silently: a platform whose display handle gave freya-winit
                     // no clipboard has none, and a listing has nowhere to say so.
@@ -224,16 +421,25 @@ pub(crate) fn on_listing_key(
                 }
             }
             Key::Character(character) if command && character == "a" => {
-                // Every row of the listing, and nothing at all for one with no rows.
+                // Every row of the listing, and nothing at all for one with no rows. The
+                // file stays what the run's was, and no scroll is owed: the whole
+                // listing names no one place to go to.
                 if let Some(last) = rows.checked_sub(1) {
-                    marked.set(Some(Marks {
-                        pane,
+                    let mut marks = marked.peek().clone();
+                    let file = marks
+                        .of(pane)
+                        .as_ref()
+                        .and_then(|picked| picked.file.clone());
+                    *marks.of_mut(pane) = Some(Picked {
                         rows: RowSelection {
                             anchor: 0,
                             lead: last,
                             dragging: false,
                         },
-                    }));
+                        file,
+                        owed: Owed::default(),
+                    });
+                    marked.set(marks);
                 }
             }
             Key::Named(NamedKey::Escape) => unmark(marked, pane),
@@ -243,8 +449,8 @@ pub(crate) fn on_listing_key(
 }
 
 /// Drop a pane's picked-out rows when the listing they index into is replaced: the
-/// assembly pane's when another question is asked, the source pane's when another file is
-/// shown.
+/// assembly pane's when another question is asked, the source pane's when the pane moves
+/// off the run's file.
 ///
 /// At the root and keyed on the states that say *which listing*, **never on the listings
 /// themselves**: `AsmData` carries an `Arc<Lanes>` rebuilt every render, so an effect
@@ -253,9 +459,8 @@ pub(crate) fn use_clear_marks(
     active: Memo<Option<Document>>,
     asked: Asked,
     analysis: State<Analyzed>,
-    pinned: State<Option<Anchor>>,
     reading: State<Reading>,
-    marked: State<Option<Marks>>,
+    marked: State<Marks>,
 ) {
     // The **question** and not the active document: a source-driven tab's listing is
     // replaced when a line in it is clicked, which changes no document, and a run picked
@@ -291,12 +496,8 @@ pub(crate) fn use_clear_marks(
         // functions from one file leave the same lines on screen. Compared against what
         // it last was rather than answered to directly, since reading the analysis
         // subscribes this to writes -- a request, the slow flag -- that change no listing.
-        let file = source_side(
-            active.read().as_ref(),
-            &analysis.read(),
-            pinned.read().as_ref(),
-        )
-        .map(|side| side.file().clone());
+        let file = source_side(active.read().as_ref(), &analysis.read(), &marked.read())
+            .map(|side| side.file().clone());
         // Cloned out of the borrow before the `borrow_mut`.
         let was = showing.borrow().clone();
         if was == file {
@@ -304,6 +505,61 @@ pub(crate) fn use_clear_marks(
         }
         *showing.borrow_mut() = file;
 
-        unmark(marked, Pane::Source);
+        // Dropped only when the pane moves **off the run's file**, and not whenever the
+        // file changes: a run a landing plants is in the file the pane is about to show,
+        // and the switch it causes -- from the listing being left to the one arriving --
+        // must not be what drops it. A run in a file the pane never reaches stays,
+        // undrawn, until the next question replaces it.
+        let picked = marked
+            .peek()
+            .source
+            .as_ref()
+            .and_then(|picked| picked.file.clone());
+        if picked.is_some() && was == picked {
+            unmark(marked, Pane::Source);
+        }
+    });
+}
+
+/// Start each document afresh: drop both runs whenever the active document changes, and
+/// plant the one the arrival asks for -- a [`Landing`] naming this document, picked out
+/// in the source pane with both panes owed the scroll; or, for a source-driven tab, the
+/// line it is driven from, with none owed, so coming back to a tab whose assembly side
+/// is a listing of one line shows which line and why.
+///
+/// A landing is spent by whichever document arrives, the one it named or another: it is
+/// for the next arrival only, and one left lying would pick a line out in a document
+/// opened for some other reason later.
+pub(crate) fn use_land(
+    active: Memo<Option<Document>>,
+    marked: State<Marks>,
+    landing: State<Option<Landing>>,
+    driven: State<Driven>,
+) {
+    use_side_effect(move || {
+        // Subscribes the effect to the active document, which is all it wants from it;
+        // the landing is peeked, so setting one wakes nothing until the document does.
+        let active = active.read().clone();
+
+        let (mut marked, mut landing) = (marked, landing);
+        let asked = landing.peek().clone();
+        if asked.is_some() {
+            landing.set(None);
+        }
+        let landed = asked
+            .filter(|landing| Some(&landing.tab) == active.as_ref())
+            .map(|landing| (landing.at.file, landing.at.line, Owed::BOTH));
+        let planted = landed.or_else(|| match &active {
+            Some(document @ Document::Source(file)) => driven
+                .peek()
+                .line(document)
+                .map(|line| (file.clone(), line, Owed::default())),
+            _ => None,
+        });
+
+        marked.set_if_modified(Marks::default());
+        if let Some((file, line, owed)) = planted {
+            mark_line(marked, file, line, owed);
+        }
     });
 }

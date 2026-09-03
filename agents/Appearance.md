@@ -8,15 +8,18 @@ instances (`Palette::LIGHT` and `Palette::DARK`), and `palette()` is how anythin
 whichever is current — no call site names a colour, and none of them changed when the second
 palette arrived, which is what the indirection was for. The dark values are the light ones
 **carried over**, not designed again: every relationship holds on both sides (the header a step
-off the pane, the pin the focus at more alpha, each code colour keeping its hue and its place in
-the ordering), and the only ones that could not be flipped literally are the translucent washes,
+off the pane, each code colour keeping its hue and its place in the ordering), and the only ones that could not be flipped literally are the translucent washes,
 which `blend` composites over the pane — the same alpha over a dark ground is a fraction of the
 step it was over white, so each was judged as what it *comes out as*. Two tests hold that: a
 contrast floor for every foreground on the surface it is really drawn on (3.0, not WCAG's 4.5 —
 the light palette's address column and its comments are meant to recede and sit between 3 and
 3.5), the × on a dock tab included, whose surface is its own wash composited over whichever of two
-grounds the tab is on; and a visible-step floor for every wash over the row under it, with the pin
-required to stay louder than the focus and the × required to move the tab it sits on further than
+grounds the tab is on; and a visible-step floor for every wash over the row under it — a code
+row's three being the pair's green (`pair_bg`, the other pane's selection mapped here), the
+selection's grey (`row_select_bg`), and the deeper green a row that is both takes
+(`pair_selected_bg`, held to a step well past the pair's, since a shadow over so pale a green
+barely moved it), none answering to the pointer (`agents/Panes.md`) — and
+the × required to move the tab it sits on further than
 the tab's own hover moves the bar — the one wash here that has to be told apart from *another
 highlight* rather than from a plain surface, since the pointer on the × lights the tab under it
 too. Two colours are drawings rather than text and are held inside the contrast test to floors of

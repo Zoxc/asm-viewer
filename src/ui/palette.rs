@@ -24,13 +24,17 @@ pub(crate) struct Palette {
     pub(crate) symbol_pane_bg: Color,
     pub(crate) symbol_hover_bg: Color,
     pub(crate) asm_pane_bg: Color,
-    /// The pointer's own hover, on an instruction row and on a source line alike.
-    pub(crate) code_row_hover_bg: Color,
-    /// The cross-view highlight: this row is what the row the pointer is on maps to on the
-    /// other side. Translucent, so it composites with the hover -- see `blend`.
-    pub(crate) line_focus_bg: Color,
-    /// The same highlight, made to stay by a click: one colour in two strengths.
-    pub(crate) line_pin_bg: Color,
+    /// The pair: the rows of this pane that are the same place as the run picked out in
+    /// the other one -- the instructions a selected source line was compiled from, the
+    /// line a selected instruction came from. Nothing lights under the pointer; only a
+    /// selection lights the other side. Translucent, so it composites with the selection
+    /// -- see `blend`.
+    pub(crate) pair_bg: Color,
+    /// A row that is both: picked out here and the other pane's pair. The same green,
+    /// deeper and less see-through, so the two states read as one and the sweep is not
+    /// lost in the pair. Its own colour rather than one wash over the other, because a
+    /// shadow over so pale a green barely moves it.
+    pub(crate) pair_selected_bg: Color,
     /// The wash over the half of a panel a dragged tab would land in.
     pub(crate) drop_preview_bg: Color,
     /// A Lucide glyph in a dock tab header, a step lighter than the title beside it.
@@ -50,15 +54,15 @@ pub(crate) struct Palette {
     pub(crate) link_hover_bg: Color,
     /// A branch line in the assembly gutter, with its corner and its arrowhead.
     pub(crate) branch_fg: Color,
-    /// The same line while a branch of the row under the pointer runs down it.
-    pub(crate) branch_hover_fg: Color,
+    /// The same line while a branch of a picked-out row runs down it.
+    pub(crate) branch_lit_fg: Color,
     /// The rule across the top of an instruction row a branch lands on, which is what makes
     /// the listing read as the basic blocks it is. Recessive on purpose -- it runs the whole
     /// width of the pane, where the gutter's stroke is a few pixels -- so it is quieter
     /// against the pane than `branch_fg` is, and the palette test says so.
     pub(crate) block_rule: Color,
-    /// The run of rows a reader has picked out to copy. Translucent, and composited with
-    /// the two washes above by `blend`.
+    /// The run of rows a reader has picked out, in either pane, where it is not also the
+    /// pair: a translucent shadow, a light grey over the light pane.
     pub(crate) row_select_bg: Color,
 
     // The code colours. Which syntactic category takes which is [`Palette::syntax`] on
@@ -113,9 +117,8 @@ impl Palette {
         symbol_pane_bg: Color::from_rgb(243, 243, 228),
         symbol_hover_bg: Color::from_rgb(226, 226, 205),
         asm_pane_bg: Color::from_rgb(248, 248, 248),
-        code_row_hover_bg: Color::from_argb(160, 228, 237, 216),
-        line_focus_bg: Color::from_argb(70, 120, 160, 220),
-        line_pin_bg: Color::from_argb(120, 120, 160, 220),
+        pair_bg: Color::from_argb(160, 228, 237, 216),
+        pair_selected_bg: Color::from_argb(190, 190, 218, 172),
         drop_preview_bg: Color::from_argb(60, 105, 89, 132),
         icon_fg: Color::from_rgb(90, 90, 90),
         toggle_on_bg: Color::from_rgb(196, 196, 196),
@@ -123,9 +126,9 @@ impl Palette {
         close_hover_bg: Color::from_argb(70, 90, 90, 96),
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
         branch_fg: Color::from_rgb(176, 188, 202),
-        branch_hover_fg: Color::from_rgb(90, 116, 148),
+        branch_lit_fg: Color::from_rgb(90, 116, 148),
         block_rule: Color::from_rgb(211, 216, 222),
-        row_select_bg: Color::from_argb(80, 96, 110, 128),
+        row_select_bg: Color::from_argb(36, 0, 0, 0),
 
         address_fg: Color::from_rgb(118, 141, 169),
         keyword_fg: Color::from_rgb(116, 94, 147),
@@ -156,23 +159,22 @@ impl Palette {
         symbol_pane_bg: Color::from_rgb(38, 38, 33),
         symbol_hover_bg: Color::from_rgb(52, 52, 44),
         asm_pane_bg: Color::from_rgb(34, 34, 36),
-        // The four translucent ones, each stated as what it should come out as over the
+        // The three translucent ones, each stated as what it should come out as over the
         // pane rather than as the light value flipped: `blend` puts 30/30/32 under them.
-        code_row_hover_bg: Color::from_argb(110, 120, 160, 110),
-        line_focus_bg: Color::from_argb(80, 130, 170, 230),
-        line_pin_bg: Color::from_argb(140, 130, 170, 230),
+        pair_bg: Color::from_argb(110, 120, 160, 110),
+        pair_selected_bg: Color::from_argb(190, 120, 160, 110),
         drop_preview_bg: Color::from_argb(90, 150, 130, 190),
         icon_fg: Color::from_rgb(160, 160, 160),
         toggle_on_bg: Color::from_rgb(88, 88, 92),
         toggle_hover_bg: Color::from_rgb(60, 60, 64),
-        // Translucent, and stated the same way as the four above: what it comes out as
+        // Translucent, and stated the same way as the three above: what it comes out as
         // over a tab, which here means lifting the surface rather than darkening it.
         close_hover_bg: Color::from_argb(75, 200, 200, 210),
         link_hover_bg: Color::from_af32rgb(0.25, 255, 255, 255),
         branch_fg: Color::from_rgb(96, 108, 124),
-        branch_hover_fg: Color::from_rgb(150, 178, 210),
+        branch_lit_fg: Color::from_rgb(150, 178, 210),
         block_rule: Color::from_rgb(66, 72, 80),
-        row_select_bg: Color::from_argb(90, 150, 165, 185),
+        row_select_bg: Color::from_argb(100, 170, 170, 170),
 
         address_fg: Color::from_rgb(132, 156, 186),
         keyword_fg: Color::from_rgb(178, 150, 214),
@@ -354,30 +356,19 @@ pub(crate) fn dimmed(color: Color, surface: Color) -> Color {
     )
 }
 
-/// The background of a code row: the pointer's own hover, the run of rows picked out to be
-/// copied, the cross-view highlight from the other pane, the stronger one a click pinned
-/// there, or any of them over any of the others.
-pub(crate) fn row_background(hovering: bool, focused: bool, pinned: bool, selected: bool) -> Color {
-    let cross = match (pinned, focused) {
-        (true, _) => palette().line_pin_bg,
-        (false, true) => palette().line_focus_bg,
+/// The background of a code row: the pair -- this row is where the other pane's
+/// picked-out run maps to -- the run picked out here, or the one over the other.
+///
+/// Nothing here answers to the pointer: a row is lit by a selection, its own pane's or
+/// the other's, and by nothing else.
+pub(crate) fn row_background(paired: bool, selected: bool) -> Color {
+    // Three colours and not one wash over another: the selection's shadow over the
+    // pair's pale green barely moved it, so a row that is both has a green of its own.
+    match (paired, selected) {
+        (true, true) => palette().pair_selected_bg,
+        (true, false) => palette().pair_bg,
+        (false, true) => palette().row_select_bg,
         (false, false) => Color::TRANSPARENT,
-    };
-
-    // `blend` over a transparent bottom is the top colour unchanged, so a hovered row
-    // that is neither selected nor lit needs no case of its own.
-    let hovered = if hovering {
-        blend(palette().code_row_hover_bg, cross)
-    } else {
-        cross
-    };
-
-    // The selection goes *on top of* the hover, the other way round from every other pair
-    // here: a row swept over by the pointer would otherwise show almost none of it.
-    if selected {
-        blend(palette().row_select_bg, hovered)
-    } else {
-        hovered
     }
 }
 
