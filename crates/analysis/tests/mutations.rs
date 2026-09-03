@@ -16,8 +16,8 @@
 //! beside it, so a mutation of the DLL that leaves the CodeView record intact goes on to
 //! open and match the PDB — at parse time now, for the procedures and publics it names; and
 //! each PDB is mutated in turn, every mutation written beside its pristine DLL before the
-//! DLL is parsed. The second and third pairs, the images that declare nothing, are the ones
-//! whose every symbol is the PDB's, so a mutated PDB there is what the procedure walk is
+//! DLL is parsed. The second and third pairs, the images that name nothing, are the ones
+//! whose every name is the PDB's, so a mutated PDB there is what the procedure walk is
 //! swept with — and the third's has a function only its publics name, so the publics walk
 //! too. Each test writes under a directory of its own in the target directory, since the
 //! three run at once.
@@ -119,7 +119,7 @@ fn corpus(test: &str) -> Vec<Case> {
     corpus.extend(
         declared_code_images()
             .into_iter()
-            .map(|(label, data)| Case::in_memory(label.to_owned(), data)),
+            .map(|(label, data, _)| Case::in_memory(label.to_owned(), data)),
     );
 
     let dir = scratch(test).join("dll");
@@ -128,10 +128,10 @@ fn corpus(test: &str) -> Vec<Case> {
         fs::write(dir.join(pdb), committed_fixture(pdb)).unwrap();
         let data = committed_fixture(dll);
         // The pair is found where the sweep put it, so the mutations reach the PDB backend
-        // rather than a search that comes back empty — and for the images that declare
-        // nothing, having a symbol at all is the PDB having been read at parse. Any symbol
-        // with lines, not the first: the third pair's first by name is the public, which
-        // has none.
+        // rather than a search that comes back empty — and for the images that name
+        // nothing, a symbol with lines is the PDB having been read at parse; their `.pdata`
+        // gives them symbols on their own, but no lines. Any symbol with lines, not the
+        // first: the third pair's first by name is the public, which has none.
         let intact = parse_and_walk_at(&data, dir.join(dll)).expect("the DLL parses");
         assert!(
             intact

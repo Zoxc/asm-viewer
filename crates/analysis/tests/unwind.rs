@@ -3,7 +3,8 @@
 
 mod common;
 
-use common::{pe_image, ExportedSymbol, PeDll, TEXT_ADDRESS};
+use analysis::Architecture;
+use common::{named, names, parse, pe_image, ExportedSymbol, PeDll, TEXT_ADDRESS};
 use object::Object as _;
 
 /// Four functions back to back, each `nop`s then a `ret`, so every offset below is a real
@@ -55,4 +56,83 @@ fn the_writers_pdata_reads_back_through_object() {
     assert_eq!(words.len(), 6, "two entries of three words");
     assert_eq!(words[0..2], [text_rva, text_rva + 4]);
     assert_eq!(words[3..5], [text_rva + 4, text_rva + 6]);
+}
+
+const SECOND: ExportedSymbol = ExportedSymbol {
+    name: "second",
+    offset: 4,
+    size: 0,
+    code: true,
+};
+
+/// An image with `first` exported and entries on it and on two functions nothing names.
+fn image_with(entry: Option<u64>, unwind: &[(u64, u64)]) -> Vec<u8> {
+    pe_image(PeDll {
+        text: TEXT,
+        symbols: &[FIRST],
+        entry,
+        codeview: None,
+        unwind,
+    })
+}
+
+/// A function only its unwind entry declares is a symbol, named `<function 0x…>` by its
+/// address since the entry carries no name, with the entry's length as its declared size,
+/// and it disassembles like any other.
+#[test]
+fn unwind_entries_are_symbols_where_nothing_names_them() {
+    let object = parse(&image_with(None, &[(0, 4), (4, 6), (7, 10)]));
+    assert_eq!(
+        names(&object),
+        [
+            format!("<function {:#x}>", TEXT_ADDRESS + 4),
+            format!("<function {:#x}>", TEXT_ADDRESS + 7),
+            "first".to_owned(),
+        ]
+    );
+
+    let second = named(&object, &format!("<function {:#x}>", TEXT_ADDRESS + 4));
+    assert_eq!(second.address, TEXT_ADDRESS + 4);
+    assert_eq!(second.size, 2, "the entry's stated length");
+    assert_eq!(second.demangled, None, "ours, not the file's");
+    assert_eq!(
+        second.section.as_ref().map(|s| s.name.as_str()),
+        Some(".text")
+    );
+    let assembly = second.assembly(&object).expect("it decodes");
+    assert!(!assembly.instructions.is_empty());
+}
+
+/// An entry at an address something else already names — an export, the entry point — adds
+/// no second symbol, and an entry that states nothing (empty, inverted, or beginning outside
+/// any code section) adds none at all.
+#[test]
+fn an_entry_at_a_named_address_adds_no_symbol_and_a_malformed_one_nothing() {
+    let object = parse(&pe_image(PeDll {
+        text: TEXT,
+        symbols: &[FIRST, SECOND],
+        entry: Some(6),
+        codeview: None,
+        // Past `.text`'s page is `.rdata`.
+        unwind: &[(0, 4), (4, 6), (6, 7), (4, 4), (9, 8), (0x1000, 0x1004)],
+    }));
+    assert_eq!(names(&object), ["<entry point>", "first", "second"]);
+    assert_eq!(object.symbols.len(), 3);
+    let section = named(&object, "first").section.clone().unwrap();
+    assert_eq!(
+        section.symbols,
+        [TEXT_ADDRESS, TEXT_ADDRESS + 4, TEXT_ADDRESS + 6]
+    );
+}
+
+/// ARM64's `.pdata` is another record altogether, so an image for it is not read as
+/// x86-64 entries however its exception directory is laid out.
+#[test]
+fn an_arm64_images_pdata_is_not_read_as_x86_64_entries() {
+    let mut image = image_with(None, &[(0, 4), (4, 6), (7, 10)]);
+    // `Machine`, the first word of the COFF header at `e_lfanew`: IMAGE_FILE_MACHINE_ARM64.
+    image[0x44..0x46].copy_from_slice(&0xAA64u16.to_le_bytes());
+    let object = parse(&image);
+    assert_eq!(object.architecture, Architecture::Aarch64);
+    assert_eq!(names(&object), ["first"]);
 }

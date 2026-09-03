@@ -54,7 +54,8 @@ from it, the two objects `gcc` produced (so the crate is pinned against DWARF a 
 emits) and three DLL plus `.pdb` pairs that `clang-cl` and rustup's `rust-lld` produced (so it
 is pinned against a real linker's PE debug directory and PDB, which nothing in memory can
 synthesize) — one exporting its three functions; `line_fixture_noexport` exporting nothing, so
-every symbol it shows is the PDB's; and `line_fixture_public`, that object linked with a
+every name it shows is the PDB's, and alone it lists the three `<function 0x…>`s its `.pdata`
+states; and `line_fixture_public`, that object linked with a
 one-function C++ file (`public_fixture.cpp`) compiled without `/Z7`, so the PDB's only name for
 that function is a decorated public symbol. `tests/real_object.rs` and `tests/pdb.rs` read them
 and fail loudly rather than skipping when they are missing; the build commands are in

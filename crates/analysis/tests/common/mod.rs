@@ -1320,12 +1320,15 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
     out
 }
 
-/// The two images `declared_code` reads: a stripped ELF `.so` whose only symbol table is
-/// `.dynsym`, and a PE DLL whose only declaration is its export directory. An `.o`
-/// declares neither, so a corpus of relocatable objects leaves the export and entry-point
-/// paths unexercised entirely.
-pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>)> {
-    const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3];
+/// The images `declared_code` reads, each with the number of symbols it declares: a stripped
+/// ELF `.so` whose only symbol table is `.dynsym`, and a PE DLL whose declarations are its
+/// export directory, its entry point and its unwind table — three entries, two of them on
+/// the export and the entry point and the third on a function nothing names. An `.o`
+/// declares none of these, so a corpus of relocatable objects leaves the export, entry-point
+/// and unwind paths unexercised entirely.
+pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
+    const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3, 0xC3];
+    const UNWIND: &[(u64, u64)] = &[(0, 4), (4, 6), (6, 7)];
     const SYMBOLS: &[ExportedSymbol] = &[
         ExportedSymbol {
             name: "first",
@@ -1350,8 +1353,19 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>)> {
                 static_symbols: &[],
                 entry: Some(4),
             }),
+            2,
         ),
-        ("pe dll", pe_dll(TEXT, SYMBOLS, Some(4))),
+        (
+            "pe dll",
+            pe_image(PeDll {
+                text: TEXT,
+                symbols: SYMBOLS,
+                entry: Some(4),
+                codeview: None,
+                unwind: UNWIND,
+            }),
+            3,
+        ),
         // The same DLL naming a `.pdb` that is nowhere on disk: the debug directory is read
         // and the search comes back empty, which is the common case for a stripped image.
         (
@@ -1365,8 +1379,9 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>)> {
                     age: 3,
                     path: "C:\\build\\fixture.pdb",
                 }),
-                unwind: &[],
+                unwind: UNWIND,
             }),
+            3,
         ),
     ]
 }

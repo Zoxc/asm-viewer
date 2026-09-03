@@ -36,8 +36,9 @@
 //! The DLL is 2.5 KB and the PDB 72 KB — an MSF file's smallest shape, 18 pages of 4 KB.
 //!
 //! A **second pair**, `line_fixture_noexport.dll` + `.pdb`, is the same object linked with
-//! no `/EXPORT`s at all, so the image declares nothing — no symbol table, no exports, no
-//! entry point — and every name it shows is the PDB's. From `tests/fixtures/`, with exactly:
+//! no `/EXPORT`s at all, so the image names nothing — no symbol table, no exports, no entry
+//! point; its `.pdata` still states where its three functions begin and end — and every
+//! name it shows is the PDB's. From `tests/fixtures/`, with exactly:
 //!
 //! ```text
 //! clang-cl --target=x86_64-pc-windows-msvc /c /Z7 /Od /GS- -ffile-compilation-dir=/fixture \
@@ -61,8 +62,8 @@
 //! `helper`, has no module symbols in the PDB at all, so the only name the PDB holds for it
 //! is the linker's public (`S_PUB32`) — and, `public_fixture.cpp` being C++, that name is the
 //! decorated `?helper@@YAHXZ`, where the C functions' publics are the plain `add`, `twice`
-//! and `sum_to`. Again no `/EXPORT`s, so the image declares nothing. From `tests/fixtures/`,
-//! with exactly:
+//! and `sum_to`. Again no `/EXPORT`s, so the image names nothing — and `helper`, a leaf, has
+//! no unwind entry either. From `tests/fixtures/`, with exactly:
 //!
 //! ```text
 //! clang-cl --target=x86_64-pc-windows-msvc /c /Z7 /Od /GS- -ffile-compilation-dir=/fixture \
@@ -543,13 +544,22 @@ fn an_absolute_recorded_path_is_tried_as_recorded() {
     assert!(symbol(&object, "add").line_info(&object).is_none());
 }
 
-/// The image that declares nothing shows nothing on its own — parsed at a path with no
-/// `.pdb` beside it, there is not one symbol — and, parsed where its `.pdb` is, shows the
+/// The three `<function 0x…>` names the no-export images show on their own: what their
+/// `.pdata` states and nothing names, in the Symbols list's byte order.
+fn unwind_names() -> Vec<String> {
+    [0x00, 0x20, 0x40]
+        .map(|offset| format!("<function {:#x}>", TEXT + offset))
+        .to_vec()
+}
+
+/// The image that names nothing shows, on its own — parsed at a path with no `.pdb` beside
+/// it — only what its `.pdata` states: three functions, each `<function 0x…>` by its address
+/// with the entry's stated length and no lines; and, parsed where its `.pdb` is, shows the
 /// PDB's three procedures as symbols: named as the records name them, at the addresses the
 /// linker laid them out at, each with its line info and its declared length, and answering
 /// the reverse index as an export would.
 #[test]
-fn procedures_are_symbols_where_the_image_declares_none() {
+fn procedures_are_symbols_where_the_image_names_none() {
     let bytes = committed_fixture(NOEXPORT_DLL);
     let file = object::File::parse(bytes.as_slice()).expect("a PE image");
     assert_eq!(file.symbols().count(), 0);
@@ -561,7 +571,13 @@ fn procedures_are_symbols_where_the_image_declares_none() {
     );
 
     let alone = parse_at(&bytes, scratch("noexport_alone").join("alone.dll"));
-    assert_eq!(names(&alone), Vec::<&str>::new());
+    assert_eq!(names(&alone), unwind_names());
+    for (offset, len) in [(0x00, 0x11), (0x20, 0x1b), (0x40, 0x49)] {
+        let function = symbol(&alone, &format!("<function {:#x}>", TEXT + offset));
+        assert_eq!(function.address, TEXT + offset);
+        assert_eq!(function.size, len, "the entry's stated length");
+        assert!(function.line_info(&alone).is_none(), "no PDB, no lines");
+    }
 
     let object = parse_at(&bytes, committed_fixture_path(NOEXPORT_DLL));
     assert_eq!(names(&object), ["add", "sum_to", "twice"]);
@@ -613,14 +629,15 @@ fn a_procedure_never_displaces_an_export() {
     }
 }
 
-/// A `.pdb` that is not this image's adds no symbols either, whatever it knows.
+/// A `.pdb` that is not this image's names nothing either, whatever it knows: the symbols
+/// are the unwind table's own, as with no `.pdb` at all.
 #[test]
-fn a_pdb_with_another_guid_adds_no_symbols() {
+fn a_pdb_with_another_guid_adds_no_names() {
     let mut other_guid = committed_fixture(NOEXPORT_DLL);
     let record = codeview_record(&other_guid);
     other_guid[record + 4] ^= 0x01;
     let object = parse_at(&other_guid, committed_fixture_path(NOEXPORT_DLL));
-    assert_eq!(names(&object), Vec::<&str>::new());
+    assert_eq!(names(&object), unwind_names());
 }
 
 /// A function no module's symbols describe is named by the PDB's **publics**: the third pair
@@ -628,7 +645,8 @@ fn a_pdb_with_another_guid_adds_no_symbols() {
 /// from that — at the address its public states, with no size, no extent and no line info,
 /// since a public is a name and an address and nothing else; and the three functions the
 /// modules do describe are still the procedures, with their lengths. Parsed at a path with
-/// no `.pdb` beside it, the image, which exports nothing, shows nothing.
+/// no `.pdb` beside it, the image, which exports nothing, shows only what its `.pdata`
+/// states — and `helper`, a leaf with no unwind entry, is not among them.
 #[test]
 fn a_public_names_the_function_no_module_describes() {
     let bytes = committed_fixture(PUBLIC_DLL);
@@ -637,7 +655,7 @@ fn a_public_names_the_function_no_module_describes() {
     assert_eq!(file.exports().unwrap().len(), 0, "no /EXPORT");
 
     let alone = parse_at(&bytes, scratch("public_alone").join("alone.dll"));
-    assert_eq!(names(&alone), Vec::<&str>::new());
+    assert_eq!(names(&alone), unwind_names());
 
     let object = parse_at(&bytes, committed_fixture_path(PUBLIC_DLL));
     assert_eq!(names(&object), ["?helper@@YAHXZ", "add", "sum_to", "twice"]);

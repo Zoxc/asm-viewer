@@ -174,7 +174,7 @@ fn corpus() -> Vec<(String, Arc<Object>)> {
             committed("line_fixture_split.o"),
         ),
     ];
-    for (name, image) in declared_code_images() {
+    for (name, image, _) in declared_code_images() {
         corpus.push((name.to_owned(), parse(&image)));
     }
     corpus

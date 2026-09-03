@@ -211,7 +211,8 @@ one item per part, so the unfinished half stays visible.
   the 40-character elision is still the last word for a name that is long anyway.
 - [ ] Fix the `<entry point>` tab name: the shortening in `naming.rs` reads a name as a
   demangled path with generic arguments, and the angle brackets the app itself puts around
-  its one made-up name are not that. A tab for the entry point should say `<entry point>`.
+  its two made-up names — `<entry point>`, and `<function 0x…>` for a function only an
+  unwind entry declares — are not that. A tab for either should say the name as it is.
 - [x] An expanding section under the Assembly tab to show more symbol info, replacing the Info
   tab. The bar above is its collapsed state, opened by a disclosure triangle in a column of its
   own — the Objects tree's idiom down to the two glyphs, a triangle being the toggle where a name
@@ -964,12 +965,30 @@ one item per part, so the unfinished half stays visible.
   declarations (entry points, exports, unwind targets in `.pdata`) do not need this and are
   their own items.
 
-- [ ] Find unwind targets. Now also the honest fix for the other half of the above: a stripped
-  PE's export table is sparse, so an exported function's extent is derived across every
-  unexported function between it and the next export — megabytes, in nine cases in the DLL, and
-  3.7 MB in the worst. `estimate_size` is capped at 1 MiB to stop that costing seconds per
-  redraw, but an x86-64 image carries a `RUNTIME_FUNCTION` in `.pdata` stating both ends of
-  every function with unwind info, which would make the gaps the cap exists for stop existing.
+- [x] Find unwind targets: an x86-64 image carries a `RUNTIME_FUNCTION` in `.pdata` stating
+  both ends of every function with unwind info, and it is a declaration — the image's own, to
+  its loader — so reading it keeps the "nothing is scanned for" rule. `unwind_ranges` reads
+  the exception data directory (x86-64 PE only: ARM64's record is another shape, a PE32 has
+  none, and a COFF `.obj` has the section but no directory), and `declared_code` takes every
+  entry as declared code, last of all its sources since an entry carries no name — one at an
+  address anything else named adds nothing, and one nothing named is called `<function 0x…>`
+  by its address, with the stated length as its declared size. The in-memory PE writer
+  writes a `.pdata` and the mutation sweep poisons it entry by entry; parsed alone, the
+  no-export DLL fixture goes from no symbols to its three.
+- [ ] Prefer the end an unwind entry states. The other half, and the honest fix for a
+  stripped PE's worst behaviour: its export table is sparse, so an exported function's extent
+  is derived across every unexported function between it and the next export — megabytes, in
+  nine cases in the DLL, and 3.7 MB in the worst — and `estimate_size` is capped at 1 MiB to
+  stop that costing seconds per redraw. Every entry's begin being a symbol now shortens
+  those derivations to the next entry; the entry's *end* is the function's, padding
+  excluded, and should win over the estimate and the cap alike where an entry covers the
+  address, whatever named the symbol.
+- [ ] Fold a chained unwind entry into its parent. A cold part, or the second entry an
+  over-long prologue gets, is a `RUNTIME_FUNCTION` whose `UNWIND_INFO` carries
+  `UNW_FLAG_CHAININFO` and names the primary entry; today each is a `<function 0x…>` of its
+  own, which is the honest reading of the table without the flag byte, but a fragment named
+  "function". Reading the flag at the entry's unwind RVA would let it be a second range of
+  the parent's instead.
 - [x] PDB line info, through the `pdb2` crate (the maintained fork of `pdb`; the one that shares
   `fallible-iterator` with `gimli`): a linked PE names its `.pdb` in the debug directory's
   CodeView record, so an `.exe`/`.dll` built with debug info gets a source view. A second

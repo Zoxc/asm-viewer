@@ -32,13 +32,16 @@ kept — plus, for a **linked image only**, the code it declares elsewhere: `dyn
 `exports` and `entry` (`declared_code`), and, for a PE whose `.pdb` is found beside it and
 matches, the **procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a nonzero length;
 `Pdb::procedures`, below) and then its **publics** (`S_PUB32` flagged as code or a function;
-`Pdb::publics`). All of them are *declared* — the PDB's by a file matched to the image by GUID
-and age — so this keeps the "nothing is scanned for" rule; a prebuilt LLVM DLL with no COFF
+`Pdb::publics`), and, for an x86-64 PE, the **unwind entries** its exception directory states
+(`.pdata`: one `RUNTIME_FUNCTION` per function with unwind info, a begin and an end and no
+name; `unwind_ranges`). All of them are *declared* — the PDB's by a file matched to the image by
+GUID and age, the unwind table's by the image to its own loader — so this keeps the "nothing is
+scanned for" rule; a prebuilt LLVM DLL with no COFF
 symbol table at all goes from zero functions to 22 918 on the strength of the exports, and
 `rustc_driver.dll` from its 15 241 exports to 70 728 symbols on the strength of its PDB's
 procedures and 115 861 with its publics, a stripped `rustc.exe` from `<entry point>` alone to
 412 and 415. One symbol per address, earliest source winning (symbol table > dynamic symbol >
-export > entry point > PDB procedure > PDB public), since an export is very often the symbol
+export > entry point > PDB procedure > PDB public > unwind entry), since an export is very often the symbol
 table's own function under a second name; the PDB comes last so a name the image itself states
 is never displaced by the debug file's spelling of it, and its 82 933 procedures collapse to the
 55 487 the image did not already name, folded functions sharing an address being one place. Its
@@ -48,12 +51,18 @@ externally visible symbol, so they survive a **stripped** PDB (`/PDBSTRIPPED` ke
 drops the module streams) and name what no module's symbols do — a module that shipped without
 debug info (2250 of `rustc_driver`'s 2907 have no stream), thunks, assembler code: 82 900 of its
 141 498 publics are flagged as functions (the other 58 598 are data, and `rust-lld` never sets
-the `code` flag alone), and 45 133 of those are addresses nothing else named. A procedure's name
+the `code` flag alone), and 45 133 of those are addresses nothing else named. The unwind entries
+come last of all because they carry no name: one at an address anything else named adds nothing
+— in the three committed DLLs every entry's begin is an export's or a procedure's — and one
+nothing named is called `<function 0x140001000>` by its address, so that 20 000 of them in one
+list are told apart, with the entry's stated length as its declared size; parsed with no `.pdb`
+beside it, the no-export DLL fixture goes from no symbols to its three. A procedure's name
 is the compiler's display name (`add`, `core::ptr::drop_in_place<T>`), which goes through the
 same demangling batch as an export's and comes out untouched; a public's is the decorated name
 as the linker saw it (`?add@@YAHHH@Z`, `_ZN4core3ptr…`, a plain `add` for C), and goes through
-the same batch to come out demangled, the raw spelling kept as `name`. A procedure's length is
-the symbol's *declared* size where an export's and a public's is 0; the extent used is still
+the same batch to come out demangled, the raw spelling kept as `name`. A procedure's length and
+an unwind entry's stated length are the symbol's *declared* size where an export's and a
+public's is 0; the extent used is still
 `SymbolData::extent`. The symbol table itself may hold two names for
 one address (an alias, an assembler label) and both are kept, but `Section::symbols` — the
 sorted list `estimate_size` binary-searches — holds each address **once**: a repeated entry
@@ -61,9 +70,9 @@ made the search land on either twin and answer 0 for an aliased symbol, which in
 without DWARF was a function with no listing at all. The section comes from
 looking the address up in the kept **text** sections, which doubles as the filter keeping exported
 *data* out. A relocatable object is skipped entirely: `entry()` answers 0 for a `.o`, and 0 there
-is a real function's first byte. The entry point has no name and is called `<entry point>` — angle
-brackets because no assembler, linker or mangling scheme emits them, so it cannot collide with a
-real one. `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target
+is a real function's first byte. The two nameless declarations, the entry point and an unwind
+entry, are called `<entry point>` and `<function 0x…>` — angle brackets because no assembler,
+linker or mangling scheme emits them, so neither can collide with a real one. `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target
 lookup) and `symbols_sorted` (name-sorted, for the UI list). `Object::data` is an `ObjectData` —
 an `Arc<[u8]>` of the whole file plus a `Range` — kept for the object's lifetime, because parsing
 keeps decompressed bytes only for sections holding text symbols and the lazy line-info pass needs
@@ -245,12 +254,13 @@ the compiler read (`SourceDigests::of` takes all three digests of a file's bytes
 file read once answers any kind), and file names in the producer's spelling — `C:\...` from MSVC,
 `/rustc/<hash>\library\...` from rustc — handed out verbatim as DWARF's are. **The PDB is also
 a source of symbols**, the one debug format that is: a `/DEBUG` image has no COFF symbol table,
-so what the image declares is its exports and entry point and what the PDB knows is every
-function. `Pdb::procedures` walks every module's symbol stream once for its `S_GPROC32`/`S_LPROC32`
+so what the image names is its exports and entry point — its `.pdata` states where its
+functions are, not what they are called — and what the PDB knows is every function. `Pdb::procedures` walks every module's symbol stream once for its `S_GPROC32`/`S_LPROC32`
 records — name, `section:offset` through the address map onto the base, length — and
 `Pdb::publics` the symbol records stream once for its `S_PUB32` records flagged as code or a
 function — decorated name, `section:offset` the same way, no length — and `parse_object` takes
-them as the last two sources in `declared_code`, in that order (Data model, above). That makes
+them as the last two *named* sources in `declared_code`, in that order, before the nameless
+unwind entries (Data model, above). That makes
 it the **one eager path through the seam**: `DebugInfo::pdb(file, path)` finds and matches the
 `.pdb` as `load` would, declines a PE carrying DWARF of its own (the same "DWARF first" rule, asked
 of `Dwarf::present` without building a context), walks the procedures and then the publics, and

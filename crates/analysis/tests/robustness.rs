@@ -581,10 +581,10 @@ fn corrupted_debug_sections_of_a_real_object_do_not_panic() {
 
 #[test]
 fn truncated_images_do_not_panic() {
-    for (kind, valid) in declared_code_images() {
+    for (kind, valid, functions) in declared_code_images() {
         // Sanity check that the fixture is an image the parse can read.
         let object = parse_and_walk(&valid).expect("the image parses");
-        assert_eq!(object.symbols_sorted.len(), 2, "{kind}");
+        assert_eq!(object.symbols_sorted.len(), functions, "{kind}");
 
         let failures = survivors(
             (0..valid.len()).map(|len| (format!("{kind} truncated to {len}"), &valid[..len])),
@@ -595,7 +595,7 @@ fn truncated_images_do_not_panic() {
 
 #[test]
 fn corrupted_images_do_not_panic() {
-    for (kind, valid) in declared_code_images() {
+    for (kind, valid, _) in declared_code_images() {
         let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
         for offset in 0..valid.len() {
             for mask in [0xFFu8, 0x01, 0x80] {

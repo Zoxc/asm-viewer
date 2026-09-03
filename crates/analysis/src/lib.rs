@@ -429,28 +429,41 @@ struct Pending {
 /// A function the file **declares** somewhere other than its symbol table; see
 /// [`declared_code`].
 struct DeclaredCode {
-    /// [`None`] for the entry point, which is an address the image names no name for.
-    name: Option<String>,
+    name: String,
+    /// Whether `name` is the file's own and goes through the demangling batch. The two
+    /// declarations that carry no name — the entry point and an unwind entry — are named in
+    /// the `<…>` convention of [`ENTRY_POINT_NAME`], which no demangler has anything to say
+    /// about.
+    mangled: bool,
     address: u64,
     /// What the declaration itself said: a dynamic symbol's size, a PDB procedure's length,
-    /// and 0 for an export, the entry point and a PDB public. Kept for display only; the
-    /// extent used comes from [`SymbolData::extent`].
+    /// an unwind entry's stated end less its begin, and 0 for an export, the entry point and
+    /// a PDB public. Kept for display only; the extent used comes from
+    /// [`SymbolData::extent`].
     size: u64,
     /// The code section containing `address` — an export table and an entry point name an
     /// address and nothing else.
     section: SectionIndex,
 }
 
-/// The name given to the entry point, which is the one declaration that carries none. The
-/// angle brackets are the point: no assembler, linker or mangling scheme produces them, so
-/// this cannot collide with a name that was in the file.
+/// The name given to the entry point, one of the two declarations that carry none; the
+/// other, an unwind entry, is named by [`unwind_name`] in the same convention. The angle
+/// brackets are the point: no assembler, linker or mangling scheme produces them, so neither
+/// can collide with a name that was in the file.
 const ENTRY_POINT_NAME: &str = "<entry point>";
 
+/// The name given to a function only an unwind entry declares: `<function 0x140001000>`,
+/// its address, since 20 000 of them in one Symbols list have to be told apart and found.
+fn unwind_name(address: u64) -> String {
+    format!("<function {address:#x}>")
+}
+
 /// The code a file declares outside its symbol table: its **entry point**, its **exports**,
-/// its ELF `.dynsym`, and the **procedures** and **publics** of the `.pdb` a PE names, where
-/// that was found and matches (`procedures` and `publics`, out of [`DebugInfo::pdb`]). A
-/// stripped shared library is otherwise a file with nothing in it, and a `/DEBUG` image has
-/// no symbol table at all.
+/// its ELF `.dynsym`, the **procedures** and **publics** of the `.pdb` a PE names, where
+/// that was found and matches (`procedures` and `publics`, out of [`DebugInfo::pdb`]), and
+/// the **unwind entries** of an x86-64 PE's exception directory (`unwind`, out of
+/// [`unwind_ranges`]). A stripped shared library is otherwise a file with nothing in it,
+/// and a `/DEBUG` image has no symbol table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
 /// states outright, so the "nothing is scanned for" rule still holds.
 ///
@@ -461,14 +474,16 @@ const ENTRY_POINT_NAME: &str = "<entry point>";
 /// exported *data* out.
 ///
 /// **One symbol per address, earliest source winning** (symbol table > dynamic symbol >
-/// export > entry point > PDB procedure > PDB public). An export is very often the symbol
-/// table's own function under its exported name, and a second `SymbolData` for it would be a
-/// second row in the list for one place in the file. The PDB comes last so a name the image
-/// itself states is never displaced by the debug file's spelling of it, and its publics
-/// after its procedures because a procedure carries a display name and a length where a
-/// public is a decorated name and an address: the publics name only what nothing else did —
-/// a function in a module that shipped without symbols, a thunk, assembler code, or every
-/// function of a stripped PDB.
+/// export > entry point > PDB procedure > PDB public > unwind entry). An export is very
+/// often the symbol table's own function under its exported name, and a second `SymbolData`
+/// for it would be a second row in the list for one place in the file. The PDB comes after
+/// the image so a name the image itself states is never displaced by the debug file's
+/// spelling of it, and its publics after its procedures because a procedure carries a
+/// display name and a length where a public is a decorated name and an address: the publics
+/// name only what nothing else did — a function in a module that shipped without symbols, a
+/// thunk, assembler code, or every function of a stripped PDB. The unwind entries come last
+/// of all because they carry no name: one at an address anything else named adds nothing,
+/// and one nothing named is called `<function 0x…>` by its address.
 ///
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
@@ -478,6 +493,7 @@ fn declared_code(
     known: &mut HashSet<u64>,
     procedures: Vec<Procedure>,
     publics: Vec<Public>,
+    unwind: &[Range<u64>],
 ) -> Vec<DeclaredCode> {
     let mut declared = Vec::new();
     if file.kind() == ObjectKind::Relocatable {
@@ -497,7 +513,7 @@ fn declared_code(
         })
         .collect();
 
-    let mut take = |name: Option<String>, address: u64, size: u64| {
+    let mut take = |name: String, mangled: bool, address: u64, size: u64| {
         let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
             return;
         };
@@ -506,6 +522,7 @@ fn declared_code(
         }
         declared.push(DeclaredCode {
             name,
+            mangled,
             address,
             size,
             section: *section,
@@ -523,7 +540,8 @@ fn declared_code(
             continue;
         }
         take(
-            Some(String::from_utf8_lossy(name).into_owned()),
+            String::from_utf8_lossy(name).into_owned(),
+            true,
             symbol.address(),
             symbol.size(),
         );
@@ -534,7 +552,8 @@ fn declared_code(
             continue;
         }
         take(
-            Some(String::from_utf8_lossy(export.name()).into_owned()),
+            String::from_utf8_lossy(export.name()).into_owned(),
+            true,
             export.address(),
             0,
         );
@@ -543,24 +562,76 @@ fn declared_code(
     // 0 is "this image has no entry point", which is how a DLL built without one states it.
     let entry = file.entry();
     if entry != 0 {
-        take(None, entry, 0);
+        take(ENTRY_POINT_NAME.to_owned(), false, entry, 0);
     }
 
-    // Last, so the image's own names win. The address is already in the image's space and
-    // the code-section lookup is what drops a procedure the PDB places in a section the
-    // image does not have code in.
+    // After the image's own names, so they win. The address is already in the image's space
+    // and the code-section lookup is what drops a procedure the PDB places in a section the
+    // image does not have code in. A procedure's name is the compiler's display name, which
+    // no demangler claims and so comes through the batch as it is.
     for procedure in procedures {
-        take(Some(procedure.name), procedure.address, procedure.len);
+        take(procedure.name, true, procedure.address, procedure.len);
     }
 
     // And the publics behind them: a name for whatever address is still unnamed, and no
     // length, as an export has none. A public in a data section — the flags are the
     // linker's to set, and the section lookup is the rule — is dropped the same way.
     for public in publics {
-        take(Some(public.name), public.address, 0);
+        take(public.name, true, public.address, 0);
+    }
+
+    // Last of all, the unwind entries: an address and a length for whatever is still
+    // unnamed, and no name at all.
+    for range in unwind {
+        take(
+            unwind_name(range.start),
+            false,
+            range.start,
+            range.end - range.start,
+        );
     }
 
     declared
+}
+
+/// The address ranges an x86-64 PE's exception directory states: one `RUNTIME_FUNCTION`
+/// per function with unwind info, its begin and end RVAs read and its unwind-info RVA left
+/// alone, placed on the image base. Each is a **declaration of both ends** of a function —
+/// the loader's, not a debugger's — which is what makes it worth reading past the export
+/// table: a stripped image exports a handful of its functions, and every function between
+/// two exports is otherwise nameless and of no known length. In file order, an entry whose
+/// end is not past its begin dropped, and not yet placed in any section — that is
+/// [`declared_code`]'s lookup, which is also what drops one whose begin is not in code.
+///
+/// x86-64 only: ARM64's `.pdata` record is another shape, 8 bytes, and a PE32 has none. A
+/// COFF `.obj` carries a relocatable `.pdata` section and no data directory; it is not a
+/// `Pe64` and so is skipped, which is `declared_code`'s rule for a relocatable object too.
+fn unwind_ranges(file: &object::File<'_>) -> Vec<Range<u64>> {
+    let object::File::Pe64(pe) = file else {
+        return Vec::new();
+    };
+    if pe.architecture() != Architecture::X86_64 {
+        return Vec::new();
+    }
+    let Some(directory) = pe
+        .data_directories()
+        .get(object::pe::IMAGE_DIRECTORY_ENTRY_EXCEPTION)
+    else {
+        return Vec::new();
+    };
+    let Ok(data) = directory.data(pe.data(), &pe.section_table()) else {
+        return Vec::new();
+    };
+
+    let base = pe.relative_address_base();
+    data.chunks_exact(12)
+        .filter_map(|entry| {
+            let word = |at: usize| entry[at..at + 4].try_into().ok().map(u32::from_le_bytes);
+            let begin = base.checked_add(u64::from(word(0)?))?;
+            let end = base.checked_add(u64::from(word(4)?))?;
+            (begin < end).then_some(begin..end)
+        })
+        .collect()
 }
 
 /// Parse `data` as a single object file. `name` is the display name (an archive member name
@@ -623,7 +694,9 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
             // Declared code goes into the same sorted lists, because that list is what
             // `estimate_size` derives an extent from and a declaration carries none.
-            let declared = declared_code(&file, &sections, &mut known, procedures, publics);
+            let unwind = unwind_ranges(&file);
+            let declared =
+                declared_code(&file, &sections, &mut known, procedures, publics, &unwind);
             for code in &declared {
                 if let Some(section) = sections.get_mut(&code.section) {
                     section.symbols.push(code.address);
@@ -678,16 +751,15 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                     .max()
                     .map_or(0, |index| index + 1);
                 for (offset, code) in declared.into_iter().enumerate() {
-                    let named = code.name.is_some();
                     pending.push(Pending {
                         index: SymbolIndex(next + offset),
-                        name: code.name.unwrap_or_else(|| ENTRY_POINT_NAME.to_owned()),
+                        name: code.name,
                         // An export's name is the file's, and on a Windows DLL very often
                         // MSVC-mangled; a PDB public's is the linker's, decorated the same
                         // way; a PDB procedure's is the compiler's display name, which no
                         // demangler claims and so comes through as it is; the entry
-                        // point's is ours.
-                        mangled: named,
+                        // point's and an unwind entry's are ours.
+                        mangled: code.mangled,
                         section: section_map.get(&code.section).cloned(),
                         address: code.address,
                         size: code.size,
