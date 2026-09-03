@@ -419,6 +419,9 @@ macro_rules! project_states {
         $runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
         // Likewise: every row and link asks it whether a press opens a tab of its own.
         $runner.provide_root_context(|| Ctrl(State::create(false)));
+        // Likewise: a recent project's row hands it to the switch, which is one of the two
+        // places a file can be moved aside.
+        $runner.provide_root_context(|| Rescued(State::create(Vec::new())));
 
         ProjectStates {
             proj: $runner
@@ -13385,4 +13388,52 @@ fn a_diagnostics_place_opens_the_file_it_names() {
         states.open.documents() == [Document::Source(file)],
         "the place did not open the file it names"
     );
+}
+
+/// The window over a rescue: it names every path it was given, and its button empties the
+/// list -- which is the same list it is drawn from, so the window goes with it.
+#[test]
+fn the_rescued_window_names_every_path_and_its_button_empties_the_list() {
+    fn rescued_harness() -> impl IntoElement {
+        rect().expanded().child(RescuedPopup)
+    }
+
+    let paths = [
+        "/state/incompatible/settings.toml",
+        "/state/incompatible/projects/project-1/session.toml",
+    ];
+    let (mut test, rescued) = TestingRunner::new(
+        rescued_harness,
+        (600., 400.).into(),
+        |runner: &mut _| {
+            runner
+                .provide_root_context(|| {
+                    Rescued(State::create(paths.iter().map(PathBuf::from).collect()))
+                })
+                .0
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    for path in paths {
+        assert!(label_area(&test, path).is_some(), "{path} was not named");
+    }
+
+    press(&mut test, "Close");
+    assert!(rescued.peek().is_empty(), "the window kept what it named");
+
+    // And a run in which nothing was moved has no window at all, this being mounted at
+    // the root of every one of them.
+    let (quiet, _) = TestingRunner::new(
+        rescued_harness,
+        (600., 400.).into(),
+        |runner: &mut _| {
+            runner
+                .provide_root_context(|| Rescued(State::create(Vec::new())))
+                .0
+        },
+        1.,
+    );
+    assert!(label_area(&quiet, "Close").is_none());
 }

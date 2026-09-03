@@ -46,6 +46,7 @@ pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::project::{
     self, Cargo, Details, Document, Project, ProjectId, Recent, SavedDocument, Selection, Session,
 };
+pub(crate) use crate::rescue;
 pub(crate) use crate::rows::RowSelection;
 pub(crate) use crate::scratchpad::{
     run_in, Build, Dependency, Ended, Failure, Half, PadId, PadListing, PadOrder, Problem,
@@ -100,6 +101,8 @@ mod project_view;
 pub(crate) use project_view::*;
 mod reading;
 pub(crate) use reading::*;
+mod rescued_view;
+pub(crate) use rescued_view::*;
 mod search_view;
 pub(crate) use search_view::*;
 mod section_view;
@@ -388,6 +391,10 @@ pub fn app() -> impl IntoElement {
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.
     use_restore_on_startup(states);
+    // After the restore, which is the last of the loads a startup makes: `Settings::load`
+    // above, the same again behind `fonts()`, and the project the line above reopened.
+    // All three are synchronous, so one ask here catches everything they moved aside.
+    use_provide_context(|| Rescued(State::create(rescue::moved())));
 
     let symbols = use_memo(move || {
         SymbolList(Arc::new(
@@ -483,6 +490,8 @@ pub fn app() -> impl IntoElement {
         // without one in an ancestor scope panics. It lays out as nothing until a menu
         // is open.
         .child(ContextMenuViewer::new())
+        // Over everything, and drawn as nothing at all until a file has been moved aside.
+        .child(RescuedPopup)
         .child(toolbar(objects, loading))
         // `ResizableContainer` renders itself `.expanded()`, so it needs a parent that
         // has already been given the leftover height under the toolbar.

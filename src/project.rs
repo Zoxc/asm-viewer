@@ -12,7 +12,8 @@
 //! [`Saves`]: [`record`] writes or marks pending, [`flush`] writes what is pending.
 //!
 //! There is no published version of this app, so a schema change is just a schema change:
-//! a file that no longer parses is the default, not a migration.
+//! a file that no longer parses is the default, not a migration. It is moved aside first
+//! (`rescue.rs`), the one thing owed to a reader whose file the next write would replace.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -29,6 +30,7 @@ use crate::bookmarks::Bookmark;
 use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
 use crate::history::History;
+use crate::rescue;
 use crate::tabs::{Driven, Positions, Spot};
 use crate::visits::Visits;
 
@@ -261,6 +263,10 @@ pub struct Project {
 }
 
 impl Project {
+    /// Read one, or `None` if it is not there or will not parse. The plain read, and the
+    /// only one: it is what draws a row for a project that is **not open**
+    /// ([`recent_projects_in`]), and listing a project must not move its file aside.
+    /// [`load_project`], which opens one, goes through [`rescue`].
     fn load_from(path: &Path) -> Option<Project> {
         let data = fs::read_to_string(path).ok()?;
         toml::from_str(&data).ok()
@@ -435,18 +441,19 @@ impl Recents {
         true
     }
 
-    fn load_from(path: &Path) -> Recents {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|data| toml::from_str(&data).ok())
-            .unwrap_or_default()
+    /// The stored order, or an empty one. A file that will not parse is moved aside
+    /// first: the next [`remember`] writes this file, so ignoring it would lose the
+    /// order without the reader ever hearing about it.
+    fn load_in(base: &Path) -> Recents {
+        rescue::parse(base, &recents_in(base)).unwrap_or_default()
     }
 }
 
 /// One row of the recent-projects view: a project that can be switched to, described by
 /// its own `project.toml` read at the moment the list is asked for, so a name is never
 /// copied beside the order. A project whose file will not parse still gets a row, as the
-/// [`Project::default`] it will behave as once opened.
+/// [`Project::default`] it will behave as once opened — and the file stays where it is
+/// until it is opened, a row being a reading of a project and not a claim on it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recent {
     pub id: ProjectId,
@@ -467,7 +474,7 @@ pub fn recent_projects() -> Vec<Recent> {
 /// gone is dropped here rather than repaired, since [`Recents`] never prunes itself on
 /// load and this is the point of use where the repair is free.
 fn recent_projects_in(base: &Path) -> Vec<Recent> {
-    Recents::load_from(&recents_in(base))
+    Recents::load_in(base)
         .projects
         .into_iter()
         .filter_map(|id| {
@@ -1092,7 +1099,7 @@ fn open_project(saves: &mut Saves, base: &Path) -> Option<ProjectId> {
 /// Put `id` at the front of `recents.toml`, writing the file only when that moved it.
 fn remember(base: &Path, id: &ProjectId) {
     let path = recents_in(base);
-    let mut recents = Recents::load_from(&path);
+    let mut recents = Recents::load_in(base);
     if !recents.touch(id) {
         return;
     }
@@ -1113,7 +1120,7 @@ pub fn reopen() -> Option<(ProjectId, Project, Session)> {
 /// The whole of the above except telling [`Saves`], so a test can point it at a directory
 /// of its own.
 fn reopen_in(base: &Path) -> Option<(ProjectId, Project, Session)> {
-    let recents = Recents::load_from(&recents_in(base));
+    let recents = Recents::load_in(base);
     let id = recents.first()?.clone();
     let (project, session) = load_project(base, &id)?;
     Some((id, project, session))
@@ -1121,7 +1128,8 @@ fn reopen_in(base: &Path) -> Option<(ProjectId, Project, Session)> {
 
 /// Both halves of the project `id` names, or `None` when its directory is gone. The
 /// directory is the only thing that has to be there: either file being missing or
-/// unreadable is simply the default half.
+/// unreadable is simply the default half, and one that will not parse is moved aside
+/// before it becomes that.
 fn load_project(base: &Path, id: &ProjectId) -> Option<(Project, Session)> {
     let directory = project_in(base, id);
     if !directory.is_dir() {
@@ -1129,11 +1137,8 @@ fn load_project(base: &Path, id: &ProjectId) -> Option<(Project, Session)> {
         return None;
     }
 
-    let project = Project::load_from(&directory.join(PROJECT_FILE)).unwrap_or_default();
-    let session: Session = fs::read_to_string(directory.join(SESSION_FILE))
-        .ok()
-        .and_then(|data| toml::from_str(&data).ok())
-        .unwrap_or_default();
+    let project = rescue::parse(base, &directory.join(PROJECT_FILE)).unwrap_or_default();
+    let session: Session = rescue::parse(base, &directory.join(SESSION_FILE)).unwrap_or_default();
     Some((project, session))
 }
 

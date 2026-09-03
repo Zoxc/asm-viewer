@@ -8,6 +8,41 @@ There is **no published version of this app yet**, so persisted formats need no 
 compatibility: a schema change is just a schema change, a stale file is ignored rather than
 migrated, and `#[serde(default)]` is added only when it earns its place on its own merits.
 
+**Ignored, but not lost** (`src/rescue.rs`). Every one of these files is read back into a default
+when it will not parse, and the next write puts a good file over it -- so the one thing that rule
+costs is the reader's own file, taken away without a word. `rescue::parse` is what every load that
+is on the way to a *write* goes through: it reads the **bytes** (a file that is not UTF-8 will not
+parse either, and is lost the same way), and on a failure copies them to `incompatible/` under the
+path the file had, removes the original, and answers `None` -- which is what all four of these loads
+already meant by "not there", so no caller changed shape. A file the system will not hand over at
+all is left alone: nothing can be salvaged from it, and nothing is about to write over it either.
+The mirror (`incompatible/projects/<id>/session.toml`) is so that a project's files keep the shape
+they had rather than being flattened into one heap of `session.toml`s, and the destination is
+claimed by `File::create_new` -- `settings.toml`, then `2-settings.toml` -- which is
+`ProjectId::anonymous`'s "a create that fails rather than opens", and for its reason: nothing there
+is ever overwritten, not by an earlier rescue and not by a second copy of the app moving the same
+file at this moment. The original is **removed** rather than copied, since nothing writes over
+`settings.toml` until a setting changes and a file left in place would be rescued again on every
+launch.
+
+The one load that does **not** go through it is `Project::load_from` as `recent_projects_in` calls
+it, which reads every listed project's file to describe its row. Drawing a row is a reading of a
+project and not a claim on it: nothing is about to write over a project nobody has entered, so its
+file stays where it is until it is opened. `load_project`, which *is* the open, rescues both halves.
+
+**And the reader is told**, which is the half that makes it a rescue at all: a file moved somewhere
+nobody hears about is a file lost politely. `rescue::moved()` hands over the destinations recorded
+since it was last asked -- a `static Mutex<Vec<PathBuf>>`, because what fills it is a load and not a
+component -- and `RescuedPopup` (`src/ui/rescued_view.rs`) names them over freya's `Popup`, which is
+shown exactly when it has children, so the list being empty *is* the window not being there. It is
+asked twice, at the two points a run loads any of these files. `app()` asks **after**
+`use_restore_on_startup`, the three loads a startup makes (`Settings::load`, the same again behind
+`fonts()`, and the project reopened) all being synchronous and all landing before that line;
+`switch_project` asks again and **adds** to the list rather than setting it, so a window still naming
+what the startup moved does not lose it when a project is switched. Neither `PopupTitle` nor
+`PopupContent` is used: both set a font size of their own, which would draw this in a size the reader
+never chose.
+
 Everything is written under `dirs::state_dir()` (falling back to `data_local_dir()`) +
 `assembly-viewer/`, atomically via `.tmp` + rename (one `write_atomically`, used by every file
 `project.rs` owns).

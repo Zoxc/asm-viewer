@@ -248,19 +248,6 @@ leaves this list when it is. That is a move made on request, like everything els
   `SyntaxBlocks` when a file is loaded, so a colour change has to re-parse every cached file
   as a theme switch already does; and the contrast test that holds every foreground to a
   floor cannot hold an override, so the picker wants to say when a colour falls under it.
-- [ ] Move a settings file that will not parse aside instead of ignoring it, and say where it
-  went. Today a stale or hand-broken file is silently ignored and the next write overwrites it,
-  so the reader loses whatever was in it without ever being told — which is the one place
-  "persisted formats need no backward compatibility" costs something real. The file goes into an
-  `incompatible/` directory that **mirrors the structure it came from**, so a project's own
-  files keep the shape they had rather than being flattened into one heap of `session.toml`s.
-  Nothing there is ever overwritten: a name already taken gets a number prefix, and the claim
-  has to be made the way an anonymous project's directory is — a create that fails rather than
-  opens — since a second copy of the app may be moving the same file at the same moment. Then a
-  popup naming every path written, because a rescue the reader never hears about is the same as
-  no rescue. The decisions are which files this covers (`settings.toml` alone, or every
-  persisted file — `project.toml`, `session.toml`, the recents list), and where the directory
-  sits relative to each of them.
 
 ## Scratchpad
 

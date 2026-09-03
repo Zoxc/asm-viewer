@@ -12,6 +12,7 @@ mod lanes;
 mod naming;
 mod pixels;
 mod project;
+mod rescue;
 mod rows;
 mod scratchpad;
 mod search;

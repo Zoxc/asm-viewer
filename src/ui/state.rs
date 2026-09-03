@@ -325,6 +325,15 @@ impl EditedFont {
 #[derive(Clone, Copy)]
 pub(crate) struct Prefs(pub(crate) State<EditedSettings>);
 
+/// Where each file that would not parse was moved to, until the reader has been told: what
+/// [`RescuedPopup`] draws, and empty for every run in which nothing was moved.
+///
+/// A state at the root and not one inside the popup, because what fills it is a *load*
+/// (`rescue::moved`), and the two loads a run makes are the startup's and a project
+/// switch's -- neither of them anywhere near a component that could own this.
+#[derive(Clone, Copy)]
+pub(crate) struct Rescued(pub(crate) State<Vec<PathBuf>>);
+
 /// Every state a project owns, in one `Copy` bundle of handles: a project switch closes
 /// all of them and reopens all of them.
 #[derive(Clone, Copy)]

@@ -204,6 +204,7 @@ impl Component for RecentRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let states = use_project_states();
+        let rescued = use_consume::<Rescued>().0;
         let id = self.recent.id.clone();
         let recent = &self.recent;
 
@@ -238,7 +239,7 @@ impl Component for RecentRow {
                 })
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |_| switch_project(states, id.clone()))
+                .on_press(move |_| switch_project(states, rescued, id.clone()))
                 .child(
                     label()
                         .text(text)
@@ -816,10 +817,19 @@ pub(crate) fn clear_project(states: ProjectStates) {
 /// re-points every baseline while the policy still points at it, and only then is the app
 /// emptied -- so the save observer, woken by a notify after this handler, sees one
 /// settled state that matches the baseline and writes nothing.
-fn switch_project(states: ProjectStates, id: ProjectId) {
+fn switch_project(states: ProjectStates, mut rescued: State<Vec<PathBuf>>, id: ProjectId) {
     let Some((project, session)) = project::switch(&id) else {
         return;
     };
+
+    // The other of the two loads a run makes, the startup's being `app()`'s. Added to
+    // rather than set: a window still naming what the startup moved must not lose it.
+    let moved = rescue::moved();
+    if !moved.is_empty() {
+        let mut naming = rescued.peek().clone();
+        naming.extend(moved);
+        rescued.set(naming);
+    }
 
     clear_project(states);
     let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);

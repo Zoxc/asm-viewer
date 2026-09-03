@@ -1588,7 +1588,12 @@ fn a_hand_edited_recent_that_is_not_an_id_is_refused() {
     let path = directory.join(RECENTS_FILE);
     fs::create_dir_all(&directory).expect("creating the test directory");
     fs::write(&path, br#"projects = ["../elsewhere"]"#).expect("writing");
-    assert_eq!(Recents::load_from(&path), Recents::default());
+    assert_eq!(Recents::load_in(&directory), Recents::default());
+    // And moved aside, the next `remember` being what would otherwise write over it.
+    assert!(directory
+        .join(crate::rescue::INCOMPATIBLE_DIR)
+        .join(RECENTS_FILE)
+        .exists());
 
     let _ = fs::remove_dir_all(&directory);
 }
@@ -1638,10 +1643,7 @@ fn the_recent_list_round_trips_through_toml() {
     assert!(text.contains(r#""kernel_2""#), "{text}");
 
     // A missing or unreadable file is the empty list, never an error.
-    assert_eq!(
-        Recents::load_from(Path::new("/no/such/recents.toml")),
-        Recents::default()
-    );
+    assert_eq!(Recents::load_in(Path::new("/no/such")), Recents::default());
 }
 
 /// The claim is the `create_dir`, so two allocations in the same directory cannot land on
@@ -1674,10 +1676,7 @@ fn the_first_write_creates_a_project_and_remembers_it() {
 
     let id = open_project(&mut saves, &base).expect("a project");
     assert!(project_in(&base, &id).is_dir());
-    assert_eq!(
-        Recents::load_from(&recents_in(&base)).projects,
-        vec![id.clone()]
-    );
+    assert_eq!(Recents::load_in(&base).projects, vec![id.clone()]);
 
     // Every later write of the run goes into the same one rather than allocating another.
     assert_eq!(open_project(&mut saves, &base), Some(id));
@@ -1752,6 +1751,15 @@ fn a_project_missing_a_half_still_reopens() {
     assert_eq!(reopened, project);
     assert_eq!(session, Session::new());
 
+    // And the corrupt half was moved aside under the path it had, rather than left for
+    // the next flush to write over.
+    let moved = base
+        .join(crate::rescue::INCOMPATIBLE_DIR)
+        .join(PROJECTS_DIR)
+        .join(id.as_str())
+        .join(SESSION_FILE);
+    assert_eq!(fs::read(&moved).ok().as_deref(), Some(&b"{ not toml"[..]));
+
     let _ = fs::remove_dir_all(&base);
 }
 
@@ -1787,6 +1795,28 @@ fn the_recent_view_names_each_project_from_its_own_file() {
     assert_eq!(recents[0].name.as_deref(), Some("loader"));
     assert_eq!(recents[0].directory, Some(PathBuf::from("/src/loader")));
     assert_eq!(recents[0].binaries, 2);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// Reading a project to draw its row is not opening it: a file that will not parse is
+/// left where it is, since nothing is about to write over a project nobody has entered.
+#[test]
+fn listing_a_project_does_not_move_its_file_aside() {
+    let base = directory(line!());
+    let id = self::id("broken-1");
+    let path = project_in(&base, &id).join(PROJECT_FILE);
+    fs::create_dir_all(project_in(&base, &id)).expect("creating the test directory");
+    fs::write(&path, b"{ not toml").expect("writing the corrupt file");
+    remember(&base, &id);
+
+    // The row is drawn, as the project it will behave as once opened.
+    let recents = recent_projects_in(&base);
+    assert_eq!(recents.len(), 1);
+    assert_eq!(recents[0].name, None);
+
+    assert!(path.exists());
+    assert!(!base.join(crate::rescue::INCOMPATIBLE_DIR).exists());
 
     let _ = fs::remove_dir_all(&base);
 }

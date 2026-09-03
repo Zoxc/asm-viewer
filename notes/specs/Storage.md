@@ -2,6 +2,13 @@
 
 A missing or unreadable file counts as empty.
 
+## A file that will not parse
+
+A file that will not parse is moved aside before the app writes over it: the settings, the
+recent projects, and a project's two files when it is opened. It keeps the path it had,
+under an `incompatible` directory beside the settings. Nothing there is ever overwritten;
+a name already taken gets a number in front of it. A window then names every path written.
+
 ## Settings
 
 The user's fonts and theme, saved apart from any project.

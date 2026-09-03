@@ -97,6 +97,7 @@ command.
 - `src/cargo.rs` — running cargo and reading what it said: the artifacts it names, the
   diagnostics it reports, and the profile's debug information in the manifest being built.
 - `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
+- `src/rescue.rs` — a stored file that will not parse, moved aside before a write replaces it.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
 - `src/source.rs` — source files read off disk and cached by path, failures included.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
@@ -144,6 +145,8 @@ command.
   question, the answer, the panel.
 - `src/ui/reading.rs` — what the worker has decoded of an object's code for the section view,
   and the window of it the view asks for next.
+- `src/ui/rescued_view.rs` — the window naming the stored files that would not parse and where
+  each was moved to.
 - `src/ui/search_view.rs` — the Search panel: what was searched for, the hits as they arrive,
   and the one worker that finds them.
 - `src/ui/section_view.rs` — the section view: an object's code as one listing, its rows, the
@@ -171,9 +174,9 @@ command.
 - `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
   it takes from that: what lets the code panes scroll sideways with their wash whole.
 
-Eight `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
-`project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`); the
-rest is in `agents/UI.md`.
+Nine `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+`project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`,
+`rescued_view`); the rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's
 tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at

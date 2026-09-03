@@ -1,3 +1,5 @@
+use std::fs;
+
 use super::*;
 
 /// A directory of this test's own under the system temporary directory, named after
@@ -28,17 +30,23 @@ fn a_missing_or_corrupt_file_is_the_default() {
     let directory = directory(line!());
     let path = directory.join(FILE_NAME);
 
-    assert_eq!(Settings::load_from(&path), Settings::default());
+    assert_eq!(Settings::load_in(&directory), Settings::default());
 
     fs::create_dir_all(&directory).expect("creating the test directory");
 
     // Not TOML at all.
     fs::write(&path, b"{ not toml").expect("writing the corrupt file");
-    assert_eq!(Settings::load_from(&path), Settings::default());
+    assert_eq!(Settings::load_in(&directory), Settings::default());
 
     // TOML, but not this schema: starting in the default beats refusing to start.
     fs::write(&path, b"theme = \"solarized\"\n").expect("writing the stale file");
-    assert_eq!(Settings::load_from(&path), Settings::default());
+    assert_eq!(Settings::load_in(&directory), Settings::default());
+
+    // Neither was left for the next save to write over: both are under `incompatible`,
+    // the second under a name of its own.
+    let moved = directory.join(crate::rescue::INCOMPATIBLE_DIR);
+    assert!(moved.join(FILE_NAME).exists());
+    assert!(moved.join(format!("2-{FILE_NAME}")).exists());
 
     let _ = fs::remove_dir_all(&directory);
 }
@@ -53,7 +61,7 @@ fn a_file_that_names_one_setting_keeps_it() {
     fs::create_dir_all(&directory).expect("creating the test directory");
     fs::write(&path, b"theme = \"light\"\n").expect("writing the partial file");
 
-    let loaded = Settings::load_from(&path);
+    let loaded = Settings::load_in(&directory);
     assert_eq!(loaded.theme, Theme::Light);
     assert_eq!(loaded.interface, FontSetting::default());
 
@@ -76,7 +84,7 @@ fn writes_atomically_and_reads_back_with_its_tables_last() {
     let fixed = text.find("[fixed]").expect("the fixed table");
     assert!(theme < interface && interface < fixed, "{text}");
 
-    assert_eq!(Settings::load_from(&path), settings);
+    assert_eq!(Settings::load_in(&directory.join("nested")), settings);
     // The temporary was renamed, not left behind.
     assert!(!path.with_extension("toml.tmp").exists());
 
