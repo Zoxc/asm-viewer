@@ -53,8 +53,8 @@ struct SourceRow {
     file: Arc<str>,
     index: usize,
     /// Whether an instruction of the assembly pane's picked-out run was compiled from
-    /// this line.
-    paired: bool,
+    /// this line, and if so which of its edges end the run of such lines.
+    paired: Option<Edges>,
     /// Whether this row is one of the run picked out to be copied, told to it by the list
     /// for the reason `InstructionRow`'s is.
     selected: bool,
@@ -127,7 +127,10 @@ impl Component for SourceRow {
             // Nothing of this row's own under the pointer: it is lit by the assembly
             // pane's run, where an instruction of it came from this line, and by this
             // pane's, where the row is in it.
-            .background(row_background(self.paired, self.selected))
+            .background(row_background(self.paired.is_some(), self.selected))
+            .maybe(self.paired.is_some_and(Edges::any), |el| {
+                el.border(pair_border(self.paired.unwrap_or_default()))
+            })
             // The same gesture as the assembly pane's, in the same order. The run is a
             // run of this file, and the right button's down is the menu, in the same
             // handler for the reason the assembly row's is (`secondary`).
@@ -335,11 +338,12 @@ impl Component for SourceList {
                                 drives: matches!(self.document, Document::Source(_)),
                             },
                             |i, data: &SourceData| {
+                                let paired_at = |row: usize| data.pairs.contains(&(row as u32 + 1));
                                 SourceRow {
                                     source: data.source.clone(),
                                     file: data.file.clone(),
                                     index: i,
-                                    paired: data.pairs.contains(&(i as u32 + 1)),
+                                    paired: paired_at(i).then(|| Edges::of(i, paired_at)),
                                     selected: data.rows.is_some_and(|rows| rows.contains(i)),
                                     drives: data.drives,
                                     key: DiffKey::None,

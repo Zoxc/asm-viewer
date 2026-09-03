@@ -85,7 +85,8 @@ impl AsmData {
     /// row naming no file or sitting on DWARF's line 0.
     pub(crate) fn position(&self, index: usize) -> Option<LinePos> {
         let lines = self.lines.info.as_ref()?;
-        let row = lines.row_at(self.assembly.instructions[index].address)?;
+        // `get` and not an index: a row's neighbour below can be past the listing.
+        let row = lines.row_at(self.assembly.instructions.get(index)?.address)?;
         Some(LinePos {
             file: lines.files().get(row.file?)?.clone(),
             line: row.line?,
@@ -504,9 +505,10 @@ pub(crate) struct InstructionRow {
     pub(crate) controller: ScrollController,
     pub(crate) viewport: State<f32>,
     /// Whether this instruction was compiled from a line of the source pane's picked-out
-    /// run. Worked out by the list rather than read here, so that a run growing by a
-    /// line leaves every row not on it untouched.
-    pub(crate) paired: bool,
+    /// run, and if so which of its edges end the run of such rows. Worked out by the list
+    /// rather than read here, so that a run growing by a line leaves every row not on it
+    /// untouched.
+    pub(crate) paired: Option<Edges>,
     /// Whether this row is one of the run picked out here. Worked out by the list too,
     /// so a row re-renders on its own membership changing and not on every row a drag
     /// passes over.
@@ -662,7 +664,10 @@ impl Component for InstructionRow {
             .assembly_font()
             // Nothing of this row's own under the pointer: it is lit by the source pane's
             // run, where it is the same place, and by this pane's, where it is in it.
-            .background(row_background(self.paired, self.selected))
+            .background(row_background(self.paired.is_some(), self.selected))
+            .maybe(self.paired.is_some_and(Edges::any), |el| {
+                el.border(pair_border(self.paired.unwrap_or_default()))
+            })
             // The *down* and not the press: a drag is over by the time a press fires, so a
             // selection swept out with the button held has to begin as it goes down. The
             // run is a run of the file this row was compiled from, which is what the
@@ -923,8 +928,17 @@ impl Component for InstructionList {
                             .into();
                         };
 
+                        // Paired, and if so whether the rows either side are too:
+                        // the listing's rows, a separator being nobody's pair.
+                        let paired_at = |row: usize| {
+                            rows.data
+                                .lanes
+                                .instruction_at(row)
+                                .is_some_and(|index| rows.data.paired(index, rows.pair.as_ref()))
+                        };
+                        let paired = paired_at(i).then(|| Edges::of(i, paired_at));
                         InstructionRow {
-                            paired: rows.data.paired(index, rows.pair.as_ref()),
+                            paired,
                             data: rows.data.clone(),
                             index,
                             row: i,

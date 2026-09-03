@@ -653,7 +653,16 @@ fn build_row(
             let address = asm.assembly.instructions[index]
                 .address
                 .wrapping_add(asm.bias);
-            let paired = asm.paired(index, data.pair.as_ref());
+            // The rows either side, where they are instructions of this same stretch:
+            // a label, a header or a separator is nobody's pair.
+            let paired_at = |row: usize| match rows.row(row) {
+                Some(Row::Instruction {
+                    stretch: other,
+                    index,
+                }) if other == stretch => asm.paired(index, data.pair.as_ref()),
+                _ => false,
+            };
+            let paired = paired_at(i).then(|| Edges::of(i, paired_at));
             InstructionRow {
                 arrows: RowArrows {
                     lanes: asm.lanes.row(index),

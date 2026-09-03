@@ -11,6 +11,40 @@ pub(crate) fn bottom_hairline() -> Border {
     })
 }
 
+/// Which of a paired row's two edges the run of paired rows ends at: the row above, or
+/// below, is not paired. A row alone is both.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) struct Edges {
+    pub(crate) top: bool,
+    pub(crate) bottom: bool,
+}
+
+impl Edges {
+    /// The edges of row `row`, `paired` saying which rows are, asked of the neighbours.
+    pub(crate) fn of(row: usize, paired: impl Fn(usize) -> bool) -> Edges {
+        Edges {
+            top: !row.checked_sub(1).is_some_and(&paired),
+            bottom: !row.checked_add(1).is_some_and(&paired),
+        }
+    }
+
+    pub(crate) fn any(self) -> bool {
+        self.top || self.bottom
+    }
+}
+
+/// The rule a run of paired rows wears along its top and its bottom, on the rows at
+/// either end: a line inside the row, so it takes no height from it -- every row of a
+/// listing being exactly `code_row_height()` -- and nothing down the sides.
+pub(crate) fn pair_border(edges: Edges) -> Border {
+    Border::new().fill(palette().pair_edge).width(BorderWidth {
+        top: if edges.top { 1.0 } else { 0.0 },
+        right: 0.0,
+        bottom: if edges.bottom { 1.0 } else { 0.0 },
+        left: 0.0,
+    })
+}
+
 pub(crate) fn right_hairline() -> Border {
     Border::new().fill(palette().hairline).width(BorderWidth {
         top: 0.0,

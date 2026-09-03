@@ -35,6 +35,10 @@ pub(crate) struct Palette {
     /// lost in the pair. Its own colour rather than one wash over the other, because a
     /// shadow over so pale a green barely moves it.
     pub(crate) pair_selected_bg: Color,
+    /// The rule along the top and the bottom of a run of paired rows: the pair's green a
+    /// step deeper, so a block of them is told from the pane around it where the wash
+    /// alone is faint. Opaque, a line and not a wash.
+    pub(crate) pair_edge: Color,
     /// The wash over the half of a panel a dragged tab would land in.
     pub(crate) drop_preview_bg: Color,
     /// A Lucide glyph in a dock tab header, a step lighter than the title beside it.
@@ -62,7 +66,7 @@ pub(crate) struct Palette {
     /// against the pane than `branch_fg` is, and the palette test says so.
     pub(crate) block_rule: Color,
     /// The run of rows a reader has picked out, in either pane, where it is not also the
-    /// pair: a translucent shadow, a light grey over the light pane.
+    /// pair: a translucent blue-grey, a shade off the pane and a hue off the pair's green.
     pub(crate) row_select_bg: Color,
 
     // The code colours. Which syntactic category takes which is [`Palette::syntax`] on
@@ -118,7 +122,8 @@ impl Palette {
         symbol_hover_bg: Color::from_rgb(226, 226, 205),
         asm_pane_bg: Color::from_rgb(248, 248, 248),
         pair_bg: Color::from_argb(160, 228, 237, 216),
-        pair_selected_bg: Color::from_argb(190, 190, 218, 172),
+        pair_selected_bg: Color::from_argb(190, 197, 214, 184),
+        pair_edge: Color::from_rgb(186, 208, 168),
         drop_preview_bg: Color::from_argb(60, 105, 89, 132),
         icon_fg: Color::from_rgb(90, 90, 90),
         toggle_on_bg: Color::from_rgb(196, 196, 196),
@@ -128,7 +133,7 @@ impl Palette {
         branch_fg: Color::from_rgb(176, 188, 202),
         branch_lit_fg: Color::from_rgb(90, 116, 148),
         block_rule: Color::from_rgb(211, 216, 222),
-        row_select_bg: Color::from_argb(36, 0, 0, 0),
+        row_select_bg: Color::from_argb(44, 40, 70, 130),
 
         address_fg: Color::from_rgb(118, 141, 169),
         keyword_fg: Color::from_rgb(116, 94, 147),
@@ -163,6 +168,7 @@ impl Palette {
         // pane rather than as the light value flipped: `blend` puts 30/30/32 under them.
         pair_bg: Color::from_argb(110, 120, 160, 110),
         pair_selected_bg: Color::from_argb(190, 120, 160, 110),
+        pair_edge: Color::from_rgb(104, 140, 96),
         drop_preview_bg: Color::from_argb(90, 150, 130, 190),
         icon_fg: Color::from_rgb(160, 160, 160),
         toggle_on_bg: Color::from_rgb(88, 88, 92),
@@ -174,7 +180,7 @@ impl Palette {
         branch_fg: Color::from_rgb(96, 108, 124),
         branch_lit_fg: Color::from_rgb(150, 178, 210),
         block_rule: Color::from_rgb(66, 72, 80),
-        row_select_bg: Color::from_argb(100, 170, 170, 170),
+        row_select_bg: Color::from_argb(100, 160, 175, 200),
 
         address_fg: Color::from_rgb(132, 156, 186),
         keyword_fg: Color::from_rgb(178, 150, 214),

@@ -54,6 +54,8 @@ pub struct PlacedEdge {
 /// Every branch of one symbol, laid out in lanes, with the answer for each row worked out
 /// in advance.
 pub struct Lanes {
+    /// How many instructions the listing has: the bound on every index answered here.
+    instructions: usize,
     rows: Vec<RowLanes>,
     placed: Vec<PlacedEdge>,
     /// The instructions a separator row is drawn above, ascending: every row a branch
@@ -78,6 +80,7 @@ impl Lanes {
 
         if sorted.is_empty() {
             return Lanes {
+                instructions,
                 rows: Vec::new(),
                 placed: Vec::new(),
                 width: 0,
@@ -155,6 +158,7 @@ impl Lanes {
         let separators = (1..instructions).filter(|&row| rows[row].arrow).collect();
 
         Lanes {
+            instructions,
             rows,
             placed,
             width,
@@ -211,7 +215,8 @@ impl Lanes {
         index + self.separators.partition_point(|&at| at <= index)
     }
 
-    /// The instruction the listing's `row` draws, or [`None`] where it is a separator.
+    /// The instruction the listing's `row` draws, or [`None`] where it is a separator --
+    /// or past the end of the listing, which a row's neighbour below can be.
     ///
     /// `row_of` climbs by one or two and never falls, so the answer is the last
     /// instruction drawn at or above `row` -- and it is a separator exactly when that
@@ -223,7 +228,7 @@ impl Lanes {
             .separators
             .partition_point(|&at| self.row_of(at) <= row + 1);
         let index = row.checked_sub(above)?;
-        (self.row_of(index) == row).then_some(index)
+        (index < self.instructions && self.row_of(index) == row).then_some(index)
     }
 
     /// The instructions drawn in the listing rows `rows`, as a range of their indices, or

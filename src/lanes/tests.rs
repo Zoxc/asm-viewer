@@ -185,6 +185,11 @@ fn a_run_of_rows_lights_the_branches_of_the_instructions_it_holds() {
     assert_eq!(lanes.row_of(7), 9);
 
     assert_eq!(lanes.instructions_in(0..=3), Some(0..=3));
+    // Past the end is no instruction, which a row asked about its neighbour below asks:
+    // the arithmetic alone answered the next index, and the row drawn from it panicked.
+    assert_eq!(lanes.instruction_at(lanes.listing_rows(9)), None);
+    assert_eq!(lanes.instruction_at(lanes.listing_rows(9) + 5), None);
+    assert_eq!(lanes.instructions_in(10..=12), None);
     // The separator at row 5 opens the run: instruction 5 is inside.
     assert_eq!(lanes.instructions_in(5..=6), Some(5..=5));
     // And closes it: the instruction below is outside.
@@ -269,6 +274,9 @@ fn a_symbol_that_branches_nowhere_is_one_row_per_instruction() {
     assert_eq!(lanes.listing_rows(4), 4);
     assert_eq!(lanes.row_of(3), 3);
     assert_eq!(lanes.instruction_at(3), Some(3));
+    // And nothing past the last: with no branches there is no row table to bound the
+    // index, and the row asked about its neighbour below panicked in the listing.
+    assert_eq!(lanes.instruction_at(4), None);
     assert_eq!(lanes.boundary(3), RowLanes::default());
 }
 

@@ -18,7 +18,8 @@ grounds the tab is on; and a visible-step floor for every wash over the row unde
 row's three being the pair's green (`pair_bg`, the other pane's selection mapped here), the
 selection's grey (`row_select_bg`), and the deeper green a row that is both takes
 (`pair_selected_bg`, held to a step well past the pair's, since a shadow over so pale a green
-barely moved it), none answering to the pointer (`agents/Panes.md`) — and
+barely moved it), none answering to the pointer (`agents/Panes.md`), with `pair_edge`, the
+opaque rule along a run of paired rows, held a step past the pair's wash — and
 the × required to move the tab it sits on further than
 the tab's own hover moves the bar — the one wash here that has to be told apart from *another
 highlight* rather than from a plain surface, since the pointer on the × lights the tab under it

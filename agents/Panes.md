@@ -163,8 +163,11 @@ the file it is a run of, so the assembly side pairs a row by asking the row's ow
 turning the run's rows into positions -- `Studied::places` for a symbol's listing, `code_places`
 over the held stretches for an object's code, through the rows the section view shares as
 `CodeRows` -- and keeping the lines of its own file. `row_background` is three colours -- the
-pair's green, the selection's grey, and a deeper green for a row that is both -- and nothing
-else lights a row: no hover, no pin.
+pair's green, the selection's grey, and a deeper green for a row that is both -- and a run of
+paired rows wears a rule a step deeper along its top and its bottom (`pair_border`, on the
+rows at either end, which each list works out from its neighbours: `Edges::of`), so a block of
+them is told from the pane where the wash alone is faint. Nothing else lights a row: no hover,
+no pin.
 There was a pin, and a hover; both went in one step (`notes/Goals.md`), because the hover said
 what the pointer already says and a pin was a second selection under another name, and one
 selection for the window meant picking out an instruction lost the run on the source side. Three

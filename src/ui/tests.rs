@@ -5445,6 +5445,7 @@ fn every_wash_reads_against_the_pane_under_it() {
                 palette.asm_pane_bg,
             ),
             ("row_select_bg", palette.row_select_bg, palette.asm_pane_bg),
+            ("pair_edge", palette.pair_edge, palette.asm_pane_bg),
             ("drop_preview_bg", palette.drop_preview_bg, palette.pane_bg),
             // The × on a tab sits on either of two grounds and has to say the same thing
             // over both: the active tab's own pane, and a hovered tab's grey.
@@ -5471,6 +5472,10 @@ fn every_wash_reads_against_the_pane_under_it() {
         let pair = step(palette.pair_bg, palette.asm_pane_bg);
         let both = step(palette.pair_selected_bg, palette.asm_pane_bg);
         assert!(both > pair + 20, "{theme} pair {pair} vs both {both}");
+        // And the rule along a run of paired rows is deeper into the green than the wash
+        // it edges: `step` of an opaque colour is its distance from the pane.
+        let edge = step(palette.pair_edge, palette.asm_pane_bg);
+        assert!(edge > pair + 10, "{theme} pair {pair} vs edge {edge}");
 
         // And the × has to be told apart from the tab under it, which is lit at the same
         // time: the two hovers differ by strength on the same surface, the close moving
@@ -7488,6 +7493,29 @@ fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
         compiled,
         "the rows lit are not the instructions the line was compiled from"
     );
+
+    // The run of lit rows wears its rule at its ends and not between: a row's top rule
+    // exactly where the row above is not lit, its bottom one where the row below is not.
+    let lit: Vec<(Area, Vec<Border>)> = test.find_many(|node, element| {
+        (element.style().background == Fill::Color(palette().pair_bg))
+            .then(|| (node.layout().area, element.style().borders.clone()))
+    });
+    let lit_at = |y: f32| lit.iter().any(|(area, _)| (area.origin.y - y).abs() < 0.5);
+    for (area, borders) in &lit {
+        let rule = borders
+            .iter()
+            .find(|border| border.fill == palette().pair_edge)
+            .map(|border| (border.width.top > 0.0, border.width.bottom > 0.0))
+            .unwrap_or((false, false));
+        let above = lit_at(area.origin.y - area.height());
+        let below = lit_at(area.origin.y + area.height());
+        assert_eq!(
+            rule,
+            (!above, !below),
+            "the row at {} wears its rule at {rule:?} with lit rows above {above}, below {below}",
+            area.origin.y
+        );
+    }
 
     // The pointer over a row that is not one of them: nothing changes.
     let row = label_area(&test, &other).expect("the other row is drawn");

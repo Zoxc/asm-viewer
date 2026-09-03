@@ -771,6 +771,18 @@ one item per part, so the unfinished half stays visible.
   assembly font silently padded the sidebar. Each `item_size` comes from the height its own rows
   draw at, which is what keeps a scroll view and its rows from disagreeing; saved viewing
   positions are rows, so they survive a font change naming the same instruction.
+- [ ] A syntax-highlighting sample on the settings page, with the colours chosen from it. A
+  block of source and a few lines of assembly drawn in the current palette -- a keyword, a
+  type, a call, a string, a comment, an attribute; a mnemonic, a register, an immediate, an
+  address, a relocation name -- beside the theme choice, so the reader sees what a theme
+  does before reading in it. Each span is a colour the reader can change: pressing one opens
+  a picker for that palette field (the `Palette` fields `Palette::syntax` and `kind_color`
+  map the categories onto), and the choice is an override per theme in `settings.toml`, told
+  from the palette's own value and cleared the way a font override is
+  (`agents/Appearance.md`). What it costs: the source pane's colours are baked into a
+  `SyntaxBlocks` when a file is loaded, so a colour change has to re-parse every cached file
+  as a theme switch already does; and the contrast test that holds every foreground to a
+  floor cannot hold an override, so the picker wants to say when a colour falls under it.
 - [ ] Move a settings file that will not parse aside instead of ignoring it, and say where it
   went. Today a stale or hand-broken file is silently ignored and the next write overwrites it,
   so the reader loses whatever was in it without ever being told — which is the one place
