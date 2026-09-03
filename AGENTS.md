@@ -102,6 +102,8 @@ command.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
+- `src/search.rs` — the project's directory searched for a pattern: the walk, the match, and
+  the hits grouped under the file each is in.
 - `src/tree.rs` — the Objects list's tree shape, and which files are still being read into it.
 - `src/files.rs` — the project's directory as a tree: read one level per unfold, forgotten on
   the fold, and flattened into the rows the Files view draws.
@@ -142,6 +144,8 @@ command.
   question, the answer, the panel.
 - `src/ui/reading.rs` — what the worker has decoded of an object's code for the section view,
   and the window of it the view asks for next.
+- `src/ui/search_view.rs` — the Search panel: what was searched for, the hits as they arrive,
+  and the one worker that finds them.
 - `src/ui/section_view.rs` — the section view: an object's code as one listing, its rows, the
   place it keeps as an address, and the window it asks for.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
