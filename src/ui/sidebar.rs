@@ -443,7 +443,7 @@ impl Component for ObjectsTab {
         };
         let length = tree.len();
 
-        filter_pane(
+        use_filter_pane(
             filter,
             palette().pane_bg,
             // `new_with_data`, never a capture: the builder closure is not compared across
@@ -514,7 +514,7 @@ impl Component for SymbolsTab {
         };
         let length = filtered.len();
 
-        filter_pane(
+        use_filter_pane(
             filter,
             palette().symbol_pane_bg,
             VirtualScrollView::new_with_data(
@@ -586,7 +586,7 @@ impl Component for HistoryTab {
 
         // A plain `ScrollView` rather than a `VirtualScrollView`: a handful of one-label
         // rows, built straight from the state instead of routed through `new_with_data`.
-        filter_pane(
+        use_filter_pane(
             filter,
             palette().symbol_pane_bg,
             match (visited, rows.is_empty()) {

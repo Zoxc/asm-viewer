@@ -30,6 +30,28 @@ and costs almost nothing: over the app's own 154k names `find` takes 10–18 ms 
 `None`: no pass, no sort, the list in its own order. The Locations panel builds the same memo and
 so ranks the same way, which is wanted, since one line can answer with thousands of instantiations.
 
+**Ctrl+F puts the caret in the box over the list it is pressed in.** The binding is on the rows of
+`use_filter_pane` and not on the root, so it reaches the box of the list the reader is in and
+nothing else: the Objects box from the Objects list, and no box at all from a code pane, which
+keeps its own keys and will keep its own Ctrl+F for the source search. `is_find_chord` is exact —
+Ctrl or Meta, and neither Shift nor Alt — so Ctrl+Shift+F stays free for that search. The rows are
+focusable and a press on one focuses them, the code panes' own shape (`a11y_id`,
+`a11y_focusable`, `on_pointer_down`): without it no list could hold the keyboard and the chord
+would have nothing to fire from. The cost is that a press on a row takes the keyboard off the code
+pane, so a copy there wants the pane clicked first.
+
+The handler sits on the rows themselves and not over both halves of the pane because **a key event
+is emitted only for a focused node that listens for it** — an ancestor's handler is reached by
+bubbling afterwards, and a focused node with no handler of its own emits nothing to bubble
+(`notes/upstream/freya.md`). In the box the chord does nothing, the box being where it leads, but
+the bar still has to decline it: an `Input` inserts a character it has no chord of its own for, so
+Ctrl+F would type an `f` into the pattern. The `on_pre_key_down` returns `false` for the chord,
+before the edit, and otherwise repeats freya's default, which the hook replaces wholesale. The
+Project, Settings and scratchpad boxes are left as they are: they filter no list, and five copies
+of freya's default is not worth it. Two ids are minted in the pane, the rows' and the box's, the
+pane being what holds them both. The headless tests pin the whole door — the chord ignored with
+nothing focused, answered from a pressed row, and not typed into the box it reaches.
+
 **Pressing an object opens all of its code** as one listing (`Document::Code`, `agents/UI.md`). That
 is the one thing an object has to show that a symbol does not; the file's own facts belong to the
 file-tab goal. **The Objects list is a tree** (`src/tree.rs`). `ObjectTree::new` groups objects by

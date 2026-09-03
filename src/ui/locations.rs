@@ -347,7 +347,7 @@ impl Component for LocationsTab {
             (Some(_), None, None) => placeholder("Nothing looked for yet"),
         };
 
-        filter_pane(filter, palette().symbol_pane_bg, body)
+        use_filter_pane(filter, palette().symbol_pane_bg, body)
     }
 }
 

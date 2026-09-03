@@ -59,7 +59,9 @@ executor drop from the rest of that queue everything the emitted event names as 
 keyboard focus (`agents/Sidebar.md`), and it is the derivation `agents/Headless.md` works out for
 the `Menu` question read the other way. `stop_propagation` is the other axis and no substitute: it
 stops the walk up the ancestors, which for an event that does not bubble (a move, an enter, a leave,
-a global, a capture; `name.rs:248-254`) is nothing at all.
+a global, a capture; `name.rs:248-254`) is nothing at all. And the walk starts at the **focused**
+node for a key: a node that does not listen itself emits nothing, so an ancestor's `on_key_down`
+never runs (`notes/upstream/freya.md`, and the filter panes' Ctrl+F in `agents/Sidebar.md`).
 
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`; `Active` (the active tab and the `Document` it shows); `Open` (the open

@@ -165,13 +165,17 @@ leaves this list when it is. That is a move made on request, like everything els
 - [ ] Only close the assembly view by default in a source-driven tab if its file is not in a
   compiled language: a `Cargo.toml` or a `.json` opens with the source side alone, a `.rs` or
   `.c` with both, as now.
-- [ ] Make that search reachable and ranked. Ranked is done: under a filter the rows come back
-  by how well they matched — a match at the start of the name, then one at the start of a word
-  (the Word toggle's own `\b`), then one inside a word, the shorter name first among equals and
-  the list's own order last — by a `Rank` in `filter.rs` beside the matcher, the same regex asked
+- [x] Make that search reachable and ranked. Ranked: under a filter the rows come back by how
+  well they matched — a match at the start of the name, then one at the start of a word (the
+  Word toggle's own `\b`), then one inside a word, the shorter name first among equals and the
+  list's own order last — by a `Rank` in `filter.rs` beside the matcher, the same regex asked
   where its first match starts; nothing typed is still no pass and the list's own order. The
-  Locations panel shares it. Reachable is not: no keyboard shortcut puts the caret in the filter
-  box yet.
+  Locations panel shares it. Reachable: **Ctrl+F** puts the caret in the box over the list it is
+  pressed in, and only there — the Objects box from the Objects list, no box from a code pane,
+  which keeps its own Ctrl+F for the source search. A list is focusable now and a press on a row
+  focuses it, without which no list could hold the keyboard; the cost is that such a press takes
+  the keyboard off the code pane. In the box the chord does nothing but is still declined there,
+  since an `Input` types in a chord it has none of its own for.
 - [ ] Left panel for project directory / source search.
 - [ ] Refactor the tabs away from freya's dock panels and onto components of the app's own,
   with a fixed panel for the tabs rather than one the reader can fold, split or drag documents
@@ -200,10 +204,11 @@ leaves this list when it is. That is a move made on request, like everything els
   without touching it — or generated from the handlers, which would mean bindings become data
   the handlers read rather than matches they are written as. That refactor is the real content
   of this item, and it is worth doing only if the keyboard goal below wants it too.
-- [ ] Reach the panels from the keyboard. Only the two code panes have key handlers at all: the
-  tab chips are pointer targets, the sidebar lists have no cursor, and there is no way in to a
-  filter box — which is the ranked-search item above seen from the other side. Note what it
-  needs deciding first: what "the focused pane" means when either dock area can hold any view.
+- [ ] Reach the panels from the keyboard. Only the code panes answer to more than one key: the
+  tab chips are pointer targets, a focused list has a cursor in neither sense — no row is
+  current, and nothing moves between rows — and Ctrl+F goes from a list to the box over it and
+  never back, which is the ranked-search item above seen from the other side. Note what it needs
+  deciding first: what "the focused pane" means when either dock area can hold any view.
 
 ## Projects
 

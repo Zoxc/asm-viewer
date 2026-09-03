@@ -148,5 +148,19 @@ a pointer dragging a selection up past the companion header or the symbol bar ar
 shows their tooltips. The app makes the two `interactive(false)` while a sweep is under
 way (`sweeping`, `ui/marks.rs`), so they are not hit at all.
 
+**A key event is emitted only for a focused node that listens for it.** A keyboard event
+becomes one potential event, on the focused node, and `measure_emmitable_events` keeps it only
+if that node is listening (`ragnarok/measurement.rs`); bubbling to the ancestors happens after
+that, in the runner. So an `on_key_down` on a parent of the focused node never runs unless the
+focused node has one too — which reads as the opposite of `does_bubble`. The app puts the
+filter panes' Ctrl+F on the focusable rows themselves for this reason (`ui/filter_bar.rs`).
+
+**An `Input` inserts a character it has no chord of its own for.** The editor's `Key::Character`
+arm falls through to insertion whatever the modifiers are, so a chord it does not implement —
+Ctrl+F — is typed in as an `f`. Declined in the filter bars' `on_pre_key_down` before the edit
+(`ui/filter_bar.rs`). That hook replaces the `Input`'s default wholesale rather than composing
+with it, so declining one chord means repeating the default for every other key, and a change
+to freya's default is missed here.
+
 **`SyntaxHighlighter::tree()`**, so the function spans the source rows' menu needs are not a
 second parse of the file (above, and `ui/highlight.rs`).

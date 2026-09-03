@@ -200,7 +200,7 @@ impl Component for BookmarksTab {
             (rows, !entries.is_empty())
         };
 
-        filter_pane(
+        use_filter_pane(
             filter,
             palette().symbol_pane_bg,
             match (any, rows.is_empty()) {

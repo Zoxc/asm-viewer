@@ -12517,3 +12517,87 @@ fn a_filtered_list_puts_the_best_match_first() {
     let rows: Vec<usize> = (0..filtered.len()).map(|row| filtered.index(row)).collect();
     assert_eq!(rows, [1, 0, 2, 3]);
 }
+
+/// The chord is Ctrl+F alone -- `F` too, for Caps Lock -- and not Ctrl+Shift+F, which the
+/// source search will want, nor a bare `f`.
+#[test]
+fn the_find_chord_is_ctrl_f_and_nothing_wider() {
+    let f = Key::Character("f".into());
+    let upper = Key::Character("F".into());
+    assert!(is_find_chord(&f, Modifiers::CONTROL));
+    assert!(is_find_chord(&upper, Modifiers::CONTROL));
+    assert!(!is_find_chord(&f, Modifiers::CONTROL | Modifiers::SHIFT));
+    assert!(!is_find_chord(&f, Modifiers::CONTROL | Modifiers::ALT));
+    assert!(!is_find_chord(&f, Modifiers::default()));
+    assert!(!is_find_chord(
+        &Key::Character("g".into()),
+        Modifiers::CONTROL
+    ));
+}
+
+/// Ctrl+F reaches a filter box only from the list it filters: with nothing focused the
+/// chord does nothing, and with the rows focused -- which a press on one does -- it puts
+/// the keyboard in the box over them, where the text typed next lands and filters the
+/// list. Fails on a binding on the root, which would answer the first press too.
+#[test]
+fn ctrl_f_reaches_the_filter_box_only_from_the_list_under_it() {
+    let symbols = fixture_symbols();
+    let names: Vec<&str> = symbols.iter().map(|symbol| symbol.data.display()).collect();
+    assert!(names.contains(&"sum_to"));
+    let other = names
+        .iter()
+        .find(|name| !name.contains("sum_to"))
+        .expect("the fixture has a name beside sum_to")
+        .to_string();
+
+    let (mut test, states) =
+        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let mut objects = states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    settle(&mut test);
+    assert!(labels(&test).iter().any(|label| label == &other));
+
+    // Nothing focused: neither the text nor the chord reaches a box, and the chord is
+    // not a way into one either.
+    test.write_text("sum_to");
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum_to");
+    settle(&mut test);
+    assert!(labels(&test).iter().any(|label| label == &other));
+
+    // A press on a row puts the keyboard on the rows, and from there the chord lands.
+    // Settled between: a focus request is applied at the top of the pass after the one
+    // that made it, and a key event is sent to whatever is focused when it is sent.
+    let row = centre_of(&test, &other);
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert!(states.open.active().is_some(), "the press opened the row");
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum_to");
+    settle(&mut test);
+    let shown = labels(&test);
+    assert!(shown.iter().any(|label| label == "sum_to"));
+    assert!(!shown.iter().any(|label| label == &other));
+}
+
+/// The chord in the box it reaches is not typed into it: an `Input` inserts a character
+/// it has no chord of its own for, so the pattern would grow an `f` without the bar's
+/// pre-key hook declining it.
+#[test]
+fn the_chord_is_not_typed_into_the_box_it_reaches() {
+    let symbols = fixture_symbols();
+    let (mut test, states) =
+        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let mut objects = states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    settle(&mut test);
+
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum");
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    settle(&mut test);
+    assert!(labels(&test).iter().any(|label| label == "sum_to"));
+}

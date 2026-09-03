@@ -98,16 +98,28 @@ impl Component for FilterToggle {
     }
 }
 
+/// The one chord that reaches a filter box: Ctrl+F -- Ctrl or Meta, and neither Shift
+/// nor Alt, so Ctrl+Shift+F stays free for the source search. `F` as well as `f`, which
+/// is what Caps Lock makes of it.
+pub(crate) fn is_find_chord(key: &Key, modifiers: Modifiers) -> bool {
+    modifiers.contains(Modifiers::ctrl_or_meta())
+        && !modifiers.intersects(Modifiers::SHIFT | Modifiers::ALT)
+        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case("f"))
+}
+
 /// The filter over one of the sidebar lists: a text box, and the three toggles that say
 /// how to read what is in it. The state it edits arrives as a prop, never as a context.
 #[derive(Clone, PartialEq)]
 struct FilterBar {
     filter: State<Filter>,
+    /// The box's own id, minted by the pane so the rows' handler can ask for it.
+    a11y: AccessibilityId,
 }
 
 impl Component for FilterBar {
     fn render(&self) -> impl IntoElement {
         let filter = self.filter;
+        let a11y = self.a11y;
         // Reading subscribes the bar to the filter.
         let current = filter.read().clone();
         // Compiled here as well as wherever the list is filtered: a `Regex` is not
@@ -142,6 +154,27 @@ impl Component for FilterBar {
                         .placeholder("Filter")
                         .compact()
                         .width(Size::flex(1.0))
+                        .a11y_id(a11y)
+                        // An `Input` inserts a character it has no chord of its own for,
+                        // so Ctrl+F in the box would type an `f` into the pattern.
+                        // Declined here, before the edit. The rest is freya's default,
+                        // which the hook replaces wholesale (`notes/upstream/freya.md`).
+                        .on_pre_key_down(Callback::new(|e: Event<KeyboardEventData>| {
+                            if is_find_chord(&e.key, e.modifiers) {
+                                return false;
+                            }
+                            match &e.key {
+                                Key::Named(NamedKey::Enter)
+                                | Key::Named(NamedKey::Escape)
+                                | Key::Named(NamedKey::Shift) => true,
+                                Key::Named(NamedKey::Tab) => false,
+                                _ => {
+                                    e.stop_propagation();
+                                    e.prevent_default();
+                                    true
+                                }
+                            }
+                        }))
                         .maybe(error.is_some(), |input| {
                             input
                                 .color(palette().invalid_fg)
@@ -172,20 +205,49 @@ impl Component for FilterBar {
 /// A list under its own filter bar. The bar takes its height off the top of the pane
 /// rather than out of the list, so a `VirtualScrollView` inside still starts at a row
 /// boundary however tall the bar turns out to be -- it grows a line for a bad pattern.
-pub(crate) fn filter_pane(
+///
+/// **Ctrl+F puts the keyboard in the box over the list it is pressed in**, and nowhere
+/// else: the binding is on the rows and not on the root, so a code pane keeps its keys
+/// and its own Ctrl+F for the source search. A press on the rows is what focuses them,
+/// or a list could not be reached with the keyboard at all and the chord would have
+/// nothing to fire from. In the box the chord does nothing, the box being where it
+/// leads; the bar declines it there so it is not typed in as an `f`.
+///
+/// The handler goes on the rows themselves rather than over both halves of the pane
+/// because a key event is emitted only for a **focused node that listens for it** --
+/// bubbling to an ancestor's handler comes after that, and never happens when the
+/// focused node has no handler of its own (`notes/upstream/freya.md`).
+///
+/// The two ids are minted here and not in the bar, the pane being what holds them both.
+/// `use_hook`, so this is a `use_` function: it is called once and unconditionally by
+/// each of the five tabs, at the end of a render.
+pub(crate) fn use_filter_pane(
     filter: State<Filter>,
     background: Color,
     list: impl IntoElement,
 ) -> Element {
+    let rows = use_hook(AccessibilityId::new_unique);
+    let box_id = use_hook(AccessibilityId::new_unique);
     rect()
         .expanded()
         .content(Content::Flex)
         .background(background)
-        .child(FilterBar { filter })
+        .child(FilterBar {
+            filter,
+            a11y: box_id,
+        })
         .child(
             rect()
                 .width(Size::fill())
                 .height(Size::flex(1.0))
+                .a11y_id(rows)
+                .a11y_focusable(true)
+                .on_pointer_down(move |_| rows.request_focus())
+                .on_key_down(move |e: Event<KeyboardEventData>| {
+                    if is_find_chord(&e.key, e.modifiers) {
+                        box_id.request_focus();
+                    }
+                })
                 .child(list),
         )
         .into()
