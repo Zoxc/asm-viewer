@@ -31,7 +31,7 @@ pub(crate) use analysis::{
 };
 
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};
-pub(crate) use crate::chars::{Caret, CharSelection, Line};
+pub(crate) use crate::chars::{beyond, Bounds, Caret, CharSelection, Line};
 pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs};
 pub(crate) use crate::files::{shows_as_source, FileRow, FileRows, FileTree, Fold};
@@ -410,7 +410,11 @@ pub fn app() -> impl IntoElement {
         })
         // A sweep ends wherever the button comes up, very often not over the pane it
         // started in, so the end of the gesture is watched for here.
-        .on_global_pointer_press(move |_| mark_release(marked))
+        // The **capture** phase and not the plain global press: that one is cancellable,
+        // and freya's own scrollbar thumb cancels it (`prevent_default` in its press), so
+        // a sweep let go of over the thumb never ended and the run followed the bare
+        // pointer from then on (`notes/upstream/freya.md`).
+        .on_capture_global_pointer_press(move |_| mark_release(marked))
         // A freya pointer event carries no modifiers, so Shift and Ctrl have to be known
         // before the click that asks about them: `ModifierKeys`.
         .on_global_key_down(move |e: Event<KeyboardEventData>| keys.down(&e.key, e.modifiers))

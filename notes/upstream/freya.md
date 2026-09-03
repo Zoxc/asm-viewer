@@ -34,6 +34,23 @@ handler can turn the location into a column (`ui/code_row.rs`);
 `a_link_in_the_text_is_one_unit_and_still_opens_its_symbol` presses a link and would catch a
 child that started listening.
 
+**A drag goes on outside the window, and the global press that ends one is cancellable.**
+Two facts about a held button. The good one: `freya-winit` forwards every `CursorMoved`
+and ignores `CursorLeft` while a button is down (`renderer.rs:1024-1046`), winit forwards
+the platform's motion unfiltered, and both Wayland and X11 keep reporting the pointer to
+the surface a button went down on wherever it goes -- so a `on_global_pointer_move`,
+which ragnarok sends to every listener without hit-testing
+(`ragnarok-0.4.3/src/measurement.rs:35-47`), sees a sweep leave the rows, the pane and the
+window. The bad one: `on_global_pointer_press` is among the events a handler's
+`prevent_default` cancels (`name.rs:192-218`, `ragnarok-0.4.3/src/executor.rs:74-81`),
+and freya's own scrollbar thumb prevents it unconditionally in its press
+(`scrollthumb.rs:64-69`), as does `VirtualScrollView` while its scrollbar is held
+(`virtual_scrollview.rs:360-364`) -- so a sweep let go of over the thumb, which appears
+under a pointer moving toward the pane's edge, never ended and the run followed the bare
+pointer from then on. **Cost:** the sweep beyond the rows is `on_sweep_beyond`
+(`ui/code_row.rs`), and the release is the root's `on_capture_global_pointer_press`, the
+capture phase running before anything can cancel it (`ui.rs`).
+
 **`pointer_over` fires on entry only.** Its doc says it fires when the pointer is over the
 element; `nodes_state.rs:163` dedups it against the hovered set, so it is `pointer_enter`
 that also fires for the ancestors. **Cost:** the sweep that picks characters out follows the

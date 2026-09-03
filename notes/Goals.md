@@ -267,10 +267,22 @@ one item per part, so the unfinished half stays visible.
   `code_row` (`src/ui/code_row.rs`), which is where both panes got it at once. Gutter picks
   rows out alone; text picks characters out too; two presses take a word and three the row's
   text; Ctrl+C prefers the characters and Escape drops them first. `agents/Panes.md`.
-- [ ] Autoscroll while sweeping a selection past the pane's edge: a `VirtualScrollView`
-  builds only the rows on screen, so a sweep stops at the last built row, as freya's own
-  editor's does. A `on_global_pointer_move` on the list clamping to its first or last row
-  and nudging the controller would do it.
+- [ ] The unified view's source side survives an answer landing. Scrolling the view asks the
+  worker for stretches, every answer bumps the reading's generation, and `use_clear_marks`
+  drops the assembly pane's run on the generation -- a run being raw listing rows, which a
+  recount shifts -- so the companion file, derived from that run's `Picked::file`, goes with
+  it and the pane says "Click an instruction" again; with up to 64 stretches asked for and 8
+  answered per chunk, answers keep landing after the reader has clicked, which is the
+  "sometimes". The fix is the reader's place's: keep the run as addresses (`Rows::address_of`,
+  `row_for`, a `Spot` per end) and re-derive its rows in the same effect that rebuilds
+  `Built`, as `use_kept_place` does, so the run, its pair and its file all survive; the
+  characters can be re-derived with it or dropped. The question-keyed drop stays: that one is
+  another listing entirely. (A plain press on a symbol label sends the pane back too, being a
+  row of no file; by design, but it looks the same.)
+- [ ] Autoscroll while sweeping a selection past the pane's edge. A sweep already carries
+  on beyond the rows, the pane and the window, clamped to the rows on screen
+  (`on_sweep_beyond`, `agents/Panes.md`); what is left is nudging the controller while the
+  pointer stays past an edge, so the rows on screen move under it.
 - [x] A caret at the pressed column, the highlight filling the row's height so a run of rows
   reads as one block, and the pointer's icon over the code panes: an I-beam over text, the
   hand over a link, the arrow over the gutter -- set from the row's move handler alone, the

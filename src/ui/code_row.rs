@@ -7,8 +7,12 @@
 //! child: freya reserves a placeholder sized from the child and moves the child's layout
 //! node to it, so the link keeps its own hover, cursor and press, and to the text engine it
 //! is one unit of the row (`Piece::Inline`). The character selection is the app's own
-//! (`src/chars.rs`); freya supplies the two primitives a paragraph has anyway, the skia
-//! hit-test behind its [`ParagraphHolder`] and its highlight paint. No editor, no rope.
+//! (`src/chars.rs`); freya supplies one primitive a paragraph has anyway, the skia
+//! hit-test behind its [`ParagraphHolder`], which answers both where a pointer is
+//! (`caret_col`) and where a column is (`caret_x`). No editor, no rope -- and no engine
+//! paint either: the highlight and the caret are rects of the row's own, placed by the
+//! column's x and the row's height on the device pixel grid, where the engine's highlight
+//! is the glyphs' tight box and leaves a seam between one row's and the next's.
 //!
 //! The pointer's icon is the row's to set, in one place: an I-beam over the text and to
 //! the right of it, the hand over a link inside it (which says so through `over_link`),
@@ -182,18 +186,53 @@ pub(crate) fn code_row(
             .highlight
             .map(|(from, to)| (from.min(units), to.min(units)));
         let text_x = text_x.clone();
+        // Where a column is, from the row's padded edge, once the paragraph has been laid
+        // out and the holder can say.
+        let column_x = {
+            let holder = holder.clone();
+            let (row_x, text_x) = (row_x.clone(), text_x.clone());
+            move |col: usize| -> Option<f32> {
+                laid().then_some(())?;
+                let x = caret_x(&holder.read(), col.min(units))?;
+                Some(text_x.get() - row_x.get() - ROW_PAD + x)
+            }
+        };
+        // The highlight: a rect of the row's own from the first column's x to the last's,
+        // the row's whole height, on the grid -- so one row's meets the next's on a pixel
+        // edge. An empty row inside the run shows as a stub, or the run would read as
+        // broken there.
+        let selected = highlight.and_then(|(from, to)| {
+            let (left, right) = (column_x(from)?, column_x(to)?);
+            let right = if right > left {
+                right
+            } else if units == 0 {
+                left + code_row_height() / 4.0
+            } else {
+                return None;
+            };
+            let span = grid.span(left, right);
+            // Not interactive, and nor is the caret: a mark answers no press and no move.
+            Some(
+                rect()
+                    .interactive(false)
+                    .position(Position::new_absolute().left(span.near).top(0.0))
+                    .width(Size::px(span.thick))
+                    .height(Size::px(code_row_height()))
+                    .background(palette().text_select_bg),
+            )
+        });
         // The caret, where the run's lead is on this row and no sweep has picked
         // characters out: a stroke of the row's own, on the device pixel grid, where the
-        // engine's would sit on the glyph's fractional edge and two pixels wide. Drawn
-        // once the paragraph has been laid out, from where the holder says the column is.
+        // engine's would sit on the glyph's fractional edge and two pixels wide.
         let caret = text
             .chars
             .cursor
-            .filter(|_| highlight.is_none() && laid())
-            .and_then(|col| caret_x(&holder.read(), col.min(units)))
+            .filter(|_| highlight.is_none())
+            .and_then(column_x)
             .map(|x| {
-                let stroke = grid.stroke(text_x.get() - row_x.get() - ROW_PAD + x, 1.0);
+                let stroke = grid.stroke(x, 1.0);
                 rect()
+                    .interactive(false)
                     .position(Position::new_absolute().left(stroke.near).top(0.0))
                     .width(Size::px(stroke.thick))
                     .height(Size::px(code_row_height()))
@@ -224,18 +263,15 @@ pub(crate) fn code_row(
                 text_x.set(e.area.min_x());
                 laid.set_if_modified(true);
             })
-            .highlights(highlight.map(|h| vec![h]))
-            .highlight_color(palette().text_select_bg)
-            .cursor_mode(CursorMode::Expanded)
             .vertical_align(VerticalAlign::Center)
             .spans_iter(text.head.into_iter())
             .maybe_child(inline)
             .spans_iter(text.tail.into_iter());
-        (paragraph, caret)
+        (paragraph, selected, caret)
     });
-    let (paragraph, caret) = match paragraph {
-        Some((paragraph, caret)) => (Some(paragraph), caret),
-        None => (None, None),
+    let (paragraph, selected, caret) = match paragraph {
+        Some((paragraph, selected, caret)) => (Some(paragraph), selected, caret),
+        None => (None, None, None),
     };
 
     rect()
@@ -321,8 +357,25 @@ pub(crate) fn code_row(
         })
         .on_pointer_out(|_| set_icon(CursorIcon::Default))
         .children(before)
-        .maybe_child(paragraph)
-        .maybe_child(caret)
+        // Before the paragraph in the tree, so it is painted under the text -- and
+        // **always there**, as is the caret's slot: freya matches siblings by position,
+        // so a rect appearing before the paragraph on the press would move the paragraph
+        // along one and remount it, link and all, between the down and the up, and the
+        // press meant for the link would never fire.
+        .maybe(has_text, |el| {
+            el.child(selected.unwrap_or_else(nothing))
+                .maybe_child(paragraph)
+                .child(caret.unwrap_or_else(nothing))
+        })
+}
+
+/// A mark's slot with no mark in it: nothing drawn, nothing hit, no size.
+fn nothing() -> Rect {
+    rect()
+        .interactive(false)
+        .position(Position::new_absolute().left(0.0).top(0.0))
+        .width(Size::px(0.0))
+        .height(Size::px(0.0))
 }
 
 /// The padding that puts a listing's rows on the device pixel grid, from where the box
@@ -348,5 +401,50 @@ impl Nudge {
     /// The padding to put on the box's top. A read: the box re-renders as it lands.
     pub(crate) fn padding(self) -> Gaps {
         Gaps::new(*self.0.read(), 0.0, 0.0, 0.0)
+    }
+
+    /// The padding as it is, for a handler.
+    pub(crate) fn value(self) -> f32 {
+        *self.0.peek()
+    }
+}
+
+/// The handler that carries a sweep on once the pointer has left the rows: outside the
+/// listing's box, the pane, or the window. The platform keeps reporting the pointer while
+/// a button is held wherever it goes, freya forwards every move and sends its global move
+/// to every listener without hit-testing (`notes/upstream/freya.md`), so this goes on the
+/// listing's box as `on_global_pointer_move` and asks [`beyond`] where the sweep reaches:
+/// nothing while the pointer is over a row, which answers for itself. `bounds` is the
+/// box's area as its `on_sized` last reported it; `length` the listing's rows.
+pub(crate) fn on_sweep_beyond(
+    marked: State<Marks>,
+    pane: Pane,
+    bounds: Rc<Cell<Area>>,
+    nudge: Nudge,
+    controller: ScrollController,
+    length: usize,
+) -> impl FnMut(Event<PointerEventData>) + 'static {
+    move |e: Event<PointerEventData>| {
+        let at = e.global_location();
+        let area = bounds.get();
+        let (_, scrolled) = <(i32, i32)>::from(controller);
+        let rows_top = nudge.value() + scrolled as f32;
+        let bounds = Bounds {
+            left: area.min_x(),
+            top: area.min_y(),
+            right: area.max_x(),
+            bottom: area.max_y(),
+        };
+        let reached = beyond(
+            bounds,
+            rows_top,
+            code_row_height(),
+            length,
+            at.x as f32,
+            at.y as f32,
+        );
+        if let Some(caret) = reached {
+            mark_drag(marked, pane, caret.row, Some(caret.col));
+        }
     }
 }

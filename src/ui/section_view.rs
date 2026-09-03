@@ -603,6 +603,8 @@ impl Component for SectionList {
 
         let nudge = use_nudge();
         let grid = pixel_grid();
+        // Where the box is, for a sweep that has left it.
+        let bounds = use_hook(|| Rc::new(std::cell::Cell::new(Area::zero())));
 
         rect()
             .expanded()
@@ -610,10 +612,22 @@ impl Component for SectionList {
             .a11y_focusable(true)
             .on_pointer_down(move |_| a11y.request_focus())
             .on_key_down(on_key_down)
-            .on_sized(move |e: Event<SizedEventData>| {
-                viewport.set_if_modified(e.area.height());
-                nudge.measured(grid, e.area.min_y());
+            .on_sized({
+                let bounds = bounds.clone();
+                move |e: Event<SizedEventData>| {
+                    viewport.set_if_modified(e.area.height());
+                    nudge.measured(grid, e.area.min_y());
+                    bounds.set(e.area);
+                }
             })
+            .on_global_pointer_move(on_sweep_beyond(
+                marked,
+                Pane::Assembly,
+                bounds,
+                nudge,
+                controller,
+                length,
+            ))
             // On the grid: see `Nudge`.
             .padding(nudge.padding())
             .child(

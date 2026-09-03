@@ -111,6 +111,68 @@ impl CharSelection {
     }
 }
 
+/// The column standing for the end of a row's text, whatever its length: clamped to the
+/// row's units wherever a column is drawn or copied.
+pub const END: usize = usize::MAX;
+
+/// A listing's box on screen, in logical pixels.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Bounds {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+/// Where a sweep reaches once the pointer has left the rows: above the box, the first row
+/// on screen from its start; below it, the last row on screen to its end; left of it,
+/// the row level with the pointer from its start; right of it, that row to its end; and
+/// under the last row of a listing shorter than its box, that row to its end. `None`
+/// while the pointer is over a row, which answers for itself. `rows_top` is where row 0
+/// sits relative to the box's top -- at or below it before any scroll, above it after --
+/// and `length` how many rows the listing has.
+pub fn beyond(
+    bounds: Bounds,
+    rows_top: f32,
+    row_height: f32,
+    length: usize,
+    x: f32,
+    y: f32,
+) -> Option<Caret> {
+    let last = length.checked_sub(1)?;
+    if !(row_height > 0.0) {
+        return None;
+    }
+    let row_at = |y: f32| ((y - bounds.top - rows_top) / row_height).floor().max(0.0) as usize;
+    let inside_x = x >= bounds.left && x < bounds.right;
+    let inside_y = y >= bounds.top && y < bounds.bottom;
+    if inside_x && inside_y {
+        return (row_at(y) > last).then_some(Caret {
+            row: last,
+            col: END,
+        });
+    }
+    // The rows on screen, which a sweep beyond the box reaches and no further.
+    let first_seen = row_at(bounds.top).min(last);
+    let last_seen = row_at(bounds.bottom - 0.5).min(last);
+    Some(if y < bounds.top {
+        Caret {
+            row: first_seen,
+            col: 0,
+        }
+    } else if y >= bounds.bottom {
+        Caret {
+            row: last_seen,
+            col: END,
+        }
+    } else {
+        Caret {
+            row: row_at(y).clamp(first_seen, last_seen),
+            col: if x < bounds.left { 0 } else { END },
+        }
+    })
+}
+
 /// One piece of a row's text.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Piece {

@@ -306,8 +306,18 @@ every pair of selected rows. The scroll offset is whole logical pixels, so at 1Ã
 rows stay on the grid as they scroll; at 1.5Ã— they do not, and nothing here pretends otherwise.
 The caret is a stroke of the row's own on the same grid (`caret_x` off the laid-out paragraph,
 `Grid::stroke`, one device pixel wide, `caret_fg`), where the engine's own would sit on the
-glyph's fractional edge two pixels wide; it is drawn from the render after the paragraph's
-first layout, which is when the holder can say where a column is. The gutter is a child of the row, so a sideways scroll carries it with the addresses
+glyph's fractional edge two pixels wide, and **so is the highlight**: a rect from the first
+column's x to the last's, the row's whole height, `Grid::span`, painted before the paragraph
+in the tree so the text sits over it -- the engine's own highlight is the glyphs' tight box,
+which is shorter than the row by whatever the line's fonts and the link's placeholder add to
+it, and left a seam between one row's and the next's. Both are drawn from the render after the
+paragraph's first layout, which is when the holder can say where a column is; an empty row
+inside a run shows a stub a quarter of a row wide, or the run would read as broken there.
+Both marks are `interactive(false)`, and **both slots are always there**, empty rects when
+there is nothing to mark: freya matches siblings by position (`notes/upstream/freya.md`), so a
+highlight appearing before the paragraph on the press would move the paragraph along one and
+remount it, link and all, between the down and the up, and the press meant for the link would
+never fire -- which `a_link_in_the_text_is_one_unit_and_still_opens_its_symbol` caught. The gutter is a child of the row, so a sideways scroll carries it with the addresses
 -- by a whole number of pixels, the scroll offset being an `i32` -- and the strokes stay on the
 grid. `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the axis-aligned ones on a
 26-pixel row, that being the even height the old placement was worst on. The rule a separator
@@ -470,7 +480,16 @@ alone; a press on the text anchors the characters too, and the sweep moves both 
 rows' to the row under the pointer, the characters' to the column, which is 0 left of the text
 and the end right of it. The column is the pointer's row-relative x less the paragraph's x within
 the row, both taken from `on_sized` into cells (scroll-invariant, and no font's advance assumed).
-**Nothing inside a row may listen to `pointer_down`**: a bubbling event is measured against the
+**A sweep carries on beyond the rows** -- outside the listing's box, the pane, the window --
+because the platform keeps reporting a held button's pointer wherever it goes and freya sends
+its global move to every listener (`notes/upstream/freya.md`): each list's box listens with
+`on_sweep_beyond`, which asks `beyond` (`src/chars.rs`, pure, tested) where the sweep reaches
+-- nothing while the pointer is over a row, which answers for itself; else the row on screen
+nearest it, from its start to the left and above and to its end (`END`, clamped as a column)
+to the right and below, and a listing shorter than its box to its last row's end. Clamped to
+the rows on screen: autoscroll is the goal left. The release is the root's
+`on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar
+thumb cancels. **Nothing inside a row may listen to `pointer_down`**: a bubbling event is measured against the
 deepest listener and every ancestor gets the same data, so a child listening would hand the row a
 location relative to itself; the links listen to the press and to `over`/`out`. While the
 characters are non-empty their rows draw the highlight and no wash (the pair's green

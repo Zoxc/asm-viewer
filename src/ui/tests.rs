@@ -9752,11 +9752,14 @@ fn toml_and_json_files_are_highlighted() {
 }
 
 /// Every paragraph on screen, top to bottom: its box, its text -- the spans joined, an
-/// inline child counting for nothing here -- and the highlight it draws.
-fn paragraphs(test: &TestingRunner) -> Vec<(Area, String, Vec<(usize, usize)>)> {
+/// inline child counting for nothing here -- and the highlight its row drew for the
+/// character selection, which is the rect in the selection's colour level with it and
+/// starting at or after its left edge (a row selected whole starts at the row's).
+fn paragraphs(test: &TestingRunner) -> Vec<(Area, String, Option<Area>)> {
     use freya::elements::paragraph::ParagraphElement;
     use std::any::Any;
 
+    let washes = rects_with(test, palette().text_select_bg);
     let mut found = test.find_many(|node, _element| {
         let element = node.element();
         (element.as_ref() as &dyn Any)
@@ -9767,11 +9770,25 @@ fn paragraphs(test: &TestingRunner) -> Vec<(Area, String, Vec<(usize, usize)>)> 
                     .iter()
                     .map(|span| span.text.to_string())
                     .collect();
-                (node.layout().area, text, paragraph.highlights.clone())
+                let area = node.layout().area;
+                let highlight = washes
+                    .iter()
+                    .find(|wash| {
+                        (wash.origin.y - area.origin.y).abs() < 1.0
+                            && wash.min_x() >= area.min_x() - 1.0
+                    })
+                    .copied();
+                (area, text, highlight)
             })
     });
     found.sort_by(|a, b| a.0.origin.y.total_cmp(&b.0.origin.y));
     found
+}
+
+/// Whether `highlight` runs from `from` to `to`, to the pixel either way: the row puts it
+/// on the device grid, so an edge may be a pixel off the text's own.
+fn spans(highlight: Option<Area>, from: f32, to: f32) -> bool {
+    highlight.is_some_and(|h| (h.min_x() - from).abs() <= 1.0 && (h.max_x() - to).abs() <= 1.0)
 }
 
 /// Every caret drawn, top to bottom: the strokes in the caret's colour, by their box.
@@ -9815,9 +9832,8 @@ fn a_sweep_along_the_text_picks_characters_out() {
     settle(&mut test);
 
     let drawn = paragraphs(&test);
-    let (first, first_text, _) = drawn[0].clone();
-    let (second, second_text, _) = drawn[1].clone();
-    let units = |text: &str| text.encode_utf16().count();
+    let (first, _, _) = drawn[0].clone();
+    let (second, _, _) = drawn[1].clone();
 
     // The text takes the row's whole height, so one row's highlight runs into the
     // next's with no gap between them.
@@ -9854,22 +9870,35 @@ fn a_sweep_along_the_text_picks_characters_out() {
         rects_with(&test, palette().text_select_bg).is_empty(),
         "a press on the text selected a row whole"
     );
-    assert!(paragraphs(&test).iter().all(|(_, _, h)| h.is_empty()));
+    assert!(paragraphs(&test).iter().all(|(_, _, h)| h.is_none()));
 
     // The sweep, to the end of the row below.
     test.move_cursor(right_of(&second));
     settle(&mut test);
     let drawn = paragraphs(&test);
-    assert_eq!(drawn[0].2, vec![(0, units(&first_text))], "{drawn:?}");
-    assert_eq!(drawn[1].2, vec![(0, units(&second_text))], "{drawn:?}");
-    assert!(drawn[2..].iter().all(|(_, _, h)| h.is_empty()));
+    assert!(spans(drawn[0].2, first.min_x(), first.max_x()), "{drawn:?}");
+    assert!(
+        spans(drawn[1].2, second.min_x(), second.max_x()),
+        "{drawn:?}"
+    );
+    assert!(drawn[2..].iter().all(|(_, _, h)| h.is_none()));
+    // And to the pixel between the rows: each highlight is the row's whole height, so
+    // the two meet on an edge.
+    let (top, below) = (drawn[0].2.unwrap(), drawn[1].2.unwrap());
+    assert_eq!(top.max_y(), below.min_y(), "a gap between the rows");
+    assert_eq!(top.height(), code_row_height());
     // No caret while there is a highlight: the selection is what shows.
     assert!(carets(&test).is_empty());
     assert!(
         rects_with(&test, palette().cursor_row_bg).is_empty(),
         "the caret's wash stayed under the characters"
     );
-    assert!(rects_with(&test, palette().text_select_bg).is_empty());
+    assert!(
+        rects_with(&test, palette().text_select_bg)
+            .iter()
+            .all(|wash| wash.min_x() >= first.min_x() - 1.0),
+        "a row is still washed whole under the characters"
+    );
     let picked = marked.peek().assembly.clone().expect("the run stays");
     assert_eq!(
         picked.rows.rows(),
@@ -9884,8 +9913,8 @@ fn a_sweep_along_the_text_picks_characters_out() {
     test.move_cursor(left_of(&drawn[2].0));
     settle(&mut test);
     let after = paragraphs(&test);
-    assert_eq!(after[1].2, vec![(0, units(&second_text))]);
-    assert!(after[2].2.is_empty(), "the pointer alone swept on");
+    assert!(spans(after[1].2, second.min_x(), second.max_x()));
+    assert!(after[2].2.is_none(), "the pointer alone swept on");
 }
 
 /// The address column is gutter: a press on it picks the row out and no characters, and
@@ -9928,7 +9957,7 @@ fn a_press_on_the_address_picks_rows_out_alone() {
         "a press on the address picked characters out"
     );
     assert_eq!(rects_with(&test, palette().text_select_bg).len(), 2);
-    assert!(paragraphs(&test).iter().all(|(_, _, h)| h.is_empty()));
+    assert!(paragraphs(&test).iter().all(|(_, _, h)| h.is_none()));
 }
 
 /// Ctrl+C takes the characters where a sweep picked any out, and the rows otherwise; and
@@ -9992,10 +10021,7 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
     settle(&mut test);
     marked.set(marks.clone());
     settle(&mut test);
-    assert!(
-        !paragraphs(&test)[0].2.is_empty(),
-        "the characters are drawn"
-    );
+    assert!(paragraphs(&test)[0].2.is_some(), "the characters are drawn");
 
     test.press_key(Key::Named(NamedKey::Escape));
     settle(&mut test);
@@ -10006,7 +10032,7 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
         .expect("the rows survive the first Escape");
     assert_eq!(picked.chars, None);
     assert_eq!(picked.rows.rows(), 0..=1);
-    assert!(paragraphs(&test)[0].2.is_empty());
+    assert!(paragraphs(&test)[0].2.is_none());
     assert_eq!(rects_with(&test, palette().text_select_bg).len(), 2);
 
     test.press_key(Key::Named(NamedKey::Escape));
@@ -10085,7 +10111,7 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
     assert!(
         paragraphs(&test)
             .iter()
-            .any(|(_, _, h)| h == &[(before, before + 1)]),
+            .any(|(_, _, h)| spans(*h, link.min_x(), link.max_x())),
         "the link's unit is not highlighted"
     );
 
@@ -10240,4 +10266,80 @@ fn a_listings_rows_sit_on_whole_device_pixels_wherever_it_is_laid_out() {
     assert_eq!(carets[0].width(), 1.0);
     assert_eq!(carets[0].origin.y, first.origin.y);
     assert_eq!(carets[0].height(), first.height());
+}
+
+/// A sweep carries on once the pointer has left the rows -- the pane, or the window: the
+/// platform keeps reporting the pointer while the button is held and freya forwards every
+/// move to the listing's global handler, which reaches the row on screen nearest the
+/// pointer, from its start on the left and above and to its end on the right and below.
+#[test]
+fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+        listing_harness,
+        (600., 300.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let drawn = paragraphs(&test);
+    let (first, third) = (drawn[0].0, drawn[2].0);
+    let middle = |area: Area| (area.origin.y + area.height() / 2.0) as f64;
+
+    test.move_cursor(left_of(&first));
+    test.press_cursor(left_of(&first));
+    // Left of the window, level with the third row: that row, from its start.
+    test.move_cursor((-20.0, middle(third)));
+    settle(&mut test);
+    let chars = marked
+        .peek()
+        .assembly
+        .clone()
+        .and_then(|picked| picked.chars)
+        .expect("the sweep is under way");
+    assert_eq!(chars.lead(), Caret { row: 2, col: 0 });
+    let drawn = paragraphs(&test);
+    assert!(spans(drawn[1].2, drawn[1].0.min_x(), drawn[1].0.max_x()));
+    assert!(
+        drawn[2].2.is_none(),
+        "row 2 from its start is nothing of it"
+    );
+
+    // Right of the window: that row, to its end.
+    test.move_cursor((700.0, middle(third)));
+    settle(&mut test);
+    let chars = marked
+        .peek()
+        .assembly
+        .clone()
+        .and_then(|p| p.chars)
+        .unwrap();
+    assert_eq!(chars.lead().row, 2);
+    let drawn = paragraphs(&test);
+    assert!(spans(drawn[2].2, third.min_x(), third.max_x()), "{drawn:?}");
+
+    // Below the window: the last row on screen, cut or whole, to its end; and the rows
+    // swept with it.
+    test.move_cursor((300.0, 900.0));
+    settle(&mut test);
+    let picked = marked.peek().assembly.clone().unwrap();
+    // The last row on screen may be one cut by the pane's edge that the virtual list
+    // has not built, so the lead is the last built row or the one under it.
+    let last_built = paragraphs(&test).len() - 1;
+    assert!(last_built > 2);
+    let lead = picked.chars.unwrap().lead();
+    assert!(
+        lead.row == last_built || lead.row == last_built + 1,
+        "{lead:?} against {last_built}"
+    );
+    assert_eq!(lead.col, crate::chars::END);
+    assert_eq!(picked.rows.rows(), 0..=lead.row);
+
+    // Above the window: the first row on screen, from its start -- which is the anchor,
+    // so nothing is selected.
+    test.move_cursor((300.0, -50.0));
+    settle(&mut test);
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.chars.unwrap().lead(), Caret { row: 0, col: 0 });
+    assert!(paragraphs(&test).iter().all(|(_, _, h)| h.is_none()));
 }
