@@ -197,7 +197,7 @@ pub struct Section {
     pub symbols: Vec<u64>,
 
     /// The address ranges the file's own unwind table states for the functions in this
-    /// section — an x86-64 PE's `.pdata`, out of [`unwind_ranges`] — sorted by start, each
+    /// section — an x86-64 PE's `.pdata`, out of [`unwind_entries`] — sorted by start, each
     /// start once, ends clamped to the section's bytes. Empty for every other kind of file.
     /// What [`SymbolData::extent`] answers from first.
     pub unwind: Vec<Range<u64>>,
@@ -482,9 +482,9 @@ struct Pending {
 struct DeclaredCode {
     name: String,
     /// Whether `name` is the file's own and goes through the demangling batch. The two
-    /// declarations that carry no name — the entry point and an unwind entry — are named in
-    /// the `<…>` convention of [`ENTRY_POINT_NAME`], which no demangler has anything to say
-    /// about.
+    /// declarations that carry no name — the entry point and an unwind entry, function or
+    /// fragment — are named in the `<…>` convention of [`ENTRY_POINT_NAME`], which no
+    /// demangler has anything to say about.
     mangled: bool,
     address: u64,
     /// What the declaration itself said: a dynamic symbol's size, a PDB procedure's length,
@@ -503,17 +503,23 @@ struct DeclaredCode {
 /// can collide with a name that was in the file.
 const ENTRY_POINT_NAME: &str = "<entry point>";
 
-/// The name given to a function only an unwind entry declares: `<function 0x140001000>`,
-/// its address, since 20 000 of them in one Symbols list have to be told apart and found.
-fn unwind_name(address: u64) -> String {
-    format!("<function {address:#x}>")
+/// The name given to code only an unwind entry declares: `<function 0x140001000>`, or
+/// `<fragment 0x140001000>` for a chained entry — its own address either way, since 20 000
+/// of them in one Symbols list have to be told apart and found.
+fn unwind_name(entry: &UnwindEntry) -> String {
+    let address = entry.range.start;
+    if entry.chained {
+        format!("<fragment {address:#x}>")
+    } else {
+        format!("<function {address:#x}>")
+    }
 }
 
 /// The code a file declares outside its symbol table: its **entry point**, its **exports**,
 /// its ELF `.dynsym`, the **procedures** and **publics** of the `.pdb` a PE names, where
 /// that was found and matches (`procedures` and `publics`, out of [`DebugInfo::pdb`]), and
 /// the **unwind entries** of an x86-64 PE's exception directory (`unwind`, out of
-/// [`unwind_ranges`]). A stripped shared library is otherwise a file with nothing in it,
+/// [`unwind_entries`]). A stripped shared library is otherwise a file with nothing in it,
 /// and a `/DEBUG` image has no symbol table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
 /// states outright, so the "nothing is scanned for" rule still holds.
@@ -534,7 +540,9 @@ fn unwind_name(address: u64) -> String {
 /// name only what nothing else did — a function in a module that shipped without symbols, a
 /// thunk, assembler code, or every function of a stripped PDB. The unwind entries come last
 /// of all because they carry no name: one at an address anything else named adds nothing,
-/// and one nothing named is called `<function 0x…>` by its address.
+/// and one nothing named is called `<function 0x…>` by its address — or `<fragment 0x…>`
+/// where its unwind info is chained, a second range of some function's rather than a
+/// function ([`UnwindEntry`]).
 ///
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
@@ -544,7 +552,7 @@ fn declared_code(
     known: &mut HashSet<u64>,
     procedures: Vec<Procedure>,
     publics: Vec<Public>,
-    unwind: &[Range<u64>],
+    unwind: &[UnwindEntry],
 ) -> Vec<DeclaredCode> {
     let mut declared = Vec::new();
     if file.kind() == ObjectKind::Relocatable {
@@ -620,12 +628,12 @@ fn declared_code(
 
     // Last of all, the unwind entries: an address and a length for whatever is still
     // unnamed, and no name at all.
-    for range in unwind {
+    for entry in unwind {
         take(
-            unwind_name(range.start),
+            unwind_name(entry),
             false,
-            range.start,
-            range.end - range.start,
+            entry.range.start,
+            entry.range.end - entry.range.start,
         );
     }
 
@@ -651,19 +659,31 @@ fn code_sections(
         .collect()
 }
 
-/// The address ranges an x86-64 PE's exception directory states: one `RUNTIME_FUNCTION`
-/// per function with unwind info, its begin and end RVAs read and its unwind-info RVA left
-/// alone, placed on the image base. Each is a **declaration of both ends** of a function —
-/// the loader's, not a debugger's — which is what makes it worth reading past the export
-/// table: a stripped image exports a handful of its functions, and every function between
-/// two exports is otherwise nameless and of no known length. In file order, an entry whose
-/// end is not past its begin dropped, and not yet placed in any section — that is
-/// [`declared_code`]'s lookup, which is also what drops one whose begin is not in code.
+/// One `RUNTIME_FUNCTION` of an x86-64 PE's exception directory, out of
+/// [`unwind_entries`]: the range it states, and whether its `UNWIND_INFO` is **chained**
+/// (`UNW_FLAG_CHAININFO`) — a second range of a function that has a primary entry elsewhere,
+/// a cold part or the piece after a mid-body stack adjustment, which Microsoft calls a
+/// *function fragment* — rather than a function's own.
+struct UnwindEntry {
+    range: Range<u64>,
+    chained: bool,
+}
+
+/// The entries an x86-64 PE's exception directory states: one `RUNTIME_FUNCTION` per function
+/// with unwind info, its begin and end RVAs read and placed on the image base, and one byte
+/// of the `UNWIND_INFO` its third word names, for the chained flag. Each is a **declaration
+/// of both ends** of a function — the loader's, not a debugger's — which is what makes it
+/// worth reading past the export table: a stripped image exports a handful of its functions,
+/// and every function between two exports is otherwise nameless and of no known length. In
+/// file order, an entry whose end is not past its begin dropped, and not yet placed in any
+/// section — that is [`declared_code`]'s lookup, which is also what drops one whose begin is
+/// not in code. An `UNWIND_INFO` that cannot be read, or is of a version other than the one
+/// there is, makes its entry a plain function: the range is still stated.
 ///
 /// x86-64 only: ARM64's `.pdata` record is another shape, 8 bytes, and a PE32 has none. A
 /// COFF `.obj` carries a relocatable `.pdata` section and no data directory; it is not a
 /// `Pe64` and so is skipped, which is `declared_code`'s rule for a relocatable object too.
-fn unwind_ranges(file: &object::File<'_>) -> Vec<Range<u64>> {
+fn unwind_entries(file: &object::File<'_>) -> Vec<UnwindEntry> {
     let object::File::Pe64(pe) = file else {
         return Vec::new();
     };
@@ -676,7 +696,8 @@ fn unwind_ranges(file: &object::File<'_>) -> Vec<Range<u64>> {
     else {
         return Vec::new();
     };
-    let Ok(data) = directory.data(pe.data(), &pe.section_table()) else {
+    let sections = pe.section_table();
+    let Ok(data) = directory.data(pe.data(), &sections) else {
         return Vec::new();
     };
 
@@ -686,7 +707,19 @@ fn unwind_ranges(file: &object::File<'_>) -> Vec<Range<u64>> {
             let word = |at: usize| entry[at..at + 4].try_into().ok().map(u32::from_le_bytes);
             let begin = base.checked_add(u64::from(word(0)?))?;
             let end = base.checked_add(u64::from(word(4)?))?;
-            (begin < end).then_some(begin..end)
+            if begin >= end {
+                return None;
+            }
+            // `UNWIND_INFO`'s first byte: the version in its low three bits, the flags
+            // above them.
+            let chained = sections
+                .pe_data_at(pe.data(), word(8)?)
+                .and_then(|info| info.first())
+                .is_some_and(|&first| first & 7 == 1 && (first >> 3) & 4 != 0);
+            Some(UnwindEntry {
+                range: begin..end,
+                chained,
+            })
         })
         .collect()
 }
@@ -752,7 +785,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
             // Declared code goes into the same sorted lists, because that list is what
             // `estimate_size` derives an extent from and a declaration carries none.
-            let unwind = unwind_ranges(&file);
+            let unwind = unwind_entries(&file);
             let code = code_sections(&file, &sections);
             let declared = declared_code(&file, &code, &mut known, procedures, publics, &unwind);
             for code in &declared {
@@ -765,7 +798,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
             // became a symbol: an export or a procedure at that address takes its extent
             // from the end the entry states. Clamped to the section's bytes, so that end can
             // never reach past what `bytes` can read.
-            for range in &unwind {
+            for UnwindEntry { range, .. } in &unwind {
                 let Some((bounds, index)) = code
                     .iter()
                     .find(|(bounds, _)| bounds.contains(&range.start))

@@ -171,6 +171,7 @@ fn an_image_built_in_memory_can_name_a_pdb() {
             path: "C:\\build\\fixture.pdb",
         }),
         unwind: &[],
+        fragments: &[],
     });
     let file = object::File::parse(image.as_slice()).expect("a PE image");
     let codeview = file
@@ -525,6 +526,7 @@ fn an_absolute_recorded_path_is_tried_as_recorded() {
                 path: recorded,
             }),
             unwind: &[],
+            fragments: &[],
         })
     };
 
@@ -577,6 +579,7 @@ fn a_stated_end_beats_the_procedures_length() {
             path: "build.pdb",
         }),
         unwind: &[(0, 0x18)],
+        fragments: &[],
     });
 
     let object = parse_at(&image, dir.join("image.dll"));

@@ -34,6 +34,7 @@ fn the_writers_pdata_reads_back_through_object() {
         entry: None,
         codeview: None,
         unwind: &[(0, 4), (4, 6)],
+        fragments: &[],
     });
     let file = object::File::parse(image.as_slice()).expect("a PE image");
     assert!(file.section_by_name(".pdata").is_some());
@@ -73,6 +74,7 @@ fn image_with(entry: Option<u64>, unwind: &[(u64, u64)]) -> Vec<u8> {
         entry,
         codeview: None,
         unwind,
+        fragments: &[],
     })
 }
 
@@ -115,6 +117,7 @@ fn an_entry_at_a_named_address_adds_no_symbol_and_a_malformed_one_nothing() {
         codeview: None,
         // Past `.text`'s page is `.rdata`.
         unwind: &[(0, 4), (4, 6), (6, 7), (4, 4), (9, 8), (0x1000, 0x1004)],
+        fragments: &[],
     }));
     assert_eq!(names(&object), ["<entry point>", "first", "second"]);
     assert_eq!(object.symbols.len(), 3);
@@ -171,6 +174,7 @@ fn a_stated_end_beats_the_next_symbols_address() {
         entry: None,
         codeview: None,
         unwind: &[(0, 6), (10, 12)],
+        fragments: &[],
     }));
     let first = named(&object, "first");
     assert_eq!(first.estimate_size(), Some(10));
@@ -204,6 +208,7 @@ fn a_stated_end_beats_the_cap() {
         entry: None,
         codeview: None,
         unwind: &[(0, text.len() as u64)],
+        fragments: &[],
     }));
     let first = named(&object, "first");
     assert_eq!(first.estimate_size(), Some(1 << 20));
@@ -233,6 +238,7 @@ fn an_entry_covering_a_label_inside_it_is_clamped_to_the_next_symbol() {
         entry: None,
         codeview: None,
         unwind: &[(0, 4)],
+        fragments: &[],
     }));
     assert_eq!(named(&object, "first").extent(&object), Some(2));
     let label = named(&object, "label");
@@ -255,10 +261,57 @@ fn an_entry_reaching_past_the_section_is_clamped_to_its_bytes() {
         entry: None,
         codeview: None,
         unwind: &[(7, 0x800)],
+        fragments: &[],
     }));
     let last = named(&object, "last");
     let section = last.section.clone().unwrap();
     assert_eq!(section.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
     assert_eq!(last.extent(&object), Some(3));
     assert!(last.assembly(&object).is_some());
+}
+
+/// A chained entry — one whose `UNWIND_INFO` carries `UNW_FLAG_CHAININFO`: a cold part, or
+/// the piece after a mid-body stack adjustment, of a function with a primary entry
+/// elsewhere — is a **fragment**, named `<fragment 0x…>` by its own address as a function
+/// is, with its stated length and extent; and the function it continues stops where it
+/// begins. A plain entry's unwind info is zeroes here, version 0, which is not chained.
+#[test]
+fn a_chained_entry_is_a_fragment() {
+    let object = parse(&pe_image(PeDll {
+        text: TEXT,
+        symbols: &[FIRST],
+        entry: None,
+        codeview: None,
+        unwind: &[(0, 4), (7, 10)],
+        fragments: &[(4, 6)],
+    }));
+    assert_eq!(
+        names(&object),
+        [
+            format!("<fragment {:#x}>", TEXT_ADDRESS + 4),
+            format!("<function {:#x}>", TEXT_ADDRESS + 7),
+            "first".to_owned(),
+        ]
+    );
+    let fragment = named(&object, &format!("<fragment {:#x}>", TEXT_ADDRESS + 4));
+    assert_eq!(fragment.size, 2);
+    assert_eq!(fragment.extent(&object), Some(2));
+    assert_eq!(fragment.demangled, None);
+    assert_eq!(named(&object, "first").extent(&object), Some(4));
+}
+
+/// A chained entry at an address something names adds nothing, as any entry: the name is
+/// the image's, and the range still states the extent.
+#[test]
+fn a_chained_entry_at_a_named_address_keeps_the_name() {
+    let object = parse(&pe_image(PeDll {
+        text: TEXT,
+        symbols: &[FIRST, SECOND],
+        entry: None,
+        codeview: None,
+        unwind: &[],
+        fragments: &[(4, 6)],
+    }));
+    assert_eq!(names(&object), ["first", "second"]);
+    assert_eq!(named(&object, "second").extent(&object), Some(2));
 }

@@ -1073,13 +1073,16 @@ pub struct CodeViewRecord<'a> {
 /// resource-only DLL; `codeview` is the debug directory's one record, or [`None`] for an
 /// image built without `/DEBUG`; `unwind` is the exception directory's `RUNTIME_FUNCTION`s,
 /// each a `(begin, end)` pair of offsets into `.text` — allowed past its end, so a test can
-/// state a function where there is no code — and empty for an image without one.
+/// state a function where there is no code — and empty for an image without one; and
+/// `fragments` are more of them whose `UNWIND_INFO` is **chained** (`UNW_FLAG_CHAININFO`),
+/// the shape a cold part or a second prologue's range has, written after `unwind`'s.
 pub struct PeDll<'a> {
     pub text: &'a [u8],
     pub symbols: &'a [ExportedSymbol<'a>],
     pub entry: Option<u64>,
     pub codeview: Option<CodeViewRecord<'a>>,
     pub unwind: &'a [(u64, u64)],
+    pub fragments: &'a [(u64, u64)],
 }
 
 /// [`pe_image`] without a debug directory or unwind info, which is what every test before
@@ -1091,6 +1094,7 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
         entry,
         codeview: None,
         unwind: &[],
+        fragments: &[],
     })
 }
 
@@ -1101,7 +1105,8 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
 /// `pdb_info` reads — so a test can name any `.pdb` on disk from an image built in memory.
 /// With `unwind` entries, a third section `.pdata` holds one 12-byte `RUNTIME_FUNCTION`
 /// each and the exception data directory points at it, as `link.exe` lays an x86-64 image
-/// out; without, the image is the two-section one byte for byte.
+/// out — a plain entry's unwind info pointing at zeroes, a fragment's at a chained
+/// `UNWIND_INFO` in `.rdata`; without, the image is the two-section one byte for byte.
 pub fn pe_image(dll: PeDll) -> Vec<u8> {
     let PeDll {
         text,
@@ -1109,6 +1114,7 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
         entry,
         codeview,
         unwind,
+        fragments,
     } = dll;
     const FILE_ALIGNMENT: usize = 0x200;
     const SECTION_ALIGNMENT: u64 = 0x1000;
@@ -1174,8 +1180,21 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
         rdata.extend_from_slice(&index.to_le_bytes());
     }
     rdata.extend_from_slice(&strings);
-    // Room for the data export to point at.
+    // Room for the data export to point at. A plain entry's unwind-info RVA points here
+    // too: zeroes, which is an `UNWIND_INFO` of version 0 with no flags.
     rdata.resize(rdata.len() + 0x20, 0);
+
+    // The `UNWIND_INFO` every fragment points at: version 1, `UNW_FLAG_CHAININFO`, no
+    // codes, and the primary `RUNTIME_FUNCTION` a chained one ends with — the first plain
+    // entry's, which nothing reads.
+    let chained_rva = rdata_rva + rdata.len() as u64;
+    if !fragments.is_empty() {
+        rdata.extend_from_slice(&[0x21, 0, 0, 0]);
+        let (begin, end) = unwind.first().copied().unwrap_or((0, 0));
+        put32(&mut rdata, (TEXT_RVA + begin) as u32);
+        put32(&mut rdata, (TEXT_RVA + end) as u32);
+        put32(&mut rdata, data_rva as u32);
+    }
 
     // The debug directory — one 28-byte `IMAGE_DEBUG_DIRECTORY` — and the CodeView record it
     // points at, after everything the export table occupies. `object` reads the record by
@@ -1210,10 +1229,12 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
     // places it.
     let pdata_rva = rdata_rva + (rdata_size as u64).next_multiple_of(SECTION_ALIGNMENT);
     let mut pdata = Vec::new();
-    for &(begin, end) in unwind {
-        put32(&mut pdata, (TEXT_RVA + begin) as u32);
-        put32(&mut pdata, (TEXT_RVA + end) as u32);
-        put32(&mut pdata, data_rva as u32);
+    for (entries, info_rva) in [(unwind, data_rva), (fragments, chained_rva)] {
+        for &(begin, end) in entries {
+            put32(&mut pdata, (TEXT_RVA + begin) as u32);
+            put32(&mut pdata, (TEXT_RVA + end) as u32);
+            put32(&mut pdata, info_rva as u32);
+        }
     }
     let pdata_size = pdata.len();
     let pdata_raw = pdata_size.next_multiple_of(FILE_ALIGNMENT);
@@ -1363,6 +1384,7 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
                 entry: Some(4),
                 codeview: None,
                 unwind: UNWIND,
+                fragments: &[],
             }),
             3,
         ),
@@ -1380,6 +1402,7 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
                     path: "C:\\build\\fixture.pdb",
                 }),
                 unwind: UNWIND,
+                fragments: &[],
             }),
             3,
         ),

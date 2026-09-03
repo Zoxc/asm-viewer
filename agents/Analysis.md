@@ -34,7 +34,7 @@ matches, the **procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a non
 `Pdb::procedures`, below) and then its **publics** (`S_PUB32` flagged as code or a function;
 `Pdb::publics`), and, for an x86-64 PE, the **unwind entries** its exception directory states
 (`.pdata`: one `RUNTIME_FUNCTION` per function with unwind info, a begin and an end and no
-name; `unwind_ranges`). All of them are *declared* — the PDB's by a file matched to the image by
+name, plus one byte of the `UNWIND_INFO` it names for the chained flag; `unwind_entries`). All of them are *declared* — the PDB's by a file matched to the image by
 GUID and age, the unwind table's by the image to its own loader — so this keeps the "nothing is
 scanned for" rule; a prebuilt LLVM DLL with no COFF
 symbol table at all goes from zero functions to 22 918 on the strength of the exports, and
@@ -55,7 +55,14 @@ the `code` flag alone), and 45 133 of those are addresses nothing else named. Th
 come last of all because they carry no name: one at an address anything else named adds nothing
 — in the three committed DLLs every entry's begin is an export's or a procedure's — and one
 nothing named is called `<function 0x140001000>` by its address, so that 20 000 of them in one
-list are told apart, with the entry's stated length as its declared size; parsed with no `.pdb`
+list are told apart, with the entry's stated length as its declared size — or `<fragment
+0x140001000>` where the entry's unwind info is **chained** (`UNW_FLAG_CHAININFO`): a cold part,
+or the piece after a mid-body stack adjustment, of a function with a primary entry elsewhere,
+which Microsoft calls a *function fragment* (195 of the LLVM DLL's 68 507 entries, 481 of
+`rustc_driver`'s 218 434); an unwind info that cannot be read, or is of another version, leaves
+the entry a function, its range being stated either way. Not to be confused with a *funclet*,
+an outlined `catch` or cleanup body, which has a primary entry of its own and is told from a
+function only by the handler's private data (Goals); parsed with no `.pdb`
 beside it, the no-export DLL fixture goes from no symbols to its three. Measured, release: the
 LLVM DLL goes from its 22 918 exports to 73 793 symbols on its 68 507 entries (50 875 of them
 functions nothing named; every entry's begin is covered), opening in 545–595 ms from 475–490;
@@ -77,8 +84,8 @@ without DWARF was a function with no listing at all. The section comes from
 looking the address up in the kept **text** sections, which doubles as the filter keeping exported
 *data* out. A relocatable object is skipped entirely: `entry()` answers 0 for a `.o`, and 0 there
 is a real function's first byte. The two nameless declarations, the entry point and an unwind
-entry, are called `<entry point>` and `<function 0x…>` — angle brackets because no assembler,
-linker or mangling scheme emits them, so neither can collide with a real one. `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target
+entry, are called `<entry point>` and `<function 0x…>` or `<fragment 0x…>` — angle brackets
+because no assembler, linker or mangling scheme emits them, so none can collide with a real one. `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target
 lookup) and `symbols_sorted` (name-sorted, for the UI list). `Object::data` is an `ObjectData` —
 an `Arc<[u8]>` of the whole file plus a `Range` — kept for the object's lifetime, because parsing
 keeps decompressed bytes only for sections holding text symbols and the lazy line-info pass needs
