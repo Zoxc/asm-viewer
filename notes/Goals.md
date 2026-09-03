@@ -1228,6 +1228,19 @@ one item per part, so the unfinished half stays visible.
   listing. Both fixed, each with a fixture of its own, since the sweep is the searcher and the
   fixture is the regression test. Two `addr2line` arithmetic bugs found with them: one is now
   declined before the call, one stays wrapped.
+- [ ] Catch a panic in any optional pass of the parse, so the object still loads without it.
+  `parse_object` is the symbol table plus what is declared elsewhere, and each of those extras
+  is a dependency's parser over file-controlled bytes: the PDB opened at parse for its
+  procedures and publics (`pdb2`), the unwind table (`.pdata` by hand, `.eh_frame` through
+  `gimli`'s CFI reader), the demangling batch. The line-info seam already wraps every backend
+  call in `without_panicking`, and the demanglers run under `catch_unwind` on stacks of their
+  own; the unwind reader and the PDB's eager open do not, so a panic in `gimli` or `pdb2` there
+  takes the whole `Object` with it — and the answer for the reader is the file not appearing
+  at all, where it could appear as its symbol table alone. One guard per pass, each declining
+  to its "nothing declared" answer, under the rule that stands: checked arithmetic first and
+  the guard for a dependency's bug, never for ours; a stack overflow still aborts and is
+  bounded before the call, as the demanglers' is. Whether a caught panic should be *said* —
+  an object shown with a note that its PDB or unwind table was not read — is the UI's half.
 - [D] Don't run by default, make that opt-in as needed. Measured and declined, with the numbers
   in `agents/UI.md`: everything expensive is *already* deferred — line info and the DWARF context to
   the first query, subprogram extents behind the same cache, disassembly to selection. What is
