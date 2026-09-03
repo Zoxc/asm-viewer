@@ -56,7 +56,13 @@ come last of all because they carry no name: one at an address anything else nam
 — in the three committed DLLs every entry's begin is an export's or a procedure's — and one
 nothing named is called `<function 0x140001000>` by its address, so that 20 000 of them in one
 list are told apart, with the entry's stated length as its declared size; parsed with no `.pdb`
-beside it, the no-export DLL fixture goes from no symbols to its three. A procedure's name
+beside it, the no-export DLL fixture goes from no symbols to its three. Measured, release: the
+LLVM DLL goes from its 22 918 exports to 73 793 symbols on its 68 507 entries (50 875 of them
+functions nothing named; every entry's begin is covered), opening in 545–595 ms from 475–490;
+`rustc_driver.dll` from 115 861 to 234 070 on 218 434 entries (118 209 nameless — functions
+neither its exports nor its PDB's procedures and publics name), opening in 1.26–1.43 s from
+1.19–1.31; and the C-API `LLVM-C.dll` from its 1 221 exports to 59 407, in 420–450 ms from
+370–390. A procedure's name
 is the compiler's display name (`add`, `core::ptr::drop_in_place<T>`), which goes through the
 same demangling batch as an export's and comes out untouched; a public's is the decorated name
 as the linker saw it (`?add@@YAHHH@Z`, `_ZN4core3ptr…`, a plain `add` for C), and goes through
@@ -107,7 +113,10 @@ sparse, so nine of the LLVM DLL's exports derived megabytes and one derived 3.7 
 772 302 instructions decoded *per render*. The unwind table is the fix for that: on an x86-64
 PE every entry's begin is a symbol and every covered symbol's end is stated, so the cap reaches
 only a symbol no entry covers — a leaf without unwind info, hand-written assembly, a mutated
-table — and everything on an ELF or an ARM64 image, where it stays.
+table — and everything on an ELF or an ARM64 image, where it stays. Measured, release: none of
+the LLVM DLL's 73 793 extents reaches the cap now, the largest being 610 302 bytes and stated,
+21 of them over 64 KiB; the extent pass over all of them is 4.6 ms, where `rustc_driver.dll`'s
+234 070 take 756 ms because the 15 636 no entry covers each go to the PDB.
 
 **Names are demangled in one batch per object, on stacks sized for them** (`demangle.rs`). A
 mangled name is bytes out of a string table, and it is the *file* that chooses how deep the

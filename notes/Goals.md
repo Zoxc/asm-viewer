@@ -988,7 +988,11 @@ one item per part, so the unfinished half stays visible.
   symbol: the image's word to its loader over a second file's, the two agreeing in every
   real image (a test pins which is asked). The cap stays for an ELF or an ARM64 image and,
   on an x86-64 PE, for a symbol no entry covers — a leaf without unwind info, assembler
-  code. Not re-measured on the LLVM DLL, which is not to hand.
+  code. Measured, release: the LLVM DLL goes from 22 918 symbols to 73 793 (50 875 of them
+  functions only an entry declares), none of its extents reaches the cap now and the largest
+  is 610 302 bytes, stated; `rustc_driver.dll` from 115 861 symbols to 234 070; the opens
+  cost 545–595 ms from 475–490 and 1.26–1.43 s from 1.19–1.31. The numbers are in
+  `agents/Analysis.md`.
 - [ ] Fold a chained unwind entry into its parent. A cold part, or the second entry an
   over-long prologue gets, is a `RUNTIME_FUNCTION` whose `UNWIND_INFO` carries
   `UNW_FLAG_CHAININFO` and names the primary entry; today each is a `<function 0x…>` of its
