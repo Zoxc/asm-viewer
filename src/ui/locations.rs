@@ -385,6 +385,7 @@ impl Component for LocationRow {
         let ctrl = use_consume::<Ctrl>().0;
         let marked = use_consume::<Marked>().0;
         let landing = use_consume::<Land>().0;
+        let plant = use_consume::<Plant>().0;
         let driven = use_consume::<Drives>().0;
         let located = use_consume::<Locations>().0.peek().clone();
         let at = located.found.as_ref().map(|found| found.of.at.clone());
@@ -445,7 +446,21 @@ impl Component for LocationRow {
                             land_on(open, marked, landing, id, at);
                         }
                         None => {
-                            land(open, visits, marked, landing, symbol_tab, at, reach(ctrl));
+                            // A line and no instruction: the row names a place in a
+                            // file, and the assembly pane's caret is the pair's.
+                            land(
+                                open,
+                                visits,
+                                marked,
+                                landing,
+                                plant,
+                                Landing {
+                                    tab: symbol_tab,
+                                    at: Some(at),
+                                    address: None,
+                                },
+                                reach(ctrl),
+                            );
                         }
                     }
                 })

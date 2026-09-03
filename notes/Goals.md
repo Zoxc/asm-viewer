@@ -459,6 +459,21 @@ one item per part, so the unfinished half stays visible.
   press is a press on the row's text. The answer to "what a document is when there is no
   symbol to name it" was the unified view's: a place in the object's code at an address, and
   nothing new was added to `Document` for it.
+- [x] The doors that open a listing at an instruction put the caret there, and not only the
+  view. "Show in unified view", "Open as symbol" and the Ctrl door on an unnamed call's target
+  each named an instruction and scrolled to it, and the caret stayed wherever the listing had
+  left it -- nowhere, in a tab just opened -- so the keyboard had nothing to move from and the
+  pair lit nothing. A `Landing` carries an address beside its line now, and the half of it the
+  change of document cannot answer travels on as a `Planting`: the rows a caret goes on arrive
+  after the document does, a symbol's from the worker and an object's code's as the skeleton
+  comes and again as the stretch decodes, so the caret is planted by the listing that draws the
+  document -- `use_kept_place` on the row at or below the address, keeping the address itself
+  for the caret's row so the decode re-places it on the instruction holding the byte and not on
+  the row nearest the guess; `InstructionList`'s own effect on the instruction's row once the
+  worker's answer is drawn. The code pane owes the planted caret no scroll, the tab's place
+  being the same address; the symbol pane owes it the reveal, and the line's run stops owing
+  the pair's. A planting is spent by whichever document arrives, as a landing is, and one
+  whose address has no row is dropped rather than left.
 - [ ] Let a call target with no symbol be opened, where a relocation names it as a section and
   an addend. `Code::relocation` answers a `Relocated` whose `target` is `None` whenever the
   relocation points at something the object has no text symbol for — a section symbol with an

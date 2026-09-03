@@ -405,6 +405,22 @@ impl Rows {
         }
     }
 
+    /// The row **holding** the byte at `address`: [`row_for`](Self::row_for)'s answer,
+    /// except past the header and the labels where the address is a stretch's start --
+    /// the first instruction, or the first guessed row -- since what a caret is put on is
+    /// a row of code and not the name over it, which `row_for` answers for a view that
+    /// is better shown the label. [`None`] where `row_for` is, and for a stretch with no
+    /// body at all.
+    pub fn body_row_for(&self, address: u64) -> Option<usize> {
+        let row = self.row_for(address)?;
+        let flat = self.stretch_of(row)?;
+        let body = self.body_start(flat)?;
+        if row >= body {
+            return Some(row);
+        }
+        (body < self.starts[flat + 1]).then_some(body)
+    }
+
     /// The stretches whose rows intersect `rows`, as a range of flat indices.
     pub fn stretches_in(&self, rows: Range<usize>) -> Range<usize> {
         if rows.start >= rows.end || rows.start >= self.len() {

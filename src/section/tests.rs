@@ -232,6 +232,50 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
     assert_eq!(with_gap.row_for(cut_at + bias + 3), Some(body + 2));
 }
 
+/// The row a caret goes on for an address is the row **holding** the byte: `row_for`'s
+/// answer, except that a stretch's start -- the header's and the labels' address as much
+/// as the first instruction's -- answers the first row of the body, decoded or guessed,
+/// the name over it being no row of code. Everything inside the stretch is `row_for`.
+#[test]
+fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
+    let (object, code) = split();
+    let empty = nothing_decoded(code.clone());
+    let body = decode(&object, &code, &empty, 1);
+    let half = Rows::new(code.clone(), |flat| (flat == 1).then(|| body.clone()));
+
+    for (name, rows) in [("estimated", &empty), ("half decoded", &half)] {
+        for flat in 0..rows.stretches.len() {
+            let start = rows.start_of(flat).unwrap();
+            let end = start + rows.stretches[flat].bytes;
+            let body = rows.body_start(flat).unwrap();
+            assert_ne!(
+                rows.row_for(start),
+                Some(body),
+                "{name}: the view lands on the label"
+            );
+            assert_eq!(
+                rows.body_row_for(start),
+                Some(body),
+                "{name}: stretch {flat}"
+            );
+            assert!(matches!(
+                rows.row(body),
+                Some(Row::Instruction { index: 0, .. } | Row::Empty { index: 0, .. })
+            ));
+            for address in start + 1..end {
+                assert_eq!(
+                    rows.body_row_for(address),
+                    rows.row_for(address),
+                    "{name}: {address:#x}"
+                );
+            }
+        }
+    }
+
+    let air = code.sections()[0].range().end;
+    assert_eq!(empty.body_row_for(air), None);
+}
+
 /// Decoding a stretch replaces its guess with its rows; every row above it stays where it
 /// was and every row below moves by the difference, which is what an address-keyed anchor
 /// absorbs.

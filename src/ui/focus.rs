@@ -24,24 +24,55 @@ pub(crate) enum Pane {
     Source,
 }
 
-/// A line to pick out the moment `tab` becomes the active document.
+/// A place to pick out the moment `tab` becomes the active document: a line, an
+/// instruction, or both.
 ///
-/// What a click from outside the two panes -- a row in the Locations panel -- needs and
-/// a click inside them does not: opening the document is an `open_document`, and the
-/// change of document that makes is exactly what `use_land` answers by giving the
-/// arriving place its own runs, so a run picked out in the same handler would be gone a
-/// beat later. Left here instead, for that effect to turn into the source pane's run when
-/// the document it names arrives -- over whatever the place had kept.
+/// What a click from outside the two panes -- a row in the Locations panel, a door out
+/// of one listing into another -- needs and a click inside them does not: opening the
+/// document is an `open_document`, and the change of document that makes is exactly what
+/// `use_land` answers by giving the arriving place its own runs, so a run picked out in
+/// the same handler would be gone a beat later. Left here instead, for that effect to
+/// turn into the source pane's run when the document it names arrives -- over whatever
+/// the place had kept -- and to hand on as a [`Planting`] for the assembly pane, whose
+/// rows come later than the document does.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Landing {
     pub(crate) tab: Document,
-    pub(crate) at: LinePos,
+    /// The line to pick out in the source pane, where the door knew one: a Locations row
+    /// names a line, and an instruction's door the line it was compiled from where it has
+    /// one. `None` for the door an unnamed call's target opens, which knows an address
+    /// and no line.
+    pub(crate) at: Option<LinePos>,
+    /// The instruction to put the assembly pane's caret on, where the door was one, as an
+    /// address in the space the tab's listing draws: **placed** (`AsmData::placed`) for
+    /// an object's code, the symbol's own for a symbol's tab.
+    pub(crate) address: Option<u64>,
 }
 
 /// The landing asked for, shared through context. `None` almost always: it is set in the
 /// handler that opens a document and spent by the change of document that follows.
 #[derive(Clone, Copy)]
 pub(crate) struct Land(pub(crate) State<Option<Landing>>);
+
+/// An instruction the assembly pane's caret is to be put on once the listing of `tab` is
+/// drawn: the half of a [`Landing`] the change of document cannot answer, since the rows
+/// arrive after the document does -- a symbol's from the worker, an object's code's as
+/// the skeleton and then as the stretch decodes. Left by `use_land` as it plants the
+/// other half, or by `land` for a tab already on top, and spent by the listing drawing
+/// the document it names: `use_kept_place` for an object's code, which puts the caret on
+/// the row at or below the address and keeps the address with it so a decode re-places it
+/// on the instruction itself; `InstructionList`'s planting effect for a symbol's. Spent
+/// by `use_land` on every change of document besides, so one left lying -- a listing that
+/// never arrived -- plants nothing in a listing opened for some other reason later.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Planting {
+    pub(crate) tab: Document,
+    pub(crate) address: u64,
+}
+
+/// The caret still to be planted, shared through context, `None` almost always.
+#[derive(Clone, Copy)]
+pub(crate) struct Plant(pub(crate) State<Option<Planting>>);
 
 /// Bring the row at `index` into view, and leave the scroll alone when it already is.
 ///

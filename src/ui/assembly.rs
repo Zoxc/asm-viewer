@@ -363,6 +363,7 @@ impl Component for TargetLabel {
         let visits = use_consume::<Visited>().0;
         let marked = use_consume::<Marked>().0;
         let landing = use_consume::<Land>().0;
+        let plant = use_consume::<Plant>().0;
         let code_at = use_consume::<CodeAt>().0;
         let object = self.object.clone();
         let address = self.address;
@@ -402,6 +403,7 @@ impl Component for TargetLabel {
                     visits,
                     marked,
                     landing,
+                    plant,
                     code_at,
                     object.clone(),
                     address,
@@ -774,6 +776,7 @@ impl Component for InstructionRow {
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let landing = use_consume::<Land>().0;
+        let plant = use_consume::<Plant>().0;
         let code_at = use_consume::<CodeAt>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
@@ -800,9 +803,15 @@ impl Component for InstructionRow {
                 self.data.placed(instruction.address),
             )
         });
-        let alone = self.data.code_tab.then(|| Symbol {
-            object: self.data.object.clone(),
-            data: self.data.symbol.clone(),
+        // The door back takes the symbol's own address, the space its listing draws.
+        let alone = self.data.code_tab.then(|| {
+            (
+                Symbol {
+                    object: self.data.object.clone(),
+                    data: self.data.symbol.clone(),
+                },
+                instruction.address,
+            )
         });
 
         // Where this row points on the source side. Worked out once here rather than in
@@ -935,6 +944,7 @@ impl Component for InstructionRow {
                                 visits,
                                 marked,
                                 landing,
+                                plant,
                                 code_at,
                                 object.clone(),
                                 address,
@@ -943,7 +953,7 @@ impl Component for InstructionRow {
                         })
                         .child("Show in unified view")
                 }));
-                let menu = menu.maybe_child(alone.clone().map(|symbol| {
+                let menu = menu.maybe_child(alone.clone().map(|(symbol, address)| {
                     let at = at.clone();
                     MenuButton::new()
                         .on_press(move |_| {
@@ -952,7 +962,9 @@ impl Component for InstructionRow {
                                 visits,
                                 marked,
                                 landing,
+                                plant,
                                 symbol.clone(),
+                                address,
                                 at.clone(),
                             )
                         })
@@ -1125,6 +1137,41 @@ impl Component for InstructionList {
             // The top: a listing *is* the symbol, so its first row is its own first line.
             0,
         );
+        // The caret a door left to be planted on an instruction of this listing, once the
+        // listing is the document it names -- which is the drawn answer's document and
+        // not the tab's, since the pane draws the listing being left until the worker
+        // answers. On the row of the instruction at or below the address, the symbol's
+        // own; an address before the first is dropped, not left. The planting is read
+        // and not peeked, being written a beat after the pane mounts: `use_land` leaves
+        // it as the document arrives, and `land` leaves it for a tab already on top. The
+        // pane owes the caret its reveal, as it owes a click from outside, and the reveal
+        // wins over the kept row in `use_kept_position`, as a reveal does.
+        let plant = use_consume::<Plant>().0;
+        use_side_effect_with_deps(&entry, {
+            let data = data.clone();
+            let mut plant = plant;
+            move |(_, document): &Entry| {
+                let planting = plant.read().clone();
+                let Some(planting) = planting.filter(|planting| planting.tab == *document) else {
+                    return;
+                };
+                plant.set(None);
+                let after = data
+                    .assembly
+                    .instructions
+                    .partition_point(|instruction| instruction.address <= planting.address);
+                let Some(index) = after.checked_sub(1) else {
+                    return;
+                };
+                let file = data.position(index).map(|at| at.file);
+                land_row(
+                    marked,
+                    file,
+                    data.lanes.row_of(index),
+                    Owed::by(Pane::Assembly),
+                );
+            }
+        });
         // The picked-out run is listing rows, and `touching` speaks instructions: a run
         // that is one separator lights nothing.
         let touching = rows

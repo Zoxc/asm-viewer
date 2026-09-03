@@ -2680,11 +2680,14 @@ fn locations_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
     let marked = use_consume::<Marked>().0;
     let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
     let driven = use_consume::<Drives>().0;
     let docs = use_open().docs;
     let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
-    use_land(active, docs, marked, landing, driven, marks_at, code_rows);
+    use_land(
+        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+    );
 
     rect().expanded().child(LocationsTab)
 }
@@ -2695,6 +2698,7 @@ struct LocationStates {
     located: State<Located>,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
+    plant: State<Option<Planting>>,
     analysis: State<Analyzed>,
 }
 
@@ -2705,6 +2709,9 @@ macro_rules! location_states {
             .provide_root_context(|| Marked(State::create(Marks::default())))
             .0;
         let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
+        let plant = $runner
+            .provide_root_context(|| Plant(State::create(None)))
+            .0;
         let located = $runner
             .provide_root_context(|| Locations(State::create(Located::default())))
             .0;
@@ -2718,6 +2725,7 @@ macro_rules! location_states {
                 located,
                 marked,
                 landing,
+                plant,
                 analysis,
             },
         )
@@ -2950,8 +2958,12 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
         states.visits,
         location.marked,
         location.landing,
-        document.clone(),
-        at.clone(),
+        location.plant,
+        Landing {
+            tab: document.clone(),
+            at: Some(at.clone()),
+            address: None,
+        },
         Reach::NewTab,
     );
     assert!(
@@ -3203,7 +3215,8 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
     let mut landing = location.landing;
     landing.set(Some(Landing {
         tab: Document::Assembly(Selection::Symbol(symbols[0].clone())),
-        at: at.clone(),
+        at: Some(at.clone()),
+        address: None,
     }));
     open_document(
         states.open,
@@ -4003,11 +4016,12 @@ macro_rules! listing_states {
                 ..Analyzed::default()
             }))
         });
-        // The row's door into the object's code reads these three, and lands through
-        // the last.
+        // The row's door into the object's code reads these four, and lands through
+        // the last two.
         $runner.provide_root_context(|| Sections(State::create(Reading::default())));
         $runner.provide_root_context(|| Window(State::create(None)));
         let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
+        $runner.provide_root_context(|| Plant(State::create(None)));
         (states, marked, landing)
     }};
 }
@@ -8224,6 +8238,7 @@ macro_rules! code_states {
             .provide_root_context(|| Window(State::create(None)))
             .0;
         let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
+        $runner.provide_root_context(|| Plant(State::create(None)));
         let ctrl = $runner
             .provide_root_context(|| Ctrl(State::create(false)))
             .0;
@@ -8929,7 +8944,12 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
     );
     let landed = landing.peek().clone().expect("the line is left to land");
     assert!(landed.tab == code);
-    assert!(landed.at == a_line_of(&sum_to));
+    assert!(landed.at == Some(a_line_of(&sum_to)));
+    assert_eq!(
+        landed.address,
+        Some(first),
+        "the instruction is left to land"
+    );
 }
 
 /// Shown among its neighbours while the object's code is already on top, the view
@@ -8940,12 +8960,18 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, marked, _sections, _window, landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 300.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, ((states, marked, _sections, _window, landing, _ctrl), plant)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 300.).into(),
+            |runner| {
+                let states = code_states!(runner, reading);
+                // Re-provided, as `Ctrl` is, to be handed to the door.
+                let plant = runner.provide_root_context(|| Plant(State::create(None))).0;
+                (states, plant)
+            },
+            1.,
+        );
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -8957,6 +8983,7 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
         states.visits,
         marked,
         landing,
+        plant,
         states.code_at,
         object.clone(),
         0x30,
@@ -9104,7 +9131,10 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target_with_ctrl() {
             rows: 0
         })
     );
-    assert!(landing.peek().is_none(), "a line was left to land");
+    // The instruction is left to land, and no line: the target's row is not this one.
+    let landed = landing.peek().clone().expect("the target is left to land");
+    assert!(landed.at.is_none(), "a line was left to land");
+    assert_eq!(landed.address, Some(target));
 }
 
 /// The code opened at a call's target lands on the row **at or below** the address: on
@@ -9135,7 +9165,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     // `f` decoded and `g` not, so the target's row is a guess.
     let reading = reading_of(&object, &[0]);
     let guessed = rows_of(&reading);
-    let (mut test, (states, _marked, sections, _window, _landing, ctrl)) = TestingRunner::new(
+    let (mut test, (states, marked, sections, _window, _landing, ctrl)) = TestingRunner::new(
         code_harness,
         (600., 4.0 * code_row_height()).into(),
         |runner| code_states!(runner, reading),
@@ -9178,14 +9208,43 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
         "{:?}",
         address_labels(&test)
     );
+    // And the caret is on that row, the door being a caret as well as a scroll: planted
+    // by the pane, the door having been opened while the tab was on top, and owing
+    // the pane nothing beside the place it wrote.
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the caret was not planted on the target's row");
+    assert_eq!(picked.chars.lead(), Caret { row: guess, col: 0 });
+    assert_eq!(picked.rows.rows(), guess..=guess);
+    assert!(picked.owed == Owed::default());
 
-    // `g` decodes, and the view is on the instruction holding the byte.
+    // `g` decodes, and the view is on the instruction holding the byte -- the caret
+    // with it, on the row that is now the instruction's.
     let mut decoded = reading_of(&object, &[0, 1]);
     decoded.generation = sections.peek().generation + 1;
+    let exact = rows_of(&decoded)
+        .row_for(target)
+        .expect("the target has a row");
     sections.set(decoded);
     settle(&mut test);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], format!("{holding:016X} "));
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the caret went with the decode");
+    assert_eq!(picked.chars.lead(), Caret { row: exact, col: 0 });
+    let caret = carets(&test);
+    assert_eq!(caret.len(), 1, "one caret is drawn");
+    let top = paragraphs(&test)[0].0;
+    assert!(
+        caret[0].origin.y >= top.origin.y - 1.0 && caret[0].origin.y < top.max_y(),
+        "the caret is not drawn on the top row: {:?} against {top:?}",
+        caret[0]
+    );
 }
 
 /// The rows of an object's code that are bytes and not instructions read as data and not
@@ -9343,7 +9402,388 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
         .clone()
         .expect("the row's line is left to land");
     assert!(landed.tab == symbol);
-    assert!(landed.at.file == a_line_of(&twice).file);
+    assert!(landed.at.as_ref().map(|at| &at.file) == Some(&a_line_of(&twice).file));
+    // The symbol's own address: the fixture places its one `.text` at 0, so the one
+    // drawn is the one the listing alone will draw.
+    assert_eq!(landed.address, Some(twice.data.address + 1));
+}
+
+/// The Assembly pane over the active document, whichever kind it is, with what the app
+/// puts at the root for a door: `use_land`, so a landing is spent by the arrival, and
+/// `use_reading_of`, so an object's code has a reading to draw rows from. The analysis
+/// and the reading are the test's to set, standing in for the worker; the pane follows
+/// the tab through the dock, read and not peeked, as `panes_harness` does.
+fn doors_harness() -> impl IntoElement {
+    let active = use_consume::<Active>().0;
+    let open = use_open();
+    let marked = use_consume::<Marked>().0;
+    let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
+    let driven = use_consume::<Drives>().0;
+    let marks_at = use_consume::<MarksAt>().0;
+    let code_rows = use_consume::<CodeRows>().0;
+    let objects = use_consume::<Objects>().0;
+    let reading = use_consume::<Sections>().0;
+    let window = use_consume::<Window>().0;
+    use_land(
+        active, open.docs, marked, landing, plant, driven, marks_at, code_rows,
+    );
+    use_reading_of(active, objects, reading, window);
+
+    let entry = {
+        let (dock, docs) = (open.dock.read(), open.docs.read());
+        active_document(&dock, &docs)
+            .and_then(|document| Some((docs.showing(&document)?, document)))
+    };
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .maybe_child(entry.map(|(tab, document)| AssemblyPane { tab, document }.into_element()))
+}
+
+/// The contexts [`doors_harness`] reads beside the project's.
+#[derive(Clone, Copy)]
+struct DoorStates {
+    marked: State<Marks>,
+    landing: State<Option<Landing>>,
+    plant: State<Option<Planting>>,
+    analysis: State<Analyzed>,
+    sections: State<Reading>,
+}
+
+macro_rules! door_states {
+    ($runner:expr) => {{
+        let states = project_states!($runner);
+        let marked = $runner
+            .provide_root_context(|| Marked(State::create(Marks::default())))
+            .0;
+        $runner.provide_root_context(|| Shift(State::create(false)));
+        $runner.provide_root_context(|| Locations(State::create(Located::default())));
+        $runner.provide_root_context(|| CodeRows(State::create(None)));
+        let analysis = $runner
+            .provide_root_context(|| Analysis(State::create(Analyzed::default())))
+            .0;
+        let sections = $runner
+            .provide_root_context(|| Sections(State::create(Reading::default())))
+            .0;
+        $runner.provide_root_context(|| Window(State::create(None)));
+        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
+        let plant = $runner
+            .provide_root_context(|| Plant(State::create(None)))
+            .0;
+        (
+            states,
+            DoorStates {
+                marked,
+                landing,
+                plant,
+                analysis,
+                sections,
+            },
+        )
+    }};
+}
+
+/// "Show in unified view" puts the assembly pane's caret on the instruction and not
+/// only the view: the code tab arrives with no rows and the caret waits; once the
+/// skeleton has come it is on the row at or below the address, a guessed row; and once
+/// the stretch decodes it is on the instruction itself -- the address the door named
+/// being what is kept for the caret's row, and not the guessed row's own share of its
+/// stretch, which would have put it on the row nearest the guess. The pane owes it no
+/// scroll: the tab's place is the same address and is what brings the row to the top.
+/// Headless because the caret is planted by the section view's own effect a pass after
+/// `use_land` has spent the landing, and moved by the rebuild an answer wakes.
+#[test]
+fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let sum_to = Symbol {
+        object: object.clone(),
+        data: object
+            .symbols_sorted
+            .iter()
+            .find(|data| data.name == "sum_to")
+            .expect("the fixture holds sum_to")
+            .clone(),
+    };
+    let studied = Studied::new(sum_to.clone());
+    let assembly = studied.assembly.clone().expect("sum_to decodes");
+    let bias = sum_to
+        .data
+        .section
+        .as_ref()
+        .map_or(0, |section| section.bias);
+    // An instruction whose guessed row is not its row, so the move can be seen: the
+    // two stretches above decoded either way, so only `sum_to`'s own guess differs, and
+    // not its first instruction, whose address is the label's and lands the view on
+    // the label over it.
+    let before = reading_of(&object, &[0, 1]);
+    let guessed = rows_of(&before);
+    let decoded = reading_of(&object, &[0, 1, 2]);
+    let exact = rows_of(&decoded);
+    let (index, address) = (1..assembly.instructions.len())
+        .map(|index| {
+            (
+                index,
+                assembly.instructions[index].address.wrapping_add(bias),
+            )
+        })
+        .find(|&(_, address)| guessed.body_row_for(address) != exact.body_row_for(address))
+        .expect("every guess was exact, proving nothing");
+    let guess = guessed
+        .body_row_for(address)
+        .expect("the address has a row");
+    let row = exact.body_row_for(address).expect("the address has a row");
+    assert!(matches!(guessed.row(guess), Some(Row::Empty { .. })));
+    assert!(matches!(exact.row(row), Some(Row::Instruction { index: at, .. }) if at == index));
+
+    let (mut test, (states, doors)) = TestingRunner::new(
+        doors_harness,
+        (600., 5.0 * code_row_height()).into(),
+        |runner| door_states!(runner),
+        1.,
+    );
+    let mut open = states.objects;
+    open.write().push(object.clone());
+    settle(&mut test);
+
+    show_in_code(
+        states.open,
+        states.visits,
+        doors.marked,
+        doors.landing,
+        doors.plant,
+        states.code_at,
+        object.clone(),
+        address,
+        studied.position(index),
+    );
+    settle(&mut test);
+    settle(&mut test);
+    let code = Document::Code(object.clone());
+    assert!(states.open.active() == Some(code.clone()));
+    assert!(
+        doors.sections.peek().is_about(&object),
+        "the reading did not follow the tab"
+    );
+    // No rows yet: the instruction waits for them, and no caret is planted in nothing.
+    assert!(doors.marked.peek().assembly.is_none());
+    let planting = doors
+        .plant
+        .peek()
+        .clone()
+        .expect("the instruction was not left for the rows");
+    assert!(planting.tab == code && planting.address == address);
+
+    // The worker's first answer, `sum_to` still a guess: the caret on the guessed row,
+    // the planting spent.
+    let mut sections = doors.sections;
+    sections.set(before);
+    settle(&mut test);
+    settle(&mut test);
+    let picked = doors
+        .marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the caret was not planted once there were rows");
+    assert_eq!(picked.chars.lead(), Caret { row: guess, col: 0 });
+    assert_eq!(picked.rows.rows(), guess..=guess);
+    assert!(
+        picked.owed == Owed::default(),
+        "a scroll is owed beside the place"
+    );
+    assert!(doors.plant.peek().is_none(), "the planting was left lying");
+
+    // The stretch decodes: the caret on the instruction itself, and the view there.
+    let mut decoded = decoded;
+    decoded.generation = sections.peek().generation + 1;
+    sections.set(decoded);
+    settle(&mut test);
+    settle(&mut test);
+    let picked = doors
+        .marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the caret went with the decode");
+    assert_eq!(picked.chars.lead(), Caret { row, col: 0 });
+    assert_eq!(picked.rows.rows(), row..=row);
+    assert_eq!(address_labels(&test)[0], format!("{address:016X} "));
+    let caret = carets(&test);
+    assert_eq!(caret.len(), 1, "one caret is drawn");
+    let top = paragraphs(&test)[0].0;
+    assert!(
+        caret[0].origin.y >= top.origin.y - 1.0 && caret[0].origin.y < top.max_y(),
+        "the caret is not drawn on the top row: {:?} against {top:?}",
+        caret[0]
+    );
+}
+
+/// "Open as symbol" puts the caret on the instruction the reader was on, in the symbol's
+/// own listing -- which comes from the worker after the tab does, so the caret is
+/// planted when that listing is drawn and not when the tab opens: nothing while the
+/// pane still says the worker has answered nothing, and the caret at the instruction's
+/// row once the answer is drawn, the pane owing it the reveal and the line's run no
+/// longer owing the pair's. Headless because the plant is the listing's own effect,
+/// woken by the answer, and only the runner can say it waited for it.
+#[test]
+fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let twice = Symbol {
+        object: object.clone(),
+        data: object
+            .symbols_sorted
+            .iter()
+            .find(|data| data.name == "twice")
+            .expect("the fixture holds twice")
+            .clone(),
+    };
+    let studied = Studied::new(twice.clone());
+    let assembly = studied.assembly.clone().expect("twice decodes");
+    let bias = twice
+        .data
+        .section
+        .as_ref()
+        .map_or(0, |section| section.bias);
+    // The third instruction: the first shares its address text with the label over it.
+    let index = 2;
+    let address = assembly.instructions[index].address;
+    let row = studied.lanes.row_of(index);
+
+    let (mut test, (states, doors)) = TestingRunner::new(
+        doors_harness,
+        (600., 900.).into(),
+        |runner| door_states!(runner),
+        1.,
+    );
+    let mut open = states.objects;
+    open.write().push(object.clone());
+    settle(&mut test);
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    settle(&mut test);
+    settle(&mut test);
+    assert!(doors.sections.peek().is_about(&object));
+    let mut sections = doors.sections;
+    sections.set(reading_of(&object, &[1]));
+    settle(&mut test);
+    settle(&mut test);
+
+    let drawn = format!("{:016X} ", address.wrapping_add(bias));
+    let at = centre_of(&test, &drawn);
+    right_click(&mut test, at);
+    let item = centre_of(&test, "Open as symbol");
+    press_at(&mut test, item);
+    settle(&mut test);
+    settle(&mut test);
+    let symbol = Document::Assembly(Selection::Symbol(twice.clone()));
+    assert!(states.open.active() == Some(symbol.clone()));
+    // The tab is up and its listing is not: the caret waits for the listing.
+    assert!(
+        doors.marked.peek().assembly.is_none(),
+        "a caret was planted in a listing that is not drawn"
+    );
+    let planting = doors
+        .plant
+        .peek()
+        .clone()
+        .expect("the instruction was not left for the listing");
+    assert!(planting.tab == symbol && planting.address == address);
+
+    // The worker's answer: the listing is drawn, and the caret is on the row.
+    let mut analysis = doors.analysis;
+    analysis.set(Analyzed {
+        shown: Some(Shown {
+            ask: Ask::Symbol(twice.clone()),
+            studied: studied.clone(),
+        }),
+        ..Analyzed::default()
+    });
+    settle(&mut test);
+    settle(&mut test);
+    let (assembly, source) = runs_of(doors.marked);
+    let picked = assembly.expect("the caret was not planted once the listing was drawn");
+    assert_eq!(picked.chars.lead(), Caret { row, col: 0 });
+    assert_eq!(picked.rows.rows(), row..=row);
+    assert!(doors.plant.peek().is_none(), "the planting was left lying");
+    let source = source.expect("the row's line was not landed");
+    assert!(
+        !source.owed.assembly,
+        "the pane still owes the line's pair beside the caret's own reveal"
+    );
+    let caret = carets(&test);
+    assert_eq!(caret.len(), 1, "one caret is drawn");
+    let rows = paragraphs(&test);
+    assert!(
+        caret[0].origin.y >= rows[row].0.origin.y - 1.0 && caret[0].origin.y < rows[row].0.max_y(),
+        "the caret is not drawn on row {row}: {:?} against {:?}",
+        caret[0],
+        rows[row].0
+    );
+}
+
+/// A landing's instruction is spent by whichever document arrives, as its line is: left
+/// for a symbol whose listing never came and spent by the next arrival, it plants nothing
+/// in that symbol's listing when the listing does come. Headless because the spending is
+/// `use_land`'s and the planting the listing's own effect, and only the runner has both.
+#[test]
+fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
+    let symbols = fixture_symbols();
+    let (first, second) = (symbols[0].clone(), symbols[1].clone());
+    let studied = Studied::new(first.clone());
+    let (mut test, (states, doors)) = TestingRunner::new(
+        doors_harness,
+        (600., 400.).into(),
+        |runner| door_states!(runner),
+        1.,
+    );
+    settle(&mut test);
+
+    let first_tab = Document::Assembly(Selection::Symbol(first.clone()));
+    let mut landing = doors.landing;
+    landing.set(Some(Landing {
+        tab: first_tab.clone(),
+        at: None,
+        address: Some(first.data.address),
+    }));
+    open_document(states.open, states.visits, first_tab.clone(), Reach::NewTab);
+    settle(&mut test);
+    settle(&mut test);
+    // Arrived, with no listing to plant it in: left for the listing.
+    assert!(doors.landing.peek().is_none(), "the landing was not spent");
+    let planting = doors
+        .plant
+        .peek()
+        .clone()
+        .expect("the instruction was not left for the listing");
+    assert!(planting.tab == first_tab);
+
+    // Another document arrives: spent.
+    let second_tab = Document::Assembly(Selection::Symbol(second));
+    open_document(states.open, states.visits, second_tab, Reach::NewTab);
+    settle(&mut test);
+    settle(&mut test);
+    assert!(doors.plant.peek().is_none(), "a landing was left lying");
+
+    // The first symbol's listing comes, and its tab is raised: nothing is planted.
+    let mut analysis = doors.analysis;
+    analysis.set(Analyzed {
+        shown: Some(Shown {
+            ask: Ask::Symbol(first),
+            studied,
+        }),
+        ..Analyzed::default()
+    });
+    raise_document(&states, &first_tab);
+    settle(&mut test);
+    settle(&mut test);
+    assert!(states.open.active() == Some(first_tab));
+    assert!(
+        doors.marked.peek().assembly.is_none(),
+        "a spent landing planted a caret"
+    );
 }
 
 /// The Assembly pane over an object's code as `app()` mounts it: the pane first, and the
@@ -11529,11 +11969,14 @@ fn navigating_harness() -> impl IntoElement {
     let docs = use_open().docs;
     let marked = use_consume::<Marked>().0;
     let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
     let driven = use_consume::<Drives>().0;
     let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(active, docs, marked, landing, driven, marks_at, code_rows);
+    use_land(
+        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+    );
     use_clear_marks(
         active,
         super::analyzed::Asked { active, driven },
@@ -11551,6 +11994,7 @@ fn navigating_panes() -> (
     ProjectStates,
     State<Marks>,
     State<Option<Landing>>,
+    State<Option<Planting>>,
     Document,
     Arc<str>,
 ) {
@@ -11577,11 +12021,13 @@ fn navigating_panes() -> (
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (test, (states, marked, landing)) = TestingRunner::new(
+    let (test, ((states, marked, landing), plant)) = TestingRunner::new(
         navigating_harness,
         (700., 400.).into(),
         |runner| {
             let states = listing_states!(runner, shown);
+            // Re-provided, as `Ctrl` is elsewhere, to be handed to `land`.
+            let plant = runner.provide_root_context(|| Plant(State::create(None))).0;
             runner.provide_root_context(|| SplitRatio(State::create(50.0)));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
@@ -11589,12 +12035,12 @@ fn navigating_panes() -> (
                     ..Default::default()
                 }))
             });
-            states
+            (states, plant)
         },
         1.,
     );
     let document = Document::Assembly(Selection::Symbol(sum_to));
-    (test, states, marked, landing, document, file)
+    (test, states, marked, landing, plant, document, file)
 }
 
 /// The paragraphs of one pane of [`navigating_panes`]'s window, top to bottom: the
@@ -11641,7 +12087,7 @@ fn runs_of(marked: State<Marks>) -> (Option<Picked>, Option<Picked>) {
 #[test]
 fn navigating_brings_back_each_panes_caret_and_selection() {
     let symbols = fixture_symbols();
-    let (mut test, states, marked, _landing, sum_to, file) = navigating_panes();
+    let (mut test, states, marked, _landing, _plant, sum_to, file) = navigating_panes();
     let add = Document::Assembly(Selection::Symbol(symbols[0].clone()));
     let id = open_document(states.open, states.visits, sum_to.clone(), Reach::NewTab)
         .expect("a document panel");
@@ -11726,7 +12172,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
 #[test]
 fn a_landing_on_arrival_wins_over_the_kept_runs() {
     let symbols = fixture_symbols();
-    let (mut test, states, marked, landing, sum_to, file) = navigating_panes();
+    let (mut test, states, marked, landing, plant, sum_to, file) = navigating_panes();
     let add = Document::Assembly(Selection::Symbol(symbols[0].clone()));
     let id = open_document(states.open, states.visits, sum_to.clone(), Reach::NewTab)
         .expect("a document panel");
@@ -11749,8 +12195,12 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
         states.visits,
         marked,
         landing,
-        sum_to.clone(),
-        at.clone(),
+        plant,
+        Landing {
+            tab: sum_to.clone(),
+            at: Some(at.clone()),
+            address: None,
+        },
         Reach::InPlace,
     );
     settle(&mut test);
@@ -11857,11 +12307,14 @@ fn code_navigating_harness() -> impl IntoElement {
     let docs = use_open().docs;
     let marked = use_consume::<Marked>().0;
     let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
     let driven = use_consume::<Drives>().0;
     let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(active, docs, marked, landing, driven, marks_at, code_rows);
+    use_land(
+        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+    );
     use_clear_marks(
         active,
         super::analyzed::Asked { active, driven },

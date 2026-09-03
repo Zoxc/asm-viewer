@@ -321,6 +321,7 @@ pub fn app() -> impl IntoElement {
     let visits = use_provide_context(|| Visited(State::create(Visits::default()))).0;
     let bookmarks = use_provide_context(|| Bookmarked(State::create(Bookmarks::default()))).0;
     let landing = use_provide_context(|| Land(State::create(None))).0;
+    let plant = use_provide_context(|| Plant(State::create(None))).0;
     let marked = use_provide_context(|| Marked(State::create(Marks::default()))).0;
     let marks_at = use_provide_context(|| MarksAt(State::create(Positions::default()))).0;
     let code_rows = use_provide_context(|| CodeRows(State::create(None))).0;
@@ -344,7 +345,9 @@ pub fn app() -> impl IntoElement {
         bookmarks,
     };
     use_save_on_change(states);
-    use_land(active, docs, marked, landing, driven, marks_at, code_rows);
+    use_land(
+        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+    );
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.

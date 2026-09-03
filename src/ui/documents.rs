@@ -387,29 +387,38 @@ pub(crate) fn close_binary(
     loading.write().cancel(path);
 }
 
-/// Open `target` on `at`: open it the way `reach` says, and pick the line out in the
-/// source pane with both panes owed the scroll -- at once when the document is already
-/// on top, since opening then changes nothing and no effect would run, and otherwise as
-/// a [`Landing`] for the change of document to turn into the run.
+/// Open `landing`'s tab on its line and its instruction: open it the way `reach` says,
+/// pick the line out in the source pane with both panes owed the scroll, and put the
+/// assembly pane's caret on the instruction. The line is picked out at once when the
+/// document is already on top, since opening then changes nothing and no effect would
+/// run, and otherwise left as the [`Landing`] for the change of document to turn into
+/// the run; the instruction is always a [`Planting`], the listing it is a row of coming
+/// after the document -- left here for a tab on top, and by `use_land` otherwise.
 pub(crate) fn land(
     open: Open,
     visits: State<Visits>,
     marked: State<Marks>,
-    mut landing: State<Option<Landing>>,
-    target: Document,
-    at: LinePos,
+    mut land: State<Option<Landing>>,
+    mut plant: State<Option<Planting>>,
+    landing: Landing,
     reach: Reach,
 ) -> Option<DocId> {
-    if open.active().as_ref() == Some(&target) {
-        mark_line(marked, at.file, at.line, Owed::BOTH);
+    if open.active().as_ref() == Some(&landing.tab) {
+        if let Some(at) = landing.at {
+            mark_line(marked, at.file, at.line, Owed::BOTH);
+        }
+        if let Some(address) = landing.address {
+            plant.set(Some(Planting {
+                tab: landing.tab,
+                address,
+            }));
+        }
         return open.active_id();
     }
 
-    landing.set(Some(Landing {
-        tab: target.clone(),
-        at,
-    }));
-    open_document(open, visits, target, reach)
+    let tab = landing.tab.clone();
+    land.set(Some(landing));
+    open_document(open, visits, tab, reach)
 }
 
 /// Raise the open tab `id` on `at`: what a Locations row does for the source-driven tab
@@ -432,7 +441,11 @@ pub(crate) fn land_on(
     let Some(tab) = showing else {
         return;
     };
-    landing.set(Some(Landing { tab, at }));
+    landing.set(Some(Landing {
+        tab,
+        at: Some(at),
+        address: None,
+    }));
     raise(open, id);
 }
 

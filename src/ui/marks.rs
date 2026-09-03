@@ -162,15 +162,20 @@ impl Kept {
             .collect()
     }
 
+    /// The place kept for `row`, if one was.
+    pub(crate) fn spot_of(&self, row: usize) -> Option<Spot> {
+        self.spots
+            .iter()
+            .find(|(kept, _)| *kept == row)
+            .map(|(_, spot)| *spot)
+    }
+
     /// The assembly run carried to rows counted afresh: every row of it put through the
     /// place kept for it and `row_of`, which answers the row that place has now. `None`
     /// for no run, and for a run any row of which has no place or no row any more.
     pub(crate) fn carry(&self, row_of: impl Fn(Spot) -> Option<usize>) -> Option<Picked> {
         let picked = self.marks.assembly.as_ref()?;
-        carried(picked, |row| {
-            let (_, spot) = self.spots.iter().find(|(kept, _)| *kept == row)?;
-            row_of(*spot)
-        })
+        carried(picked, |row| row_of(self.spot_of(row)?))
     }
 }
 
@@ -457,7 +462,32 @@ pub(crate) fn mark_press(
 /// The source pane owes the scroll; the assembly pane has just been given one.
 pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: usize) {
     let mut marks = marked.peek().clone();
-    marks.assembly = Some(Picked {
+    marks.assembly = Some(row_pick(file, row, Owed::by(Pane::Source)));
+    marked.set_if_modified(marks);
+}
+
+/// Put the assembly pane's caret on `row`, at its start, as a [`Planting`] lands: the
+/// door that opened the listing named an instruction, and this is the one run in the
+/// pane, over whatever was there. `owed` is what the pane still owes it -- its own
+/// reveal in a symbol's listing, nothing in an object's code, where the tab's place
+/// (`CodeAt`) is what scrolls to the instruction and a reveal beside it would fight it.
+///
+/// The source pane's run, where the same door left one, stops owing this pane a scroll
+/// to its pair: the caret **is** that pair, and one scroll to it is this pane's own or
+/// its place's.
+pub(crate) fn land_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: usize, owed: Owed) {
+    let mut marks = marked.peek().clone();
+    marks.assembly = Some(row_pick(file, row, owed));
+    if let Some(source) = marks.source.as_mut() {
+        source.owed.paid(Pane::Assembly);
+    }
+    marked.set_if_modified(marks);
+}
+
+/// The one-row run [`mark_row`] and [`land_row`] make of `row`: the row, and a caret at
+/// its start.
+fn row_pick(file: Option<Arc<str>>, row: usize, owed: Owed) -> Picked {
+    Picked {
         rows: RowSelection {
             anchor: row,
             lead: row,
@@ -466,9 +496,8 @@ pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: us
         chars: CharSelection::at(Caret { row, col: 0 }),
         by_rows: false,
         file,
-        owed: Owed::by(Pane::Source),
-    });
-    marked.set_if_modified(marks);
+        owed,
+    }
 }
 
 /// Pick out the one row `line` of `file` in the source pane, as a click from outside the
@@ -951,6 +980,16 @@ pub(crate) fn use_clear_marks(
 /// one left lying would pick a line out in a document opened for some other reason
 /// later.
 ///
+/// **A landing's instruction is planted later than its line.** The line is a row of a
+/// file, which has the same rows every time; the instruction is a row of a listing that
+/// arrives after the document -- a symbol's from the worker, an object's code's as the
+/// skeleton comes and again as the stretch decodes. So the address is handed on as a
+/// [`Planting`] naming the document, for the listing that draws it to spend
+/// (`use_kept_place`, `InstructionList`), and the kept assembly run is left out as the
+/// kept source run is: the landing is the only run in either pane. The planting is
+/// dropped here on every arrival before any is left, the rule above in the same place:
+/// a listing that never came must not leave a caret for the next one that does.
+///
 /// **An object's code is the one listing whose rows are not its rows next time**: the
 /// reading is reset when the tab is left, and comes back as guesses. Its assembly run
 /// is carried through the places the section view kept for it ([`Kept::carry`]) --
@@ -963,6 +1002,7 @@ pub(crate) fn use_land(
     docs: State<Docs>,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
+    plant: State<Option<Planting>>,
     driven: State<Driven>,
     marks_at: State<Positions<Entry, Kept>>,
     code_rows: State<Option<Arc<Built>>>,
@@ -975,7 +1015,7 @@ pub(crate) fn use_land(
         // Subscribes the effect to the active document, which is all it wants from it;
         // the landing is peeked, so setting one wakes nothing until the document does.
         let active = active.read().clone();
-        let (mut marked, mut landing, mut marks_at) = (marked, landing, marks_at);
+        let (mut marked, mut landing, mut plant, mut marks_at) = (marked, landing, plant, marks_at);
 
         // Cloned out of the borrow before the `borrow_mut`.
         let leaving = showing.borrow().clone();
@@ -1007,8 +1047,16 @@ pub(crate) fn use_land(
             landing.set(None);
         }
         let landed = asked
-            .filter(|landing| Some(&landing.tab) == active.as_ref().map(|(_, document)| document))
-            .map(|landing| line_pick(landing.at.file, landing.at.line, Owed::BOTH));
+            .filter(|landing| Some(&landing.tab) == active.as_ref().map(|(_, document)| document));
+        // The caret the arriving listing is to plant, or none: a planting left by the
+        // last arrival is spent by this one whether or not it named it.
+        let planting = landed.as_ref().and_then(|landing| {
+            Some(Planting {
+                tab: landing.tab.clone(),
+                address: landing.address?,
+            })
+        });
+        plant.set_if_modified(planting);
         let kept = match (&landed, &active) {
             (None, Some(entry)) => marks_at.peek().at(entry),
             _ => None,
@@ -1016,7 +1064,9 @@ pub(crate) fn use_land(
 
         let mut marks = Marks::default();
         match (landed, kept) {
-            (Some(planted), _) => marks.source = Some(planted),
+            (Some(landing), _) => {
+                marks.source = landing.at.map(|at| line_pick(at.file, at.line, Owed::BOTH));
+            }
             (None, Some(kept)) => {
                 marks.source = kept.marks.source.clone();
                 marks.assembly = match &active {

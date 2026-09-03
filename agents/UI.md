@@ -73,8 +73,9 @@ those trails was left), `CodeAt` (where each code tab's places were left, as add
 shape), `Proj` (which project all of that belongs to), `Loading` (the files on their way into
 `Objects`), `Marked` (each pane's picked-out run, and what it owes the other) with `Shift`
 and `Ctrl`, `MarksAt` (what each place on each trail had picked out in each pane when it was
-last shown, put back with the place and never saved), `Land` (a line to pick out the moment a
-document arrives), `CodeRows` (the section
+last shown, put back with the place and never saved), `Land` (a line and an instruction to pick
+out the moment a document arrives), `Plant` (the instruction half of that, left for the listing
+that draws the document, its rows coming after it), `CodeRows` (the section
 view's rows, which the Source pane beside it reads too), `Analysis` (what
 the worker has to say about the selected symbol), `Sections`/`Window` (what it has decoded of the
 object whose code is on screen, and the stretches the view wants next), `Locations` (every symbol
@@ -431,7 +432,9 @@ the place put back is the map's own where the view was at it as well as the old 
 and the derived one otherwise: a place written from outside is exact, a row's share of an
 undecoded stretch is a guess, and re-applying the guess landed a target in a stretch the worker
 had not reached on the row nearest its guess rather than on its own instruction
-(`the_code_opened_at_a_target_lands_on_the_row_at_or_below_it`). A place written from outside
+(`the_code_opened_at_a_target_lands_on_the_row_at_or_below_it`). The same hook plants the caret a
+door left for the listing (`Planting`, `agents/Panes.md`), owing it no scroll: the place is what
+moves the view there, and is authoritative in this pane. A place written from outside
 is answered **once, as a change of the map's value**, and never as "the map disagrees with the
 view": a listing of a large binary is millions of rows and tens of millions of pixels down, past
 where freya's `f32` scroll offset holds a pixel (`notes/upstream/freya.md`), so the view cannot

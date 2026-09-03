@@ -512,6 +512,7 @@ impl Component for SectionList {
         let docs = use_consume::<OpenDocs>().0;
         let code_at = use_consume::<CodeAt>().0;
         let marks_at = use_consume::<MarksAt>().0;
+        let plant = use_consume::<Plant>().0;
         let a11y = use_a11y();
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);
@@ -556,6 +557,7 @@ impl Component for SectionList {
             reading_state,
             marked,
             marks_at,
+            plant,
             rows,
             controller,
             &entry,
@@ -862,7 +864,20 @@ fn build_row(
 /// `use_land`'s: the reset is a change of the active entry, which `use_land` answers a
 /// pass after the memo, and the rows come a pass after the reading follows it. On the
 /// run that switches tab the marks on screen are still the last tab's, so nothing is
-/// written then unless this run carried a run of its own.
+/// written then unless this run carried a run of its own, or planted one.
+///
+/// **A door's instruction is planted here** ([`Planting`]), in the first run that has
+/// rows and finds a planting naming this document -- over the kept run, a landing
+/// winning -- on the row at or below its address (`Rows::body_row_for`), and the address
+/// itself is what is kept for the caret's row: a guessed row's own place is its share of
+/// an undecoded stretch, and re-placing the caret by that once the stretch decodes would
+/// land it on the row nearest the guess rather than on the instruction holding the byte.
+/// So a place kept for a row of the run **stays** for as long as it still names the row
+/// (`row_of` over the rows on screen), the exact address a planting gave and the derived
+/// one alike, and only a row with none is given its own; and the carry across a recount
+/// goes through the kept place before the derived one for the same reason. The pane owes
+/// the planted caret no scroll: the tab's place is the same address, written by the same
+/// door, and is what scrolls the view to it.
 fn use_kept_place(
     mut places: State<Positions<Entry, Spot>>,
     is_open: impl Fn(&Entry) -> bool + 'static,
@@ -870,6 +885,7 @@ fn use_kept_place(
     reading: State<Reading>,
     marked: State<Marks>,
     mut marks_at: State<Positions<Entry, Kept>>,
+    mut plant: State<Option<Planting>>,
     mut rows: State<Option<Arc<Built>>>,
     mut controller: ScrollController,
     tab: &Entry,
@@ -925,9 +941,12 @@ fn use_kept_place(
             let switching = state.tab.as_ref() != Some(tab);
             // The rows drawn until now, which are what the offset was scrolled against.
             let before = rows.peek().clone();
-            // Whether this run put the tab's own run back, which makes it this tab's
-            // run to write down whether or not the tab is being switched to.
+            // Whether this run put the tab's own run back, or planted one, which makes
+            // it this tab's run to write down whether or not the tab is being switched
+            // to.
             let mut carried = false;
+            // The places kept for the run's rows, which a carry goes through first.
+            let kept = marks_at.peek().at(tab);
             let built = if rebuilt {
                 let reading = reading.peek();
                 let Some(code) = reading.code.clone() else {
@@ -944,18 +963,24 @@ fn use_kept_place(
                 match before.as_ref() {
                     // The run picked out over the old rows, carried to the new: each of
                     // its rows through the address it stood for, the way the reader's
-                    // place is kept across the same recount.
-                    Some(before) => {
-                        carry_assembly(marked, |row| row_of(&built, spot_at(before, row)?))
-                    }
+                    // place is kept across the same recount -- the place kept for the
+                    // row where it still names it, which is exact, else the row's own.
+                    Some(before) => carry_assembly(marked, |row| {
+                        let spot = kept
+                            .as_ref()
+                            .and_then(|kept| kept.spot_of(row))
+                            .filter(|spot| row_of(before, *spot) == Some(row))
+                            .or_else(|| spot_at(before, row))?;
+                        row_of(&built, spot)
+                    }),
                     // The first rows since the reading was reset: the run kept for this
                     // place, carried through the places kept with it, and nothing where
                     // nothing was kept -- a run left over from a listing this tab is not
                     // showing goes.
                     None => {
-                        let kept = marks_at.peek().at(tab);
-                        let replanted =
-                            kept.and_then(|kept| kept.carry(|spot| row_of(&built, spot)));
+                        let replanted = kept
+                            .as_ref()
+                            .and_then(|kept| kept.carry(|spot| row_of(&built, spot)));
                         carried = replanted.is_some();
                         set_assembly(marked, replanted);
                     }
@@ -968,13 +993,58 @@ fn use_kept_place(
                 }
             };
 
+            // The caret a door left to be planted, if it is this document's: on the row
+            // at or below the address, and spent whether or not there is one -- an
+            // address in no stretch is dropped rather than left for ever. Read and not
+            // peeked, so a door opened while the tab is on top wakes this. The address
+            // goes with the row into the places kept below, exactly.
+            let mut planted: Option<(usize, Spot)> = None;
+            let planting = plant.read().clone();
+            if let Some(planting) = planting.filter(|planting| planting.tab == tab.1) {
+                plant.set(None);
+                if let Some(row) = built.body_row_for(planting.address) {
+                    let file = match built.row(row) {
+                        Some(Row::Instruction { stretch, index }) => built
+                            .reading
+                            .held
+                            .get(&stretch)
+                            .and_then(|stretched| stretched.code.as_ref())
+                            .and_then(|studied| studied.position(index))
+                            .map(|at| at.file),
+                        _ => None,
+                    };
+                    land_row(marked, file, row, Owed::default());
+                    let first = built.row_for(planting.address).unwrap_or(row);
+                    planted = Some((
+                        row,
+                        Spot {
+                            address: planting.address,
+                            rows: row.saturating_sub(first),
+                        },
+                    ));
+                    carried = true;
+                }
+            }
+
             // The places the run's rows stand for, written down as they change and only
             // for a run that is this tab's own -- and for a tab still open, as the place
-            // below is.
+            // below is. A place already kept that still names the row stays, the exact
+            // address a planting gave among them; a row with none gets its own.
             if (!switching || carried) && is_open(tab) {
-                let spots =
-                    Kept::spots_of(marked.peek().assembly.as_ref(), |row| spot_at(&built, row));
-                let was = marks_at.peek().at(tab);
+                let spots = Kept::spots_of(marked.peek().assembly.as_ref(), |row| {
+                    planted
+                        .filter(|(at, _)| *at == row)
+                        .map(|(_, spot)| spot)
+                        .or_else(|| {
+                            kept.as_ref()?
+                                .spots
+                                .iter()
+                                .map(|(_, spot)| *spot)
+                                .find(|spot| row_of(&built, *spot) == Some(row))
+                        })
+                        .or_else(|| spot_at(&built, row))
+                });
+                let was = kept.clone();
                 let kept = Kept {
                     spots,
                     generation: Some(generation),
@@ -1084,37 +1154,41 @@ fn use_kept_place(
 
 /// Show the instruction at `address` -- placed, in `object`'s code -- among its
 /// neighbours: the object's code tab, opened in a tab of its own on that address, with
-/// the line the instruction was compiled from picked out in the source pane where it has
-/// one.
+/// the caret on the instruction's row and the line the instruction was compiled from
+/// picked out in the source pane where it has one.
 ///
 /// The place is written in the same handler as the open and before any render, so the
 /// pane's first run finds it; it comes *after* the open only because the entry it is kept
 /// under names the tab, and a new tab has no id until it is opened. When the code tab is
 /// already on top the write is what moves the view, `use_kept_place` reading the map for
-/// exactly this. The line goes through `land`, which knows whether the tab is on top.
+/// exactly this. The line and the instruction go through `land`, which knows whether
+/// the tab is on top; the caret is planted by the pane once it has rows, on the row at
+/// or below the address, and moved onto the instruction itself once its stretch decodes.
 pub(crate) fn show_in_code(
     open: Open,
     visits: State<Visits>,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
+    plant: State<Option<Planting>>,
     mut places: State<Positions<Entry, Spot>>,
     object: Arc<Object>,
     address: u64,
     at: Option<LinePos>,
 ) {
     let code = Document::Code(object);
-    let id = match at {
-        Some(at) => land(
-            open,
-            visits,
-            marked,
-            landing,
-            code.clone(),
+    let id = land(
+        open,
+        visits,
+        marked,
+        landing,
+        plant,
+        Landing {
+            tab: code.clone(),
             at,
-            Reach::NewTab,
-        ),
-        None => open_document(open, visits, code.clone(), Reach::NewTab),
-    };
+            address: Some(address),
+        },
+        Reach::NewTab,
+    );
     if let Some(id) = id {
         places
             .write()
@@ -1122,26 +1196,34 @@ pub(crate) fn show_in_code(
     }
 }
 
-/// Open `symbol`'s own tab from a row of it read among its neighbours, landing on the
-/// line the row was compiled from where it has one: `show_in_code`'s door the other way,
-/// and a tab of its own likewise.
+/// Open `symbol`'s own tab from a row of it read among its neighbours, the caret on that
+/// row's instruction -- `address` is the symbol's own, the space its listing draws -- and
+/// landing on the line the row was compiled from where it has one: `show_in_code`'s door
+/// the other way, and a tab of its own likewise.
 pub(crate) fn open_as_symbol(
     open: Open,
     visits: State<Visits>,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
+    plant: State<Option<Planting>>,
     symbol: Symbol,
+    address: u64,
     at: Option<LinePos>,
 ) {
     let tab = Document::Assembly(Selection::Symbol(symbol));
-    match at {
-        Some(at) => {
-            land(open, visits, marked, landing, tab, at, Reach::NewTab);
-        }
-        None => {
-            open_document(open, visits, tab, Reach::NewTab);
-        }
-    }
+    land(
+        open,
+        visits,
+        marked,
+        landing,
+        plant,
+        Landing {
+            tab,
+            at,
+            address: Some(address),
+        },
+        Reach::NewTab,
+    );
 }
 
 /// The listing row of the first held instruction compiled from a line of the source
