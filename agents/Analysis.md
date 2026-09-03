@@ -34,7 +34,7 @@ matches, the **procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a non
 `Pdb::procedures`, below) and then its **publics** (`S_PUB32` flagged as code or a function;
 `Pdb::publics`), and, for an x86-64 PE, the **unwind entries** its exception directory states
 (`.pdata`: one `RUNTIME_FUNCTION` per function with unwind info, a begin and an end and no
-name, plus one byte of the `UNWIND_INFO` it names for the chained flag; `unwind_entries`). All of them are *declared* — the PDB's by a file matched to the image by
+name, plus one byte of the `UNWIND_INFO` it names for the chained flag; `unwind::entries`). All of them are *declared* — the PDB's by a file matched to the image by
 GUID and age, the unwind table's by the image to its own loader — so this keeps the "nothing is
 scanned for" rule; a prebuilt LLVM DLL with no COFF
 symbol table at all goes from zero functions to 22 918 on the strength of the exports, and

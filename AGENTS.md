@@ -81,6 +81,9 @@ command.
   which `parse_object` takes as symbols.
 - `crates/analysis/src/line/source.rs` — the same line info the other way: a file and a line,
   out to the symbols compiled from them, built on the seam and not on a backend.
+- `crates/analysis/src/unwind.rs` — the unwind tables a linked image states its functions'
+  bounds in, an x86-64 PE's `.pdata` today, read for the ranges they declare; the only part
+  that reads one.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
 - `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.

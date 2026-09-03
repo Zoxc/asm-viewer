@@ -15,9 +15,11 @@ mod demangle;
 pub mod disasm;
 mod line;
 mod listing;
+mod unwind;
 
 use disasm::Code;
 use line::{DebugInfo, Procedure, Public};
+use unwind::UnwindEntry;
 
 pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
 pub use line::{DebugInfoCache, LineInfo, LineRow, Location, SourceDigests, SourceHash};
@@ -197,7 +199,7 @@ pub struct Section {
     pub symbols: Vec<u64>,
 
     /// The address ranges the file's own unwind table states for the functions in this
-    /// section — an x86-64 PE's `.pdata`, out of [`unwind_entries`] — sorted by start, each
+    /// section — an x86-64 PE's `.pdata`, out of [`unwind::entries`] — sorted by start, each
     /// start once, ends clamped to the section's bytes. Empty for every other kind of file.
     /// What [`SymbolData::extent`] answers from first.
     pub unwind: Vec<Range<u64>>,
@@ -519,7 +521,7 @@ fn unwind_name(entry: &UnwindEntry) -> String {
 /// its ELF `.dynsym`, the **procedures** and **publics** of the `.pdb` a PE names, where
 /// that was found and matches (`procedures` and `publics`, out of [`DebugInfo::pdb`]), and
 /// the **unwind entries** of an x86-64 PE's exception directory (`unwind`, out of
-/// [`unwind_entries`]). A stripped shared library is otherwise a file with nothing in it,
+/// [`unwind::entries`]). A stripped shared library is otherwise a file with nothing in it,
 /// and a `/DEBUG` image has no symbol table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
 /// states outright, so the "nothing is scanned for" rule still holds.
@@ -659,71 +661,6 @@ fn code_sections(
         .collect()
 }
 
-/// One `RUNTIME_FUNCTION` of an x86-64 PE's exception directory, out of
-/// [`unwind_entries`]: the range it states, and whether its `UNWIND_INFO` is **chained**
-/// (`UNW_FLAG_CHAININFO`) — a second range of a function that has a primary entry elsewhere,
-/// a cold part or the piece after a mid-body stack adjustment, which Microsoft calls a
-/// *function fragment* — rather than a function's own.
-struct UnwindEntry {
-    range: Range<u64>,
-    chained: bool,
-}
-
-/// The entries an x86-64 PE's exception directory states: one `RUNTIME_FUNCTION` per function
-/// with unwind info, its begin and end RVAs read and placed on the image base, and one byte
-/// of the `UNWIND_INFO` its third word names, for the chained flag. Each is a **declaration
-/// of both ends** of a function — the loader's, not a debugger's — which is what makes it
-/// worth reading past the export table: a stripped image exports a handful of its functions,
-/// and every function between two exports is otherwise nameless and of no known length. In
-/// file order, an entry whose end is not past its begin dropped, and not yet placed in any
-/// section — that is [`declared_code`]'s lookup, which is also what drops one whose begin is
-/// not in code. An `UNWIND_INFO` that cannot be read, or is of a version other than the one
-/// there is, makes its entry a plain function: the range is still stated.
-///
-/// x86-64 only: ARM64's `.pdata` record is another shape, 8 bytes, and a PE32 has none. A
-/// COFF `.obj` carries a relocatable `.pdata` section and no data directory; it is not a
-/// `Pe64` and so is skipped, which is `declared_code`'s rule for a relocatable object too.
-fn unwind_entries(file: &object::File<'_>) -> Vec<UnwindEntry> {
-    let object::File::Pe64(pe) = file else {
-        return Vec::new();
-    };
-    if pe.architecture() != Architecture::X86_64 {
-        return Vec::new();
-    }
-    let Some(directory) = pe
-        .data_directories()
-        .get(object::pe::IMAGE_DIRECTORY_ENTRY_EXCEPTION)
-    else {
-        return Vec::new();
-    };
-    let sections = pe.section_table();
-    let Ok(data) = directory.data(pe.data(), &sections) else {
-        return Vec::new();
-    };
-
-    let base = pe.relative_address_base();
-    data.chunks_exact(12)
-        .filter_map(|entry| {
-            let word = |at: usize| entry[at..at + 4].try_into().ok().map(u32::from_le_bytes);
-            let begin = base.checked_add(u64::from(word(0)?))?;
-            let end = base.checked_add(u64::from(word(4)?))?;
-            if begin >= end {
-                return None;
-            }
-            // `UNWIND_INFO`'s first byte: the version in its low three bits, the flags
-            // above them.
-            let chained = sections
-                .pe_data_at(pe.data(), word(8)?)
-                .and_then(|info| info.first())
-                .is_some_and(|&first| first & 7 == 1 && (first >> 3) & 4 != 0);
-            Some(UnwindEntry {
-                range: begin..end,
-                chained,
-            })
-        })
-        .collect()
-}
-
 /// Parse `data` as a single object file. `name` is the display name (an archive member name
 /// or the file name) and `path` the file it came from. Anything that fails to parse yields
 /// [`None`]. `data` is kept in the returned [`Object`]; see [`ObjectData`].
@@ -785,7 +722,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
             // Declared code goes into the same sorted lists, because that list is what
             // `estimate_size` derives an extent from and a declaration carries none.
-            let unwind = unwind_entries(&file);
+            let unwind = unwind::entries(&file);
             let code = code_sections(&file, &sections);
             let declared = declared_code(&file, &code, &mut known, procedures, publics, &unwind);
             for code in &declared {
