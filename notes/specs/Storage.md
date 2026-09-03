@@ -1,6 +1,6 @@
 # Storage
 
-**A missing or unreadable file counts as empty.**
+A missing or unreadable file counts as empty.
 
 ## Settings
 
@@ -8,12 +8,28 @@ The user's fonts and theme, saved apart from any project.
 
 ## Projects
 
-**Project data and session data are saved in separate files.**
+A project is identified by the directory it is stored in. Renaming it or changing its
+directory does not move it. A project without a name is an anonymous project: opening files
+with no project open makes one, and there can be many. A project in which nothing was opened
+is not written.
 
-- **Project data**, what the user set: name, directory, binaries.
+Project data and session data are saved in separate files.
+
+- **Project data**, what the user set: name, directory, binaries, bookmarks.
 - **Session data**, what the app recorded: tabs and their history, source files, the shown file,
   the selection, the visit history, scroll positions, a hash of each binary.
 
-**Project data is saved as soon as it changes**; session data every thirty seconds and on close.
+Project data is saved as soon as it changes; session data every thirty seconds and on close.
 A change to the binaries saves both, so a session never refers to a binary the project no
 longer has. A broken session loses scroll positions, never the binaries.
+
+The session is restored when the project is opened; on startup, the project last open is. Saved
+scroll positions are clamped to what the tab holds now. A place in a binary that no longer
+resolves is dropped. A source file no longer on disk still comes back, its pane saying so.
+
+## Restoring a binary
+
+A hash of each binary file is saved. If it differs on restore, a saved place is found by
+symbol name, the address only breaking a tie between two symbols of that name, and the tab's
+scroll position is dropped. Nothing is refused or asked. A binary with no saved hash counts as
+unchanged.

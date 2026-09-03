@@ -45,8 +45,8 @@ one headless test, which compares a 150px pane against a 300px one rather than a
 its own, text being really shaped under the runner and a digit therefore measuring whatever fonts
 the machine has.
 
-**A file being read is a row before it has an object**, which is `notes/Goals.md`'s "an indicator
-for an object still being processed" — and the state is on the **file**, not on an object, because
+**A file being read is a row before it has an object**, which is `notes/specs/Sidebar.md`'s file
+still being read — and the state is on the **file**, not on an object, because
 an object that has not been parsed does not exist: the unit part-way through is the one the reader
 opened, the one `close_binary` closes, and the one that already has a row. `Loads` (in `tree.rs`,
 the state behind the `Loading` context) is the files being read, one entry per (load, path); the

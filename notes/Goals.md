@@ -14,10 +14,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Source / assembly split view
 
-- [x] Have a source view and an assembly view side by side. This is the default layout of the
-  content area: the source a symbol was compiled from beside its assembly.
-- [x] Map between the two views — an instruction knows its source line and both panes show
-  it: a run of rows picked out on either side lights up what it maps to on the other.
 - [x] Each pane keeps a selection of its own, in grey, and the green marks the pair: the
   rows of this pane that are the same place as the other pane's selection. Nothing answers
   to the pointer in either pane, and there is no pin. This replaced three earlier answers
@@ -50,44 +46,6 @@ leaves this list when it is. That is a move made on request, like everything els
   hovering each. `AsmData::position` is already the question per row; what is missing is a mark
   in the row for a `Some`, in the same colour as the source gutter's, and a decision about
   where in an instruction row it goes, the gutter there being the branch arrows' already.
-- [x] Have a function to find all source / assembly locations that match, producing a list on the
-  other side. "Find all locations" on a source row or an instruction row asks the analysis
-  worker for every symbol the line was compiled into over every open object, and the Locations
-  view — a sidebar tab beside History — lists them one row per symbol, the object after the
-  name, under a heading naming the line. A row is a symbol and not a range: the crate answers
-  symbols by design, and one line answers with 9 374 of them on this app's own binary, so
-  a range per hit would be seconds of DWARF walking behind every click. Pressing a row opens the
-  symbol and picks the line out in it with both panes owed the scroll, which is where the range
-  is.
-- [x] A function to pick the generic instance of a source function. Same query, different
-  presentation — "all symbols for this function, pick one" against "all locations for this line,
-  list them" — so it is the Locations view under another heading ("N instances of `foo`"),
-  asked for by a second entry in a source row's context menu, offered where a function encloses
-  the row. The function's lines are the source's (`src/functions.rs`: a scanner of our own for
-  Rust, the grammar losing whole files to `const impl`; the tree-sitter parse for C and C++),
-  not DWARF's; every symbol holding code from them is listed, an
-  inlined caller included, in the crate's order, and the panel's filter narrows to a name. A row
-  chooses as a location row does (`Driven::choice`, from the row the menu was opened on), and
-  the row lit is the symbol drawn, so the choice shows in a source-driven tab.
-- [x] An active navigation function where selection on one side moves the other side to the
-  matching place — within one symbol. Clicking a source line scrolls the assembly to the
-  first instruction it produced, clicking an instruction scrolls the source to its line, and
-  neither is a navigation: the selection does not change and nothing is pushed onto the
-  history.
-- [x] The same across symbols, preferring recent history when a source line maps into several.
-  It lands **only where source is driving**, which is the whole of where it lands: a
-  source-driven tab's line click resolves across every open object and puts the assembly side on
-  the symbol it picks, while an assembly-driven tab's source side keeps the within-symbol reveal
-  above exactly — selection unchanged, nothing pushed onto the history. The tie-break is
-  `compiled::pick`: most recently visited, with the symbol on screen at the head of that list.
-- [x] Syntax highlighting for both sides. Assembly is coloured by span kind; source is
-  tree-sitter, through the highlighter `freya-code-editor` exposes publicly.
-- [x] Use the assembly colour palette for the source side's syntax highlighting, so the two
-  panes read as one view rather than as two themes. `EditorSyntaxTheme` is built from the
-  app's own `Palette` now: keywords and types take the mnemonic's purple, variables and
-  fields the register's olive, literals the immediate's blue, function and module names the
-  relocation target's near-black, punctuation the rest's grey, and comments and strings are
-  two new entries of the palette's own.
 - [x] Pull attributes, types and functions apart in the source side's highlighting. Three
   of `syntax()`'s entries had been mapped onto colours the assembly side already had, and a
   Rust file read as two: `attribute` and `type_` were both `keyword_fg`, `function` and
@@ -139,110 +97,20 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Navigation
 
-- [x] Clicking on functions in assembly should navigate to them.
 - [ ] Clicking on functions in source should navigate to them. A click on a source line moves
   the assembly pane to that line's instructions; a click on a *call* in the source still does
   nothing, since nothing maps a source identifier to the symbol it names. Sequenced after
   the LSP item under *Projects*: rust-analyzer is what should answer which symbol an
   identifier names, rather than building name matching over demangled strings here.
-- [x] Navigating in assembly should also navigate source, within a symbol: clicking an
-  instruction scrolls the source pane to the line it was compiled from.
-- [x] Selecting another symbol puts the source pane on that symbol's own lines. The pane
-  never inherited the offset the *previous* symbol left, and since the one strip landed a
-  tab remembers a row for *each of its two sides*, keyed by the document, so two symbols
-  compiled from one file do not share a position. The first open was the half left: a tab
-  seen for the first time opened at the top of the file. `SymbolLines` now carries the
-  **line** the symbol opens at beside the file it opens in -- both off one line-info row,
-  worked out on the worker -- and `use_kept_position` takes an opening row a tab nothing is
-  remembered for lands at, three rows above that line so the signature is not flush against
-  the top. A remembered row still wins, and a symbol whose debug info places it nowhere
-  opens at the top of the file as before.
-- [x] Mouse buttons can navigate history so you can go back and forth.
-- [x] Navigating brings back each pane's caret and selection with the place. Back, Forward, a
-  switch of tab and a place a tab has been at before put back what the reader had picked out in
-  **both** panes -- the companion's run in an assembly-driven tab, the listing's in a
-  source-driven one -- the way the scroll rows come back, and owed no scroll, so the two cannot
-  fight. Kept per tab and place (`MarksAt`, an `Entry`-keyed map beside `AsmAt`/`SrcAt`,
-  forgotten in the same three closers), in memory only: `session.toml` never sees it. A landing
-  from outside the panes wins over what was kept; what was kept wins over a source-driven tab's
-  driven line; with nothing kept an arrival gets what it always got. An object's code, whose rows
-  are counted afresh when its tab is shown again, keeps its run by the places its rows stood for.
-- [x] Add `<`, `>` navigation buttons to the top bar. Two chevrons at the left of the toolbar,
-  driving the same `navigate` the mouse's side buttons do, so every rule about tabs, selection
-  and history holds without a second spelling of it. Each names where it would land in its
-  tooltip, and each is **dimmed rather than hidden** when there is nothing that way: the pair
-  keeps its place under the pointer, and a reader who has been nowhere yet can still see it is
-  there. They read `Active` and the tab table, which is what repaints them as the tab
-  changes, as its trail grows and as its cursor moves.
 - [ ] A file search dialog on Ctrl+P: type part of a path and open the file it names, the
   way an editor's quick-open does.
 
 ## Assembly viewer
 
-- [x] Bar under the Assembly tab with the full demangled + mangled symbol name. A header inside
-  the Assembly pane, the demangled name over the mangled original, each on one line. It names
-  **what the pane is drawing** and not what is selected — the same `Analyzed::showing` the rows
-  below it come from, where the Info pane it is taking over from read the selection and so said a
-  different thing for as long as the worker took. A tab that is a whole object has no listing
-  ever worked out for it, so the bar names the object there instead. The names are ellipsised
-  rather than wrapped, this repo's samples reaching 1038 bytes mangled, and **pressing one copies
-  it**, which with the tooltip is the whole of how the rest of a long name is got at.
 - [ ] Fix the `<entry point>` tab name: the shortening in `naming.rs` reads a name as a
   demangled path with generic arguments, and the angle brackets the app itself puts around
   its two made-up names — `<entry point>`, and `<function 0x…>` for a function only an
   unwind entry declares — are not that. A tab for either should say the name as it is.
-- [x] An expanding section under the Assembly tab to show more symbol info, replacing the Info
-  tab. The bar above is its collapsed state, opened by a disclosure triangle in a column of its
-  own — the Objects tree's idiom down to the two glyphs, a triangle being the toggle where a name
-  is a copy. It answers what the Info view answered, plus the address and the object a symbol came
-  from, neither of which was shown anywhere: section, address, declared size and extent for a
-  symbol; format, symbol count and path for an object, which is the other case the view had. Open
-  or shut is kept **per tab** and never saved, since both panes are mounted afresh for every
-  document and a flag in the pane would shut the section every time the reader looked elsewhere.
-  It is keyed by `DocId` and not by `Document`, so it holds no closed binary's bytes and needs
-  forgetting in none of the three closing paths. The view is then gone — eight dockable views
-  become seven — and nothing had to be migrated with it, the dock layout not being persisted.
-- [x] Keep the `rip+` visible in a relocated rip-relative operand — `mov dword ptr [rip+<target>], 7`
-  rather than `mov dword ptr [<target>], 7` — when you can navigate to the target.
-- [x] Don't zero-pad the target of a jump or a call. `jle short 000000000000004Bh` spent the
-  width of a 64-bit address on a number nowhere near one; it now reads `jle short 4Bh`.
-  Displacements and immediates are a separate `iced-x86` option and are left as they were.
-- [x] Allow selection, of rows. Both panes: click a row, shift-click or drag to reach out
-  to another, Ctrl+C copies the run as text, Ctrl+A takes the whole listing and Escape
-  drops it. One selection per pane (the split-view item above): Ctrl+C copies the run of
-  the pane the keyboard is in, the key handlers being on each pane's own box. The assembly
-  copies what the row draws — the address column and the instruction
-  with the relocation target's name in its operand — and the source copies the file's own
-  lines.
-- [x] Horizontal scroll in the assembly and the source pane, and in an object's code. A row
-  wider than the pane -- a long source line, an instruction with a long relocation name --
-  was cut at the pane's edge and could not be reached: a `VirtualScrollView` scrolls
-  sideways as far as its widest *built* row, and a row filling the pane left it nothing. The
-  scratchpad's run output measures its rows to their content and has no wash to lose; the
-  code panes' rows carry the selection and the pair as their own background, so they take
-  freya's `CodeEditor`'s answer instead: every row of a listing is as wide as the pane or as
-  the widest row drawn so far, whichever is more (`src/ui/width.rs`), reporting its content
-  through `inner_sizes` and never its laid-out width, so narrowing the pane leaves no scroll
-  behind. A width and not a minimum, since torin sizes an auto-width node from its minimum
-  *plus* its children (`notes/upstream/freya.md`); the separator never reports, its rule
-  being as wide as the row; and the widest is held under the listing's identity, so a file
-  with short lines opened after one with a long line has nothing to scroll over. The gutter
-  is a child of the row and goes with it. Four headless tests, one per mechanism.
-- [x] Text selection, of characters, in both the assembly and the source pane: drag across
-  part of a line or across lines and Ctrl+C copies the text, the way an editor does, beside
-  the row selection above, which stays for whole runs. Built by hand rather than on freya's
-  editor: the model is the app's own (`src/chars.rs`, a row and a column in UTF-16 units, a
-  row's text in pieces), the gestures and the copy sit beside the rows' in `ui/marks.rs`,
-  and freya supplies only what a `paragraph()` has anyway -- the skia hit-test behind its
-  `ParagraphHolder` and its highlight paint. What was taken from `CodeEditor` is its shape:
-  one holder per row, per-row highlights, the release watched at the root. The cost read
-  out earlier was right about the row and wrong about the remedy: an assembly row's text is
-  now one paragraph with the relocation link as an inline child, which freya sizes as a
-  placeholder and moves the link's own node to, so the link is unchanged and is one unit of
-  the row to the engine, copying as its name. All three listings draw their rows through one
-  `code_row` (`src/ui/code_row.rs`), which is where both panes got it at once. Gutter picks
-  rows out alone; text picks characters out too; two presses take a word and three the row's
-  text; Ctrl+C prefers the characters and Escape drops them first. `agents/Panes.md`.
 - [x] The unified view's run survives an answer landing. Scrolling the view asks the worker for
   stretches, every answer bumped the reading's generation, and `use_clear_marks` dropped the
   assembly pane's run on the generation -- a run being raw listing rows, which a recount
@@ -253,63 +121,12 @@ leaves this list when it is. That is a move made on request, like everything els
   the run is carried across the recount by address in the same effect that rebuilds the rows,
   as the reader's place already was (`carry_assembly`, `agents/Panes.md`). (A plain press on a
   symbol label still sends the source pane back, being a row of no file; by design.)
-- [x] Autoscroll while sweeping a selection past any edge of the pane: a task moves the view
-  a row at a time towards the pointer, or a row's height sideways, and reaches the run out to
-  what comes in, while the button is down and the pointer stays past the edge; past the left
-  or right edge the sweep reaches the column in sight at that edge and not the row's start or
-  end, the rows lending the list their paragraphs for the column (`use_sweep_beyond`,
-  `agents/Panes.md`).
-- [x] A caret at the pressed column, the highlight filling the row's height so a run of rows
-  reads as one block, and the pointer's icon over the code panes: an I-beam over text, the
-  hand over a link, the arrow over the gutter -- set from the row's move handler alone, the
-  links' `CursorArea`s removed so nothing fights it (`agents/Panes.md`).
-- [x] The rows of a listing sit on whole device pixels wherever the window puts the listing
-  (`Nudge`), so the washes of two selected rows meet on an edge instead of leaving a seam;
-  and the caret is the row's own one-pixel stroke on the grid, fainter than the text
-  (`caret_fg`), in place of the engine's two-pixel one on a fractional edge (`agents/Panes.md`).
-- [x] The row wash means the caret's row and nothing else: the old grey is now the selection's
-  colour, drawn under the characters a sweep picked out, and the caret's row wears it faded
-  (`cursor_row_bg`). Every pick is a caret and a selection -- a gutter click puts the caret at
-  the row's start and a gutter sweep selects whole rows, Ctrl+A the whole listing, a landing a
-  caret on its line -- so no row is ever washed whole, and Escape collapses before it drops.
-- [x] The caret is drawn over a selection too, at its lead, two pixels wide; the companion
-  header and the symbol bar's names do not answer the pointer while a sweep is under way, so
-  no tooltip arms as a selection is dragged past them; and the unified view's rows compare
-  the caret, so a move along a row redraws it there (`agents/Panes.md`).
-- [x] A key moves the view only when the caret leaves it (`reveal_caret`: no context rows, a
-  row above coming to the top and one below to the bottom), and a caret walked past the
-  pane's edge brings the pane sideways to it, from the row that draws it through the list's
-  `Listing` context (`agents/Panes.md`).
-- [x] The keyboard moves the caret in both code panes and in an object's code: the arrows
-  by character and, with Ctrl, by word; Home and End to the row's ends and, with Ctrl, the
-  listing's; Page Up and Page Down by a screen of rows; Shift reaches the selection out and
-  a plain key collapses it. The motions are framework-free (`Motion`,
-  `CharSelection::moved` in `src/chars.rs`, with the word rule and the goal column a
-  vertical move keeps through short rows) and the UI half (`move_caret`, `ui/marks.rs`)
-  keeps the row run on the caret's row with no scroll owed to the other pane, reveals the
-  caret's row, and gives a gutter run a caret at its lead row's start on the first arrow
-  key. No editing keys. `agents/Panes.md`.
 - [ ] Ctrl+C copies whatever is selected, wherever it is: the run of rows in either pane
   today, the characters once the goal above lands, and the other places text is picked out
   -- a filter box, the scratchpad's editor, its diagnostics and its output -- so the one
   binding has one meaning and never comes back with a page of disassembly for a word picked
   out somewhere else. The key handlers are per pane on purpose (`agents/Panes.md`); this is
   the rule that decides which of them answers, not a global handler.
-- [x] A separator before a row something jumps to, so the listing reads as the basic blocks
-  it is rather than as one run of instructions. A **row of its own** and not a border on the
-  row below: a block reads as separated from the one above rather than as underlined by it.
-  `VirtualScrollView` is given one `item_size` and every row must equal it, so the separator
-  is `code_row_height()` like the rest and the rule is drawn centred inside it, clear of the
-  gutter — what it costs is a second index space, listing rows against instruction indices,
-  which `Lanes` converts between and nothing else may. It carries the lanes crossing it, and
-  the padding the instruction rows take, so a branch's line runs over the gap unbroken and
-  unkinked; and it takes the mark handlers so a sweep is not cut in half at every boundary. The
-  targets were already known and are not worked out again — `RowLanes::arrow`, the same set
-  7b's gutter draws an arrowhead on, carried to the row beside the lanes it already gets. Its
-  colour is `block_rule`, recessive by construction: it reads against the pane and stays
-  quieter than the branch line beside it in both palettes, which the palette test holds. The
-  row after a `ret` or an unconditional `jmp` starts a block too, but nothing below the
-  disassembler says which instructions end a fall-through, so that half is left.
 - [x] A unified **section** view of code: the whole `.text` as one endless scroll, with the
   symbols drawn as labels *inside* the listing where they start — what `objdump -d` reads like.
   *Done*: a third kind of document, `Document::Code`, one per object, opened by pressing the
@@ -352,11 +169,6 @@ leaves this list when it is. That is a move made on request, like everything els
   Note what it would make easy in return: the "gap or line before a jump target" item below, and
   showing a symbol in the context of its neighbours rather than as an island.
 
-- [x] Have arrows for jumps. A gutter left of the addresses draws every branch that stays
-  inside the symbol as a line from its row to its target's, with an arrowhead where it lands
-  and shorter branches nested inside longer ones. At most five lanes wide, and only as wide
-  as the symbol needs; past five, the outermost lane is shared. Picking a row out draws its
-  own branches darker, all the way to where they go.
 - [x] Pixel-align the gutter's strokes. Every stroke in `gutter` is now placed by its **edges**
   through `Grid` (`src/pixels.rs`), which rounds them to the device pixel grid rather than
   putting a centre on a fraction and letting a one-pixel line come out as two grey ones. The
@@ -383,28 +195,6 @@ leaves this list when it is. That is a move made on request, like everything els
   horizontal run reads as a step where a branch lands on a boundary.
   `a_block_rule_lands_on_whole_device_pixels` measures the rule against the run rather than
   working the answer out a second time.
-- [x] Follow a jump by clicking its target offset, the way a call's relocation target is
-  clicked. A branch's displacement (`jle 4Bh`) is a link where the listing holds the row it
-  lands on — the same set the gutter draws an arrow for — and pressing it puts that row on
-  screen. `Instruction::branch_span` is `relocation_span`'s twin, the span the displacement
-  was printed into, and the two are exclusive: a branch whose displacement is a relocation
-  placeholder names no address of its own. `Assembly::edge_from` pairs the span with the edge
-  that says where it goes. It is a scroll within one symbol and **not** a navigation: the
-  document does not change and nothing is pushed onto the history. It does move the
-  selection, the way clicking the target row would: the row landed on becomes the picked-out
-  one, of the target's file, with the source side owed the scroll — the run holding for an
-  object with no line info, the file and the scroll lighting the other pane where the reader
-  has arrived rather than where they left. A branch out of the symbol — a tail call — keeps its
-  plain operand; making that one navigate like a call target is an item of its own.
-- [x] Name the target of a direct `call` in a linked image. A relocatable object's calls were
-  links because their relocations named the function; a linked ELF or PE has had those consumed,
-  and every `call rel32` to a function in the same image drew as a bare address. Where no
-  relocation covers the instruction, the displacement is looked up as the start of a text symbol
-  in the instruction's own section — exactly the start, so a call into the middle of a function
-  keeps its number — and handed out through the same `relocation`/`relocation_span` the UI
-  already draws a `RelocationLabel` from. The lookup is `Object::by_address`, sorted by placed
-  address and built once per object on the first disassembly rather than per click. A `jmp` out
-  of the symbol is left as the item above says.
 - [ ] Drop the `<` `>` around a symbol's label in the unified view. A stretch's label is
   drawn `<name>:` (`src/ui/section_view.rs`, in the rows and in what is copied), objdump's
   spelling, and the brackets say nothing the colon and the row's own colour do not; a demangled
@@ -468,36 +258,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## UI
 
-- [x] Migrate the app's hand-rolled panes to freya's own panel components (`ResizableContainer` /
-  `ResizablePanel` / `ResizableHandle`), which also makes the split user-resizable.
-- [x] Docking panels: a `DockingArea` inside each half of the split, with Objects, Symbols, Info
-  and Assembly as tabs that can be dragged between the two areas, stacked into one panel as real
-  tabs, or split further. Two of those four are no longer views: an assembly listing is half of a
-  *document* rather than a pane of its own, and the Info view has since been folded into the bar
-  over that listing.
-- [x] A dark mode, in the same palette rather than a second one — the light colours carried
-  over at dark-mode lightness, so the two themes are recognisably one design. Every relationship
-  in the light palette is preserved through the dark one; the translucent washes were re-judged
-  as what they *composite to* rather than inverted, since the same alpha over a dark ground is a
-  fraction of the step it was over white. Asking for a colour is what subscribes a component to
-  the theme, so no call site changed and a switch repaints exactly the scopes that draw
-  something coloured. The highlighted-source cache is cleared inside the one function that can
-  change the appearance, so it cannot be routed around. freya's own components get its
-  `light_theme()`/`dark_theme()` alongside, a white text box on a dark pane not being a theme
-  switch. The light theme is byte-for-byte what it was. "Follow the desktop" is answered by the
-  windowing system rather than by asking a desktop tool: freya surfaces winit's `Window::theme()`
-  as a reactive `Platform::preferred_theme`, so no process is spawned and the app repaints when
-  the desktop switches theme while it is running, which a one-shot query could never do.
-- [x] Use freya's icon libraries where they suit, panel titles at least — an icon beside
-  Objects / Symbols / Info / History / Assembly / Source in the tab bar. `freya`'s
-  `icons-lucide` feature is on and `Tab::icon` names one glyph per view (`package`,
-  `square-function`, `history`, `binary`, `file-code`; `info` went with the Info view), drawn at the interface
-  font's size times 1.25 and in the palette's new `icon_fg`. The two places that had
-  settled for text were weighed again with the dependency in and both keep it: Lucide does
-  carry `case-sensitive` / `whole-word` / `regex`, but rendered at the toggles' 22px they
-  say less than `Aa` / `\b` / `.*`, which are the regex the toggles turn on; and nothing in
-  the 1640-icon set names an object file format, so the file-type tags would all become one
-  generic page. See `notes/Plan.md` 6e.
 - [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
   sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
@@ -524,13 +284,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Panels and tabs
 
-- [x] History panel on the bottom left with recent functions.
-- [x] The history panel also lists recent source files. It falls out of the history recording
-  *documents*: a visited file is an entry like any function, spelt by its own name and wearing
-  the same kind icon its tab does. The recording rule changed with it — the record is written
-  by `open_document` alone, so opening a document or going to one is a visit and switching to a
-  tab that is already open, or walking a tab's trail, is not.
-- [x] Don't insert duplicate history entries, bump existing ones instead.
 - [ ] A tab kind for a file, so an object or an archive can be opened and read about. Today
   a row in the Objects list can only be expanded or closed, and everything the parse learnt
   about the file — its format, architecture, sections, symbol counts, what its members are,
@@ -541,22 +294,6 @@ leaves this list when it is. That is a move made on request, like everything els
   decisions are what document kind a file is (`Document` names a place in a binary or a file
   today, and a whole binary is neither), and whether the timings are always collected or
   gathered only when something asks.
-- [x] Tree view for objects, with an indicator per row for the file type. A file that
-  contributed one object is one row; an archive is a parent row its members fold under,
-  and the type is a short tag (`ELF`, `PE`, `COFF`, `MACH`, `AR`) rather than a picture —
-  freya's icon set is a dependency behind a feature and has no notion of an object format.
-- [x] An indicator for an object still being processed. The state belongs to the *file*, not to
-  an object — an object that has not been parsed does not exist, while the file is the thing the
-  reader opened and the thing that already has a row. A file being read wears `…` where its
-  format tag will go, since the format is not known yet, and its name is dimmed. Two static cues
-  rather than a spinner: a sidebar row is one of hundreds.
-- [x] Filter bar under objects / symbols / history, with icons for caps / full word / regex.
-  One `FilterBar` in three places, each list keeping its own filter; the toggles are written
-  as the regex they turn on (`Aa`, `\b`, `.*`) and a pattern that will not compile says so.
-- [x] Tooltip for items in panels. The objects, symbols and history rows all show their
-  own text in full, which is what a name cut off at the pane's edge needs; the assembly
-  and source rows deliberately have none, being code the pointer sweeps across rather than
-  a name that could not fit.
 - [ ] Show a row's tooltip only when the row is actually cut off. A tooltip repeating a name
   that is already fully on screen is noise the pointer drags behind it across a whole list —
   and with the zero delay above it arrives the instant the pointer crosses a row. What it
@@ -566,52 +303,14 @@ leaves this list when it is. That is a move made on request, like everything els
   the row reporting its own overflow. Settling that is the goal; the rule once it is settled
   is one line per list, and the same question decides it for the tab bar, whose tabs elide
   too.
-- [x] Instant tooltip delay for list items. A truncated name in a list is read by sweeping
-  the pointer down it, and freya's 500ms default made that useless, so every list row
-  passes `TooltipContainer::delay` a zero. The filter toggles keep the default: theirs
-  explains what `\b` means rather than finishing a word, and a pointer crossing the bar
-  should not light three of them. What is left is freya's own 150ms fade-in, which is
-  inside the component and not reachable from outside — measured, not guessed: at 200ms
-  the tooltip is up, at 48ms it is not.
-- [x] Context menu on a file in the objects panel to close it. Right-clicking a file row —
-  an archive, or a file that contributed the one object it is named after — offers "Close
-  file", and closing drops every object of that path, an archive's members with it. What
-  pointed at them: the open tabs in it are closed and the selection moves to the
-  neighbouring tab the way closing one tab by hand does (no selection at all only when that
-  was the last), the history entries are *dropped* rather than degraded, through the same
-  walk a restore uses for binaries that have changed, and `Project::binaries` follows the
-  objects and is written to disk at once. A member row offers nothing: the file is the unit
-  that closes, so the row above it is the one that closes it.
-- [x] Bookmarks panel for pinned symbols / functions — a list the reader adds to deliberately
-  and that outlives the session, unlike the history, which records everywhere they went and
-  drops the oldest. A sidebar panel beside Objects / Symbols / History, saved with the
-  project (`project.toml`, being what the user said; `agents/Persistence.md`). Added and
-  removed from a right-click on a Symbols row or a History row, on a document's tab, or on an
-  instruction row in the assembly view ("Bookmark symbol"); a bookmark whose binary is
-  closed is kept and drawn dimmed rather than dropped, and comes back when the binary does
-  (`agents/Sidebar.md`). The name clash this warned about is gone with the pin itself: the
-  position a click fixed the two panes on is a selection now (`Picked`, `ui/marks.rs`), and
-  nothing in the code says "pinned" of anything.
 - [ ] A bookmark control on the symbol bar, for the symbol being read, beside the two menus
   above.
-- [x] Left panel to explore project directory / files. The Files view: the project's directory
-  as a tree, read one level per unfold and re-read on a refold, which is the refresh; the tree
-  is the fold state. A file's row opens it as a source-driven tab, spelled the way the debug
-  info spells it so the two meet in one tab; its right-click offers "Open file", which is the
-  parser's to judge, or "Close file" once it is loaded. Nothing here judges what a file is
-  (`agents/Sidebar.md`).
 - [ ] Only close the assembly view by default in a source-driven tab if its file is not in a
   compiled language: a `Cargo.toml` or a `.json` opens with the source side alone, a `.rs` or
   `.c` with both, as now.
-- [x] Left panel for symbol search — the Symbols panel filters every loaded object's symbols
-  by substring, whole word or regex, on the demangled name the row shows.
 - [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter
   box, and matches come back in the list's own name order rather than by how well they match.
 - [ ] Left panel for project directory / source search.
-- [x] Tabs for assembly functions / source files. One tab per open document — a function, an
-  object or a source file. Clicking a tab switches; the × closes it and moves to the neighbour;
-  closing the last one goes back to the placeholder. The list is saved with the session and comes
-  back on a rerun, in the order the reader left it.
 - [x] Open documents are tabs in the dock, beside Project / Settings / Scratchpad, rather than a
   strip of the app's own over it. This reverses the earlier decision, whose argument was that the
   dock tree is the layout and a layout must survive documents opening and closing. Two thirds of
@@ -629,61 +328,12 @@ leaves this list when it is. That is a move made on request, like everything els
   A view being the tab on top means there is *no* active document, which is what keeps the
   derivation honest and is the one visible edge: the analysis clears and the session records
   nothing active until a document is on top again.
-- [x] Two kinds of tab, assembly-driven and source-driven, told apart by an icon. The two
-  independent strips (one for functions, one for files, each with its own notion of what is
-  open) are one strip of `Document`s, each of which is a place in a binary or a file, and the
-  variant says which of the tab's two sides it is *about* and therefore which drives the
-  other. So opening a file and opening a function produce the same kind of thing. The doctrine
-  changed with it: "a document is a place in a binary" became "a place in a binary *or* a
-  file". A source-driven tab is opened from the Source pane's companion header, which is the
-  only door into one until the project explorer and the source search land.
-- [x] The assembly side of a source-driven tab: clicking a line in the file shows the assembly
-  compiled from it. The tab is driven from a line, and the click in its own file is the only
-  thing that writes one — a click in the assembly pane never does, so a listing cannot re-drive
-  itself. The question goes to the one analysis worker, which now takes a question rather than a
-  symbol; which symbol wins is the most recently visited, **with the symbol already on screen at
-  the head of that list**, since nothing is pushed onto the history between two clicks in one
-  function and reading down a generic function would otherwise walk across its instantiations.
-  Below the tie-break the order is the crate's own and is arbitrary; picking deliberately is the
-  generic-instance item above. A line no object holds code from leaves the listing that is up and
-  lights no pair in it, which is what says the click landed nowhere. Two things came out
-  of it that were not in the ask: an answer can now outlive the document that named it, a
-  source-driven tab surviving a binary close, so the analysis lets go of a closed binary; and the
-  reveal a click asks for is now looked at before it is taken, the listing that can answer it not
-  being the one that is up when the click is made.
-- [x] The source side of a source-driven tab is on the left and its assembly on the right. The
-  side a tab is driven from leads in both kinds, so the pane the reader came here to read sits
-  where the assembly does in an assembly-driven tab and the side it resolves to sits beside it.
-  `DocumentBody` is the only thing that knows which way round a document goes — neither pane is
-  handed a side — so the swap is the order of two `.panel(..)` calls, and everything the two
-  panes share was already keyed by which pane it is rather than by where it sits: the picked-out
-  runs and the scroll each owes the other's, and the row each side was left on. The
-  split's one remembered width was the one thing keyed by position, and was left that way
-  deliberately: it is now the *leading* pane's width rather than the assembly pane's, so
-  switching between the two kinds of tab leaves the handle where the reader dragged it instead of
-  throwing the two widths across the window. Panel 0 is the leading pane either way round, which
-  is what keeps the container's own drag arithmetic — positional too — agreeing with it.
 - [ ] Refactor the tabs away from freya's dock panels and onto components of the app's own,
   with a fixed panel for the tabs rather than one the reader can fold, split or drag documents
   out of.
 - [ ] Let the views close — Project, Settings, the Scratchpad and the rest — and add a menu at
   the top left of the window to reopen them. Today a view has no × because there is no way back
   once it is closed; the menu is that way back, so the × can come.
-- [x] Close the other tabs from a tab's context menu. A right-click on a document's tab offers
-  "Close other tabs", which keeps the tab it was opened on and closes every other document in
-  the panel; the panel lands on the kept tab when what was on screen is among the ones closing,
-  and stays where it is otherwise. A view sharing the document panel is left alone — it is not a
-  document, and having no × of its own is the same argument. A tab that is the only one open
-  offers no menu rather than a menu whose one row would do nothing.
-- [x] Reach a tab that has scrolled off the end of the bar. Documents are opened by the dozen
-  and the bar scrolls, so a tab past the right-hand edge used to be reachable only by scrolling
-  to it — and a reader had no way of seeing what was out there. A control at the right of the
-  document bar lists **every** open document, with the one on screen marked, and picking one
-  activates it. All of them rather than only the hidden ones: which tabs are off-screen means
-  measuring the bar's content against its viewport, and a list that changes length as the bar is
-  dragged is worse to use than a complete one. The popup is positioned by the app rather than
-  through `ContextMenu`, which pins a menu to the pointer and clamps to nothing — from a button
-  at the right-hand edge that would draw off the side of the window.
 - [ ] A tab should open immediately even while its binary is still being read, with a loading
   message inside it rather than nothing. Today a tab can only exist once the object it names
   does: a document is resolved against the objects list by path, object name and symbol name, so
@@ -696,18 +346,6 @@ leaves this list when it is. That is a move made on request, like everything els
   it names arrives — which also means deciding what such a tab does if the load finishes and the
   object never comes, where the answer is probably the same drop the restore does now, only
   later and visibly.
-- [x] A larger close target on a tab, with a highlight under the pointer. The × on a document's
-  tab is a control of its own now: a square centred on the glyph with four pixels of air on every
-  side, capped at the row so it never decides how tall the bar is, so what a reader hits is the
-  padding as much as the × itself. The glyph is drawn a third larger than the interface font
-  beside it, being a mark rather than a letter — at the text's own size the multiplication sign
-  reads as a scratch — and the target is written as the glyph plus its air, so growing one grows
-  the other. Under the pointer it takes a wash of its
-  own and the glyph comes up to the interface text, while the tab under it stays lit — the two
-  are told apart by the close being the deeper step, in both palettes, which the visible-step
-  test holds along with the glyph's contrast over the composited wash. A component and not
-  another line of the chip, because freya has no hover pseudo-state and the state has to be the
-  ×'s own.
 - [ ] A shortcuts panel, listing every key and every mouse gesture the app answers to. There
   is no way to find out what the app does today short of reading the source: Ctrl+C, Ctrl+A and
   Escape in the two code panes, the mouse's side buttons going back and forward, shift-click
@@ -721,111 +359,18 @@ leaves this list when it is. That is a move made on request, like everything els
   tab chips are pointer targets, the sidebar lists have no cursor, and there is no way in to a
   filter box — which is the ranked-search item above seen from the other side. Note what it
   needs deciding first: what "the focused pane" means when either dock area can hold any view.
-- [x] The archive row's object count survives a narrow sidebar. The count is a column of its
-  own — the digits and a gutter beside them — measured whole before the name is handed what
-  the columns leave, so dragging the split left is taken out of the name, which ellipsises, and
-  never out of the count. Half of it was already there and unrecorded: the row is laid out under
-  `Content::Flex` with the name as its one flex child, which is what keeps the count inside the
-  row's clip instead of past its edge. What was missing was the gutter, without which the name
-  grew right up to the digits and the ellipsis read as part of the number. A headless test pins
-  both halves, comparing a 150px pane against a 300px one rather than against a width of its
-  own: text is really shaped there, so a digit measures whatever fonts the machine has.
 
 ## Projects
 
-- [x] Minimal project support: the previous session's binaries and selected symbol reopen when
-  the app is rerun, for easier testing.
-- [x] Have a project concept. A project is a directory under `projects/<id>/`, and the
-  directory *is* the identity — not its files, not its given name, not its associated
-  directory. `ProjectId` is a validated single path component, checked on the way in from
-  disk too, so a hand-edited recents list cannot name `..`.
-- [x] Anonymous projects — opening files without an explicit project — should be saved too, next
-  to the user / global settings. There can be multiple such anonymous projects. Anonymous means
-  the `name` key is *absent*, the same real third state an unspecified font setting is. The id
-  is the first free `project-N`, claimed with a `create_dir` that fails rather than opens, so it
-  cannot collide with a directory already there or with a second copy of the app racing for it;
-  the spelling carries no meaning, and naming a project later does not move it. The directory is
-  created by the first write that has something to say, so a run in which nothing was opened
-  leaves nothing behind.
-- [x] Each project can have multiple binaries loaded.
-- [x] Has an associated directory, set from the project view — a text box and a folder picker.
-  Editing it writes `project.toml` at once, the way opening a binary does: a rename or a
-  re-association is a deliberate user action, and it lets go of no binary, so it writes that
-  file alone and leaves the session pending.
-- [x] Can have multiple tabs with different function assemblies / source files open. Within
-  a session: one strip holds them all, each tab being a place in a binary or a file. They are
-  carried across a restart by the "saves the open tabs" item below.
-- [x] Saves the open tabs. One ordered list in `session.toml`, of the same `SavedDocument` the
-  history and the active document already use, so the reader's own interleaving of functions
-  and files survives a restart. Coming back goes through the functions that hold the tab
-  invariants rather than writing the list, and the ordering is load-bearing — the tabs are
-  opened before the active one, or `open_document` puts it beside the tab on screen instead of
-  finding it in place. An assembly-driven place that no longer resolves is dropped off its
-  trail, the way a visit is; a source file that is no longer on disk still comes back, because the
-  pane's own "Source file not found" is the right answer and dropping it would silently lose
-  a file the reader had open.
-- [x] Saves a viewing position per tab. Each open tab carries the row *each of its two sides*
-  was left at, in memory and in `session.toml`, so switching to a tab puts both panes back
-  where they were and a tab seen for the first time opens at the top. A row rather than a pixel offset, so a later
-  change to the row height does not move every saved position, and a hint rather than a fact:
-  it is clamped to what the tab holds now, so a rebuilt binary or a shortened file cannot come
-  back past the end.
-- [x] Saves hashes of the binaries, so a restore can tell the same file from one that has
-  been rebuilt underneath it. An xxHash64 of the whole file, taken on the parse worker while
-  the bytes are already in hand — 31 ms on the 331 MB sample, 2% of its open — and one hash per
-  *file*, so an archive's 196 members share it. Size + mtime was rejected on correctness rather
-  than cost: mtime is not a property of the bytes, so a deterministic rebuild reads as changed
-  and a `cp -p` or a checkout reads as unchanged, which is the exact case this exists to catch.
-  Under a binary whose digest no longer matches, the **name becomes the identity and the address
-  only a tie-breaker** — a symbol that merely moved still resolves, but a name that names two
-  symbols and no longer names an address resolves to neither, a stale address being precisely
-  what lands a reader on a different function — and the saved viewing row is dropped, being a
-  claim about a listing this build no longer has. No dialog and no refusal. A binary with no
-  saved digest is a third state rather than a mismatch, so existing sessions load unchanged.
 - [ ] Can have an LSP server (like rust-analyzer) / cargo integration so it can build for you and find binaries.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
-- [x] A main view where you can see all project info: the project's name and directory, both
-  editable, the id it is stored as, and every open binary with how many objects it contributed.
-  It is a dockable view rather than a chip in the content strip, for the reason now written into
-  `agents/UI.md`: a document there is a *place in a binary*, and a project is not one.
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
-- [x] Save the navigation history.
-- [x] Opening binary files saves immediately.
-- [x] User project changes should save immediately. `project::record` writes at once when
-  `binaries` differs and leaves everything else pending, so both changes the user can
-  currently make to a project — opening a binary and closing one — are on disk before the
-  next click. Anything Step 8's project model adds (a directory, a name, binary hashes) has
-  to go through the same comparison to keep this true.
-- [x] Periodically save if anything has changed. History, open files and view positions do not
-  need to save immediately.
 
 ## Startup
 
-- [x] Reopen previous open project on startup. `recents.toml` is an *order*, most recent first,
-  and the project to reopen is its first entry rather than a field of its own — the order already
-  answers that, and a second answer would be one to keep in step. The directories are what say
-  which projects exist, so the list needs no pruning.
-- [x] Have a view of recent projects if none was open — a section of the project view rather
-  than a view of its own, since the recent list is how you *leave* the project the rest of the
-  pane describes, and a separate tab would be empty in every session where a project was
-  reopened. Each row is named from its own `project.toml` rather than from a name copied into
-  the list, ids whose directory is gone are dropped, and the open project is left out because
-  the pane above already describes it more freshly. Clicking a row switches project at runtime:
-  the old one is flushed while the save policy still points at it, every binary and then every
-  remaining tab is closed through the functions that hold the tab invariants, and the new one
-  is restored through the same body the startup restore uses.
 
 ## Fonts and settings
 
-- [x] Match system fonts / coding fonts by default, by runtime lookup. KDE / Gnome / Windows.
-  `XDG_CURRENT_DESKTOP` only sorts the two Linux tools rather than choosing one — a tool that
-  is not installed is already "the desktop said nothing" — so `kreadconfig` and `gsettings`
-  are both tried, and Gnome's `text-scaling-factor` is applied to the point size because it
-  is where Gnome puts "make text bigger". Windows goes through
-  `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)` over a target-gated `windows-sys`, with no
-  external process; its fixed-width half stays `Consolas`, Windows storing no desktop-wide
-  monospace font to look up. Compile-checked for the Windows target, but only the decoding is
-  tested — nothing here has been run on Windows.
 - [x] Have a settings page where you can override (with a default being unspecified with clear
   visual distinction). A dockable view with the theme (light / dark / follow the desktop, naming
   which the desktop currently prefers) and, per font, a family box and a size stepper with a
@@ -871,68 +416,9 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Scratchpad
 
-- [x] A scratchpad function which allows creating single file rust projects where you can build
-  with cargo and view assembly output. The generated cargo package *is* the storage, so there is
-  no second format to disagree with what cargo is handed, and the editor is freya's own
-  `CodeEditor` — rejected for the read-only source pane because it paints a line background only
-  for the cursor's row and keeps its scroll state private, both of which that pane needs and an
-  editor you type in does not. Building runs off the UI thread and what it produces goes through
-  the ordinary open path, so the scratchpad's functions appear in the content strip like any
-  other binary's. One scratchpad for now, with no picker: the model holds many, but a picker is a
-  second document list.
-- [x] Let a scratchpad depend on crates.io crates, as a **list of crates edited in the UI** —
-  name and required version per row — rather than as a convention inside the source. Every bad
-  row is marked in place, on the half of the row that is wrong, with the reason under it; a
-  wildcard is refused, a version being required so a scratchpad builds the same way twice. A
-  build that cargo rejects *before compiling anything* is shown against the rows rather than
-  searched for a crate name: the dependency list is the only part of the generated package this
-  pane can get wrong, so no compiler diagnostics means the rows are where the answer is.
-- [x] Allow these files to run with output viewable. The built artifact is spawned directly
-  rather than through `cargo run`: the build already asked cargo where it put the executable, and
-  re-entering cargo would redo resolution, interleave its own progress lines into what the reader
-  is reading as their program's output, and leave a killed `cargo run` with a child nobody holds.
-  Output streams line by line while the program is going, stdout and stderr told apart by colour,
-  and Stop is a real kill rather than a dropped handle — `Child`'s `Drop` neither waits nor
-  kills. A run is also ended by a rebuild (cargo is about to overwrite the file the process *is*)
-  and by closing the window; an edit ends nothing, a run being of an executable rather than of
-  the buffer. Bounded three ways, each a different failure: a line with no newline is cut rather
-  than accumulated, the oldest lines are dropped past a cap and the pane says how many, and the
-  channel is bounded so backpressure reaches the program itself.
-- [x] Follow the newest line of a running scratchpad's output. Arriving lines keep the pane
-  pinned to the bottom while the reader is at the bottom, a wheel away from there releases the
-  follow and leaves them where they are, and coming back to the bottom arms it again. Being at
-  the bottom is judged in rows against the viewport as it is now — `reveal_row`'s shape — and
-  never as a remembered row: past the output cap the oldest rows drop off the front and every
-  index shifts. A line arriving is not an occasion to re-judge, the newest row being below the
-  viewport by definition; the pane is keyed on the pad, so one pad's scrolling never breaks
-  another's follow.
 - [?] Use freya's tty for the scratchpad's output, in place of the list of coloured rows the
   run pane draws: a terminal would carry a program's own colours, cursor movement and
   progress bars, where the rows keep only which stream a line came from.
-- [x] Wrap or scroll the compiler output, wrap or scroll being decided by the list a line is in
-  rather than by the line. The diagnostics and cargo's own stderr are a plain `ScrollView` of
-  wrapping paragraphs — a build says dozens of things, so there is nothing to virtualise away, and
-  once nothing is virtual a block may be as tall as its text needs; the `--> src/main.rs:9:17` a
-  span carries, which was the widest line rustc writes and so the first thing the pane's right
-  edge took, now wraps. The run output stays a `VirtualScrollView` stepping by one `item_size`,
-  being bounded at nothing smaller than `MAX_OUTPUT_LINES`, and takes a sideways scroll instead:
-  a virtual list has to know a row's height before it has built one, which is exactly what a
-  wrapped row cannot tell it. Each costs one honest thing — a wrapped caret can sit under the
-  wrong character, though only on a line clipping would have cut outright, and the output scrolls
-  only as wide as the widest row it has drawn.
-- [x] Click a diagnostic to reach the code it is about. The place under the message is a target
-  now, and pressing it puts the editor's cursor on the line and the column rustc named. The
-  conversion between the two ways of counting is one pure function of the source text,
-  `Span::offset_in`, and is unit-tested rather than eyeballed: rustc counts from one and counts a
-  column in characters, a cursor is UTF-16 code units from the start of the text, and lines are
-  `\n` and nothing else. It is applied to the buffer as it is *now* rather than to what was
-  compiled, the reader having usually typed since, so a column past its line's end lands at that
-  end and a line past the file's end at the file's end — clamped, never out of range. Only a span
-  in the pad's own `src/main.rs` is a target: cargo names a dependency's file just as readily and
-  there is nowhere to put a cursor in one, so those keep the plain label, no hover and no press,
-  a promised press that did nothing being the worse answer. The cue is the relocation link's own
-  — its wash and its pointer — and the colour a place already wears. What it does is put the
-  cursor there; bringing the line *on screen* is the half below.
 - [D] Scroll the editor to the line a pressed diagnostic names. The cursor lands on it and the
   row is marked — the editor's own current-line background, and its gutter number lit — but a
   line that was off screen stays off screen, so a reader with an error below the fold is told
@@ -965,64 +451,11 @@ leaves this list when it is. That is a move made on request, like everything els
   themed pane not being one of them. Rendering from the JSON instead makes the colour the app's
   by construction and costs the caret line, which would have to be drawn rather than reprinted.
   Sequenced after this, since what is coloured depends on which copy survives.
-- [x] Scratchpads are a concept of their own, disjoint from projects, and there are many of them
-  saved. Each is its own directory under `scratchpads/` the way each project is one under
-  `projects/`, and it is filed under an **id the reader never sees** — the directory, the crate
-  and the order file all say the same `PadId`, checked the way a `ProjectId` is because it is
-  interpolated into a path and read back out of files a user can edit. What the reader deals in
-  is a **name**, a value in the pad's own package under `[package.metadata]`, so it may be
-  empty, hold spaces or repeat another pad's, and renaming is a keystroke the ordinary save
-  writes out rather than a directory move that has to claim a target and refuse a collision. A pad
-  nobody has named has an empty one, and the pane calls it `<pad-3>` — the id in the brackets that
-  already mark `<entry point>` as the app's word rather than the file's.
-  Which pad opens is the front of an order beside the pads, `recents.toml`'s rules exactly: an
-  order and not an index of what exists, `touch` answering whether anything moved, nothing
-  pruning itself on load. The *list* is the union of that order and the pad directories it does
-  not name, each row's name read from that pad's own package, since a reader picks a pad from it
-  and one that fell off the end has to stay reachable. The list lives in the **Scratchpad view's
-  own side panel**, the content area's strip deliberately not being the place for a second
-  document list. A new pad is the first free `pad-N`, claimed by a `create_dir` that fails rather
-  than opens and written at once. **Runs are per pad**: several can be going at once,
-  leaving a pad stops nothing, and switching only switches which output is on screen. So is the
-  editor buffer, so a pad comes back with the cursor and the undo history it was left with.
-  Deleting a pad is deliberately absent — it is the one operation here that destroys a reader's
-  source, so it waits until it is asked for.
-- [x] Stop a run's grandchildren with it. A run is started in a process group of its own, so Stop
-  kills the program *and* everything it forked rather than only the process the app holds a handle
-  for — a grandchild's pid was never anywhere but inside the program that is now gone. One idea
-  with two implementations: `process_group(0)` before the spawn and `kill(-pgid, SIGKILL)` in the
-  stop on Unix, and a kill-on-close job object the child is assigned to on Windows, where closing
-  the app's only handle is the kill. The child's own kill stays behind the group's, as what a job
-  the system refuses still gets. Nothing else moved: the reap is the same `try_wait` on a poll —
-  the group changes who dies, not how the end is noticed — and the rebuild, the next run,
-  `stop_all` and the window closing all go through the same stop and inherit it.
+- [ ] Delete a scratchpad, from its row in the side panel, behind a confirmation: it is the one
+  operation here that destroys a reader's source, so it is asked for and not one click.
 
 ## Binary inspection design
 
-- [x] Can explore while binary is processed to find all functions. Objects reach the sidebar as
-  they parse rather than all at once at the end, so a 196-member archive offers its first member
-  at 102 ms where the window used to show nothing for 685 ms, and everything already parsed is
-  explorable while the rest arrives. A single-object file gains no time — there is one answer and
-  it arrives when it arrives — but its row is on screen from the start rather than nothing being
-  there.
-- [x] Rely on declared functions in binaries. Don't assume things can be code — only declared
-  text symbols are disassembled, nothing is scanned for.
-- [x] Rely on debug info: DWARF line info is read (lazily, per section).
-- [x] Rely on debug info for function extents too, rather than estimating from the next symbol's
-  address (`estimate_size`), since declared sizes are often 0 in COFF/ELF. `SymbolData::extent`
-  takes a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc` where there is one, and the
-  *smaller* of it and the estimate: the estimate over-reaches into padding, but `high_pc`
-  describes the function, so an alias or a split cold part inside one subprogram would otherwise
-  swallow the next function. It stays lazy, behind the same cache, bias and `catch_unwind` the
-  line rows go through. On the `analysis` crate's own rlib 3 704 of 3 705 symbols answer from DWARF;
-  on the app's own binary half do, the rest being C++ dependencies built without it.
-- [x] Take entry points and exported DLL / dylib functions as symbols too. `declared_code`
-  reads `dynamic_symbols`, `exports` and `entry` for a **linked image** — all declared, so
-  nothing is guessed at or scanned for — and a prebuilt LLVM DLL goes from zero functions to
-  22 918. One symbol per address, earliest source winning, since a repeated address makes the
-  sorted list `estimate_size` searches answer 0; the section is found by looking the address up
-  in the kept text sections, which is also what keeps exported *data* out. A relocatable object
-  is skipped, 0 being a real function's first byte there rather than "no entry point".
 - [?] A multi-threaded, **deterministic** analysis pass that finds all the code: labels,
   functions, jump targets, entry points, exports and the rest. Deterministic in the strong
   sense — the same binary gives the same set of code locations, in the same order, whatever the
@@ -1036,44 +469,6 @@ leaves this list when it is. That is a move made on request, like everything els
   declarations (entry points, exports, unwind targets in `.pdata`) do not need this and are
   their own items.
 
-- [x] Find unwind targets: an x86-64 image carries a `RUNTIME_FUNCTION` in `.pdata` stating
-  both ends of every function with unwind info, and it is a declaration — the image's own, to
-  its loader — so reading it keeps the "nothing is scanned for" rule. `unwind_ranges` reads
-  the exception data directory (x86-64 PE only: ARM64's record is another shape, a PE32 has
-  none, and a COFF `.obj` has the section but no directory), and `declared_code` takes every
-  entry as declared code, last of all its sources since an entry carries no name — one at an
-  address anything else named adds nothing, and one nothing named is called `<function 0x…>`
-  by its address, with the stated length as its declared size. The in-memory PE writer
-  writes a `.pdata` and the mutation sweep poisons it entry by entry; parsed alone, the
-  no-export DLL fixture goes from no symbols to its three.
-- [x] Prefer the end an unwind entry states. The other half, and the honest fix for a
-  stripped PE's worst behaviour: its export table is sparse, so an exported function's extent
-  was derived across every unexported function between it and the next export — megabytes, in
-  nine cases in the DLL, and 3.7 MB in the worst — and `estimate_size` is capped at 1 MiB to
-  stop that costing seconds per redraw. Now every entry's range goes to its section
-  (`Section::unwind`), whether or not its begin became a symbol, and `SymbolData::extent`
-  answers from it first: where an entry covers the address the extent is the stated end,
-  whatever named the symbol, and neither the estimate nor the cap bounds it — only the next
-  symbol does, since the section listing decodes one stretch per symbol and an extent past
-  the next label would draw its rows twice. The debug info is not asked for a covered
-  symbol: the image's word to its loader over a second file's, the two agreeing in every
-  real image (a test pins which is asked). The cap stays for an image without a table and,
-  on an x86-64 PE, for a symbol no entry covers — a leaf without unwind info, assembler
-  code. Measured, release: the LLVM DLL goes from 22 918 symbols to 73 793 (50 875 of them
-  functions only an entry declares), none of its extents reaches the cap now and the largest
-  is 610 302 bytes, stated; `rustc_driver.dll` from 115 861 symbols to 234 070; the opens
-  cost 545–595 ms from 475–490 and 1.26–1.43 s from 1.19–1.31. The numbers are in
-  `agents/Analysis.md`.
-- [x] Name a chained unwind entry `<fragment 0x…>`, by its own address as a function is. A
-  cold part, or the second entry an over-long prologue gets, is a `RUNTIME_FUNCTION` whose
-  `UNWIND_INFO` carries `UNW_FLAG_CHAININFO` and names the primary entry — Microsoft's word
-  for it is a *function fragment*. `unwind_entries` reads that one byte at each entry's
-  unwind RVA (195 of the LLVM DLL's 68 507 entries, 481 of `rustc_driver`'s 218 434), and an
-  info that cannot be read or is of another version leaves the entry a plain function, the
-  range being stated either way. A fragment stays a symbol of its own: the section listing
-  decodes one stretch per symbol, so a second range of the parent's would need multi-range
-  symbols, which is another goal; the parent's extent stops where the fragment begins, as it
-  did before.
 - [?] Name a **funclet** after its parent. LLVM's and MSVC's word for an outlined `catch`,
   cleanup, `filter` or `finally` body: a separate body with a prologue of its own, and so a
   primary unwind entry of its own, which looks like a small function to the table and is a
@@ -1134,38 +529,6 @@ leaves this list when it is. That is a move made on request, like everything els
   rustc and stable, where PE's is one C runtime's; whether reading either sits inside the
   "nothing is scanned for" rule is the same question as the funclet goal's, and the two
   should be decided together.
-- [x] PDB line info, through the `pdb2` crate (the maintained fork of `pdb`; the one that shares
-  `fallible-iterator` with `gimli`): a linked PE names its `.pdb` in the debug directory's
-  CodeView record, so an `.exe`/`.dll` built with debug info gets a source view. A second
-  backend behind `line.rs`'s seam, answering the same two questions from the PDB's per-module
-  line tables and procedure lengths, with `section:offset` translated through the PDB's own
-  address map onto the image base. The `.pdb` is found at the recorded path, or beside the
-  binary under the recorded name or the binary's own, and taken only when its GUID **and** age
-  are the image's. Each file's recorded checksum travels with its name (`SourceHash`), so the
-  app can tell an edited source from the one compiled. Pinned by a committed
-  `line_fixture.dll` + `.pdb` built by clang-cl and rust-lld from the gcc fixtures' own C file
-  (`agents/Analysis.md`).
-- [x] PDB procedures as symbols: a PE whose matching `.pdb` is beside it lists every function
-  the PDB's modules record (`S_GPROC32`/`S_LPROC32` with a length, name as the compiler
-  spelled it, address through the PDB's address map, the length as the declared size), not
-  only what the image declares — a fifth source in `declared_code`, after the symbol table,
-  `.dynsym`, exports and entry point, so an image's own name is never displaced. The `.pdb` is
-  opened at parse for it, once, and the backend seeded for the line questions; the line tables
-  stay lazy. `rustc_driver.dll` goes from 15 241 symbols to 70 728 for 561 ms -> 1.00 s of
-  open (release; one read of every module stream), `rustc.exe` from `<entry point>` to 412.
-  Pinned by a second committed pair, `line_fixture_noexport.dll` + `.pdb`, the same object
-  linked with no exports, which lists nothing alone and the three functions beside its PDB.
-- [x] PDB public symbols as a further source: `S_PUB32` records in the symbol records stream,
-  the decorated names, for the functions no module's symbols describe (a module without
-  debug info, thunks, assembler, a whole stripped PDB) — those flagged code or function and
-  landing in a kept text section, after the procedures as a sixth source in `declared_code`,
-  under the same one-per-address rule, size 0 like an export, and through the demangler since
-  these *are* mangled (`Pdb::publics`, read at parse with the procedures). `rustc_driver.dll`
-  goes from 70 728 symbols to 115 861 for 1.00 s -> 1.3 s of open (release; 55 ms is the walk,
-  the rest 45 133 more names demangled), `rustc.exe` from 412 to 415. Pinned by a third
-  committed pair, `line_fixture_public.dll` + `.pdb`: the same object linked with a C++ file
-  compiled without `/Z7`, whose one function the PDB names only as the public `?helper@@YAHXZ`
-  — listed, demangled, sized 0, no lines — while the no-export pair still lists exactly three.
 - [ ] Make PDB private symbols informative only. The module streams' `S_GPROC32`/`S_LPROC32`
   records — the PDB's *private* symbols, as against the linker's publics — are today a source
   of symbols in their own right, fifth in `declared_code`'s order, and their names are the
@@ -1188,28 +551,6 @@ leaves this list when it is. That is a move made on request, like everything els
 - [?] CodeView embedded in COFF (`.debug$S`/`.debug$T`), which is what a rustc `.rlib` member
   carries — a different container from a `.pdb` file and likely hand parsing, so it stays
   undecided on its own.
-- [x] Binary inspection is off the UI thread. Disassembly, line info and the arrow gutter's
-  lane layout moved together onto one worker for the app's lifetime, which drains its queue to
-  the newest request so the clicks a reader passed are dropped before being started rather than
-  pushed through the most expensive call in the crate. An answer carries the symbol it is about
-  and is kept only if that symbol is still selected, so a stale answer is discarded by a
-  comparison rather than by a counter. The first symbol clicked on the app's own binary cost 589 ms
-  on the UI thread and now costs a channel send.
-- [x] Binary inspection uses more than one core, which is the whole of what demangling had left
-  to give. `demangle::batch` hands one object's names to a process-wide pool of threads with
-  64 MiB stacks — `available_parallelism` capped at 8, started on the first batch that needs one
-  and then kept — and they take the batch in grains of 256 names off one atomic cursor. A grain
-  is handed back with the index it started at and written there, so the answer is the batch's
-  own order whatever the scheduling did and two runs over one file agree. Grains are pulled as a
-  thread frees rather than dealt out up front, because a name's cost is superlinear in its
-  length and where the long ones sit is the file's business. Two costs went at once: the
-  demangling itself, and the 64 MiB thread that used to be created and joined once per object —
-  237 of them for the crate's own rlib. Release, best of 3, on a machine with five other agents
-  building on it: the app's own debug binary 1 701 → 1 414 ms, the rlib 383 → 151 ms. Streaming
-  is untouched, objects still reaching the sidebar as they parse and in file order. No
-  dependency was added for it: `rayon` is in the lock already, under `image`, but its threads
-  would still have to be a pool of this crate's own to get the stack size — which is the whole
-  of what is hard here — and what is left over is a queue and a cursor.
 - [ ] Parse an archive's members on more than one core as well. The second of the two levels,
   and the one still sequential: `open_files_streaming` walks a file's members in order on one
   thread, so the read, the section decompression and the symbol-table pass of the rlib's 237
@@ -1261,44 +602,6 @@ leaves this list when it is. That is a move made on request, like everything els
   sweep — to save milliseconds per click where that cache saved 26–72% of open time. If
   anything is ever cached here it is small derived metadata (a file → symbol index,
   subprogram extents), never listings.
-- [x] Binary inspection should be designed to be portable, allowing different disassembly
-  libraries to be used. `disasm.rs` holds `Assembly`/`Instruction`/`SpanKind`/`BranchEdge` and
-  names no backend; `disasm/x86.rs` is the only `iced-x86` in the crate. The trait is one call
-  wide and shaped by what `Assembly` needs — bytes, an address, and one question per
-  instruction about whether a relocation covers it — so a second backend is an impl and not a
-  rewrite. The four x86 spellings that have no cross-architecture answer live behind it: the
-  `SymbolResolver` substitution, the per-instruction `rip+` flip, the flow-control judgement
-  and the `FormatterTextKind` mapping. Only iced-x86 sits behind the seam today, which is the
-  point rather than a gap.
-- [x] Make the architecture-specific analysis **generic rather than dynamically dispatched**.
-  `disassembler(architecture) -> Option<Box<dyn Disassembler>>` is gone: `Assembly::decode` is
-  the one `match` over the architecture, each arm naming a concrete backend, and
-  `Assembly::decoded` — the backend's call and the branch resolution together, which is the
-  whole decode path — is generic over it and compiled once per backend. Nothing is boxed and
-  no signature says `dyn`, so every type here stays nameable by a caller. What it buys is not
-  the virtual call — one per symbol is nothing — but the allocation going away and the
-  backend's formatting and span-mapping becoming inlinable into the decode loop, which *is*
-  per instruction. The trait stays as the shape a backend is written to; the trade taken is
-  that a new architecture is a new arm rather than a new impl behind a registry, the set being
-  closed at compile time either way. Behaviour is unchanged, held by the existing tests.
-- [x] Decode as the architecture the object declares, rather than as x86-64 whatever it is.
-  `Object::architecture` comes from the file, and the bitness comes from the architecture and
-  not from `is_64()` — x32 is 64-bit code with 32-bit pointers, the one case the file's class
-  gets backwards. An architecture no backend claims is now a third answer (`Assembly::
-  undecodable`) rather than a confident page of nonsense.
-- [x] Say so in the UI when an architecture cannot be decoded. The assembly pane reads
-  `Assembly::undecodable` and says "No disassembler for aarch64" rather than drawing an empty
-  pane the reader has to guess about — an empty listing being indistinguishable from an empty
-  function.
-- [x] Should never panic on any file input. Errors doing analysis should allow inspecting
-  functions without errors. Searched for rather than asserted: a seeded, bounded mutation sweep
-  (`tests/mutations.rs`) truncates every corpus file at every length, poisons every count, offset
-  and size in the ELF/PE headers and tables, and splats bytes, then asks each result everything
-  the app asks. It found a stack overflow in the demanglers that **aborted** the process — which
-  `catch_unwind` cannot catch — and one corrupt symbol address that cost its neighbour its
-  listing. Both fixed, each with a fixture of its own, since the sweep is the searcher and the
-  fixture is the regression test. Two `addr2line` arithmetic bugs found with them: one is now
-  declined before the call, one stays wrapped.
 - [ ] Catch a panic in any optional pass of the parse, so the object still loads without it.
   `parse_object` is the symbol table plus what is declared elsewhere, and each of those extras
   is a dependency's parser over file-controlled bytes: the PDB opened at parse for its
@@ -1327,7 +630,6 @@ leaves this list when it is. That is a move made on request, like everything els
   a sound design needs that answered before it saves a byte; the decompressed and relocated
   sections cannot be mapped regardless; and nothing measured says memory is a problem yet.
 - [?] How to design an index to allow source files / assembly to map, without large memory footprint.
-- [x] Have this in its own crate. Use it for test cases.
 
 ---
 

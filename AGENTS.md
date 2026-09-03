@@ -13,9 +13,12 @@ Standing instructions from the user.
 - Keep `notes/Goals.md` current. It is the checklist of planned features.
 - `notes/specs/` is what a finished feature does, one file per area with a section per
   feature, moved there from `notes/Goals.md`. **Never write or change a spec without asking the
-  user first**; read the spec files to gauge the writing style, keep development history and
-  implementation detail out, and make a second pass to cut what can go
-  (`notes/specs/README.md`).
+  user first**; read the spec files to gauge the writing style and keep development history and
+  implementation detail out (`notes/specs/README.md`).
+- Before presenting edits to the user, make one final pass over every text written (prose, a
+  code comment, a doc comment, markdown): cut what can go, and prefer simple English, short
+  direct sentences and plain words. Neither may lose precision. Only then, not after every
+  edit.
 - **Adding a goal is not a request to do it.** "Add a goal: …" means write the item down and
   stop there; the checklist is where work is planned, not where it is started. Implement one
   only when asked for the thing itself.
