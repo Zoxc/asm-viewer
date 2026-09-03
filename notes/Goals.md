@@ -420,6 +420,14 @@ one item per part, so the unfinished half stays visible.
   that symbol beside the object, object › symbol, and pressing it would be the "Open as symbol"
   door in one more place. Whether it follows the top row or the pointer is the one decision:
   the top row is stable and the pointer lights nothing.
+- [ ] Navigate to an address in the unified view: type one and the listing goes to the row
+  at that address, in the object whose code is on screen. Today the only way to a place in the
+  section view is a label, a symbol's "Show in unified view" or the kept place a tab came back
+  to, so an address read off a crash, a linker map or a debugger has no door. The place the
+  view keeps is already an address (`CodeAt`, `Spot`), so landing is the write that hook
+  answers; what is undecided is where the address is typed -- a box in the bar over the pane,
+  or a Ctrl+G dialog -- whether it is the placed address the listing draws or the object's
+  own, and what happens to one that falls between rows or outside every section.
 - [ ] Let a call target with no symbol be opened. `Code::relocation` answers a `Relocated`
   whose `target` is `None` whenever the relocation points at something the object has no text
   symbol for — a section, a data symbol, an undefined import — and the operand is then drawn
