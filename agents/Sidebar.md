@@ -18,6 +18,18 @@ filter); Objects, History and Bookmarks filter where their rows are built. A His
 shortened name (`entry_text`) and is filtered on the whole one (`entry_name`), so a generic argument
 the row has no room for can still be searched for.
 
+**A filtered list is ranked, an unfiltered one is not.** `Filtered` orders its indices by
+`filter::Rank`, which sits beside the matcher because it is the same regex asked a second question:
+where its first match *starts*. A match at the name's first character beats one at a word boundary
+— regex's `\b`, which is the Word toggle's own notion, so the two agree that `::` bounds and `_`
+does not — which beats one inside a word. Between two of a kind the shorter name wins, being the
+one the pattern says most of, and the list's own order breaks the last tie, so the sort is total
+and `sort_unstable` is safe. Ranking is `Regex::find` in place of `is_match`, one pass and not two,
+and costs almost nothing: over the app's own 154k names `find` takes 10–18 ms against `is_match`'s
+11–14 ms, since a name that does not match is scanned whole either way. Nothing typed is still
+`None`: no pass, no sort, the list in its own order. The Locations panel builds the same memo and
+so ranks the same way, which is wanted, since one line can answer with thousands of instantiations.
+
 **Pressing an object opens all of its code** as one listing (`Document::Code`, `agents/UI.md`). That
 is the one thing an object has to show that a symbol does not; the file's own facts belong to the
 file-tab goal. **The Objects list is a tree** (`src/tree.rs`). `ObjectTree::new` groups objects by

@@ -165,8 +165,13 @@ leaves this list when it is. That is a move made on request, like everything els
 - [ ] Only close the assembly view by default in a source-driven tab if its file is not in a
   compiled language: a `Cargo.toml` or a `.json` opens with the source side alone, a `.rs` or
   `.c` with both, as now.
-- [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter
-  box, and matches come back in the list's own name order rather than by how well they match.
+- [ ] Make that search reachable and ranked. Ranked is done: under a filter the rows come back
+  by how well they matched — a match at the start of the name, then one at the start of a word
+  (the Word toggle's own `\b`), then one inside a word, the shorter name first among equals and
+  the list's own order last — by a `Rank` in `filter.rs` beside the matcher, the same regex asked
+  where its first match starts; nothing typed is still no pass and the list's own order. The
+  Locations panel shares it. Reachable is not: no keyboard shortcut puts the caret in the filter
+  box yet.
 - [ ] Left panel for project directory / source search.
 - [ ] Refactor the tabs away from freya's dock panels and onto components of the app's own,
   with a fixed panel for the tabs rather than one the reader can fold, split or drag documents

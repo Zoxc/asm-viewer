@@ -12481,3 +12481,39 @@ fn the_temporal_tabs_name_is_italic_and_a_double_press_makes_it_stay() {
     assert_eq!(states.open.docs.peek().temporal(), None);
     assert_eq!(label_slant(&test, &name), None);
 }
+
+/// Under a filter the rows come back by how well they matched -- a prefix, then a word
+/// start, then a substring, the shorter name first among equals and the list's own order
+/// last -- and with nothing typed the list is left in its own order at no cost.
+#[test]
+fn a_filtered_list_puts_the_best_match_first() {
+    let object = fixture_symbols()[0].object.clone();
+    let symbol = |name: &str| Symbol {
+        object: object.clone(),
+        data: Arc::new(SymbolData {
+            name: name.to_owned(),
+            demangled: None,
+            address: 0,
+            section: None,
+            size: 0,
+        }),
+    };
+    let list = SymbolList(Arc::new(
+        ["zz::next", "next_to", "std::next", "connext", "push"]
+            .into_iter()
+            .map(symbol)
+            .collect(),
+    ));
+
+    let filtered = Filtered::new(list.clone(), &Filter::default().matcher());
+    assert_eq!(filtered.len(), 5);
+    assert!((0..5).all(|row| filtered.index(row) == row));
+
+    let filter = Filter {
+        pattern: "next".to_owned(),
+        ..Filter::default()
+    };
+    let filtered = Filtered::new(list, &filter.matcher());
+    let rows: Vec<usize> = (0..filtered.len()).map(|row| filtered.index(row)).collect();
+    assert_eq!(rows, [1, 0, 2, 3]);
+}

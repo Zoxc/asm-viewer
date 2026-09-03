@@ -116,3 +116,93 @@ fn an_invalid_regex_says_so_and_matches_nothing() {
     assert!(!matcher.matches("core::iter::Iterator"));
     assert!(!matcher.matches("anything at all"));
 }
+
+/// The rank a filter gives a name, `None` where the name does not match.
+fn rank(filter: &Filter, text: &str) -> Rank {
+    filter
+        .matcher()
+        .rank(text)
+        .unwrap_or_else(|| panic!("{text:?} should match"))
+}
+
+/// The tiers dominate the lengths: the prefix here is the longest name and the substring
+/// the shortest, and the order is still prefix, word start, substring.
+#[test]
+fn a_prefix_outranks_a_word_start_outranks_a_substring() {
+    let filter = plain("iter");
+    let prefix = rank(&filter, "iterator::Iterator::next");
+    let word = rank(&filter, "core::iter");
+    let inside = rank(&filter, "into_iter");
+    assert!(prefix < word);
+    assert!(word < inside);
+    assert_eq!(prefix.tier, Tier::Prefix);
+    assert_eq!(word.tier, Tier::Word);
+    assert_eq!(inside.tier, Tier::Inside);
+    assert!(filter.matcher().rank("Vec::push").is_none());
+}
+
+/// Within a tier the shorter name is the one the pattern says more of.
+#[test]
+fn a_shorter_name_wins_a_tie() {
+    let filter = plain("next");
+    let short = rank(&filter, "a::next");
+    let long = rank(&filter, "abc::next");
+    assert_eq!(short.tier, long.tier);
+    assert!(short < long);
+    assert_eq!(rank(&filter, "x::next"), rank(&filter, "y::next"));
+}
+
+/// The word start is regex's `\b`, the Word toggle's notion, asked of the match's start
+/// alone: `_` binds, so `into_iter` matches inside a word while `iter_mut` is a prefix;
+/// `::`, `<` and a space bound, so `core::iterator` starts at a word even though the
+/// toggle would reject it for how it ends.
+#[test]
+fn a_word_start_is_the_word_toggles_boundary() {
+    let filter = plain("iter");
+    assert_eq!(rank(&filter, "core::iter::Iterator").tier, Tier::Word);
+    assert_eq!(rank(&filter, "fn iter(&self)").tier, Tier::Word);
+    assert_eq!(rank(&filter, "<Vec<T> as Iter>").tier, Tier::Word);
+    assert_eq!(rank(&filter, "core::iterator").tier, Tier::Word);
+    assert_eq!(rank(&filter, "into_iter").tier, Tier::Inside);
+    assert_eq!(rank(&filter, "iter_mut").tier, Tier::Prefix);
+}
+
+/// A regex ranks by where its first match lands, whatever it matched; one that matches
+/// nothing at all -- an empty match -- starts nowhere and ranks last.
+#[test]
+fn a_regex_ranks_by_where_its_first_match_lands() {
+    let regex = |pattern: &str| Filter {
+        regex: true,
+        ..plain(pattern)
+    };
+    assert_eq!(rank(&regex("[a-z]+::"), "core::iter").tier, Tier::Prefix);
+    assert_eq!(rank(&regex("::n\\w+"), "core::next").tier, Tier::Word);
+    assert_eq!(rank(&regex("e::"), "core::next").tier, Tier::Inside);
+    assert_eq!(rank(&regex("x*"), "abc").tier, Tier::Inside);
+}
+
+/// Nothing typed ranks everything alike, and a pattern that will not compile ranks
+/// nothing, as it matches nothing.
+#[test]
+fn nothing_typed_ranks_alike_and_an_invalid_pattern_ranks_nothing() {
+    let none = Filter::default();
+    assert_eq!(rank(&none, "abc").tier, Tier::Inside);
+    assert!(rank(&none, "abc") < rank(&none, "abcd"));
+    let invalid = Filter {
+        regex: true,
+        ..plain("core::(iter")
+    };
+    assert!(invalid.matcher().rank("core::iter").is_none());
+}
+
+/// The case toggle changes what matches and not how a match ranks.
+#[test]
+fn case_folding_does_not_change_the_rank() {
+    assert_eq!(rank(&plain("iter"), "ITER::x").tier, Tier::Prefix);
+    assert_eq!(rank(&plain("iter"), "x::ITER").tier, Tier::Word);
+    let sensitive = Filter {
+        case_sensitive: true,
+        ..plain("iter")
+    };
+    assert!(sensitive.matcher().rank("ITER::x").is_none());
+}

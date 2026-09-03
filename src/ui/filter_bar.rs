@@ -192,9 +192,9 @@ pub(crate) fn filter_pane(
 }
 
 /// What a filter leaves of the symbol list: the list itself, and where in it the names
-/// that matched are. Indices rather than a second `Vec<Symbol>` (115k entries on
-/// `viewer-sample`), and `None` for no filter at all, which costs no pass and no
-/// allocation.
+/// that matched are, best match first. Indices rather than a second `Vec<Symbol>` (115k
+/// entries on `viewer-sample`), and `None` for no filter at all, which costs no pass, no
+/// sort and no allocation, and keeps the list in its own order.
 #[derive(Clone)]
 pub(crate) struct Filtered {
     pub(crate) symbols: SymbolList,
@@ -213,19 +213,27 @@ impl PartialEq for Filtered {
 }
 
 impl Filtered {
-    /// Filters on the name the row actually shows -- the demangled one where there is one.
+    /// Filters on the name the row actually shows -- the demangled one where there is one
+    /// -- and orders what is left by its [`Rank`], the list's own order breaking ties, so
+    /// the sort is deterministic and `sort_unstable` is safe.
     pub(crate) fn new(symbols: SymbolList, matcher: &Matcher) -> Self {
         let matches = match matcher {
             Matcher::Everything => None,
-            matcher => Some(Arc::new(
-                symbols
+            matcher => {
+                let mut ranked: Vec<(Rank, usize)> = symbols
                     .0
                     .iter()
                     .enumerate()
-                    .filter(|(_, symbol)| matcher.matches(symbol.data.display()))
-                    .map(|(index, _)| index)
-                    .collect(),
-            )),
+                    .filter_map(|(index, symbol)| {
+                        let rank = matcher.rank(symbol.data.display())?;
+                        Some((rank, index))
+                    })
+                    .collect();
+                ranked.sort_unstable();
+                Some(Arc::new(
+                    ranked.into_iter().map(|(_, index)| index).collect(),
+                ))
+            }
         };
 
         Filtered { symbols, matches }

@@ -1,8 +1,11 @@
-//! What the filter bar under each of the sidebar lists is asking for, and what answers it.
+//! What the filter bar under each of the sidebar lists is asking for, what answers it, and
+//! how well each answer matched.
 //!
 //! Every filter compiles to one [`regex::Regex`], the plain ones included, because the
 //! three toggles *are* three regex constructs — so they compose instead of being four
-//! hand-written search loops. It is also the faster answer over 151k demangled names.
+//! hand-written search loops. It is also the faster answer over 151k demangled names. The
+//! same regex ranks: where its first match starts in a name is the [`Rank`] a list under a
+//! filter orders its rows by.
 
 use regex::{Regex, RegexBuilder};
 
@@ -74,6 +77,69 @@ impl Matcher {
             _ => None,
         }
     }
+
+    /// How well `text` matches, `None` where it does not: [`matches`](Self::matches) with
+    /// an order on its `true`. One `find` and not an `is_match` first -- a name that does
+    /// not match is scanned whole either way, and the match's start is what the rank is.
+    pub fn rank(&self, text: &str) -> Option<Rank> {
+        let tier = match self {
+            Matcher::Everything => Tier::Inside,
+            Matcher::Invalid(_) => return None,
+            Matcher::Pattern(regex) => {
+                let found = regex.find(text)?;
+                tier_at(text, found.start(), found.is_empty())
+            }
+        };
+
+        Some(Rank {
+            tier,
+            length: text.len(),
+        })
+    }
+}
+
+/// How well a name matched, for a list under a filter to order its rows by: `Ord` puts
+/// the best first. A match at the start of the name beats one at the start of a word,
+/// which beats one inside a word, and between two of a kind the shorter name wins -- the
+/// name the pattern says most of. Every name a filter lets through has one, so a list
+/// sorted by it and then by its own order is total and deterministic.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct Rank {
+    tier: Tier,
+    length: usize,
+}
+
+/// Where the first match starts. The order of the variants is the order of the ranks.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Tier {
+    /// At the name's first character.
+    Prefix,
+    /// At a word boundary -- regex's `\b`, the Word toggle's own notion, so `::`, `<` and
+    /// a space bound a word and `_` does not. The boundary is asked of the match's start
+    /// only; where it ends is the toggle's business.
+    Word,
+    /// Anywhere else. Also an empty match, which starts nowhere in particular.
+    Inside,
+}
+
+fn tier_at(text: &str, start: usize, empty: bool) -> Tier {
+    if empty {
+        return Tier::Inside;
+    }
+    if start == 0 {
+        return Tier::Prefix;
+    }
+    let before = text[..start].chars().next_back();
+    let first = text[start..].chars().next();
+    match (before, first) {
+        (Some(before), Some(first)) if is_word(before) != is_word(first) => Tier::Word,
+        _ => Tier::Inside,
+    }
+}
+
+/// A word character as regex's `\b` counts them.
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 /// The one line of a `regex` error worth putting in a filter bar: its `Display` is a
