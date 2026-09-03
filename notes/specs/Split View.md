@@ -12,7 +12,8 @@ was left at wins over both.
 
 ## Mapping between the panes
 
-Rows selected on either side light up the rows they map to on the other. Clicking an
+Each pane has its own selection, in grey. The rows on the other side that are the same place
+are marked in green. Nothing responds to the pointer alone. Clicking an
 instruction scrolls the source pane to the line it was compiled from; clicking a source line
 scrolls the assembly to the first instruction compiled from it. Neither opens a document or
 adds to the history.
@@ -37,4 +38,5 @@ extending the selection to what comes into view.
 ## Highlighting
 
 Assembly is coloured by span kind; source by its language's grammar, in the assembly's
-colours.
+colours, with colours of their own for attributes, types, function names, comments and
+strings.

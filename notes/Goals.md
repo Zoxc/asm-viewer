@@ -14,26 +14,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Source / assembly split view
 
-- [x] Each pane keeps a selection of its own, in grey, and the green marks the pair: the
-  rows of this pane that are the same place as the other pane's selection. Nothing answers
-  to the pointer in either pane, and there is no pin. This replaced three earlier answers
-  in one step — hovering either side lit its pair on the other, a click pinned the position
-  in a stronger shade of the same green until the next, and the assembly row's own hover
-  wash (`code_row_hover_bg`) had already been dropped for the pair's — because the hover
-  said what the pointer already says, the pin was a second selection under another name,
-  and one selection for the window (below) meant picking out an instruction lost the source
-  run the reader was reading from. What the pin carried moved onto the selection (`Picked`,
-  `ui/marks.rs`): the scroll the other pane owes a click, paid once and left owed while the
-  listing that can pay it has not arrived; the line a Locations row or a "Show in unified
-  view" lands on, planted as the source pane's run with both panes owed; the companion
-  file beside an object's code, the file of the pressed instruction; and a source-driven
-  tab's driven line, planted as the source pane's run when the tab comes back. The arrow
-  gutter lights the branches of the picked-out instructions instead of the hovered row's.
-  The code listing's Ctrl-link cue is on the label, in the relocation link's own wash, a
-  row drawing nothing under the pointer. The scratchpad editor's cursor line borrows the
-  pair's green. Found on the way: freya's `on_secondary_down` had replaced the rows'
-  `pointer_down`, so a press in either pane had never picked its row out
-  (`notes/upstream/freya.md`).
 - [ ] Mark, in the Source pane's line-number gutter, the lines that have assembly: a reader
   scanning a file should be able to tell at a glance which lines the symbol on the other side
   was compiled from and which produced nothing, without hovering each one. The answer is the
@@ -46,24 +26,6 @@ leaves this list when it is. That is a move made on request, like everything els
   hovering each. `AsmData::position` is already the question per row; what is missing is a mark
   in the row for a `Some`, in the same colour as the source gutter's, and a decision about
   where in an instruction row it goes, the gutter there being the branch arrows' already.
-- [x] Pull attributes, types and functions apart in the source side's highlighting. Three
-  of `syntax()`'s entries had been mapped onto colours the assembly side already had, and a
-  Rust file read as two: `attribute` and `type_` were both `keyword_fg`, `function` and
-  `function_method` were `name_fg`, which is also the plain text. Three palette entries of
-  their own now, light-first and turned through the background for dark — `attribute_fg` a
-  plain grey that recedes, since `#[derive(..)]` is scaffolding around the code rather than
-  code; `type_fg` a dim red, so a type is told from the keyword introducing it;
-  `function_fg` a blue with none of the address column's greyness, so a call site is told
-  from the text around it. `function_macro` went with the other two though nothing asked
-  for it: `resolve_capture_color` walks a child left on the text colour up to its parent, so
-  it would have been painted `function_fg` silently anyway. The assembly side keeps the five
-  colours it had — that was the open question, and the answer is that none of the three has
-  anything to name in a listing: `SpanKind` is a mnemonic, a prefix, a register, a number, an
-  address and glue, and the one name there is a relocation target, as often data as a
-  function and already told apart by `name_fg`/`name_hover_fg` and its underline. The
-  contrast test holds the three on `pane_bg` alone, beside the strings and comments, and
-  `attribute_fg` to a relationship as well: quieter than the keyword it left, the punctuation
-  beside it and the plain text.
 - [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
   each language is a `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and
   deferred *per language* rather than as a whole: a grammar is a parser generator's worth of
@@ -111,90 +73,13 @@ leaves this list when it is. That is a move made on request, like everything els
   demangled path with generic arguments, and the angle brackets the app itself puts around
   its two made-up names — `<entry point>`, and `<function 0x…>` for a function only an
   unwind entry declares — are not that. A tab for either should say the name as it is.
-- [x] The unified view's run survives an answer landing. Scrolling the view asks the worker for
-  stretches, every answer bumped the reading's generation, and `use_clear_marks` dropped the
-  assembly pane's run on the generation -- a run being raw listing rows, which a recount
-  shifts -- so the caret vanished and the companion file, derived from that run's
-  `Picked::file`, went with it and the pane said "Click an instruction" again; with up to 64
-  stretches asked for and 8 answered per chunk, answers kept landing after the reader had
-  clicked, which was the "sometimes", and the reason the caret's keys seemed dead there. Now
-  the run is carried across the recount by address in the same effect that rebuilds the rows,
-  as the reader's place already was (`carry_assembly`, `agents/Panes.md`). (A plain press on a
-  symbol label still sends the source pane back, being a row of no file; by design.)
 - [ ] Ctrl+C copies whatever is selected, wherever it is: the run of rows in either pane
   today, the characters once the goal above lands, and the other places text is picked out
   -- a filter box, the scratchpad's editor, its diagnostics and its output -- so the one
   binding has one meaning and never comes back with a page of disassembly for a word picked
   out somewhere else. The key handlers are per pane on purpose (`agents/Panes.md`); this is
   the rule that decides which of them answers, not a global handler.
-- [x] A unified **section** view of code: the whole `.text` as one endless scroll, with the
-  symbols drawn as labels *inside* the listing where they start — what `objdump -d` reads like.
-  *Done*: a third kind of document, `Document::Code`, one per object, opened by pressing the
-  object in the Objects list and drawn by `src/ui/section_view.rs` — every code section placed in
-  the parse's layout, a label per symbol, the rows estimated from the bytes before a stretch is
-  decoded and empty until it is, decoded in windows of a few screens around the reader through
-  the one worker, the place kept as an address, the pinned line's file beside it, and two doors
-  between it and the symbol view (`agents/Panes.md`, `agents/Worker.md`, `agents/UI.md`).
-  It is how you see what sits between two functions, what the padding is, and code no symbol
-  claims at all.
-  It is a **separate viewing mode beside the function/symbol assembly view, not a replacement
-  for it**. Both stay: reading one function is the common case and is what the panes, the
-  history and the saved session are all built around, while the section view is for the times
-  you need the surroundings. That is the deciding constraint for everything below — the
-  symbol-keyed machinery is not migrated, it stays exactly as it is, and the section mode brings
-  its own address-keyed answers alongside.
-  Three things in the way, all of them real and worth knowing before starting. **Length**: a
-  `VirtualScrollView` is told a row count up front, and x86 is variable-length, so instruction
-  *n* of a section cannot be found without decoding from a known start — the sorted symbol
-  addresses in `Section::symbols` are the sync points that make this tractable. *Decided, in
-  the crate* (`Listing`, `agents/Analysis.md`): the section is one stretch per symbol address,
-  each the symbol's own listing plus the bytes from its extent to the next label as a gap, and
-  a stretch is decoded when asked for and counted then; the skeleton is the addresses alone and
-  costs nothing. A gap is shown as bytes and never decoded — bytes no symbol claims are not
-  known to be code. And it is *all* the object's code, not one section's: every code section
-  placed in the layout the parse gives them (`CodeListing`), which is what makes one function
-  per section — rustc's shape — read as one listing rather than as many of one function. **Identity**: `Assembly::edges`, `Lanes`, the
-  per-tab viewing row and the copy-a-run selection are all indices into *one symbol's*
-  instructions. Being a separate mode is what makes that affordable — none of it has to change
-  — but the section mode needs the same four answers keyed by address instead, so the question
-  is whether those are generalised over what indexes them or written twice. Note that indices
-  were deliberately chosen over addresses in the first place, so that a symbol's edges are
-  independent of where it sits; a section listing has no such need. *Decided*: written twice.
-  The crate's half is on the row — every instruction has its `address` and a branch has the
-  address it names (`Instruction::branch`), judged by nothing, since whether the target has a
-  row is only known once the stretch it is in has been decoded; the other three are the view's
-  to write against those. **Scale**: the app's own binary's `.text` is far past what
-  decoding eagerly on the analysis worker would answer in one go, so this wants the worker to
-  answer for a *window* of the section rather than for a whole symbol.
-  Note what it would make easy in return: the "gap or line before a jump target" item below, and
-  showing a symbol in the context of its neighbours rather than as an island.
 
-- [x] Pixel-align the gutter's strokes. Every stroke in `gutter` is now placed by its **edges**
-  through `Grid` (`src/pixels.rs`), which rounds them to the device pixel grid rather than
-  putting a centre on a fraction and letting a one-pixel line come out as two grey ones. The
-  scale factor was there to be had: freya keeps it on `Platform`, a root context the renderer
-  writes and `freya-testing` takes from `with_scale_factor`, so `pixel_grid()` in
-  `ui/metrics.rs` reads it the way `fonts()` and `palette()` are read and subscribes the row
-  that asked. What was really blurred at 1× was the horizontal run and the cut at
-  `code_row_height() / 2.0` — whole numbers whenever the row height is even, and so half-pixels
-  once a stroke was centred on them; the lanes' own columns already landed right, `lane_x`
-  being half a pixel off a multiple and the stroke half a pixel wide. At a fractional scale all
-  of it was off. The arrowhead's diagonals are **not** aligned and never could be — at 30° a
-  line crosses into a new row of pixels wherever it is put — so they are weighted instead of
-  aligned: half a device pixel more ink, so the two rows the antialiasing spreads them over stop
-  reading lighter than the crisp run they point along. Only their pivot is snapped, and it is
-  that run's own end. The row's own top and bottom stay exact, a lane's line having to reach
-  them or the column comes out dashed, and a corner's half-stroke now ends at the far edge of
-  the run instead of inside it. The snapping is relative to the gutter's origin, which nothing
-  inside a row can see: at 1× and 2× every offset above it is whole, at 1.5× the pane's padding
-  decides. `pixels::tests` pins the geometry and
-  `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the laid-out strokes on a 26-pixel
-  row, the even height the old placement was worst on. The separator row's rule went the same
-  way and from the same answer, `Grid::stroke` over the middle of a row: it was centred by
-  `cross_align` and so sat at 12.5 in a 26-pixel row, and a rule half a pixel off the gutter's
-  horizontal run reads as a step where a branch lands on a boundary.
-  `a_block_rule_lands_on_whole_device_pixels` measures the rule against the run rather than
-  working the answer out a second time.
 - [ ] Drop the `<` `>` around a symbol's label in the unified view. A stretch's label is
   drawn `<name>:` (`src/ui/section_view.rs`, in the rows and in what is copied), objdump's
   spelling, and the brackets say nothing the colon and the row's own colour do not; a demangled
@@ -218,34 +103,6 @@ leaves this list when it is. That is a move made on request, like everything els
   answers; what is undecided is where the address is typed -- a box in the bar over the pane,
   or a Ctrl+G dialog -- whether it is the placed address the listing draws or the object's
   own, and what happens to one that falls between rows or outside every section.
-- [x] Let a call target with no symbol be opened, where the call spells its own address. A
-  direct `call` or `jmp` whose displacement is real and names no symbol's start — a call into
-  the middle of a function, a call to a function a stripped image has no symbol for, a jump
-  out of the symbol — keeps that address on its row (`Instruction::target`, with
-  `target_span` where the number was printed; `branch_span` is now derived from it), and the
-  number is a **Ctrl** door: pressed with Ctrl held it opens the object's code in a tab of its
-  own at that address, through the same `show_in_code` the instruction's menu uses, landing on
-  the row **at or below** the address — the instruction holding the byte, the row of bytes
-  covering it, and in a stretch the worker has not reached yet the guessed row and then, once
-  it has, the instruction, the kept place being re-applied exactly on the rebuild. A plain
-  press is a press on the row's text. The answer to "what a document is when there is no
-  symbol to name it" was the unified view's: a place in the object's code at an address, and
-  nothing new was added to `Document` for it.
-- [x] The doors that open a listing at an instruction put the caret there, and not only the
-  view. "Show in unified view", "Open as symbol" and the Ctrl door on an unnamed call's target
-  each named an instruction and scrolled to it, and the caret stayed wherever the listing had
-  left it -- nowhere, in a tab just opened -- so the keyboard had nothing to move from and the
-  pair lit nothing. A `Landing` carries an address beside its line now, and the half of it the
-  change of document cannot answer travels on as a `Planting`: the rows a caret goes on arrive
-  after the document does, a symbol's from the worker and an object's code's as the skeleton
-  comes and again as the stretch decodes, so the caret is planted by the listing that draws the
-  document -- `use_kept_place` on the row at or below the address, keeping the address itself
-  for the caret's row so the decode re-places it on the instruction holding the byte and not on
-  the row nearest the guess; `InstructionList`'s own effect on the instruction's row once the
-  worker's answer is drawn. The code pane owes the planted caret no scroll, the tab's place
-  being the same address; the symbol pane owes it the reveal, and the line's run stops owing
-  the pair's. A planting is spent by whichever document arrives, as a landing is, and one
-  whose address has no row is dropped rather than left.
 - [ ] Let a call target with no symbol be opened, where a relocation names it as a section and
   an addend. `Code::relocation` answers a `Relocated` whose `target` is `None` whenever the
   relocation points at something the object has no text symbol for — a section symbol with an
@@ -311,23 +168,6 @@ leaves this list when it is. That is a move made on request, like everything els
 - [ ] Make that search reachable and ranked: no keyboard shortcut puts the caret in the filter
   box, and matches come back in the list's own name order rather than by how well they match.
 - [ ] Left panel for project directory / source search.
-- [x] Open documents are tabs in the dock, beside Project / Settings / Scratchpad, rather than a
-  strip of the app's own over it. This reverses the earlier decision, whose argument was that the
-  dock tree is the layout and a layout must survive documents opening and closing. Two thirds of
-  that are answered by **designating** one panel: it is exempt from the folding sweep, so closing
-  the last document folds nothing away, and it gives one answer to "which document is active" —
-  its own active tab, from which `Active` is now *derived* rather than kept beside the list. The
-  remaining third is a real cost and is accepted: the layout and the list of open documents are no
-  longer separable, so the arrangement survives a close because a rule says so rather than because
-  the shape makes it impossible to break. What it buys is that a reader arranges documents the way
-  they already arrange the views — tabbed together, split, or dragged aside — and that there is one
-  kind of tab header to change instead of two. A document may only ever live in that panel, since
-  one visible document is what lets the analysis and the picked-out rows each hold one answer
-  for the window; a view may go anywhere, that panel included. The Source pane
-  stops being independently dockable in return, being inside a document rather than beside one.
-  A view being the tab on top means there is *no* active document, which is what keeps the
-  derivation honest and is the one visible edge: the analysis clears and the session records
-  nothing active until a document is on top again.
 - [ ] Refactor the tabs away from freya's dock panels and onto components of the app's own,
   with a fixed panel for the tabs rather than one the reader can fold, split or drag documents
   out of.
@@ -371,23 +211,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Fonts and settings
 
-- [x] Have a settings page where you can override (with a default being unspecified with clear
-  visual distinction). A dockable view with the theme (light / dark / follow the desktop, naming
-  which the desktop currently prefers) and, per font, a family box and a size stepper with a
-  preview in the resolved font. An override is told from an inherited value three ways: the
-  field's own label changes colour, the value is real text rather than a dim placeholder, and a
-  Clear button exists only where there is something to clear. What the placeholder shows is
-  `resolve(&Settings::default())`, so it is *by construction* the value that would be used
-  rather than a second guess at it. Sizes are a stepper and not a text box deliberately: with
-  settings applying live, a box means typing `1` on the way to `12` and getting a 1pt window,
-  and a third "not a number" state that nothing else here has.
-  Fonts became reactive the way colours did — asking for a font subscribes you to it — so a row's
-  height now follows the font it is drawn in instead of being a constant. There are two heights,
-  not one: the sidebar's rows are interface-font rows and the code panes' are fixed-width ones,
-  and no row mixes the two, so a single height over the larger of the fonts meant raising the
-  assembly font silently padded the sidebar. Each `item_size` comes from the height its own rows
-  draw at, which is what keeps a scroll view and its rows from disagreeing; saved viewing
-  positions are rows, so they survive a font change naming the same instruction.
 - [ ] A syntax-highlighting sample on the settings page, with the colours chosen from it. A
   block of source and a few lines of assembly drawn in the current palette -- a keyword, a
   type, a call, a string, a comment, an attribute; a mnemonic, a register, an immediate, an
@@ -487,28 +310,6 @@ leaves this list when it is. That is a move made on request, like everything els
   DLLs, so it cannot be told by an import name; the magic would be the gate. Undecided
   whether reading a runtime's private tables is within the "nothing is scanned for" rule,
   or worth it for a name that is mostly `<cleanup of …>`.
-- [x] ELF unwind entries: `.eh_frame`'s FDEs as declared code and extents, the way `.pdata`'s
-  are for a PE. Every FDE states a function's start and length, and `gimli`, already a
-  dependency, reads them (`unwind::elf`: `EhFrame`, its `entries` walked once front to back,
-  CIEs kept as they go by). The same format on every architecture, and on x86-64 every
-  function has one by default, leaves included, which is more than `.pdata` covers. Measured
-  on `librustc_driver.so` (712 MB, not stripped) before starting: 172 169 FDEs, every one
-  beginning at a `.symtab` function and every `.symtab` function but six having one,
-  `st_size` equal to the FDE's length in all 197 375 — so with a symbol table the FDEs add
-  no symbols, and the gains are a **stripped** ELF, whose `.dynsym` named 16 728 functions,
-  and every ELF's **extents**, which now come from the table before the DWARF walk. Three
-  things left out, deliberately: `.eh_frame_hdr`, the unwinder's lookup table over the same
-  records, which a walk of the whole section does not need; `.debug_frame`, the same format
-  in an object built `-fno-asynchronous-unwind-tables`, whose DWARF already declares the
-  extents; and a relocatable `.o`'s `.eh_frame`, written before its addresses are — read as
-  they lie the committed `.o`'s FDEs fall inside `.text` and would hand `sum_to` an extent of
-  4 — which the reader refuses and a test pins. A `.cold` part has an FDE of its own and no
-  chained flag, so stripped it is a `<function 0x…>` of its own. Mach-O's `__eh_frame` is
-  one match arm away and untested, so not taken. Measured, release: the stripped copy goes
-  from 16 728 symbols to 172 169, opening in 400–540 ms from 300–345; reading the table costs
-  the unstripped `.so` 2.8–2.9 s to open from 2.5–2.7 and `viewer-sample` 1.26–1.28 s from
-  1.04–1.23, and the reverse index's first ask on `viewer-sample` falls from 2.2 s to 0.43 s,
-  115 096 of its 115 577 extents now stated and 481 still walked.
 - [ ] Take a nonzero `st_size` before the DWARF extent walk. The `.eh_frame` measurement
   says `st_size` was exact for every one of `librustc_driver.so`'s 197 375 functions, while
   `SymbolData::extent` never reads it: an ELF with a symbol table and no `.eh_frame` (built

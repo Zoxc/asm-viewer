@@ -2,14 +2,15 @@
 
 Only declared text symbols are disassembled. Nothing is scanned for code. In a linked image,
 the entry point and the exported functions are symbols too, one symbol per address.
-In an x86-64 PE the functions its unwind table states are symbols too; one nothing else names
-is called `<function 0x…>` by its address, with the stated length as its size. A chained
-unwind entry, a function fragment, is a symbol of its own, `<fragment 0x…>`, and its parent's
-extent stops where it begins.
+The functions a linked image's unwind table states, an x86-64 PE's `.pdata` or an ELF's
+`.eh_frame`, are symbols too; one nothing else names is called `<function 0x…>` by its
+address, with the stated length as its size. A relocatable object's `.eh_frame` is not read.
+A PE's chained unwind entry, a function fragment, is a symbol of its own, `<fragment 0x…>`,
+and its parent's extent stops where it begins.
 
 Line info comes from the binary's debug info.
 A function's extent is the smaller of what the debug info gives and the distance to the next
-symbol. In an x86-64 PE, an unwind entry covering the function states its end instead.
+symbol. An unwind entry covering the function states its end instead.
 
 Code is decoded as the architecture the object declares; x32 is decoded as 64-bit code.
 
