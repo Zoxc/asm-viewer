@@ -993,12 +993,22 @@ one item per part, so the unfinished half stays visible.
   is 610 302 bytes, stated; `rustc_driver.dll` from 115 861 symbols to 234 070; the opens
   cost 545–595 ms from 475–490 and 1.26–1.43 s from 1.19–1.31. The numbers are in
   `agents/Analysis.md`.
-- [ ] Fold a chained unwind entry into its parent. A cold part, or the second entry an
-  over-long prologue gets, is a `RUNTIME_FUNCTION` whose `UNWIND_INFO` carries
-  `UNW_FLAG_CHAININFO` and names the primary entry; today each is a `<function 0x…>` of its
-  own, which is the honest reading of the table without the flag byte, but a fragment named
-  "function". Reading the flag at the entry's unwind RVA would let it be a second range of
-  the parent's instead.
+- [ ] Name a chained unwind entry `<fragment 0x…>`, by its own address as a function is. A
+  cold part, or the second entry an over-long prologue gets, is a `RUNTIME_FUNCTION` whose
+  `UNWIND_INFO` carries `UNW_FLAG_CHAININFO` and names the primary entry — Microsoft's word
+  for it is a *function fragment*; today each is a `<function 0x…>` of its own, which is the
+  honest reading of the table without the flag byte. One byte read at the entry's unwind RVA
+  tells the two apart (195 of the LLVM DLL's 68 507 entries, 481 of `rustc_driver`'s
+  218 434). It stays a symbol of its own: the section listing decodes one stretch per symbol,
+  so a second range of the parent's would need multi-range symbols, which is another goal.
+  Not the same thing as a **funclet** — LLVM's and MSVC's word for an outlined `catch`,
+  cleanup, `filter` or `finally` body, which has a primary entry of its own and looks like a
+  small function to the table: LLVM emits no handler for a cleanup funclet at all (a `FIXME`
+  in `WinException::beginFunclet`), and a catch funclet is only told from a function by the
+  handler data it shares with its parent, which is the handler's own format
+  (`__CxxFrameHandler3`'s `FuncInfo`, `__C_specific_handler`'s scope table) and not the
+  image's. In both sample DLLs every handler is local code — a statically linked CRT — so
+  which format it is cannot be read off an import name either. Left as it is.
 - [x] PDB line info, through the `pdb2` crate (the maintained fork of `pdb`; the one that shares
   `fallible-iterator` with `gimli`): a linked PE names its `.pdb` in the debug directory's
   CodeView record, so an `.exe`/`.dll` built with debug info gets a source view. A second
