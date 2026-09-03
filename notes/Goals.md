@@ -1021,6 +1021,37 @@ one item per part, so the unfinished half stays visible.
   DLLs, so it cannot be told by an import name; the magic would be the gate. Undecided
   whether reading a runtime's private tables is within the "nothing is scanned for" rule,
   or worth it for a name that is mostly `<cleanup of …>`.
+- [ ] ELF unwind entries: `.eh_frame`'s FDEs as declared code and extents, the way `.pdata`'s
+  are for a PE. Every FDE states a function's start and length (`initial_address`, `len`),
+  and `.eh_frame_hdr` is the sorted table of them with a count up front; `gimli`, already a
+  dependency, parses both (`EhFrame`, `EhFrameHdr`, `FrameDescriptionEntry`). Measured on
+  `librustc_driver.so` (712 MB, not stripped): 172 169 FDEs, every one beginning at a
+  `.symtab` function and every `.symtab` function but six (the six with `st_size` 0) having
+  one, `st_size` equal to the FDE's length in all 197 375 — so with a symbol table the FDEs
+  add nothing, and the gain is the stripped case: `.dynsym` names 16 728 addresses, so a
+  stripped copy would go from 16 728 functions to 172 169, the same tenfold the LLVM DLL got.
+  x86-64 builds asynchronous unwind tables by default, leaves included, which is more than
+  `.pdata` covers. A `.cold` part has an FDE of its own (24 here) and a `.symtab` name;
+  stripped, it would be a nameless range like a PE fragment, with no chained flag to tell it
+  by. Two things to settle first: `.debug_frame` is the same format for an object built
+  `-fno-asynchronous-unwind-tables`, and a relocatable `.o`'s FDEs need relocating — the
+  `declared_code` rule excludes an `.o` outright today. And a question the measurement
+  raises on its own: `st_size` was exact for every function here, while `SymbolData::extent`
+  never reads it and the DWARF extent pass costs 2.0 s on this app's binary for the same
+  answer — whether a nonzero `st_size` should come before the DWARF walk is its own item.
+- [?] Exception handlers as targets, both formats. The unwind data names what runs on an
+  exception: on ELF the CIE's personality (`rust_eh_personality`, through a `DW.ref.` GOT
+  slot, in 45 008 of `librustc_driver.so`'s 172 169 FDEs; `__gxx_personality_v0` for C++)
+  and each FDE's LSDA in `.gcc_except_table` (2.4 MB here), whose call-site table says, per
+  call, where control lands — a **landing pad inside the same function**, not a funclet,
+  since the Itanium ABI has none — and whose action and type tables say what is caught; on
+  PE the handler and its `FuncInfo`, the funclet goal above. The viewer's use would be the
+  arrow gutter: a call's landing pad drawn as an edge the way a branch is, and a row marked
+  as one, which is the one thing about a function's control flow the listing cannot show
+  today. The LSDA is the C++ ABI's format rather than the file's, shared by GCC, Clang and
+  rustc and stable, where PE's is one C runtime's; whether reading either sits inside the
+  "nothing is scanned for" rule is the same question as the funclet goal's, and the two
+  should be decided together.
 - [x] PDB line info, through the `pdb2` crate (the maintained fork of `pdb`; the one that shares
   `fallible-iterator` with `gimli`): a linked PE names its `.pdb` in the debug directory's
   CodeView record, so an `.exe`/`.dll` built with debug info gets a source view. A second
