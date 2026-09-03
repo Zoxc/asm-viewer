@@ -1,7 +1,8 @@
 //! The assembly half of a document, from the row up: what a row is drawn out of, the
-//! branch gutter, the two operands a row can make a link of -- a relocation target's name
-//! and a branch's own displacement -- the virtual list of instructions and the pane
-//! holding it.
+//! branch gutter, the three operands a row can make a link of -- a relocation target's
+//! name, a branch's own displacement where the listing has its row, and the address an
+//! unnamed call or branch goes to, a door into the object's code that opens with Ctrl --
+//! the virtual list of instructions and the pane holding it.
 //!
 //! The gutter is drawn with **rects and not `canvas()`**, whose `RenderCallback` compares
 //! equal unconditionally -- exactly wrong for a row a scroll view recycles. And a row's
@@ -38,24 +39,32 @@ pub(crate) enum Link {
     Relocation,
     /// A branch's displacement, where the listing has the row it lands on.
     Branch,
+    /// The address an unnamed call or a branch this listing has no row for goes to: a
+    /// door into the object's code at that address, opened with Ctrl and plain text
+    /// without it.
+    Target,
 }
 
 /// How an instruction's text is drawn after its address: the formatter's spans up to the
 /// link, the link, and the spans after it. `linked` says whether its branch, if it has
 /// one, is drawn as a link -- which is the listing's to know, being whether it has the
-/// row the branch lands on. The two spans are exclusive -- a branch whose displacement is
-/// a relocation placeholder names no address of its own -- so there is at most one link,
-/// and an instruction with no span has an empty tail.
+/// row the branch lands on. The spans are exclusive -- a branch whose displacement is a
+/// relocation placeholder names no address of its own, and a target's span is a branch's
+/// own where the row is a branch -- so there is at most one link, and an instruction with
+/// no span has an empty tail.
 pub(crate) fn split(
     instruction: &Instruction,
     linked: bool,
 ) -> (&[(String, SpanKind)], Option<Link>, &[(String, SpanKind)]) {
     let link = match instruction.relocation_span {
         Some(i) if instruction.relocation.is_some() => Some((i, Link::Relocation)),
-        _ => instruction
-            .branch_span
-            .filter(|_| linked)
-            .map(|i| (i, Link::Branch)),
+        _ => match instruction.branch_span.filter(|_| linked) {
+            Some(i) => Some((i, Link::Branch)),
+            None => instruction
+                .target_span
+                .filter(|_| instruction.target.is_some())
+                .map(|i| (i, Link::Target)),
+        },
     };
     match link {
         Some((i, link)) if i < instruction.format.len() => (
@@ -95,6 +104,14 @@ pub(crate) fn instruction_line(assembly: &Assembly, index: usize) -> Line {
         Some(Link::Branch) => {
             if let Some((text, _)) = instruction
                 .branch_span
+                .and_then(|i| instruction.format.get(i))
+            {
+                line.push_inline(text.clone());
+            }
+        }
+        Some(Link::Target) => {
+            if let Some((text, _)) = instruction
+                .target_span
                 .and_then(|i| instruction.format.get(i))
             {
                 line.push_inline(text.clone());
@@ -169,6 +186,19 @@ impl PartialEq for AsmData {
 }
 
 impl AsmData {
+    /// `address`, one of this listing's own, in the object's one address space: the
+    /// section's place in the layout added (`Section::bias`), which is what a door into
+    /// the object's code takes. Not [`bias`](Self::bias), which is what this listing
+    /// *draws* and is nothing in a symbol's own listing, whose addresses are the file's.
+    pub(crate) fn placed(&self, address: u64) -> u64 {
+        let bias = self
+            .symbol
+            .section
+            .as_ref()
+            .map_or(0, |section| section.bias);
+        address.wrapping_add(bias)
+    }
+
     /// The source position the instruction at `index` was compiled from, or `None` where
     /// the debug info gives it none: no line info at all, an address no row covers, or a
     /// row naming no file or sitting on DWARF's line 0.
@@ -293,6 +323,95 @@ impl Component for RelocationLabel {
                 palette().name_hover_fg
             } else {
                 palette().name_fg
+            }))
+    }
+}
+
+/// The address an unnamed call, or a branch this listing has no row for, goes to: a
+/// door into the object's code, in the unified view at that address, that opens with
+/// **Ctrl** as a label's does in that view (`TextRow`) and is the plain number without it,
+/// a press on which picks the row out like a press on any of the row's text. Lit as a
+/// link only while Ctrl is held, which is when a press is one.
+///
+/// A tab of its own, as `show_in_code` opens one from the instruction's menu, landing on
+/// the row at or below the address (`section::Rows::row_for`): a call into the middle of
+/// a function lands on the instruction holding the byte, a target in a data stretch on
+/// the row of bytes covering it. The line is left unknown, the target's row not being
+/// this row.
+#[derive(Clone)]
+struct TargetLabel {
+    /// The operand as the disassembler printed it, which is what a reader is clicking.
+    text: String,
+    object: Arc<Object>,
+    /// Where the instruction goes, placed: in the object's one address space.
+    address: u64,
+}
+
+impl PartialEq for TargetLabel {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+            && Arc::ptr_eq(&self.object, &other.object)
+            && self.address == other.address
+    }
+}
+
+impl Component for TargetLabel {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let ctrl = use_consume::<Ctrl>().0;
+        let open = use_open();
+        let visits = use_consume::<Visited>().0;
+        let marked = use_consume::<Marked>().0;
+        let landing = use_consume::<Land>().0;
+        let code_at = use_consume::<CodeAt>().0;
+        let object = self.object.clone();
+        let address = self.address;
+        let text = self.text.clone();
+        // A link while Ctrl is held: the cue is the name's colour and the box a relocation
+        // link wears, since that is the door it is.
+        let link = hovering() && ctrl();
+
+        rect()
+            .maybe(link, |rect| {
+                rect.background(palette().link_hover_bg)
+                    .corner_radius(6.0)
+                    .border(
+                        Border::new()
+                            .fill(palette().name_hover_fg)
+                            .width(BorderWidth {
+                                top: 0.0,
+                                right: 0.0,
+                                bottom: 2.0,
+                                left: 0.0,
+                            }),
+                    )
+            })
+            .on_pointer_over(move |_| hovering.set_if_modified(true))
+            .on_pointer_out(move |_| hovering.set_if_modified(false))
+            .on_press(move |e: Event<PressEventData>| {
+                // A plain press is a plain press: it goes on into the row, which
+                // `pointer_down` has already picked out, and opens nothing.
+                if !*ctrl.peek() {
+                    return;
+                }
+                // Or the press bubbles into the row, which would pin the line the
+                // instruction being left came from.
+                e.stop_propagation();
+                show_in_code(
+                    open,
+                    visits,
+                    marked,
+                    landing,
+                    code_at,
+                    object.clone(),
+                    address,
+                    None,
+                );
+            })
+            .child(label().text(text).max_lines(1).color(if link {
+                palette().name_hover_fg
+            } else {
+                kind_color(SpanKind::Address)
             }))
     }
 }
@@ -673,8 +792,14 @@ impl Component for InstructionRow {
         // has placed the symbol's section.
         let address = instruction.address.wrapping_add(self.data.bias);
         // The row's door into the object's code, unless this listing is that already --
-        // and from there, the door back to the symbol read alone.
-        let neighbours = (!self.data.code_tab).then(|| (self.data.object.clone(), address));
+        // and from there, the door back to the symbol read alone. The door takes the
+        // placed address, which in a symbol's own listing is not the one drawn.
+        let neighbours = (!self.data.code_tab).then(|| {
+            (
+                self.data.object.clone(),
+                self.data.placed(instruction.address),
+            )
+        });
         let alone = self.data.code_tab.then(|| Symbol {
             object: self.data.object.clone(),
             data: self.data.symbol.clone(),
@@ -713,6 +838,22 @@ impl Component for InstructionRow {
                         at: self.data.position(edge.to),
                         controller: self.controller,
                         viewport: self.viewport,
+                    }
+                    .into_element()
+                })
+            }
+            // Where the instruction goes, with no name and no row here: the door into the
+            // object's code at that address, in either listing -- the unified view's own
+            // rows included, where the target may be screens away.
+            Some(Link::Target) => {
+                let span = instruction
+                    .target_span
+                    .and_then(|i| instruction.format.get(i));
+                instruction.target.zip(span).map(|(target, (text, _))| {
+                    TargetLabel {
+                        text: text.clone(),
+                        object: self.data.object.clone(),
+                        address: self.data.placed(target),
                     }
                     .into_element()
                 })
@@ -772,6 +913,7 @@ impl Component for InstructionRow {
             inline,
             tail: spans(tail, false),
             chars: self.chars,
+            door: link == Some(Link::Target),
         };
 
         // The menu: the line's locations, where the debug info gives the row a line; the

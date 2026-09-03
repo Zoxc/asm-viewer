@@ -51,10 +51,12 @@ pub fn landing<T: Clone + PartialEq>(
 /// a [`crate::project::Document`] is compared by `Arc` pointer identity where it is a
 /// place in a binary and hashes by nothing at all.
 ///
-/// The value is a row for the two panes, and an **address** for the listing of an
-/// object's whole code, whose rows are counted afresh as it is decoded and where a row
-/// means nothing for long; the map is the same map either way, and only
-/// [`row`](Positions::row), the clamp against a listing's length, is a rows-only answer.
+/// The value is a row for the two panes, an **address** for the listing of an object's
+/// whole code, whose rows are counted afresh as it is decoded and where a row means
+/// nothing for long, and the **runs** each pane had picked out at the place -- which are
+/// not `Copy`, so a value need only be `Clone`; the map is the same map in all three,
+/// and only [`row`](Positions::row), the clamp against a listing's length, is a
+/// rows-only answer.
 pub struct Positions<T, V = usize> {
     at: Vec<(T, V)>,
 }
@@ -65,14 +67,14 @@ impl<T, V> Default for Positions<T, V> {
     }
 }
 
-impl<T: Clone + PartialEq, V: Copy + PartialEq> Positions<T, V> {
+impl<T: Clone + PartialEq, V: Clone + PartialEq> Positions<T, V> {
     /// Where `tab` was left, or `None` when it has never been anywhere — which a pane
     /// needs in order to tell "never seen" from "seen at the top".
     pub fn at(&self, tab: &T) -> Option<V> {
         self.at
             .iter()
             .find(|(open, _)| open == tab)
-            .map(|(_, at)| *at)
+            .map(|(_, at)| at.clone())
     }
 
     /// Remember that `tab` is at `at`, replacing whatever it was at before.

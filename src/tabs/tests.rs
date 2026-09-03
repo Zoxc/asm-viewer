@@ -134,6 +134,27 @@ fn a_closing_binary_forgets_every_position_into_it() {
     assert_eq!(positions.at(&"lib.a:three".to_owned()), None);
 }
 
+/// A value that is not `Copy` -- the runs a place keeps are not -- comes back whole,
+/// is replaced whole, and is forgotten with its tab like a row is.
+#[test]
+fn a_value_that_is_not_copy_comes_back_whole() {
+    let mut kept: Positions<String, Vec<usize>> = Positions::default();
+    assert_eq!(kept.at(&"a".to_owned()), None);
+    kept.remember("a".to_owned(), vec![3, 4]);
+    kept.remember("b".to_owned(), Vec::new());
+    assert_eq!(kept.at(&"a".to_owned()), Some(vec![3, 4]));
+    // Seen with nothing in it is not the same as never seen.
+    assert_eq!(kept.at(&"b".to_owned()), Some(Vec::new()));
+
+    kept.remember("a".to_owned(), vec![5]);
+    assert_eq!(kept.at(&"a".to_owned()), Some(vec![5]));
+    assert_eq!(kept.at.len(), 2);
+
+    kept.forgetting(|tab| tab != "a");
+    assert_eq!(kept.at(&"a".to_owned()), None);
+    assert_eq!(kept.at(&"b".to_owned()), Some(Vec::new()));
+}
+
 /// An entry of a source-driven tab's trail, which is the only kind [`Driven`] ever
 /// holds, on the tab `nth` ids from the first. The document is compared by its text, so
 /// two of these naming one file on one tab are one entry.

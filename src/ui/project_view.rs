@@ -256,6 +256,8 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         src_at,
         code_at,
         driven,
+        // What each place had picked out is a view of its tab, and not saved.
+        marks_at: _,
         visits,
         bookmarks,
     } = states;
@@ -435,6 +437,7 @@ pub(crate) fn clear_project(states: ProjectStates) {
         src_at,
         code_at,
         driven,
+        marks_at,
         visits,
         ..
     } = states;
@@ -448,13 +451,13 @@ pub(crate) fn clear_project(states: ProjectStates) {
     let binaries = project::binaries(&objects.peek());
     for path in binaries {
         close_binary(
-            objects, loading, open, asm_at, src_at, code_at, driven, visits, &path,
+            objects, loading, open, asm_at, src_at, code_at, driven, marks_at, visits, &path,
         );
     }
 
     let remaining = open.ids();
     for id in remaining {
-        close_tab(open, asm_at, src_at, code_at, driven, id);
+        close_tab(open, asm_at, src_at, code_at, driven, marks_at, id);
     }
 
     // And the record outright, which neither walk above does.

@@ -356,6 +356,7 @@ impl Component for TextRow {
             inline: None,
             tail: Vec::new(),
             chars: self.chars,
+            door: false,
         };
 
         // The gutter's width, so the address column starts where it does on an
@@ -510,6 +511,7 @@ impl Component for SectionList {
         let pair = pair_of(marked, Pane::Assembly);
         let docs = use_consume::<OpenDocs>().0;
         let code_at = use_consume::<CodeAt>().0;
+        let marks_at = use_consume::<MarksAt>().0;
         let a11y = use_a11y();
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);
@@ -553,6 +555,7 @@ impl Component for SectionList {
             },
             reading_state,
             marked,
+            marks_at,
             rows,
             controller,
             &entry,
@@ -849,12 +852,24 @@ fn build_row(
 /// generation changes, and set into `rows` in the same run that moves the controller, so
 /// the pass that first draws new rows draws them at the corrected offset rather than one
 /// frame early.
+///
+/// The picked-out run is kept the same way, in `marks_at` beside the runs `use_land`
+/// keeps by rows: the place each of its rows stands for, written whenever the run or the
+/// rows change ([`Kept::spots`], stamped with the generation), and read back when the
+/// rows are built **for the first time since the reading was reset** -- the run
+/// `use_land` put back is by rows of a listing that is gone, and is carried through
+/// those places to the rows there are now ([`Kept::carry`]). That run is always
+/// `use_land`'s: the reset is a change of the active entry, which `use_land` answers a
+/// pass after the memo, and the rows come a pass after the reading follows it. On the
+/// run that switches tab the marks on screen are still the last tab's, so nothing is
+/// written then unless this run carried a run of its own.
 fn use_kept_place(
     mut places: State<Positions<Entry, Spot>>,
     is_open: impl Fn(&Entry) -> bool + 'static,
     mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
     reading: State<Reading>,
     marked: State<Marks>,
+    mut marks_at: State<Positions<Entry, Kept>>,
     mut rows: State<Option<Arc<Built>>>,
     mut controller: ScrollController,
     tab: &Entry,
@@ -908,10 +923,15 @@ fn use_kept_place(
             let mut state = held.borrow_mut();
             let rebuilt = state.built != Some(generation);
             let switching = state.tab.as_ref() != Some(tab);
+            // The rows drawn until now, which are what the offset was scrolled against.
+            let before = rows.peek().clone();
+            // Whether this run put the tab's own run back, which makes it this tab's
+            // run to write down whether or not the tab is being switched to.
+            let mut carried = false;
             let built = if rebuilt {
                 let reading = reading.peek();
                 let Some(code) = reading.code.clone() else {
-                    if rows.peek().is_some() {
+                    if before.is_some() {
                         rows.set(None);
                     }
                     return;
@@ -921,25 +941,55 @@ fn use_kept_place(
                     reading: (*reading).clone(),
                 });
                 state.built = Some(generation);
-                // The run picked out over the old rows, carried to the new: each of its
-                // rows through the address it stood for, the way the reader's place is
-                // kept across the same recount. Nothing to carry from before there were
-                // rows, so a run left over from a listing this tab is not showing goes.
-                let before = rows.peek().clone();
-                carry_assembly(marked, |row| {
-                    let spot = spot_at(before.as_ref()?, row)?;
-                    let first = built.row_for(spot.address)?;
-                    Some((first + spot.rows).min(built.len().saturating_sub(1)))
-                });
+                match before.as_ref() {
+                    // The run picked out over the old rows, carried to the new: each of
+                    // its rows through the address it stood for, the way the reader's
+                    // place is kept across the same recount.
+                    Some(before) => {
+                        carry_assembly(marked, |row| row_of(&built, spot_at(before, row)?))
+                    }
+                    // The first rows since the reading was reset: the run kept for this
+                    // place, carried through the places kept with it, and nothing where
+                    // nothing was kept -- a run left over from a listing this tab is not
+                    // showing goes.
+                    None => {
+                        let kept = marks_at.peek().at(tab);
+                        let replanted =
+                            kept.and_then(|kept| kept.carry(|spot| row_of(&built, spot)));
+                        carried = replanted.is_some();
+                        set_assembly(marked, replanted);
+                    }
+                }
                 built
             } else {
-                match rows.peek().clone() {
+                match before.clone() {
                     Some(built) => built,
                     None => return,
                 }
             };
 
-            let row = ((top / height) as usize).min(built.len().saturating_sub(1));
+            // The places the run's rows stand for, written down as they change and only
+            // for a run that is this tab's own -- and for a tab still open, as the place
+            // below is.
+            if (!switching || carried) && is_open(tab) {
+                let spots =
+                    Kept::spots_of(marked.peek().assembly.as_ref(), |row| spot_at(&built, row));
+                let was = marks_at.peek().at(tab);
+                let kept = Kept {
+                    spots,
+                    generation: Some(generation),
+                    marks: was
+                        .as_ref()
+                        .map(|was| was.marks.clone())
+                        .unwrap_or_default(),
+                };
+                if was.as_ref() != Some(&kept) {
+                    marks_at.write().remember(tab.clone(), kept);
+                }
+            }
+
+            let scrolled = (top / height) as usize;
+            let row = scrolled.min(built.len().saturating_sub(1));
             let remainder = top - row as f64 * height;
             let derived = spot_at(&built, row);
             // Read and not peeked, unlike `use_kept_position`'s map: a place written from
@@ -956,12 +1006,15 @@ fn use_kept_place(
             // reader's and be written down over the place they asked for. So a move is
             // re-issued until a run finds the view there, a few times and no more.
             if let Some(moving) = state.moving {
-                if derived == Some(moving) || state.tries >= MOVE_TRIES {
+                // Arrived when the view's top row is the row the place names -- by row
+                // and not by spot, since a place written from outside can be an address
+                // inside a row, a call's target in the middle of an instruction, which
+                // no spot derived from the offset will ever spell.
+                if row_of(&built, moving) == Some(row) || state.tries >= MOVE_TRIES {
                     state.moving = None;
                 } else if !switching && !rebuilt {
                     state.tries += 1;
-                    if let Some(to) = built.row_for(moving.address) {
-                        let to = (to + moving.rows).min(built.len().saturating_sub(1));
+                    if let Some(to) = row_of(&built, moving) {
                         controller.scroll_to_y(to_offset(to as f64));
                     }
                     return;
@@ -972,8 +1025,18 @@ fn use_kept_place(
             let target: Option<Spot> = if switching {
                 known
             } else if rebuilt {
-                // The rows changed under the reader: back to the place they were at.
-                state.derived.or(known)
+                // The rows changed under the reader: back to the place they were at --
+                // the map's own place where the view was at it, as well as the old rows
+                // could tell, since a place written from outside is exact and a row's
+                // share of an undecoded stretch is a guess. A target in a stretch the
+                // worker had not reached lands on its own row once the stretch is
+                // decoded, and not on the row its guess was nearest.
+                let exact = known.filter(|known| {
+                    before.as_ref().is_some_and(|old| {
+                        row_of(old, *known) == Some(scrolled.min(old.len().saturating_sub(1)))
+                    })
+                });
+                exact.or(state.derived).or(known)
             } else if derived != state.derived && known != derived {
                 // A scroll: write it down, for a tab that is still open. The run after
                 // a close is still holding the tab and would put it straight back.
@@ -1002,10 +1065,9 @@ fn use_kept_place(
                 return;
             }
             if let Some(target) = target {
-                let Some(to) = built.row_for(target.address) else {
+                let Some(to) = row_of(&built, target) else {
                     return;
                 };
-                let to = (to + target.rows).min(built.len().saturating_sub(1));
                 if to != row || (rebuilt && switching) {
                     // Keeping the sub-row remainder, so a chunk landing above does not
                     // snap the view to a row edge.
@@ -1100,9 +1162,17 @@ fn row_compiled_from(rows: &Rows, reading: &Reading, pair: &Picked) -> Option<us
     })
 }
 
+/// The row `spot` names now: its address's row -- the row at or below the address, where
+/// the address is inside one -- and the rows past it, clamped to the listing. [`None`]
+/// for an address in no stretch.
+pub(crate) fn row_of(rows: &Rows, spot: Spot) -> Option<usize> {
+    let first = rows.row_for(spot.address)?;
+    Some((first + spot.rows).min(rows.len().saturating_sub(1)))
+}
+
 /// The place row `row` stands for: its address and how many rows past that address's own
 /// row it is.
-fn spot_at(rows: &Rows, row: usize) -> Option<Spot> {
+pub(crate) fn spot_at(rows: &Rows, row: usize) -> Option<Spot> {
     let address = rows.address_of(row)?;
     let first = rows.row_for(address)?;
     Some(Spot {

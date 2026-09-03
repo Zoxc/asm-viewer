@@ -60,6 +60,10 @@ pub(crate) struct Text {
     pub(crate) tail: Vec<Span<'static>>,
     /// What this row draws of the character selection.
     pub(crate) chars: RowChars,
+    /// Whether the inline element is a link only while Ctrl is held -- a door into the
+    /// object's code -- which is when the hand is shown over it; a link that is one
+    /// always shows the hand always.
+    pub(crate) door: bool,
 }
 
 /// What one row draws of the pane's character selection, as the list tells it: its
@@ -196,6 +200,11 @@ pub(crate) fn code_row(
     let text_x = use_hook(|| Rc::new(Cell::new(0.0f32)));
     // Whether the pointer is over the link inside the text, which the link's box says.
     let over_link = use_hook(|| Rc::new(Cell::new(false)));
+    // Whether the link is one now: always, or only while Ctrl is held, for a door. Asked
+    // at the pointer's move and not subscribed to, the icon being set from handlers.
+    let ctrl = try_consume_context::<Ctrl>().map(|ctrl| ctrl.0);
+    let door = text.as_ref().is_some_and(|text| text.door);
+    let hand = move || !door || ctrl.is_some_and(|ctrl| *ctrl.peek());
     // Whether the paragraph has been laid out, which is when the holder can answer where
     // a column is: the caret is drawn from the render after that.
     let mut laid = use_state(|| false);
@@ -335,7 +344,11 @@ pub(crate) fn code_row(
             rect()
                 .on_pointer_over(move |_| {
                     entered.set(true);
-                    set_icon(CursorIcon::Pointer);
+                    set_icon(if hand() {
+                        CursorIcon::Pointer
+                    } else {
+                        CursorIcon::Text
+                    });
                 })
                 .on_pointer_out(move |_| {
                     left.set(false);
@@ -436,7 +449,7 @@ pub(crate) fn code_row(
                 let at = e.element_location();
                 mark_drag(marked, pane, row, column(at, false));
                 let on_text = has_text && at.x as f32 >= text_x.get() - row_x.get();
-                set_icon(if over_link.get() {
+                set_icon(if over_link.get() && hand() {
                     CursorIcon::Pointer
                 } else if on_text {
                     CursorIcon::Text

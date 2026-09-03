@@ -492,6 +492,23 @@ unoptimized test build, once per object on the first disassembly; a lookup after
 search, 5 µs. A sort per click would have been the same 67 ms on every symbol opened, which is why
 it is not rebuilt per disassembly.
 
+**Where an instruction goes is kept beside what it is named** — `Instruction::target` and
+`target_span`. `target` is the address a direct near `call` or branch names in its own encoding
+where no relocation covers its bytes and no symbol has named it: a call into the middle of a
+function, a call to a function a stripped image has no symbol for, a jump out of the symbol. In
+the section's own address space, as `address` is, and `Some` exactly when `target_span` is —
+the span the number was printed into, which is `write_number`'s mark; `branch_span` is now
+*derived* from it, the same span for exactly the rows whose `branch` is set, so the two twins
+became three spans that are still exclusive: a call the resolver named has `relocation_span`
+and no `target` (its address is the symbol's own), a branch has `branch_span` and the same index
+in `target_span`, an unnamed call has `target_span` alone, and a row still has at most one
+link. Nothing is judged here either; what the UI does with it is a **Ctrl** door into the
+object's code at that address (`agents/Panes.md`). What it does not cover is a relocation
+against a section symbol with an addend — `Relocated { target: None }`, a call into `.text+0x40`
+in a relocatable object — whose target would be the section's address plus the addend, adjusted
+by the relocation's kind: the parse keeps no section symbols and the relocation's kind is not
+read, so that operand stays the placeholder it is and the item stays in `notes/Goals.md`.
+
 **Branch edges** (`Assembly::edges`) are the branches staying inside one symbol, for the arrow
 gutter. Both ends are **indices into `instructions`**, not addresses, because that is what a row
 can be asked about and it makes the answer independent of where the symbol sits. A backend leaves

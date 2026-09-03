@@ -162,6 +162,7 @@ impl Component for SourceRow {
             inline: None,
             tail: Vec::new(),
             chars: self.chars,
+            door: false,
         };
 
         // The menu: the line's locations and, inside a function as the file's parse

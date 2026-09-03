@@ -72,14 +72,17 @@ those trails was left), `CodeAt` (where each code tab's places were left, as add
 `Visited` (everywhere the reader has been), `Bookmarked` (the project's bookmarks, in their saved
 shape), `Proj` (which project all of that belongs to), `Loading` (the files on their way into
 `Objects`), `Marked` (each pane's picked-out run, and what it owes the other) with `Shift`
-and `Ctrl`, `Land` (a line to pick out the moment a document arrives), `CodeRows` (the section
+and `Ctrl`, `MarksAt` (what each place on each trail had picked out in each pane when it was
+last shown, put back with the place and never saved), `Land` (a line to pick out the moment a
+document arrives), `CodeRows` (the section
 view's rows, which the Source pane beside it reads too), `Analysis` (what
 the worker has to say about the selected symbol), `Sections`/`Window` (what it has decoded of the
 object whose code is on screen, and the stretches the view wants next), `Locations` (every symbol
 the line, or the function around it, last asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
 `SplitRatio`/`Splits` (how wide a document's leading side is), plus the memos `Symbols` and
-`Active`. The nine that a project *owns* travel together as a `ProjectStates`, since a project
-switch closes all of them and reopens all of them.
+`Active`. The eleven that a project *owns* travel together as a `ProjectStates`, since a project
+switch closes all of them and reopens all of them -- `MarksAt` among them for the closing and
+not the reopening, being the one that is never saved.
 
 **One strip, three kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**:
 `Document::Assembly(Selection)` — an object or a function — `Document::Source(Arc<str>)`, a
@@ -398,7 +401,14 @@ takes off the surviving trails too, which is not tidiness: an `Assembly` entry h
 `Arc<Object>` it points into — and the hook is handed `Docs::contains` precisely so that the run
 *after* a close, still holding the place that has gone, cannot put it straight back. The closers
 forget the driven lines with them, which *is* tidiness: a `Source` key holds no object, so nothing
-is being held up.
+is being held up. **Each place remembers what was picked out in each of its panes** the same
+way: `MarksAt` is a fourth map keyed by the same `Entry`, holding both panes' runs as they were
+left -- the caret and the selection, no gesture, nothing owed -- and, for an object's code, the
+place each row of the assembly run stood for; `use_land` (`agents/Panes.md`) saves under the
+entry being left and restores for the one arriving, a landing winning over what was kept and a
+kept run over a source-driven tab's driven line. It is forgotten in the three closers with the
+other three and by `Docs::contains` for the same reason, and it is the one of the four that
+`session.toml` never sees.
 
 **A code tab's place is an address, in the same map type.** The listing of an object's whole
 code is counted afresh with every answer that lands (`agents/Panes.md`), so a row there means
@@ -412,7 +422,16 @@ place written from outside while the tab is on top is answered (the run that wak
 write finds nothing moved and writes nothing); the rows the place is re-applied against are
 produced in the same run, so a chunk landing above the reader never draws one frame at the old
 offset; and a move it makes is re-issued until a run finds the view there, a few times and no
-more, since a `VirtualScrollView` clamps a target past its content. A place written from outside
+more, since a `VirtualScrollView` clamps a target past its content. "There" is **the row the
+place names** (`row_of`: `Rows::row_for` plus the rows past it, which rounds an address inside a
+row down to the row at or below it) and not the spot derived from the offset, since a place
+written from outside can be an address inside a row — a call's target in the middle of an
+instruction — that no derived spot ever spells. And when the rows are rebuilt under the view,
+the place put back is the map's own where the view was at it as well as the old rows could tell,
+and the derived one otherwise: a place written from outside is exact, a row's share of an
+undecoded stretch is a guess, and re-applying the guess landed a target in a stretch the worker
+had not reached on the row nearest its guess rather than on its own instruction
+(`the_code_opened_at_a_target_lands_on_the_row_at_or_below_it`). A place written from outside
 is answered **once, as a change of the map's value**, and never as "the map disagrees with the
 view": a listing of a large binary is millions of rows and tens of millions of pixels down, past
 where freya's `f32` scroll offset holds a pixel (`notes/upstream/freya.md`), so the view cannot

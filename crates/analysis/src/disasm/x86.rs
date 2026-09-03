@@ -79,6 +79,14 @@ impl Disassembler for X86 {
             } else {
                 branch_target(&instruction)
             };
+            // Where the instruction goes, for the operand to be a door there: a branch's
+            // own address, or a call's where no symbol has named it -- a name is the
+            // door, and a relocation placeholder names nowhere.
+            let target = if relocated {
+                None
+            } else {
+                branch.or_else(|| call_target(&instruction).filter(|_| relocation.is_none()))
+            };
 
             let mut inst = Instruction {
                 address: instruction.ip(),
@@ -88,6 +96,8 @@ impl Disassembler for X86 {
                 relocation_span: None,
                 branch_span: None,
                 branch,
+                target,
+                target_span: None,
             };
 
             // The resolver takes the name, so at most one operand is substituted however
@@ -114,12 +124,14 @@ impl Disassembler for X86 {
             formatter.format(&instruction, &mut inst);
 
             // `write_number` marks every branch-target operand the formatter writes, and a
-            // call's target and a far branch's selector-and-offset are written the same
-            // way. Only the instructions that named an address of their own above keep the
-            // mark: those are the ones a row can be pointed at.
-            if branch.is_none() {
-                inst.branch_span = None;
+            // far branch's selector-and-offset are written the same way. Only the
+            // instructions that named an address of their own above keep the mark, and a
+            // branch's is its `branch_span` too: those are the ones a row can be pointed
+            // at.
+            if target.is_none() {
+                inst.target_span = None;
             }
+            inst.branch_span = inst.target_span.filter(|_| branch.is_some());
 
             instructions.push(inst);
         }
@@ -156,7 +168,7 @@ impl iced_x86::FormatterOutput for Instruction {
     ///
     /// The *first* such span, since a far branch writes its selector and its offset both
     /// this way; the decode loop discards the mark for anything that is not a near branch
-    /// naming an address of its own.
+    /// or call naming an address of its own, and copies it to `branch_span` for a branch.
     fn write_number(
         &mut self,
         _instruction: &iced_x86::Instruction,
@@ -167,8 +179,8 @@ impl iced_x86::FormatterOutput for Instruction {
         _number_kind: iced_x86::NumberKind,
         kind: iced_x86::FormatterTextKind,
     ) {
-        if SpanKind::from(kind) == SpanKind::Address && self.branch_span.is_none() {
-            self.branch_span = Some(self.format.len());
+        if SpanKind::from(kind) == SpanKind::Address && self.target_span.is_none() {
+            self.target_span = Some(self.format.len());
         }
         self.write(text, kind);
     }

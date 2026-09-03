@@ -103,6 +103,7 @@ impl Component for TabClose {
         let src_at = use_consume::<SrcAt>().0;
         let code_at = use_consume::<CodeAt>().0;
         let driven = use_consume::<Drives>().0;
+        let marks_at = use_consume::<MarksAt>().0;
         let id = self.id;
 
         rect()
@@ -121,7 +122,7 @@ impl Component for TabClose {
             // wrapper and the close first switches to the tab it is closing.
             .on_press(move |e: Event<PressEventData>| {
                 e.stop_propagation();
-                close_tab(open, asm_at, src_at, code_at, driven, id);
+                close_tab(open, asm_at, src_at, code_at, driven, marks_at, id);
             })
             .child(
                 label()

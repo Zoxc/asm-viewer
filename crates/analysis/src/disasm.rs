@@ -196,6 +196,25 @@ pub struct Instruction {
     /// Nothing is judged here: a branch out of the symbol, into the middle of an
     /// instruction, or `jmp $` all keep their address.
     pub branch: Option<u64>,
+
+    /// The address this instruction's own encoding names and nothing here has named for
+    /// it: a direct near `call` or branch whose displacement is real -- no relocation
+    /// covers its bytes -- and whose target no text symbol starts at, since a call one
+    /// does is [`relocation`](Self::relocation)'s and its address is the symbol's. In the
+    /// same address space as [`address`](Self::address), the section's own. [`Some`]
+    /// exactly when [`target_span`](Self::target_span) is.
+    ///
+    /// [`branch`](Self::branch) plus the calls, kept apart because they answer different
+    /// questions: a branch is a line the gutter draws and a row this listing may have,
+    /// while this is only *where the instruction goes* -- into the middle of a function,
+    /// a function no symbol names, a stretch of a linked image nothing claims -- for a
+    /// reader to be taken there in a listing of the whole object. Nothing is judged.
+    pub target: Option<u64>,
+
+    /// Where in [`format`](Self::format) that number was printed, as
+    /// [`branch_span`](Self::branch_span) says where a branch's is -- the same span for a
+    /// branch, and a call's own for a call, which has no `branch_span`.
+    pub target_span: Option<usize>,
 }
 
 pub struct Assembly {

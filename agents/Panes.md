@@ -205,10 +205,13 @@ what the pointer already says and a pin was a second selection under another nam
 selection for the window meant picking out an instruction lost the run on the source side. Three
 things are load-bearing: **a position is a file and a line** (`LinePos`), since an inlined
 header's line 42 is not line 42 of the open file — the one `Arc` in the UI compared by
-*contents*; **a run is dropped only when its listing goes** — the assembly's when the question
-changes or the rows are counted afresh, the source's when the pane moves *off the run's file*
-(`use_clear_marks`) and not whenever the file changes, since a landing plants a run in the file
-the pane is about to show and the switch it causes must not be what drops it; and **the scroll
+*contents*; **a run is dropped only when its listing goes, or kept with its place** — the
+assembly's when the same place asks another question (a click on a line of a source-driven tab)
+or the rows are counted afresh, the source's when the pane moves *off the run's file* within one
+place (`use_clear_marks`) and not whenever the file changes, since a landing plants a run in the
+file the pane is about to show and the switch it causes must not be what drops it; a change of
+the active *entry* is neither effect's to answer, being a switch of place, which `use_land` owns
+whole (below); and **the scroll
 is a request, answered once** — `Picked::owed` says which panes have yet to scroll to the run,
 `owed_reveal` only *looks*, `reveal_made` is what clears a pane's flag, and `reveal_row` does
 nothing when the row is already on screen. A click in one pane owes the other; a landing owes
@@ -217,9 +220,9 @@ click that asks for the listing, so the run it wakes is still holding the previo
 no row matches — a single take would spend the request there and the listing that can answer it
 would arrive to nothing owed. A request nothing matches stays owed until the next click replaces
 it or the run is dropped with its listing. **And the ask is the run** for a source-driven tab:
-`use_land` drops both runs with the document and plants the driven line as the source pane's,
-with nothing owed, or coming back to one would show a listing with nothing lit and no reason
-given. None of this is a navigation: the selection does not change and nothing is pushed onto
+`use_land` plants the driven line as the source pane's run whenever the tab arrives with none
+kept for it, with nothing owed, or coming back to one would show a listing with nothing lit and
+no reason given. None of this is a navigation: the selection does not change and nothing is pushed onto
 any trail. `open_document` remains the only path for anything that does, and `navigate` the only
 one that moves a cursor. **Both rows do the
 left button and the right in one `pointer_down`**: freya's `on_secondary_down` is
@@ -232,11 +235,14 @@ it makes.** A row in the Locations panel opens its symbol *and* picks the line o
 asks the other, a click in neither asks both, and each pane pays its own half -- the source pane
 to its own run, the assembly pane to the pair. Opening is an `open_document` -- a `Preview` from
 a row, as every sidebar row's is, or a `NewTab` with Ctrl held (`agents/UI.md` for the three
-reaches) -- and the change of document that makes is exactly what `use_land` answers by dropping
-both runs -- so the row does not pick anything out; it leaves a `Landing` (`Land`, at the root)
-naming the document and the line, and that effect turns it into the source pane's run when the
-document it names arrives. Whichever document arrives spends it, the one it named or another, since
-a landing left lying would pick a line out in a document opened for some other reason later. A row
+reaches) -- and the change of document that makes is exactly what `use_land` answers by giving the
+arriving place its own runs -- so the row does not pick anything out; it leaves a `Landing`
+(`Land`, at the root) naming the document and the line, and that effect turns it into the source
+pane's run when the document it names arrives, **over whatever the place had kept** (below): a
+click from outside named a line, and the run it makes is the only run in either pane, or the
+assembly pane would light its old run beside the pair of the new. Whichever document arrives
+spends it, the one it named or another, since a landing left lying would pick a line out in a
+document opened for some other reason later. A row
 whose symbol is already on top picks the line out at once (`documents::land`), the opening then
 changing nothing and no effect running. A row answering a question asked from a source-driven tab
 chooses for that tab instead -- `Located::subject` carries the tab's id beside its file, and the
@@ -249,7 +255,27 @@ row is a row of no file. Ctrl is watched at the root exactly as Shift is (`Ctrl`
 both kept by `ModifierKeys`), a freya pointer event carrying no modifiers, and the label lights as
 a link only while it is held. A Caps Lock the desktop has made into Ctrl names itself Caps Lock in
 every event, so it is learnt from its first release (`ModifierKeys`' doc,
-`notes/upstream/freya.md`). **A relocation link and the companion header are clicks inside the
+`notes/upstream/freya.md`). **The third door is the address an instruction goes to when
+nothing names it** -- a call into the middle of a function, a call to a function a stripped
+image has no symbol for, a jump out of the symbol in a listing with no row for it
+(`Instruction::target`, `agents/Analysis.md`). The number is drawn as a `TargetLabel`
+(`Link::Target`, the third of `split`'s links), inline in the row's paragraph as the other two
+are, and a Ctrl-press on it is `show_in_code` with the **placed** address and no line: the
+object's code in a tab of its own, landed on the row **at or below** the address. That
+rounding is `section::Rows::row_for`'s and holds for every kind of row -- the instruction
+holding the byte, the row of bytes covering it, the guessed row of a stretch nobody has decoded
+-- and `use_kept_place` finishes it: a move has arrived when the view's top row is the row the
+place names, by row and not by spot, since a spot derived from the offset never spells an
+address inside a row; and when the rows are rebuilt under a view that was at the map's place
+as well as the old rows could tell, the map's place is re-applied and not the derived one, so a
+target in a stretch the worker had not reached lands on its own instruction once the stretch
+is decoded, not on the row its guess was nearest (`agents/UI.md`). A plain press on the
+number is a press on the row's text, and the label lights as a link -- and the row shows the
+hand over it (`Text::door`) -- only while Ctrl is held. Both doors into the object's code, this
+one and the menu's, take `AsmData::placed`, the section's bias added to the row's own address:
+the bias the *listing* draws is nothing in a symbol's own tab, and the code tab's rows are
+placed. Undefined imports and relocations against a section symbol stay plain text; the crate
+says why. **A relocation link and the companion header are clicks inside the
 tab**, and are followed **in place**: pushed onto the tab's trail so the function left is one Back
 away, the way a browser follows a link, and in a tab of their own beside it with Ctrl.
 An instruction's menu offers to show it among its neighbours -- "Show in unified view", offered in
@@ -267,6 +293,45 @@ with "Bookmark symbol" -- the symbol the row is code of, which in the code listi
 own -- through the same `bookmark_item` the sidebar rows and a tab's header use
 (`agents/Sidebar.md`), worded for a row that is an instruction and not the symbol; with it the menu
 always has something to offer, so a row opens one whether or not it has a line or a door.
+
+**Navigating brings back each pane's caret and selection with the place.** Back, Forward, a
+switch of tab and a place a tab has been at before put back, in **both** panes, what the reader had
+picked out there when the place was last shown -- the companion's run in an assembly-driven tab,
+the listing's in a source-driven one -- the way `use_kept_position` puts the scroll rows back.
+The runs are kept per tab and place, `MarksAt` at the root: a `Positions<Entry, Kept>` beside
+`AsmAt`/`SrcAt`, `Positions` generalised to a `Clone` value for it, forgotten in the same three
+closers for the same reason -- an `Entry` holds the `Arc<Object>` its document points into -- and
+never saved: a run is a view of a tab. `use_land` is the whole of it, and is the one effect that
+touches the marks on a change of the active entry: it holds the entry the runs on screen belong to
+in an `Rc<RefCell>`, as `use_kept_position` holds its tab, saves `Marked` under that entry on the
+way out -- **settled**, no gesture and nothing owed, and only while the entry is still on its
+trail, since the run after a close is still holding the place that has gone and would put its
+binary straight back -- and then gives the arriving place its own. Three rules settle what wins: a
+pending `Landing` over what was kept, in both panes; a kept run over the driven line, being the
+more specific, the driven line planted where the kept source run is none; and **a restored run
+owes no scroll**, the kept rows being what put each side back, and a reveal beside them would fight
+them. Writing on the way out and not on every change of `Marked` is deliberate: a sweep writes on
+every pointer move, and the entry those writes belong to is a memo a beat behind them. What made
+this subtle is that `use_clear_marks`'s two effects are woken by the same change of entry as
+`use_land`, in an order nothing guarantees -- a drop made there *for the switch* could land after
+the restore and take the restored run with it, which is what
+`navigating_brings_back_each_panes_caret_and_selection` saw before each of them learnt to keep
+the entry it last ran for and hand a change of entry off to `use_land` untouched. **An object's
+code is the one listing whose rows are not its rows next time**: the reading is reset when the
+tab is left (`use_reading_of`) and comes back as guesses, so a run kept by rows would land rows
+away. Its assembly run is kept with the **place each of its rows stood for** (`Kept::spots`,
+stamped with the reading generation), written by `use_kept_place` whenever the run or the rows
+change -- never on the run that switches tab, when the marks on screen are still the last tab's --
+and carried through them (`Kept::carry`) when the rows are built for the first time since the
+reset, which is a pass after `use_land` has put the kept run back; until then the pane's run is
+none, never a run of rows that are gone. `use_land` does that carry itself in the one case the
+rows on screen are already the object's at another generation, a second tab on the same code,
+where the section view rebuilds nothing. A restored run is never out of range for what is drawn:
+a symbol's listing and a file have the same rows every time, a code run any row of which has no
+place any more is dropped rather than guessed, and every reader of a run already answers a row
+past the end with nothing. `a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for`
+pins the carry, `a_landing_on_arrival_wins_over_the_kept_runs` the precedence and
+`closing_a_tab_and_a_binary_forget_the_kept_runs` the forgetting.
 
 **The arrow gutter** draws every branch staying inside the symbol, with the layout in `src/lanes.rs`
 because a `VirtualScrollView` builds row *n* knowing nothing but *n* — a row has to be *told* which
@@ -472,7 +537,9 @@ is listing rows: the section view's own rebuild (`use_kept_place`, which produce
 in the one run that moves the controller) carries it across through `carry_assembly`, each row of
 it -- the rows' two ends and the caret's -- put through the address it stood for in the old rows
 (`spot_at`) and back to a row of the new (`row_for`), the way the reader's place is kept across the
-same recount; a run any end of which has no row any more goes. It used to be dropped on every
+same recount; a run any end of which has no row any more goes. Across a *switch* the old rows
+are gone with the reading, and the run comes back through the places kept for it instead
+(`Kept::spots`, the paragraph on navigating above). It used to be dropped on every
 answer that landed, and with up to 64 stretches asked for and 8 answered a chunk, answers kept
 landing after the reader had clicked: the caret vanished and the companion file with it.
 

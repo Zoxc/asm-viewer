@@ -1,6 +1,6 @@
 use object::{
     read::archive::ArchiveFile, CompressionFormat, Object as _, ObjectKind, ObjectSection,
-    ObjectSymbol, Relocation, SectionKind, SymbolIndex, SymbolKind,
+    ObjectSymbol, Relocation, SectionKind, SymbolKind,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -25,7 +25,7 @@ pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
 pub use line::{DebugInfoCache, LineInfo, LineRow, Location, SourceDigests, SourceHash};
 pub use listing::{CodeListing, DecodedStretch, Gap, GapKind, Listing, Place, Placed, Stretch};
 // Re-exported so the viewer needs no `object` dependency of its own.
-pub use object::{Architecture, BinaryFormat, SectionIndex};
+pub use object::{Architecture, BinaryFormat, SectionIndex, SymbolIndex};
 
 /// [`Object`] is shared as an `Arc` and read from worker threads; the others are what a
 /// worker is handed and hands back. Asserted here so a field that stops being shared-safe

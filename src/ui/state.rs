@@ -333,6 +333,8 @@ pub(crate) struct ProjectStates {
     pub(crate) code_at: State<Positions<Entry, Spot>>,
     /// Which line each source-driven tab's assembly side is driven from.
     pub(crate) driven: State<Driven>,
+    /// What each place had picked out in each pane when it was last shown. Never saved.
+    pub(crate) marks_at: State<Positions<Entry, Kept>>,
     pub(crate) visits: State<Visits>,
     pub(crate) bookmarks: State<Bookmarks>,
 }
@@ -357,6 +359,7 @@ pub(crate) fn use_project_states() -> ProjectStates {
         code_at: use_consume::<CodeAt>().0,
         src_at: use_consume::<SrcAt>().0,
         driven: use_consume::<Drives>().0,
+        marks_at: use_consume::<MarksAt>().0,
         visits: use_consume::<Visited>().0,
         bookmarks: use_consume::<Bookmarked>().0,
     }

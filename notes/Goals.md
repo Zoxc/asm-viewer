@@ -173,6 +173,15 @@ one item per part, so the unfinished half stays visible.
   whose *current* place is in the file and thins every other trail, the cursor carried; and a
   click in the History panel is a click from outside, into the temporal tab. New tabs open
   beside the tab on screen.
+- [x] Navigating brings back each pane's caret and selection with the place. Back, Forward, a
+  switch of tab and a place a tab has been at before put back what the reader had picked out in
+  **both** panes -- the companion's run in an assembly-driven tab, the listing's in a
+  source-driven one -- the way the scroll rows come back, and owed no scroll, so the two cannot
+  fight. Kept per tab and place (`MarksAt`, an `Entry`-keyed map beside `AsmAt`/`SrcAt`,
+  forgotten in the same three closers), in memory only: `session.toml` never sees it. A landing
+  from outside the panes wins over what was kept; what was kept wins over a source-driven tab's
+  driven line; with nothing kept an arrival gets what it always got. An object's code, whose rows
+  are counted afresh when its tab is shown again, keeps its run by the places its rows stood for.
 - [x] Add `<`, `>` navigation buttons to the top bar. Two chevrons at the left of the toolbar,
   driving the same `navigate` the mouse's side buttons do, so every rule about tabs, selection
   and history holds without a second spelling of it. Each names where it would land in its
@@ -437,13 +446,28 @@ one item per part, so the unfinished half stays visible.
   answers; what is undecided is where the address is typed -- a box in the bar over the pane,
   or a Ctrl+G dialog -- whether it is the placed address the listing draws or the object's
   own, and what happens to one that falls between rows or outside every section.
-- [ ] Let a call target with no symbol be opened. `Code::relocation` answers a `Relocated`
-  whose `target` is `None` whenever the relocation points at something the object has no text
-  symbol for — a section, a data symbol, an undefined import — and the operand is then drawn
-  as the placeholder the linker will overwrite, with nothing to click. A reader who can see
-  where a call goes should be able to go there, so the question is what a document is when
-  there is no symbol to name it: a place in a section at an address, which is the same
-  question the unified section view above asks, and probably the same answer.
+- [x] Let a call target with no symbol be opened, where the call spells its own address. A
+  direct `call` or `jmp` whose displacement is real and names no symbol's start — a call into
+  the middle of a function, a call to a function a stripped image has no symbol for, a jump
+  out of the symbol — keeps that address on its row (`Instruction::target`, with
+  `target_span` where the number was printed; `branch_span` is now derived from it), and the
+  number is a **Ctrl** door: pressed with Ctrl held it opens the object's code in a tab of its
+  own at that address, through the same `show_in_code` the instruction's menu uses, landing on
+  the row **at or below** the address — the instruction holding the byte, the row of bytes
+  covering it, and in a stretch the worker has not reached yet the guessed row and then, once
+  it has, the instruction, the kept place being re-applied exactly on the rebuild. A plain
+  press is a press on the row's text. The answer to "what a document is when there is no
+  symbol to name it" was the unified view's: a place in the object's code at an address, and
+  nothing new was added to `Document` for it.
+- [ ] Let a call target with no symbol be opened, where a relocation names it as a section and
+  an addend. `Code::relocation` answers a `Relocated` whose `target` is `None` whenever the
+  relocation points at something the object has no text symbol for — a section symbol with an
+  addend (`.text+0x40`), a data symbol, an undefined import — and the operand is then drawn as
+  the placeholder the linker will overwrite, with nothing to click. The section-plus-addend
+  case is an address the object could compute, but the parse keeps no section symbols and
+  reads no relocation kind, both of which the sum depends on (`S + A` against a PC-relative
+  `P`); with those read it would be one more `target` and the door above would serve it. An
+  undefined import has no address at all and stays plain text whatever is read.
 
 ## UI
 

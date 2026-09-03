@@ -152,6 +152,86 @@ fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
     assert_eq!(empty.row_for(u64::MAX), None);
 }
 
+/// An address that is no row's own -- inside an instruction, inside a row of bytes,
+/// between two guessed rows -- finds the row **at or below** it: the last row of its
+/// stretch whose address is not past it, which is where a call into the middle of a
+/// function lands a reader. Decoded or not, so a target in a stretch the worker has not
+/// reached lands on its guess and, once it has, on its instruction.
+#[test]
+fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
+    let (object, code) = split();
+    let empty = nothing_decoded(code.clone());
+    let body = decode(&object, &code, &empty, 2);
+    let half = Rows::new(code.clone(), |flat| (flat == 2).then(|| body.clone()));
+    // A gap too: `add` decoded as if its extent stopped at its third instruction, the
+    // rest of its stretch left over as rows of bytes. The fixture's functions fill their
+    // stretches, so the gap is made by hand out of the same decode.
+    let mut cut = decode(&object, &code, &empty, 0);
+    let assembly = cut.assembly.clone().expect("add decodes");
+    assert!(assembly.instructions.len() > 3, "add is short");
+    let cut_at = assembly.instructions[2].address;
+    let stretch = &code.sections()[0].listing.stretches()[0];
+    cut.gap = Some(cut_at..stretch.range.end);
+    cut.assembly = Some(Arc::new(Assembly {
+        instructions: assembly.instructions[..2].to_vec(),
+        edges: Vec::new(),
+        undecodable: None,
+    }));
+    cut.lanes = Arc::new(Lanes::new(&[], 2));
+    let with_gap = Rows::new(code.clone(), |flat| (flat == 0).then(|| cut.clone()));
+
+    let mut inside = 0;
+    for (name, rows) in [
+        ("estimated", &empty),
+        ("half decoded", &half),
+        ("with a gap", &with_gap),
+    ] {
+        for flat in 0..rows.stretches.len() {
+            let range = rows_of(rows, flat);
+            let start = rows.start_of(flat).unwrap();
+            let end = start + rows.stretches[flat].bytes;
+            for address in start..end {
+                let expected = if address == start {
+                    range.start
+                } else {
+                    // The last row of the stretch at or before the address; a separator
+                    // shares its address with the row below it, which is the one found.
+                    range
+                        .clone()
+                        .filter(|&row| rows.address_of(row).is_some_and(|own| own <= address))
+                        .last()
+                        .unwrap()
+                };
+                let found = rows.row_for(address);
+                assert_eq!(
+                    found,
+                    Some(expected),
+                    "{name}: {address:#x} is drawn in row {expected}"
+                );
+                if rows.address_of(expected) != Some(address) {
+                    inside += 1;
+                }
+            }
+        }
+    }
+    assert!(inside > 0, "no address inside a row was tried");
+
+    // Spelt out: the instruction holding the byte, and the row of bytes covering it.
+    let bias = code.sections()[0].bias();
+    let body = with_gap.body_start(0).unwrap();
+    let second = &assembly.instructions[1];
+    assert!(second.bytes.len() > 1, "a one-byte instruction");
+    assert_eq!(with_gap.row_for(second.address + bias + 1), Some(body + 1));
+    assert_eq!(
+        with_gap.row(body + 2),
+        Some(Row::Gap {
+            stretch: 0,
+            index: 0
+        })
+    );
+    assert_eq!(with_gap.row_for(cut_at + bias + 3), Some(body + 2));
+}
+
 /// Decoding a stretch replaces its guess with its rows; every row above it stays where it
 /// was and every row below moves by the difference, which is what an address-keyed anchor
 /// absorbs.

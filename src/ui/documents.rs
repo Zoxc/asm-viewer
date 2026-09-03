@@ -152,6 +152,7 @@ pub(crate) fn close_tab(
     mut src_at: State<Positions<Entry>>,
     mut code_at: State<Positions<Entry, Spot>>,
     mut driven: State<Driven>,
+    mut marks_at: State<Positions<Entry, Kept>>,
     id: DocId,
 ) {
     let Open { mut dock, mut docs } = open;
@@ -195,6 +196,7 @@ pub(crate) fn close_tab(
     asm_at.write().forgetting(kept);
     src_at.write().forgetting(kept);
     code_at.write().forgetting(kept);
+    marks_at.write().forgetting(kept);
     driven.write().forget_tab(id);
 }
 
@@ -217,6 +219,7 @@ pub(crate) fn close_others(
     mut src_at: State<Positions<Entry>>,
     mut code_at: State<Positions<Entry, Spot>>,
     mut driven: State<Driven>,
+    mut marks_at: State<Positions<Entry, Kept>>,
     keep: DocId,
 ) {
     let Open { mut dock, mut docs } = open;
@@ -272,6 +275,7 @@ pub(crate) fn close_others(
     asm_at.write().forgetting(held);
     src_at.write().forgetting(held);
     code_at.write().forgetting(held);
+    marks_at.write().forgetting(held);
     // One guard rather than one write per tab: a write notifies whether or not it
     // changed anything, and a dozen tabs closing is one change.
     driven.write().forgetting(held);
@@ -298,6 +302,7 @@ pub(crate) fn close_binary(
     mut src_at: State<Positions<Entry>>,
     mut code_at: State<Positions<Entry, Spot>>,
     mut driven: State<Driven>,
+    mut marks_at: State<Positions<Entry, Kept>>,
     mut visits: State<Visits>,
     path: &Path,
 ) {
@@ -363,6 +368,7 @@ pub(crate) fn close_binary(
     asm_at.write().forgetting(kept);
     src_at.write().forgetting(kept);
     code_at.write().forgetting(kept);
+    marks_at.write().forgetting(kept);
     {
         // A source-driven tab stands, but a symbol it chose out of this file is let go:
         // the line beside the choice is what survives a close, and the next ask answers
@@ -450,6 +456,7 @@ pub(crate) fn tab_menu(
         src_at,
         code_at,
         driven,
+        marks_at,
         bookmarks,
         objects,
         ..
@@ -458,7 +465,9 @@ pub(crate) fn tab_menu(
     Menu::new()
         .maybe_child(others.then(|| {
             MenuButton::new()
-                .on_press(move |_| close_others(open, asm_at, src_at, code_at, driven, keep))
+                .on_press(move |_| {
+                    close_others(open, asm_at, src_at, code_at, driven, marks_at, keep)
+                })
                 // "tabs" and not "documents": the strip is what the reader is pointing at,
                 // and a view sharing the panel is a tab this leaves alone.
                 .child("Close other tabs")
@@ -503,6 +512,7 @@ pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
         src_at,
         code_at,
         driven,
+        marks_at,
         visits,
         ..
     } = states;
@@ -511,7 +521,8 @@ pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
         MenuButton::new()
             .on_press(move |_| {
                 close_binary(
-                    objects, loading, open, asm_at, src_at, code_at, driven, visits, &path,
+                    objects, loading, open, asm_at, src_at, code_at, driven, marks_at, visits,
+                    &path,
                 )
             })
             // "file" and not "object": the row may be one object of a file or the archive
@@ -711,6 +722,7 @@ pub(crate) fn reopen_binary(states: ProjectStates, path: PathBuf) {
         states.src_at,
         states.code_at,
         states.driven,
+        states.marks_at,
         states.visits,
         &path,
     );

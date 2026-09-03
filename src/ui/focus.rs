@@ -28,10 +28,10 @@ pub(crate) enum Pane {
 ///
 /// What a click from outside the two panes -- a row in the Locations panel -- needs and
 /// a click inside them does not: opening the document is an `open_document`, and the
-/// change of document that makes is exactly what `use_land` answers by dropping both
-/// panes' runs,
-/// so a run picked out in the same handler would be gone a beat later. Left here instead,
-/// for that effect to turn into the source pane's run when the document it names arrives.
+/// change of document that makes is exactly what `use_land` answers by giving the
+/// arriving place its own runs, so a run picked out in the same handler would be gone a
+/// beat later. Left here instead, for that effect to turn into the source pane's run when
+/// the document it names arrives -- over whatever the place had kept.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Landing {
     pub(crate) tab: Document,

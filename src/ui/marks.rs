@@ -102,6 +102,85 @@ impl Marks {
 #[derive(Clone, Copy)]
 pub(crate) struct Marked(pub(crate) State<Marks>);
 
+impl Marks {
+    /// The runs as a place keeps them while its tab is elsewhere: no gesture under way,
+    /// and no scroll owed -- the kept scroll rows are what put each side back when the
+    /// place is shown again, and a reveal owed beside them would fight them.
+    fn settled(&self) -> Marks {
+        let settle = |picked: &Option<Picked>| {
+            picked.as_ref().map(|picked| Picked {
+                rows: RowSelection {
+                    dragging: false,
+                    ..picked.rows
+                },
+                owed: Owed::default(),
+                ..picked.clone()
+            })
+        };
+        Marks {
+            assembly: settle(&self.assembly),
+            source: settle(&self.source),
+        }
+    }
+}
+
+/// What a place keeps of its two runs while its tab shows something else, or another tab
+/// is on top: the runs as they were, by rows -- a symbol's listing and a file have the
+/// same rows every time they are drawn -- and, for an object's code, whose rows are
+/// counted afresh every time the tab is shown, the place each row of the assembly run
+/// stood for in the rows it was picked out of, stamped with the reading generation those
+/// rows were counted at. `use_land` writes the runs as a place is left and puts them back
+/// as it arrives; the section view writes the places as its run changes and carries the
+/// run through them when its rows are new ([`Kept::carry`]).
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct Kept {
+    pub(crate) marks: Marks,
+    /// For each row the assembly run holds -- the rows' two ends and the caret's -- the
+    /// place it stood for. Empty except in an object's code.
+    pub(crate) spots: Vec<(usize, Spot)>,
+    /// The reading generation `spots` were taken against, under which the run's rows
+    /// are still its rows.
+    pub(crate) generation: Option<u64>,
+}
+
+impl Kept {
+    /// The place of every row `picked` holds, through `spot_at`; a row with no place is
+    /// left out, and the carry drops a run any row of which is missing.
+    pub(crate) fn spots_of(
+        picked: Option<&Picked>,
+        spot_at: impl Fn(usize) -> Option<Spot>,
+    ) -> Vec<(usize, Spot)> {
+        let Some(picked) = picked else {
+            return Vec::new();
+        };
+        let (anchor, lead) = picked.chars.ends();
+        let mut rows = vec![picked.rows.anchor, picked.rows.lead, anchor.row, lead.row];
+        rows.sort_unstable();
+        rows.dedup();
+        rows.into_iter()
+            .filter_map(|row| Some((row, spot_at(row)?)))
+            .collect()
+    }
+
+    /// The assembly run carried to rows counted afresh: every row of it put through the
+    /// place kept for it and `row_of`, which answers the row that place has now. `None`
+    /// for no run, and for a run any row of which has no place or no row any more.
+    pub(crate) fn carry(&self, row_of: impl Fn(Spot) -> Option<usize>) -> Option<Picked> {
+        let picked = self.marks.assembly.as_ref()?;
+        carried(picked, |row| {
+            let (_, spot) = self.spots.iter().find(|(kept, _)| *kept == row)?;
+            row_of(*spot)
+        })
+    }
+}
+
+/// The runs each place on each open tab's trail had picked out when it was last shown,
+/// shared through context. Keyed by [`Entry`] as [`AsmAt`] is, and forgotten with the
+/// entry in the three closers for the same reason: a key holds the `Arc<Object>` its
+/// document points into. Never saved: a run is a view of a tab.
+#[derive(Clone, Copy)]
+pub(crate) struct MarksAt(pub(crate) State<Positions<Entry, Kept>>);
+
 /// Whether Shift is held, which is what turns a click into "reach to here". Its own state,
 /// written from the root's *global* key handlers, because a freya pointer event carries no
 /// modifiers at all.
@@ -396,9 +475,15 @@ pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: us
 /// panes does: a [`Landing`], or the line a source-driven tab is driven from. `owed`
 /// says which panes have yet to scroll to it.
 pub(crate) fn mark_line(mut marked: State<Marks>, file: Arc<str>, line: u32, owed: Owed) {
-    let row = (line as usize).saturating_sub(1);
     let mut marks = marked.peek().clone();
-    marks.source = Some(Picked {
+    marks.source = Some(line_pick(file, line, owed));
+    marked.set_if_modified(marks);
+}
+
+/// The one-row run [`mark_line`] makes of `line`: the row, and a caret at its start.
+fn line_pick(file: Arc<str>, line: u32, owed: Owed) -> Picked {
+    let row = (line as usize).saturating_sub(1);
+    Picked {
         rows: RowSelection {
             anchor: row,
             lead: row,
@@ -408,8 +493,7 @@ pub(crate) fn mark_line(mut marked: State<Marks>, file: Arc<str>, line: u32, owe
         by_rows: false,
         file: Some(file),
         owed,
-    });
-    marked.set_if_modified(marks);
+    }
 }
 
 /// Sweep `pane`'s run out to `row`, which does nothing unless a run is already started.
@@ -691,40 +775,48 @@ fn move_caret(
 /// the rows' two ends and the caret's -- put through `map`, which answers a row of the
 /// old count with the row of the new; a run any end of which has no row any more is
 /// dropped. The columns stay: a row's text is the same text wherever its row is now.
-pub(crate) fn carry_assembly(mut marked: State<Marks>, map: impl Fn(usize) -> Option<usize>) {
+pub(crate) fn carry_assembly(marked: State<Marks>, map: impl Fn(usize) -> Option<usize>) {
     let Some(picked) = marked.peek().assembly.clone() else {
         return;
     };
-    let carried = (|| {
-        let (anchor, lead) = picked.chars.ends();
-        let rows = RowSelection {
-            anchor: map(picked.rows.anchor)?,
-            lead: map(picked.rows.lead)?,
-            ..picked.rows
-        };
-        let chars = CharSelection::between(
-            Caret {
-                row: map(anchor.row)?,
-                col: anchor.col,
-            },
-            Caret {
-                row: map(lead.row)?,
-                col: lead.col,
-            },
-        );
-        Some(Picked {
-            rows,
-            chars: if picked.chars.is_empty() {
-                chars.collapsed()
-            } else {
-                chars
-            },
-            ..picked
-        })
-    })();
+    set_assembly(marked, carried(&picked, map));
+}
+
+/// Put `picked` in the assembly pane, in place of whatever run was there.
+pub(crate) fn set_assembly(mut marked: State<Marks>, picked: Option<Picked>) {
     let mut marks = marked.peek().clone();
-    marks.assembly = carried;
+    marks.assembly = picked;
     marked.set_if_modified(marks);
+}
+
+/// `picked` with every row it holds put through `map`; `None` where any row has no
+/// answer. The columns stay: a row's text is the same text wherever its row is now.
+fn carried(picked: &Picked, map: impl Fn(usize) -> Option<usize>) -> Option<Picked> {
+    let (anchor, lead) = picked.chars.ends();
+    let rows = RowSelection {
+        anchor: map(picked.rows.anchor)?,
+        lead: map(picked.rows.lead)?,
+        ..picked.rows
+    };
+    let chars = CharSelection::between(
+        Caret {
+            row: map(anchor.row)?,
+            col: anchor.col,
+        },
+        Caret {
+            row: map(lead.row)?,
+            col: lead.col,
+        },
+    );
+    Some(Picked {
+        rows,
+        chars: if picked.chars.is_empty() {
+            chars.collapsed()
+        } else {
+            chars
+        },
+        ..picked.clone()
+    })
 }
 
 /// Collapse `pane`'s selection to its caret where anything is selected, the rows to the
@@ -764,6 +856,14 @@ fn peel(mut marked: State<Marks>, pane: Pane) {
 /// At the root and keyed on the states that say *which listing*, **never on the listings
 /// themselves**: `AsmData` carries an `Arc<Lanes>` rebuilt every render, so an effect
 /// inside each list would fire on every render and wipe the run the press just started.
+///
+/// **Neither run is dropped here on a change of the active entry.** A switch of place is
+/// [`use_land`]'s: it saves the runs of the place being left and puts back the arriving
+/// place's own, and it does so in an effect woken by the same change as these two, in
+/// no order anyone can rely on -- a drop made here for the switch could land after the
+/// restore and take the restored run with it. So each effect keeps the entry it last ran
+/// for and, when the entry has changed, records the new one and does nothing else; what
+/// it drops is a listing replaced *within* one place.
 pub(crate) fn use_clear_marks(
     active: Memo<Option<Entry>>,
     asked: Asked,
@@ -773,29 +873,41 @@ pub(crate) fn use_clear_marks(
     // The **question** and not the active document: a source-driven tab's listing is
     // replaced when a line in it is clicked, which changes no document, and a run picked
     // out of the last line's function would survive into the next one's as raw row
-    // indices. Every document change that can have a run under it changes the question
-    // too, so this is a superset of what it was.
+    // indices. The entry and the question this last ran for, in an `Rc<RefCell>` and not
+    // a `State`: nothing renders from them.
+    let asked_for = use_hook(|| Rc::new(RefCell::new(None::<(Option<Entry>, Option<Ask>)>)));
     use_side_effect(move || {
-        let _ = asked.read_ask();
-        unmark(marked, Pane::Assembly);
+        let ask = asked.read_ask();
+        let entry = active.peek().clone();
+        // Cloned out of the borrow before the `borrow_mut`.
+        let was = asked_for.borrow().clone();
+        *asked_for.borrow_mut() = Some((entry.clone(), ask.clone()));
+        let Some((was_entry, was_ask)) = was else {
+            return;
+        };
+        // The same place asking another question: the listing under the run is going.
+        if was_entry == entry && was_ask != ask {
+            unmark(marked, Pane::Assembly);
+        }
     });
-    // Which file the Source pane was drawing the last time this ran. An `Rc<RefCell>`
-    // and not a `State`: nothing renders from it.
-    let showing = use_hook(|| Rc::new(RefCell::new(None::<Arc<str>>)));
+    // Which entry, and which file the Source pane was drawing, the last time this ran.
+    let showing = use_hook(|| Rc::new(RefCell::new((None::<Entry>, None::<Arc<str>>))));
     use_side_effect(move || {
         // The *file the Source pane is drawing*, which is not the active document: two
         // functions from one file leave the same lines on screen. Compared against what
         // it last was rather than answered to directly, since reading the analysis
         // subscribes this to writes -- a request, the slow flag -- that change no listing.
-        let active = active.read().clone().map(|(_, document)| document);
-        let file = source_side(active.as_ref(), &analysis.read(), &marked.read())
-            .map(|side| side.file().clone());
+        let active = active.read().clone();
+        let document = active.as_ref().map(|(_, document)| document);
+        let file =
+            source_side(document, &analysis.read(), &marked.read()).map(|side| side.file().clone());
         // Cloned out of the borrow before the `borrow_mut`.
-        let was = showing.borrow().clone();
-        if was == file {
+        let (was_entry, was) = showing.borrow().clone();
+        let switched = was_entry != active;
+        *showing.borrow_mut() = (active, file.clone());
+        if switched || was == file {
             return;
         }
-        *showing.borrow_mut() = file;
 
         // Dropped only when the pane moves **off the run's file**, and not whenever the
         // file changes: a run a landing plants is in the file the pane is about to show,
@@ -813,45 +925,127 @@ pub(crate) fn use_clear_marks(
     });
 }
 
-/// Start each document afresh: drop both runs whenever the active document changes, and
-/// plant the one the arrival asks for -- a [`Landing`] naming this document, picked out
-/// in the source pane with both panes owed the scroll; or, for a source-driven tab, the
-/// line it is driven from, with none owed, so coming back to a tab whose assembly side
-/// is a listing of one line shows which line and why.
+/// Give each place its own runs: whenever the active entry changes, keep the runs of the
+/// place being left under its entry ([`MarksAt`]) and put the arriving place's own back
+/// in both panes, the way its scroll rows come back -- the caret and the selection the
+/// reader left in each. A place that has never been shown has nothing kept, and gets
+/// what an arrival always got: a [`Landing`] naming this document, picked out in the
+/// source pane with both panes owed the scroll; or, for a source-driven tab, the line it
+/// is driven from, with none owed, so coming back to a tab whose assembly side is a
+/// listing of one line shows which line and why.
 ///
-/// A landing is spent by whichever document arrives, the one it named or another: it is
-/// for the next arrival only, and one left lying would pick a line out in a document
-/// opened for some other reason later.
+/// Three rules settle what wins. **A landing wins over what was kept**, in both panes: a
+/// click from outside named a line, and the run it makes is the only run, or the
+/// assembly pane would light its old run beside the pair of the new. **A kept run wins
+/// over the driven line**, being the more specific, and the driven line is planted where
+/// the kept source run is none -- the ask is the run. **A restored run owes no scroll**
+/// ([`Marks::settled`]): the kept rows put the view back, and the two must not fight.
+///
+/// The runs are saved here, on the way out, rather than on every change of [`Marks`]:
+/// a sweep writes on every pointer move, and the entry those writes belong to is a memo
+/// a beat behind them. The entry being left is therefore held in the hook, as
+/// `use_kept_position` holds its tab, and the save goes under it -- and only while it
+/// is still on its trail, since the run after a close is still holding the place that
+/// has gone and would put its binary straight back. A landing is spent by whichever
+/// document arrives, the one it named or another: it is for the next arrival only, and
+/// one left lying would pick a line out in a document opened for some other reason
+/// later.
+///
+/// **An object's code is the one listing whose rows are not its rows next time**: the
+/// reading is reset when the tab is left, and comes back as guesses. Its assembly run
+/// is carried through the places the section view kept for it ([`Kept::carry`]) --
+/// here, when the rows on screen are already that object's at another generation (a
+/// second tab on the same code), and otherwise by the section view itself when it first
+/// builds rows again, which is after this has run; until then the pane's run is none,
+/// never a run of rows that are gone.
 pub(crate) fn use_land(
     active: Memo<Option<Entry>>,
+    docs: State<Docs>,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
     driven: State<Driven>,
+    marks_at: State<Positions<Entry, Kept>>,
+    code_rows: State<Option<Arc<Built>>>,
 ) {
+    // The entry the runs on screen belong to. An `Rc<RefCell>` and not a `State`:
+    // nothing renders from it.
+    let showing = use_hook(|| Rc::new(RefCell::new(None::<Entry>)));
+
     use_side_effect(move || {
         // Subscribes the effect to the active document, which is all it wants from it;
         // the landing is peeked, so setting one wakes nothing until the document does.
         let active = active.read().clone();
+        let (mut marked, mut landing, mut marks_at) = (marked, landing, marks_at);
 
-        let (mut marked, mut landing) = (marked, landing);
+        // Cloned out of the borrow before the `borrow_mut`.
+        let leaving = showing.borrow().clone();
+        if leaving == active {
+            return;
+        }
+        *showing.borrow_mut() = active.clone();
+
+        // The runs of the place being left, kept under it -- for an entry still on its
+        // trail, and only when they changed: `State::write` notifies whether or not the
+        // value changes. A place left with nothing picked out and nothing kept gets no
+        // entry: it comes back as a place never seen does, and a restored session walks
+        // through every tab it reopens.
+        let left = leaving.filter(|(tab, document)| docs.peek().contains(*tab, document));
+        if let Some(entry) = left {
+            let was = marks_at.peek().at(&entry);
+            let kept = Kept {
+                marks: marked.peek().settled(),
+                ..was.clone().unwrap_or_default()
+            };
+            let unseen = was.is_none() && kept == Kept::default();
+            if !unseen && was.as_ref() != Some(&kept) {
+                marks_at.write().remember(entry, kept);
+            }
+        }
+
         let asked = landing.peek().clone();
         if asked.is_some() {
             landing.set(None);
         }
         let landed = asked
             .filter(|landing| Some(&landing.tab) == active.as_ref().map(|(_, document)| document))
-            .map(|landing| (landing.at.file, landing.at.line, Owed::BOTH));
-        let planted = landed.or_else(|| match &active {
-            Some(entry @ (_, Document::Source(file))) => driven
-                .peek()
-                .line(entry)
-                .map(|line| (file.clone(), line, Owed::default())),
+            .map(|landing| line_pick(landing.at.file, landing.at.line, Owed::BOTH));
+        let kept = match (&landed, &active) {
+            (None, Some(entry)) => marks_at.peek().at(entry),
             _ => None,
-        });
+        };
 
-        marked.set_if_modified(Marks::default());
-        if let Some((file, line, owed)) = planted {
-            mark_line(marked, file, line, owed);
+        let mut marks = Marks::default();
+        match (landed, kept) {
+            (Some(planted), _) => marks.source = Some(planted),
+            (None, Some(kept)) => {
+                marks.source = kept.marks.source.clone();
+                marks.assembly = match &active {
+                    Some((_, Document::Code(object))) => {
+                        code_rows.peek().as_ref().and_then(|built| {
+                            if !built.reading.is_about(object) {
+                                return None;
+                            }
+                            if kept.generation == Some(built.reading.generation) {
+                                kept.marks.assembly.clone()
+                            } else {
+                                kept.carry(|spot| row_of(built, spot))
+                            }
+                        })
+                    }
+                    _ => kept.marks.assembly.clone(),
+                };
+            }
+            (None, None) => {}
         }
+        if marks.source.is_none() {
+            marks.source = match &active {
+                Some(entry @ (_, Document::Source(file))) => driven
+                    .peek()
+                    .line(entry)
+                    .map(|line| line_pick(file.clone(), line, Owed::default())),
+                _ => None,
+            };
+        }
+        marked.set_if_modified(marks);
     });
 }

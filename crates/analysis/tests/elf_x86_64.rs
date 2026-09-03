@@ -794,6 +794,13 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     assert_eq!(text(&assembly.instructions[0]).trim_end(), "call      5");
     assert_eq!(assembly.instructions[0].branch_span, None);
     assert_eq!(assembly.instructions[0].branch, None);
+    // It still says where it goes, in the span the number was printed into: the door
+    // into a listing of the whole object, which a branch's span is too.
+    assert_eq!(assembly.instructions[0].target, Some(5));
+    assert_eq!(
+        target_span(&assembly.instructions[0]),
+        Some(("5", SpanKind::Address))
+    );
 
     // A relocated `jmp target`: the displacement is a placeholder the name stands in for,
     // and the name is `relocation_span`'s. The two spans are exclusive.
@@ -818,14 +825,18 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     let jump = &assembly.instructions[0];
     assert_eq!(relocation_span(jump), Some(("target", SpanKind::Address)));
     assert_eq!(jump.branch_span, None);
+    assert_eq!(jump.target, None);
+    assert_eq!(jump.target_span, None);
 
     // And the same jump relocated against a data symbol, where nothing was substituted and
     // the placeholder is printed as it stands: still no span, on the same rule that drops
-    // the edge.
+    // the edge -- and no target either, a placeholder naming nowhere.
     let assembly = assemble(&parse(&branch_to_data()), "jumper");
     let jump = &assembly.instructions[0];
     assert_eq!(spans_of(jump, SpanKind::Address), ["5"]);
     assert_eq!(jump.branch_span, None);
+    assert_eq!(jump.target, None);
+    assert_eq!(jump.target_span, None);
 }
 
 #[test]
@@ -875,6 +886,13 @@ fn relocation_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKin
 /// The span [`analysis::Instruction::branch_span`] points at, with its kind.
 fn branch_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
     let index = instruction.branch_span?;
+    let (text, kind) = instruction.format.get(index)?;
+    Some((text.as_str(), *kind))
+}
+
+/// The span [`analysis::Instruction::target_span`] points at, with its kind.
+fn target_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
+    let index = instruction.target_span?;
     let (text, kind) = instruction.format.get(index)?;
     Some((text.as_str(), *kind))
 }
