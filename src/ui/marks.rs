@@ -2,7 +2,7 @@
 //! the other pane: the rows there that are the same place are lit, and a scroll to the
 //! first of them is owed once. One run per pane, independent of the other's; nothing
 //! here answers to the pointer. Beside the rows, the run of **characters** a sweep over a
-//! row's text makes, which is what Ctrl+C copies when there is one.
+//! row's text makes and the keyboard moves, which is what Ctrl+C copies when there is one.
 
 use freya::engine::prelude::{RectHeightStyle, RectWidthStyle};
 
@@ -514,7 +514,12 @@ pub(crate) fn copy_text(
     }
 }
 
-/// What Ctrl+C, Ctrl+A and Escape do to a listing's selection.
+/// What the keyboard does to a listing's selection: Ctrl+C, Ctrl+A and Escape, and the
+/// caret's keys -- the arrows by character and, with Ctrl, by word; Home and End to the
+/// row's ends and, with Ctrl, the listing's; Page Up and Page Down by a screen of rows
+/// -- each reaching the run out with Shift and collapsing it without ([`move_caret`]).
+/// `viewport` is how tall the list is, which is what a page is, and `reveal` is asked to
+/// bring the caret's row on screen after each move.
 ///
 /// Goes on the pane's own focusable box and **not** on a global key handler, which would
 /// fire while a filter bar had the keyboard and — sorting last (`EventName::cmp`) — would
@@ -524,13 +529,41 @@ pub(crate) fn on_listing_key(
     marked: State<Marks>,
     pane: Pane,
     rows: usize,
+    viewport: State<f32>,
     line: impl Fn(usize) -> String + 'static,
     text: impl Fn(usize) -> Line + 'static,
+    mut reveal: impl FnMut(usize) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     let mut marked = marked;
 
     move |e: Event<KeyboardEventData>| {
         let command = e.modifiers.contains(Modifiers::ctrl_or_meta());
+        let shift = e.modifiers.contains(Modifiers::SHIFT);
+
+        let motion = match &e.key {
+            Key::Named(NamedKey::ArrowLeft) if command => Some(Motion::WordLeft),
+            Key::Named(NamedKey::ArrowRight) if command => Some(Motion::WordRight),
+            Key::Named(NamedKey::ArrowLeft) => Some(Motion::Left),
+            Key::Named(NamedKey::ArrowRight) => Some(Motion::Right),
+            Key::Named(NamedKey::ArrowUp) => Some(Motion::Up),
+            Key::Named(NamedKey::ArrowDown) => Some(Motion::Down),
+            Key::Named(NamedKey::Home) if command => Some(Motion::ListingStart),
+            Key::Named(NamedKey::End) if command => Some(Motion::ListingEnd),
+            Key::Named(NamedKey::Home) => Some(Motion::RowStart),
+            Key::Named(NamedKey::End) => Some(Motion::RowEnd),
+            Key::Named(NamedKey::PageUp) => Some(Motion::PageUp),
+            Key::Named(NamedKey::PageDown) => Some(Motion::PageDown),
+            _ => None,
+        };
+        if let Some(motion) = motion {
+            // A page is the rows the list shows whole; the motion makes one of none.
+            let page = (*viewport.peek() / code_row_height()).floor().max(0.0) as usize;
+            let moved = move_caret(marked, pane, motion, shift, rows, page, &text);
+            if let Some(row) = moved {
+                reveal(row);
+            }
+            return;
+        }
 
         match &e.key {
             Key::Character(character) if command && character == "c" => {
@@ -568,6 +601,62 @@ pub(crate) fn on_listing_key(
             _ => {}
         }
     }
+}
+
+/// Move `pane`'s caret by `motion`, reaching the run out from its anchor with `extend`
+/// (Shift held) and collapsing it to the caret without; the row of the caret it left it
+/// at, for the pane to reveal, and `None` where there was nothing to move. A run of rows
+/// with no caret under it -- picked out from the gutter, or from outside the panes --
+/// is given one at its lead row's start first, and the key moves it from there; a
+/// listing with no run at all does nothing with the key.
+///
+/// The rows follow the caret, since they are the place the panes point at each other
+/// through: a one-row run at the caret's row, or with `extend` the run reached out to
+/// it. No drag, and **no scroll owed** to the other pane: it would be paid on every
+/// repeat of a held key, yanking the other pane about while the reader walks this one.
+/// The file stays what the run's was.
+fn move_caret(
+    mut marked: State<Marks>,
+    pane: Pane,
+    motion: Motion,
+    extend: bool,
+    length: usize,
+    page: usize,
+    text: impl Fn(usize) -> Line,
+) -> Option<usize> {
+    let picked = marked.peek().of(pane).clone()?;
+    let last = length.checked_sub(1)?;
+    let chars = picked.chars.unwrap_or_else(|| {
+        CharSelection::at(Caret {
+            row: picked.rows.lead.min(last),
+            col: 0,
+        })
+    });
+    let moved = chars.moved(motion, extend, text, length, page);
+    let row = moved.lead().row;
+    let rows = if extend {
+        RowSelection {
+            lead: row,
+            dragging: false,
+            ..picked.rows
+        }
+    } else {
+        RowSelection {
+            anchor: row,
+            lead: row,
+            dragging: false,
+        }
+    };
+
+    let mut marks = marked.peek().clone();
+    *marks.of_mut(pane) = Some(Picked {
+        rows,
+        chars: Some(moved),
+        owed: Owed::default(),
+        ..picked
+    });
+    marked.set_if_modified(marks);
+    Some(row)
 }
 
 /// Drop `pane`'s picked-out characters where a sweep made any, and otherwise the run

@@ -583,10 +583,12 @@ impl Component for SectionList {
         let on_key_down = {
             let rows = built.clone();
             let drawn = built.clone();
+            let mut controller = controller;
             on_listing_key(
                 marked,
                 Pane::Assembly,
                 length,
+                viewport,
                 move |row| {
                     rows.as_ref()
                         .map(|built| row_line(built, &built.reading, row))
@@ -598,6 +600,8 @@ impl Component for SectionList {
                         .map(|built| code_line(built, &built.reading, row))
                         .unwrap_or_default()
                 },
+                // The caret's row, brought on screen after a key has moved it.
+                move |row| reveal_row(&mut controller, *viewport.peek(), row),
             )
         };
 

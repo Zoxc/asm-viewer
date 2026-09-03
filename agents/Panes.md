@@ -523,3 +523,36 @@ copy and Escape's order, the link as one unit that still opens its symbol (the p
 one unit is skia's, which the registry cannot show, so the test is what says so), and the
 double press.
 
+**The keyboard moves the caret** (`Motion`, `CharSelection::moved`, `src/chars.rs`; `move_caret`
+in `ui/marks.rs`): the arrows by character and, with Ctrl, by word; Home and End to the row's
+ends and, with Ctrl, the listing's; Page Up and Page Down by a screen of rows; Shift reaches the
+run out from its anchor and a key without it collapses the run to the new caret. The motions are
+framework-free and tested against a five-row listing: a step is over a *character*, never a
+UTF-16 unit, so a two-unit character is one step and a column left inside one by a sweep rounds
+outward as `slice` does; an inline element is one step and one word; a word is a run of one
+kind -- alphanumerics and underscores, or punctuation -- with whitespace passed over first, the
+rule an editor's Ctrl+arrow follows, and skia's `get_word_boundary` is **not** used for it (it
+is what the double press takes, but it is a hit-test on a laid-out paragraph and a key move
+has no row on screen to ask). Left at a row's start goes to the row above's end and Right at its
+end to the row below's start; the listing's ends clamp rather than wrap. A vertical move keeps a
+**goal column** -- the column the lead had before the first of a run of them -- so moving down
+through a short row and on comes back to it; it lives in `CharSelection` and not `Picked`, since
+everything that puts the lead at a column of its own (a press, a sweep, a sideways key) clears
+it, and those are all `CharSelection`'s own constructors. The lead is clamped to the listing and
+the row's text first, because a sweep beyond the rows leaves it at `END`. The UI half decodes the
+key on the pane's own box, as Ctrl+C is, and does three things the model cannot: **the rows follow
+the caret** -- a one-row run at its row, or with Shift the run reached out to it, `dragging`
+false -- because the rows are the place the panes point at each other through and a caret on
+row 12 with the pair lit for row 3 would be two places at once; **no scroll is owed** to the other
+pane (`Owed::default()`), since a held key repeats and every repeat would yank the other pane
+about while the reader walks this one; and the pane reveals the caret's row through the same
+`reveal_row` a landing uses, handed in as a closure by each list. A run of rows with no caret
+under it -- from the gutter, Ctrl+A, or a landing -- is given one at its lead row's start and the
+key moves from there, so a landing can be walked away from; a listing with no run does nothing
+with the key. A page is `viewport / code_row_height()`, floored, and the motion makes one of
+none. Nothing edits: no Backspace, no typing. Four headless tests pin the mechanism, each on
+the ends of a row's text and a row's y so none measures a font: the caret moving with Right,
+Down, End, Home and a Left that crosses to the row above; Shift reaching out and a plain key
+collapsing; Ctrl+End scrolling a short pane to the last row and Ctrl+Home back; and an arrow
+key placing a caret on a gutter run, then doing nothing once Escape has dropped it.
+

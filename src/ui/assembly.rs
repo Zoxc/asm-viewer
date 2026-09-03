@@ -981,10 +981,12 @@ impl Component for InstructionList {
             let (text_assembly, text_lanes) = (assembly.clone(), lanes.clone());
             // A separator copies as the blank line it is drawn as, so a run lifted out of
             // the listing keeps the blocks apart on the way to the clipboard.
+            let mut controller = controller;
             on_listing_key(
                 marked,
                 Pane::Assembly,
                 length,
+                viewport,
                 move |row| {
                     lanes
                         .instruction_at(row)
@@ -999,6 +1001,8 @@ impl Component for InstructionList {
                         .map(|index| instruction_line(&text_assembly, index))
                         .unwrap_or_default()
                 },
+                // The caret's row, brought on screen after a key has moved it.
+                move |row| reveal_row(&mut controller, *viewport.peek(), row),
             )
         };
 

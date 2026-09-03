@@ -339,10 +339,12 @@ impl Component for SourceList {
         let on_key_down = {
             let source = self.source.clone();
             let drawn = self.source.clone();
+            let mut controller = controller;
             on_listing_key(
                 marked,
                 Pane::Source,
                 length,
+                viewport,
                 move |index| {
                     // The file's own text and not the row's spans: what is pasted is the
                     // line as it is on disk, tabs and all. The newline is the join's
@@ -360,6 +362,8 @@ impl Component for SourceList {
                 // The characters are columns of the line as drawn, so that is what they
                 // copy: an indentation as the spaces the row draws it as.
                 move |index| source_line(&drawn, index),
+                // The caret's row, brought on screen after a key has moved it.
+                move |index| reveal_row(&mut controller, *viewport.peek(), index),
             )
         };
 

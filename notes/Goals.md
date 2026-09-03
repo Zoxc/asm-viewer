@@ -295,6 +295,15 @@ one item per part, so the unfinished half stays visible.
   selection's colour, painted under the characters a sweep picked out and worn whole by the
   rows of a gutter's run (or Ctrl+A's, or a landing's), and the caret's row wears it faded
   (`cursor_row_bg`). A text sweep washes no row: the highlight is the selection.
+- [x] The keyboard moves the caret in both code panes and in an object's code: the arrows
+  by character and, with Ctrl, by word; Home and End to the row's ends and, with Ctrl, the
+  listing's; Page Up and Page Down by a screen of rows; Shift reaches the selection out and
+  a plain key collapses it. The motions are framework-free (`Motion`,
+  `CharSelection::moved` in `src/chars.rs`, with the word rule and the goal column a
+  vertical move keeps through short rows) and the UI half (`move_caret`, `ui/marks.rs`)
+  keeps the row run on the caret's row with no scroll owed to the other pane, reveals the
+  caret's row, and gives a gutter run a caret at its lead row's start on the first arrow
+  key. No editing keys. `agents/Panes.md`.
 - [ ] Ctrl+C copies whatever is selected, wherever it is: the run of rows in either pane
   today, the characters once the goal above lands, and the other places text is picked out
   -- a filter box, the scratchpad's editor, its diagnostics and its output -- so the one

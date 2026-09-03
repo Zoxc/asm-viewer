@@ -10343,3 +10343,291 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
     assert_eq!(picked.chars.unwrap().lead(), Caret { row: 0, col: 0 });
     assert!(paragraphs(&test).iter().all(|(_, _, h)| h.is_none()));
 }
+
+/// A key under modifiers, which no `TestingRunner` method sends: `press_key` hardcodes
+/// none. Goes to the focused node, as every key does.
+fn key_with(test: &mut TestingRunner, key: Key, modifiers: Modifiers) {
+    use freya::prelude::platform::{KeyboardEventName, PlatformEvent};
+
+    test.send_event(PlatformEvent::Keyboard {
+        name: KeyboardEventName::KeyDown,
+        key,
+        code: Code::Unidentified,
+        modifiers,
+    });
+    settle(test);
+}
+
+/// The arrow keys move the caret, and the run of rows and its wash go with it: Right one
+/// character along the row, Down to the row below at the same column, End and Home to the
+/// row's ends, and Left at a row's start to the end of the row above. The ends of a row's
+/// text are what is asserted against, so nothing here measures a font.
+#[test]
+fn the_arrow_keys_move_the_caret_and_the_run_of_rows_with_it() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let drawn = paragraphs(&test);
+    let (first, second) = (drawn[0].0, drawn[1].0);
+    let at = left_of(&first);
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    mark_release(marked);
+    settle(&mut test);
+    assert_eq!(carets(&test)[0].origin.x, first.origin.x);
+
+    // Right: one character on, still on the row and still inside its text.
+    test.press_key(Key::Named(NamedKey::ArrowRight));
+    settle(&mut test);
+    let caret = carets(&test);
+    assert_eq!(caret.len(), 1, "{caret:?}");
+    assert!(
+        caret[0].origin.x > first.origin.x && caret[0].origin.x < first.max_x(),
+        "the caret did not step along the row: {caret:?} in {first:?}"
+    );
+    assert_eq!(caret[0].origin.y, first.origin.y);
+    let chars = marked.peek().assembly.clone().unwrap().chars.unwrap();
+    assert_eq!(chars.lead(), Caret { row: 0, col: 1 });
+    assert!(chars.is_empty(), "a plain key swept characters out");
+
+    // Down: the row below, and the run of rows and the wash with it. No scroll is owed
+    // to the other pane -- a key repeat would yank it -- and no drag is under way.
+    test.press_key(Key::Named(NamedKey::ArrowDown));
+    settle(&mut test);
+    let caret = carets(&test);
+    assert_eq!(caret.len(), 1, "{caret:?}");
+    assert_eq!(caret[0].origin.y, second.origin.y);
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.chars.unwrap().lead(), Caret { row: 1, col: 1 });
+    assert_eq!(
+        picked.rows.rows(),
+        1..=1,
+        "the rows did not follow the caret"
+    );
+    assert!(!picked.rows.dragging);
+    assert!(picked.owed == Owed::default(), "a key move owed a scroll");
+    let washes = rects_with(&test, palette().cursor_row_bg);
+    assert_eq!(washes.len(), 1, "{washes:?}");
+    assert_eq!(washes[0].origin.y, second.origin.y);
+
+    // End and Home: the row's own ends.
+    test.press_key(Key::Named(NamedKey::End));
+    settle(&mut test);
+    let caret = carets(&test);
+    assert!(
+        (caret[0].origin.x - second.max_x()).abs() <= 1.0,
+        "{caret:?} against {second:?}"
+    );
+    test.press_key(Key::Named(NamedKey::Home));
+    settle(&mut test);
+    assert_eq!(carets(&test)[0].origin.x, second.origin.x);
+
+    // Left at the row's start: the end of the row above.
+    test.press_key(Key::Named(NamedKey::ArrowLeft));
+    settle(&mut test);
+    let caret = carets(&test);
+    assert_eq!(caret[0].origin.y, first.origin.y);
+    assert!(
+        (caret[0].origin.x - first.max_x()).abs() <= 1.0,
+        "{caret:?} against {first:?}"
+    );
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.rows.rows(), 0..=0);
+}
+
+/// With Shift held a key reaches the run out from its anchor, characters and rows both,
+/// and each row between draws its part; a key without Shift collapses it to the caret.
+#[test]
+fn shift_and_a_key_reach_the_run_out_and_a_key_alone_collapses_it() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let drawn = paragraphs(&test);
+    let (first, second) = (drawn[0].0, drawn[1].0);
+    let at = left_of(&first);
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    mark_release(marked);
+    settle(&mut test);
+
+    // Shift+Down: the first row from the caret to its end, and nothing of the second,
+    // the lead being at its start.
+    key_with(&mut test, Key::Named(NamedKey::ArrowDown), Modifiers::SHIFT);
+    let drawn = paragraphs(&test);
+    assert!(spans(drawn[0].2, first.min_x(), first.max_x()), "{drawn:?}");
+    assert!(drawn[1].2.is_none(), "{drawn:?}");
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(
+        picked.chars.unwrap().ends(),
+        (Caret { row: 0, col: 0 }, Caret { row: 1, col: 0 })
+    );
+    assert_eq!(picked.rows.rows(), 0..=1);
+    assert!(!picked.rows.dragging);
+    assert!(carets(&test).is_empty(), "a caret under a highlight");
+
+    // Shift+End: the second row whole.
+    key_with(&mut test, Key::Named(NamedKey::End), Modifiers::SHIFT);
+    let drawn = paragraphs(&test);
+    assert!(spans(drawn[0].2, first.min_x(), first.max_x()), "{drawn:?}");
+    assert!(
+        spans(drawn[1].2, second.min_x(), second.max_x()),
+        "{drawn:?}"
+    );
+    // Shift+Down again: a third row in, and the rows with it.
+    key_with(&mut test, Key::Named(NamedKey::ArrowDown), Modifiers::SHIFT);
+    let drawn = paragraphs(&test);
+    assert!(
+        spans(drawn[1].2, second.min_x(), second.max_x()),
+        "{drawn:?}"
+    );
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.rows.rows(), 0..=2);
+    assert_eq!(picked.chars.unwrap().ends().0, Caret { row: 0, col: 0 });
+    // Shift+Up: back off the third row, the anchor still where the press was.
+    key_with(&mut test, Key::Named(NamedKey::ArrowUp), Modifiers::SHIFT);
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.rows.rows(), 0..=1);
+    assert_eq!(picked.chars.unwrap().ends().0, Caret { row: 0, col: 0 });
+
+    // Down alone: collapsed to the caret, on the row below the lead's, no highlight.
+    test.press_key(Key::Named(NamedKey::ArrowDown));
+    settle(&mut test);
+    let picked = marked.peek().assembly.clone().unwrap();
+    let chars = picked.chars.unwrap();
+    assert!(chars.is_empty(), "{chars:?}");
+    assert_eq!(chars.lead().row, 2);
+    assert_eq!(picked.rows.rows(), 2..=2);
+    assert!(paragraphs(&test).iter().all(|(_, _, h)| h.is_none()));
+    assert_eq!(carets(&test).len(), 1);
+}
+
+/// Ctrl+End puts the caret at the listing's last row's end and scrolls the pane so the
+/// row is on screen; Ctrl+Home brings it back to the top.
+#[test]
+fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
+    let shown = shown_sum_to();
+    let instructions = &shown.studied.assembly.as_ref().unwrap().instructions;
+    let length = shown.studied.lanes.listing_rows(instructions.len());
+    let first_address = format!("{:016X} ", instructions[0].address);
+    let last_address = format!("{:016X} ", instructions.last().unwrap().address);
+    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+        listing_harness,
+        (600., 300.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    assert!(
+        !labels(&test).contains(&last_address),
+        "the last row is on screen before any scroll, so the scroll cannot be seen"
+    );
+    let first = paragraphs(&test)[0].0;
+    let at = left_of(&first);
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    mark_release(marked);
+    settle(&mut test);
+
+    key_with(&mut test, Key::Named(NamedKey::End), Modifiers::CONTROL);
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&last_address),
+        "the pane did not scroll to the caret: {:?}",
+        labels(&test)
+    );
+    let picked = marked.peek().assembly.clone().unwrap();
+    let lead = picked.chars.unwrap().lead();
+    assert_eq!(lead.row, length - 1);
+    assert_eq!(picked.rows.rows(), length - 1..=length - 1);
+    let drawn = paragraphs(&test);
+    let last = drawn.last().unwrap().0;
+    let caret = carets(&test);
+    assert_eq!(caret.len(), 1, "{caret:?}");
+    assert_eq!(caret[0].origin.y, last.origin.y);
+    assert!(
+        (caret[0].origin.x - last.max_x()).abs() <= 1.0,
+        "{caret:?} against {last:?}"
+    );
+
+    key_with(&mut test, Key::Named(NamedKey::Home), Modifiers::CONTROL);
+    settle(&mut test);
+    assert!(labels(&test).contains(&first_address));
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.chars.unwrap().lead(), Caret { row: 0, col: 0 });
+    assert_eq!(picked.rows.rows(), 0..=0);
+}
+
+/// A run of rows with no caret under it -- picked out from the gutter -- takes an arrow
+/// key too: the caret is put at the run's lead row, column 0, and the key moves it from
+/// there. A listing with no run at all does nothing with the key.
+#[test]
+fn an_arrow_key_puts_a_caret_on_a_run_of_rows_that_has_none() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let second = paragraphs(&test)[1].0;
+    let address = labels_with_areas(&test)
+        .into_iter()
+        .find(|(text, _)| text.len() == 17 && text.ends_with(' '))
+        .map(|(_, area)| area)
+        .expect("the first address");
+    let centre = (
+        (address.origin.x + address.width() / 2.0) as f64,
+        (address.origin.y + address.height() / 2.0) as f64,
+    );
+    test.move_cursor(centre);
+    test.press_cursor(centre);
+    test.release_cursor(centre);
+    mark_release(marked);
+    settle(&mut test);
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.chars, None);
+    assert_eq!(picked.rows.rows(), 0..=0);
+
+    test.press_key(Key::Named(NamedKey::ArrowDown));
+    settle(&mut test);
+    let picked = marked.peek().assembly.clone().unwrap();
+    let chars = picked.chars.expect("the key placed no caret");
+    assert_eq!(chars.lead(), Caret { row: 1, col: 0 });
+    assert!(chars.is_empty());
+    assert_eq!(picked.rows.rows(), 1..=1);
+    let caret = carets(&test);
+    assert_eq!(caret.len(), 1, "{caret:?}");
+    assert_eq!(caret[0].origin.x, second.origin.x);
+    assert_eq!(caret[0].origin.y, second.origin.y);
+    assert!(
+        rects_with(&test, palette().text_select_bg).is_empty(),
+        "the row is still washed whole under the caret"
+    );
+
+    // Escape twice drops the run; a key then has nothing to move.
+    test.press_key(Key::Named(NamedKey::Escape));
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+    assert!(marked.peek().assembly.is_none());
+    test.press_key(Key::Named(NamedKey::ArrowDown));
+    settle(&mut test);
+    assert!(
+        marked.peek().assembly.is_none(),
+        "a key made a run from nothing"
+    );
+    assert!(carets(&test).is_empty());
+}
