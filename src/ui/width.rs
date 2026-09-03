@@ -74,6 +74,17 @@ impl Widest {
         }
     }
 
+    /// The widest row of `listing` as a handler asks it, subscribing nothing: what the
+    /// list can be scrolled sideways over.
+    pub(crate) fn extent(&self, listing: u64) -> f32 {
+        let (key, width) = *self.0.peek();
+        if key == listing {
+            width
+        } else {
+            0.0
+        }
+    }
+
     /// A row of `listing` measured `natural` wide: kept if it is the widest so far, or the
     /// first of a listing the state does not yet hold -- which is the reset, made without
     /// an effect: the rows of the listing before drop to the pane's width on the first

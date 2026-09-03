@@ -109,6 +109,11 @@ impl PartialEq for SectionRows {
             && self.pair == other.pair
             && self.touching == other.touching
             && self.marks == other.marks
+            // The caret and the selection too: a key that moves the caret along a row
+            // changes no row of the run, and rows compared without it drew the caret
+            // where it had been -- which read, in the unified view alone, as Left, Right,
+            // Home and End doing nothing.
+            && self.chars == other.chars
     }
 }
 
@@ -541,6 +546,7 @@ impl Component for SectionList {
                 true
             },
             reading_state,
+            marked,
             rows,
             controller,
             &self.document,
@@ -601,14 +607,16 @@ impl Component for SectionList {
                         .unwrap_or_default()
                 },
                 // The caret's row, brought on screen after a key has moved it.
-                move |row| reveal_row(&mut controller, *viewport.peek(), row),
+                move |row| reveal_caret(&mut controller, *viewport.peek(), row),
             )
         };
 
         let nudge = use_nudge();
         let grid = pixel_grid();
-        // Where the box is, for a sweep that has left it.
-        let bounds = use_hook(|| Rc::new(std::cell::Cell::new(Area::zero())));
+        // The list as its rows and a sweep past its edge know it: its scroll, its box,
+        // the paragraphs the rows lend it, and its widest row.
+        let listing_ctx = use_provide_context(|| Listing::new(controller, widest, listing));
+        let bounds = listing_ctx.bounds.clone();
 
         rect()
             .expanded()
@@ -624,12 +632,11 @@ impl Component for SectionList {
                     bounds.set(e.area);
                 }
             })
-            .on_global_pointer_move(on_sweep_beyond(
+            .on_global_pointer_move(use_sweep_beyond(
                 marked,
                 Pane::Assembly,
-                bounds,
+                listing_ctx.clone(),
                 nudge,
-                controller,
                 length,
             ))
             // On the grid: see `Nudge`.
@@ -668,7 +675,7 @@ fn build_row(
     let Some(rows) = data.rows.as_ref() else {
         return rect().height(Size::px(code_row_height())).into_element();
     };
-    let wash = wash_of(data.marks, data.chars, i);
+    let wash = wash_of(data.chars, i);
     let chars = RowChars::of(data.chars, i);
     // The edges lit in `stretch`, which is the stretch's own entry and nothing when it
     // has none.
@@ -841,6 +848,7 @@ fn use_kept_place(
     is_open: impl Fn(&Document) -> bool + 'static,
     mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
     reading: State<Reading>,
+    marked: State<Marks>,
     mut rows: State<Option<Arc<Built>>>,
     mut controller: ScrollController,
     tab: &Document,
@@ -907,6 +915,16 @@ fn use_kept_place(
                     reading: (*reading).clone(),
                 });
                 state.built = Some(generation);
+                // The run picked out over the old rows, carried to the new: each of its
+                // rows through the address it stood for, the way the reader's place is
+                // kept across the same recount. Nothing to carry from before there were
+                // rows, so a run left over from a listing this tab is not showing goes.
+                let before = rows.peek().clone();
+                carry_assembly(marked, |row| {
+                    let spot = spot_at(before.as_ref()?, row)?;
+                    let first = built.row_for(spot.address)?;
+                    Some((first + spot.rows).min(built.len().saturating_sub(1)))
+                });
                 built
             } else {
                 match rows.peek().clone() {

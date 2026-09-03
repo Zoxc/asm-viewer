@@ -65,10 +65,9 @@ pub(crate) struct Palette {
     /// width of the pane, where the gutter's stroke is a few pixels -- so it is quieter
     /// against the pane than `branch_fg` is, and the palette test says so.
     pub(crate) block_rule: Color,
-    /// The selection, in either pane: the characters a sweep over a row's text picked out,
-    /// painted under the text by the text engine, and the whole rows a run picked out from
-    /// the gutter, as the row's own wash. A translucent blue-grey, a shade off the pane and
-    /// a hue off the pair's green.
+    /// The selection, in either pane: the characters a sweep picked out, drawn by the row
+    /// under its text. A translucent blue-grey, a shade off the pane and a hue off the
+    /// pair's green.
     pub(crate) text_select_bg: Color,
     /// The row the caret is on, where a press on the text has left one and no sweep has
     /// followed: the selection's colour, faded.
@@ -374,31 +373,28 @@ pub(crate) fn dimmed(color: Color, surface: Color) -> Color {
     )
 }
 
-/// The wash a code row wears for its own pane's selection.
+/// The wash a code row wears for its own pane's caret.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum Wash {
     #[default]
     None,
-    /// The caret's row: a press on the text left a caret here and no sweep has followed.
+    /// The caret's row: the run's lead is here and nothing is selected, so the caret is
+    /// what shows and this is the line it is on.
     Cursor,
-    /// A row of a run picked out from the gutter -- or by Ctrl+A, or from outside the
-    /// panes -- which is selected whole, as its wash.
-    Selected,
 }
 
 /// The background of a code row: the pair -- this row is where the other pane's
-/// picked-out run maps to -- the wash of its own pane's selection, or the one over the
-/// other.
+/// picked-out run maps to -- the caret's row, or the one over the other. The selection
+/// itself is not a wash: the row draws it under its text (`ui/code_row.rs`).
 ///
 /// Nothing here answers to the pointer: a row is lit by a selection, its own pane's or
 /// the other's, and by nothing else.
 pub(crate) fn row_background(paired: bool, wash: Wash) -> Color {
-    // Three colours and not one wash over another: the selection's shadow over the
-    // pair's pale green barely moved it, so a row that is both has a green of its own.
+    // Three colours and not one wash over another: the caret's shadow over the pair's
+    // pale green barely moved it, so a row that is both has a green of its own.
     match (paired, wash) {
-        (true, Wash::Selected | Wash::Cursor) => palette().pair_selected_bg,
+        (true, Wash::Cursor) => palette().pair_selected_bg,
         (true, Wash::None) => palette().pair_bg,
-        (false, Wash::Selected) => palette().text_select_bg,
         (false, Wash::Cursor) => palette().cursor_row_bg,
         (false, Wash::None) => Color::TRANSPARENT,
     }

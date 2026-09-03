@@ -16,9 +16,8 @@ the light palette's address column and its comments are meant to recede and sit 
 3.5), the × on a dock tab included, whose surface is its own wash composited over whichever of two
 grounds the tab is on; and a visible-step floor for every wash over the row under it — a code
 row's four being the pair's green (`pair_bg`, the other pane's selection mapped here), the
-selection's blue-grey (`text_select_bg`: the characters a sweep picked out, which the text
-engine paints under them, and the whole rows a gutter's run picks out, as the row's own
-wash -- held to the floor over the pane and over a paired row's green alike), that colour
+selection's blue-grey (`text_select_bg`: the characters a sweep picked out, drawn by the row
+under its text -- held to the floor over the pane and over a paired row's green alike), that colour
 faded for the caret's row (`cursor_row_bg`, and the caret itself `caret_fg`, the text
 colour faded so it marks a place without reading as a character), and the deeper green a row that is both takes
 (`pair_selected_bg`, held to a step well past the pair's, since a shadow over so pale a green

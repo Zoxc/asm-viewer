@@ -365,7 +365,7 @@ pub fn app() -> impl IntoElement {
         asked, objects, history, analysis, located, reading, window, answer,
     );
     // After the analysis: the file the Source pane draws is what the analysis says it is.
-    use_clear_marks(active, asked, analysis, reading, marked);
+    use_clear_marks(active, asked, analysis, marked);
 
     // At the root rather than in the view: an inactive dock tab is unmounted, and neither
     // a buffer being typed into nor a program that was started can live there. The buffers

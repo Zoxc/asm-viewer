@@ -83,6 +83,36 @@ impl CharSelection {
         }
     }
 
+    /// The run swept out **by rows** to `row`, as a sweep from a gutter goes: the whole
+    /// of every row from the anchor's to `row`, the anchor at its row's start and the
+    /// lead at `row`'s end going down, and the other way round going up. Back on the
+    /// anchor's own row it is the caret the press left, at the row's start.
+    pub fn by_rows(self, row: usize) -> Self {
+        let anchor = self.anchor.row;
+        if row == anchor {
+            return CharSelection::at(Caret {
+                row: anchor,
+                col: 0,
+            });
+        }
+        let down = row > anchor;
+        CharSelection::between(
+            Caret {
+                row: anchor,
+                col: if down { 0 } else { END },
+            },
+            Caret {
+                row,
+                col: if down { END } else { 0 },
+            },
+        )
+    }
+
+    /// The run collapsed to its lead: what Escape makes of a selection.
+    pub fn collapsed(self) -> Self {
+        CharSelection::at(self.lead)
+    }
+
     /// The run after the keyboard has moved its lead by `motion`: from the anchor to the
     /// new lead with `extend` (Shift held), and collapsed to the new lead without. `line`
     /// answers a row's text, `length` is how many rows the listing has and `page` how
@@ -247,13 +277,24 @@ pub struct Bounds {
     pub bottom: f32,
 }
 
+/// Where a sweep has got to once the pointer has left the rows: the row on screen nearest
+/// the pointer, and the x on that row to ask for the column at -- the pointer's own where
+/// it is level with the box, and otherwise the box's near edge, so a pointer past the
+/// left or right edge reaches the column at that edge and not the row's end, and the
+/// view can be scrolled sideways under it a little at a time.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Reach {
+    pub row: usize,
+    pub x: f32,
+}
+
 /// Where a sweep reaches once the pointer has left the rows: above the box, the first row
-/// on screen from its start; below it, the last row on screen to its end; left of it,
-/// the row level with the pointer from its start; right of it, that row to its end; and
-/// under the last row of a listing shorter than its box, that row to its end. `None`
-/// while the pointer is over a row, which answers for itself. `rows_top` is where row 0
-/// sits relative to the box's top -- at or below it before any scroll, above it after --
-/// and `length` how many rows the listing has.
+/// on screen; below it, the last row on screen; left or right of it, the row level with
+/// the pointer; and under the last row of a listing shorter than its box, that row -- each
+/// at the x of the pointer clamped into the box (see [`Reach`]). `None` while the pointer
+/// is over a row, which answers for itself. `rows_top` is where row 0 sits relative to
+/// the box's top -- at or below it before any scroll, above it after -- and `length` how
+/// many rows the listing has.
 pub fn beyond(
     bounds: Bounds,
     rows_top: f32,
@@ -261,7 +302,7 @@ pub fn beyond(
     length: usize,
     x: f32,
     y: f32,
-) -> Option<Caret> {
+) -> Option<Reach> {
     let last = length.checked_sub(1)?;
     if !(row_height > 0.0) {
         return None;
@@ -269,31 +310,21 @@ pub fn beyond(
     let row_at = |y: f32| ((y - bounds.top - rows_top) / row_height).floor().max(0.0) as usize;
     let inside_x = x >= bounds.left && x < bounds.right;
     let inside_y = y >= bounds.top && y < bounds.bottom;
+    let x = x.clamp(bounds.left, (bounds.right - 1.0).max(bounds.left));
     if inside_x && inside_y {
-        return (row_at(y) > last).then_some(Caret {
-            row: last,
-            col: END,
-        });
+        return (row_at(y) > last).then_some(Reach { row: last, x });
     }
     // The rows on screen, which a sweep beyond the box reaches and no further.
     let first_seen = row_at(bounds.top).min(last);
     let last_seen = row_at(bounds.bottom - 0.5).min(last);
-    Some(if y < bounds.top {
-        Caret {
-            row: first_seen,
-            col: 0,
-        }
+    let row = if y < bounds.top {
+        first_seen
     } else if y >= bounds.bottom {
-        Caret {
-            row: last_seen,
-            col: END,
-        }
+        last_seen
     } else {
-        Caret {
-            row: row_at(y).clamp(first_seen, last_seen),
-            col: if x < bounds.left { 0 } else { END },
-        }
-    })
+        row_at(y).clamp(first_seen, last_seen)
+    };
+    Some(Reach { row, x })
 }
 
 /// One piece of a row's text.

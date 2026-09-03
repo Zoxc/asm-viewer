@@ -142,5 +142,11 @@ row selectable as a whole; nothing in freya's docs says so, and the registry can
 skia's source, so the app pins it with a test
 (`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol`).
 
+**A tooltip that does not arm under a held button.** `TooltipContainer` arms its timer on
+`pointer_over` and disarms on `pointer_out` and on nothing else (`tooltip.rs:204-216`), so
+a pointer dragging a selection up past the companion header or the symbol bar arms and
+shows their tooltips. The app makes the two `interactive(false)` while a sweep is under
+way (`sweeping`, `ui/marks.rs`), so they are not hit at all.
+
 **`SyntaxHighlighter::tree()`**, so the function spans the source rows' menu needs are not a
 second parse of the file (above, and `ui/highlight.rs`).

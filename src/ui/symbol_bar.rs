@@ -48,41 +48,47 @@ impl Component for NameRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let copying = self.text.clone();
+        // Not hit while a sweep is under way: the pointer dragging a selection up past
+        // the bar would otherwise arm the name's tooltip, and light it.
+        let sweeping = try_consume_context::<Marked>().is_some_and(|marked| sweeping(marked.0));
 
-        row_tooltip(
-            self.text.clone(),
-            CursorArea::new().child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::px(list_row_height()))
-                    // The row's own direction is vertical, so it is the *main* axis the
-                    // label is centred on.
-                    .main_align(Alignment::Center)
-                    .overflow(Overflow::Clip)
-                    // The grey a chrome control takes under the pointer, and not the
-                    // relocation label's `link_hover_bg`: that one is a translucent white,
-                    // which over the header's own grey is six levels and says nothing.
-                    .maybe(hovering(), |row| row.background(palette().toggle_hover_bg))
-                    .on_pointer_over(move |_| hovering.set_if_modified(true))
-                    .on_pointer_out(move |_| hovering.set_if_modified(false))
-                    // Failing silently, the way the listing's own copy does: a platform
-                    // whose display handle gave freya-winit no clipboard has none, and a
-                    // header has nowhere to say so.
-                    .on_press(move |_| {
-                        Clipboard::set(copying.clone()).ok();
-                    })
-                    .child(
-                        label()
-                            .text(self.text.clone())
-                            .width(Size::fill())
-                            .max_lines(1)
-                            .text_overflow(TextOverflow::Ellipsis)
-                            // Unset rather than `text_fg` when it is not dimmed, so the
-                            // name goes on inheriting the interface colour from the root.
-                            .maybe(self.dim, |name| name.color(palette().address_fg)),
-                    ),
-            ),
-        )
+        rect()
+            .width(Size::fill())
+            .interactive(!sweeping)
+            .child(row_tooltip(
+                self.text.clone(),
+                CursorArea::new().child(
+                    rect()
+                        .width(Size::fill())
+                        .height(Size::px(list_row_height()))
+                        // The row's own direction is vertical, so it is the *main* axis the
+                        // label is centred on.
+                        .main_align(Alignment::Center)
+                        .overflow(Overflow::Clip)
+                        // The grey a chrome control takes under the pointer, and not the
+                        // relocation label's `link_hover_bg`: that one is a translucent white,
+                        // which over the header's own grey is six levels and says nothing.
+                        .maybe(hovering(), |row| row.background(palette().toggle_hover_bg))
+                        .on_pointer_over(move |_| hovering.set_if_modified(true))
+                        .on_pointer_out(move |_| hovering.set_if_modified(false))
+                        // Failing silently, the way the listing's own copy does: a platform
+                        // whose display handle gave freya-winit no clipboard has none, and a
+                        // header has nowhere to say so.
+                        .on_press(move |_| {
+                            Clipboard::set(copying.clone()).ok();
+                        })
+                        .child(
+                            label()
+                                .text(self.text.clone())
+                                .width(Size::fill())
+                                .max_lines(1)
+                                .text_overflow(TextOverflow::Ellipsis)
+                                // Unset rather than `text_fg` when it is not dimmed, so the
+                                // name goes on inheriting the interface colour from the root.
+                                .maybe(self.dim, |name| name.color(palette().address_fg)),
+                        ),
+                ),
+            ))
     }
 }
 

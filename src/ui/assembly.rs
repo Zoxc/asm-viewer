@@ -1002,14 +1002,16 @@ impl Component for InstructionList {
                         .unwrap_or_default()
                 },
                 // The caret's row, brought on screen after a key has moved it.
-                move |row| reveal_row(&mut controller, *viewport.peek(), row),
+                move |row| reveal_caret(&mut controller, *viewport.peek(), row),
             )
         };
 
         let nudge = use_nudge();
         let grid = pixel_grid();
-        // Where the box is, for a sweep that has left it.
-        let bounds = use_hook(|| Rc::new(std::cell::Cell::new(Area::zero())));
+        // The list as its rows and a sweep past its edge know it: its scroll, its box,
+        // the paragraphs the rows lend it, and its widest row.
+        let listing_ctx = use_provide_context(|| Listing::new(controller, widest, listing));
+        let bounds = listing_ctx.bounds.clone();
 
         rect()
             .expanded()
@@ -1025,12 +1027,11 @@ impl Component for InstructionList {
                     bounds.set(e.area);
                 }
             })
-            .on_global_pointer_move(on_sweep_beyond(
+            .on_global_pointer_move(use_sweep_beyond(
                 marked,
                 Pane::Assembly,
-                bounds,
+                listing_ctx.clone(),
                 nudge,
-                controller,
                 length,
             ))
             // On the grid: see `Nudge`.
@@ -1045,7 +1046,7 @@ impl Component for InstructionList {
                         chars,
                     },
                     move |i, rows: &AsmRows| {
-                        let wash = wash_of(rows.rows, rows.chars, i);
+                        let wash = wash_of(rows.chars, i);
                         let Some(index) = rows.data.lanes.instruction_at(i) else {
                             // A separator, which belongs to the instruction below it: the
                             // lanes it carries are that row's, and it lights with them

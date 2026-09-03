@@ -61,6 +61,23 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
     controller.scroll_to_y(-((row - margin).max(0.0) as i32));
 }
 
+/// Bring the row the caret is on into view, and only when it is not: no context rows,
+/// unlike [`reveal_row`], since a key repeat that scrolled the view while the caret was
+/// still on screen would walk the rows away from under the reader; a row above the view
+/// comes to its top, one below to its bottom, as an editor's does.
+pub(crate) fn reveal_caret(controller: &mut ScrollController, viewport: f32, index: usize) {
+    let (_, scrolled) = <(i32, i32)>::from(*controller);
+    let top = -scrolled as f32;
+    let height = code_row_height();
+    let row = index as f32 * height;
+
+    if row < top {
+        controller.scroll_to_y(-(row.max(0.0) as i32));
+    } else if row + height > top + viewport {
+        controller.scroll_to_y(-((row + height - viewport).max(0.0) as i32));
+    }
+}
+
 /// Keep `controller` pointed at the row `tab` was last left at, and keep [`Positions`]
 /// told where it is now. `length` is what the pane holds *now*, which is what makes the
 /// answer a row of this listing rather than of the one it was saved from.

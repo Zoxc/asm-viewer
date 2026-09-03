@@ -267,22 +267,22 @@ one item per part, so the unfinished half stays visible.
   `code_row` (`src/ui/code_row.rs`), which is where both panes got it at once. Gutter picks
   rows out alone; text picks characters out too; two presses take a word and three the row's
   text; Ctrl+C prefers the characters and Escape drops them first. `agents/Panes.md`.
-- [ ] The unified view's source side survives an answer landing. Scrolling the view asks the
-  worker for stretches, every answer bumps the reading's generation, and `use_clear_marks`
-  drops the assembly pane's run on the generation -- a run being raw listing rows, which a
-  recount shifts -- so the companion file, derived from that run's `Picked::file`, goes with
-  it and the pane says "Click an instruction" again; with up to 64 stretches asked for and 8
-  answered per chunk, answers keep landing after the reader has clicked, which is the
-  "sometimes". The fix is the reader's place's: keep the run as addresses (`Rows::address_of`,
-  `row_for`, a `Spot` per end) and re-derive its rows in the same effect that rebuilds
-  `Built`, as `use_kept_place` does, so the run, its pair and its file all survive; the
-  characters can be re-derived with it or dropped. The question-keyed drop stays: that one is
-  another listing entirely. (A plain press on a symbol label sends the pane back too, being a
-  row of no file; by design, but it looks the same.)
-- [ ] Autoscroll while sweeping a selection past the pane's edge. A sweep already carries
-  on beyond the rows, the pane and the window, clamped to the rows on screen
-  (`on_sweep_beyond`, `agents/Panes.md`); what is left is nudging the controller while the
-  pointer stays past an edge, so the rows on screen move under it.
+- [x] The unified view's run survives an answer landing. Scrolling the view asks the worker for
+  stretches, every answer bumped the reading's generation, and `use_clear_marks` dropped the
+  assembly pane's run on the generation -- a run being raw listing rows, which a recount
+  shifts -- so the caret vanished and the companion file, derived from that run's
+  `Picked::file`, went with it and the pane said "Click an instruction" again; with up to 64
+  stretches asked for and 8 answered per chunk, answers kept landing after the reader had
+  clicked, which was the "sometimes", and the reason the caret's keys seemed dead there. Now
+  the run is carried across the recount by address in the same effect that rebuilds the rows,
+  as the reader's place already was (`carry_assembly`, `agents/Panes.md`). (A plain press on a
+  symbol label still sends the source pane back, being a row of no file; by design.)
+- [x] Autoscroll while sweeping a selection past any edge of the pane: a task moves the view
+  a row at a time towards the pointer, or a row's height sideways, and reaches the run out to
+  what comes in, while the button is down and the pointer stays past the edge; past the left
+  or right edge the sweep reaches the column in sight at that edge and not the row's start or
+  end, the rows lending the list their paragraphs for the column (`use_sweep_beyond`,
+  `agents/Panes.md`).
 - [x] A caret at the pressed column, the highlight filling the row's height so a run of rows
   reads as one block, and the pointer's icon over the code panes: an I-beam over text, the
   hand over a link, the arrow over the gutter -- set from the row's move handler alone, the
@@ -291,10 +291,19 @@ one item per part, so the unfinished half stays visible.
   (`Nudge`), so the washes of two selected rows meet on an edge instead of leaving a seam;
   and the caret is the row's own one-pixel stroke on the grid, fainter than the text
   (`caret_fg`), in place of the engine's two-pixel one on a fractional edge (`agents/Panes.md`).
-- [x] The row wash means the selection or the caret, not the run: the old grey is now the
-  selection's colour, painted under the characters a sweep picked out and worn whole by the
-  rows of a gutter's run (or Ctrl+A's, or a landing's), and the caret's row wears it faded
-  (`cursor_row_bg`). A text sweep washes no row: the highlight is the selection.
+- [x] The row wash means the caret's row and nothing else: the old grey is now the selection's
+  colour, drawn under the characters a sweep picked out, and the caret's row wears it faded
+  (`cursor_row_bg`). Every pick is a caret and a selection -- a gutter click puts the caret at
+  the row's start and a gutter sweep selects whole rows, Ctrl+A the whole listing, a landing a
+  caret on its line -- so no row is ever washed whole, and Escape collapses before it drops.
+- [x] The caret is drawn over a selection too, at its lead, two pixels wide; the companion
+  header and the symbol bar's names do not answer the pointer while a sweep is under way, so
+  no tooltip arms as a selection is dragged past them; and the unified view's rows compare
+  the caret, so a move along a row redraws it there (`agents/Panes.md`).
+- [x] A key moves the view only when the caret leaves it (`reveal_caret`: no context rows, a
+  row above coming to the top and one below to the bottom), and a caret walked past the
+  pane's edge brings the pane sideways to it, from the row that draws it through the list's
+  `Listing` context (`agents/Panes.md`).
 - [x] The keyboard moves the caret in both code panes and in an object's code: the arrows
   by character and, with Ctrl, by word; Home and End to the row's ends and, with Ctrl, the
   listing's; Page Up and Page Down by a screen of rows; Shift reaches the selection out and

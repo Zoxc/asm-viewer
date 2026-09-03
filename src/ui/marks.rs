@@ -12,10 +12,14 @@ use super::*;
 #[derive(Clone, PartialEq)]
 pub(crate) struct Picked {
     pub(crate) rows: RowSelection,
-    /// The characters picked out, where the run was started on a row's text and not in
-    /// its gutter: anchored by the press, swept with the rows. Empty until swept, and
-    /// `None` for a run of rows alone.
-    pub(crate) chars: Option<CharSelection>,
+    /// The caret, and the characters picked out: anchored by the press -- at the column
+    /// pressed on the text, at the row's start from the gutter or from outside the panes
+    /// -- and swept with the rows. Empty until swept, and then it is the selection.
+    pub(crate) chars: CharSelection,
+    /// Whether a sweep of this run goes **by rows**, whole ones from the anchor's to the
+    /// pointer's: a run started in the gutter does, as a sweep down an editor's line
+    /// numbers does; one started on the text goes by character.
+    pub(crate) by_rows: bool,
     /// The file the run is read in: the source pane's own file for its run, and for the
     /// assembly pane's the file the pressed row was compiled from -- which is what the
     /// source pane shows beside an object's code. `None` where the row has no line.
@@ -285,21 +289,28 @@ pub(crate) fn pair_of(marked: State<Marks>, pane: Pane) -> Option<Picked> {
     marked.read().of(other(pane)).clone()
 }
 
-/// The run of characters `pane`'s run holds, for the rows to draw their part of. Reads,
-/// for the reason [`marked_rows`] does.
+/// Whether a sweep is under way in either pane -- the button down on a run -- which is
+/// what a control the sweep passes over asks before it answers the pointer: a tooltip
+/// armed by a pointer that is dragging a selection past it is a tooltip nobody asked for,
+/// and freya's arms on the hover alone (`notes/upstream/freya.md`). A read, so the
+/// control re-renders as a sweep starts and ends.
+pub(crate) fn sweeping(marked: State<Marks>) -> bool {
+    let marks = marked.read();
+    let dragging = |picked: &Option<Picked>| picked.as_ref().is_some_and(|p| p.rows.dragging);
+    dragging(&marks.assembly) || dragging(&marks.source)
+}
+
+/// The caret and characters `pane`'s run holds, for the rows to draw their part of, and
+/// `None` with no run. Reads, for the reason [`marked_rows`] does.
 pub(crate) fn chars_of(marked: State<Marks>, pane: Pane) -> Option<CharSelection> {
-    marked
-        .read()
-        .of(pane)
-        .as_ref()
-        .and_then(|picked| picked.chars)
+    marked.read().of(pane).as_ref().map(|picked| picked.chars)
 }
 
 /// Start a run at `row` in `pane`, or -- with Shift held and a run already there -- reach
 /// out to it from wherever that run started. `file` is what the pressed row is a row of
 /// (see [`Picked::file`]); a reach keeps the file the run began in. `press` is what the
-/// row's text answered where the press was on it, and `None` for a press in the gutter:
-/// the rows are picked out either way, and the characters only from the text.
+/// row's text answered where the press was on it, and `None` for a press in the gutter,
+/// which puts the caret at the row's start and makes the sweep go by rows.
 ///
 /// The other pane's run is left alone: the two are independent.
 pub(crate) fn mark_press(
@@ -314,14 +325,21 @@ pub(crate) fn mark_press(
     let picked = match current {
         Some(picked) if shift => Picked {
             rows: picked.rows.extended(row),
-            // The reach moves the characters' lead with the rows', where both sides have
-            // one; a reach from the gutter, or to it, leaves the characters as they were.
-            chars: match (picked.chars, press) {
-                (Some(chars), Some(Press::At(col))) => Some(chars.extended(Caret { row, col })),
-                (Some(chars), Some(Press::Span(_, col))) => {
-                    Some(chars.extended(Caret { row, col }))
+            // The reach moves the characters' lead with the rows': to the column pressed
+            // on the text, and from the gutter to the row's far end, whole rows being
+            // what the gutter reaches.
+            chars: match press {
+                Some(Press::At(col)) | Some(Press::Span(_, col)) => {
+                    picked.chars.extended(Caret { row, col })
                 }
-                (chars, _) => chars,
+                None => picked.chars.extended(Caret {
+                    row,
+                    col: if row >= picked.chars.ends().0.row {
+                        crate::chars::END
+                    } else {
+                        0
+                    },
+                }),
             },
             ..picked
         },
@@ -334,12 +352,14 @@ pub(crate) fn mark_press(
                 lead: row,
                 dragging: true,
             },
-            chars: press.map(|press| match press {
-                Press::At(col) => CharSelection::at(Caret { row, col }),
-                Press::Span(from, to) => {
+            chars: match press {
+                Some(Press::At(col)) => CharSelection::at(Caret { row, col }),
+                Some(Press::Span(from, to)) => {
                     CharSelection::between(Caret { row, col: from }, Caret { row, col: to })
                 }
-            }),
+                None => CharSelection::at(Caret { row, col: 0 }),
+            },
+            by_rows: press.is_none(),
             file,
             owed: Owed::by(other(pane)),
         },
@@ -364,7 +384,8 @@ pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: us
             lead: row,
             dragging: false,
         },
-        chars: None,
+        chars: CharSelection::at(Caret { row, col: 0 }),
+        by_rows: false,
         file,
         owed: Owed::by(Pane::Source),
     });
@@ -383,7 +404,8 @@ pub(crate) fn mark_line(mut marked: State<Marks>, file: Arc<str>, line: u32, owe
             lead: row,
             dragging: false,
         },
-        chars: None,
+        chars: CharSelection::at(Caret { row, col: 0 }),
+        by_rows: false,
         file: Some(file),
         owed,
     });
@@ -391,8 +413,9 @@ pub(crate) fn mark_line(mut marked: State<Marks>, file: Arc<str>, line: u32, owe
 }
 
 /// Sweep `pane`'s run out to `row`, which does nothing unless a run is already started.
-/// `col` is the column under the pointer where the row has text, and its characters --
-/// where the run has any -- follow it; a row with no text, or a gutter, is column 0.
+/// `col` is the column under the pointer where the row has text, and the characters
+/// follow it; a row with no text, or a gutter, is column 0. A run started in the gutter
+/// sweeps by rows instead, whole ones, and the column is not asked.
 pub(crate) fn mark_drag(mut marked: State<Marks>, pane: Pane, row: usize, col: Option<usize>) {
     let Some(picked) = marked.peek().of(pane).clone() else {
         return;
@@ -406,12 +429,14 @@ pub(crate) fn mark_drag(mut marked: State<Marks>, pane: Pane, row: usize, col: O
     let mut marks = marked.peek().clone();
     *marks.of_mut(pane) = Some(Picked {
         rows: picked.rows.extended(row),
-        chars: picked.chars.map(|chars| {
-            chars.extended(Caret {
+        chars: if picked.by_rows {
+            picked.chars.by_rows(row)
+        } else {
+            picked.chars.extended(Caret {
                 row,
                 col: col.unwrap_or(0),
             })
-        }),
+        },
         ..picked
     });
     marked.set_if_modified(marks);
@@ -497,10 +522,12 @@ pub(crate) fn reveal_made(mut marked: State<Marks>, pane: Pane) {
     }
 }
 
-/// What Ctrl+C takes from `pane`'s run: the characters, where a sweep picked any out, and
-/// otherwise the rows -- each row's own `line`, in listing order, newline-separated, so a
-/// sweep that went upwards copies what one that went down does. `text` is a row's text as
-/// it is drawn, which is what the characters are columns of. `None` with no run at all.
+/// What Ctrl+C takes from `pane`'s run: the characters, where any are selected, and
+/// otherwise the rows -- the caret's row as its own `line`, address and all, as an editor
+/// copies the line under a caret with nothing selected; a run of rows wider than the
+/// caret's is the keyboard's and the pair's and copies the same way, each row's own
+/// `line` in listing order, newline-separated. `text` is a row's text as it is drawn,
+/// which is what the characters are columns of. `None` with no run at all.
 pub(crate) fn copy_text(
     marks: &Marks,
     pane: Pane,
@@ -508,9 +535,10 @@ pub(crate) fn copy_text(
     text: impl Fn(usize) -> Line,
 ) -> Option<String> {
     let picked = marks.of(pane).as_ref()?;
-    match picked.chars.filter(|chars| !chars.is_empty()) {
-        Some(chars) => Some(chars.copy(text)),
-        None => Some(picked.rows.rows().map(line).collect::<Vec<_>>().join("\n")),
+    if picked.chars.is_empty() {
+        Some(picked.rows.rows().map(line).collect::<Vec<_>>().join("\n"))
+    } else {
+        Some(picked.chars.copy(text))
     }
 }
 
@@ -575,9 +603,9 @@ pub(crate) fn on_listing_key(
                 }
             }
             Key::Character(character) if command && character == "a" => {
-                // Every row of the listing, and nothing at all for one with no rows. The
-                // file stays what the run's was, and no scroll is owed: the whole
-                // listing names no one place to go to.
+                // Every row of the listing, first row's start to last row's end, and
+                // nothing at all for one with no rows. The file stays what the run's was,
+                // and no scroll is owed: the whole listing names no one place to go to.
                 if let Some(last) = rows.checked_sub(1) {
                     let mut marks = marked.peek().clone();
                     let file = marks
@@ -590,7 +618,14 @@ pub(crate) fn on_listing_key(
                             lead: last,
                             dragging: false,
                         },
-                        chars: None,
+                        chars: CharSelection::between(
+                            Caret { row: 0, col: 0 },
+                            Caret {
+                                row: last,
+                                col: crate::chars::END,
+                            },
+                        ),
+                        by_rows: false,
                         file,
                         owed: Owed::default(),
                     });
@@ -605,10 +640,8 @@ pub(crate) fn on_listing_key(
 
 /// Move `pane`'s caret by `motion`, reaching the run out from its anchor with `extend`
 /// (Shift held) and collapsing it to the caret without; the row of the caret it left it
-/// at, for the pane to reveal, and `None` where there was nothing to move. A run of rows
-/// with no caret under it -- picked out from the gutter, or from outside the panes --
-/// is given one at its lead row's start first, and the key moves it from there; a
-/// listing with no run at all does nothing with the key.
+/// at, for the pane to reveal, and `None` where there was nothing to move: a listing
+/// with no run at all does nothing with the key.
 ///
 /// The rows follow the caret, since they are the place the panes point at each other
 /// through: a one-row run at the caret's row, or with `extend` the run reached out to
@@ -625,14 +658,8 @@ fn move_caret(
     text: impl Fn(usize) -> Line,
 ) -> Option<usize> {
     let picked = marked.peek().of(pane).clone()?;
-    let last = length.checked_sub(1)?;
-    let chars = picked.chars.unwrap_or_else(|| {
-        CharSelection::at(Caret {
-            row: picked.rows.lead.min(last),
-            col: 0,
-        })
-    });
-    let moved = chars.moved(motion, extend, text, length, page);
+    length.checked_sub(1)?;
+    let moved = picked.chars.moved(motion, extend, text, length, page);
     let row = moved.lead().row;
     let rows = if extend {
         RowSelection {
@@ -651,7 +678,8 @@ fn move_caret(
     let mut marks = marked.peek().clone();
     *marks.of_mut(pane) = Some(Picked {
         rows,
-        chars: Some(moved),
+        chars: moved,
+        by_rows: false,
         owed: Owed::default(),
         ..picked
     });
@@ -659,27 +687,79 @@ fn move_caret(
     Some(row)
 }
 
-/// Drop `pane`'s picked-out characters where a sweep made any, and otherwise the run
-/// itself: Escape peels the selection back a layer at a time, since the rows are a place
-/// the panes point at each other through and the characters are only what is copied.
+/// Carry the assembly pane's run to the rows a recount gave it: every row it holds --
+/// the rows' two ends and the caret's -- put through `map`, which answers a row of the
+/// old count with the row of the new; a run any end of which has no row any more is
+/// dropped. The columns stay: a row's text is the same text wherever its row is now.
+pub(crate) fn carry_assembly(mut marked: State<Marks>, map: impl Fn(usize) -> Option<usize>) {
+    let Some(picked) = marked.peek().assembly.clone() else {
+        return;
+    };
+    let carried = (|| {
+        let (anchor, lead) = picked.chars.ends();
+        let rows = RowSelection {
+            anchor: map(picked.rows.anchor)?,
+            lead: map(picked.rows.lead)?,
+            ..picked.rows
+        };
+        let chars = CharSelection::between(
+            Caret {
+                row: map(anchor.row)?,
+                col: anchor.col,
+            },
+            Caret {
+                row: map(lead.row)?,
+                col: lead.col,
+            },
+        );
+        Some(Picked {
+            rows,
+            chars: if picked.chars.is_empty() {
+                chars.collapsed()
+            } else {
+                chars
+            },
+            ..picked
+        })
+    })();
+    let mut marks = marked.peek().clone();
+    marks.assembly = carried;
+    marked.set_if_modified(marks);
+}
+
+/// Collapse `pane`'s selection to its caret where anything is selected, the rows to the
+/// caret's row with it, and otherwise drop the run: Escape peels the selection back a
+/// layer at a time, as an editor's does, and the second press takes the place the panes
+/// point at each other through.
 fn peel(mut marked: State<Marks>, pane: Pane) {
     let Some(picked) = marked.peek().of(pane).clone() else {
         return;
     };
     let mut marks = marked.peek().clone();
-    *marks.of_mut(pane) = match picked.chars.filter(|chars| !chars.is_empty()) {
-        Some(_) => Some(Picked {
-            chars: None,
+    *marks.of_mut(pane) = if picked.chars.is_empty() {
+        None
+    } else {
+        let row = picked.chars.lead().row;
+        Some(Picked {
+            chars: picked.chars.collapsed(),
+            rows: RowSelection {
+                anchor: row,
+                lead: row,
+                dragging: false,
+            },
+            by_rows: false,
             ..picked
-        }),
-        None => None,
+        })
     };
     marked.set(marks);
 }
 
 /// Drop a pane's picked-out rows when the listing they index into is replaced: the
 /// assembly pane's when another question is asked, the source pane's when the pane moves
-/// off the run's file.
+/// off the run's file. An object's code being counted afresh under its run is **not** a
+/// replacement: the run is carried to the rows it now has ([`carry_assembly`], from the
+/// section view's own rebuild), since the place it marks has an address and the rows do
+/// not.
 ///
 /// At the root and keyed on the states that say *which listing*, **never on the listings
 /// themselves**: `AsmData` carries an `Arc<Lanes>` rebuilt every render, so an effect
@@ -688,7 +768,6 @@ pub(crate) fn use_clear_marks(
     active: Memo<Option<Document>>,
     asked: Asked,
     analysis: State<Analyzed>,
-    reading: State<Reading>,
     marked: State<Marks>,
 ) {
     // The **question** and not the active document: a source-driven tab's listing is
@@ -699,23 +778,6 @@ pub(crate) fn use_clear_marks(
     use_side_effect(move || {
         let _ = asked.read_ask();
         unmark(marked, Pane::Assembly);
-    });
-    // And the rows of an object's code, which are counted afresh with every answer that
-    // lands: a run of them is listing rows too, and would survive the rows shifting under
-    // it. Keyed on the reading's generation and compared against what it last was, since
-    // reading the state subscribes this to the asks the view makes as it scrolls, which
-    // change no row.
-    let counted = use_hook(|| Rc::new(RefCell::new(None::<u64>)));
-    use_side_effect(move || {
-        let generation = reading.read().generation;
-        let was = *counted.borrow();
-        if was == Some(generation) {
-            return;
-        }
-        *counted.borrow_mut() = Some(generation);
-        if was.is_some() {
-            unmark(marked, Pane::Assembly);
-        }
     });
     // Which file the Source pane was drawing the last time this ran. An `Rc<RefCell>`
     // and not a `State`: nothing renders from it.

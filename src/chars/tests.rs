@@ -94,9 +94,9 @@ fn an_inline_element_is_one_unit_and_copies_as_its_name() {
     assert_eq!(line.slice(0, 5), "call ");
 }
 
-/// A sweep that has left the rows reaches the row on screen nearest the pointer, from its
-/// start on the left and above, to its end on the right and below -- and nothing while the
-/// pointer is over a row, which answers for itself.
+/// A sweep that has left the rows reaches the row on screen nearest the pointer, at the
+/// pointer's x clamped into the box -- and nothing while the pointer is over a row, which
+/// answers for itself.
 #[test]
 fn a_sweep_beyond_the_rows_reaches_the_row_on_screen_nearest_the_pointer() {
     // A box of four rows of 10, scrolled down by one row and a half: rows 1 to 5 on
@@ -109,28 +109,28 @@ fn a_sweep_beyond_the_rows_reaches_the_row_on_screen_nearest_the_pointer() {
     };
     let rows_top = -15.0;
     let at = |x: f32, y: f32| beyond(bounds, rows_top, 10.0, 20, x, y);
-    let caret = |row: usize, col: usize| Some(Caret { row, col });
+    let reach = |row: usize, x: f32| Some(Reach { row, x });
 
     assert_eq!(
         at(150.0, 70.0),
         None,
         "over a row, which answers for itself"
     );
-    assert_eq!(at(50.0, 70.0), caret(3, 0));
-    assert_eq!(at(350.0, 70.0), caret(3, END));
-    assert_eq!(at(150.0, 10.0), caret(1, 0));
-    assert_eq!(at(150.0, 200.0), caret(5, END));
-    // Off a corner, the vertical side decides.
-    assert_eq!(at(50.0, 200.0), caret(5, END));
-    assert_eq!(at(350.0, 10.0), caret(1, 0));
+    assert_eq!(at(50.0, 70.0), reach(3, 100.0));
+    assert_eq!(at(350.0, 70.0), reach(3, 299.0));
+    assert_eq!(at(150.0, 10.0), reach(1, 150.0));
+    assert_eq!(at(150.0, 200.0), reach(5, 150.0));
+    // Off a corner, the vertical side picks the row and the horizontal the x.
+    assert_eq!(at(50.0, 200.0), reach(5, 100.0));
+    assert_eq!(at(350.0, 10.0), reach(1, 299.0));
 
-    // A listing shorter than its box: under its last row is that row's end, and the
-    // rows on screen stop at the listing.
+    // A listing shorter than its box: under its last row is that row, and the rows on
+    // screen stop at the listing.
     let short = |x: f32, y: f32| beyond(bounds, 0.0, 10.0, 2, x, y);
-    assert_eq!(short(150.0, 85.0), caret(1, END));
-    assert_eq!(short(150.0, 200.0), caret(1, END));
+    assert_eq!(short(150.0, 85.0), reach(1, 150.0));
+    assert_eq!(short(150.0, 200.0), reach(1, 150.0));
     assert_eq!(short(150.0, 65.0), None, "over row 1");
-    assert_eq!(short(50.0, 65.0), caret(1, 0));
+    assert_eq!(short(50.0, 65.0), reach(1, 100.0));
 
     // Nothing to reach in an empty listing, and nothing with rows of no height.
     assert_eq!(beyond(bounds, 0.0, 10.0, 0, 50.0, 70.0), None);
@@ -329,4 +329,30 @@ fn a_move_extends_with_shift_and_collapses_without() {
     let collapsed = moved(before, Motion::Right, false);
     assert!(collapsed.is_empty());
     assert_eq!(collapsed.lead(), caret(0, 1));
+}
+
+/// A sweep by rows takes whole rows, the anchor at its row's start and the lead at the
+/// swept row's end going down and the reverse going up; back on its own row it is the
+/// caret the press left.
+#[test]
+fn a_sweep_by_rows_takes_whole_rows_either_way() {
+    let pressed = CharSelection::at(Caret { row: 3, col: 0 });
+    let down = pressed.by_rows(5);
+    assert_eq!(
+        down.ends(),
+        (Caret { row: 3, col: 0 }, Caret { row: 5, col: END })
+    );
+    assert_eq!(down.of_row(4, 7), Some((0, 7)));
+    let up = pressed.by_rows(1);
+    assert_eq!(
+        up.ends(),
+        (Caret { row: 1, col: 0 }, Caret { row: 3, col: END })
+    );
+    assert_eq!(up.lead(), Caret { row: 1, col: 0 });
+    assert_eq!(pressed.by_rows(3), pressed);
+    assert!(down.by_rows(3).is_empty());
+    assert_eq!(
+        down.collapsed(),
+        CharSelection::at(Caret { row: 5, col: END })
+    );
 }

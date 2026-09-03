@@ -71,24 +71,17 @@ pub(crate) struct RowChars {
     /// The columns from the first end on this row to the second on its own, unclamped at
     /// the end ([`CharSelection::of_row`] asked with no width); `None` outside the run.
     pub(crate) highlight: Option<(usize, usize)>,
-    /// The column the caret is drawn at, where the run's lead is on this row. The text
-    /// engine leaves it undrawn under a highlight, so it shows for a press and not for a
-    /// sweep, as an editor's does.
+    /// The column the caret is drawn at, where the run's lead is on this row -- over a
+    /// selection too, at its lead, since that is where the next key moves from.
     pub(crate) cursor: Option<usize>,
 }
 
-/// The wash row `row` wears for its pane's selection: the selection's own colour for a row
-/// of a run picked out whole -- from the gutter, by Ctrl+A, from outside the panes -- which
-/// is a run with no characters under it; and the faded one for the caret's row, which is
-/// where a press on the text has left one that no sweep has moved. A sweep of characters
-/// washes nothing: the highlight is the selection then.
-pub(crate) fn wash_of(
-    rows: Option<RowSelection>,
-    chars: Option<CharSelection>,
-    row: usize,
-) -> Wash {
+/// The wash row `row` wears: the faded one for the caret's row, which is where the run's
+/// lead is while nothing is selected -- a press on the text or in the gutter, a landing,
+/// a key -- and nothing otherwise: a selection is drawn by the row under its text, and
+/// washes no row.
+pub(crate) fn wash_of(chars: Option<CharSelection>, row: usize) -> Wash {
     match chars {
-        None if rows.is_some_and(|run| run.contains(row)) => Wash::Selected,
         Some(chars) if chars.is_empty() && chars.lead().row == row => Wash::Cursor,
         _ => Wash::None,
     }
@@ -105,6 +98,64 @@ impl RowChars {
         }
     }
 }
+
+/// The list a row is in, provided by each list to its rows: its scroll and its box, for
+/// a row that draws the caret out of the pane's sight to bring it sideways into it -- the
+/// box and not the row's own `visible_area`, which freya reports unclipped, the whole row
+/// wide -- and the paragraphs its rows have lent it, for a sweep that has left the rows
+/// to ask a row where a column is. The widest row and its key are the sideways extent.
+#[derive(Clone)]
+pub(crate) struct Listing {
+    pub(crate) controller: ScrollController,
+    pub(crate) bounds: Rc<Cell<Area>>,
+    pub(crate) texts: Rc<RefCell<HashMap<usize, RowText>>>,
+    pub(crate) widest: Widest,
+    pub(crate) key: u64,
+}
+
+/// A row's laid-out paragraph and where it starts, lent to the list by the row as it
+/// renders: what answers a column for an x on a row the pointer is not over. Written
+/// afresh by every render of the row, so a row the list has stopped building leaves a
+/// stale entry that no reach asks about, the rows asked about being on screen.
+#[derive(Clone)]
+pub(crate) struct RowText {
+    holder: ParagraphHolder,
+    text_x: Rc<Cell<f32>>,
+}
+
+impl Listing {
+    /// A fresh list, with nothing lent yet.
+    pub(crate) fn new(controller: ScrollController, widest: Widest, key: u64) -> Self {
+        Listing {
+            controller,
+            bounds: Rc::new(Cell::new(Area::zero())),
+            texts: Rc::new(RefCell::new(HashMap::new())),
+            widest,
+            key,
+        }
+    }
+
+    /// The column at window x `x` on row `row`, off the paragraph the row lent: 0 for a
+    /// row with no text and for an x left of its text, the end for one right of it.
+    fn column_at(&self, row: usize, x: f32) -> usize {
+        let texts = self.texts.borrow();
+        let Some(text) = texts.get(&row) else {
+            return 0;
+        };
+        let x = x - text.text_x.get();
+        if x < 0.0 {
+            return 0;
+        }
+        caret_col(&text.holder, x, 0.0).unwrap_or(0)
+    }
+}
+
+/// How far inside the pane's edge a caret brought into sight is put.
+const CARET_INSET: f32 = 8.0;
+
+/// How wide the caret is drawn, in logical pixels: two, as most editors draw theirs, and
+/// on the grid so it is whole device pixels either side of the column.
+const CARET_WIDTH: f32 = 2.0;
 
 /// What every row of a listing shares.
 #[derive(Clone)]
@@ -134,6 +185,7 @@ pub(crate) fn code_row(
 ) -> Rect {
     let marked = use_consume::<Marked>().0;
     let shift = use_consume::<Shift>().0;
+    let listing = use_consume::<Listing>();
     // The laid-out paragraph, for the pointer to be answered in columns. One per row, as
     // freya's own editor keeps one per line.
     let holder = use_state(ParagraphHolder::default);
@@ -156,7 +208,7 @@ pub(crate) fn code_row(
         paired,
         wash,
         widest,
-        listing,
+        listing: listing_key,
         measured,
     } = chrome;
     let has_text = text.is_some();
@@ -178,6 +230,18 @@ pub(crate) fn code_row(
             caret_col(&holder.read(), x, at.y as f32)
         }
     };
+
+    // Lent to the list, for a sweep that has left the rows to ask this one where a
+    // column is.
+    if has_text {
+        listing.texts.borrow_mut().insert(
+            row,
+            RowText {
+                holder: holder.read().clone(),
+                text_x: text_x.clone(),
+            },
+        );
+    }
 
     let paragraph = text.map(|text| {
         let units = text.line.units();
@@ -224,20 +288,46 @@ pub(crate) fn code_row(
         // The caret, where the run's lead is on this row and no sweep has picked
         // characters out: a stroke of the row's own, on the device pixel grid, where the
         // engine's would sit on the glyph's fractional edge and two pixels wide.
-        let caret = text
-            .chars
-            .cursor
-            .filter(|_| highlight.is_none())
-            .and_then(column_x)
-            .map(|x| {
-                let stroke = grid.stroke(x, 1.0);
-                rect()
-                    .interactive(false)
-                    .position(Position::new_absolute().left(stroke.near).top(0.0))
-                    .width(Size::px(stroke.thick))
-                    .height(Size::px(code_row_height()))
-                    .background(palette().caret_fg)
-            });
+        // Drawn over a selection too, at its lead: it is where the next key moves from.
+        let caret = text.chars.cursor.and_then(column_x).map(|x| {
+            // A caret past the pane's edge brings the list sideways to it: the
+            // keyboard walks the caret along a row longer than the pane, and the
+            // pane has to follow. From a task and not the render, since a scroll
+            // is a write; the list answers with a layout, whose `on_sized` moves
+            // `visible`, and a caret then inside asks for nothing more.
+            let seen = listing.bounds.get();
+            if seen.width() > 0.0 {
+                let at = row_x.get() + ROW_PAD + x;
+                let shove = if at < seen.min_x() {
+                    Some(seen.min_x() - at + CARET_INSET)
+                } else if at + 1.0 > seen.max_x() {
+                    Some(seen.max_x() - at - 1.0 - CARET_INSET)
+                } else {
+                    None
+                };
+                if let Some(shove) = shove.filter(|shove| shove.abs() >= 1.0) {
+                    let mut controller = listing.controller;
+                    // Nothing to bring in from the left of the row's own start.
+                    let shove = shove.min(-(row_x.get() - seen.min_x()).min(0.0));
+                    spawn(async move {
+                        let (x0, _) = <(i32, i32)>::from(controller);
+                        let target = (x0 + shove.round() as i32).min(0);
+                        if target != x0 {
+                            controller.scroll_to_x(target);
+                        }
+                    });
+                }
+            }
+            // From the column rightward, so a caret on column 0 starts where the
+            // text does.
+            let stroke = grid.span(x, x + CARET_WIDTH);
+            rect()
+                .interactive(false)
+                .position(Position::new_absolute().left(stroke.near).top(0.0))
+                .width(Size::px(stroke.thick))
+                .height(Size::px(code_row_height()))
+                .background(palette().caret_fg)
+        });
         // The link, in a box that says when the pointer is over it: the hand is the
         // link's and the I-beam the text's, and the row sets both (`set_icon`).
         let inline = text.inline.map(|inline| {
@@ -281,13 +371,13 @@ pub(crate) fn code_row(
         // it holds measured under it -- which is what lets the list scroll sideways to a
         // long row while the wash still runs the whole width. The width reported is the
         // content's, not the laid-out one: see `ui/width.rs`.
-        .width(Widest::row_width(widest.floor(listing), listing))
+        .width(Widest::row_width(widest.floor(listing_key), listing_key))
         .on_sized({
             let row_x = row_x.clone();
             move |e: Event<SizedEventData>| {
                 row_x.set(e.area.min_x());
                 if measured {
-                    widest.note(listing, e.inner_sizes.width);
+                    widest.note(listing_key, e.inner_sizes.width);
                 }
             }
         })
@@ -409,42 +499,134 @@ impl Nudge {
     }
 }
 
+/// How often the view moves while a sweep is held past an edge: a row up or down, and
+/// a row's height sideways, each time.
+const AUTOSCROLL_TICK: Duration = Duration::from_millis(40);
+
+/// Whether `pane`'s run is being swept: the button down on it.
+fn dragging(marked: State<Marks>, pane: Pane) -> bool {
+    marked
+        .peek()
+        .of(pane)
+        .as_ref()
+        .is_some_and(|picked| picked.rows.dragging)
+}
+
+/// Where a sweep at `at`, a window location, reaches once it has left the rows of
+/// `listing`: [`beyond`], with the rows' top worked out from the list's scroll and its
+/// nudge, and the column off the paragraph the row lent. `None` while the pointer is over
+/// a row, which answers for itself.
+fn reach(listing: &Listing, nudge: Nudge, length: usize, at: CursorPoint) -> Option<Caret> {
+    let area = listing.bounds.get();
+    let (_, scrolled) = <(i32, i32)>::from(listing.controller);
+    let rows_top = nudge.value() + scrolled as f32;
+    let bounds = Bounds {
+        left: area.min_x(),
+        top: area.min_y(),
+        right: area.max_x(),
+        bottom: area.max_y(),
+    };
+    let reached = beyond(
+        bounds,
+        rows_top,
+        code_row_height(),
+        length,
+        at.x as f32,
+        at.y as f32,
+    )?;
+    Some(Caret {
+        row: reached.row,
+        col: listing.column_at(reached.row, reached.x),
+    })
+}
+
 /// The handler that carries a sweep on once the pointer has left the rows: outside the
 /// listing's box, the pane, or the window. The platform keeps reporting the pointer while
 /// a button is held wherever it goes, freya forwards every move and sends its global move
 /// to every listener without hit-testing (`notes/upstream/freya.md`), so this goes on the
 /// listing's box as `on_global_pointer_move` and asks [`beyond`] where the sweep reaches:
-/// nothing while the pointer is over a row, which answers for itself. `bounds` is the
-/// box's area as its `on_sized` last reported it; `length` the listing's rows.
-pub(crate) fn on_sweep_beyond(
+/// nothing while the pointer is over a row, which answers for itself. `length` is the
+/// listing's rows.
+///
+/// Held past an edge of the box, the sweep **scrolls the view**: a task moves it every
+/// [`AUTOSCROLL_TICK`] towards the pointer -- a row up or down, a row's height sideways --
+/// and reaches the run out to what came in, for as long as the button is down and the
+/// pointer stays past an edge; the pointer's last place is kept in a cell the handler
+/// writes and the task reads, since nothing arrives from a pointer that is not moving. A
+/// hook, for the cells to outlive the handler a render makes afresh; one task at a time,
+/// the flag says.
+pub(crate) fn use_sweep_beyond(
     marked: State<Marks>,
     pane: Pane,
-    bounds: Rc<Cell<Area>>,
+    listing: Listing,
     nudge: Nudge,
-    controller: ScrollController,
     length: usize,
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
+    let last = use_hook(|| Rc::new(Cell::new(None::<CursorPoint>)));
+    let running = use_hook(|| Rc::new(Cell::new(false)));
+
     move |e: Event<PointerEventData>| {
         let at = e.global_location();
-        let area = bounds.get();
-        let (_, scrolled) = <(i32, i32)>::from(controller);
-        let rows_top = nudge.value() + scrolled as f32;
-        let bounds = Bounds {
-            left: area.min_x(),
-            top: area.min_y(),
-            right: area.max_x(),
-            bottom: area.max_y(),
-        };
-        let reached = beyond(
-            bounds,
-            rows_top,
-            code_row_height(),
-            length,
-            at.x as f32,
-            at.y as f32,
-        );
-        if let Some(caret) = reached {
+        last.set(Some(at));
+        if let Some(caret) = reach(&listing, nudge, length, at) {
             mark_drag(marked, pane, caret.row, Some(caret.col));
         }
+
+        let area = listing.bounds.get();
+        let past = at.y < area.min_y() as f64
+            || at.y >= area.max_y() as f64
+            || at.x < area.min_x() as f64
+            || at.x >= area.max_x() as f64;
+        if !past || running.get() || !dragging(marked, pane) {
+            return;
+        }
+        running.set(true);
+        let (last, running, listing) = (last.clone(), running.clone(), listing.clone());
+        spawn(async move {
+            loop {
+                Timer::after(AUTOSCROLL_TICK).await;
+                let Some(at) = last.get() else { break };
+                if !dragging(marked, pane) {
+                    break;
+                }
+                let area = listing.bounds.get();
+                // Each offset counts down from zero, so towards the far side is less.
+                let side = |before: bool, past: bool| {
+                    if before {
+                        1
+                    } else if past {
+                        -1
+                    } else {
+                        0
+                    }
+                };
+                let down = side(at.y < area.min_y() as f64, at.y >= area.max_y() as f64);
+                let across = side(at.x < area.min_x() as f64, at.x >= area.max_x() as f64);
+                if down == 0 && across == 0 {
+                    break;
+                }
+                let step = code_row_height() as i32;
+                let (x, y) = <(i32, i32)>::from(listing.controller);
+                let mut controller = listing.controller;
+                if down != 0 {
+                    let extent = (length as f32 * code_row_height() - area.height()).max(0.0);
+                    let target = (y + down * step).clamp(-(extent as i32), 0);
+                    if target != y {
+                        controller.scroll_to_y(target);
+                    }
+                }
+                if across != 0 {
+                    let extent = (listing.widest.extent(listing.key) - area.width()).max(0.0);
+                    let target = (x + across * step).clamp(-(extent as i32), 0);
+                    if target != x {
+                        controller.scroll_to_x(target);
+                    }
+                }
+                if let Some(caret) = reach(&listing, nudge, length, at) {
+                    mark_drag(marked, pane, caret.row, Some(caret.col));
+                }
+            }
+            running.set(false);
+        });
     }
 }

@@ -305,8 +305,9 @@ over the pixel they share, and a translucent wash fading twice reads as a light 
 every pair of selected rows. The scroll offset is whole logical pixels, so at 1× and 2× the
 rows stay on the grid as they scroll; at 1.5× they do not, and nothing here pretends otherwise.
 The caret is a stroke of the row's own on the same grid (`caret_x` off the laid-out paragraph,
-`Grid::stroke`, one device pixel wide, `caret_fg`), where the engine's own would sit on the
-glyph's fractional edge two pixels wide, and **so is the highlight**: a rect from the first
+`Grid::span` from the column rightward, two logical pixels wide as most editors draw theirs,
+`caret_fg`), where the engine's own would sit on the glyph's fractional edge, and **so is the
+highlight**: a rect from the first
 column's x to the last's, the row's whole height, `Grid::span`, painted before the paragraph
 in the tree so the text sits over it -- the engine's own highlight is the glyphs' tight box,
 which is shorter than the row by whatever the line's fonts and the link's placeholder add to
@@ -453,9 +454,14 @@ disassembly. Runs are dropped by `use_clear_marks` at the root, not by an effect
 just started. What is copied is what the row draws: `asm_line` (address plus the instruction with
 the target's name in its operand), and the rope's own line for source, tabs and all -- and, in an
 object's code, each kind of row as it draws (`row_line`), a separator and an empty row as the blank
-line they are. That listing's run is also dropped when its rows are counted afresh under it, since
-a run is listing rows: `use_clear_marks` watches the reading's generation, and only the generation,
-because the asks the view makes as it scrolls write the same state and change no row.
+line they are. That listing's run **survives its rows being counted afresh under it**, though a run
+is listing rows: the section view's own rebuild (`use_kept_place`, which produces the new `Built`
+in the one run that moves the controller) carries it across through `carry_assembly`, each row of
+it -- the rows' two ends and the caret's -- put through the address it stood for in the old rows
+(`spot_at`) and back to a row of the new (`row_for`), the way the reader's place is kept across the
+same recount; a run any end of which has no row any more goes. It used to be dropped on every
+answer that landed, and with up to 64 stretches asked for and 8 answered a chunk, answers kept
+landing after the reader had clicked: the caret vanished and the companion file with it.
 
 **A sweep along a row's text picks characters out**, beside the rows and not instead of them
 (`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `code_row`
@@ -475,27 +481,47 @@ own code would unwrap) and the highlight paint (`highlights`, `text_select_bg`,
 `CursorMode::Expanded` so it fills the row). No `use_editable`, no rope of the listing: the
 editor's model wants one rope and a line per row, and an object's code is estimated rows that are
 counted afresh with every answer. **Gutter against text**: the arrow gutter, the address column,
-the line number, a separator and an empty row are gutter, and a press there picks the row out
-alone; a press on the text anchors the characters too, and the sweep moves both leads -- the
-rows' to the row under the pointer, the characters' to the column, which is 0 left of the text
-and the end right of it. The column is the pointer's row-relative x less the paragraph's x within
+the line number, a separator and an empty row are gutter, and a press there puts the caret at the
+row's start and makes the sweep go **by rows** (`Picked::by_rows`, `CharSelection::by_rows`):
+whole ones from the anchor's row to the pointer's, as a sweep down an editor's line numbers goes,
+and back on the anchor's own row the caret the press left; a press on the text anchors the caret
+at the column, and the sweep moves both leads -- the rows' to the row under the pointer, the
+characters' to the column, which is 0 left of the text and the end right of it. Every pick is
+therefore a caret and a selection, and `Picked::chars` is not optional. The column is the pointer's row-relative x less the paragraph's x within
 the row, both taken from `on_sized` into cells (scroll-invariant, and no font's advance assumed).
 **A sweep carries on beyond the rows** -- outside the listing's box, the pane, the window --
 because the platform keeps reporting a held button's pointer wherever it goes and freya sends
 its global move to every listener (`notes/upstream/freya.md`): each list's box listens with
 `on_sweep_beyond`, which asks `beyond` (`src/chars.rs`, pure, tested) where the sweep reaches
 -- nothing while the pointer is over a row, which answers for itself; else the row on screen
-nearest it, from its start to the left and above and to its end (`END`, clamped as a column)
-to the right and below, and a listing shorter than its box to its last row's end. Clamped to
-the rows on screen: autoscroll is the goal left. The release is the root's
+nearest it (`Reach`: the first above, the last below, the one level with the pointer beside)
+at **the column under the pointer's x clamped into the box**, which the list asks of the row
+through the paragraph the row lent it (`Listing::texts`, written by every render of a row with
+text): past the left edge that is the first column in sight and past the right the last, and not
+the row's start or end, which is what the sweep used to jump to. Held past any edge of the box,
+the sweep **scrolls the view**: a task the handler starts moves it every `AUTOSCROLL_TICK` towards
+the pointer -- a row up or down, a row's height sideways, the sideways extent being the widest row
+(`Widest::extent`) -- and reaches the run out to what came in, for as long as the button is down
+and the pointer stays past an edge, the pointer's last place kept in a cell since nothing arrives
+from a pointer that is not moving (`use_sweep_beyond`, a hook so the cells outlive the handler a
+render remakes; one task at a time). The release is the root's
 `on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar
-thumb cancels. **Nothing inside a row may listen to `pointer_down`**: a bubbling event is measured against the
+thumb cancels. **A control the sweep passes over does not answer the pointer**: the companion header and the
+symbol bar's names are `interactive(false)` while a sweep is under way (`sweeping`), since freya's
+tooltip arms on the hover alone and a pointer dragging a selection up past them armed and showed
+theirs (`notes/upstream/freya.md`). **What re-renders a row when the caret moves** is its list's
+data: the three lists hand their rows `chars` through `new_with_data`, and the section view's
+`SectionRows`, comparing by hand, once compared everything but it -- so a move along a row, which
+changes no row of the run, rebuilt nothing and the caret stayed drawn where it was, while a
+vertical move redrew: Left, Right, Home and End read as dead in the unified view alone
+(`the_keys_move_the_caret_along_a_row_the_worker_decoded`). **Nothing inside a row may listen
+to `pointer_down`**: a bubbling event is measured against the
 deepest listener and every ancestor gets the same data, so a child listening would hand the row a
 location relative to itself; the links listen to the press and to `over`/`out`. While the
 characters are non-empty their rows draw the highlight and no wash (the pair's green
 still shows); a plain press leaves an empty run and the caret's row washed, plus a **caret** at
-the pressed column (`cursor_index`, which the engine leaves undrawn under a highlight, so it
-shows for a press and not a sweep, as an editor's does). The paragraph takes the row's whole
+the pressed column -- drawn over a selection too, at its lead, since that is where the next key
+moves from. The paragraph takes the row's whole
 height (`height(fill)`, as `CodeEditor`'s lines do) so the highlight, which `Expanded` mode
 stretches to the paragraph's box, runs from one row into the next without a gap. The pointer's
 icon is the row's to set, in its move handler and nowhere else -- an I-beam over the text and
@@ -503,19 +529,19 @@ to the right of it, the hand over a link (whose box in the paragraph says when i
 pointer; the two labels' own `CursorArea`s went, or they would fight it), the arrow over the
 gutter and on leaving the row -- and only when it changes, through one cell for the thread:
 a set is a message to the platform, and a row's own memory of the icon would be wrong the
-moment its neighbour set another. **The row wash is the selection's colour or the caret's**
-(`wash_of`, `Wash`): a run with no characters under it -- picked out from the gutter, by
-Ctrl+A, or from outside the panes -- is selected whole and its rows wear `text_select_bg`, the
-colour the character highlight is painted in, so a gutter sweep and a text sweep read as one
-thing; the caret's row, where a press on the text has left a caret and no sweep has moved it,
-wears the same colour faded (`cursor_row_bg`); and a sweep of characters washes nothing, the
-highlight being the selection then. freya counts presses
+moment its neighbour set another. **The only row wash is the caret's** (`wash_of`, `Wash`): the
+row the lead is on while nothing is selected, in the selection's colour faded (`cursor_row_bg`);
+a selection washes no row, the highlight being the selection, and a run picked out whole -- from
+the gutter, by Ctrl+A (first row's start to last row's end), from outside the panes (a caret at
+the line's start) -- is a selection like any other. The whole-row wash that preceded it made a
+gutter click look like a different kind of thing from a text click, which it is not. freya counts presses
 (`EventsCombos::pressed`, root state, 500 ms and 5 px): two on a word take the word as skia
 divides them (`get_word_boundary`), three the row's text, and a sweep after either goes on by
-character. Ctrl+C copies the characters where there are any and the rows otherwise
-(`copy_text`, pure, so the rule is tested without a clipboard); Escape peels the characters
-first and the rows on a second press (`peel`); Ctrl+A stays rows; everything that drops a run
-drops its characters with it. Each row is handed its own `highlight` by its list
+character. Ctrl+C copies the characters where any are selected and otherwise the rows -- the
+caret's row as its own line, address and all, as an editor copies the line under a caret with
+nothing selected (`copy_text`, pure, so the rule is tested without a clipboard); Escape collapses
+the selection to its caret, the rows to the caret's row with it, and drops the run on a second
+press (`peel`); everything that drops a run drops its caret with it. Each row is handed its own `highlight` by its list
 (`highlight_of`, unclamped at the end so a row's prop changes only when an end moves on it), the
 reason `selected` is a row prop. Five tests pin it, the ends of a row's text being what is
 pressed on so none measures a font: the sweep and the wash giving way, the address as gutter,
@@ -545,12 +571,18 @@ the caret** -- a one-row run at its row, or with Shift the run reached out to it
 false -- because the rows are the place the panes point at each other through and a caret on
 row 12 with the pair lit for row 3 would be two places at once; **no scroll is owed** to the other
 pane (`Owed::default()`), since a held key repeats and every repeat would yank the other pane
-about while the reader walks this one; and the pane reveals the caret's row through the same
-`reveal_row` a landing uses, handed in as a closure by each list. A run of rows with no caret
-under it -- from the gutter, Ctrl+A, or a landing -- is given one at its lead row's start and the
-key moves from there, so a landing can be walked away from; a listing with no run does nothing
-with the key. A page is `viewport / code_row_height()`, floored, and the motion makes one of
-none. Nothing edits: no Backspace, no typing. Four headless tests pin the mechanism, each on
+about while the reader walks this one; and the pane reveals the caret's row through
+`reveal_caret`, handed in as a closure by each list -- **not** the `reveal_row` a click uses, whose
+`CONTEXT_ROWS` of margin would scroll the view while the caret was still on screen and walk the
+rows away from under the reader on every repeat of a held key: the caret's reveal moves the view
+only when the caret has left it, a row above coming to the top and one below to the bottom. A
+caret walked **past the pane's edge** brings the pane sideways to it: the row that draws the caret
+knows its x, the list's box (`Listing`, a context each list provides its rows, with its scroll and
+its bounds -- freya reports a row's own `visible_area` unclipped) says where the pane ends, and a
+task scrolls the list by the difference, from a task and not the render since a scroll is a
+write; a listing with no run does nothing with the key. A page is `viewport /
+code_row_height()`, floored, and the motion makes one of none. Nothing edits: no Backspace, no
+typing. Five headless tests pin the mechanism, each on
 the ends of a row's text and a row's y so none measures a font: the caret moving with Right,
 Down, End, Home and a Left that crosses to the row above; Shift reaching out and a plain key
 collapsing; Ctrl+End scrolling a short pane to the last row and Ctrl+Home back; and an arrow

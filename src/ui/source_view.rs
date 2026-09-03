@@ -334,8 +334,10 @@ impl Component for SourceList {
 
         let nudge = use_nudge();
         let grid = pixel_grid();
-        // Where the box is, for a sweep that has left it.
-        let bounds = use_hook(|| Rc::new(std::cell::Cell::new(Area::zero())));
+        // The list as its rows and a sweep past its edge know it: its scroll, its box,
+        // the paragraphs the rows lend it, and its widest row.
+        let listing_ctx = use_provide_context(|| Listing::new(controller, widest, listing));
+        let bounds = listing_ctx.bounds.clone();
         let on_key_down = {
             let source = self.source.clone();
             let drawn = self.source.clone();
@@ -363,7 +365,7 @@ impl Component for SourceList {
                 // copy: an indentation as the spaces the row draws it as.
                 move |index| source_line(&drawn, index),
                 // The caret's row, brought on screen after a key has moved it.
-                move |index| reveal_row(&mut controller, *viewport.peek(), index),
+                move |index| reveal_caret(&mut controller, *viewport.peek(), index),
             )
         };
 
@@ -386,12 +388,11 @@ impl Component for SourceList {
                             bounds.set(e.area);
                         }
                     })
-                    .on_global_pointer_move(on_sweep_beyond(
+                    .on_global_pointer_move(use_sweep_beyond(
                         marked,
                         Pane::Source,
-                        bounds,
+                        listing_ctx.clone(),
                         nudge,
-                        controller,
                         length,
                     ))
                     // On the grid: see `Nudge`.
@@ -417,7 +418,7 @@ impl Component for SourceList {
                                     file: data.file.clone(),
                                     index: i,
                                     paired: paired_at(i).then(|| Edges::of(i, paired_at)),
-                                    wash: wash_of(data.rows, data.chars, i),
+                                    wash: wash_of(data.chars, i),
                                     chars: RowChars::of(data.chars, i),
                                     drives: data.drives,
                                     widest: data.widest,
@@ -583,25 +584,35 @@ fn stale_banner() -> Element {
 ///
 /// The states come in as arguments: this is called from inside a `match`, and a hook may
 /// only run unconditionally in a component's body.
-fn companion_header(open: Open, history: State<History>, file: Arc<str>) -> Element {
+fn companion_header(
+    open: Open,
+    history: State<History>,
+    file: Arc<str>,
+    sweeping: bool,
+) -> Element {
     let document = Document::Source(file.clone());
 
-    row_tooltip(
-        file.to_string(),
-        rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .width(Size::fill())
-            .height(Size::px(list_row_height()))
-            .padding(Gaps::new_symmetric(0.0, 8.0))
-            .spacing(6.0)
-            .background(palette().header_bg)
-            .border(bottom_hairline())
-            .on_press(move |_| activate(open, history, Some(document.clone()), Visit::Went))
-            .child(entry_icon(&Document::Source(file.clone())))
-            .child(label().text(file_name(&file)).max_lines(1)),
-    )
-    .into_element()
+    // Not hit while a sweep is under way: the pointer dragging a selection up past the
+    // header would otherwise arm its tooltip, and light it.
+    rect()
+        .width(Size::fill())
+        .interactive(!sweeping)
+        .child(row_tooltip(
+            file.to_string(),
+            rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .width(Size::fill())
+                .height(Size::px(list_row_height()))
+                .padding(Gaps::new_symmetric(0.0, 8.0))
+                .spacing(6.0)
+                .background(palette().header_bg)
+                .border(bottom_hairline())
+                .on_press(move |_| activate(open, history, Some(document.clone()), Visit::Went))
+                .child(entry_icon(&Document::Source(file.clone())))
+                .child(label().text(file_name(&file)).max_lines(1)),
+        ))
+        .into_element()
 }
 
 /// The Source pane: the tab's source side, whichever of the two sides that is.
@@ -618,6 +629,8 @@ impl PartialEq for SourcePane {
 
 impl Component for SourcePane {
     fn render(&self) -> impl IntoElement {
+        // Whether a sweep is under way, for the header not to answer the pointer during one.
+        let sweeping = sweeping(use_consume::<Marked>().0);
         let open = use_open();
         let history = use_consume::<Hist>().0;
         // Reading it is what subscribes this tab to the analysis, so the pane fills in when
@@ -696,7 +709,9 @@ impl Component for SourcePane {
             .content(Content::Flex)
             .background(palette().pane_bg)
             .maybe_child(match &side {
-                SourceSide::Companion(file) => Some(companion_header(open, history, file.clone())),
+                SourceSide::Companion(file) => {
+                    Some(companion_header(open, history, file.clone(), sweeping))
+                }
                 SourceSide::Subject(_) => None,
             })
             .maybe_child(stale.then(stale_banner))
