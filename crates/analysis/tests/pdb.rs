@@ -169,6 +169,7 @@ fn an_image_built_in_memory_can_name_a_pdb() {
             age: 7,
             path: "C:\\build\\fixture.pdb",
         }),
+        unwind: &[],
     });
     let file = object::File::parse(image.as_slice()).expect("a PE image");
     let codeview = file
@@ -522,6 +523,7 @@ fn an_absolute_recorded_path_is_tried_as_recorded() {
                 age: codeview.age(),
                 path: recorded,
             }),
+            unwind: &[],
         })
     };
 

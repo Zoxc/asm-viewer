@@ -1071,22 +1071,26 @@ pub struct CodeViewRecord<'a> {
 
 /// What [`pe_image`] is asked for. `entry` is an offset into `.text`, or [`None`] as in a
 /// resource-only DLL; `codeview` is the debug directory's one record, or [`None`] for an
-/// image built without `/DEBUG`.
+/// image built without `/DEBUG`; `unwind` is the exception directory's `RUNTIME_FUNCTION`s,
+/// each a `(begin, end)` pair of offsets into `.text` — allowed past its end, so a test can
+/// state a function where there is no code — and empty for an image without one.
 pub struct PeDll<'a> {
     pub text: &'a [u8],
     pub symbols: &'a [ExportedSymbol<'a>],
     pub entry: Option<u64>,
     pub codeview: Option<CodeViewRecord<'a>>,
+    pub unwind: &'a [(u64, u64)],
 }
 
-/// [`pe_image`] without a debug directory, which is what every test before the PDB backend
-/// asked for.
+/// [`pe_image`] without a debug directory or unwind info, which is what every test before
+/// the PDB backend asked for.
 pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Vec<u8> {
     pe_image(PeDll {
         text,
         symbols,
         entry,
         codeview: None,
+        unwind: &[],
     })
 }
 
@@ -1095,17 +1099,21 @@ pub fn pe_dll(text: &[u8], symbols: &[ExportedSymbol], entry: Option<u64>) -> Ve
 /// above is. With a [`CodeViewRecord`], `.rdata` also carries a debug directory of one
 /// `IMAGE_DEBUG_TYPE_CODEVIEW` entry pointing at an `RSDS` record — the shape `object`'s
 /// `pdb_info` reads — so a test can name any `.pdb` on disk from an image built in memory.
+/// With `unwind` entries, a third section `.pdata` holds one 12-byte `RUNTIME_FUNCTION`
+/// each and the exception data directory points at it, as `link.exe` lays an x86-64 image
+/// out; without, the image is the two-section one byte for byte.
 pub fn pe_image(dll: PeDll) -> Vec<u8> {
     let PeDll {
         text,
         symbols,
         entry,
         codeview,
+        unwind,
     } = dll;
     const FILE_ALIGNMENT: usize = 0x200;
     const SECTION_ALIGNMENT: u64 = 0x1000;
-    /// DOS stub, `PE\0\0`, COFF header, PE32+ optional header and two section headers,
-    /// rounded up to one file-alignment unit — which everything below assumes fits.
+    /// DOS stub, `PE\0\0`, COFF header, PE32+ optional header and up to three section
+    /// headers, rounded up to one file-alignment unit — which everything below assumes fits.
     const HEADERS: usize = FILE_ALIGNMENT;
 
     let text_size = text.len();
@@ -1195,11 +1203,33 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
 
     let rdata_size = rdata.len();
     let rdata_raw = rdata_size.next_multiple_of(FILE_ALIGNMENT);
-    let image_size = (rdata_rva + rdata_size as u64).next_multiple_of(SECTION_ALIGNMENT);
 
-    let mut out = vec![0u8; HEADERS + text_raw + rdata_raw];
+    // The unwind table: one `RUNTIME_FUNCTION` per entry — begin RVA, end RVA, and the RVA
+    // of its `UNWIND_INFO`, which nothing here reads and so points at the hole `.rdata`
+    // keeps for the data export. In a `.pdata` of its own after `.rdata`, as a linker
+    // places it.
+    let pdata_rva = rdata_rva + (rdata_size as u64).next_multiple_of(SECTION_ALIGNMENT);
+    let mut pdata = Vec::new();
+    for &(begin, end) in unwind {
+        put32(&mut pdata, (TEXT_RVA + begin) as u32);
+        put32(&mut pdata, (TEXT_RVA + end) as u32);
+        put32(&mut pdata, data_rva as u32);
+    }
+    let pdata_size = pdata.len();
+    let pdata_raw = pdata_size.next_multiple_of(FILE_ALIGNMENT);
+    let section_count: u16 = if pdata.is_empty() { 2 } else { 3 };
+    let image_end = if pdata.is_empty() {
+        rdata_rva + rdata_size as u64
+    } else {
+        pdata_rva + pdata_size as u64
+    };
+    let image_size = image_end.next_multiple_of(SECTION_ALIGNMENT);
+
+    let mut out = vec![0u8; HEADERS + text_raw + rdata_raw + pdata_raw];
     out[HEADERS..HEADERS + text_size].copy_from_slice(text);
     out[HEADERS + text_raw..HEADERS + text_raw + rdata_size].copy_from_slice(&rdata);
+    let pdata_pointer = HEADERS + text_raw + rdata_raw;
+    out[pdata_pointer..pdata_pointer + pdata_size].copy_from_slice(&pdata);
 
     out[..2].copy_from_slice(b"MZ");
     out[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes()); // e_lfanew
@@ -1209,7 +1239,7 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
     // PointerToSymbolTable, NumberOfSymbols, SizeOfOptionalHeader, Characteristics.
     let coff = &mut out[0x44..0x58];
     coff[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
-    coff[2..4].copy_from_slice(&2u16.to_le_bytes());
+    coff[2..4].copy_from_slice(&section_count.to_le_bytes());
     // PointerToSymbolTable and NumberOfSymbols stay 0: the point of the fixture.
     coff[16..18].copy_from_slice(&240u16.to_le_bytes()); // SizeOfOptionalHeader
     coff[18..20].copy_from_slice(&0x2022u16.to_le_bytes()); // EXECUTABLE | LARGE_ADDRESS | DLL
@@ -1228,6 +1258,11 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
                                                          // Data directory 0 is the export table.
     opt[112..116].copy_from_slice(&(rdata_rva as u32).to_le_bytes());
     opt[116..120].copy_from_slice(&(rdata_size as u32).to_le_bytes());
+    // Data directory 3 is the exception directory: the whole of `.pdata`, when there is one.
+    if !pdata.is_empty() {
+        opt[136..140].copy_from_slice(&(pdata_rva as u32).to_le_bytes());
+        opt[140..144].copy_from_slice(&(pdata_size as u32).to_le_bytes());
+    }
     // Data directory 6 is the debug directory: one entry, when there is one.
     if let Some(directory) = debug_directory {
         opt[160..164].copy_from_slice(&(directory as u32).to_le_bytes());
@@ -1270,6 +1305,17 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
     );
     out[headers..headers + 40].copy_from_slice(&text_header);
     out[headers + 40..headers + 80].copy_from_slice(&rdata_header);
+    if !pdata.is_empty() {
+        let pdata_header = section(
+            b".pdata",
+            pdata_rva,
+            pdata_size,
+            pdata_pointer,
+            pdata_raw,
+            0x4000_0040,
+        );
+        out[headers + 80..headers + 120].copy_from_slice(&pdata_header);
+    }
 
     out
 }
@@ -1319,6 +1365,7 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>)> {
                     age: 3,
                     path: "C:\\build\\fixture.pdb",
                 }),
+                unwind: &[],
             }),
         ),
     ]

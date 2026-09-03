@@ -468,9 +468,10 @@ fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
     fields
 }
 
-/// The same for a PE image: the COFF header, the PE32+ optional header, the export and
-/// debug data directories, the section table, the export directory it points at — what
-/// `declared_code` walks in an image with no symbol table — and the debug directory's
+/// The same for a PE image: the COFF header, the PE32+ optional header, the export,
+/// exception and debug data directories, the section table, the export directory it points
+/// at — what `declared_code` walks in an image with no symbol table — every
+/// `RUNTIME_FUNCTION`'s three words in the exception directory, and the debug directory's
 /// entry and the CodeView record behind it, which is how a `.pdb` is named and matched.
 fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
     let mut fields = Vec::new();
@@ -490,8 +491,8 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
     }
 
     // Magic, AddressOfEntryPoint, BaseOfCode, ImageBase, SectionAlignment, FileAlignment,
-    // SizeOfImage, SizeOfHeaders, NumberOfRvaAndSizes, the export data directory and the
-    // debug data directory.
+    // SizeOfImage, SizeOfHeaders, NumberOfRvaAndSizes, the export data directory, the
+    // exception data directory and the debug data directory.
     let opt = coff + 20;
     for (offset, width) in [
         (0usize, 2usize),
@@ -505,6 +506,8 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
         (108, 4),
         (112, 4),
         (116, 4),
+        (136, 4),
+        (140, 4),
         (160, 4),
         (164, 4),
     ] {
@@ -518,8 +521,11 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
     let optional = u16::from_le_bytes(data[coff + 16..coff + 18].try_into().unwrap()) as usize;
     let table = opt + optional;
     let export_rva = u32::from_le_bytes(data[opt + 112..opt + 116].try_into().unwrap());
+    let exception_rva = u32::from_le_bytes(data[opt + 136..opt + 140].try_into().unwrap());
+    let exception_size = u32::from_le_bytes(data[opt + 140..opt + 144].try_into().unwrap());
     let debug_rva = u32::from_le_bytes(data[opt + 160..opt + 164].try_into().unwrap());
     let mut export = None;
+    let mut exception = None;
     let mut debug = None;
 
     for i in 0..sections {
@@ -532,7 +538,7 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
             fields.push((base + offset, width));
         }
 
-        // Where in the file the export directory and the debug directory are, if they are in
+        // Where in the file the export, exception and debug directories are, if they are in
         // this section.
         let size = u32::from_le_bytes(data[base + 8..base + 12].try_into().unwrap());
         let rva = u32::from_le_bytes(data[base + 12..base + 16].try_into().unwrap());
@@ -540,8 +546,26 @@ fn pe_fields(data: &[u8]) -> Vec<(usize, usize)> {
         if export_rva >= rva && export_rva < rva.saturating_add(size) {
             export = Some(pointer + (export_rva - rva) as usize);
         }
+        if exception_rva != 0 && exception_rva >= rva && exception_rva < rva.saturating_add(size) {
+            exception = Some(pointer + (exception_rva - rva) as usize);
+        }
         if debug_rva != 0 && debug_rva >= rva && debug_rva < rva.saturating_add(size) {
             debug = Some(pointer + (debug_rva - rva) as usize);
+        }
+    }
+
+    // Every `RUNTIME_FUNCTION` in the exception directory: BeginAddress, EndAddress and
+    // UnwindInfoAddress, 12 bytes each, as many as the directory's size says fit.
+    if let Some(base) = exception {
+        let entries = (exception_size / 12) as usize;
+        for i in 0..entries {
+            let entry = base + 12 * i;
+            if entry + 12 > data.len() {
+                break;
+            }
+            for offset in [0usize, 4, 8] {
+                fields.push((entry + offset, 4));
+            }
         }
     }
 
