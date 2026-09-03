@@ -43,6 +43,21 @@ rfd = "0.17"
 # regex 1 is already compiled in this tree, as a dependency of both `env_logger` and the
 # `tree-sitter` under freya's syntax highlighter.
 regex = "1"
+# The source search (`src/search.rs`): ripgrep's own walker and searcher rather than a
+# hand-rolled walk and a `regex` over whole files. `ignore` is what reads git's ignore
+# files, the whole reason the search skips `target/` without being told to; `grep-searcher`
+# reads a file a line at a time, never holding a big one whole, and is what recognises a
+# binary; `grep-regex` compiles the pattern for it and `grep-matcher` is the trait the
+# matches are asked for through. Unlike most of the list above these really are new
+# packages -- eight of them, the four named here plus `globset`, `bstr`, `encoding_rs` and
+# `encoding_rs_io` -- but nothing they pull in is a second copy of anything: `memchr`,
+# `regex-automata`, `regex-syntax`, `aho-corasick`, `walkdir`, `same-file`, `crossbeam-*`
+# and `winapi-util` are all in the lock already and shared. `cargo tree -d` is how that
+# stays true.
+ignore = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
 async-channel = "2"
 # The timer for the periodic save. Not a new async runtime: freya already depends on
 # async-io (freya-animation and freya-sdk both wait on `Timer` inside spawned tasks),

@@ -97,6 +97,10 @@ pub(crate) const FIELD_LABEL_WIDTH: f32 = 72.0;
 /// nobody has asked to be able to drag.
 pub(crate) const PAD_LIST_WIDTH: f32 = 150.0;
 
+/// The column a Search hit's line number is written in, so the lines under one file start
+/// at the same x whether the number has two digits or five.
+pub(crate) const LINE_NUMBER_WIDTH: f32 = 38.0;
+
 /// The column the short format tag is written in. Fixed, so the names to the right of it
 /// start at the same x whatever the tag says.
 pub(crate) const TAG_WIDTH: f32 = 34.0;

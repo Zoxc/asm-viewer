@@ -469,6 +469,7 @@ impl Tab {
 pub(crate) enum View {
     Objects,
     Files,
+    Search,
     Symbols,
     History,
     Bookmarks,
@@ -483,6 +484,7 @@ impl View {
         match self {
             View::Objects => "Objects",
             View::Files => "Files",
+            View::Search => "Search",
             View::Symbols => "Symbols",
             View::History => "History",
             View::Bookmarks => "Bookmarks",
@@ -502,6 +504,7 @@ impl View {
         let (name, svg) = match self {
             View::Objects => ("package", lucide::package()),
             View::Files => ("folder-tree", lucide::folder_tree()),
+            View::Search => ("search", lucide::search()),
             View::Symbols => ("square-function", lucide::square_function()),
             View::History => ("history", lucide::history()),
             View::Bookmarks => ("bookmark", lucide::bookmark()),
@@ -527,6 +530,7 @@ impl View {
         match self {
             View::Objects => ObjectsTab.into_element(),
             View::Files => FilesTab.into_element(),
+            View::Search => SearchTab.into_element(),
             View::Symbols => SymbolsTab.into_element(),
             View::History => HistoryTab.into_element(),
             View::Bookmarks => BookmarksTab.into_element(),
@@ -534,6 +538,19 @@ impl View {
             View::Project => ProjectTab.into_element(),
             View::Settings => SettingsTab.into_element(),
             View::Scratchpad => ScratchpadTab.into_element(),
+        }
+    }
+}
+
+/// Bring `view` to the front, wherever it is: the area it is asked of first, and then the
+/// one beside it, since a view may have been dragged into either. What a panel that
+/// answers a question asked somewhere else does before it answers.
+pub(crate) fn raise_view(mut dock: State<DockArea>, view: View) {
+    // Bound before the write below, so the read is gone by then.
+    let other = dock.peek().other;
+    if !dock.write().show_view(view) {
+        if let Some(mut other) = other {
+            other.write().show_view(view);
         }
     }
 }

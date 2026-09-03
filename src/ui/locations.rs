@@ -193,7 +193,7 @@ impl Found {
 /// landing, so a reader who moved on meanwhile is not pulled back.
 pub(crate) fn find_locations(
     mut located: State<Located>,
-    mut dock: State<DockArea>,
+    dock: State<DockArea>,
     query: Query,
     subject: Option<(DocId, Arc<str>)>,
 ) {
@@ -205,13 +205,7 @@ pub(crate) fn find_locations(
     next.subject = subject;
     located.set(next);
 
-    // Bound before the write below, so the read is gone by then.
-    let other = dock.peek().other;
-    if !dock.write().show_view(View::Locations) {
-        if let Some(mut other) = other {
-            other.write().show_view(View::Locations);
-        }
-    }
+    raise_view(dock, View::Locations);
 }
 
 /// The menu a source row or an instruction row opens on a right-click: the line's
@@ -458,6 +452,7 @@ impl Component for LocationRow {
                                     tab: symbol_tab,
                                     at: Some(at),
                                     address: None,
+                                    columns: None,
                                 },
                                 reach(ctrl),
                             );

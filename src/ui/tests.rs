@@ -11,6 +11,7 @@ use super::*;
 // prelude -- and two globs offering one name is an ambiguity rather than a shadowing. An
 // explicit import wins over a glob, so this is what the name means here: ours.
 use super::settings_view::use_theme;
+use crate::search::{Hit, SearchEvent, SearchQuery};
 use freya_testing::TestingRunner;
 
 /// Three rows wired exactly the way the two panes are: the press that starts a run, the
@@ -389,7 +390,7 @@ fn project_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// The eleven contexts `app()` provides, in one `ProjectStates`. A macro and not a
+/// The twelve contexts `app()` provides, in one `ProjectStates`. A macro and not a
 /// function: the runner's type is `freya_core::integration::Runner`, which freya's prelude
 /// does not re-export, so naming it would mean naming a crate the app does not depend on.
 macro_rules! project_states {
@@ -450,6 +451,9 @@ macro_rules! project_states {
                 .0,
             bookmarks: $runner
                 .provide_root_context(|| Bookmarked(State::create(Bookmarks::default())))
+                .0,
+            searched: $runner
+                .provide_root_context(|| Searching(State::create(Searched::default())))
                 .0,
         }
     }};
@@ -2963,6 +2967,7 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
             tab: document.clone(),
             at: Some(at.clone()),
             address: None,
+            columns: None,
         },
         Reach::NewTab,
     );
@@ -3217,6 +3222,7 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
         tab: Document::Assembly(Selection::Symbol(symbols[0].clone())),
         at: Some(at.clone()),
         address: None,
+        columns: None,
     }));
     open_document(
         states.open,
@@ -5744,15 +5750,16 @@ fn every_foreground_is_legible_on_its_own_surface() {
             );
         }
 
-        // The five the source pane has to itself: a disassembly holds no strings,
-        // comments, attributes, types or call names, so these are only ever read on
-        // `pane_bg`.
+        // The five the source pane has to itself, and the Search panel's mark, which is
+        // read on a sidebar row: a disassembly holds no strings, comments, attributes,
+        // types or call names, so these are only ever read on `pane_bg`.
         for (name, color) in [
             ("string_fg", palette.string_fg),
             ("comment_fg", palette.comment_fg),
             ("attribute_fg", palette.attribute_fg),
             ("type_fg", palette.type_fg),
             ("function_fg", palette.function_fg),
+            ("match_fg", palette.match_fg),
         ] {
             let ratio = contrast(color, palette.pane_bg);
             assert!(ratio >= 3.0, "{theme} {name} on pane_bg: {ratio:.2}");
@@ -9747,6 +9754,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
         tab: first_tab.clone(),
         at: None,
         address: Some(first.data.address),
+        columns: None,
     }));
     open_document(states.open, states.visits, first_tab.clone(), Reach::NewTab);
     settle(&mut test);
@@ -12200,6 +12208,7 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
             tab: sum_to.clone(),
             at: Some(at.clone()),
             address: None,
+            columns: None,
         },
         Reach::InPlace,
     );
@@ -12599,5 +12608,398 @@ fn the_chord_is_not_typed_into_the_box_it_reaches() {
     test.write_text("sum");
     key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
     settle(&mut test);
+    assert!(labels(&test).iter().any(|label| label == "sum_to"));
+}
+
+/// The Search panel over a work function the test hands in, so that a search can be held
+/// still: a real walk answers faster than the runner settles, and superseding is a race
+/// by construction.
+#[derive(Clone)]
+struct Walk(
+    Arc<dyn Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync>,
+);
+
+fn search_harness() -> impl IntoElement {
+    let searched = use_consume::<Searching>().0;
+    let work = use_consume::<Walk>().0;
+    use_search_with(searched, move |query, emit| work(query, emit));
+
+    // What spends the landing a hit's press leaves, as `app()` does: without it a row
+    // opens its tab and picks nothing out.
+    let active = use_consume::<Active>().0;
+    let marked = use_consume::<Marked>().0;
+    let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
+    let driven = use_consume::<Drives>().0;
+    let docs = use_open().docs;
+    let marks_at = use_consume::<MarksAt>().0;
+    let code_rows = use_consume::<CodeRows>().0;
+    use_land(
+        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+    );
+
+    rect().expanded().child(SearchTab)
+}
+
+/// The panel over `work`, with the project's directory set: a real directory of this
+/// test's own, since a panel with none says so instead of drawing rows.
+fn search_over(
+    line: u32,
+    work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync + 'static,
+) -> (TestingRunner, ProjectStates, PathBuf) {
+    let (test, states, directory, _, _) = search_and_modifiers(line, work);
+    (test, states, directory)
+}
+
+/// The same, and the four states `ModifierKeys` is made of: a test cannot create a
+/// `State` outside the runner's own context, so they are made where the rest are.
+fn search_and_modifiers(
+    line: u32,
+    work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync + 'static,
+) -> (
+    TestingRunner,
+    ProjectStates,
+    PathBuf,
+    Modifiers4,
+    State<Marks>,
+) {
+    let directory = run_directory(line).join("searched");
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let work = Arc::new(work);
+    let (mut test, states) = TestingRunner::new(
+        search_harness,
+        (300., 400.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context({
+                let work = work.clone();
+                move || Walk(work.clone())
+            });
+            // What a row's press reaches through: the landing a hit makes, and the runs
+            // it picks out on the other side of it.
+            runner.provide_root_context(|| Land(State::create(None)));
+            runner.provide_root_context(|| Plant(State::create(None)));
+            runner.provide_root_context(|| CodeRows(State::create(None)));
+            let held = runner.provide_root_context(|| {
+                Modifiers4(
+                    State::create(false),
+                    State::create(false),
+                    State::create(false),
+                    State::create(false),
+                )
+            });
+            let marked = runner
+                .provide_root_context(|| Marked(State::create(Marks::default())))
+                .0;
+            (project_states!(runner), held, marked)
+        },
+        1.,
+    );
+    let mut proj = states.0.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    settle(&mut test);
+    (test, states.0, directory, states.1, states.2)
+}
+
+/// The four states `ModifierKeys` is made of, created where freya's context is: a test
+/// cannot make a `State` of its own outside the runner.
+#[derive(Clone, Copy)]
+struct Modifiers4(State<bool>, State<bool>, State<bool>, State<bool>);
+
+/// The panel over a walk that answers nothing, and the modifier states the root's one key
+/// handler writes beside the chord.
+fn search_with_modifiers(
+    line: u32,
+) -> (
+    TestingRunner,
+    ProjectStates,
+    PathBuf,
+    ModifierKeys,
+    State<bool>,
+    State<bool>,
+) {
+    let (test, states, directory, held, _) = search_and_modifiers(line, |_query, _emit| {});
+    let keys = ModifierKeys::new(held.0, held.1, held.2, held.3);
+    (test, states, directory, keys, held.0, held.1)
+}
+
+/// One hit, spelled as the walk spells one.
+fn hit_at(path: &Path, line: u32, text: &str) -> Hit {
+    Hit {
+        path: path.to_path_buf(),
+        line,
+        text: text.to_owned(),
+        spans: Vec::new(),
+        columns: None,
+    }
+}
+
+/// Ask for `pattern`, the way Enter in the box asks.
+fn ask_for(states: &ProjectStates, directory: &Path, pattern: &str) {
+    start_search(
+        states.searched,
+        states.open.dock,
+        SearchQuery {
+            root: directory.to_path_buf(),
+            filter: Filter {
+                pattern: pattern.to_owned(),
+                ..Filter::default()
+            },
+        },
+    );
+}
+
+/// Hits arrive while the search runs, grouped under the file they are in, and a file row
+/// folds its own away. Fails on rows built from anything but the streamed state.
+#[test]
+fn hits_arrive_under_their_file_and_fold() {
+    let first = PathBuf::from("/project/one.rs");
+    let second = PathBuf::from("/project/two.rs");
+    let (one, two) = (first.clone(), second.clone());
+    let (mut test, states, directory) = search_over(line!(), move |_query, emit| {
+        let _ = emit(SearchEvent::Hit(hit_at(&one, 3, "first hit")));
+        let _ = emit(SearchEvent::Hit(hit_at(&one, 9, "second hit")));
+        let _ = emit(SearchEvent::Hit(hit_at(&two, 1, "third hit")));
+        let _ = emit(SearchEvent::Finished);
+    });
+
+    ask_for(&states, &directory, "hit");
+    let searched = states.searched;
+    pump(&mut test, || !searched.peek().running);
+
+    let shown = labels(&test);
+    assert!(shown.iter().any(|label| label == "one.rs"), "{shown:?}");
+    assert!(shown.iter().any(|label| label == "first hit"), "{shown:?}");
+    assert!(shown.iter().any(|label| label == "third hit"), "{shown:?}");
+    assert!(shown.iter().any(|label| label == "3 matches in 2 files"));
+
+    let at = centre_of(&test, "one.rs");
+    press_at(&mut test, at);
+    settle(&mut test);
+
+    let folded = labels(&test);
+    assert!(folded.iter().any(|label| label == "one.rs"));
+    assert!(
+        !folded.iter().any(|label| label == "first hit"),
+        "{folded:?}"
+    );
+    assert!(folded.iter().any(|label| label == "third hit"));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A hit that lands after its search has been replaced is dropped: the batch is checked
+/// against the search it belongs to before anything is written, so the old walk's last
+/// answer cannot appear under the new question. Fails on a check made only where the loop
+/// ends.
+#[test]
+fn a_hit_from_a_replaced_search_is_dropped() {
+    let (gate, held) = std::sync::mpsc::channel::<()>();
+    let held = Arc::new(std::sync::Mutex::new(held));
+    let file = PathBuf::from("/project/one.rs");
+    let (mut test, states, directory) = search_over(line!(), move |query, emit| {
+        if query.filter.pattern == "slow" {
+            let _ = emit(SearchEvent::Hit(hit_at(&file, 1, "early answer")));
+            // Held until the test has asked for something else.
+            let _ = held.lock().expect("the gate").recv();
+            let _ = emit(SearchEvent::Hit(hit_at(&file, 2, "late answer")));
+            let _ = emit(SearchEvent::Finished);
+            return;
+        }
+        let _ = emit(SearchEvent::Hit(hit_at(&file, 5, "other answer")));
+        let _ = emit(SearchEvent::Finished);
+    });
+
+    let searched = states.searched;
+    ask_for(&states, &directory, "slow");
+    pump(&mut test, || searched.peek().hits.counts().0 == 1);
+    assert!(labels(&test).iter().any(|label| label == "early answer"));
+
+    ask_for(&states, &directory, "other");
+    pump(&mut test, || !searched.peek().running);
+    assert!(labels(&test).iter().any(|label| label == "other answer"));
+
+    // The first walk goes on and answers into a channel nobody is taking from.
+    gate.send(()).expect("the held search is still running");
+    for _ in 0..40 {
+        test.sync_and_update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let shown = labels(&test);
+    assert!(
+        !shown.iter().any(|label| label == "late answer"),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|label| label == "early answer"),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|label| label == "1 match in 1 file"),
+        "{shown:?}"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Pressing a match opens its file as a source-driven tab landed on the line it was found
+/// at, and a file the source pane would refuse opens nothing.
+#[test]
+fn pressing_a_hit_opens_its_file_on_the_line() {
+    let (mut test, states, directory, _, marked) =
+        search_and_modifiers(line!(), |_query, _emit| {});
+    let path = directory.join("x.c");
+    std::fs::write(&path, "int x;\nint y;\nint z;\n").expect("writing the source");
+    let missing = directory.join("gone.c");
+
+    let mut searched = states.searched;
+    searched.write().asked = Some(SearchQuery {
+        root: directory.clone(),
+        filter: Filter {
+            pattern: "y".to_owned(),
+            ..Filter::default()
+        },
+    });
+    searched.write().hits.push(Hit {
+        columns: Some(4..5),
+        ..hit_at(&path, 2, "int y;")
+    });
+    searched.write().hits.push(hit_at(&missing, 4, "gone"));
+    settle(&mut test);
+
+    let at = centre_of(&test, "gone");
+    press_at(&mut test, at);
+    settle(&mut test);
+    assert!(
+        states.open.active().is_none(),
+        "a file that is not there opens nothing"
+    );
+
+    let at = centre_of(&test, "int y;");
+    press_at(&mut test, at);
+    settle(&mut test);
+
+    let document = Document::Source(Arc::from(&*path.to_string_lossy()));
+    assert!(states.open.active() == Some(document));
+
+    // And the match itself is selected, not merely its line: the columns the hit came
+    // with, over the file's own line, which is what Ctrl+C there would copy.
+    let picked = marked
+        .peek()
+        .source
+        .clone()
+        .expect("the hit picked out its line");
+    assert!(picked.rows.anchor == 1 && picked.rows.lead == 1);
+    assert!(!picked.chars.is_empty(), "the match is selected");
+    let copied = picked.chars.copy(|row| {
+        assert!(row == 1);
+        Line::text("int y;")
+    });
+    assert!(copied == "y", "{copied:?}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Enter in the box searches for what is in it, over the project's directory. The box is
+/// reached by pressing it, as a reader reaches it.
+#[test]
+fn enter_in_the_box_asks_for_what_is_in_it() {
+    let file = PathBuf::from("/project/one.rs");
+    let (mut test, states, directory) = search_over(line!(), move |query, emit| {
+        let _ = emit(SearchEvent::Hit(hit_at(
+            &file,
+            1,
+            &format!("found {}", query.filter.pattern),
+        )));
+        let _ = emit(SearchEvent::Finished);
+    });
+    let searched = states.searched;
+    assert!(searched.peek().asked.is_none());
+
+    let at = centre_of(&test, "Search");
+    press_at(&mut test, at);
+    settle(&mut test);
+    test.write_text("needle");
+    settle(&mut test);
+    println!("after typing: {:?}", labels(&test));
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::default());
+    settle(&mut test);
+    println!("after enter: {:?}", labels(&test));
+    pump(&mut test, || !searched.peek().running);
+
+    assert!(searched
+        .peek()
+        .asked
+        .as_ref()
+        .is_some_and(|query| query.filter.pattern == "needle" && query.root == directory));
+    assert!(labels(&test).iter().any(|label| label == "found needle"));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The root's one global key handler: Ctrl+Shift+F asks for the caret in the Search box,
+/// **and** the modifiers go on being tracked, since both are that one handler. A second
+/// `on_global_key_down` for the chord would replace the first and take Ctrl-click with it,
+/// which nothing else here would notice.
+#[test]
+fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
+    // A runner, because every `State` here belongs to freya's own context, and the panel
+    // is what spends what the chord asks for.
+    let (mut test, states, directory, keys, shift, ctrl) = search_with_modifiers(line!());
+    let searched = states.searched;
+    let dock = states.open.dock;
+
+    let chord =
+        |key: Key, modifiers: Modifiers| root_key_down(keys, searched, dock, &key, modifiers);
+
+    chord(Key::Character("f".into()), Modifiers::CONTROL);
+    assert!(!searched.peek().focus, "Ctrl+F is the filter boxes' own");
+    assert!(*ctrl.peek(), "and the modifier is tracked all the same");
+
+    chord(
+        Key::Character("F".into()),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+    );
+    assert!(searched.peek().focus, "the chord asks for the box");
+    assert!(
+        *ctrl.peek() && *shift.peek(),
+        "and the modifiers still land"
+    );
+
+    // And the panel spends it: the caret is in the box, so what is typed next is the
+    // pattern and not a keystroke into nothing.
+    settle(&mut test);
+    test.write_text("needle");
+    settle(&mut test);
+    assert!(
+        !searched.peek().focus,
+        "the flag is spent, not left standing"
+    );
+    assert!(labels(&test).iter().any(|label| label == "needle"));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The chord is not typed into a filter box: the `Input`'s pre-key hook declines it, which
+/// is also what keeps it reaching the root -- the hook's other arms call `prevent_default`,
+/// and that cancels the global key event beside them.
+#[test]
+fn the_search_chord_is_declined_by_a_filter_box() {
+    let symbols = fixture_symbols();
+    let (mut test, states) =
+        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let mut objects = states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    settle(&mut test);
+
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum");
+    key_with(
+        &mut test,
+        Key::Character("F".into()),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+    );
+    settle(&mut test);
+
+    // The pattern is what was typed: an `F` in it would have filtered the row away.
     assert!(labels(&test).iter().any(|label| label == "sum_to"));
 }

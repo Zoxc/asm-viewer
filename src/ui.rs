@@ -6,7 +6,7 @@
 pub(crate) use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
-    ops::{ControlFlow, RangeInclusive},
+    ops::{ControlFlow, Range, RangeInclusive},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, LazyLock, Mutex, MutexGuard},
@@ -97,6 +97,8 @@ mod project_view;
 pub(crate) use project_view::*;
 mod reading;
 pub(crate) use reading::*;
+mod search_view;
+pub(crate) use search_view::*;
 mod section_view;
 pub(crate) use section_view::*;
 mod settings_view;
@@ -246,6 +248,27 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
         )
 }
 
+/// Every key the window answers to whatever holds the keyboard: the modifiers each
+/// pointer gesture is read against, and the chord that reaches the Search panel.
+///
+/// **One handler and not two.** An element keeps one handler per event name, so a second
+/// `on_global_key_down` on the root would replace this one and take the modifier tracking
+/// with it -- silently, with Ctrl-click and Shift-click going quiet. And a **global**
+/// handler, since a plain key event is emitted only for the focused node that listens for
+/// it: this one has to answer from wherever the keyboard is, including nowhere.
+pub(crate) fn root_key_down(
+    keys: ModifierKeys,
+    searched: State<Searched>,
+    dock: State<DockArea>,
+    key: &Key,
+    modifiers: Modifiers,
+) {
+    keys.down(key, modifiers);
+    if is_search_chord(key, modifiers) {
+        reach_search(searched, dock);
+    }
+}
+
 pub fn app() -> impl IntoElement {
     // Before everything else: the theme and the fonts are resolved from it and both have
     // to be right on the first frame.
@@ -270,7 +293,11 @@ pub fn app() -> impl IntoElement {
     let docs = use_provide_context(|| OpenDocs(State::create(Docs::default()))).0;
     let sidebar_dock = use_state(|| {
         DockArea::column(vec![
-            vec![Tab::View(View::Objects), Tab::View(View::Files)],
+            vec![
+                Tab::View(View::Objects),
+                Tab::View(View::Files),
+                Tab::View(View::Search),
+            ],
             vec![Tab::View(View::Symbols)],
             vec![
                 Tab::View(View::History),
@@ -331,6 +358,7 @@ pub fn app() -> impl IntoElement {
     let control_held = use_state(|| false);
     let keys = ModifierKeys::new(shift, ctrl, caps_is_ctrl, control_held);
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
+    let searched = use_provide_context(|| Searching(State::create(Searched::default()))).0;
     let states = ProjectStates {
         proj,
         objects,
@@ -343,6 +371,7 @@ pub fn app() -> impl IntoElement {
         marks_at,
         visits,
         bookmarks,
+        searched,
     };
     use_save_on_change(states);
     use_land(
@@ -382,6 +411,10 @@ pub fn app() -> impl IntoElement {
     );
     // After the analysis: the file the Source pane draws is what the analysis says it is.
     use_clear_marks(active, asked, analysis, marked);
+
+    // The search's own worker, beside the analysis one and for its reasons: the walk reads
+    // every file under the project directory, which is not the UI thread's to do.
+    use_search_with(searched, |query, emit| crate::search::search(query, emit));
 
     // At the root rather than in the view: an inactive dock tab is unmounted, and neither
     // a buffer being typed into nor a program that was started can live there. The buffers
@@ -433,7 +466,9 @@ pub fn app() -> impl IntoElement {
         .on_capture_global_pointer_press(move |_| mark_release(marked))
         // A freya pointer event carries no modifiers, so Shift and Ctrl have to be known
         // before the click that asks about them: `ModifierKeys`.
-        .on_global_key_down(move |e: Event<KeyboardEventData>| keys.down(&e.key, e.modifiers))
+        .on_global_key_down(move |e: Event<KeyboardEventData>| {
+            root_key_down(keys, searched, content_dock, &e.key, e.modifiers)
+        })
         .on_global_key_up(move |e: Event<KeyboardEventData>| keys.up(&e.key, e.modifiers))
         // Provides the root state `ContextMenu::open_from_event` looks up: opening a menu
         // without one in an ancestor scope panics. It lays out as nothing until a menu

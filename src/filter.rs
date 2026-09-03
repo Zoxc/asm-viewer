@@ -21,14 +21,15 @@ pub struct Filter {
 }
 
 impl Filter {
-    /// `case_insensitive` is a flag on the builder rather than a `(?i)` prefix, so a regex
-    /// carrying its own `(?i)`/`(?-i)` still overrides it for the part it covers.
-    pub fn matcher(&self) -> Matcher {
-        if self.pattern.is_empty() {
-            return Matcher::Everything;
-        }
-
-        let mut expression = if self.regex {
+    /// The pattern as a regular expression: what the two toggles that are *written* into
+    /// the expression come to, leaving the third to the builder below.
+    ///
+    /// Its own function because the source search compiles the same expression with
+    /// another crate's builder (`src/search.rs`), and the two searches must agree about
+    /// what a toggle means. `grep-regex` has a `word` flag of its own and it is
+    /// deliberately looser than `\b`, so this is what is handed over instead.
+    pub fn expression(&self) -> String {
+        let expression = if self.regex {
             self.pattern.clone()
         } else {
             regex::escape(&self.pattern)
@@ -36,10 +37,19 @@ impl Filter {
         if self.whole_word {
             // The group is load-bearing and must be non-capturing: `\ba|b\b` would bind
             // the boundaries to the first and last branch only.
-            expression = format!(r"\b(?:{expression})\b");
+            return format!(r"\b(?:{expression})\b");
+        }
+        expression
+    }
+
+    /// `case_insensitive` is a flag on the builder rather than a `(?i)` prefix, so a regex
+    /// carrying its own `(?i)`/`(?-i)` still overrides it for the part it covers.
+    pub fn matcher(&self) -> Matcher {
+        if self.pattern.is_empty() {
+            return Matcher::Everything;
         }
 
-        match RegexBuilder::new(&expression)
+        match RegexBuilder::new(&self.expression())
             .case_insensitive(!self.case_sensitive)
             .build()
         {

@@ -337,6 +337,8 @@ pub(crate) struct ProjectStates {
     pub(crate) marks_at: State<Positions<Entry, Kept>>,
     pub(crate) visits: State<Visits>,
     pub(crate) bookmarks: State<Bookmarks>,
+    /// What the project's directory was last searched for, and what was found in it.
+    pub(crate) searched: State<Searched>,
 }
 
 /// What is open, as a component sees it: the document panel and the id table together.
@@ -362,6 +364,7 @@ pub(crate) fn use_project_states() -> ProjectStates {
         marks_at: use_consume::<MarksAt>().0,
         visits: use_consume::<Visited>().0,
         bookmarks: use_consume::<Bookmarked>().0,
+        searched: use_consume::<Searching>().0,
     }
 }
 

@@ -59,3 +59,32 @@ symbol a source-driven tab shows.
 The project's directory as a tree, one level read per unfold and read again on a refold.
 Clicking a file opens it as a source-driven tab. A file's context menu has "Open file", which
 opens it as a binary, and "Close file" once it is loaded.
+
+## Search panel
+
+Searches the text of the project's directory. The box takes a pattern and Enter runs it. Its
+three toggles are the filter bars' — `Aa` for case, `\b` for whole word, `.*` for regex — and a
+pattern that does not compile shows its error under the box. A new search stops the one before
+it. With no project directory the panel says so and points at the Project view.
+
+Matches arrive while the search runs, grouped under the file they are in, the files in the order
+the search reaches them: a directory's own files before the directories under it, each sorted by
+name, so the list only grows at its end. A file row says how many matches it holds, and folds
+them away when pressed. A match row is its line number and the line's text, with the matched
+part marked; a long line is cut. Above the list the panel says how many matches in how many
+files, and says while it is still searching.
+
+Pressing a match opens its file as a source-driven tab on that line, as pressing a Files item
+opens one. The matched text is selected there, so copying copies the match. Nothing else moves.
+
+The search reads only what the app can show. It skips what git is told to ignore, hidden files,
+files it finds to be binary, and files too big for the source pane. It does not follow symbolic
+links. The Files panel is different: it shows every entry it reads.
+
+The search stops at 10,000 matches and says there are more. What was searched for is not kept
+with the session, and leaving the project clears it.
+
+### Reaching it
+
+Ctrl+Shift+F opens the panel and puts the caret in its box, from anywhere in the window. Ctrl+F
+still reaches the filter box of the list it is pressed in.

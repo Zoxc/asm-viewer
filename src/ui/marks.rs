@@ -503,22 +503,44 @@ fn row_pick(file: Option<Arc<str>>, row: usize, owed: Owed) -> Picked {
 /// Pick out the one row `line` of `file` in the source pane, as a click from outside the
 /// panes does: a [`Landing`], or the line a source-driven tab is driven from. `owed`
 /// says which panes have yet to scroll to it.
-pub(crate) fn mark_line(mut marked: State<Marks>, file: Arc<str>, line: u32, owed: Owed) {
+pub(crate) fn mark_line(
+    mut marked: State<Marks>,
+    file: Arc<str>,
+    line: u32,
+    columns: Option<Range<usize>>,
+    owed: Owed,
+) {
     let mut marks = marked.peek().clone();
-    marks.source = Some(line_pick(file, line, owed));
+    marks.source = Some(line_pick(file, line, columns, owed));
     marked.set_if_modified(marks);
 }
 
-/// The one-row run [`mark_line`] makes of `line`: the row, and a caret at its start.
-fn line_pick(file: Arc<str>, line: u32, owed: Owed) -> Picked {
+/// The one-row run [`mark_line`] makes of `line`: the row, and a caret at its start --
+/// or, where the door named `columns`, that run of the row's characters selected, which
+/// is what a search hit lands on. Copying then copies the match and not the line, since
+/// characters picked out are what `copy_text` prefers.
+fn line_pick(file: Arc<str>, line: u32, columns: Option<Range<usize>>, owed: Owed) -> Picked {
     let row = (line as usize).saturating_sub(1);
+    let chars = match columns {
+        Some(columns) => CharSelection::between(
+            Caret {
+                row,
+                col: columns.start,
+            },
+            Caret {
+                row,
+                col: columns.end,
+            },
+        ),
+        None => CharSelection::at(Caret { row, col: 0 }),
+    };
     Picked {
         rows: RowSelection {
             anchor: row,
             lead: row,
             dragging: false,
         },
-        chars: CharSelection::at(Caret { row, col: 0 }),
+        chars,
         by_rows: false,
         file: Some(file),
         owed,
@@ -1065,7 +1087,9 @@ pub(crate) fn use_land(
         let mut marks = Marks::default();
         match (landed, kept) {
             (Some(landing), _) => {
-                marks.source = landing.at.map(|at| line_pick(at.file, at.line, Owed::BOTH));
+                marks.source = landing
+                    .at
+                    .map(|at| line_pick(at.file, at.line, landing.columns, Owed::BOTH));
             }
             (None, Some(kept)) => {
                 marks.source = kept.marks.source.clone();
@@ -1092,7 +1116,7 @@ pub(crate) fn use_land(
                 Some(entry @ (_, Document::Source(file))) => driven
                     .peek()
                     .line(entry)
-                    .map(|line| line_pick(file.clone(), line, Owed::default())),
+                    .map(|line| line_pick(file.clone(), line, None, Owed::default())),
                 _ => None,
             };
         }

@@ -260,6 +260,8 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         marks_at: _,
         visits,
         bookmarks,
+        // A search is a view of the project's files, not part of the session.
+        searched: _,
     } = states;
 
     use_side_effect(move || {
@@ -439,6 +441,7 @@ pub(crate) fn clear_project(states: ProjectStates) {
         driven,
         marks_at,
         visits,
+        mut searched,
         ..
     } = states;
 
@@ -463,6 +466,11 @@ pub(crate) fn clear_project(states: ProjectStates) {
     // And the record outright, which neither walk above does.
     let mut visits = visits;
     visits.set(Visits::default());
+
+    // The search likewise: its hits are places in the directory being left, and dropping
+    // the question is also what stops a walk still running -- the task takes the next
+    // batch, sees a search it is not, and lets its end of the channel go.
+    searched.set(Searched::default());
 }
 
 /// Leave the project on screen and open the one `id` names in its place.

@@ -151,6 +151,17 @@ leaves this list when it is. That is a move made on request, like everything els
   decisions are what document kind a file is (`Document` names a place in a binary or a file
   today, and a whole binary is neither), and whether the timings are always collected or
   gathered only when something asks.
+- [ ] Show a file in the desktop's file manager, from a document's tab menu and from a
+  Files panel row's. A reader who has found a file here often wants it where the rest of
+  their tools are, and the app knows the path already. The item is the same one in both
+  places, and the decision is how it is done per desktop -- what to call on each of the
+  three, and what happens where there is no file manager to call.
+- [ ] A toggle on the Symbols panel for the selected object's symbols only. The list is
+  every loaded object's symbols today, which is what a reader wants when they are looking
+  for a name and not what they want when they are reading one file: with several binaries
+  open, or an archive of 196 members, the names of the object in hand are lost among the
+  rest. The toggle sits with the filter, since it narrows the same list, and the decision is
+  what "selected" means -- the Objects row that is lit, or the object the panes are drawing.
 - [ ] Show a row's tooltip only when the row is actually cut off. A tooltip repeating a name
   that is already fully on screen is noise the pointer drags behind it across a whole list —
   and with the zero delay above it arrives the instant the pointer crosses a row. What it
@@ -172,11 +183,15 @@ leaves this list when it is. That is a move made on request, like everything els
   where its first match starts; nothing typed is still no pass and the list's own order. The
   Locations panel shares it. Reachable: **Ctrl+F** puts the caret in the box over the list it is
   pressed in, and only there — the Objects box from the Objects list, no box from a code pane,
-  which keeps its own Ctrl+F for the source search. A list is focusable now and a press on a row
-  focuses it, without which no list could hold the keyboard; the cost is that such a press takes
-  the keyboard off the code pane. In the box the chord does nothing but is still declined there,
-  since an `Input` types in a chord it has none of its own for.
-- [ ] Left panel for project directory / source search.
+  which keeps its own Ctrl+F, the source search being Ctrl+Shift+F. A list is focusable now
+  and a press on a row focuses it, without which no list could hold the keyboard; the cost
+  is that such a press takes the keyboard off the code pane. In the box the chord does
+  nothing but is still declined there, since an `Input` types in a chord it has none of its
+  own for.
+- [x] Left panel for project directory / source search. The Files panel is the first half;
+  the Search panel is the second, a box over a grep of the project's directory on a worker,
+  hits streaming in grouped under their file and opening as source-driven tabs on their
+  line. Ctrl+Shift+F reaches it from anywhere.
 - [ ] Refactor the tabs away from freya's dock panels and onto components of the app's own,
   with a fixed panel for the tabs rather than one the reader can fold, split or drag documents
   out of.
@@ -249,6 +264,14 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Scratchpad
 
+- [ ] The unified assembly view for a scratchpad's own build. A pad compiles to an artifact
+  the app can already parse and list, but reading it means finding it on disk and opening it
+  as a binary by hand -- so the one place where the source and the assembly beside it are
+  both the reader's own is the one place the app does not join them. What it needs is the
+  built artifact opened as an object when the build ends, and the pad's pane offering its
+  code the way pressing an Objects row does. The decisions are whether the artifact's
+  objects join the Objects list or are the pad's alone, and what happens to them and their
+  tabs when the pad is rebuilt or closed.
 - [?] Use freya's tty for the scratchpad's output, in place of the list of coloured rows the
   run pane draws: a terminal would carry a program's own colours, cursor movement and
   progress bars, where the rows keep only which stream a line came from.

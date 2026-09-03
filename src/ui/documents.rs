@@ -405,7 +405,13 @@ pub(crate) fn land(
 ) -> Option<DocId> {
     if open.active().as_ref() == Some(&landing.tab) {
         if let Some(at) = landing.at {
-            mark_line(marked, at.file, at.line, Owed::BOTH);
+            mark_line(
+                marked,
+                at.file,
+                at.line,
+                landing.columns.clone(),
+                Owed::BOTH,
+            );
         }
         if let Some(address) = landing.address {
             plant.set(Some(Planting {
@@ -433,7 +439,7 @@ pub(crate) fn land_on(
     at: LinePos,
 ) {
     if open.active_id() == Some(id) {
-        mark_line(marked, at.file, at.line, Owed::BOTH);
+        mark_line(marked, at.file, at.line, None, Owed::BOTH);
         return;
     }
     // Bound in a statement of its own: the guard is gone before the writes.
@@ -445,6 +451,7 @@ pub(crate) fn land_on(
         tab,
         at: Some(at),
         address: None,
+        columns: None,
     }));
     raise(open, id);
 }

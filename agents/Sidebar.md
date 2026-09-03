@@ -1,11 +1,12 @@
 # The sidebar and the project view
 
-The four filtered lists, the Objects tree and its rows for files still being read, closing a binary,
-the Files view over the project's directory, the Project view and a project switch.
+The filtered lists, the Objects tree and its rows for files still being read, closing a binary,
+the Files view over the project's directory, the Search panel over its text, the Project view and a
+project switch.
 
-**The four sidebar lists filter themselves.** `FilterBar` is one component with four uses. The
-`Filter` is a `use_state` in the owning tab rather than a root context: a filter is a view of a
-list, never part of the session. `filter.rs` compiles every filter to one `regex::Regex`, plain
+**The sidebar lists filter themselves.** `FilterBar` is one component behind every box in the
+sidebar, the Search panel's included. The `Filter` is a `use_state` in the owning tab rather than a
+root context: a filter is a view of a list, never part of the session. `filter.rs` compiles every filter to one `regex::Regex`, plain
 patterns included, because the three toggles *are* three regex constructs: a `RegexBuilder` flag for
 case (so a pattern's own `(?i)` still wins for the part it covers), `\b(?:…)\b` for whole word (the
 non-capturing group is load-bearing), and escaping on the way in for the third. That is also the
@@ -33,8 +34,8 @@ so ranks the same way, which is wanted, since one line can answer with thousands
 **Ctrl+F puts the caret in the box over the list it is pressed in.** The binding is on the rows of
 `use_filter_pane` and not on the root, so it reaches the box of the list the reader is in and
 nothing else: the Objects box from the Objects list, and no box at all from a code pane, which
-keeps its own keys and will keep its own Ctrl+F for the source search. `is_find_chord` is exact —
-Ctrl or Meta, and neither Shift nor Alt — so Ctrl+Shift+F stays free for that search. The rows are
+keeps its own keys. `is_find_chord` is exact — Ctrl or Meta, and neither Shift nor Alt — which is
+what leaves Ctrl+Shift+F to the Search panel. The rows are
 focusable and a press on one focuses them, the code panes' own shape (`a11y_id`,
 `a11y_focusable`, `on_pointer_down`): without it no list could hold the keyboard and the chord
 would have nothing to fire from. The cost is that a press on a row takes the keyboard off the code
@@ -151,6 +152,66 @@ are directories first and then files, each sorted by name without regard to case
 are shown; `.git` and `target` fold away with one click. There is no filter bar: a filter over a
 lazily read tree can only see what is unfolded, and the search stories are the Symbols filter and
 `notes/Goals.md`'s source search.
+
+**The Search panel is the Files panel's other half** (`src/ui/search_view.rs` over
+`src/search.rs`): the Files view answers *what is here*, this one answers *where is that*. A panel
+of its own and not a box on the Files view, because the two disagree about almost everything -- one
+is a lazily read tree of every entry, the other a flat streamed answer that skips what git ignores
+-- and because a filter bar narrows rows already in hand, where this asks a question and waits.
+
+**Enter asks; typing does not.** A filter bar edits live because its list is already in memory; a
+search reads every file under the project directory, so a pattern is asked for once it is finished.
+The box is `FilterBar` with two more props -- a placeholder, and a `State<u64>` Enter bumps -- and
+`use_search_pane` beside `use_filter_pane` over one builder, so the toggles are the same three. A **counter and not a callback**: freya's `Callback` is never equal to another, so a bar
+holding one would re-render on every render of the panel, which for a streaming answer is every
+batch. The pattern itself is `filter::Filter`, and the expression it compiles to is
+`Filter::expression`, factored out of `Filter::matcher` so the two searches cannot disagree about
+what a toggle means -- `grep-regex` has a `word` option of its own and it is deliberately looser
+than `\b`.
+
+**The walk is ripgrep's** (`ignore`, `grep-searcher`, `grep-regex`), which is where the ignore
+rules, the binary detection and the line-at-a-time reading come from rather than being written here.
+Four decisions are the app's. `require_git(false)`, since a project directory is usually not a git
+working tree and the crate's default would then walk `target/` whole. The sort puts a directory's
+own files before the directories under it, which costs a `symlink_metadata` per comparison and buys
+the one thing a reader watching a list grow needs: it only ever grows at its end. `max_filesize` is
+`source::MAX_SIZE`, so the search reads only what the source pane could show and every hit can be
+opened. And a hit's line is decoded, **then** matched, **then** trimmed and cut, with the spans
+moved afterwards: matching a trimmed line changes what `^` and `\b` answer, and match offsets taken
+from raw bytes are wrong the moment a lossy decode replaces one.
+
+**A search is a thread and a channel of its own, and cancelling one is letting the receiver go.**
+`start_search` writes state and nothing else -- the id bumped, the hits emptied -- and an effect in
+`use_search_with` is what starts the walk, `use_analysis_with`'s shape. The effect reads a **memo**
+of the question and not the state itself: every hit is a write to that state, and an effect reading
+it would start a fresh search for each batch of its own answer. Hits come back through
+`take_hits`, which is `take_load`'s loop -- a batch per wake, since a write is a render -- and which
+returns the moment the search is no longer the one being asked for. Returning drops the receiver,
+the walk's next send fails, and it breaks where it stands. That one rule covers a second search, a
+project switched away from (`clear_project` resets the state), and the app closing. The check is
+made **before** the write and not at the end of the loop, or the old walk's last batch lands under
+the new question. The work is an argument to the hook for the reason the analysis worker's is: a
+walk that answers as fast as it is asked can say nothing about superseding.
+
+**A hit row is `land`, the Locations row's door**, with the file spelled exactly as the Files view
+spells it -- the entry's own path, never canonicalised -- since a `LinePos` is compared by text.
+`shows_as_source` guards it, so a row cannot open a tab the pane would refuse. It lands on the
+**match** and not just its line: a `Landing` carries the columns to select, and `line_pick` makes
+them the row's `CharSelection` where every other door leaves a caret at column 0. So Ctrl+C there
+copies the match, `copy_text` preferring characters to rows. The columns are the *file's* line in
+UTF-16 units, counted before the line is trimmed for drawing and counted in units rather than
+bytes, or a multi-byte character ahead of the match would move it. The matched parts of
+the line are drawn **bold in `match_fg`** and not on a background: a span inside a paragraph carries
+a colour and a weight and no fill, so the selection's own highlight is not available here.
+
+**Ctrl+Shift+F is one more line in the key handler the root already has** (`root_key_down`), never a
+second one: an element keeps one handler per event name, so a second `on_global_key_down` would
+replace the first and take the modifier tracking -- and with it Ctrl-click and Shift-click -- away
+silently. It is a *global* handler, so it answers from wherever the keyboard is, including nowhere;
+what could still swallow it is the filter boxes' `prevent_default`, so they decline this chord as
+they decline Ctrl+F. The chord cannot focus the box itself, an inactive dock tab being unmounted:
+it raises the panel and leaves a flag the panel's effect spends once it has a node to focus, the
+`Landing` pattern.
 
 **A click opens a file as source; opening it as a binary is its menu, and the parser's call.** What
 a file *is* is not judged here: not by extension (this project's own binaries have none) and not by

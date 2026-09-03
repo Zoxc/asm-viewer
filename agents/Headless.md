@@ -106,6 +106,12 @@ which calls `a11y.request_focus()`, then `sync_and_update`. The request travels 
 `UserEvent::FocusAccessibilityNode` into `requested_focus_strategy` and is applied at the top of the
 *next* pass (`lib.rs:330-335`).
 
+A **global** key handler is the exception: `measure_source_global_events` emits to every listener
+of `GlobalKeyDown` with no focus check at all (`ragnarok-0.4.3/src/measurement.rs:17-47`), so the
+root's one handler answers with nothing focused and while an `Input` holds the keyboard. What can
+still swallow it is `prevent_default` on the plain `KeyDown` beside it, which cancels the global
+one -- the filter boxes decline the chords they must not eat for that reason (`agents/Sidebar.md`).
+
 **Time.** `poll(step, duration)` and `poll_n(step, times)` are `sync_and_update` in a loop with a
 real `std::thread::sleep` and a rendering tick between iterations. They are the only thing that ever
 sends a tick. `animation_clock()` hands back the `AnimationClock`, which only scales animation

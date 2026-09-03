@@ -115,6 +115,10 @@ pub(crate) struct Palette {
 
     /// What a pattern that will not compile, and the reason it will not, are written in.
     pub(crate) invalid_fg: Color,
+    /// The part of a Search row's line that the pattern matched, drawn bold in this on
+    /// top of the row's own colour. A colour and a weight and not a background: a span
+    /// inside a paragraph can carry no fill of its own.
+    pub(crate) match_fg: Color,
 }
 
 impl Palette {
@@ -158,6 +162,7 @@ impl Palette {
         name_hover_fg: Color::from_rgb(105, 89, 132),
 
         invalid_fg: Color::from_rgb(176, 0, 32),
+        match_fg: Color::from_rgb(166, 92, 0),
     };
 
     /// The same palette at dark-mode lightness: every value is the one in `LIGHT` turned
@@ -207,6 +212,7 @@ impl Palette {
         name_hover_fg: Color::from_rgb(190, 168, 224),
 
         invalid_fg: Color::from_rgb(240, 110, 120),
+        match_fg: Color::from_rgb(232, 174, 90),
     };
 
     /// This palette in the shape `freya-code-editor`'s highlighter wants, so the source

@@ -1186,6 +1186,7 @@ pub(crate) fn show_in_code(
             tab: code.clone(),
             at,
             address: Some(address),
+            columns: None,
         },
         Reach::NewTab,
     );
@@ -1221,6 +1222,7 @@ pub(crate) fn open_as_symbol(
             tab,
             at,
             address: Some(address),
+            columns: None,
         },
         Reach::NewTab,
     );

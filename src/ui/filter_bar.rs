@@ -107,6 +107,16 @@ pub(crate) fn is_find_chord(key: &Key, modifiers: Modifiers) -> bool {
         && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case("f"))
 }
 
+/// The chord that reaches the Search panel: Ctrl+Shift+F, exactly the one
+/// [`is_find_chord`] leaves free. It is answered at the root and not here, since it works
+/// wherever the keyboard is; a box only has to decline it (`FilterBar`).
+pub(crate) fn is_search_chord(key: &Key, modifiers: Modifiers) -> bool {
+    modifiers.contains(Modifiers::ctrl_or_meta())
+        && modifiers.contains(Modifiers::SHIFT)
+        && !modifiers.contains(Modifiers::ALT)
+        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case("f"))
+}
+
 /// The filter over one of the sidebar lists: a text box, and the three toggles that say
 /// how to read what is in it. The state it edits arrives as a prop, never as a context.
 #[derive(Clone, PartialEq)]
@@ -114,12 +124,20 @@ struct FilterBar {
     filter: State<Filter>,
     /// The box's own id, minted by the pane so the rows' handler can ask for it.
     a11y: AccessibilityId,
+    /// What the empty box says it is for.
+    placeholder: &'static str,
+    /// Bumped by Enter, for a box that asks a question rather than filtering as it is
+    /// typed. `None` in a filter bar, where there is nothing to submit. A counter and not
+    /// a callback: a `Callback` is never equal to another, so a bar holding one would
+    /// re-render on every render of whatever holds it.
+    submits: Option<State<u64>>,
 }
 
 impl Component for FilterBar {
     fn render(&self) -> impl IntoElement {
         let filter = self.filter;
         let a11y = self.a11y;
+        let submits = self.submits;
         // Reading subscribes the bar to the filter.
         let current = filter.read().clone();
         // Compiled here as well as wherever the list is filtered: a `Regex` is not
@@ -151,7 +169,7 @@ impl Component for FilterBar {
                                 .into_writable()
                                 .map(|filter| &filter.pattern, |filter| &mut filter.pattern),
                         )
-                        .placeholder("Filter")
+                        .placeholder(self.placeholder)
                         .compact()
                         .width(Size::flex(1.0))
                         .a11y_id(a11y)
@@ -159,9 +177,25 @@ impl Component for FilterBar {
                         // so Ctrl+F in the box would type an `f` into the pattern.
                         // Declined here, before the edit. The rest is freya's default,
                         // which the hook replaces wholesale (`notes/upstream/freya.md`).
-                        .on_pre_key_down(Callback::new(|e: Event<KeyboardEventData>| {
+                        .on_pre_key_down(Callback::new(move |e: Event<KeyboardEventData>| {
                             if is_find_chord(&e.key, e.modifiers) {
                                 return false;
+                            }
+                            // Declined rather than answered here: the chord is the root's,
+                            // and this arm is what keeps it reaching the root at all --
+                            // the `_` arm below calls `prevent_default`, which cancels the
+                            // global key event beside this one. The `Shift` arm above is
+                            // the same rule already answered once, for the modifier the
+                            // root tracks.
+                            if is_search_chord(&e.key, e.modifiers) {
+                                return false;
+                            }
+                            if let (Key::Named(NamedKey::Enter), Some(mut submits)) =
+                                (&e.key, submits)
+                            {
+                                // Bound before the write, so the read guard is gone by it.
+                                let next = submits.peek().wrapping_add(1);
+                                submits.set(next);
                             }
                             match &e.key {
                                 Key::Named(NamedKey::Enter)
@@ -226,15 +260,40 @@ pub(crate) fn use_filter_pane(
     background: Color,
     list: impl IntoElement,
 ) -> Element {
+    use_boxed_pane(filter, "Filter", None, background, list).0
+}
+
+/// The Search panel's list under its own box: [`use_filter_pane`] where Enter asks a
+/// question rather than the typing filtering as it goes, and where the box's id comes
+/// back, since the chord that reaches it is answered at the root and not on the rows.
+pub(crate) fn use_search_pane(
+    filter: State<Filter>,
+    submits: State<u64>,
+    background: Color,
+    list: impl IntoElement,
+) -> (Element, AccessibilityId) {
+    use_boxed_pane(filter, "Search", Some(submits), background, list)
+}
+
+/// The two panes above: the pane, and the id of the box in it.
+fn use_boxed_pane(
+    filter: State<Filter>,
+    placeholder: &'static str,
+    submits: Option<State<u64>>,
+    background: Color,
+    list: impl IntoElement,
+) -> (Element, AccessibilityId) {
     let rows = use_hook(AccessibilityId::new_unique);
     let box_id = use_hook(AccessibilityId::new_unique);
-    rect()
+    let pane = rect()
         .expanded()
         .content(Content::Flex)
         .background(background)
         .child(FilterBar {
             filter,
             a11y: box_id,
+            placeholder,
+            submits,
         })
         .child(
             rect()
@@ -250,7 +309,8 @@ pub(crate) fn use_filter_pane(
                 })
                 .child(list),
         )
-        .into()
+        .into();
+    (pane, box_id)
 }
 
 /// What a filter leaves of the symbol list: the list itself, and where in it the names

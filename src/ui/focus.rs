@@ -47,6 +47,10 @@ pub(crate) struct Landing {
     /// address in the space the tab's listing draws: **placed** (`AsmData::placed`) for
     /// an object's code, the symbol's own for a symbol's tab.
     pub(crate) address: Option<u64>,
+    /// The characters to select on `at`'s line, in the UTF-16 units a pane counts columns
+    /// in: a search hit picks out what it matched, where every other door picks out the
+    /// row and leaves a caret at its start. Means nothing without `at`.
+    pub(crate) columns: Option<Range<usize>>,
 }
 
 /// The landing asked for, shared through context. `None` almost always: it is set in the
