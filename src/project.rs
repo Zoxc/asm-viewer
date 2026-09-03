@@ -26,6 +26,7 @@ use analysis::{Object, Symbol, SymbolData};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::bookmarks::Bookmark;
+use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
 use crate::history::History;
 use crate::tabs::{Driven, Positions, Spot};
@@ -203,12 +204,33 @@ impl ProjectId {
     }
 }
 
-/// The two things a user can give a project that are not files: what to call it, and
-/// which directory it is about.
+/// The things a user can give a project that are not files: what to call it, which
+/// directory it is about, and what to build it with.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Details {
     pub name: Option<String>,
     pub directory: Option<PathBuf>,
+    pub cargo: Option<Cargo>,
+}
+
+/// What the reader chose about building, in `project.toml`'s `[cargo]`.
+///
+/// A table of its own, so it is **absent** until the reader has chosen something and has
+/// room for what a later step adds. Absent means the defaults.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cargo {
+    #[serde(default)]
+    pub profile: Profile,
+}
+
+/// What the last build produced, in `session.toml`'s `[cargo]`.
+///
+/// Kept for one reason: the next build replaces the artifacts of the build before it, and
+/// the build before it may have been in another run of the app.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCargo {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<PathBuf>,
 }
 
 /// The user-given half of a project: `project.toml`.
@@ -228,6 +250,10 @@ pub struct Project {
     pub directory: Option<PathBuf>,
     /// The paths that were opened, deduplicated, in the order they were opened.
     pub binaries: Vec<PathBuf>,
+    /// What to build the directory with. A table, so it comes after every plain value
+    /// above and before the array of tables below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo: Option<Cargo>,
     /// The places the reader bookmarked, in the order they did. The one array of tables
     /// in this file, so it comes last; absent rather than empty when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -257,6 +283,9 @@ pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
 /// [`Project`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
+    /// What the last build produced, so a build after a restart still replaces it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo: Option<SessionCargo>,
     /// What each opened binary's bytes hashed to when the session was saved, keyed by the
     /// path [`Project::binaries`] holds.
     ///
@@ -680,6 +709,7 @@ impl Session {
     /// The empty session, as a `const fn` so [`Saves`] can be a `static`.
     pub const fn new() -> Session {
         Session {
+            cargo: None,
             digests: BTreeMap::new(),
             active: None,
             tabs: Vec::new(),
@@ -704,6 +734,7 @@ impl Session {
         driven: &Driven,
         active: Option<&Document>,
         visits: &Visits,
+        artifacts: &[PathBuf],
     ) -> Session {
         let mut digests: BTreeMap<PathBuf, String> = BTreeMap::new();
         for object in objects {
@@ -715,6 +746,11 @@ impl Session {
                 .or_insert_with(|| object.data.digest().to_string());
         }
         Session {
+            // Absent rather than empty, so a project nothing was ever built in writes no
+            // section at all.
+            cargo: (!artifacts.is_empty()).then(|| SessionCargo {
+                artifacts: artifacts.to_vec(),
+            }),
             digests,
             active: active.map(SavedDocument::from_document),
             tabs: tabs
@@ -927,6 +963,7 @@ impl Saves {
             given: Details {
                 name: None,
                 directory: None,
+                cargo: None,
             },
             bookmarks: Vec::new(),
             binaries: Vec::new(),
@@ -946,6 +983,7 @@ impl Saves {
             name: self.given.name.clone(),
             directory: self.given.directory.clone(),
             binaries,
+            cargo: self.given.cargo.clone(),
             bookmarks: self.bookmarks.clone(),
         }
     }
@@ -959,6 +997,7 @@ impl Saves {
         self.given = Details {
             name: project.name.clone(),
             directory: project.directory.clone(),
+            cargo: project.cargo.clone(),
         };
         self.bookmarks = project.bookmarks.clone();
         self.binaries = Vec::new();

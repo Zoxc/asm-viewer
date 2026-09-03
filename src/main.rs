@@ -1,4 +1,5 @@
 mod bookmarks;
+mod cargo;
 mod chars;
 mod compiled;
 mod docs;

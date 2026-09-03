@@ -455,6 +455,9 @@ macro_rules! project_states {
             searched: $runner
                 .provide_root_context(|| Searching(State::create(Searched::default())))
                 .0,
+            build: $runner
+                .provide_root_context(|| Building(State::create(Builds::default())))
+                .0,
         }
     }};
 }
@@ -7158,7 +7161,7 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
             rendered: "warning: unused variable: `x`\n".to_owned(),
             // `Span` is freya's own name in this file, the text kind: a diagnostic's is
             // the model's, spelt out.
-            span: Some(crate::scratchpad::Span {
+            span: Some(cargo::Span {
                 file: SOURCE_FILE.to_owned(),
                 line: 3,
                 column: 5,
@@ -7236,7 +7239,7 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
             level: Level::Warning,
             message: "unused import".to_owned(),
             rendered: "warning: unused import\n".to_owned(),
-            span: Some(crate::scratchpad::Span {
+            span: Some(cargo::Span {
                 file: "/home/reader/.cargo/registry/src/index.crates.io-6f17/rand-0.8.5/src/lib.rs"
                     .to_owned(),
                 line: 3,
@@ -7640,7 +7643,7 @@ fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
         level: Level::Error,
         message: message.to_owned(),
         rendered: rendered.to_owned(),
-        span: Some(crate::scratchpad::Span {
+        span: Some(cargo::Span {
             file: SOURCE_FILE.to_owned(),
             line: 1,
             column: 1,
@@ -13002,4 +13005,384 @@ fn the_search_chord_is_declined_by_a_filter_box() {
 
     // The pattern is what was typed: an `F` in it would have filtered the row away.
     assert!(labels(&test).iter().any(|label| label == "sum_to"));
+}
+
+// ---------------------------------------------------------------------------------------
+// Building the project's own workspace.
+
+#[derive(Clone)]
+struct BuildWorking(Arc<dyn Fn(BuildJob) -> BuildAnswer + Send + Sync>);
+
+#[derive(Clone, Copy)]
+struct BuildAsking(State<Option<BuildJobs>>);
+
+/// What the worker was asked for, as a test can compare it.
+#[derive(Debug, PartialEq, Eq)]
+enum AskedToBuild {
+    Read,
+    Build,
+    AddDebugLines,
+}
+
+fn project_view_harness() -> Element {
+    build_wiring();
+    rect().expanded().child(ProjectTab).into_element()
+}
+
+fn build_wiring() {
+    let states = use_project_states();
+    let work = use_consume::<BuildWorking>().0;
+    let mut asking = use_consume::<BuildAsking>().0;
+
+    let jobs = use_building_with(states.build, states, move |job| work(job));
+    use_hook(move || asking.set(Some(jobs)));
+}
+
+/// Mount the Project view over a worker that records every job and answers from `answer`.
+macro_rules! mount_project {
+    ($answer:expr) => {{
+        let (asked, asks) = async_channel::unbounded::<AskedToBuild>();
+        let answer = $answer;
+        let work = move |job: BuildJob| {
+            let recorded = match &job {
+                BuildJob::Read { .. } => AskedToBuild::Read,
+                BuildJob::Build { .. } => AskedToBuild::Build,
+                BuildJob::AddDebugLines { .. } => AskedToBuild::AddDebugLines,
+            };
+            let _ = asked.send_blocking(recorded);
+            answer(job)
+        };
+
+        let (mut test, (states, asking)) = TestingRunner::new(
+            project_view_harness,
+            (600., 700.).into(),
+            move |runner: &mut _| {
+                let states = project_states!(runner);
+                runner.provide_root_context(move || BuildWorking(Arc::new(work)));
+                // A diagnostic's place is a link, and a link lands: the three states a
+                // landing is left in.
+                runner.provide_root_context(|| Marked(State::create(Marks::default())));
+                runner.provide_root_context(|| Land(State::create(None)));
+                runner.provide_root_context(|| Plant(State::create(None)));
+                let asking = runner
+                    .provide_root_context(|| BuildAsking(State::create(None)))
+                    .0;
+                (states, asking)
+            },
+            1.,
+        );
+        test.sync_and_update();
+
+        (test, states, asking, asks)
+    }};
+}
+
+/// A build whose artifacts are the two committed fixtures, so what is opened is a file
+/// that really parses.
+fn built(artifacts: &[PathBuf]) -> cargo::Run {
+    cargo::Run::Built {
+        artifacts: artifacts
+            .iter()
+            .map(|path| cargo::Artifact {
+                path: path.clone(),
+                target: "fixture".to_owned(),
+                kind: "bin".to_owned(),
+            })
+            .collect(),
+        diagnostics: Vec::new(),
+    }
+}
+
+/// The whole of a build from the view: the button asks once however often it is pressed,
+/// what cargo named becomes the rows, and pressing a row opens that file as a binary.
+#[test]
+fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
+    let artifact = fixture_artifact();
+    let answer = {
+        let artifact = artifact.clone();
+        move |job: BuildJob| match job {
+            BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
+            _ => BuildAnswer::Read {
+                manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                debug_lines: true,
+            },
+        }
+    };
+    let (mut test, states, asking, asks) = mount_project!(answer);
+
+    let mut proj = states.proj;
+    proj.write().directory = "/work/app".to_owned();
+    pump(&mut test, || states.build.peek().manifest.is_some());
+    assert_eq!(asks.try_recv(), Ok(AskedToBuild::Read));
+
+    // The file cargo would be run over, named rather than left to be worked out from the
+    // directory above it.
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text == "Cargo build"), "{drawn:?}");
+    assert!(
+        drawn.iter().any(|text| text == "/work/app/Cargo.toml"),
+        "{drawn:?}"
+    );
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    start_build(
+        states.build,
+        &jobs,
+        PathBuf::from("/work/app"),
+        Profile::Release,
+    );
+    // The second press, while the first is still in flight. Nothing at all happens.
+    start_build(
+        states.build,
+        &jobs,
+        PathBuf::from("/work/app"),
+        Profile::Release,
+    );
+    assert!(states.build.peek().building);
+
+    pump(&mut test, || !states.build.peek().building);
+    assert_eq!(asks.try_recv(), Ok(AskedToBuild::Build));
+    assert!(
+        asks.is_empty(),
+        "the second press started a second build of the same workspace"
+    );
+    assert_eq!(states.build.peek().artifacts().len(), 1);
+    assert_eq!(states.build.peek().previous, vec![artifact.clone()]);
+
+    // A row per artifact, naming the file and the target it came from. Nothing is opened
+    // until the reader asks for it.
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text.contains("line_fixture.o")),
+        "{drawn:?}"
+    );
+    assert!(states.objects.peek().is_empty());
+
+    let row = centre_of(&test, &artifact.to_string_lossy());
+    press_at(&mut test, row);
+    pump(&mut test, || !states.objects.peek().is_empty());
+    assert!(states
+        .objects
+        .peek()
+        .iter()
+        .any(|object| object.path == artifact));
+}
+
+/// The rule the session carries: a build replaces the artifacts of the build **before**
+/// it, and leaves a binary the reader opened some other way alone -- even at a path this
+/// build also wrote.
+#[test]
+fn a_build_replaces_what_the_build_before_it_produced() {
+    let artifact = fixture_artifact();
+    let other = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("crates/analysis/tests/fixtures/line_fixture_hidden.so");
+    let answer = {
+        let artifact = artifact.clone();
+        move |job: BuildJob| match job {
+            BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
+            _ => BuildAnswer::Read {
+                manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                debug_lines: true,
+            },
+        }
+    };
+    let (mut test, states, asking, _asks) = mount_project!(answer);
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+
+    // Both files are open, and only one of them is the last build's.
+    let mut build = states.build;
+    build.write().previous = vec![artifact.clone()];
+    let mut objects = states.objects;
+    objects.set(analysis::open_files(vec![artifact.clone(), other.clone()]));
+    test.sync_and_update();
+
+    // Identity and not a count: a file closed and reopened has the same number of objects
+    // and different `Arc`s, and which of the two happened is the whole of the rule. Pointer
+    // identity is what this app means by identity everywhere else, too.
+    let held = |path: &Path| {
+        states
+            .objects
+            .peek()
+            .iter()
+            .filter(|object| object.path == path)
+            .map(|object| Arc::as_ptr(object).addr())
+            .collect::<Vec<usize>>()
+    };
+    let (before_built, before_other) = (held(&artifact), held(&other));
+    assert!(!before_built.is_empty() && !before_other.is_empty());
+
+    start_build(build, &jobs, PathBuf::from("/work/app"), Profile::Release);
+    // Both halves: the close empties the list for that path a beat before the reopen
+    // fills it, and waiting only for "different" would land in that gap.
+    pump(&mut test, || {
+        let now = held(&artifact);
+        !build.peek().building && !now.is_empty() && now != before_built
+    });
+
+    assert_eq!(
+        held(&artifact).len(),
+        before_built.len(),
+        "the artifact was left in the list twice, or dropped"
+    );
+    assert_ne!(
+        held(&artifact),
+        before_built,
+        "the artifact was not reopened, so the objects describe bytes that are gone"
+    );
+    assert_eq!(
+        held(&other),
+        before_other,
+        "a binary the reader opened was closed by a build that did not produce it"
+    );
+}
+
+/// A directory with no manifest is a placeholder and not an error: the section says so,
+/// there is nothing to choose, and the button is dimmed rather than taken away -- a press
+/// on it starts nothing.
+#[test]
+fn a_directory_with_no_manifest_builds_nothing() {
+    let (mut test, states, _asking, _asks) = mount_project!(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        debug_lines: false,
+    });
+
+    let mut proj = states.proj;
+    proj.write().directory = "/work/not-a-workspace".to_owned();
+    pump(&mut test, || states.build.peek().manifest.is_none());
+
+    let drawn = labels(&test);
+    assert!(
+        drawn
+            .iter()
+            .any(|text| text == "No Cargo.toml in the directory"),
+        "{drawn:?}"
+    );
+    // Nothing to choose either: the profile and the offer are about a manifest.
+    assert!(!drawn.iter().any(|text| text == "Release"), "{drawn:?}");
+
+    // The button is drawn and dimmed rather than taken away, and a press on it does
+    // nothing at all.
+    let button = centre_of(&test, "Build");
+    press_at(&mut test, button);
+    test.sync_and_update();
+    assert!(!states.build.peek().building);
+}
+
+/// The offer, which is the whole reason the profile and the manifest are read together: a
+/// profile carrying no lines has no source side, and taking the offer is what makes the
+/// line go.
+#[test]
+fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
+    let added = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let answer = {
+        let added = added.clone();
+        move |job: BuildJob| match job {
+            BuildJob::AddDebugLines { .. } => {
+                added.store(true, std::sync::atomic::Ordering::SeqCst);
+                BuildAnswer::Read {
+                    manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                    debug_lines: true,
+                }
+            }
+            _ => BuildAnswer::Read {
+                manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                debug_lines: added.load(std::sync::atomic::Ordering::SeqCst),
+            },
+        }
+    };
+    let (mut test, states, _asking, _asks) = mount_project!(answer);
+
+    let mut proj = states.proj;
+    proj.write().directory = "/work/app".to_owned();
+    pump(&mut test, || states.build.peek().manifest.is_some());
+
+    let drawn = labels(&test);
+    assert!(
+        drawn
+            .iter()
+            .any(|text| text == "Off, so there is no source side"),
+        "{drawn:?}"
+    );
+
+    let button = centre_of(&test, "Turn on");
+    press_at(&mut test, button);
+    pump(&mut test, || states.build.peek().debug_lines);
+
+    let drawn = labels(&test);
+    assert!(
+        !drawn
+            .iter()
+            .any(|text| text == "Off, so there is no source side"),
+        "{drawn:?}"
+    );
+}
+
+/// A diagnostic's place is a target when this pane can reach it: cargo spells the file
+/// relative to where it ran, so the project's directory joined with it is the file, and
+/// pressing it opens that file as source on the line the compiler named. A place in a
+/// dependency stays a plain label, since the app opens a file it can read and a target that
+/// did nothing when pressed would be worse than none.
+#[test]
+fn a_diagnostics_place_opens_the_file_it_names() {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let own = cargo::Span {
+        file: "src/main.rs".to_owned(),
+        line: 2,
+        column: 1,
+    };
+    let elsewhere = cargo::Span {
+        file: "/home/reader/.cargo/registry/src/index/serde-1.0/src/lib.rs".to_owned(),
+        line: 9,
+        column: 4,
+    };
+    let said = |span: &cargo::Span| cargo::Diagnostic {
+        level: Level::Error,
+        message: "mismatched types".to_owned(),
+        rendered: "error: mismatched types".to_owned(),
+        span: Some(span.clone()),
+    };
+    let run = cargo::Run::Rejected {
+        diagnostics: vec![said(&own), said(&elsewhere)],
+        message: String::new(),
+    };
+
+    let manifest = directory.join("Cargo.toml");
+    let (mut test, states, _asking, _asks) = mount_project!(move |_: BuildJob| BuildAnswer::Read {
+        manifest: Some(manifest.clone()),
+        debug_lines: true,
+    });
+
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    // The section is drawn once the manifest has been read, which is a worker's answer away.
+    pump(&mut test, || states.build.peek().manifest.is_some());
+    let mut build = states.build;
+    build.write().built = Some(run);
+    settle(&mut test);
+
+    // Both places are drawn, each spelled as the file, the line and the column.
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "src/main.rs:2:1"),
+        "{drawn:?}"
+    );
+    assert!(drawn.iter().any(|text| text == "lib.rs:9:4"), "{drawn:?}");
+
+    // The dependency's is a label and nothing else: pressing it opens nothing.
+    let plain = centre_of(&test, "lib.rs:9:4");
+    press_at(&mut test, plain);
+    assert!(
+        states.open.documents().is_empty(),
+        "a place with nowhere to go opened a tab"
+    );
+
+    let own_place = centre_of(&test, "src/main.rs:2:1");
+    press_at(&mut test, own_place);
+    settle(&mut test);
+
+    let file = Arc::<str>::from(&*directory.join("src/main.rs").to_string_lossy());
+    assert!(
+        states.open.documents() == [Document::Source(file)],
+        "the place did not open the file it names"
+    );
 }

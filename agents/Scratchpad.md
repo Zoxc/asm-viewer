@@ -82,14 +82,17 @@ comes back as `(index, Problem)` so the editor can mark all of them at once, a r
 included, since `[dependencies]` is a table and the second row would otherwise silently win. A
 scratchpad with a bad row **refuses to write** rather than generating a manifest that differs from
 what is on screen. **Building is blocking and belongs on a worker thread**, exactly as `open_files`
-is: `build_in` writes the package, runs `cargo build --message-format=json --color=never` with a
-null stdin, and hands back a value. The artifact path is what cargo *named*, never
+is. Running cargo and reading what it said is `src/cargo.rs`, shared with the project's own build
+(`agents/Sidebar.md`); `build_in` writes the package, calls it, and narrows what comes back to the
+one binary a generated package has. The artifact path is what cargo *named*, never
 `target/debug/<crate>` derived from the name and the profile, which a `CARGO_TARGET_DIR`, a config
-above the directory or an executable suffix each make silently wrong. Turning that stream into a
-`Build` is a pure function of cargo's stdout, stderr and exit status, which is what lets a failed
+above the directory or an executable suffix each make silently wrong. Turning that stream into an
+answer is a pure function of cargo's stdout, stderr and exit status, which is what lets a failed
 build be a test over a canned stream. Three answers, not two: the compiler said no (with cargo's own
 stderr kept, since `no matching package named ... found` is said there and nowhere else), or nothing
-was compiled at all.
+was compiled at all. `Build` is still the pad's own type, since two of its answers -- a bad
+dependency row and a package that would not write -- are about a generated package and mean nothing
+to a workspace.
 
 **Running is the artifact and not `cargo run`.** `run_in` spawns the executable `build_in` already
 asked cargo to name, in the scratchpad's own directory with a null stdin. Re-entering cargo would

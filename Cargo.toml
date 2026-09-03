@@ -76,6 +76,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
 toml = "1.1.4"
+# Editing a manifest the app did not write: the Build control offers to turn on debug
+# information for a profile (`src/cargo.rs`), and that means changing the reader's own
+# `Cargo.toml` in place. `toml` above parses into a value and would write back a file with
+# every comment and every blank line gone; `toml_edit` keeps the document, which is the whole
+# reason for a second TOML crate. `toml` 1.x is *not* a facade over it -- it has its own
+# `toml_parser` and `toml_writer` -- but the version resolved here is already in the lock, as
+# `proc-macro-crate`'s dependency under freya's `zbus_macros`. So this adds no package and no
+# second version, only a target-side compile of one that was being built for the host anyway.
+# `cargo tree -i toml_edit` is how that stays true.
+toml_edit = "0.25"
 
 # One call: `kill(-pgid, SIGKILL)`, which ends a scratchpad run's whole process group
 # (`src/scratchpad.rs`). Putting the run in a group of its own is std's `process_group`, but

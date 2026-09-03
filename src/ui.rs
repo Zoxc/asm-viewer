@@ -31,6 +31,7 @@ pub(crate) use analysis::{
 };
 
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};
+pub(crate) use crate::cargo::{self, Diagnostic, Level, Profile};
 pub(crate) use crate::chars::{beyond, Bounds, Caret, CharSelection, Line, Motion};
 pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs, Entry};
@@ -43,12 +44,12 @@ pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::project::{
-    self, Details, Document, Project, ProjectId, Recent, SavedDocument, Selection, Session,
+    self, Cargo, Details, Document, Project, ProjectId, Recent, SavedDocument, Selection, Session,
 };
 pub(crate) use crate::rows::RowSelection;
 pub(crate) use crate::scratchpad::{
-    run_in, Build, Dependency, Diagnostic, Ended, Failure, Half, Level, PadId, PadListing,
-    PadOrder, Problem, RunEvent, RunOutput, Running, Scratchpad, Stream,
+    run_in, Build, Dependency, Ended, Failure, Half, PadId, PadListing, PadOrder, Problem,
+    RunEvent, RunOutput, Running, Scratchpad, Stream,
 };
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
@@ -65,6 +66,8 @@ mod assembly;
 pub(crate) use assembly::*;
 mod bookmarks_view;
 pub(crate) use bookmarks_view::*;
+mod building;
+pub(crate) use building::*;
 mod code_row;
 pub(crate) use code_row::*;
 mod dock;
@@ -359,6 +362,9 @@ pub fn app() -> impl IntoElement {
     let keys = ModifierKeys::new(shift, ctrl, caps_is_ctrl, control_held);
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
     let searched = use_provide_context(|| Searching(State::create(Searched::default()))).0;
+    // At the root, not in the Project view: an inactive dock tab is unmounted, and a build
+    // that survives the reader looking away cannot live there.
+    let build = use_provide_context(|| Building(State::create(Builds::default()))).0;
     let states = ProjectStates {
         proj,
         objects,
@@ -372,6 +378,7 @@ pub fn app() -> impl IntoElement {
         visits,
         bookmarks,
         searched,
+        build,
     };
     use_save_on_change(states);
     use_land(
@@ -422,6 +429,8 @@ pub fn app() -> impl IntoElement {
     let pad = use_provide_context(|| Pad(State::create(Pads::default()))).0;
     let pad_text = use_provide_context(|| PadText(State::create(PadBuffers::default()))).0;
     use_scratchpad_with(pad, pad_text, states, pad_work);
+
+    use_building_with(build, states, build_work);
 
     // Docking cannot express a fixed pixel width, which is why the outer split is a
     // `ResizableContainer` and not a `DockingArea`: a fixed 300px sidebar beside the one

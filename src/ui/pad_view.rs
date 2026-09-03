@@ -30,34 +30,6 @@ pub(crate) const SOURCE_FILE: &str = "src/main.rs";
 const NAME_FLEX: f32 = 2.0;
 const VERSION_FLEX: f32 = 1.0;
 
-/// A block of a tool's own output, laid out the way it wrote it: one label per line, in
-/// the fixed-width font, so rustc's carets sit under what they point at. A line too wide
-/// for the pane **wraps** rather than being cut off at its right edge.
-///
-/// Wrapping does move a caret out from under the character it points at, which is why this
-/// block used to cut instead. What settles it is which line pays: a line that fits is
-/// untouched, so every block narrower than the pane is drawn exactly as it was, and the
-/// only line that wraps is the one clipping would have thrown the end of away entirely.
-/// `--> src/main.rs:9:17` is that line -- the half of a diagnostic that says *where* --
-/// and a caret under the wrong column is a worse drawing of something the reader can
-/// still read, where a cut is the answer not being there at all.
-fn text_block(text: &str, color: Color) -> Element {
-    rect()
-        .width(Size::fill())
-        .children(
-            text.lines()
-                .map(|line| {
-                    label()
-                        .text(line.to_owned())
-                        .assembly_font()
-                        .color(color)
-                        .into()
-                })
-                .collect::<Vec<Element>>(),
-        )
-        .into_element()
-}
-
 /// The place a diagnostic points at, drawn as a **target**: pressing it puts the pad's
 /// cursor on that line and that column. `address_fg` at rest, which is what says "a place"
 /// everywhere else in this app, and the relocation link's own hover — the wash under it and
@@ -73,7 +45,7 @@ fn text_block(text: &str, color: Color) -> Element {
 #[derive(Clone, PartialEq)]
 struct SpanTarget {
     pad: PadId,
-    span: crate::scratchpad::Span,
+    span: cargo::Span,
     text: String,
 }
 
@@ -110,78 +82,27 @@ impl Component for SpanTarget {
     }
 }
 
-/// One thing the compiler said: a line that can be scanned, and cargo's own rendering of
-/// it under that. The header adds the **place**, taken from the span rather than from the
-/// text — and that place is a [`SpanTarget`] when it is somewhere this pane can go.
-fn diagnostic_block(pad: &PadId, diagnostic: &Diagnostic) -> Element {
-    let place = diagnostic.span.as_ref().map(|span| {
-        let own = span.file == SOURCE_FILE;
-        let file = match own {
-            true => span.file.clone(),
-            // A registry path is most of a line on its own, and which crate it is in is
-            // the useful half of it.
-            false => file_name(&span.file),
-        };
-        let text = format!("{file}:{}:{}", span.line, span.column);
+/// The place a diagnostic points at, as this pane can draw it: a [`SpanTarget`] for the
+/// pad's own source, and a plain label for anywhere else, since the editor holds that one
+/// file and this app opens no other for editing.
+fn pad_place(pad: &PadId, diagnostic: &Diagnostic) -> Option<Element> {
+    let span = diagnostic.span.as_ref()?;
+    let own = span.file == SOURCE_FILE;
+    let text = diagnostic_place(span, own);
 
-        match own {
-            true => SpanTarget {
-                pad: pad.clone(),
-                span: span.clone(),
-                text,
-            }
-            .into_element(),
-            false => label()
-                .text(text)
-                .color(palette().address_fg)
-                .max_lines(1)
-                .into_element(),
+    Some(match own {
+        true => SpanTarget {
+            pad: pad.clone(),
+            span: span.clone(),
+            text,
         }
-    });
-
-    rect()
-        .width(Size::fill())
-        .padding(Gaps::new(2.0, 0.0, 6.0, 0.0))
-        .child(
-            rect()
-                .width(Size::fill())
-                // Tall enough for what is in it and never shorter than an ordinary row:
-                // the message wraps, so the header is one row for almost every diagnostic
-                // and as many as the sentence needs for the one that does not fit.
-                .height(Size::auto())
-                .min_height(Size::px(list_row_height()))
-                .horizontal()
-                // Start and not `Center`: what a wrapped message stands beside is the word
-                // `error` and the place, which belong against its first line.
-                .cross_align(Alignment::Start)
-                .spacing(6.0)
-                .content(Content::Flex)
-                .child(
-                    label()
-                        .text(match diagnostic.level {
-                            Level::Error => "error",
-                            Level::Warning => "warning",
-                            Level::Note => "note",
-                        })
-                        // An error is the red every invalid thing wears, a warning the one
-                        // warm hue in the palette, and a note recedes.
-                        .color(match diagnostic.level {
-                            Level::Error => palette().invalid_fg,
-                            Level::Warning => palette().string_fg,
-                            Level::Note => palette().address_fg,
-                        })
-                        .max_lines(1),
-                )
-                .maybe_child(place)
-                // The sentence rustc wrote, wrapping rather than cut at the pane's edge.
-                .child(
-                    label()
-                        .text(diagnostic.message.clone())
-                        .width(Size::flex(1.0)),
-                ),
-        )
-        .child(text_block(&diagnostic.rendered, palette().text_fg))
-        .into_element()
+        .into_element(),
+        false => label()
+            .text(text)
+            .color(palette().address_fg)
+            .max_lines(1)
+            .into_element(),
+    })
 }
 
 /// One `[dependencies]` row: the crate, the version required of it, and the × that drops
@@ -714,7 +635,7 @@ impl Component for ScratchpadTab {
         let diagnostics: Vec<Element> = state
             .diagnostics()
             .iter()
-            .map(|diagnostic| diagnostic_block(&shown, diagnostic))
+            .map(|diagnostic| diagnostic_block(diagnostic, pad_place(&shown, diagnostic)))
             .collect();
         let refusal = state
             .refusal()

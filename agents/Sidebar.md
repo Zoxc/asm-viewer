@@ -250,6 +250,50 @@ keystroke of something typed once a project. The binaries it lists come from `Ob
 `project::binaries`, which is what the saved list is *derived from*, so what the pane draws is what
 the next write will say.
 
+**The Project view is also where the project is built** (`src/ui/building.rs` over
+`src/cargo.rs`), under a heading naming the tool rather than the act, since the pane has
+several other things a reader could mean by "build". The manifest found is **named** in the
+section: what cargo is run over is otherwise a rule the reader has to know. Four decisions.
+
+**The state is a root context, not the view's.** An inactive dock tab is unmounted, so a build held
+in `ProjectTab` would be lost the moment the reader looked at something else while it ran. `Builds`
+is therefore provided at the root beside `Pad`, and it is in `ProjectStates`, because what one
+project built says nothing about the next: a switch clears it, or the first build over there would
+replace binaries opened over here.
+
+**One worker thread, for the scratchpad's reason.** The work blocks, and it is one thread rather
+than several so the project's directory has a single writer -- the debug-lines edit cannot land
+inside the build that is reading the same manifest. Nothing supersedes: a build is asked for by a
+press and takes seconds, and the two manifest jobs are cheap. Two builds cannot start at once, on
+the button's `enabled` and in `start_build` both. The work function is handed in, so a headless test
+drives the whole mechanism with no cargo on the machine.
+
+**Artifacts are what cargo named, and the workspace's own are found by `manifest_path`.** cargo
+reports a `compiler-artifact` for every crate in the graph -- 449 of them for this app's own
+workspace, of which two are its own -- so the list is filtered to the artifacts whose manifest is
+under the directory being built, matched by path component after canonicalising, since a `..` or a
+symlink in what the reader typed would match nothing. A target contributes its `executable` where it
+has one and its `filenames` otherwise, which is what puts a library's `.rlib` in the list: an
+archive this app opens like any other, and the most interesting thing a workspace produces for it.
+The `.rmeta` beside it is dropped, the one place here a file is judged by its name, because it holds
+no code and a row for it could only ever fail to parse.
+
+**A build replaces the artifacts of the build before it, and nothing else.** `reopen_binary`'s rule
+-- a binary is a path, so two generations of one file cannot both be in the objects list -- but
+narrowed: a file the reader opened by hand is theirs even where a build has just written the same
+path. So the set replaced is the *previous* build's list intersected with what is open, closed one
+by one and reopened in a single `open_binaries`, rather than a `reopen_binary` each, which would be
+one spawn and one load per artifact. That list is saved with the session, which is what makes the
+rule survive a restart (`agents/Persistence.md`).
+
+The **debug-lines offer** is why the profile and the manifest are read together. Release is the
+default profile, since a reader inspecting a binary is usually asking what the optimiser did, and
+cargo's own default for release is *no* debug information -- which is a binary with no source side,
+the app's whole other half. So the view says so where the profile is chosen and offers to fix it,
+writing `debug = "line-tables-only"` into that profile: exactly what the source side reads, and the
+cheapest to build. The write is `toml_edit` and not `toml`, since it is the reader's own manifest
+and a round trip through a value would take every comment and blank line with it.
+
 **A project switch is a close and a restore, through the same functions.** `switch_project` is
 `project::switch` (flush, re-point, remember), then `clear_project`, then `restore_project`.
 `clear_project` is a `close_binary` per path and then a `close_tab` for whatever is left, never a

@@ -121,7 +121,15 @@ fn session_of(
         .map(|id| (*id, docs.trail(*id).expect("open"), false))
         .collect();
     Session::from_state(
-        objects, &trails, &asm_rows, &src_rows, &spots, &driven, active, visits,
+        objects,
+        &trails,
+        &asm_rows,
+        &src_rows,
+        &spots,
+        &driven,
+        active,
+        visits,
+        &[],
     )
 }
 
@@ -457,6 +465,7 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
             &Driven::default(),
             Some(&current),
             &Visits::default(),
+            &[],
         );
         assert_eq!(session.tabs[0].cursor, 2 - back);
         assert_eq!(session.tabs[0].entries.len(), 3);
@@ -1166,6 +1175,7 @@ fn opening_a_binary_is_written_at_once() {
                 name: None,
                 directory: None,
                 binaries: paths(&["/tmp/lib.a"]),
+                cargo: None,
                 bookmarks: Vec::new(),
             },
             Some(session_with(None)),
@@ -1276,6 +1286,7 @@ fn a_record_keeps_the_name_the_project_was_given() {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
         binaries: paths(&["/tmp/vmlinux"]),
+        cargo: None,
         bookmarks: Vec::new(),
     };
     saves.opened(ProjectId::new("kernel-1").expect("an id"), &named);
@@ -1297,6 +1308,7 @@ fn reopening_seeds_the_name_but_not_the_baseline() {
         name: Some("kernel".into()),
         directory: None,
         binaries: paths(&["/tmp/vmlinux"]),
+        cargo: None,
         bookmarks: Vec::new(),
     };
     saves.opened(ProjectId::new("kernel-1").expect("an id"), &loaded);
@@ -1321,6 +1333,7 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
     let named = Details {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
+        cargo: None,
     };
     let written = saves
         .record(
@@ -1336,6 +1349,7 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
             name: named.name.clone(),
             directory: named.directory.clone(),
             binaries: paths(&["/tmp/lib.a"]),
+            cargo: None,
             bookmarks: Vec::new(),
         }
     );
@@ -1384,6 +1398,7 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
         name: None,
         directory: None,
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
+        cargo: None,
         bookmarks: Vec::new(),
     };
     saves.opened(ProjectId::new("kernel-1").expect("an id"), &loaded);
@@ -1391,6 +1406,7 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
     let named = Details {
         name: Some("kernel".into()),
         directory: None,
+        cargo: None,
     };
     let written = saves
         .record(named, Vec::new(), Vec::new(), Session::new())
@@ -1435,6 +1451,7 @@ fn entering_a_project_empties_every_baseline() {
             Details {
                 name: entered.name.clone(),
                 directory: entered.directory.clone(),
+                cargo: None,
             },
             Vec::new(),
             Vec::new(),
@@ -1459,6 +1476,7 @@ fn a_project() -> Project {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
         binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+        cargo: None,
         bookmarks: Vec::new(),
     }
 }
@@ -1750,6 +1768,7 @@ fn the_recent_view_names_each_project_from_its_own_file() {
                 name: Some(name.to_owned()),
                 directory: Some(PathBuf::from("/src").join(name)),
                 binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+                cargo: None,
                 bookmarks: Vec::new(),
             },
         )
@@ -2123,4 +2142,77 @@ fn resolving_by_name_agrees_with_the_strict_rule_and_survives_a_rebuild() {
         path: "/src/main.rs".into(),
     };
     assert!(file.resolve_by_name(&[]) == Some(Document::Source(Arc::from("/src/main.rs"))));
+}
+
+/// The section a build puts in each file, as it is spelled: `[cargo]` in both, a profile
+/// by name in the project's and the paths in the session's, both read back as they were
+/// written. The profile is written as a word rather than as a number, so a file a reader
+/// opens says what it means.
+#[test]
+fn a_cargo_section_is_written_where_toml_can_read_it_back() {
+    let project = Project {
+        name: Some("kernel".into()),
+        directory: Some(PathBuf::from("/src/kernel")),
+        binaries: paths(&["/tmp/vmlinux"]),
+        cargo: Some(Cargo {
+            profile: Profile::Debug,
+        }),
+        bookmarks: vec![Bookmark {
+            name: "start".to_owned(),
+            document: SavedDocument::Source {
+                path: "/src/kernel/main.rs".to_owned(),
+            },
+        }],
+    };
+    let text = round_trip(&project);
+    assert!(text.contains("[cargo]"), "{text}");
+    assert!(text.contains("profile = \"debug\""), "{text}");
+
+    let session = Session {
+        cargo: Some(SessionCargo {
+            artifacts: paths(&["/src/kernel/target/debug/vmlinux"]),
+        }),
+        ..session_with(None)
+    };
+    let text = round_trip(&session);
+    assert!(text.contains("[cargo]"), "{text}");
+}
+
+/// Absent rather than empty: a project whose profile is the default one and a session in
+/// which nothing was built each write no section at all, so a file nothing has chosen in
+/// says nothing.
+#[test]
+fn nothing_chosen_and_nothing_built_write_no_section() {
+    let project = Project {
+        name: None,
+        directory: None,
+        binaries: Vec::new(),
+        cargo: None,
+        bookmarks: Vec::new(),
+    };
+    assert!(!round_trip(&project).contains("[cargo]"));
+    assert!(!round_trip(&Session::new()).contains("[cargo]"));
+}
+
+/// What the last build produced is the app's own record and belongs to the session, so
+/// [`Session::from_state`] is where it is written and an empty list leaves it out.
+#[test]
+fn the_session_records_what_the_last_build_produced() {
+    let objects = Vec::new();
+    let built = paths(&["/src/kernel/target/debug/vmlinux"]);
+    let session = Session::from_state(
+        &objects,
+        &[],
+        &Positions::default(),
+        &Positions::default(),
+        &Positions::default(),
+        &Driven::default(),
+        None,
+        &Visits::default(),
+        &built,
+    );
+    assert_eq!(
+        session.cargo.as_ref().map(|cargo| cargo.artifacts.clone()),
+        Some(built)
+    );
 }

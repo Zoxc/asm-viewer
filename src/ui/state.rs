@@ -217,6 +217,9 @@ pub(crate) struct OpenProject {
     pub(crate) id: Option<ProjectId>,
     pub(crate) name: String,
     pub(crate) directory: String,
+    /// What to build the directory with. A plain value and not an `Option`, since the two
+    /// buttons that set it have no third state either; the file is what leaves it out.
+    pub(crate) profile: Profile,
 }
 
 impl OpenProject {
@@ -230,6 +233,7 @@ impl OpenProject {
                 .as_ref()
                 .map(|directory| directory.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            profile: project.cargo.clone().unwrap_or_default().profile,
         }
     }
 
@@ -239,6 +243,12 @@ impl OpenProject {
         Details {
             name: given(&self.name).map(str::to_owned),
             directory: given(&self.directory).map(PathBuf::from),
+            // Absent while it says nothing the defaults do not: a reader who has never
+            // touched the profile leaves no `[cargo]` behind, and choosing the default
+            // back takes the section out again.
+            cargo: (self.profile != Profile::default()).then(|| Cargo {
+                profile: self.profile,
+            }),
         }
     }
 }
@@ -339,6 +349,8 @@ pub(crate) struct ProjectStates {
     pub(crate) bookmarks: State<Bookmarks>,
     /// What the project's directory was last searched for, and what was found in it.
     pub(crate) searched: State<Searched>,
+    /// What the project's own workspace built, and what a build replaces.
+    pub(crate) build: State<Builds>,
 }
 
 /// What is open, as a component sees it: the document panel and the id table together.
@@ -365,6 +377,7 @@ pub(crate) fn use_project_states() -> ProjectStates {
         visits: use_consume::<Visited>().0,
         bookmarks: use_consume::<Bookmarked>().0,
         searched: use_consume::<Searching>().0,
+        build: use_consume::<Building>().0,
     }
 }
 

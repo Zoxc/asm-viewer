@@ -28,7 +28,24 @@ behind.
 `project.toml` is what the user *said* (`name`, `directory`, `binaries`, `bookmarks`) and is written
 **at once**, because a binaries change is what `Saves` writes immediately. `session.toml` is what
 the app *noticed* (`digests`, `active`, `tabs` with their trails, `history`, the record of visits)
-and is the file rewritten every thirty seconds. So the file a user might keep, copy or hand-edit is
+and is the file rewritten every thirty seconds.
+
+**Building puts a `[cargo]` section in each file, and which file each half goes in is that same
+line.** The profile is what the reader chose, so it is `project.toml`'s and is written the moment
+they choose it, a rename's own timing. The paths the last build produced are what the app noticed,
+so they are `session.toml`'s. They are saved at all for one reason: a build replaces the artifacts
+of the build *before* it, and the build before it may have been in another run of the app -- without
+them a restart would leave the reader's binaries behind with nothing that could refresh them. Each
+section is a **table of its own and is absent when it has nothing to say**, so a project nobody has
+chosen a profile in and a session nothing was built in each write no section at all. A table also
+leaves room for what the next build setting needs, which a loose key would not.
+
+Both are placed after the plain values of their struct, which is the field-order rule the file has
+followed since `toml` 0.x. Note that the rule is now belt and braces: `toml` 1.x's serializer emits
+every plain value before every table whatever order the struct declares them in, so the round-trip
+tests can no longer fail on a misplaced field. The declaration order is kept anyway, because it is
+what a reader of the struct is entitled to assume and because nothing here wants to depend on that
+serializer detail. So the file a user might keep, copy or hand-edit is
 exactly the one that changes only when they do something. Three things follow, and they are why it
 is two files rather than two tables. A `session.toml` that will not parse loses a scroll position
 and not the list of binaries. The directory *is* the project, so a run killed between `create_dir`

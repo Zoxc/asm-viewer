@@ -9,7 +9,6 @@
 
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
-    ffi::OsString,
     fmt, fs,
     io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -24,6 +23,7 @@ use std::{
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::cargo::{self, Diagnostic};
 use crate::project::{base, write_atomically, write_toml};
 
 const SCRATCHPADS_DIR: &str = "scratchpads";
@@ -231,72 +231,6 @@ pub enum Build {
     Unavailable(Failure),
 }
 
-/// One thing the compiler said, flattened out of cargo's JSON.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Diagnostic {
-    pub level: Level,
-    pub message: String,
-    /// cargo's own rendered block, asked for without colour.
-    pub rendered: String,
-    /// The primary span, since a UI marking every span of every diagnostic marks most of
-    /// the file.
-    pub span: Option<Span>,
-}
-
-/// A place in a file the compiler named. `file` is as cargo gave it — `src/main.rs` for
-/// the scratchpad's own source, a registry path for a dependency's.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Span {
-    pub file: String,
-    /// One-based, as rustc counts.
-    pub line: usize,
-    pub column: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Level {
-    Error,
-    Warning,
-    /// Everything else rustc emits — `note`, `help`, `failure-note`.
-    Note,
-}
-
-impl Span {
-    /// Where in `text` this span points, counted in **UTF-16 code units** from the start of
-    /// the text — which is how a cursor position is counted, and the only unit that makes
-    /// the answer independent of who is counting lines.
-    ///
-    /// rustc counts a line and a column from one and counts a column in *characters*, so a
-    /// tab is one and an accented letter is one. Lines are separated by `\n` and nothing
-    /// else, which is rustc's own rule: it normalises `\r\n` before it numbers anything.
-    ///
-    /// Two clamps, and they are the same decision twice. `text` is the source **as it is
-    /// now**, which is not necessarily the source the build was told about — the reader has
-    /// usually typed since — so a column past the end of its line lands at the end of that
-    /// line, and a line past the end of the text at the end of the text. Being taken to
-    /// roughly the right place beats not being taken anywhere, and there is nothing here
-    /// that can fail.
-    pub fn offset_in(&self, text: &str) -> usize {
-        let line = self.line.saturating_sub(1);
-        let column = self.column.saturating_sub(1);
-        let units =
-            |text: &str, take: usize| text.chars().take(take).map(char::len_utf16).sum::<usize>();
-
-        let mut offset = 0;
-        for (index, row) in text.split_inclusive('\n').enumerate() {
-            if index == line {
-                // The line break is no part of the line: a column past the end of the text
-                // on it stops before the break rather than landing on the line below.
-                let row = row.trim_end_matches('\n').trim_end_matches('\r');
-                return offset + units(row, column);
-            }
-            offset += units(row, usize::MAX);
-        }
-
-        offset
-    }
-}
-
 impl Problem {
     pub fn half(&self) -> Half {
         match self {
@@ -478,34 +412,40 @@ impl Scratchpad {
     /// Write the package into `directory` and build it. Blocking, and never from a UI
     /// thread.
     ///
-    /// The subprocess gets a null stdin, so a cargo that decides to ask a question cannot
-    /// sit waiting for an answer no one can give it.
+    /// The package is written first, so what is built is what is on screen.
     pub fn build_in(&self, directory: &Path) -> Build {
         if let Err(failure) = self.write_to(directory) {
             return Build::Unavailable(failure);
         }
 
-        let output =
-            Command::new(std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
-                .current_dir(directory)
-                // The artifact path is *asked for* rather than guessed at: deriving
-                // `target/debug/<name>` from the crate name and the profile is silently wrong
-                // under a `CARGO_TARGET_DIR`, a `.cargo/config` above the directory, or an
-                // executable suffix. cargo names it.
-                .args(["build", "--message-format=json", "--color=never"])
-                .stdin(Stdio::null())
-                .output();
-
-        let output = match output {
-            Ok(output) => output,
-            Err(error) => return Build::Unavailable(Failure::NoCargo(error.to_string())),
-        };
-
-        outcome(
-            &String::from_utf8_lossy(&output.stdout),
-            &String::from_utf8_lossy(&output.stderr),
-            output.status.success(),
-        )
+        // Always `dev`: a scratchpad is compiled to be read and run, not to be measured,
+        // and the wait is the reader's.
+        match cargo::run(directory, cargo::Profile::Debug) {
+            cargo::Run::Built {
+                artifacts,
+                diagnostics,
+            } => match artifacts
+                .into_iter()
+                .find(|artifact| artifact.kind == "bin")
+            {
+                // The generated package has exactly one binary, so the one executable
+                // cargo named for it is this pad's.
+                Some(artifact) => Build::Built {
+                    executable: artifact.path,
+                    diagnostics,
+                },
+                // cargo succeeded and named nothing: a third answer, not an `unwrap`.
+                None => Build::Unavailable(Failure::NoArtifact),
+            },
+            cargo::Run::Rejected {
+                diagnostics,
+                message,
+            } => Build::Rejected {
+                diagnostics,
+                message,
+            },
+            cargo::Run::NoCargo(error) => Build::Unavailable(Failure::NoCargo(error)),
+        }
     }
 }
 
@@ -1098,111 +1038,6 @@ fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(O
 /// Everything started and not yet ended, so that [`stop_all`] can reach it without a
 /// handle. A `static` because the window's close hook can be handed nothing.
 static RUNNING: Mutex<Vec<Running>> = Mutex::new(Vec::new());
-
-/// Turn one `cargo build --message-format=json` run into an answer. A pure function of
-/// what cargo said, so a failed build is a test over a canned stream.
-///
-/// Every line of stdout is one JSON message and cargo's own progress goes to stderr, so a
-/// line that does not parse is skipped rather than failed on.
-fn outcome(stdout: &str, stderr: &str, success: bool) -> Build {
-    let mut diagnostics = Vec::new();
-    let mut executable = None;
-
-    for line in stdout.lines() {
-        match serde_json::from_str::<Report>(line) {
-            Ok(Report::Message { message }) => diagnostics.push(message.into()),
-            // The generated package has one binary and cargo builds no dependency's
-            // binaries, so the one artifact carrying an executable is ours; a build
-            // script's has none. A rebuild that recompiled nothing still names it.
-            Ok(Report::Artifact {
-                executable: Some(path),
-            }) => executable = Some(path),
-            _ => {}
-        }
-    }
-
-    if !success {
-        return Build::Rejected {
-            diagnostics,
-            message: stderr.trim().to_owned(),
-        };
-    }
-
-    match executable {
-        Some(executable) => Build::Built {
-            executable,
-            diagnostics,
-        },
-        None => Build::Unavailable(Failure::NoArtifact),
-    }
-}
-
-/// The messages cargo emits, as much of each as this module reads. `#[serde(other)]` is
-/// what makes an unknown `reason` a message that is skipped rather than a parse failure
-/// that would throw the artifact path away with it.
-#[derive(Deserialize)]
-#[serde(tag = "reason")]
-enum Report {
-    #[serde(rename = "compiler-message")]
-    Message { message: CompilerMessage },
-    #[serde(rename = "compiler-artifact")]
-    Artifact { executable: Option<PathBuf> },
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Deserialize)]
-struct CompilerMessage {
-    level: String,
-    message: String,
-    #[serde(default)]
-    rendered: Option<String>,
-    #[serde(default)]
-    spans: Vec<MessageSpan>,
-}
-
-#[derive(Deserialize)]
-struct MessageSpan {
-    file_name: String,
-    line_start: usize,
-    column_start: usize,
-    #[serde(default)]
-    is_primary: bool,
-}
-
-impl From<CompilerMessage> for Diagnostic {
-    fn from(message: CompilerMessage) -> Diagnostic {
-        // The primary span, falling back to the first: a diagnostic with secondary spans
-        // and no primary is rare, and pointing at one of them beats pointing nowhere.
-        let span = message
-            .spans
-            .iter()
-            .find(|span| span.is_primary)
-            .or(message.spans.first())
-            .map(|span| Span {
-                file: span.file_name.clone(),
-                line: span.line_start,
-                column: span.column_start,
-            });
-
-        // `starts_with`, because rustc spells an ICE `error: internal compiler error` and
-        // a lint's level can arrive as `warning: ...`.
-        let level = if message.level.starts_with("error") {
-            Level::Error
-        } else if message.level.starts_with("warning") {
-            Level::Warning
-        } else {
-            Level::Note
-        };
-
-        Diagnostic {
-            level,
-            rendered: message.rendered.unwrap_or_else(|| message.message.clone()),
-            message: message.message,
-            span,
-        }
-    }
-}
 
 /// The generated manifest, as a serializable shape. **Field order is load-bearing**: TOML
 /// cannot reopen a table once a later one has begun, so every plain value of a table must

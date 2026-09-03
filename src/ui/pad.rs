@@ -808,11 +808,7 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
 /// So the jump *marks* the line: the cursor's row takes the editor's own current-line
 /// background and its number lights in the gutter, which is the whole of what the pane can
 /// honestly promise until the editor exposes its scroll.
-pub(crate) fn jump_to_span(
-    mut text: State<PadBuffers>,
-    pad: &PadId,
-    span: &crate::scratchpad::Span,
-) {
+pub(crate) fn jump_to_span(mut text: State<PadBuffers>, pad: &PadId, span: &cargo::Span) {
     let buffers = text.peek();
     if !buffers.holds(pad) {
         return;

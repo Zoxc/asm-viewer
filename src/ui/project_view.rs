@@ -28,6 +28,164 @@ fn binary_row(path: &Path, objects: usize) -> Element {
     .into_element()
 }
 
+/// One thing the last build produced. Pressing it opens the file as a binary, unless it is
+/// open already: opening a path twice would put a second copy of each of its objects in
+/// the list.
+#[derive(Clone, PartialEq)]
+struct ArtifactRow {
+    artifact: cargo::Artifact,
+    key: DiffKey,
+}
+
+impl KeyExt for ArtifactRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for ArtifactRow {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let states = use_project_states();
+        let path = self.artifact.path.clone();
+        let text = path.to_string_lossy().into_owned();
+        // What cargo calls the target, and what kind it is: the two things that tell one
+        // row from another when the file names are hashes.
+        let about = format!("{} {}", self.artifact.target, self.artifact.kind);
+
+        row_tooltip(
+            text.clone(),
+            CursorArea::new().child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(list_row_height()))
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(8.0)
+                    .content(Content::Flex)
+                    .background(match hovering() {
+                        true => palette().object_hover_bg,
+                        false => Color::TRANSPARENT,
+                    })
+                    .on_pointer_over(move |_| hovering.set_if_modified(true))
+                    .on_pointer_out(move |_| hovering.set_if_modified(false))
+                    .on_press(move |_| {
+                        let open = states
+                            .objects
+                            .peek()
+                            .iter()
+                            .any(|object| object.path == path)
+                            || states.loading.peek().is_loading(&path);
+                        if open {
+                            return;
+                        }
+
+                        let (objects, loading, path) =
+                            (states.objects, states.loading, path.clone());
+                        spawn(async move {
+                            open_binaries(objects, loading, vec![path]).await;
+                        });
+                    })
+                    .child(tree_name(text, false))
+                    .child(label().text(about).color(palette().address_fg).max_lines(1)),
+            ),
+        )
+    }
+}
+
+/// The place a diagnostic points at, drawn as a **target** where this pane can reach it:
+/// pressing it opens that file as source, on the line and column the compiler named.
+///
+/// cargo spells the file relative to where it ran, so the place is the project's directory
+/// joined with it. A file **outside** that directory -- a dependency's, out of the registry
+/// -- keeps the plain label it would have had: the app opens a source file it can read, and
+/// a target that did nothing when pressed would be worse than never offering one.
+fn source_place(directory: Option<&Path>, diagnostic: &Diagnostic) -> Option<Element> {
+    let span = diagnostic.span.as_ref()?;
+    let file = directory.map(|directory| directory.join(&span.file));
+    let own = file.as_deref().is_some_and(|file| {
+        file.starts_with(directory.unwrap_or(Path::new(""))) && shows_as_source(file)
+    });
+    let text = diagnostic_place(span, own);
+
+    Some(match (own, file) {
+        (true, Some(file)) => SourceTarget {
+            file: Arc::from(&*file.to_string_lossy()),
+            line: span.line as u32,
+            text,
+        }
+        .into_element(),
+        _ => label()
+            .text(text)
+            .color(palette().address_fg)
+            .max_lines(1)
+            .into_element(),
+    })
+}
+
+/// A diagnostic's place, as a row of the project's own source. The relocation link's own
+/// hover, which is what says "this can be pressed" everywhere else in this app.
+#[derive(Clone, PartialEq)]
+struct SourceTarget {
+    file: Arc<str>,
+    line: u32,
+    text: String,
+}
+
+impl Component for SourceTarget {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let states = use_project_states();
+        let marked = use_consume::<Marked>().0;
+        let landing = use_consume::<Land>().0;
+        let plant = use_consume::<Plant>().0;
+        let ctrl = use_consume::<Ctrl>().0;
+        let (file, line) = (self.file.clone(), self.line);
+
+        CursorArea::new().child(
+            rect()
+                .maybe(hovering(), |rect| {
+                    rect.background(palette().link_hover_bg).corner_radius(6.0)
+                })
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |e: Event<PressEventData>| {
+                    // The blocks are in a `ScrollView` that drags to scroll, and a press
+                    // that reached it would be the start of one.
+                    e.stop_propagation();
+
+                    land(
+                        states.open,
+                        states.visits,
+                        marked,
+                        landing,
+                        plant,
+                        Landing {
+                            tab: Document::Source(file.clone()),
+                            at: Some(LinePos {
+                                file: file.clone(),
+                                line,
+                            }),
+                            // A source file and no instruction: the compiler named a line.
+                            address: None,
+                            columns: None,
+                        },
+                        reach(ctrl),
+                    );
+                })
+                .child(
+                    label()
+                        .text(self.text.clone())
+                        .max_lines(1)
+                        .color(match hovering() {
+                            true => palette().name_hover_fg,
+                            false => palette().address_fg,
+                        }),
+                ),
+        )
+    }
+}
+
 /// One project in the recent list. Pressing it opens this one in place of the one on
 /// screen.
 #[derive(Clone, PartialEq)]
@@ -128,6 +286,52 @@ impl Component for ProjectTab {
                 .collect()
         };
 
+        // What there is to build, and what to build it with. The read subscribes this
+        // component to the build, so a finished one redraws the rows below.
+        let build = states.build;
+        let held = build.read().clone();
+        let jobs = use_consume::<BuildJobs>();
+        let directory = workspace(&open);
+        let profile = open.profile;
+
+        // The manifest is read on mount and whenever the directory or the profile
+        // changes -- the two things that decide what the answer is. A keystroke in the
+        // directory box costs one `read_to_string` of a half-typed path, which fails
+        // cheaply, `files_view`'s own bargain.
+        use_side_effect_with_deps(&(directory.clone(), profile), {
+            let jobs = jobs.clone();
+            move |(directory, profile): &(Option<PathBuf>, Profile)| {
+                let Some(directory) = directory.clone() else {
+                    return;
+                };
+                jobs.send(BuildJob::Read {
+                    directory,
+                    profile: *profile,
+                });
+            }
+        });
+
+        let artifacts: Vec<Element> = held
+            .artifacts()
+            .iter()
+            .map(|artifact| {
+                ArtifactRow {
+                    artifact: artifact.clone(),
+                    key: DiffKey::None,
+                }
+                .key(artifact.path.to_string_lossy().into_owned())
+                .into()
+            })
+            .collect();
+
+        let diagnostics: Vec<Element> = held
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                diagnostic_block(diagnostic, source_place(directory.as_deref(), diagnostic))
+            })
+            .collect();
+
         let others: Vec<Element> = recents
             .read()
             .iter()
@@ -219,6 +423,121 @@ impl Component for ProjectTab {
                             false => rect().width(Size::fill()).children(binaries).into_element(),
                         })
                         .child(section_heading(
+                            "Cargo build",
+                            directory.clone().map(|directory| {
+                                let jobs = jobs.clone();
+                                Button::new()
+                                    // Two builds cannot go at once: the second would
+                                    // compile what the first is writing.
+                                    .enabled(held.manifest.is_some() && !held.building)
+                                    .on_press(move |_| {
+                                        start_build(build, &jobs, directory.clone(), profile)
+                                    })
+                                    .child(match held.building {
+                                        true => "Building...",
+                                        false => "Build",
+                                    })
+                                    .into_element()
+                            }),
+                        ))
+                        .child(match &held.manifest {
+                            None => info_line(match directory.is_some() {
+                                true => "No Cargo.toml in the directory".to_owned(),
+                                false => "No directory".to_owned(),
+                            })
+                            .into_element(),
+                            Some(manifest) => rect()
+                                .width(Size::fill())
+                                .spacing(6.0)
+                                // The file cargo is run over, named rather than implied:
+                                // what is built is a question the directory alone answers
+                                // only for a reader who knows the rule.
+                                .child(field_row(
+                                    "Manifest",
+                                    label()
+                                        .text(manifest.to_string_lossy().into_owned())
+                                        .color(palette().address_fg)
+                                        .max_lines(1),
+                                ))
+                                .child(field_row(
+                                    "Profile",
+                                    SegmentedButton::new().children(
+                                        [(Profile::Debug, "Debug"), (Profile::Release, "Release")]
+                                            .map(|(choice, text)| {
+                                                ButtonSegment::new()
+                                                    .key(text)
+                                                    .selected(profile == choice)
+                                                    // Straight into `Proj`, so the save
+                                                    // observer sees it like a rename and
+                                                    // `project.toml` is written at once.
+                                                    .on_press(move |_| {
+                                                        proj.write().profile = choice;
+                                                    })
+                                                    .child(text)
+                                                    .into()
+                                            }),
+                                    ),
+                                ))
+                                // What a binary with no line information costs is the
+                                // whole source side, so the offer is made where the
+                                // profile is chosen and goes as soon as it is taken.
+                                .maybe_child((!held.debug_lines).then(|| {
+                                    let jobs = jobs.clone();
+                                    let directory = directory.clone();
+                                    field_row(
+                                        "Debug lines",
+                                        rect()
+                                            .width(Size::flex(1.0))
+                                            .horizontal()
+                                            .cross_align(Alignment::Center)
+                                            .content(Content::Flex)
+                                            .spacing(6.0)
+                                            .child(
+                                                label()
+                                                    .text("Off, so there is no source side")
+                                                    .width(Size::flex(1.0))
+                                                    .color(palette().address_fg),
+                                            )
+                                            .child(
+                                                Button::new()
+                                                    .on_press(move |_| {
+                                                        let Some(directory) = directory.clone()
+                                                        else {
+                                                            return;
+                                                        };
+                                                        jobs.send(BuildJob::AddDebugLines {
+                                                            directory,
+                                                            profile,
+                                                        });
+                                                    })
+                                                    .child("Turn on"),
+                                            ),
+                                    )
+                                    .into_element()
+                                }))
+                                .maybe_child(held.status().map(|(text, bad)| {
+                                    info_line_in(
+                                        text,
+                                        match bad {
+                                            true => palette().invalid_fg,
+                                            false => palette().address_fg,
+                                        },
+                                    )
+                                    .into_element()
+                                }))
+                                .children(artifacts)
+                                // cargo's own words, for what it says nowhere else.
+                                .maybe_child(
+                                    held.refusal()
+                                        .map(|message| text_block(message, palette().text_fg)),
+                                )
+                                // Drawn straight into the pane's own scroll: a wrapping
+                                // block has no height a virtual list could use, and this
+                                // whole view scrolls already.
+                                .children(diagnostics)
+                                .into_element(),
+                        })
+                        .child(section_heading(
                             "Recent projects",
                             Some(
                                 Button::new()
@@ -262,6 +581,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         bookmarks,
         // A search is a view of the project's files, not part of the session.
         searched: _,
+        build,
     } = states;
 
     use_side_effect(move || {
@@ -291,6 +611,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                     &driven.read(),
                     active_document(&dock, &docs).as_ref(),
                     &visits.read(),
+                    &build.read().previous,
                 )
             },
         );
@@ -342,6 +663,17 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates) {
 /// looks at it. A tab's trail is opened whole and its rows go in per entry, so Back
 /// after a restart comes back to the rows that were left.
 fn restore_project(states: ProjectStates, project: Project, session: Session) {
+    // What the last build produced, which the next build replaces. Set before the early
+    // return below: a project whose binaries are all gone still knows what it built.
+    let mut build = states.build;
+    let mut next = build.peek().clone();
+    next.previous = session
+        .cargo
+        .as_ref()
+        .map(|cargo| cargo.artifacts.clone())
+        .unwrap_or_default();
+    build.set(next);
+
     let ProjectStates {
         objects,
         loading,
@@ -471,6 +803,11 @@ pub(crate) fn clear_project(states: ProjectStates) {
     // the question is also what stops a walk still running -- the task takes the next
     // batch, sees a search it is not, and lets its end of the channel go.
     searched.set(Searched::default());
+
+    // What one project built says nothing about the next, and a list left standing would
+    // have the first build over there replace binaries opened over here.
+    let mut build = states.build;
+    build.set(Builds::default());
 }
 
 /// Leave the project on screen and open the one `id` names in its place.

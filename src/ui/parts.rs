@@ -69,6 +69,11 @@ pub(crate) fn info_line(text: String) -> impl IntoElement {
     rect().padding(5.0).child(label().text(text))
 }
 
+/// The same in a colour of its own, for a line that is saying how something went.
+pub(crate) fn info_line_in(text: String, color: Color) -> impl IntoElement {
+    rect().padding(5.0).child(label().text(text).color(color))
+}
+
 /// A row's or a chip's own text, shown in full where the row could only show part of it.
 /// Used rather than `TooltipContainer` directly so that [`TOOLTIP_DELAY`] is decided once.
 pub(crate) fn row_tooltip(text: String, row: impl IntoElement) -> TooltipContainer {
@@ -167,4 +172,98 @@ pub(crate) fn field_row(name: &str, value: impl IntoElement) -> impl IntoElement
                 .max_lines(1),
         )
         .child(value)
+}
+
+/// A block of a tool's own output, laid out the way it wrote it: one label per line, in
+/// the fixed-width font, so rustc's carets sit under what they point at. A line too wide
+/// for the pane **wraps** rather than being cut off at its right edge.
+///
+/// Wrapping does move a caret out from under the character it points at, which is why this
+/// block used to cut instead. What settles it is which line pays: a line that fits is
+/// untouched, so every block narrower than the pane is drawn exactly as it was, and the
+/// only line that wraps is the one clipping would have thrown the end of away entirely.
+/// `--> src/main.rs:9:17` is that line -- the half of a diagnostic that says *where* --
+/// and a caret under the wrong column is a worse drawing of something the reader can
+/// still read, where a cut is the answer not being there at all.
+pub(crate) fn text_block(text: &str, color: Color) -> Element {
+    rect()
+        .width(Size::fill())
+        .children(
+            text.lines()
+                .map(|line| {
+                    label()
+                        .text(line.to_owned())
+                        .assembly_font()
+                        .color(color)
+                        .into()
+                })
+                .collect::<Vec<Element>>(),
+        )
+        .into_element()
+}
+
+/// One thing the compiler said: a line that can be scanned, and cargo's own rendering of
+/// it under that. The header adds the **place**, taken from the span rather than from the
+/// text.
+///
+/// `place` is drawn by whoever calls this, because what a place can be *pressed* to reach
+/// differs between the two panes that draw diagnostics: the scratchpad's puts its editor's
+/// cursor on the line, the project's opens the file. Both agree that a place they cannot
+/// reach is a plain label — [`diagnostic_place`] is that label, and a target that did
+/// nothing when pressed would be the worse of the two answers.
+pub(crate) fn diagnostic_block(diagnostic: &Diagnostic, place: Option<Element>) -> Element {
+    rect()
+        .width(Size::fill())
+        .padding(Gaps::new(2.0, 0.0, 6.0, 0.0))
+        .child(
+            rect()
+                .width(Size::fill())
+                // Tall enough for what is in it and never shorter than an ordinary row:
+                // the message wraps, so the header is one row for almost every diagnostic
+                // and as many as the sentence needs for the one that does not fit.
+                .height(Size::auto())
+                .min_height(Size::px(list_row_height()))
+                .horizontal()
+                // Start and not `Center`: what a wrapped message stands beside is the word
+                // `error` and the place, which belong against its first line.
+                .cross_align(Alignment::Start)
+                .spacing(6.0)
+                .content(Content::Flex)
+                .child(
+                    label()
+                        .text(match diagnostic.level {
+                            Level::Error => "error",
+                            Level::Warning => "warning",
+                            Level::Note => "note",
+                        })
+                        // An error is the red every invalid thing wears, a warning the one
+                        // warm hue in the palette, and a note recedes.
+                        .color(match diagnostic.level {
+                            Level::Error => palette().invalid_fg,
+                            Level::Warning => palette().string_fg,
+                            Level::Note => palette().address_fg,
+                        })
+                        .max_lines(1),
+                )
+                .maybe_child(place)
+                // The sentence rustc wrote, wrapping rather than cut at the pane's edge.
+                .child(
+                    label()
+                        .text(diagnostic.message.clone())
+                        .width(Size::flex(1.0)),
+                ),
+        )
+        .child(text_block(&diagnostic.rendered, palette().text_fg))
+        .into_element()
+}
+
+/// How a diagnostic's place is spelled: the file, the line and the column. A registry path
+/// is most of a line on its own and which crate it is in is the useful half, so a file
+/// outside the directory being built is cut down to its name.
+pub(crate) fn diagnostic_place(span: &cargo::Span, whole: bool) -> String {
+    let file = match whole {
+        true => span.file.clone(),
+        false => file_name(&span.file),
+    };
+    format!("{file}:{}:{}", span.line, span.column)
 }

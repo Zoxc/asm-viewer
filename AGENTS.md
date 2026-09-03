@@ -94,6 +94,8 @@ command.
   bounds in (an x86-64 PE's `.pdata`, an ELF's `.eh_frame`), read for the ranges they declare;
   the only part that reads call-frame information.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
+- `src/cargo.rs` — running cargo and reading what it said: the artifacts it names, the
+  diagnostics it reports, and the profile's debug information in the manifest being built.
 - `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
 - `src/source.rs` — source files read off disk and cached by path, failures included.
@@ -145,6 +147,8 @@ command.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.
+- `src/ui/building.rs` — building the project's own workspace: what is held about it, the one
+  worker thread, and which binaries a finished build replaces.
 - `src/ui/bookmarks_view.rs` — the Bookmarks list: one row per bookmark, live against what is
   loaded and kept dimmed when it is not.
 - `src/ui/files_view.rs` — the Files view: the project's directory as a tree, a file's row
@@ -159,13 +163,13 @@ command.
 - `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
-- `src/ui/parts.rs` — eleven small stateless pieces of drawing shared by unrelated panes.
+- `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes.
 - `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
   it takes from that: what lets the code panes scroll sideways with their wash whole.
 
-Seven `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
-`project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`); the rest is in
-`agents/UI.md`.
+Eight `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+`project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`); the
+rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's
 tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at
