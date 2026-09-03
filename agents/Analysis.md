@@ -82,21 +82,32 @@ once. It also carries the file's `FileDigest` — xxHash64 of the *whole file*, 
 same value, so 196 members cost one pass (1.5 ms against the 129 ms `open_files` takes on
 the 196-member rlib; 32 ms against 1.6 s on the 331 MB binary). Nothing in the crate
 reads it: it exists so a restore can tell the file it saved from one rebuilt underneath it.
-`Section` owns decompressed bytes, relocations keyed by address, and a sorted list of its
-text symbols' addresses. `SymbolData::estimate_size` derives a symbol's extent from the *next*
-address in that list — **clipped to the section's own bytes**, since that list is numbers out of
+`Section` owns decompressed bytes, relocations keyed by address, a sorted list of its
+text symbols' addresses, and the ranges the file's unwind table states for its functions
+(`unwind`, sorted by start, each start once, ends clamped to the section's bytes; empty but for
+an x86-64 PE). `SymbolData::estimate_size` derives a symbol's extent from the *next*
+address in the symbol list — **clipped to the section's own bytes**, since that list is numbers out of
 the file and one wild `st_value` in it would otherwise cost the symbol *above* it its listing
 rather than only itself. Declared sizes are frequently 0 in ELF/COFF, which is why the
-derivation exists at all; the declared size is kept separately and only displayed. `SymbolData::extent` is the answer that is actually used, and
-prefers the extent the debug info declares — a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc`,
-or a PDB procedure's length — where the object has any, taking the **smaller** of the two: the
-estimate over-reaches into padding, but the declared extent describes the *function*, so a second
-symbol inside one function (an alias, an assembler label, a split cold part) would otherwise
-swallow the next function. The derivation is capped at
-`MAX_DERIVED_SIZE` (1 MiB) — not a claim about how long a function can be, but the point past
-which it is certainly describing something else: a stripped PE's export table is sparse, so nine
-of the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which is 772 302 instructions
-decoded *per render*. `.pdata`/`RUNTIME_FUNCTION` is the real fix and is its own Goals item.
+derivation exists at all; the declared size is kept separately and only displayed.
+`SymbolData::extent` is the answer that is actually used, and has two answers in order. **The end
+the unwind table states**, where an entry covers the address, whatever named the symbol: the
+image's own statement, to its loader, of the very bytes the unwinder covers, so neither the
+estimate nor its cap bounds it and the debug info is not asked — only the next symbol clamps
+it, because a listing is one stretch per symbol decoded as that symbol's extent, and an extent
+reaching past the next label would draw its rows twice; every entry's begin being a symbol, that
+is also what stops a parent at the chained entry of its cold part. **Else the smaller** of the
+extent the debug info declares — a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc`, or a
+PDB procedure's length — and the estimate: the estimate over-reaches into padding, but the
+declared extent describes the *function*, so a second symbol inside one function (an alias, an
+assembler label, a split cold part) would otherwise swallow the next function. The derivation is
+capped at `MAX_DERIVED_SIZE` (1 MiB) — not a claim about how long a function can be, but the
+point past which it is certainly describing something else: a stripped PE's export table is
+sparse, so nine of the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which was
+772 302 instructions decoded *per render*. The unwind table is the fix for that: on an x86-64
+PE every entry's begin is a symbol and every covered symbol's end is stated, so the cap reaches
+only a symbol no entry covers — a leaf without unwind info, hand-written assembly, a mutated
+table — and everything on an ELF or an ARM64 image, where it stays.
 
 **Names are demangled in one batch per object, on stacks sized for them** (`demangle.rs`). A
 mangled name is bytes out of a string table, and it is the *file* that chooses how deep the
@@ -460,7 +471,8 @@ them would print the confident page of nonsense `undecodable` exists to prevent,
 copied, since the tail of a stripped PE's export can be megabytes. Two kinds only. `Bytes` is
 the ordinary one. `Cut` is the rest of a stretch whose derived extent hit `MAX_DERIVED_SIZE`,
 said apart because it is very likely the function going on past the cap rather than anything
-between two functions, and starts wherever the cap fell rather than at an instruction. An
+between two functions, and starts wherever the cap fell rather than at an instruction — on an
+x86-64 PE only a symbol no unwind entry covers can get one, the rest having their ends stated. An
 architecture no backend decodes gives the symbol stretch the `undecodable` `Assembly` as the
 symbol view gets, and its gaps are `Bytes` like any other. The section's end is saturating,
 where `estimate_size`'s is `None`: a listing has to end somewhere. `tests/listing.rs` holds one

@@ -20,6 +20,7 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         address: 0,
         relocations: HashMap::new(),
         symbols: symbols.iter().map(|(_, address)| *address).collect(),
+        unwind: Vec::new(),
         code: true,
         bias: 0,
     });

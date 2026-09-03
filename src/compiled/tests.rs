@@ -15,6 +15,7 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
         address: 0,
         relocations: HashMap::new(),
         symbols: (0..symbols.len() as u64).collect(),
+        unwind: Vec::new(),
         code: true,
         bias: 0,
     });

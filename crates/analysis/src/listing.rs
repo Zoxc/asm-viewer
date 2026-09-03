@@ -80,7 +80,8 @@ pub enum GapKind {
     /// The rest of a stretch whose symbol's derived extent hit [`MAX_DERIVED_SIZE`]: very
     /// likely the symbol's own code going on past the cap rather than anything between two
     /// functions, and starting wherever the cap fell rather than at an instruction. Said
-    /// apart so a reader is not told the function ends there.
+    /// apart so a reader is not told the function ends there. On an x86-64 PE only a symbol
+    /// no unwind entry covers can get here; the rest have their ends stated.
     Cut,
 }
 

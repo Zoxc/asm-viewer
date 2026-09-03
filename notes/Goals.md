@@ -975,14 +975,20 @@ one item per part, so the unfinished half stays visible.
   by its address, with the stated length as its declared size. The in-memory PE writer
   writes a `.pdata` and the mutation sweep poisons it entry by entry; parsed alone, the
   no-export DLL fixture goes from no symbols to its three.
-- [ ] Prefer the end an unwind entry states. The other half, and the honest fix for a
+- [x] Prefer the end an unwind entry states. The other half, and the honest fix for a
   stripped PE's worst behaviour: its export table is sparse, so an exported function's extent
-  is derived across every unexported function between it and the next export — megabytes, in
+  was derived across every unexported function between it and the next export — megabytes, in
   nine cases in the DLL, and 3.7 MB in the worst — and `estimate_size` is capped at 1 MiB to
-  stop that costing seconds per redraw. Every entry's begin being a symbol now shortens
-  those derivations to the next entry; the entry's *end* is the function's, padding
-  excluded, and should win over the estimate and the cap alike where an entry covers the
-  address, whatever named the symbol.
+  stop that costing seconds per redraw. Now every entry's range goes to its section
+  (`Section::unwind`), whether or not its begin became a symbol, and `SymbolData::extent`
+  answers from it first: where an entry covers the address the extent is the stated end,
+  whatever named the symbol, and neither the estimate nor the cap bounds it — only the next
+  symbol does, since the section listing decodes one stretch per symbol and an extent past
+  the next label would draw its rows twice. The debug info is not asked for a covered
+  symbol: the image's word to its loader over a second file's, the two agreeing in every
+  real image (a test pins which is asked). The cap stays for an ELF or an ARM64 image and,
+  on an x86-64 PE, for a symbol no entry covers — a leaf without unwind info, assembler
+  code. Not re-measured on the LLVM DLL, which is not to hand.
 - [ ] Fold a chained unwind entry into its parent. A cold part, or the second entry an
   over-long prologue gets, is a `RUNTIME_FUNCTION` whose `UNWIND_INFO` carries
   `UNW_FLAG_CHAININFO` and names the primary entry; today each is a `<function 0x…>` of its

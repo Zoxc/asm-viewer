@@ -3,7 +3,7 @@
 
 mod common;
 
-use analysis::Architecture;
+use analysis::{Architecture, Gap, GapKind, Listing};
 use common::{named, names, parse, pe_image, ExportedSymbol, PeDll, TEXT_ADDRESS};
 use object::Object as _;
 
@@ -123,6 +123,15 @@ fn an_entry_at_a_named_address_adds_no_symbol_and_a_malformed_one_nothing() {
         section.symbols,
         [TEXT_ADDRESS, TEXT_ADDRESS + 4, TEXT_ADDRESS + 6]
     );
+    assert_eq!(
+        section.unwind,
+        [
+            TEXT_ADDRESS..TEXT_ADDRESS + 4,
+            TEXT_ADDRESS + 4..TEXT_ADDRESS + 6,
+            TEXT_ADDRESS + 6..TEXT_ADDRESS + 7,
+        ],
+        "the three that state something"
+    );
 }
 
 /// ARM64's `.pdata` is another record altogether, so an image for it is not read as
@@ -135,4 +144,121 @@ fn an_arm64_images_pdata_is_not_read_as_x86_64_entries() {
     let object = parse(&image);
     assert_eq!(object.architecture, Architecture::Aarch64);
     assert_eq!(names(&object), ["first"]);
+}
+
+/// The end an entry states is the function's, padding excluded, where the next symbol's
+/// address is not: the extent stops at the stated end, the bytes from there to the next
+/// symbol are the listing's gap, and `estimate_size` — the derivation, by name — still says
+/// what it always said.
+#[test]
+fn a_stated_end_beats_the_next_symbols_address() {
+    const TEXT: &[u8] = &[
+        0x90, 0x90, 0x90, 0x90, 0x90, 0xC3, // 0: five nops and a ret
+        0xCC, 0xCC, 0xCC, 0xCC, // 6: the linker's int3 padding
+        0x90, 0xC3, // 10
+    ];
+    let object = parse(&pe_image(PeDll {
+        text: TEXT,
+        symbols: &[
+            FIRST,
+            ExportedSymbol {
+                name: "second",
+                offset: 10,
+                size: 0,
+                code: true,
+            },
+        ],
+        entry: None,
+        codeview: None,
+        unwind: &[(0, 6), (10, 12)],
+    }));
+    let first = named(&object, "first");
+    assert_eq!(first.estimate_size(), Some(10));
+    assert_eq!(first.debug_extent(&object), None, "no debug info at all");
+    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.data(), Some(&TEXT[..10]), "the derivation, by name");
+    assert_eq!(first.data_in(&object), Some(&TEXT[..6]));
+    let assembly = first.assembly(&object).expect("first decodes");
+    assert_eq!(assembly.instructions.len(), 6);
+
+    let listing = Listing::new(&object, first.section.clone().unwrap());
+    let stretch = listing.decode(&object, 0).expect("first decodes");
+    assert_eq!(
+        stretch.gap,
+        Some(Gap {
+            range: TEXT_ADDRESS + 6..TEXT_ADDRESS + 10,
+            kind: GapKind::Bytes,
+        })
+    );
+}
+
+/// The cap on the derivation exists for a function whose end nothing states; one whose end
+/// the unwind table states is that long, however long that is.
+#[test]
+fn a_stated_end_beats_the_cap() {
+    let mut text = vec![0x90u8; (1 << 20) + 16];
+    *text.last_mut().unwrap() = 0xC3;
+    let object = parse(&pe_image(PeDll {
+        text: &text,
+        symbols: &[FIRST],
+        entry: None,
+        codeview: None,
+        unwind: &[(0, text.len() as u64)],
+    }));
+    let first = named(&object, "first");
+    assert_eq!(first.estimate_size(), Some(1 << 20));
+    assert_eq!(first.extent(&object), Some((1 << 20) + 16));
+    assert_eq!(
+        first.data_in(&object).map(<[u8]>::len),
+        Some((1 << 20) + 16)
+    );
+}
+
+/// A symbol inside an entry's range — a label, a public mid-function — is given the rest of
+/// the range; and the symbol the range begins at stops at that label, since the listing
+/// decodes one stretch per symbol and would otherwise draw the label's rows twice.
+#[test]
+fn an_entry_covering_a_label_inside_it_is_clamped_to_the_next_symbol() {
+    let object = parse(&pe_image(PeDll {
+        text: TEXT,
+        symbols: &[
+            FIRST,
+            ExportedSymbol {
+                name: "label",
+                offset: 2,
+                size: 0,
+                code: true,
+            },
+        ],
+        entry: None,
+        codeview: None,
+        unwind: &[(0, 4)],
+    }));
+    assert_eq!(named(&object, "first").extent(&object), Some(2));
+    let label = named(&object, "label");
+    assert_eq!(label.estimate_size(), Some(8), "to the section's end");
+    assert_eq!(label.extent(&object), Some(2), "to the entry's end");
+}
+
+/// An end the table states past the section's bytes is clamped to them as it is read in,
+/// so a function it covers still has bytes to decode.
+#[test]
+fn an_entry_reaching_past_the_section_is_clamped_to_its_bytes() {
+    let object = parse(&pe_image(PeDll {
+        text: TEXT,
+        symbols: &[ExportedSymbol {
+            name: "last",
+            offset: 7,
+            size: 0,
+            code: true,
+        }],
+        entry: None,
+        codeview: None,
+        unwind: &[(7, 0x800)],
+    }));
+    let last = named(&object, "last");
+    let section = last.section.clone().unwrap();
+    assert_eq!(section.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
+    assert_eq!(last.extent(&object), Some(3));
+    assert!(last.assembly(&object).is_some());
 }

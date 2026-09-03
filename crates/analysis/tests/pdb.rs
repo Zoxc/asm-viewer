@@ -544,6 +544,59 @@ fn an_absolute_recorded_path_is_tried_as_recorded() {
     assert!(symbol(&object, "add").line_info(&object).is_none());
 }
 
+/// Where the image's unwind table and its PDB both say how long a function is, the image's
+/// word is the extent and the PDB's is only the declared size: the same `.text`, GUID and
+/// age as the committed DLL, but an entry for `add` reaching seven bytes into the `int3`
+/// padding after it, gives `add` those seven bytes too. The two agree in every real image;
+/// this pins which one is asked.
+#[test]
+fn a_stated_end_beats_the_procedures_length() {
+    let dll = committed_fixture(DLL);
+    let file = object::File::parse(dll.as_slice()).unwrap();
+    let codeview = file.pdb_info().unwrap().unwrap();
+    let text = file
+        .section_by_name(".text")
+        .unwrap()
+        .data()
+        .unwrap()
+        .to_vec();
+    let dir = scratch("stated_end");
+    std::fs::write(dir.join("build.pdb"), committed_fixture(PDB)).unwrap();
+    let image = pe_image(PeDll {
+        text: &text,
+        symbols: &[ExportedSymbol {
+            name: "add",
+            offset: 0,
+            size: 0,
+            code: true,
+        }],
+        entry: None,
+        codeview: Some(CodeViewRecord {
+            guid: codeview.guid(),
+            age: codeview.age(),
+            path: "build.pdb",
+        }),
+        unwind: &[(0, 0x18)],
+    });
+
+    let object = parse_at(&image, dir.join("image.dll"));
+    let add = symbol(&object, "add");
+    assert_eq!(
+        add.debug_extent(&object),
+        Some(0x11),
+        "the procedure's length"
+    );
+    assert_eq!(add.size, 0, "an export declares no size");
+    assert_eq!(add.extent(&object), Some(0x18), "the unwind entry's end");
+    // Not `rows`, which is written for the linker's image base; this image is at the
+    // writer's.
+    assert_eq!(
+        line_info(&object, "add").rows().len(),
+        4,
+        "the PDB was read"
+    );
+}
+
 /// The three `<function 0x…>` names the no-export images show on their own: what their
 /// `.pdata` states and nothing names, in the Symbols list's byte order.
 fn unwind_names() -> Vec<String> {
@@ -576,6 +629,8 @@ fn procedures_are_symbols_where_the_image_names_none() {
         let function = symbol(&alone, &format!("<function {:#x}>", TEXT + offset));
         assert_eq!(function.address, TEXT + offset);
         assert_eq!(function.size, len, "the entry's stated length");
+        assert_eq!(function.debug_extent(&alone), None, "no PDB");
+        assert_eq!(function.extent(&alone), Some(len), "the stated end");
         assert!(function.line_info(&alone).is_none(), "no PDB, no lines");
     }
 
@@ -669,6 +724,11 @@ fn a_public_names_the_function_no_module_describes() {
         "a public's name is the decorated one, and is demangled"
     );
     assert_eq!(helper.debug_extent(&object), None, "no module knows it");
+    assert_eq!(
+        helper.extent(&object),
+        Some(6),
+        "a leaf with no unwind entry: the estimate, to the section's end"
+    );
     assert!(
         helper.line_info(&object).is_none(),
         "no module has its lines"
@@ -684,6 +744,7 @@ fn a_public_names_the_function_no_module_describes() {
         let symbol = symbol(&object, name);
         assert_eq!(symbol.address, TEXT + offset, "{name}");
         assert_eq!(symbol.size, len, "{name}: still the procedure's length");
+        assert_eq!(symbol.extent(&object), Some(len), "{name}");
         assert_eq!(symbol.demangled, None, "{name}");
     }
     assert_eq!(rows(&line_info(&object, "add")).len(), 4);

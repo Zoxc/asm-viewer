@@ -196,6 +196,12 @@ pub struct Section {
     /// at one address are one entry here. The sync points a listing decodes from.
     pub symbols: Vec<u64>,
 
+    /// The address ranges the file's own unwind table states for the functions in this
+    /// section — an x86-64 PE's `.pdata`, out of [`unwind_ranges`] — sorted by start, each
+    /// start once, ends clamped to the section's bytes. Empty for every other kind of file.
+    /// What [`SymbolData::extent`] answers from first.
+    pub unwind: Vec<Range<u64>>,
+
     /// Whether the file marks this section as holding code (`SectionKind::Text`). Every
     /// section whose bytes read is kept, since the line info needs the debug ones; this is
     /// what tells the code apart for a listing of all of it.
@@ -263,6 +269,8 @@ const SECTION_ALIGNMENT: u64 = 16;
 /// it is treated as having said nothing. Not a claim about how long a function can be — five
 /// times the largest in any sample here — but the point past which a sparse export table's
 /// derivation is certainly describing something else, at megabytes of decoding per redraw.
+/// On an x86-64 PE the unwind table now states where a function ends and the cap reaches
+/// only a symbol no entry covers; it stays for an ELF or an ARM64 image.
 const MAX_DERIVED_SIZE: u64 = 1 << 20;
 
 #[derive(Debug)]
@@ -284,8 +292,15 @@ impl SymbolData {
     /// Object files frequently report a size of 0, so derive the extent from the next symbol
     /// in the section (or the section end). An *upper* bound rather than a measurement: it
     /// includes alignment padding, and a declaration the symbol table never mentioned (an
-    /// export, an entry point) has no size of its own. See [`extent`](Self::extent).
+    /// export, an entry point) has no size of its own. Capped at [`MAX_DERIVED_SIZE`]. See
+    /// [`extent`](Self::extent).
     pub fn estimate_size(&self) -> Option<u64> {
+        Some(self.derived()?.min(MAX_DERIVED_SIZE))
+    }
+
+    /// [`estimate_size`](Self::estimate_size) before its cap: the bytes from this symbol to
+    /// the next in the section, or to the section's end.
+    fn derived(&self) -> Option<u64> {
         let section = self.section.as_ref()?;
         let i = section.symbols.binary_search(&self.address).ok()?;
 
@@ -307,11 +322,44 @@ impl SymbolData {
             None => end?,
         };
 
-        Some(next.checked_sub(self.address)?.min(MAX_DERIVED_SIZE))
+        next.checked_sub(self.address)
     }
 
-    /// How many bytes of code this symbol is: the **smaller** of the extent the debug info
-    /// declares for the function (DWARF's `DW_AT_low_pc`/`DW_AT_high_pc`) and
+    /// The end the file's own unwind table states for the function this symbol is in
+    /// ([`Section::unwind`]), as bytes from the symbol's address, or [`None`] where no entry
+    /// covers it. Clamped to the next symbol: a listing is one stretch per symbol and
+    /// decodes each as its symbol's extent, so an extent reaching past the next label would
+    /// draw those rows twice — and every entry's own begin is a symbol, which is what stops
+    /// a parent at the chained entry of its cold part.
+    fn unwind_extent(&self) -> Option<u64> {
+        let section = self.section.as_ref()?;
+        // The last range starting at or before the address: with the starts sorted and
+        // each once, the innermost of any that nest.
+        let i = section
+            .unwind
+            .partition_point(|range| range.start <= self.address)
+            .checked_sub(1)?;
+        let range = &section.unwind[i];
+        if !range.contains(&self.address) {
+            return None;
+        }
+        let stated = range.end - self.address;
+        Some(match self.derived().filter(|&size| size != 0) {
+            Some(derived) => stated.min(derived),
+            None => stated,
+        })
+    }
+
+    /// How many bytes of code this symbol is. Two answers, in order.
+    ///
+    /// **The end the file's own unwind table states**, where an entry covers the address
+    /// ([`unwind_extent`](Self::unwind_extent)): the image's statement, to its loader, of
+    /// the very bytes the unwinder covers, so neither the estimate nor its cap bounds it —
+    /// only the next symbol does, for the listing's sake — and the debug info is not asked.
+    /// On an x86-64 PE that is nearly every function.
+    ///
+    /// **Else the smaller** of the extent the debug info declares for the function (DWARF's
+    /// `DW_AT_low_pc`/`DW_AT_high_pc`, a PDB procedure's length) and
     /// [`estimate_size`](Self::estimate_size), because each bounds the other in a case the
     /// other gets wrong. The estimate over-reaches into padding and over a function with no
     /// symbol; the declared extent over-reaches when two symbols share one function (an
@@ -320,6 +368,9 @@ impl SymbolData {
     /// A zero estimate is treated as no estimate: a symbol placed exactly at the section's
     /// end has no bytes to derive from, and the debug info may still know its extent.
     pub fn extent(&self, object: &Object) -> Option<u64> {
+        if let Some(stated) = self.unwind_extent() {
+            return Some(stated);
+        }
         let estimate = self.estimate_size().filter(|&size| size != 0);
         match (self.debug_extent(object), estimate) {
             (Some(declared), Some(estimate)) => Some(declared.min(estimate)),
@@ -489,7 +540,7 @@ fn unwind_name(address: u64) -> String {
 /// real function's first byte.
 fn declared_code(
     file: &object::File<'_>,
-    sections: &HashMap<SectionIndex, Section>,
+    code: &[(Range<u64>, SectionIndex)],
     known: &mut HashSet<u64>,
     procedures: Vec<Procedure>,
     publics: Vec<Public>,
@@ -499,19 +550,6 @@ fn declared_code(
     if file.kind() == ObjectKind::Relocatable {
         return declared;
     }
-
-    // The address ranges code can be in. Only sections that were kept: one whose bytes would
-    // not decompress has nothing to disassemble either.
-    let code: Vec<(Range<u64>, SectionIndex)> = file
-        .sections()
-        .filter(|section| section.kind() == SectionKind::Text)
-        .filter_map(|section| {
-            let kept = sections.get(&section.index())?;
-            let length: u64 = kept.data.len().try_into().ok()?;
-            let end = kept.address.checked_add(length)?;
-            (length > 0).then_some((kept.address..end, section.index()))
-        })
-        .collect();
 
     let mut take = |name: String, mangled: bool, address: u64, size: u64| {
         let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
@@ -594,6 +632,25 @@ fn declared_code(
     declared
 }
 
+/// The address ranges code can be in, each with its section: what [`declared_code`] looks a
+/// declared address up in, and what places an unwind entry's range in its
+/// [`Section::unwind`]. Only sections that were kept — one whose bytes would not decompress
+/// has nothing to disassemble either — and only the ones with bytes.
+fn code_sections(
+    file: &object::File<'_>,
+    sections: &HashMap<SectionIndex, Section>,
+) -> Vec<(Range<u64>, SectionIndex)> {
+    file.sections()
+        .filter(|section| section.kind() == SectionKind::Text)
+        .filter_map(|section| {
+            let kept = sections.get(&section.index())?;
+            let length: u64 = kept.data.len().try_into().ok()?;
+            let end = kept.address.checked_add(length)?;
+            (length > 0).then_some((kept.address..end, section.index()))
+        })
+        .collect()
+}
+
 /// The address ranges an x86-64 PE's exception directory states: one `RUNTIME_FUNCTION`
 /// per function with unwind info, its begin and end RVAs read and its unwind-info RVA left
 /// alone, placed on the image base. Each is a **declaration of both ends** of a function —
@@ -657,6 +714,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                             address: section.address(),
                             data,
                             symbols: Vec::new(),
+                            unwind: Vec::new(),
                             relocations,
                             code: section.kind() == SectionKind::Text,
                             bias: biases.get(&section.index()).copied().unwrap_or(0),
@@ -695,11 +753,27 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
             // Declared code goes into the same sorted lists, because that list is what
             // `estimate_size` derives an extent from and a declaration carries none.
             let unwind = unwind_ranges(&file);
-            let declared =
-                declared_code(&file, &sections, &mut known, procedures, publics, &unwind);
+            let code = code_sections(&file, &sections);
+            let declared = declared_code(&file, &code, &mut known, procedures, publics, &unwind);
             for code in &declared {
                 if let Some(section) = sections.get_mut(&code.section) {
                     section.symbols.push(code.address);
+                }
+            }
+
+            // Every unwind entry's range goes to its section, whether or not its begin
+            // became a symbol: an export or a procedure at that address takes its extent
+            // from the end the entry states. Clamped to the section's bytes, so that end can
+            // never reach past what `bytes` can read.
+            for range in &unwind {
+                let Some((bounds, index)) = code
+                    .iter()
+                    .find(|(bounds, _)| bounds.contains(&range.start))
+                else {
+                    continue;
+                };
+                if let Some(section) = sections.get_mut(index) {
+                    section.unwind.push(range.start..range.end.min(bounds.end));
                 }
             }
 
@@ -712,6 +786,10 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                     // answer 0 for whichever of the two the search landed on.
                     section.symbols.sort_unstable();
                     section.symbols.dedup();
+                    // The unwind ranges likewise, by start: a table stating one function
+                    // twice is one function, and the search over them assumes it.
+                    section.unwind.sort_unstable_by_key(|range| range.start);
+                    section.unwind.dedup_by_key(|range| range.start);
                     (index, Arc::new(section))
                 })
                 .collect();
