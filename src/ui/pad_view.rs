@@ -369,11 +369,12 @@ impl PartialEq for OutputRows {
 
 /// One line, in the colour of the stream it came from.
 ///
-/// **As wide as the line is**, where every other row in this app is as wide as its pane:
-/// the row is what gives the list around it something to scroll sideways over, and it is
-/// exactly the width the `max_lines(1)` label measures to -- freya lays a one-line label
-/// out against `f32::MAX` and reports its longest line, so a row asking for its content's
-/// width gets the whole of the line and not the pane's share of it.
+/// **As wide as the line is**: the row is what gives the list around it something to
+/// scroll sideways over, and it is exactly the width the `max_lines(1)` label measures to
+/// -- freya lays a one-line label out against `f32::MAX` and reports its longest line, so
+/// a row asking for its content's width gets the whole of the line and not the pane's
+/// share of it. The code panes' rows scroll sideways the same way but are never narrower
+/// than their pane (`ui/width.rs`), because they carry a wash; this row carries none.
 ///
 /// The one thing that cannot change is the **height**, which is `code_row_height()`
 /// because that is the `item_size` the [`OutputPane`]'s `VirtualScrollView` steps by. That

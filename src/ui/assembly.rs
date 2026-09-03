@@ -444,6 +444,10 @@ pub(crate) struct SeparatorRow {
     /// The gutter's width for the whole symbol, and the lanes crossing this boundary.
     pub(crate) width: usize,
     pub(crate) arrows: RowArrows,
+    /// The listing's widest row and its key, as `InstructionRow` carries them: the rule
+    /// runs the width of the widest row, so the listing does not read as ending early.
+    pub(crate) widest: Widest,
+    pub(crate) listing: u64,
     pub(crate) key: DiffKey,
 }
 
@@ -459,10 +463,16 @@ impl Component for SeparatorRow {
         let shift = use_consume::<Shift>().0;
         let row = self.row;
         let width = self.width;
+        let (widest, listing) = (self.widest, self.listing);
 
         rect()
             .horizontal()
-            .width(Size::fill())
+            // As wide as the instruction rows are, so the rule inside it -- which fills
+            // the row -- runs as far as the widest row does. **Never measured**: what it
+            // holds is the gutter and that rule, and the rule is as wide as the row, so
+            // a separator reporting itself would report the row plus its gutter and the
+            // widest row would grow by a gutter's width every layout, without end.
+            .width(Widest::row_width(widest.floor(listing), listing))
             .height(Size::px(code_row_height()))
             // The same horizontal padding the instruction rows take. Without it the
             // gutter's lines step three pixels sideways at every boundary they cross.
@@ -504,6 +514,11 @@ pub(crate) struct InstructionRow {
     /// changes while it lives.
     pub(crate) controller: ScrollController,
     pub(crate) viewport: State<f32>,
+    /// The widest row the listing has drawn, and the listing's key in it, for this row to
+    /// be no narrower than and to report itself to. Out of the `PartialEq` for the same
+    /// reason: a row asks the state itself. See `ui/width.rs`.
+    pub(crate) widest: Widest,
+    pub(crate) listing: u64,
     /// Whether this instruction was compiled from a line of the source pane's picked-out
     /// run, and if so which of its edges end the run of such rows. Worked out by the list
     /// rather than read here, so that a run growing by a line leaves every row not on it
@@ -653,10 +668,17 @@ impl Component for InstructionRow {
                 .spans_iter(spans(tail, false).into_iter())
         });
 
+        let (widest, listing) = (self.widest, self.listing);
+
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .width(Size::fill())
+            // As wide as the pane or the listing's widest row, whichever is more, and
+            // what it holds measured under it -- which is what lets the list scroll
+            // sideways to a long operand while the wash still runs the whole width. The
+            // width reported is the content's, not the laid-out one: see `ui/width.rs`.
+            .width(Widest::row_width(widest.floor(listing), listing))
+            .on_sized(move |e: Event<SizedEventData>| widest.note(listing, e.inner_sizes.width))
             .height(Size::px(code_row_height()))
             // Horizontally only: the gutter's lines run to the row's own top and bottom
             // edges, and padding there would break every line in the column once per row.
@@ -802,6 +824,10 @@ impl Component for InstructionList {
         // asked for is on screen already. `VirtualScrollView` measures itself but keeps
         // the answer, so the rect wrapping it is measured here instead.
         let mut viewport = use_state(|| 0.0f32);
+        // The widest row drawn, under this disassembly's identity: what every row is at
+        // least as wide as, so the list scrolls sideways over a stable extent.
+        let widest = use_widest();
+        let listing = Widest::key(Arc::as_ptr(&self.assembly).addr());
 
         let data = AsmData {
             assembly: self.assembly.clone(),
@@ -922,6 +948,8 @@ impl Component for InstructionList {
                                     lanes: rows.data.lanes.boundary(below),
                                     lit,
                                 },
+                                widest,
+                                listing,
                                 key: DiffKey::None,
                             }
                             .key((true, address))
@@ -949,6 +977,8 @@ impl Component for InstructionList {
                             },
                             controller,
                             viewport,
+                            widest,
+                            listing,
                             key: DiffKey::None,
                         }
                         // Tagged, for the separators' sake: an address alone could be

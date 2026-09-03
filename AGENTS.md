@@ -147,6 +147,8 @@ command.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — eleven small stateless pieces of drawing shared by unrelated panes.
+- `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
+  it takes from that: what lets the code panes scroll sideways with their wash whole.
 
 Seven `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
 `project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`); the rest is in
@@ -224,6 +226,11 @@ it cost here, and whether it was reported. Add the note with the workaround.
 - `spawn` ties a task to the scope it was called in, and a task whose scope is unmounted is
   dropped — before its first poll, if that comes first. A handler on something the handler
   itself takes down (a context menu's item, which the press closes) has to `spawn_forever`.
+- A `VirtualScrollView` scrolls sideways only as far as the widest row it has built, so a
+  row that should be reachable sideways is never `width(Size::fill())`. It is not
+  `width(Size::auto())` with a `min_width` either: torin sizes an auto-width node from its
+  minimum *plus* its children. The code panes' rows take `Widest::row_width`
+  (`src/ui/width.rs`) and report their content through `on_sized`'s `inner_sizes`.
 
 ## Testing the UI
 

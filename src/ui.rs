@@ -105,6 +105,8 @@ mod state;
 pub(crate) use state::*;
 mod symbol_bar;
 pub(crate) use symbol_bar::*;
+mod width;
+pub(crate) use width::*;
 
 /// One of the two history buttons at the left of the toolbar: the step it makes, drawn as
 /// the chevron pointing that way, with the entry it would land on in its tooltip.

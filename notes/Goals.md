@@ -188,6 +188,8 @@ one item per part, so the unfinished half stays visible.
   keeps its place under the pointer, and a reader who has been nowhere yet can still see it is
   there. They read `Hist`, which is what repaints them as entries appear and as the cursor
   moves.
+- [ ] A file search dialog on Ctrl+P: type part of a path and open the file it names, the
+  way an editor's quick-open does.
 
 ## Assembly viewer
 
@@ -236,16 +238,20 @@ one item per part, so the unfinished half stays visible.
   copies what the row draws — the address column and the instruction
   with the relocation target's name in its operand — and the source copies the file's own
   lines.
-- [ ] Horizontal scroll in the assembly and the source pane. A row wider than the pane -- a
-  long source line, an instruction with a long relocation name -- is cut at the pane's edge
-  and cannot be reached. The scratchpad's run output already answers the same question
-  (`a_wide_output_line_is_reached_by_scrolling_sideways`): a `VirtualScrollView` scrolls
-  sideways as far as its widest drawn row, but only when the rows are measured to their
-  content, and both code panes' rows fill the pane (`width(Size::fill())`), which is what
-  makes their backgrounds -- the selection, the pair -- run the whole width. So a row wants
-  its text measured and its wash drawn to the pane's width, or the wash comes out as wide
-  as the text; and the gutter's strokes are positioned from the row's left edge and must
-  scroll with it.
+- [x] Horizontal scroll in the assembly and the source pane, and in an object's code. A row
+  wider than the pane -- a long source line, an instruction with a long relocation name --
+  was cut at the pane's edge and could not be reached: a `VirtualScrollView` scrolls
+  sideways as far as its widest *built* row, and a row filling the pane left it nothing. The
+  scratchpad's run output measures its rows to their content and has no wash to lose; the
+  code panes' rows carry the selection and the pair as their own background, so they take
+  freya's `CodeEditor`'s answer instead: every row of a listing is as wide as the pane or as
+  the widest row drawn so far, whichever is more (`src/ui/width.rs`), reporting its content
+  through `inner_sizes` and never its laid-out width, so narrowing the pane leaves no scroll
+  behind. A width and not a minimum, since torin sizes an auto-width node from its minimum
+  *plus* its children (`notes/upstream/freya.md`); the separator never reports, its rule
+  being as wide as the row; and the widest is held under the listing's identity, so a file
+  with short lines opened after one with a long line has nothing to scroll over. The gutter
+  is a child of the row and goes with it. Four headless tests, one per mechanism.
 - [ ] Text selection, of characters, in both the assembly and the source pane: drag across
   part of a line or across lines and Ctrl+C copies the text, the way an editor does, beside
   the row selection above, which stays for whole runs. Was deferred, with the cost read out

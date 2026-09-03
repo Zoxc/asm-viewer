@@ -30,6 +30,10 @@ struct SourceData {
     /// It travels here and through `new_with_data` rather than being captured by the
     /// builder closure, which is never compared across renders.
     drives: bool,
+    /// The widest row drawn, under the highlighted file's identity, and that key: what
+    /// every row is at least as wide as. Handles, so out of the `PartialEq` below.
+    widest: Widest,
+    listing: u64,
 }
 
 impl PartialEq for SourceData {
@@ -60,6 +64,9 @@ struct SourceRow {
     selected: bool,
     /// Whether a click here also drives the tab's assembly side. See [`SourceData`].
     drives: bool,
+    /// The listing's widest row and its key, as an `InstructionRow` carries them.
+    widest: Widest,
+    listing: u64,
     key: DiffKey,
 }
 
@@ -117,10 +124,16 @@ impl Component for SourceRow {
             })
             .collect::<Vec<_>>();
 
+        let (widest, listing) = (self.widest, self.listing);
+
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .width(Size::fill())
+            // As wide as the pane or the file's widest row drawn, whichever is more, the
+            // line measured under it: the list scrolls sideways to a long line, and the
+            // wash still runs the whole width. See `ui/width.rs`.
+            .width(Widest::row_width(widest.floor(listing), listing))
+            .on_sized(move |e: Event<SizedEventData>| widest.note(listing, e.inner_sizes.width))
             .height(Size::px(code_row_height()))
             .padding(3.0)
             .assembly_font()
@@ -244,6 +257,9 @@ impl Component for SourceList {
 
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);
+        // The widest row drawn, under the highlighted file's identity.
+        let widest = use_widest();
+        let listing = Widest::key(Arc::as_ptr(&self.source.0).addr());
 
         let length = self.source.0.lines;
         // The tab and not the file: see `SourceList::document`.
@@ -336,6 +352,8 @@ impl Component for SourceList {
                                 // A source-driven tab's subject is the file its own
                                 // document names; a companion's tab is a symbol's.
                                 drives: matches!(self.document, Document::Source(_)),
+                                widest,
+                                listing,
                             },
                             |i, data: &SourceData| {
                                 let paired_at = |row: usize| data.pairs.contains(&(row as u32 + 1));
@@ -346,6 +364,8 @@ impl Component for SourceList {
                                     paired: paired_at(i).then(|| Edges::of(i, paired_at)),
                                     selected: data.rows.is_some_and(|rows| rows.contains(i)),
                                     drives: data.drives,
+                                    widest: data.widest,
+                                    listing: data.listing,
                                     key: DiffKey::None,
                                 }
                                 .key(i)

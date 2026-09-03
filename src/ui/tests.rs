@@ -4037,6 +4037,353 @@ fn scrolling_past_a_separator_keeps_every_row_its_own() {
     );
 }
 
+/// `sum_to`, shown: the fixture's one function with branches inside it, so its listing has
+/// a gutter and two separators, and rows wider than a 250px pane.
+fn shown_sum_to() -> Shown {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to),
+    }
+}
+
+/// Every rect drawn in `color`, by its box.
+fn rects_with(test: &TestingRunner, color: Color) -> Vec<Area> {
+    test.find_many(move |node, element| {
+        (element.style().background == Fill::Color(color)).then_some(node.layout().area)
+    })
+}
+
+/// Every paragraph drawn, by its box: a source line's text and an instruction's operands
+/// are paragraphs where an address or a line number is a label.
+fn paragraph_boxes(test: &TestingRunner) -> Vec<Area> {
+    use freya::elements::paragraph::ParagraphElement;
+    use std::any::Any;
+
+    test.find_many(|node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<ParagraphElement>()
+            .map(|_| node.layout().area)
+    })
+}
+
+/// The right edge of the widest text drawn: the furthest any label or paragraph reaches.
+fn content_right(test: &TestingRunner) -> f32 {
+    labels_with_areas(test)
+        .into_iter()
+        .map(|(_, area)| area)
+        .chain(paragraph_boxes(test))
+        .map(|area| area.max_x())
+        .fold(0.0, f32::max)
+}
+
+/// The gutter's vertical strokes, by their box: see
+/// `every_lane_gets_a_column_of_its_own`.
+fn lane_strokes(test: &TestingRunner) -> Vec<Area> {
+    let height = code_row_height();
+    test.find_many(move |node, element| {
+        let area = node.layout().area;
+        (element.style().background == Fill::Color(palette().branch_fg)
+            && area.width() == BRANCH_STROKE
+            && area.height() >= height / 2.0)
+            .then_some(area)
+    })
+}
+
+/// The leftmost of `areas`.
+fn leftmost(areas: &[Area]) -> f32 {
+    areas
+        .iter()
+        .map(|area| area.min_x())
+        .fold(f32::MAX, f32::min)
+}
+
+/// An instruction too wide for the Assembly pane is reached by scrolling sideways, and
+/// its gutter goes with it.
+///
+/// The load-bearing assertion is the wheel. A row measured to its content is what gives
+/// the list something wider than its viewport to scroll over; a row filling the pane
+/// leaves the two the same width, and freya scrolls a list no further than its content
+/// goes -- so with the row filling the pane the wheel below moves nothing. The gutter is
+/// a child of the row and its strokes are placed from the gutter's own left edge, so it
+/// moves exactly as far as the addresses do.
+#[test]
+fn a_wide_instruction_is_reached_by_scrolling_sideways() {
+    let shown = shown_sum_to();
+    let (mut test, _) = TestingRunner::new(
+        listing_harness,
+        (250., 300.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+
+    // The premise: a row reaches past the pane, and the gutter is drawn.
+    let right = content_right(&test);
+    assert!(
+        right > 250.0,
+        "no row is wider than the pane, so the wheel below proves nothing: {right}"
+    );
+    let strokes = lane_strokes(&test);
+    assert!(
+        !strokes.is_empty(),
+        "no lane is drawn in the rows on screen"
+    );
+    let addresses = labels_with_areas(&test)
+        .into_iter()
+        .filter(|(text, _)| text.trim_end().len() == 16)
+        .map(|(_, area)| area)
+        .collect::<Vec<_>>();
+    assert!(!addresses.is_empty());
+    let (labels_before, strokes_before) = (leftmost(&addresses), leftmost(&strokes));
+
+    test.scroll((125., 150.), (-150., 0.));
+    settle(&mut test);
+
+    let addresses = labels_with_areas(&test)
+        .into_iter()
+        .filter(|(text, _)| text.trim_end().len() == 16)
+        .map(|(_, area)| area)
+        .collect::<Vec<_>>();
+    let strokes = lane_strokes(&test);
+    let (labels_after, strokes_after) = (leftmost(&addresses), leftmost(&strokes));
+    assert!(
+        labels_after < labels_before - 100.0,
+        "the sideways wheel moved nothing: {labels_after} against {labels_before}"
+    );
+    assert_eq!(
+        strokes_after - strokes_before,
+        labels_after - labels_before,
+        "the gutter did not scroll with its rows"
+    );
+}
+
+/// A line too wide for the Source pane is reached by scrolling sideways: the other pane,
+/// and the other kind of row, of the test above.
+#[test]
+fn a_wide_source_line_is_reached_by_scrolling_sideways() {
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("wide.c");
+    std::fs::write(&path, format!("int x;\n// {}\nint y;\n", "x".repeat(400)))
+        .expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let (mut test, _states, _showing) = source_file_harness(&file, (300., 200.));
+
+    let widest = |test: &TestingRunner| {
+        paragraph_boxes(test)
+            .into_iter()
+            .max_by(|a, b| a.width().total_cmp(&b.width()))
+            .expect("a line is drawn")
+    };
+    let before = widest(&test);
+    // The premise: the paragraph measures to its whole line. It did before too -- a
+    // paragraph inside a row filling the pane measured itself out past the row; it was
+    // the row around it that left the list nothing wider than itself to scroll over.
+    assert!(
+        before.width() > 300.0,
+        "the line was cut to the pane instead of measured: {before:?}"
+    );
+
+    test.scroll((150., 100.), (-150., 0.));
+    settle(&mut test);
+
+    let after = widest(&test);
+    assert_eq!(
+        after.width(),
+        before.width(),
+        "scrolling re-measured the line"
+    );
+    assert!(
+        after.min_x() < before.min_x() - 100.0,
+        "the sideways wheel moved nothing: {after:?} against {before:?}"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A picked-out row's wash runs as wide as the widest row drawn, and no wider than the
+/// pane where nothing overflows it.
+///
+/// The wash is the row's own background, so a row measured to its content would wash
+/// only as far as its text; every row is floored to the widest instead, the pane's width
+/// being the floor's own floor. The block rule between two blocks fills its row, so it
+/// runs as far too. The two halves fail for opposite reasons: with plain content-sized
+/// rows the first is short, and with the pane's width folded into the floor the second is
+/// long.
+#[test]
+fn a_picked_rows_wash_runs_as_wide_as_the_widest_row() {
+    let wash_at = |width: f32| {
+        let shown = shown_sum_to();
+        let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+            listing_harness,
+            (width, 300.).into(),
+            |runner| listing_states!(runner, shown),
+            1.,
+        );
+        let mut marked = marked;
+        settle(&mut test);
+        // The first row, `push rbp`: the shortest an instruction row gets.
+        marked.set(Marks {
+            assembly: Some(picked_row(
+                0,
+                "/fixture/line_fixture.c",
+                Owed::by(Pane::Source),
+            )),
+            source: None,
+        });
+        settle(&mut test);
+        let wash = rects_with(&test, palette().row_select_bg);
+        assert_eq!(wash.len(), 1, "one row is picked out: {wash:?}");
+        let rules = rects_with(&test, palette().block_rule);
+        assert!(
+            !rules.is_empty(),
+            "no block rule is drawn in the rows on screen"
+        );
+        (wash[0], rules, content_right(&test))
+    };
+
+    // Narrow: the wash reaches as far as the widest row does, and so does every rule.
+    let (wash, rules, right) = wash_at(250.);
+    assert!(
+        right > 250.0,
+        "no row is wider than the pane, so the wash proves nothing: {right}"
+    );
+    assert!(
+        wash.max_x() >= right,
+        "the wash stops at {} where the widest row reaches {right}",
+        wash.max_x()
+    );
+    for rule in rules {
+        assert!(
+            rule.max_x() >= right - 1.0,
+            "a block rule stops at {} where the widest row reaches {right}",
+            rule.max_x()
+        );
+    }
+
+    // Wide: the wash is the pane's and no more.
+    let (wash, _rules, right) = wash_at(600.);
+    assert!(right < 600.0, "a row is wider than the pane: {right}");
+    assert!(
+        wash.width() > 500.0 && wash.max_x() <= 600.0,
+        "the wash is not the pane's width: {wash:?}"
+    );
+}
+
+/// The file the Source pane shows, as a state the test moves.
+#[derive(Clone)]
+struct Showing(State<Arc<str>>);
+
+/// The Source pane over whatever file [`Showing`] names.
+fn showing_harness() -> impl IntoElement {
+    let showing = use_consume::<Showing>().0;
+    rect().expanded().child(SourcePane {
+        document: Document::Source(showing.read().clone()),
+    })
+}
+
+/// The Source pane over `file`, with the contexts its rows read, in a window `size`,
+/// the file's document activated so the tab's place-keeping sees it open.
+fn source_file_harness(
+    file: &Arc<str>,
+    size: (f32, f32),
+) -> (TestingRunner, ProjectStates, State<Arc<str>>) {
+    let (mut test, (states, showing)) = TestingRunner::new(
+        showing_harness,
+        size.into(),
+        {
+            let file = file.clone();
+            move |runner| {
+                let states = project_states!(runner);
+                runner.provide_root_context(|| Marked(State::create(Marks::default())));
+                runner.provide_root_context(|| Shift(State::create(false)));
+                runner.provide_root_context(|| CodeRows(State::create(None)));
+                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
+                runner.provide_root_context(|| Locations(State::create(Located::default())));
+                let showing = runner
+                    .provide_root_context(|| Showing(State::create(file.clone())))
+                    .0;
+                (states, showing)
+            }
+        },
+        1.,
+    );
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Source(file.clone())),
+        Visit::Went,
+    );
+    settle(&mut test);
+    (test, states, showing)
+}
+
+/// The widest row is the widest row **of this listing**: a pane moved from a file with a
+/// long line to one whose lines all fit has nothing to scroll sideways over.
+///
+/// The list is one component across the switch, and the widest row it holds is kept under
+/// the file's identity: a key that no longer matches is a floor of nothing. Without that
+/// the second file's rows would still be floored to the first's widest, and the wheel
+/// below would move them.
+#[test]
+fn a_listings_extent_does_not_outlive_it() {
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let wide = directory.join("wide.c");
+    std::fs::write(&wide, format!("// {}\nint x;\n", "x".repeat(400)))
+        .expect("writing the source file");
+    let narrow = directory.join("narrow.c");
+    std::fs::write(&narrow, "int y;\nint z;\n").expect("writing the source file");
+    let wide: Arc<str> = Arc::from(wide.to_str().expect("a utf-8 temporary path"));
+    let narrow: Arc<str> = Arc::from(narrow.to_str().expect("a utf-8 temporary path"));
+    let (mut test, states, mut showing) = source_file_harness(&wide, (300., 200.));
+
+    // The line numbers: the one label every row of either file draws.
+    let numbers = |test: &TestingRunner| {
+        labels_with_areas(test)
+            .into_iter()
+            .filter(|(text, _)| text.ends_with('\u{a0}'))
+            .map(|(_, area)| area)
+            .collect::<Vec<_>>()
+    };
+
+    let before = leftmost(&numbers(&test));
+    test.scroll((150., 100.), (-150., 0.));
+    settle(&mut test);
+    let scrolled = leftmost(&numbers(&test));
+    assert!(
+        scrolled < before - 100.0,
+        "the wide file did not scroll sideways: {scrolled} against {before}"
+    );
+
+    showing.set(narrow.clone());
+    activate(
+        states.open,
+        states.history,
+        Some(Document::Source(narrow.clone())),
+        Visit::Went,
+    );
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "2\u{a0}"),
+        "the second file is not shown: {drawn:?}"
+    );
+
+    let before = leftmost(&numbers(&test));
+    test.scroll((150., 100.), (-150., 0.));
+    settle(&mut test);
+    let after = leftmost(&numbers(&test));
+    assert_eq!(
+        after, before,
+        "the second file scrolled sideways over the first file's widest row"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// Pressing a branch's displacement puts the row it lands on on screen **and picks that
 /// row out** -- the run a press on the target row itself would have made, of the file the
 /// target was compiled from, with the Source pane owed the scroll and the Assembly pane

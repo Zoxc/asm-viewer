@@ -168,6 +168,35 @@ paired rows wears a rule a step deeper along its top and its bottom (`pair_borde
 rows at either end, which each list works out from its neighbours: `Edges::of`), so a block of
 them is told from the pane where the wash alone is faint. Nothing else lights a row: no hover,
 no pin.
+
+**Every row of a listing is as wide as the pane or as the widest row the listing has drawn,
+whichever is more** (`Widest`, `src/ui/width.rs`), which is what lets both panes scroll
+sideways. A `VirtualScrollView` already scrolls on x -- the wheel's `delta_x`, Shift and the
+wheel, a horizontal scrollbar -- but only as far as the widest row it has *built*, and a row
+filling the pane leaves it nothing. A row measured to its content would give it that and lose
+the wash, which is the row's own background. So the rows follow freya's own `CodeEditor`, which
+gives every line one width: one `State` per list holds the widest content any row has reported
+under the listing's key, every row takes `max(pane, widest)` as its width through a `Size::Fn`,
+and reports its own content -- `on_sized`'s `inner_sizes`, the children plus padding, never
+the laid-out width, or narrowing the pane would leave a sideways scroll over nothing. Three
+things are load-bearing. **It is a width and not a minimum**: torin sizes an auto-width node
+from its minimum *plus* its children (`notes/upstream/freya.md`), so `width(auto)` under a
+`min_width` of the pane came out the pane and the content again; the cost of the width is one
+layout, a row wider than anything drawn being cut until it has reported. **The separator never
+reports**: its rule fills the row, so it would report the row plus its gutter and the widest
+would grow by a gutter every layout without end. **The key is the identity of what outlives
+the rows** -- the disassembly, the highlighted file, the *object* for the section view, whose
+`Built` is rebuilt every generation -- hashed with the mono font's size; a key that no longer
+matches is a floor of nothing, which is the reset, made without an effect: the old listing's
+rows drop to the pane's width on the new one's first render and report again. The extent is
+therefore the widest row **drawn so far**, as the scratchpad's run output's is: a wide row
+further down is reached once the reader has scrolled to it. The editor's own estimate -- the
+most characters on a line times a `W` -- was not taken: it needs Skia on the UI thread, is
+wrong for tabs and double-width glyphs, and an object's code cannot know its widest line
+before the worker has decoded it. Four tests pin it, one per mechanism: the wheel moving a
+wide instruction and its gutter together, the wheel moving a wide source line, a picked-out
+row's wash reaching the widest row and no further than the pane where nothing overflows, and
+a listing's extent not outliving it.
 There was a pin, and a hover; both went in one step (`notes/Goals.md`), because the hover said
 what the pointer already says and a pin was a second selection under another name, and one
 selection for the window meant picking out an instruction lost the run on the source side. Three
@@ -267,7 +296,9 @@ is the run's own end. A corner's half-stroke now ends at the *far* edge of that 
 its centre line, so the joint is filled to the pixel instead of stopping inside the run behind an
 antialiased edge. All of it is relative to the gutter's own origin, which nothing inside a row can
 see: at 1× and 2× every offset above it is a whole number, and at 1.5× the pane's own padding
-decides. `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the axis-aligned ones on a
+decides. The gutter is a child of the row, so a sideways scroll carries it with the addresses
+-- by a whole number of pixels, the scroll offset being an `i32` -- and the strokes stay on the
+grid. `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the axis-aligned ones on a
 26-pixel row, that being the even height the old placement was worst on. The rule a separator
 row draws goes on the grid the same way and from the same answer — `Grid::stroke` over the
 middle of a row — so a rule and a horizontal run crossing one row sit in the same device

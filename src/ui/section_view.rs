@@ -222,6 +222,10 @@ struct TextRow {
     /// shape, which no instruction row has, so a page of data is not taken for a page of
     /// assembly. Said in the row's shape and not in a colour.
     mark: Option<&'static str>,
+    /// The listing's widest row and its key, as every row of a listing carries them:
+    /// a gap's bytes are the widest row in the app, and what the others are floored to.
+    widest: Widest,
+    listing: u64,
     key: DiffKey,
 }
 
@@ -280,11 +284,14 @@ impl Component for TextRow {
         // listing of an object's code has no pair to light.
         let link = opens.is_some() && ctrl();
         let background = row_background(false, self.selected);
+        let (widest, listing) = (self.widest, self.listing);
 
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .width(Size::fill())
+            // Sized and measured as an instruction row is: see `ui/width.rs`.
+            .width(Widest::row_width(widest.floor(listing), listing))
+            .on_sized(move |e: Event<SizedEventData>| widest.note(listing, e.inner_sizes.width))
             .height(Size::px(code_row_height()))
             .padding(Gaps::new_symmetric(0.0, 3.0))
             .assembly_font()
@@ -370,6 +377,9 @@ impl Component for TextRow {
 struct EmptyRow {
     row: usize,
     selected: bool,
+    /// The listing's widest row and its key: empty space is washed too.
+    widest: Widest,
+    listing: u64,
     key: DiffKey,
 }
 
@@ -384,9 +394,11 @@ impl Component for EmptyRow {
         let marked = use_consume::<Marked>().0;
         let shift = use_consume::<Shift>().0;
         let row = self.row;
+        let (widest, listing) = (self.widest, self.listing);
 
         rect()
-            .width(Size::fill())
+            // Nothing to measure: as wide as the pane, or as the widest row.
+            .width(Widest::row_width(widest.floor(listing), listing))
             .height(Size::px(code_row_height()))
             .background(row_background(false, self.selected))
             .on_pointer_down(move |e: Event<PointerEventData>| {
@@ -441,6 +453,10 @@ impl Component for SectionList {
         let a11y = use_a11y();
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);
+        // The widest row drawn, under the object's identity and not the rows': `Built`
+        // is made afresh as every stretch lands, and the listing is the same one.
+        let widest = use_widest();
+        let listing = Widest::key(Arc::as_ptr(&self.object).addr());
         // The rows, produced by the place-keeping effect and rendered from here, so that
         // new rows and the offset that keeps the reader's place under them land together.
         let rows = use_consume::<CodeRows>().0;
@@ -539,7 +555,9 @@ impl Component for SectionList {
                         touching,
                         marks,
                     },
-                    move |i, data: &SectionRows| build_row(i, data, controller, viewport),
+                    move |i, data: &SectionRows| {
+                        build_row(i, data, controller, viewport, widest, listing)
+                    },
                     controller,
                 )
                 .length(length)
@@ -555,6 +573,8 @@ fn build_row(
     data: &SectionRows,
     controller: ScrollController,
     viewport: State<f32>,
+    widest: Widest,
+    listing: u64,
 ) -> Element {
     let Some(rows) = data.rows.as_ref() else {
         return rect().height(Size::px(code_row_height())).into_element();
@@ -584,6 +604,8 @@ fn build_row(
             selected,
             opens,
             mark,
+            widest,
+            listing,
             key: DiffKey::None,
         }
         .key(key)
@@ -626,6 +648,8 @@ fn build_row(
         Some(Row::Empty { stretch, index }) => EmptyRow {
             row: i,
             selected,
+            widest,
+            listing,
             key: DiffKey::None,
         }
         .key(RowKey::Empty(rows.start_of(stretch).unwrap_or(0), index))
@@ -673,6 +697,8 @@ fn build_row(
                 row: i,
                 controller,
                 viewport,
+                widest,
+                listing,
                 paired,
                 selected,
                 key: DiffKey::None,
@@ -697,6 +723,8 @@ fn build_row(
                     lanes: asm.lanes.boundary(below),
                     lit,
                 },
+                widest,
+                listing,
                 key: DiffKey::None,
             }
             .key(RowKey::Sep(address))

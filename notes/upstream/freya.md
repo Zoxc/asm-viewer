@@ -70,3 +70,18 @@ without Ctrl on the way down and with Ctrl on the way up, so the app's Ctrl was 
 press and left set by the release. `ModifierKeys` (`src/ui/marks.rs`) learns such a Caps Lock from
 its first release. The fix upstream is either forwarding `ModifiersChanged` as a global event or
 carrying the current modifiers on pointer events. Not reported yet.
+
+## torin sizes an auto-width node from its minimum plus its children
+
+`torin 0.4.3`, `measure.rs`: a node's area starts as `min_max(padding, …, minimum_width, …)`
+(`:192`), so under a `min_width` it starts *at the minimum*; a horizontal parent whose width
+is `Inner` then adds every child's width to that (`stack_child`, `:1123`: `parent_area.size.width
++= child_area.size.width`), and the `min_max` re-applied afterwards (`:381`) floors a sum that
+is already past the floor. A `rect().horizontal().width(Size::auto()).min_width(Size::px(290.))`
+holding 107px of labels comes out 397px wide, not 290. A measurer node (a label) is not
+affected: its `min_max` runs over the measured size (`:258`). What it cost here: the code
+panes' rows, which wanted to be "their content, but never narrower than the pane", are given
+that as a `Size::Fn` **width** instead and report their content through `on_sized`'s
+`inner_sizes` (`src/ui/width.rs`), which costs a wide row one layout before it is drawn whole.
+`a_picked_rows_wash_runs_as_wide_as_the_widest_row` would catch the minimum coming back. Not
+reported yet.
