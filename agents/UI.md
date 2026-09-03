@@ -1,28 +1,25 @@
 # The UI: freya, state, documents and the dock
 
 The shape of the UI: what freya 0.4 is and is not, the root contexts, what a document is, how the
-dock holds one, what each tab remembers, and how a binary is opened. The worker, the two panes,
-the sidebar, the appearance and the scratchpad each have a note of their own beside this one.
+dock holds one, what each tab remembers, and how a binary is opened. The worker, the two panes, the
+sidebar, the appearance and the scratchpad each have a note of their own beside this one.
 
 ## The UI is a directory
 
-The UI is a directory, and each of its files is a **cut out of what was one 8 700-line
-`ui.rs`** rather than a boundary designed from scratch — what each holds is what that file's
-section banners and `AGENTS.md`'s layout list already said belonged together. Two mechanical points
-carry across all of them and are written out in `src/ui.rs`'s own `//!` header: the imports
-there are `pub(crate) use` and every file begins `use super::*;`, so each keeps the set of
-names it had as a section; and each `mod x;` is followed by a `pub(crate) use x::*;`, so a
-name means what it always meant wherever it is written. Visibility is what the compiler
-asked for and no more, so the annotations *are* the list of what crosses a boundary.
+The UI is a directory cut out of what was one `ui.rs`; `AGENTS.md`'s layout list says what each file
+holds. Two mechanical points carry across all of them and are written out in `src/ui.rs`'s own `//!`
+header. The imports there are `pub(crate) use` and every file begins `use super::*;`, so each keeps
+the set of names it had as a section. And each `mod x;` is followed by a `pub(crate) use x::*;`, so
+a name means what it always meant wherever it is written. Visibility is what the compiler asked for
+and no more, so the annotations *are* the list of what crosses a boundary.
 
-Seven of the names are not the obvious one, and each avoids shadowing a crate module the
-prelude has already brought in: `ui::source_view` (not `source`), `ui::project_view` (not
-`project`), `ui::filter_bar` (not `filter`), `ui::bookmarks_view` (not `bookmarks`),
-`ui::files_view` (not `files`), `ui::pad` (not `scratchpad`) and `ui::analyzed` (not `analysis`,
-which is the crate `ui/tests.rs` calls into). One name genuinely collides:
-`freya::prelude` exports a `use_theme` of its own, so `ui/tests.rs` names ours explicitly —
-an explicit import wins over a glob, and that line is the disambiguation rather than a
-duplicate.
+Seven of the names are not the obvious one, and each avoids shadowing a crate module the prelude has
+already brought in: `ui::source_view` (not `source`), `ui::project_view` (not `project`),
+`ui::filter_bar` (not `filter`), `ui::bookmarks_view` (not `bookmarks`), `ui::files_view` (not
+`files`), `ui::pad` (not `scratchpad`) and `ui::analyzed` (not `analysis`, which is the crate
+`ui/tests.rs` calls into). One name genuinely collides: `freya::prelude` exports a `use_theme` of
+its own, so `ui/tests.rs` names ours explicitly. An explicit import wins over a glob, and that line
+is the disambiguation rather than a duplicate.
 
 ## Framework and state
 
@@ -32,476 +29,448 @@ describes the older API and does not apply.
 
 **A `Component` carries no identity of its own.** `ComponentKey::default_key` hashes
 `TypeId::of::<Self>()` and nothing else (`freya-core`'s `element.rs`), and a scope is re-rendered
-only when its key or its props changed (`runner.rs:812`) — so every sibling of one type answers
-with the same key, and a list of them gives the diff nothing to tell two rows apart by. `.key(..)`
-comes from `KeyExt`, which the built-in elements implement and a component does not, so a
-component takes a key only where it is given somewhere to put one: the twelve keyed components
-here (`InstructionRow`, `SourceRow`, `SymbolRow`, `PadRow` and the rest) each hold a `DiffKey`
-field, implement `KeyExt::write_key` over it, and answer `render_key` with
-`self.key.clone().or(self.default_key())` — `.key(..)` writes the field and the `or` leaves the
+only when its key or its props changed (`runner.rs:812`). So every sibling of one type answers with
+the same key, and a list of them gives the diff nothing to tell two rows apart by. `.key(..)` comes
+from `KeyExt`, which the built-in elements implement and a component does not, so a component takes
+a key only where it is given somewhere to put one. The twelve keyed components here
+(`InstructionRow`, `SourceRow`, `SymbolRow`, `PadRow` and the rest) each hold a `DiffKey` field,
+implement `KeyExt::write_key` over it, and answer `render_key` with
+`self.key.clone().or(self.default_key())`: `.key(..)` writes the field and the `or` leaves the
 type's own key standing where a call site gives none. What goes into it is whatever identifies
 *that* row: an `Arc::as_ptr(..).addr()`, an instruction's address, an index.
 
 **A `Writable<T>` compares equal to every other one.** Its `eq` returns `true` outright
-(`freya-core`'s `lifecycle/writable.rs`), there being nothing to compare in the four closures it
-is; a `Readable<T>` made from a `State` or a `Memo` is the same, and only one made out of a
-plain value compares by value (`readable.rs:92,102`). Handing one down as a prop therefore never
-re-renders the component holding it, which is what makes a *mapped* one a hazard rather than a
-convenience: `into_writable().map(..)` captures its way in — a field of a `Filter`,
-`dependencies[index]` — and the component keeps the closures it was first given. A mapping that
-can change is safe only where the component holding it is unmounted when it does, which is what
-the scratchpad's editor and its dependency rows arrange (`agents/Scratchpad.md`), and never by
-handing it a new one.
+(`freya-core`'s `lifecycle/writable.rs`), there being nothing to compare in the four closures it is.
+A `Readable<T>` made from a `State` or a `Memo` is the same, and only one made out of a plain value
+compares by value (`readable.rs:92,102`). Handing one down as a prop therefore never re-renders the
+component holding it, which is what makes a *mapped* one a hazard rather than a convenience:
+`into_writable().map(..)` captures its way in (a field of a `Filter`, `dependencies[index]`) and the
+component keeps the closures it was first given. A mapping that can change is safe only where the
+component holding it is unmounted when it does, which is what the scratchpad's editor and its
+dependency rows arrange (`agents/Scratchpad.md`), and never by handing it a new one.
 
-**`prevent_default` cancels the events an event derives; `stop_propagation` stops it bubbling.**
-One platform event becomes a queue of tree events, and a handler calling `prevent_default` makes
-the executor drop from the rest of that queue everything the emitted event names as cancellable
-(`ragnarok`'s `executor.rs:72-90`, over the table at `freya-core`'s `events/name.rs:179-219`): a
-`PointerPress` — which is what `on_press` is built on — cancels the `MouseUp` and the
-`GlobalPointerPress` beside it, a `MouseDown` its `PointerDown` and `GlobalPointerDown`, a
+**`prevent_default` cancels the events an event derives; `stop_propagation` stops it bubbling.** One
+platform event becomes a queue of tree events, and a handler calling `prevent_default` makes the
+executor drop from the rest of that queue everything the emitted event names as cancellable
+(`ragnarok`'s `executor.rs:72-90`, over the table at `freya-core`'s `events/name.rs:179-219`). A
+`PointerPress`, which is what `on_press` is built on, cancels the `MouseUp` and the
+`GlobalPointerPress` beside it; a `MouseDown` cancels its `PointerDown` and `GlobalPointerDown`; a
 `KeyDown` its `GlobalKeyDown`. That is the whole of how the filter bar's toggles keep an `Input`'s
 keyboard focus (`agents/Sidebar.md`), and it is the derivation `agents/Headless.md` works out for
 the `Menu` question read the other way. `stop_propagation` is the other axis and no substitute: it
-stops the walk up the ancestors, which for an event that does not bubble — a move, an enter, a
-leave, a global, a capture (`name.rs:248-254`) — is nothing at all.
+stops the walk up the ancestors, which for an event that does not bubble (a move, an enter, a leave,
+a global, a capture; `name.rs:248-254`) is nothing at all.
 
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
-`use_consume`: `Objects`, `Active` (the active tab and the `Document` it shows), `Open` (the open
-tabs and the trail behind each), `AsmAt`/`SrcAt` (where each *side* of each place on each of
-those trails was left), `CodeAt` (where each code tab's places were left, as addresses),
-`Visited` (everywhere the reader has been), `Bookmarked` (the project's bookmarks, in their saved
-shape), `Proj` (which project all of that belongs to), `Loading` (the files on their way into
-`Objects`), `Marked` (each pane's picked-out run, and what it owes the other) with `Shift`
-and `Ctrl`, `MarksAt` (what each place on each trail had picked out in each pane when it was
-last shown, put back with the place and never saved), `Land` (a line and an instruction to pick
-out the moment a document arrives), `Plant` (the instruction half of that, left for the listing
-that draws the document, its rows coming after it), `CodeRows` (the section
-view's rows, which the Source pane beside it reads too), `Analysis` (what
-the worker has to say about the selected symbol), `Sections`/`Window` (what it has decoded of the
-object whose code is on screen, and the stretches the view wants next), `Locations` (every symbol
-the line, or the function around it, last asked about was compiled into), `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad),
-`SplitRatio`/`Splits` (how wide a document's leading side is), plus the memos `Symbols` and
-`Active`. The eleven that a project *owns* travel together as a `ProjectStates`, since a project
-switch closes all of them and reopens all of them -- `MarksAt` among them for the closing and
-not the reopening, being the one that is never saved.
+`use_consume`: `Objects`; `Active` (the active tab and the `Document` it shows); `Open` (the open
+tabs and the trail behind each); `AsmAt`/`SrcAt` (where each *side* of each place on each of those
+trails was left); `CodeAt` (where each code tab's places were left, as addresses); `Visited`
+(everywhere the reader has been); `Bookmarked` (the project's bookmarks, in their saved shape);
+`Proj` (which project all of that belongs to); `Loading` (the files on their way into `Objects`);
+`Marked` (each pane's selected run, and what it owes the other) with `Shift` and `Ctrl`; `MarksAt`
+(what each place on each trail had selected in each pane when it was last shown, put back with the
+place and never saved); `Land` (a line and an instruction to select the moment a document arrives);
+`Plant` (the instruction half of that, left for the listing that draws the document, its rows coming
+after it); `CodeRows` (the section view's rows, which the Source pane beside it reads too);
+`Analysis` (what the worker has to say about the selected symbol); `Sections`/`Window` (what it has
+decoded of the object whose code is on screen, and the stretches the view wants next); `Locations`
+(every symbol the line, or the function around it, last asked about was compiled into);
+`Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad); `SplitRatio`/`Splits`
+(how wide a document's leading side is); plus the memos `Symbols` and `Active`. The eleven that a
+project *owns* travel together as a `ProjectStates`, since a project switch closes all of them and
+reopens all of them. `MarksAt` is among them for the closing and not the reopening, being the one
+that is never saved.
 
-**One strip, three kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**:
-`Document::Assembly(Selection)` — an object or a function — `Document::Source(Arc<str>)`, a
-file as a string and not a `PathBuf`: the spelling the debug info said, or the project directory
-joined with a Files row's entries, which is deliberately the same spelling and is never
-canonicalised (`agents/Sidebar.md`), or
-`Document::Code(Arc<Object>)`, **all of one object's code** as one listing with the symbols drawn
-as labels inside it (`agents/Panes.md`). A tab has two sides, assembly and source, and the
-variant says which side the tab is *about* and therefore which drives the other; an object's code
-is assembly-driven like a function's tab. It is one document per object, compared by the object's
-pointer, and where the reader was in it is the tab's position and not its identity — a place in
-it at an address is that tab landed there, which is also what a call target with no symbol will
-open. Pressing an object in the Objects list opens it; the object tab `Selection::Object` opened
-until then drew nothing but "No symbol selected", stays a valid document (restorable, and the
-shape the file-tab goal in `notes/Goals.md` will fill) and has no door for now. So opening a file from a directory panel and opening a function from the symbol list
-produce the same kind of thing, differing only in which way the mapping runs. Each tab wears the
-one glyph that tells the two apart — the same pair the Assembly and Source views wore before those
-two became a document's left and right halves. Until Step 1 this was two strips with two notions of what was open — `Open`/`Sel` for
-functions and `Files`/`Shown` for files — and the merge is what made the history able to record a
-visited file and the session able to keep the strip's interleaved order.
+**One strip, three kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**.
+`Document::Assembly(Selection)` is an object or a function. `Document::Source(Arc<str>)` is a file
+as a string and not a `PathBuf`: the spelling the debug info said, or the project directory joined
+with a Files row's entries, which is deliberately the same spelling and is never canonicalised
+(`agents/Sidebar.md`). `Document::Code(Arc<Object>)` is **all of one object's code** as one listing
+with the symbols drawn as labels inside it (`agents/Panes.md`). A tab has two sides, assembly and
+source, and the variant says which side the tab is *about* and therefore which drives the other; an
+object's code is assembly-driven like a function's tab. It is one document per object, compared by
+the object's pointer, and where the reader was in it is the tab's position and not its identity: a
+place in it at an address is that tab landed there, which is also what a call target with no symbol
+will open. Pressing an object in the Objects list opens it. `Selection::Object`, the object tab that
+draws only "No symbol selected", stays a valid document (restorable, and the shape the file-tab goal
+in `notes/Goals.md` will fill) and has no door for now. So opening a file from a directory panel and
+opening a function from the symbol list produce the same kind of thing, differing only in which way
+the mapping runs. Each tab has one glyph that tells the two apart. One strip rather than one per
+kind is what lets the history record a visited file and the session keep the strip's interleaved
+order.
 
-**`Active` is a derivation, not a state.** What is open is `Open { dock, docs }`: the content
-area's dock, whose **document panel**'s `tabs` vec *is* the list of open tabs in the reader's own
-order, and `Docs`, the table holding the **trail** behind each tab's `DocId` — every place the
-tab has shown, oldest first, with a cursor on the one it shows now (`History`, one per tab). A tab
-is a trail and not a document: a link followed inside it pushes onto the trail, Back and Forward
-move its cursor, and what the tab shows is `Docs::get`, the entry under the cursor. There is no
-second list — the active tab is the panel's active tab read through the table, which is the whole
-of `active_tab`, and `open_ids` is the same walk for the list. `Docs` holds no order at all;
-membership is the one thing the two share, and it is an invariant the closers keep and a test
-asserts: a tab and its trail are made together and closed together. One tab may be the
-**temporal** one (`Docs::temporal`), the preview a sidebar row opens its place in and the next row
-reuses; it is a tab like any other with one flag on it, told apart by its name being italic.
+**`Active` is a derivation, not a state.** What is open is `Open { dock, docs }`: the content area's
+dock, whose **document panel**'s `tabs` vec *is* the list of open tabs in the reader's own order,
+and `Docs`, the table holding the **trail** behind each tab's `DocId`, every place the tab has
+shown, oldest first, with a cursor on the one it shows now (`History`, one per tab). A tab is a
+trail and not a document: a link followed inside it pushes onto the trail, Back and Forward move its
+cursor, and what the tab shows is `Docs::get`, the entry under the cursor. There is no second list.
+The active tab is the panel's active tab read through the table, which is the whole of `active_tab`,
+and `open_ids` is the same walk for the list. `Docs` holds no order at all; membership is the one
+thing the two share, and it is an invariant the closers keep and a test asserts: a tab and its trail
+are made together and closed together. One tab may be the **temporal** one (`Docs::temporal`), the
+preview a sidebar row opens its place in and the next row reuses. It is a tab like any other with
+one flag on it, told apart by its name being italic.
 
 `Active` is a `Memo` over the two, because the dock notifies on every layout change and a reader
-dragging a split must not re-render every pane that draws a document — `Memo` writes with
+dragging a split must not re-render every pane that draws a document. `Memo` writes with
 `set_if_modified`, so a drag that changed no document wakes nothing. It yields the **id and the
 document as one pair** (`Entry`), out of one read of both states: the driven line and the viewing
 positions are kept per tab *and* place, and an id read a beat apart from the document would pair
 another tab's for that beat, which the worker would answer with a re-ask. It is therefore **a beat
 behind**, a memo being recomputed by a task woken on a notify. That is right for anything that
-*renders* and wrong for anything that must be true inside one event handler, so `open_document`,
-the closers and the save observer call `active_tab` on the states directly and never read the
-memo. `use_kept_position` asks `Docs` for the same reason: it decides whether to write a row down
-for a place that may have just been closed or dropped off its trail, and a memo could still be
-reporting it there during exactly that run.
+*renders* and wrong for anything that must be true inside one event handler, so `open_document`, the
+closers and the save observer call `active_tab` on the states directly and never read the memo.
+`use_kept_position` asks `Docs` for the same reason: it decides whether to write a row down for a
+place that may have just been closed or dropped off its trail, and a memo could still be reporting
+it there during exactly that run.
 
 `Active` being `None` means two things and deliberately does not distinguish them: nothing is open,
 or **the tab on top of the document panel is a view**. Making Settings the active tab therefore
-means there is no active document — the analysis clears, `session.toml` writes `active = None`, and
-a restart with a view on top restores every tab and shows none of them. That is the price of the
+means there is no active document. The analysis clears, `session.toml` writes `active = None`, and a
+restart with a view on top restores every tab and shows none of them. That is the price of the
 derivation, and it was taken over the alternative, which is remembering the last document that was
 active there: memory rather than a reading of the dock, and the second source of truth back again.
 
-The invariants — the active tab is one of the open tabs, or `None`; a tab and its trail are made
-and closed together — are held by six functions and nothing else: `open_document`, `raise`,
-`navigate`, `close_tab`, `close_others`, `close_binary`. **Every** site that would *open* a
-document calls `open_document` with a `Reach`, which is what the click that opened it says and
-nothing about the state can: **`InPlace`** from inside the tab on screen (a relocation link, the
-companion header), pushed onto that tab's trail so the place left is one Back away; **`NewTab`**
-beside the tab on screen in a tab that stays (Ctrl+click on anything, a menu item, the unified
-view's Ctrl-press on a label); **`Preview`** from outside the panes (a sidebar row), into the one
-temporal tab, pushed onto its trail so Back inside it walks the rows clicked, or a new temporal tab
-where there is none. Under every reach a tab already showing the place is **raised** instead, the
-one on screen preferred where two show it — `NewTab` promotes the temporal one, since what was
-asked for is a tab of this place that stays; `Preview` promotes nothing — and every opening is
-recorded in `Visited`. **What promotes** the temporal tab: `NewTab` on the place it shows, a link
-followed in place inside it (the reader is reading in it), or a double press on its header;
-`navigate` never does, walking a trail not being going somewhere new in it. `raise` is the move
-between places already open — the strip's menu, the neighbour a close lands on, a restored session
-— and records nothing; pressing a tab needs none of them, freya's own header wrapper setting the
-panel's active tab, which *is* the change. `Selection` itself has **no "nothing" variant**: having
-none open is an absent one, which is the only spelling that stays honest once a selection is
-something a tab can hold. A new tab goes in **after the tab on screen** (`show_document`, through
-freya's `insert_tab`), the way a browser opens a link, and at the end when a view is on top.
+The invariants (the active tab is one of the open tabs, or `None`; a tab and its trail are made and
+closed together) are held by six functions and nothing else: `open_document`, `raise`, `navigate`,
+`close_tab`, `close_others`, `close_binary`. **Every** site that would *open* a document calls
+`open_document` with a `Reach`, which is what the click that opened it says and nothing about the
+state can. **`InPlace`** is from inside the tab on screen (a relocation link, the companion header),
+pushed onto that tab's trail so the place left is one Back away. **`NewTab`** is beside the tab on
+screen, in a tab that stays (Ctrl+click on anything, a menu item, the unified view's Ctrl-press on a
+label). **`Preview`** is from outside the panes (a sidebar row), into the one temporal tab, pushed
+onto its trail so Back inside it walks the rows clicked, or into a new temporal tab where there is
+none. Under every reach a tab already showing the place is **raised** instead, the one on screen
+preferred where two show it. `NewTab` promotes the temporal one, since what was asked for is a tab
+of this place that stays; `Preview` promotes nothing. Every opening is recorded in `Visited`. **What
+promotes** the temporal tab: `NewTab` on the place it shows, a link followed in place inside it (the
+reader is reading in it), or a double press on its header. `navigate` never does, walking a trail
+not being going somewhere new in it. `raise` is the move between places already open (the strip's
+menu, the neighbour a close lands on, a restored session) and records nothing. Pressing a tab needs
+none of them: freya's own header wrapper sets the panel's active tab, which *is* the change.
+`Selection` itself has **no "nothing" variant**: having none open is an absent one, which is the
+only spelling that stays honest once a selection is something a tab can hold. A new tab goes in
+**after the tab on screen** (`show_document`, through freya's `insert_tab`), the way a browser opens
+a link, and at the end when a view is on top.
 
 **Layout** is a toolbar over a `ResizableContainer`: a `PanelSize::px(300.)` sidebar and a
 `PanelSize::percent(100.)` content pane, mixing the two sizing modes deliberately so the sidebar
-keeps a fixed width and the content takes the rest, with freya's 4px `ResizableHandle` between
-them. `ResizableContainer` renders itself `.expanded()`, so it needs a parent already sized —
+keeps a fixed width and the content takes the rest, with freya's 4px `ResizableHandle` between them.
+`ResizableContainer` renders itself `.expanded()`, so it needs a parent already sized;
 `Size::flex(..)` only works under a parent with `.content(Content::Flex)`. The content panel holds
-the `DockingArea` and nothing else: the open documents are tabs *in* it, so the bar over them is
-the document panel's own tab bar rather than a strip of the app's.
+the `DockingArea` and nothing else: the open documents are tabs *in* it, so the bar over them is the
+document panel's own tab bar rather than a strip of the app's.
 
-The toolbar itself holds three controls: Open at its left edge and the two history chevrons at
-its right, held apart by a `Size::flex(1.0)` gap under `Content::Flex` — measured out of what the
-controls left over, where a `Size::fill()` gap would claim the bar and push them off its end. The
-pair sits at the corner so it stays under the same one however many neighbours Open grows.
-`NavButton` calls the same `navigate` the mouse's side buttons do — a second spelling of
-the step would be a second set of rules about tabs, selection and recording — and both walk **the
-trail of the tab on screen** and no other. **It reads `Active` and the table rather than peeking
-them**, which is the whole of how the pair stays current: a switch of tab, a push onto any trail,
-a close that drops entries and every move of a cursor, the one the button itself just made
-included, repaint both. `Active` and not the dock, or the pair would repaint on every drag of a
-split, which is the whole reason `Active` is a memo. A button
-with nothing in its direction is **dimmed rather than hidden**, the first disabled drawing in this
-app: hiding it would slide the other one under the pointer, and a reader who has been nowhere yet
-would never learn the pair is there. Disabled is the whole of the drawing — no hover wash, no press
-handler, and the chevron in `dimmed(icon_fg, pane_bg)` — while the tooltip stays, naming the
-direction where `entry_text` gives it nothing to name. `Nav::destination` is the one place the
-answer is worked out and `Nav::possible` is it asked as a question, so a live button and a step that
-does something cannot disagree. Headless, the runner can be asked whether a button washes under the
-pointer and whether it kept its box, and not what colour the chevron came out: an `SvgViewer`
-rasterises its colour into an image that is not in the element tree.
+The toolbar itself holds three controls: Open at its left edge and the two history chevrons at its
+right, held apart by a `Size::flex(1.0)` gap under `Content::Flex`. The gap is measured out of what
+the controls left over, where a `Size::fill()` gap would claim the bar and push them off its end.
+The pair sits at the corner so it stays under the same one however many neighbours Open grows.
+`NavButton` calls the same `navigate` the mouse's side buttons do, since a second spelling of the
+step would be a second set of rules about tabs, selection and recording, and both walk **the trail
+of the tab on screen** and no other. **It reads `Active` and the table rather than peeking them**,
+which is the whole of how the pair stays current: a switch of tab, a push onto any trail, a close
+that drops entries and every move of a cursor, the one the button itself just made included, repaint
+both. It reads `Active` and not the dock, or the pair would repaint on every drag of a split, which
+is the whole reason `Active` is a memo. A button with nothing in its direction is **dimmed rather
+than hidden**, the first disabled drawing in this app: hiding it would slide the other one under the
+pointer, and a reader who has been nowhere yet would never learn the pair is there. Disabled is the
+whole of the drawing (no hover wash, no press handler, and the chevron in
+`dimmed(icon_fg, pane_bg)`) while the tooltip stays, naming the direction where `entry_text` gives
+it nothing to name. `Nav::destination` is the one place the answer is worked out and `Nav::possible`
+is it asked as a question, so a live button and a step that does something cannot disagree.
+Headless, the runner can be asked whether a button washes under the pointer and whether it kept its
+box, and not what colour the chevron came out: an `SvgViewer` rasterises its colour into an image
+that is not in the element tree.
 
-Inside each panel is a `DockingArea` over a `DockArea` model. A `Tab` is two-kinded —
-`Tab::View(View)` for one of the nine views, `Tab::Document(DocId)` for an open document — because
-`DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. The
-count moves with the views: the **Info** view went — what it said about a symbol is the section
-under the Assembly pane's own bar now (`agents/Panes.md`), which is where a reader is already
-looking and which names the symbol being *drawn* where the view named the one selected — and the
-**Bookmarks** and **Files** views came (`agents/Sidebar.md`). Nothing had to be migrated for any of
-them — the dock
-layout is not persisted, so a removed view is a compile-time deletion, an added one starts where
-its default layout puts it, and there is no saved tab that can name one. Both areas
-use `Tab` as the payload and `use_drag` keeps one `DockDrag<Tab>` at the root. The outer split stays
-a `ResizableContainer` because docking cannot express a literal 300px. A drag carries only the tab,
-so the area receiving a drop evicts it from the other through a wired-up
-`other: Option<State<DockArea>>`. A view is a **persistent pane**, not a slot the selection drives:
-each is a unit `Component` that consumes context and renders off the state it is about, so a
+Inside each panel is a `DockingArea` over a `DockArea` model. A `Tab` is two-kinded,
+`Tab::View(View)` for one of the nine views and `Tab::Document(DocId)` for an open document, because
+`DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. Adding or
+removing a view needs no migration: the dock layout is not persisted, so a removed view is a
+compile-time deletion, an added one starts where its default layout puts it, and there is no saved
+tab that can name one. Both areas use `Tab` as the payload and `use_drag` keeps one `DockDrag<Tab>`
+at the root. The outer split stays a `ResizableContainer` because docking cannot express a literal
+300px. A drag carries only the tab, so the area receiving a drop evicts it from the other through a
+wired-up `other: Option<State<DockArea>>`. A view is a **persistent pane**, not a slot the selection
+drives: each is a unit `Component` that consumes context and renders off the state it is about, so a
 selection change re-renders only the panes that read it and never the root.
 
 **One panel is designated, and the reason is the opening rather than the placeholder.** A click in
 the symbol list opens a document, and that document has to land *somewhere*; a dock has many panels
 and freya has no notion of "the panel documents belong to", so `DockArea::documents` names one.
-Three rules follow. `on_drop` refuses a document into any other panel — one visible document is what
-lets `Analysis` and `Marked` each hold one answer for the window — and refuses
-a `DocId` the table no longer knows, which is a drag that outlived its document and is the whole
-payoff of **ids never being reused**. A **view**, by contrast, may go anywhere, that panel included:
-Project, Settings and the Scratchpad start tabbed in it, to the left of the documents, where they
-are always visible. And `tidy` exempts it from the folding sweep, so closing the last document
-cannot fold the content area away.
+Three rules follow. `on_drop` refuses a document into any other panel (one visible document is what
+lets `Analysis` and `Marked` each hold one answer for the window) and refuses a `DocId` the table no
+longer knows, which is a drag that outlived its document and is the whole payoff of **ids never
+being reused**. A **view**, by contrast, may go anywhere, that panel included: Project, Settings and
+the Scratchpad start tabbed in it, to the left of the documents, where they are always visible. And
+`tidy` exempts it from the folding sweep, so closing the last document cannot fold the content area
+away.
 
-`tidy` is freya's `close_empty_panels` **written out rather than called**, because that sweep retains
-every non-empty child with no exemption and has to be replaced rather than followed — a panel
-re-created after it would come back somewhere else in the tree. The two behaviours of freya's that
-are kept: a split left with one child collapses into it, and a lone panel at the root is never
-removed. Likewise a close never goes through `DockNode::remove_tab_except`, which sets a panel's
-active tab to `tabs.first()`; landing on the **neighbour** is a rule of this app, so `close_tab`
-removes the tab by hand and chooses with `tabs::landing`.
+`tidy` is freya's `close_empty_panels` **written out rather than called**, because that sweep
+retains every non-empty child with no exemption and has to be replaced rather than followed; a panel
+re-created after it would come back somewhere else in the tree. Two behaviours of freya's are kept:
+a split left with one child collapses into it, and a lone panel at the root is never removed.
+Likewise a close never goes through `DockNode::remove_tab_except`, which sets a panel's active tab
+to `tabs.first()`; landing on the **neighbour** is a rule of this app, so `close_tab` removes the
+tab by hand and chooses with `tabs::landing`.
 
-**Open documents *are* dock tabs.** This supersedes 6c's "the tab strip is not the dock's tabs",
-which argued three things. Two are answered by the designated panel: there is one answer to "which
-document is active" — that panel's active tab — and closing the last document folds nothing away,
-the panel being exempt from `tidy`. The third stands and is the price: the layout and the list of
-open documents are no longer separable, and the arrangement survives a close because a rule says so
-rather than because the shape makes it impossible to break. What it buys is that a reader arranges
-their documents the way they already arrange the views, and that Steps 9, 12, 19 and 33 each have
-one kind of tab to change instead of two.
+**Open documents *are* dock tabs.** Two objections to that are answered by the designated panel:
+there is one answer to "which document is active", that panel's active tab, and closing the last
+document folds nothing away, the panel being exempt from `tidy`. The third stands and is the price:
+the layout and the list of open documents are no longer separable, and the arrangement survives a
+close because a rule says so rather than because the shape makes it impossible to break. What it
+buys is that a reader arranges their documents the way they already arrange the views, and that
+every later feature has one kind of tab to change instead of two.
 
-A document's header is `chip` — the same element the content area's own strip drew, hover state and
-× included. **Nothing in it activates the tab**: freya wraps a header in a `DropZone` around a
+A document's header is `chip`, the same element the content area's own strip drew, hover state and ×
+included. **Nothing in it activates the tab**: freya wraps a header in a `DropZone` around a
 `rect().on_press(set_active)` around a `DragZone`, so pressing it makes it the panel's active tab
 and therefore the active document. That is also why the × must `stop_propagation`, or a close would
-first switch to the tab it is closing — and why the header's own press handler, which promotes the
-temporal tab on a **double press** (`EventsCombos::pressed`, freya's own count of 500 ms and 5 px,
-which nothing else on the header asks), must not: the first press still has to reach the wrapper.
-The temporal tab is told from one that stays by its name being **italic** (`font_slant`) and by
-nothing else, the header reading the flag out of the table beside the document. The × is drawn for
-documents only — the views are furniture, one of a kind, with no way back once closed, where a
-document is always reachable again from the symbol list or the History panel.
+first switch to the tab it is closing. And it is why the header's own press handler, which promotes
+the temporal tab on a **double press** (`EventsCombos::pressed`, freya's own count of 500 ms and 5
+px, which nothing else on the header asks), must not: the first press still has to reach the
+wrapper. The temporal tab is told from one that stays by its name being **italic** (`font_slant`)
+and by nothing else, the header reading the flag out of the table beside the document. The × is
+drawn for documents only. The views are furniture, one of a kind, with no way back once closed,
+where a document is always reachable again from the symbol list or the History panel.
 
-**The × is a control of its own**, `TabClose`, and a component rather than another line of
-`chip` for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the
-`use_state` with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper — which is
-why the × reaches `chip` as an element already built rather than as an `on_close` handler. Two
-things follow from its being a control. It is **a target you hit rather than one you aim at**: a
-`close_target()` square centred on the glyph, four pixels of air on every side, capped at the row
-so the close never decides how tall the bar is. The square is written as `close_glyph() + 8`
-rather than as a share of the row, so the air is what stays fixed when the font or the row moves.
-The × is drawn a third larger than the interface font it sits beside: it is a mark and not a
-letter, and at the text's own size the multiplication sign reads as a scratch on the tab. And it says under the pointer that it is the × and not the tab: `close_hover_bg` behind
-it and the glyph up from `address_fg` to the interface text, while the tab under it stays lit —
-the two are told apart by the wash being the deeper step, not by the tab going out. It closes the
-tab itself rather than taking a handler, a `Component` being `PartialEq` where a closure is not:
-the `DocId` is the prop and the five states a close needs come from the contexts, the same ones
-the header reads a step above it. The headless pair is
-`a_press_beside_the_glyph_still_closes_the_tab`, which presses inside the target and nowhere near
-the glyph, and `the_close_target_lights_under_the_pointer`.
+**The × is a control of its own**, `TabClose`, and a component rather than another line of `chip`
+for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the `use_state`
+with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper. That is why the × reaches
+`chip` as an element already built rather than as an `on_close` handler. Two things follow from its
+being a control. It is **a target you hit rather than one you aim at**: a `close_target()` square
+centred on the glyph, four pixels of air on every side, capped at the row so the close never decides
+how tall the bar is. The square is written as `close_glyph() + 8` rather than as a share of the row,
+so the air is what stays fixed when the font or the row moves. The × is drawn a third larger than
+the interface font it sits beside: it is a mark and not a letter, and at the text's own size the
+multiplication sign looks like a scratch on the tab. And it says under the pointer that it is the ×
+and not the tab: `close_hover_bg` behind it and the glyph up from `address_fg` to the interface
+text, while the tab under it stays lit. The two are told apart by the wash being the deeper step,
+not by the tab going out. It closes the tab itself rather than taking a handler, a `Component` being
+`PartialEq` where a closure is not: the `DocId` is the prop and the five states a close needs come
+from the contexts, the same ones the header reads a step above it.
 
 A right-click on a document's header opens a menu of two items. **Close other tabs** is
 `close_others`: the tab it was opened on stays, every other *document* in the panel goes, and a view
-sharing the panel is left where it is — it is not a document, and the × it has no place for is the
-same argument. Its own function rather than `close_tab` in a loop, because each of those would work
-out a landing of its own and walk the panel through every intermediate state, where the landing here
-is known before anything is removed: the kept tab, and only when the tab on screen is one of the
-ones closing. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the sidebar rows
-and the instruction rows use (`agents/Sidebar.md`), for the tab's own document. The first row is
-left out when nothing else is open, rather than drawn as a row that would do nothing, and the header
-asks the panel for that at the **press** — whether a tab has company is not something a header
-draws, so subscribing to the panel for it would re-render every tab whenever any one of them
-opened. Until the bookmark item, a lone tab opened no menu at all.
+sharing the panel is left where it is. A view is not a document, and the × it has no place for is
+the same argument. It is its own function rather than `close_tab` in a loop, because each of those
+would work out a landing of its own and walk the panel through every intermediate state, where the
+landing here is known before anything is removed: the kept tab, and only when the tab on screen is
+one of the ones closing. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the
+sidebar rows and the instruction rows use (`agents/Sidebar.md`), for the tab's own document. The
+first row is left out when nothing else is open, rather than drawn as a row that would do nothing,
+and the header asks the panel for that at the **press**: whether a tab has company is not something
+a header draws, so subscribing to the panel for it would re-render every tab whenever any one of
+them opened.
 
 The document panel's tab bar is the horizontally scrolling one the strip used to be (`chip_strip`),
 because documents are opened by the dozen; a view panel's stays a plain row, nine views always
-fitting. Two things bite there. freya appends one child more than there are tabs — a
-`rect().expanded()` drop zone for "past the last tab" — and `expanded()` is meaningless inside a
+fitting. Two things bite there. freya appends one child more than there are tabs, a
+`rect().expanded()` drop zone for "past the last tab", and `expanded()` is meaningless inside a
 horizontal scroll view, so it is given a width of its own. And a tab's name is elided **by character
-count in Rust**, where every other truncation is a width: a `maximum_width` anywhere inside one makes
-it shrinkable, and a horizontal scroll view measures children against the space *left*, so tabs past
-the edge get no width and draw as a bare ×. Do not "fix" that back into a width.
+count in Rust**, where every other truncation is a width: a `maximum_width` anywhere inside one
+makes it shrinkable, and a horizontal scroll view measures children against the space *left*, so
+tabs past the edge get no width and draw as a bare ×. Do not "fix" that back into a width.
 
 **A tab is named after the function, not after the whole demangled name** (`src/naming.rs`,
 `short_name`). The name a tab is given is its last two path segments and nothing else: generic
 arguments go however deep they nest, `<Vec<T> as IntoIterator>::into_iter` is `Vec::into_iter`, a
 C++ argument list and the `const` after it go, and rustc's legacy `::h<hash>` suffix goes with them.
-The one thing kept beyond two segments is the closure a symbol *is* — `render::{closure#0}` is not
-`render` — and only the innermost of them. Over the 142 804 text symbols of this app's own debug
-binary, that is 151 characters of demangled name down to 21. The character elision above is still
-there and still the last word, for the names that are long anyway.
+The one thing kept beyond two segments is the closure a symbol *is* (`render::{closure#0}` is not
+`render`), and only the innermost of them. The character elision above is still there and still the
+last word, for the names that are long anyway.
 
 It is real parsing and not a `rsplit("::")`: `::` appears inside generic arguments, `operator<<`
 writes an angle bracket that opens no group, `fn(*mut c_void) -> *mut T` writes one that closes
-none, and an `extern "C"` puts a quoted run in the middle of a type. So it is a scanner, framework-
-free with its own `tests.rs` — written against names taken out of that binary — and it lives in the
-app rather than beside the demangling in `analysis`, because the crate has no use for it: it hands
-out the name the file states and the name the demangler made of it, and *how much of one to draw* is
-a question only a view has. `entry_text` is where it is applied and is the one spelling a document
-tab and a History row share; `entry_name` beside it is the whole name, which is what the tooltip
-says and what the History filter matches — a generic argument no tab draws is still something a
-reader can search for.
+none, and an `extern "C"` puts a quoted run in the middle of a type. So it is a scanner,
+framework-free with its own `tests.rs`, written against names taken out of that binary. It lives in
+the app rather than beside the demangling in `analysis`, because the crate has no use for it: it
+hands out the name the file states and the name the demangler made of it, and *how much of one to
+draw* is a question only a view has. `entry_text` is where it is applied and is the one spelling a
+document tab and a History row share; `entry_name` beside it is the whole name, which is what the
+tooltip says and what the History filter matches, so a generic argument no tab draws is still
+something a reader can search for.
 
 **A document's two sides live inside its tab.** `Tab::Document` renders the two panes in a
-`ResizableContainer` — not a nested `DockingArea`, which is a great deal of machinery for a two-way
+`ResizableContainer`, not a nested `DockingArea`, which is a great deal of machinery for a two-way
 split. The cost is real and was taken deliberately: **the Source pane is no longer independently
 dockable**, since it is inside a document rather than beside one. Each pane takes its `Document` as
-a prop rather than reading `Active`, which is both synchronous and honest — only the active tab's
+a prop rather than reading `Active`, which is both synchronous and honest: only the active tab's
 content is mounted, so a pane is only ever built for the tab it belongs to.
 
 **Which pane comes first is the document's kind**: the side a tab is driven from leads, so
 `AssemblyPane` is on the left in an assembly-driven tab and `SourcePane` is on the left in a
-source-driven one. `DocumentBody` is the only thing that knows this — the panes themselves are
-handed no side and read none — so the swap is the order of two `.panel(..)` calls and nothing else.
+source-driven one. `DocumentBody` is the only thing that knows this. The panes themselves are handed
+no side and read none, so the swap is the order of two `.panel(..)` calls and nothing else.
 Everything the two panes share is keyed by pane *identity* and not by position (`Pane`, `Owed`,
-`Marks`, `AsmAt`/`SrcAt`), which is why swapping them moves no picked-out run, no pair, no owed
-scroll and no kept row. The panes are two different component types, so a swap unmounts and remounts both;
+`Marks`, `AsmAt`/`SrcAt`), which is why swapping them moves no selected run, no pair, no owed scroll
+and no kept row. The panes are two different component types, so a swap unmounts and remounts both;
 their rows come back where `use_kept_position` puts them.
 
 That unmounting is why the split ratio is held at the root (`SplitRatio`, with `Splits` the shared
 `ResizableContext` it is read back out of). A `ResizablePanel` registers at its `initial_size` in a
 `use_hook` and *removes* its entry in a `use_drop`, so even a shared context comes back holding the
-initial sizes under new panel ids; what survives is a number the app keeps, fed in as `initial_size`
-and written back out while the split is on screen. One number for the app and not one per document:
-per-document would be a third `Positions`-shaped map to forget in `close_tab`, for a number nobody
-asked to differ per document. That number is **the leading panel's width and not the assembly
-pane's** — the one thing here deliberately kept by place rather than by pane. Both readings are
-coherent and this one moves nothing on screen: switching from an assembly-driven tab to a
+initial sizes under new panel ids. What survives is a number the app keeps, fed in as `initial_size`
+and written back out while the split is on screen. It is one number for the app and not one per
+document: per-document would be a third `Positions`-shaped map to forget in `close_tab`, for a
+number nobody asked to differ per document. That number is **the leading panel's width and not the
+assembly pane's**, the one thing here deliberately kept by place rather than by pane. Both readings
+are coherent and this one moves nothing on screen: switching from an assembly-driven tab to a
 source-driven one leaves the handle exactly where the reader dragged it, where keeping it by pane
 would throw the two widths across the split at every switch of kind. The registry agrees with it by
 construction, since `apply_resize` speaks positions too: panel 0 is the leading pane in both kinds,
 so a drag means the same thing either way round.
 
-**A document is a place in a binary or a file; everything else is a view.** This is 8e's rule with
-Step 1's amendment — it used to end at "in a binary" — and everything below it is unchanged, so
-decide nothing about it again. The document panel holds `Document`s and never anything else, and
-that is what lets five separate things work without a case each: the Assembly *and* Source panes both
-render "the active tab", the record of visits holds it, `SavedDocument::from_document`/`::resolve` write
-it down and find it again after a restart, `close_binary` knows which tabs a closing file takes
-with it, and `entry_text` knows what to call it. A project view, the settings page and a
-scratchpad's editor are none of that: they resolve against no object, they are no file on disk the
-panes could open, there is one of each rather than many, and neither pane could draw one. So they
-are **dockable views** — a `Tab` — which is the mechanism the app already has for "a pane with its
-own state that the reader can put where they like", and which the three sidebar lists were already
-instances of.
-A `Document` variant for a view was the alternative and buys a tab in a strip nothing else would
-put a second entry in, at the price of five answers nobody wants: what `resolve` does with it after
-a restart, what `Document::in_file` says when a binary closes, what the panes draw for it, what the
-history means by a "place" that is not one, and what the session file spells it as. `Document::Code`
-is not that: an object's code *is* a place in a binary — the whole of it — and every one of the
-five has an answer that is the object's own, which is why it is a document and not a mode of the
-object's tab. Persistence
-follows from the same sentence: a `Tab` is layout, and the dock layout is deliberately not
-persisted, so a view is **explicitly excluded** from the saved tabs and `SavedDocument` needs no
-answer for it. What a scratchpad *builds* needs no rule at all — the artifact goes through
+**A document is a place in a binary or a file; everything else is a view.** Decide nothing about
+this again. The document panel holds `Document`s and never anything else, and that is what lets five
+separate things work without a case each: the Assembly *and* Source panes both render "the active
+tab", the record of visits holds it, `SavedDocument::from_document`/`::resolve` write it down and
+find it again after a restart, `close_binary` knows which tabs a closing file takes with it, and
+`entry_text` knows what to call it. A project view, the settings page and a scratchpad's editor are
+none of that: they resolve against no object, they are no file on disk the panes could open, there
+is one of each rather than many, and neither pane could draw one. So they are **dockable views**, a
+`Tab`, which is the mechanism the app already has for "a pane with its own state that the reader can
+put where they like", and which the three sidebar lists were already instances of. A `Document`
+variant for a view was the alternative. It buys a tab in a strip nothing else would put a second
+entry in, at the price of five answers nobody wants: what `resolve` does with it after a restart,
+what `Document::in_file` says when a binary closes, what the panes draw for it, what the history
+means by a "place" that is not one, and what the session file spells it as. `Document::Code` is not
+that: an object's code *is* a place in a binary, the whole of it, and every one of the five has an
+answer that is the object's own, which is why it is a document and not a mode of the object's tab.
+Persistence follows from the same sentence: a `Tab` is layout, and the dock layout is deliberately
+not persisted, so a view is **explicitly excluded** from the saved tabs and `SavedDocument` needs no
+answer for it. What a scratchpad *builds* needs no rule at all: the artifact goes through
 `open_files` like any other binary, and its functions are ordinary tabs.
 
 **Each place on each tab's trail remembers where each of its sides was left.** A pane has one
 `ScrollController` and shows one tab at a time, so left alone it hands the tab arriving whatever
 offset the one leaving had. `AsmAt`/`SrcAt` are two root `Positions` maps beside `Open`, **both
-keyed by an `Entry`** — the tab's `DocId` and a `Document` on its trail, so an entry means "this
-side of this place on this tab" for exactly as long as the tab is open and the place is on its
-trail, and going Back comes back to the rows that were left — and `use_kept_position` is the whole
-of the behaviour, called once by `InstructionList` and once by `SourceList`, each handed its tab's
-id as a prop from `DocumentBody`. Which place a listing's row is filed under is `asked_of` the
-question that listing answers, never the place the app is showing: while the worker catches up the
-pane is drawing the one being left, and for a source-driven tab the question's place is the file
-and not the resolved symbol, which is very likely on no trail at all. Navigating in place is not a
-switch of tab: `DocumentBody` reads the table, so a push re-renders it and the panes are handed
-the new document as a prop with their controllers kept, and the hook's switching arm files the
-row of the place left under that place's own entry (still on the trail, so still `contains`) before
-putting the arriving one back. Keying the source side by the *file*, which is what the Source
-pane's own strip did, made two functions compiled from one file share a position they have no
-reason to share. What is
-kept is a **row**, clamped to what the tab holds *now*, so a rebuilt binary or a shortened file
-cannot come back past the end. A tab nothing is remembered for opens at an **opening row** the
-caller hands in — `0` for the Assembly pane, whose first row is the symbol's own first line, and
-the symbol's own line for the Source pane (`opening_row`, off `SymbolLines::line`); a remembered
-row always wins over it, so it is the first open this answers and not every one. An opening row of
-`0` is left alone rather than scrolled to, since the effect runs a beat after the first render and
-setting the offset the pane already has would undo a wheel that got in. Three things are
-load-bearing. Reading the controller's position (`<(i32, i32)>::from`) is a `State::read`, which is
-what **subscribes the effect to the pane's own scroll**: every position is written down as it
-happens rather than on the way out, which is what survives the window merely being closed. The tab
-the controller is *holding* is tracked in the hook — an `Rc<RefCell>`, not a `State`, since nothing
-renders from it — because it is not the tab the app is showing during the one run that has to move
-the view, and every write goes under the held one. And a reveal a run is owed (`Picked::owed`)
-**wins** over a remembered position because the same effect makes both: `use_kept_position` is handed the pane's reveal as a
-closure and asks it first, applying the remembered row only when no scroll was made. The two *are*
-owed at once — a Locations row opens a symbol on a line, so the tab changes and the arriving one
-is owed a reveal — and two effects' scrolls land in whichever order the runtime wakes them; with
-the reveal first, it had marked itself made by the time the kept row was put over it, which reset
-both panes to the top. One effect has one order, and when a reveal scrolls, the effect wakes on
-that scroll and records where it landed. `close_tab`/`close_others`/`close_binary` forget every
-position of a tab's entries with the tab, by id, and `close_binary` forgets those of the entries it
-takes off the surviving trails too, which is not tidiness: an `Assembly` entry holds the
-`Arc<Object>` it points into — and the hook is handed `Docs::contains` precisely so that the run
-*after* a close, still holding the place that has gone, cannot put it straight back. The closers
-forget the driven lines with them, which *is* tidiness: a `Source` key holds no object, so nothing
-is being held up. **Each place remembers what was picked out in each of its panes** the same
-way: `MarksAt` is a fourth map keyed by the same `Entry`, holding both panes' runs as they were
-left -- the caret and the selection, no gesture, nothing owed -- and, for an object's code, the
-place each row of the assembly run stood for; `use_land` (`agents/Panes.md`) saves under the
-entry being left and restores for the one arriving, a landing winning over what was kept and a
-kept run over a source-driven tab's driven line. It is forgotten in the three closers with the
-other three and by `Docs::contains` for the same reason, and it is the one of the four that
-`session.toml` never sees.
+keyed by an `Entry`**, the tab's `DocId` and a `Document` on its trail. So an entry means "this side
+of this place on this tab" for exactly as long as the tab is open and the place is on its trail, and
+going Back comes back to the rows that were left. `use_kept_position` is the whole of the behaviour,
+called once by `InstructionList` and once by `SourceList`, each handed its tab's id as a prop from
+`DocumentBody`. Which place a listing's row is filed under is `asked_of` the question that listing
+answers, never the place the app is showing: while the worker catches up the pane is drawing the one
+being left, and for a source-driven tab the question's place is the file and not the resolved
+symbol, which is very likely on no trail at all. Navigating in place is not a switch of tab:
+`DocumentBody` reads the table, so a push re-renders it and the panes are handed the new document as
+a prop with their controllers kept, and the hook's switching arm files the row of the place left
+under that place's own entry (still on the trail, so still `contains`) before putting the arriving
+one back. Keying the source side by the *file* instead made two functions compiled from one file
+share a position they have no reason to share. What is kept is a **row**, clamped to what the tab
+holds *now*, so a rebuilt binary or a shortened file cannot come back past the end. A tab nothing is
+remembered for opens at an **opening row** the caller hands in: `0` for the Assembly pane, whose
+first row is the symbol's own first line, and the symbol's own line for the Source pane
+(`opening_row`, off `SymbolLines::line`). A remembered row always wins over it, so it is the first
+open this answers and not every one. An opening row of `0` is left alone rather than scrolled to,
+since the effect runs a beat after the first render and setting the offset the pane already has
+would undo a wheel that got in. Three things are load-bearing. Reading the controller's position
+(`<(i32, i32)>::from`) is a `State::read`, which is what **subscribes the effect to the pane's own
+scroll**: every position is written down as it happens rather than on the way out, which is what
+survives the window merely being closed. The tab the controller is *holding* is tracked in the hook,
+in an `Rc<RefCell>` and not a `State`, since nothing renders from it. That is because it is not the
+tab the app is showing during the one run that has to move the view, and every write goes under the
+held one. And a reveal a run is owed (`Picked::owed`) **wins** over a remembered position because
+the same effect makes both: `use_kept_position` is handed the pane's reveal as a closure and asks it
+first, applying the remembered row only when no scroll was made. The two *are* owed at once (a
+Locations row opens a symbol on a line, so the tab changes and the arriving one is owed a reveal),
+and two effects' scrolls land in whichever order the runtime wakes them. With the reveal first, it
+had marked itself made by the time the kept row was put over it, which reset both panes to the top.
+One effect has one order, and when a reveal scrolls, the effect wakes on that scroll and records
+where it landed. `close_tab`/`close_others`/`close_binary` forget every position of a tab's entries
+with the tab, by id, and `close_binary` forgets those of the entries it takes off the surviving
+trails too. That is not tidiness: an `Assembly` entry holds the `Arc<Object>` it points into, and
+the hook is handed `Docs::contains` precisely so that the run *after* a close, still holding the
+place that has gone, cannot put it straight back. The closers forget the driven lines with them,
+which *is* tidiness: a `Source` key holds no object, so nothing is being held up. **Each place
+remembers what was selected in each of its panes** the same way: `MarksAt` is a fourth map keyed by
+the same `Entry`, holding both panes' runs as they were left (the caret and the selection, no
+gesture, nothing owed) and, for an object's code, the place each row of the assembly run stood for.
+`use_land` (`agents/Panes.md`) saves under the entry being left and restores for the one arriving, a
+landing winning over what was kept and a kept run over a source-driven tab's driven line. It is
+forgotten in the three closers with the other three and by `Docs::contains` for the same reason, and
+it is the one of the four that `session.toml` never sees.
 
-**A code tab's place is an address, in the same map type.** The listing of an object's whole
-code is counted afresh with every answer that lands (`agents/Panes.md`), so a row there means
-nothing for long; `CodeAt` is a `Positions<Entry, Spot>` — the map generalised over its value,
-`row`'s clamp being the one rows-only answer — holding the placed address at the top of the pane
-and how many rows past that address's own row it was, a stretch's header, its labels and its first
-instruction all sitting at one address. It is forgotten in the three closers with the other two
-and travels in `ProjectStates` as they do; `use_kept_place` in `src/ui/section_view.rs` is its
-`use_kept_position`, and the differences are the point: the map is **read** and not peeked, so a
-place written from outside while the tab is on top is answered (the run that wakes on its own
-write finds nothing moved and writes nothing); the rows the place is re-applied against are
-produced in the same run, so a chunk landing above the reader never draws one frame at the old
-offset; and a move it makes is re-issued until a run finds the view there, a few times and no
-more, since a `VirtualScrollView` clamps a target past its content. "There" is **the row the
-place names** (`row_of`: `Rows::row_for` plus the rows past it, which rounds an address inside a
-row down to the row at or below it) and not the spot derived from the offset, since a place
-written from outside can be an address inside a row — a call's target in the middle of an
-instruction — that no derived spot ever spells. And when the rows are rebuilt under the view,
-the place put back is the map's own where the view was at it as well as the old rows could tell,
-and the derived one otherwise: a place written from outside is exact, a row's share of an
-undecoded stretch is a guess, and re-applying the guess landed a target in a stretch the worker
-had not reached on the row nearest its guess rather than on its own instruction
-(`the_code_opened_at_a_target_lands_on_the_row_at_or_below_it`). The same hook plants the caret a
-door left for the listing (`Planting`, `agents/Panes.md`), owing it no scroll: the place is what
-moves the view there, and is authoritative in this pane. A place written from outside
-is answered **once, as a change of the map's value**, and never as "the map disagrees with the
-view": a listing of a large binary is millions of rows and tens of millions of pixels down, past
-where freya's `f32` scroll offset holds a pixel (`notes/upstream/freya.md`), so the view cannot
-always be put exactly where the map says, and a rule that answered the disagreement moved the view
-into a run that found the same disagreement, for ever -- the freeze the first scroll through the
-app's own binary produced. The hook's own arithmetic is `f64` for the same reason. The list is mounted from the
-first frame with no rows for the same reason: the view resets the controller as it mounts, and a
-move made before that was read back as the reader's own scroll and written over the place they
-asked for.
+**A code tab's place is an address, in the same map type.** The listing of an object's whole code is
+counted afresh with every answer that lands (`agents/Panes.md`), so a row there means nothing for
+long. `CodeAt` is a `Positions<Entry, Spot>`, the map generalised over its value, `row`'s clamp
+being the one rows-only answer. It holds the placed address at the top of the pane and how many rows
+past that address's own row it was, since a stretch's header, its labels and its first instruction
+all sit at one address. It is forgotten in the three closers with the other two and travels in
+`ProjectStates` as they do. `use_kept_place` in `src/ui/section_view.rs` is its `use_kept_position`,
+and the differences are the point. The map is **read** and not peeked, so a place written from
+outside while the tab is on top is answered (the run that wakes on its own write finds nothing moved
+and writes nothing). The rows the place is re-applied against are produced in the same run, so a
+chunk landing above the reader never draws one frame at the old offset. And a move it makes is
+re-issued until a run finds the view there, a few times and no more, since a `VirtualScrollView`
+clamps a target past its content. "There" is **the row the place names** (`row_of`: `Rows::row_for`
+plus the rows past it, which rounds an address inside a row down to the row at or below it) and not
+the spot derived from the offset, since a place written from outside can be an address inside a row
+(a call's target in the middle of an instruction) that no derived spot ever spells. And when the
+rows are rebuilt under the view, the place put back is the map's own where the view was at it as
+well as the old rows could tell, and the derived one otherwise: a place written from outside is
+exact, a row's share of an undecoded stretch is a guess, and re-applying the guess landed a target
+in a stretch the worker had not reached on the row nearest its guess rather than on its own
+instruction. The same hook plants the caret a door left for the listing (`Planting`,
+`agents/Panes.md`), owing it no scroll: the place is what moves the view there, and is authoritative
+in this pane. A place written from outside is answered **once, as a change of the map's value**, and
+never as "the map disagrees with the view". A listing of a large binary is millions of rows and tens
+of millions of pixels down, past where freya's `f32` scroll offset holds a pixel
+(`notes/upstream/freya.md`), so the view cannot always be put exactly where the map says, and a rule
+that answered the disagreement moved the view into a run that found the same disagreement, for ever:
+the freeze the first scroll through the app's own binary produced. The hook's own arithmetic is
+`f64` for the same reason. The list is mounted from the first frame with no rows for the same
+reason: the view resets the controller as it mounts, and a move made before that was read back as
+the reader's own scroll and written over the place they asked for.
 
 **Opening a binary is the one path in, and it streams.** `open_binaries` is `close_binary`'s
-opposite number and the only thing that ever adds to `Objects` — the toolbar's Open, a session
+opposite number and the only thing that ever adds to `Objects`. The toolbar's Open, a session
 restore and a scratchpad's rebuild all go through it, so they cannot differ about what opening a
-file means. A `std::thread` and an `async_channel`, `use_analysis`' shape, but the answers come back
-one at a time: `Loads::begin` registers the paths **before a byte is read**, so the sidebar has a
-row for the whole of the wait rather than from whenever the first answer lands, and `take_load`
-writes each batch of objects in as it arrives. The channel is **unbounded and drained in batches** —
-unbounded because backpressure is exactly wrong here (the worker is the thing that should run flat
-out) and batched because a write per member is a re-render per member, which for an archive whose
-members parse in a millisecond is a hundred renders nobody sees. **An object nobody asked for any
-more is dropped, not prevented**, which is `use_analysis`' rule in a second place and has to be: the
-worker is already parsing when the file is closed. It is checked against `Loads::holds` — the load
-*and* the path, since a file closed and reopened while the first parse ran is two loads and only the
-second one's objects belong on screen, which is the whole reason a load has an id where an analysis
-answer needs none (an answer is about a `Symbol` that already existed; a load is about work that has
-produced nothing to be identified by). `take_load` **returning** is what stops the worker: it drops
-the receiver, the next send fails, and the walk breaks. What streaming buys is not uniform:
-the 196-member rlib's first member is offered at 102 ms against the 685 ms the whole file
-takes (debug build), while the 331 MB binary is one object and gains no object earlier at all — there
-the win is the row, on screen from the click instead of an empty list for six seconds. **Nothing
-further is opt-in**, and measuring says why: of a file's parse, the whole of what is left after
-line info, the DWARF context and the disassembly were already made lazy is reading the bytes and
-walking the symbol table, which is what the Objects and Symbols lists *are*. On the 331 MB binary
-(release) that is 1.38 s of which 766 ms is the read and 286 ms the demangling; deferring the
+file means. It is a `std::thread` and an `async_channel`, `use_analysis`' shape, but the answers
+come back one at a time: `Loads::begin` registers the paths **before a byte is read**, so the
+sidebar has a row for the whole of the wait rather than from whenever the first answer lands, and
+`take_load` writes each batch of objects in as it arrives. The channel is **unbounded and drained in
+batches**: unbounded because backpressure is exactly wrong here (the worker is the thing that should
+run flat out) and batched because a write per member is a re-render per member, which for an archive
+whose members parse in a millisecond is a hundred renders nobody sees. **An object nobody asked for
+any more is dropped, not prevented**, which is `use_analysis`' rule in a second place and has to be:
+the worker is already parsing when the file is closed. It is checked against `Loads::holds`, the
+load *and* the path, since a file closed and reopened while the first parse ran is two loads and
+only the second one's objects belong on screen. That is the whole reason a load has an id where an
+analysis answer needs none: an answer is about a `Symbol` that already existed, while a load is
+about work that has produced nothing to be identified by. `take_load` **returning** is what stops
+the worker: it drops the receiver, the next send fails, and the walk breaks. What streaming buys is
+not uniform. The 196-member rlib's first member is offered at 102 ms against the 685 ms the whole
+file takes (debug build), while the 331 MB binary is one object and gains no object earlier at all;
+there the win is the row, on screen from the click instead of an empty list for six seconds.
+**Nothing further is opt-in**, and measuring says why: of a file's parse, the whole of what is left
+after line info, the DWARF context and the disassembly were already made lazy is reading the bytes
+and walking the symbol table, which is what the Objects and Symbols lists *are*. On the 331 MB
+binary (release) that is 1.38 s of which 766 ms is the read and 286 ms the demangling; deferring the
 demangling is the only lever there is, and it defers work until the first click on the object.
 
 
 **Identity throughout the UI is `Arc` pointer identity**, not names or indices: list keys are
 `Arc::as_ptr(..).addr()` and every prop `PartialEq` is hand-written in terms of `Arc::ptr_eq`. That
-matters twice — duplicate symbol names across objects stay distinct, and `#[derive(PartialEq)]` on
-an `Arc<T>` field would deep-compare on every parent render.
+matters twice: duplicate symbol names across objects stay distinct, and `#[derive(PartialEq)]` on an
+`Arc<T>` field would deep-compare on every parent render.
 
 
 ## Testing the UI
 
-`freya-testing` runs the whole app — components, hooks, effects, layout, events — with no window,
-no GPU and no event loop, on the test's own thread. It is a dev-dependency for `src/ui/tests.rs`
-and for nothing else, and the binary's whole suite runs in under two seconds, so
-a test written to settle one point costs less than a `cargo run` and a look and is worth writing
-even when it is going to be deleted again. Keep the ones that pin a mechanism — that a component
-with no props re-rendered because it read `palette()`, that a superseded answer was dropped — and
-delete the ones that only proved the code just written does what it says.
+`freya-testing` runs the whole app (components, hooks, effects, layout, events) with no window, no
+GPU and no event loop, on the test's own thread. It is a dev-dependency for `src/ui/tests.rs` and
+for nothing else, and the binary's whole suite runs in under two seconds, so a test written to
+settle one point costs less than a `cargo run` and a look and is worth writing even when it is going
+to be deleted again. Keep the ones that pin a mechanism (that a component with no props re-rendered
+because it read `palette()`, that a superseded answer was dropped) and delete the ones that only
+proved the code just written does what it says.
 
-What it can be asked: **any control that can be pressed** and the state it changes, **a drag,
-including a drop into the dock**, **a scroll and where it lands**, **a keyboard binding** with the
-modifiers built by hand (`press_key` hardcodes `Modifiers::default()` and cannot express Ctrl),
-**a row height, width or position as laid out** rather than as requested, **anything a worker
-thread answers**, and **which component re-rendered** — that last has no other test shape at all.
-What it cannot: whether it *looks* right; any text width, which is really shaped by the machine's
-own fonts and so is an assertion about the machine; the platform's own behaviour, which is stubbed
-(the cursor icon, the desktop's real theme, the clipboard, the file dialog); and anything timed,
-there being no virtual clock, so a timing test costs its own duration in real seconds. Those are
-what launching the app is for.
+What it can and cannot be asked is `agents/Headless.md`'s verdict, and `AGENTS.md` has the short
+form.
 
 `agents/Headless.md` is the full account, checked against `freya-testing` 0.4.3's sources rather
-than its README: the runner's whole surface, the rule that a pass is *either* a render *or* a
-round of task polling (which is why a change needs somewhere between *n* and *2n*
-`sync_and_update`s and why the tests here loop rather than count), and the house rule that a
-headless test has to be made to fail first on the *mechanism* it claims to test.
-
+than its README: the runner's whole surface, the rule that a pass is *either* a render *or* a round
+of task polling (which is why a change needs somewhere between *n* and *2n* `sync_and_update`s and
+why the tests here loop rather than count), and the house rule that a headless test has to be made
+to fail first on the *mechanism* it claims to test.

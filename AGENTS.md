@@ -3,17 +3,17 @@
 Standing instructions from the user.
 
 - Committing. Whatever is uncommitted when you start stays uncommitted.
-- Run rustfmt over every file you modified, before committing it. Format **only those files** —
-  `rustfmt --edition 2021 <paths>` — and not the workspace: a bare `cargo fmt` reformats
+- Run rustfmt over every file you modified, before committing it. Format **only those files**,
+  with `rustfmt --edition 2021 <paths>`, and not the workspace: a bare `cargo fmt` reformats
   everything, and much of this repo predates anyone running it, so it drags unrelated reflow into
   a diff that then has to be picked apart by hand. The `--edition 2021` is load-bearing; plain
   `rustfmt` parses as 2015 and will mangle what it cannot read. Nothing here needs a
   `rustfmt.toml`: the defaults are what the formatted files already follow.
 - Don't reference an uncommitted file from a committed one.
 - Keep `notes/Goals.md` current. It is the checklist of planned features.
-- `notes/specs/` is what a finished feature does, one file per area with a section per
-  feature, moved there from `notes/Goals.md`. **Never write or change a spec without asking the
-  user first**; read the spec files to gauge the writing style and keep development history and
+- `notes/specs/` is what a finished feature does, one file per area with a section per feature,
+  moved there from `notes/Goals.md`. **Never write or change a spec without asking the user
+  first**; read the spec files to gauge the writing style and keep development history and
   implementation detail out (`notes/specs/README.md`).
 - Before presenting edits to the user, make one final pass over every text written (prose, a
   code comment, a doc comment, markdown): cut what can go, and prefer simple English, short
@@ -24,34 +24,33 @@ Standing instructions from the user.
   only when asked for the thing itself.
 - Prefer TOML for files, not JSON.
 - Add a minimal test case every time something is found wrong with binary inspection.
-- Answer a question about the UI with a headless test rather than by launching the app — a
+- Answer a question about the UI with a headless test rather than by launching the app. A
   throwaway one, deleted once it has answered, is fine. See `agents/Headless.md`.
 
 ## What this is
 
 A desktop GUI ("Assembly Viewer") for inspecting object files: open an ELF/PE/Mach-O object or a
-static archive, browse its text symbols, and read a symbol's disassembly — with relocation targets
-resolved to clickable symbol names — beside the source it was compiled from. Rust, cargo
+static archive, browse its text symbols, and read a symbol's disassembly, with relocation targets
+resolved to clickable symbol names, beside the source it was compiled from. Rust, cargo
 workspace, [freya](https://freyaui.dev) 0.4 for the UI.
 
 ## Build
 
 `cargo run --features devtools` starts freya's devtools server alongside the app (`[::1]:7354`,
-opt-in so it never reaches a release build); the viewer is a separate `cargo install
+opt-in so it never reaches a release build). The viewer is a separate `cargo install
 freya-devtools-app`, only one devtools-enabled freya app can run at a time, and there is no in-app
 shortcut. See `notes/DevTools.md`.
 
-The first build compiles Skia (via `freya-engine` -> `freya-skia-safe`) and takes a long time; on
+The first build compiles Skia (via `freya-engine` -> `freya-skia-safe`) and takes a long time. On
 Fedora it needs `freetype-devel fontconfig-devel libglvnd-devel wayland-devel` to link, and `mold`
 is not a supported linker.
 
-Dependency versions are pinned by compatibility, not taste: the `tree-sitter-*` grammars must sit
+Dependency versions are pinned by compatibility, not taste. The `tree-sitter-*` grammars must sit
 on the `tree-sitter-language` ABI of the one `tree-sitter` the app and `freya-code-editor` share
-(`cargo tree -p viewer -d`), and `addr2line`
-0.21 / `gimli` 0.28 / `object` 0.32 must stay one copy each — check with `cargo tree -p analysis
--d` after touching any of them — as must `fallible-iterator` 0.3, which `gimli` and `pdb2` share,
-and `digest` 0.10, which the three hash crates share. The reasoning is in the `Cargo.toml`
-comments; keep them current.
+(`cargo tree -p viewer -d`). `addr2line` 0.21 / `gimli` 0.28 / `object` 0.32 must stay one copy
+each (check with `cargo tree -p analysis -d` after touching any of them), as must
+`fallible-iterator` 0.3, which `gimli` and `pdb2` share, and `digest` 0.10, which the three hash
+crates share. The reasoning is in the `Cargo.toml` comments; keep them current.
 
 ### Test fixtures
 
@@ -59,18 +58,17 @@ Almost every fixture is built **in memory** with the `object` and `gimli` writer
 (`crates/analysis/tests/common/mod.rs`), so the suite needs nothing on disk and is green in a fresh
 checkout. The exception is `crates/analysis/tests/fixtures/`: one small C file and, **committed**
 from it, the two objects `gcc` produced (so the crate is pinned against DWARF a real toolchain
-emits), a stripped shared object `gcc` and `ld` produced with its functions hidden
-(`line_fixture_hidden.so`: no symbol table, nothing in `.dynsym`, so the crate is pinned
-against an `.eh_frame` as a real linker lays it out, the only thing naming its functions) and
-three DLL plus `.pdb` pairs that `clang-cl` and rustup's `rust-lld` produced (so it
-is pinned against a real linker's PE debug directory and PDB, which nothing in memory can
-synthesize) — one exporting its three functions; `line_fixture_noexport` exporting nothing, so
-every name it shows is the PDB's, and alone it lists the three `<function 0x…>`s its `.pdata`
-states; and `line_fixture_public`, that object linked with a
-one-function C++ file (`public_fixture.cpp`) compiled without `/Z7`, so the PDB's only name for
-that function is a decorated public symbol. `tests/real_object.rs` and `tests/pdb.rs` read them
-and fail loudly rather than skipping when they are missing; the build commands are in
-`line_fixture.c`'s header, `pdb.rs`'s and `unwind.rs`'s.
+emits); a stripped shared object `gcc` and `ld` produced with its functions hidden
+(`line_fixture_hidden.so`: no symbol table, nothing in `.dynsym`, so the crate is pinned against
+an `.eh_frame` as a real linker lays it out, the only thing naming its functions); and three DLL
+plus `.pdb` pairs that `clang-cl` and rustup's `rust-lld` produced (so it is pinned against a real
+linker's PE debug directory and PDB, which nothing in memory can synthesize). Of the three, one
+exports its three functions; `line_fixture_noexport` exports nothing, so every name it shows is
+the PDB's, and alone it lists the three `<function 0x…>`s its `.pdata` states; and
+`line_fixture_public` is that object linked with a one-function C++ file (`public_fixture.cpp`)
+compiled without `/Z7`, so the PDB's only name for that function is a decorated public symbol.
+`tests/real_object.rs` and `tests/pdb.rs` read them and fail loudly rather than skipping when they
+are missing; the build commands are in `line_fixture.c`'s header, `pdb.rs`'s and `unwind.rs`'s.
 
 The measurements quoted in `agents/` were taken on two inputs `cargo build` produces: the app's
 own debug binary (~331 MB, one linked ELF, ~115k text symbols, ~267 MB of DWARF) and the `analysis`
@@ -93,8 +91,8 @@ command.
 - `crates/analysis/src/line/source.rs` — the same line info the other way: a file and a line,
   out to the symbols compiled from them, built on the seam and not on a backend.
 - `crates/analysis/src/unwind.rs` — the unwind tables a linked image states its functions'
-  bounds in — an x86-64 PE's `.pdata`, an ELF's `.eh_frame` — read for the ranges they
-  declare; the only part that reads call-frame information.
+  bounds in (an x86-64 PE's `.pdata`, an ELF's `.eh_frame`), read for the ranges they declare;
+  the only part that reads call-frame information.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
 - `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
@@ -107,8 +105,8 @@ command.
   the fold, and flattened into the rows the Files view draws.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
-- `src/rows.rs` — the run of rows a reader picks out to copy.
-- `src/chars.rs` — the run of characters a sweep over a row's text picks out: a place is a row
+- `src/rows.rs` — the run of rows a reader selects to copy.
+- `src/chars.rs` — the run of characters a sweep over a row's text selects: a place is a row
   and a column in UTF-16 units, a row's text is pieces, and what each row draws and copies.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
@@ -134,7 +132,7 @@ command.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
 - `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes, and
   where each side of a tab was left.
-- `src/ui/marks.rs` — the run of rows picked out in each pane, the pair it lights on the other
+- `src/ui/marks.rs` — the run of rows selected in each pane, the pair it lights on the other
   side, the scroll it owes, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file parsed when loaded, its spans and its functions, and the
   cache holding it.
@@ -169,15 +167,15 @@ Seven `ui/` names avoid shadowing a crate module the prelude brings in (`source_
 `project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`); the rest is in
 `agents/UI.md`.
 
-Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's tests
-are a file of their own** — `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at the
-foot of `src/<module>.rs` — so the module a reader opens is the module and not the module plus
+Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's
+tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at
+the foot of `src/<module>.rs`, so the module a reader opens is the module and not the module plus
 half again of what it is asserted to do. The path a test is named by (`project::tests::…`) is
 unchanged, which is the point: it is where the file sits and not what the module tree looks like.
 
 ## Design notes
 
-The reasoning behind the code — what was decided, what it cost, and what was measured — is in
+The reasoning behind the code (what was decided, what it cost, and what was measured) is in
 `agents/`. **Read the note for the area before changing it, and rewrite the paragraph a change
 invalidates in the same commit**: these are the record of why things are the way they are.
 
@@ -196,7 +194,7 @@ invalidates in the same commit**: these are the record of why things are the way
 - `agents/Appearance.md` — the palette, theme switching, fonts, row heights, the Settings page.
 - `agents/Headless.md` — `freya-testing` as it actually behaves, checked against its sources.
 
-What the app *does* — the rules a finished feature follows — is in `notes/specs/`, one file per
+What the app *does*, the rules a finished feature follows, is in `notes/specs/`, one file per
 area with a section per feature, moved there from `notes/Goals.md` once the goal is done. A spec
 says what and an `agents/` note says why; neither repeats the other, and a spec is only written
 or changed on the user's say-so (`notes/specs/README.md`).
@@ -226,27 +224,26 @@ feature there with the substitute, so a release that brings it is noticed.
 ## Gotchas before editing the UI
 
 - A `State`'s `peek`/`read` hands back a guard, and an `if let` holds its scrutinee's temporary
-  until the end of its **body** — so `if let Some(x) = *state.peek() { state.set(..) }` compiles and
+  until the end of its **body**, so `if let Some(x) = *state.peek() { state.set(..) }` compiles and
   panics the moment it runs. `let ... else` and `match` end theirs with the statement. Bind the read
-  to a `let` of its own before any write. That class of bug is invisible to every other test in
-  the repo, and is what the headless tests in `src/ui/tests.rs` were first written for.
+  to a `let` of its own before any write. That class of bug is invisible to every other test in the repo; the headless tests in `src/ui/tests.rs` catch it.
 - There is no `.hover()` pseudo-state. A hoverable row is a `Component` with `use_state(|| false)`
   plus `on_pointer_over`/`on_pointer_out` (`over`/`out`, not `enter`/`leave`, so hovering a child
   keeps the highlight).
 - `VirtualScrollView`'s builder closure is never compared across renders, so anything the rows
   depend on must go through `new_with_data`, not be captured.
 - A row's height must equal the `item_size` given to the `VirtualScrollView` over it, or scrolling
-  misaligns. There are **two** of them — `list_row_height()` for rows in the interface font and
-  `code_row_height()` for rows in the fixed-width one — so a view and its rows have to agree about
+  misaligns. There are **two** of them, `list_row_height()` for rows in the interface font and
+  `code_row_height()` for rows in the fixed-width one, so a view and its rows have to agree about
   *which*, as well as about the number. Both are functions of the fonts and no longer a `const`, so
   never write a literal row height anywhere; the two halves are safe only because both are read in
   the same render pass. This is also why variable-height rows are not free.
-- `Size` has no `From<f32>` — write `Size::px(300.)`. But `.padding`, `.spacing`, `.margin` and
+- `Size` has no `From<f32>`; write `Size::px(300.)`. But `.padding`, `.spacing`, `.margin` and
   `.corner_radius` do take plain `f32`.
 - `label()` and `paragraph()` do not implement `StyleExt`, so they have no `.background()` /
   `.border()`; wrap them in a `rect()`.
 - `spawn` ties a task to the scope it was called in, and a task whose scope is unmounted is
-  dropped — before its first poll, if that comes first. A handler on something the handler
+  dropped, before its first poll if that comes first. A handler on something the handler
   itself takes down (a context menu's item, which the press closes) has to `spawn_forever`.
 - A `VirtualScrollView` scrolls sideways only as far as the widest row it has built, so a
   row that should be reachable sideways is never `width(Size::fill())`. It is not
@@ -261,7 +258,7 @@ feature there with the substitute, so a release that brings it is noticed.
 
 ## Testing the UI
 
-`freya-testing` runs the whole app headless on the test's own thread; the binary's suite runs in
+`freya-testing` runs the whole app headless on the test's own thread. The binary's suite runs in
 under two seconds, so a test written to settle one point costs less than a `cargo run` and a
 look. It can be asked about any control, drag, scroll, keyboard binding, laid-out size, worker
 answer, or which component re-rendered; it cannot say how anything *looks*, measure text, or
