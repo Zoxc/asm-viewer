@@ -1,12 +1,34 @@
 //! Unwind entries: the `RUNTIME_FUNCTION`s an x86-64 PE's exception directory (`.pdata`)
-//! states, one per function with unwind info, each with both ends and no name.
+//! states and the FDEs an ELF's `.eh_frame` does, one per function with unwind info, each
+//! with both ends and no name.
+//!
+//! One fixture is a real toolchain's: `line_fixture_hidden.so`, committed in
+//! `tests/fixtures/` beside `line_fixture.c` and built from it, from that directory, with
+//! exactly:
+//!
+//! ```text
+//! gcc -shared -fPIC -fvisibility=hidden -nostdlib -s -Wl,--build-id=none \
+//!     -o line_fixture_hidden.so line_fixture.c
+//! ```
+//!
+//! with gcc (GCC) 16.1.1 20260515 (Red Hat 16.1.1-2) and GNU ld 2.46.1. What each flag is
+//! for: `-fvisibility=hidden` keeps the three functions out of `.dynsym`, which is then the
+//! null entry alone; `-s` strips `.symtab`; `-nostdlib` links no CRT, so `.text` is exactly
+//! the three functions and there is no `_init`; `-Wl,--build-id=none` keeps the bytes a
+//! function of the source. The image therefore names nothing — no symbol table, no dynamic
+//! function, no entry point — and its `.eh_frame`, which gcc writes for every function by
+//! default, is the only thing that says where its functions are: the ELF analogue of
+//! `line_fixture_noexport.dll`, as `gcc` and `ld` lay one out (`zR`, `pcrel|sdata4`, the
+//! terminator, an `.eh_frame_hdr` beside). 9 KB. The recipe is not in `line_fixture.c`'s
+//! header, where the other objects' are, because that header's length puts `int add` on
+//! line 21 and every row assertion pins it.
 
 mod common;
 
 use analysis::{Architecture, Gap, GapKind, Listing};
 use common::{
-    elf_shared_object, named, names, parse, pe_image, ExportedSymbol, PeDll, SharedObject,
-    TEXT_ADDRESS,
+    committed_fixture, elf_shared_object, named, names, parse, pe_image, ExportedSymbol, PeDll,
+    SharedObject, TEXT_ADDRESS,
 };
 use object::{Object as _, ObjectSection as _};
 
@@ -560,5 +582,75 @@ fn a_cut_eh_frame_yields_what_parsed_before_the_cut() {
             format!("<function {:#x}>", TEXT_ADDRESS + 4),
             "first".to_owned()
         ]
+    );
+}
+
+const HIDDEN_SO: &str = "line_fixture_hidden.so";
+
+/// The committed shared object names nothing itself: a linked image with no symbol table,
+/// no dynamic function, no entry point — and an `.eh_frame`.
+#[test]
+fn the_hidden_shared_object_names_nothing_itself() {
+    use object::{ObjectKind, ObjectSymbol as _, SymbolKind};
+
+    let bytes = committed_fixture(HIDDEN_SO);
+    let file = object::File::parse(bytes.as_slice()).expect("an ELF image");
+    assert_eq!(file.kind(), ObjectKind::Dynamic);
+    assert_eq!(file.symbols().count(), 0, "-s");
+    assert!(
+        !file
+            .dynamic_symbols()
+            .any(|symbol| symbol.kind() == SymbolKind::Text),
+        "-fvisibility=hidden"
+    );
+    assert_eq!(file.entry(), 0, "-shared, no _start");
+    assert!(file.section_by_name(".eh_frame").is_some());
+}
+
+/// Its three functions are what its FDEs state, as `gcc` and `ld` wrote them: `<function
+/// 0x…>` each, at the addresses `readelf --debug-dump=frames` prints, with the FDE's length
+/// as size and extent — the same three lengths `line_fixture.o` gives the same functions —
+/// each decoding to code that ends in `ret`, and the section's ranges being exactly those.
+#[test]
+fn the_hidden_shared_objects_functions_are_its_fdes() {
+    let object = parse(&committed_fixture(HIDDEN_SO));
+    let flat = parse(&committed_fixture("line_fixture.o"));
+
+    // `.text` sits at 0x238 in an image based at 0; `add`, `twice`, `sum_to` in that order.
+    let functions = [
+        (0x238u64, 20u64, "add"),
+        (0x24c, 28, "twice"),
+        (0x268, 62, "sum_to"),
+    ];
+    assert_eq!(
+        names(&object),
+        functions
+            .iter()
+            .map(|(address, ..)| format!("<function {address:#x}>"))
+            .collect::<Vec<_>>()
+    );
+    for (address, len, name) in functions {
+        let function = named(&object, &format!("<function {address:#x}>"));
+        assert_eq!(function.address, address);
+        assert_eq!(function.size, len, "{name}");
+        assert_eq!(
+            function.size,
+            named(&flat, name).size,
+            "{name}: the .o's st_size"
+        );
+        assert_eq!(function.extent(&object), Some(len), "{name}");
+        let assembly = function.assembly(&object).expect("it decodes");
+        let last = assembly.instructions.last().expect("at least one");
+        assert_eq!(
+            last.format.first().map(|(text, _)| text.as_str()),
+            Some("ret"),
+            "{name}"
+        );
+    }
+    let section = named(&object, "<function 0x238>").section.clone().unwrap();
+    assert_eq!(
+        section.unwind,
+        [0x238..0x24c, 0x24c..0x268, 0x268..0x2a6],
+        "the FDEs' ranges"
     );
 }

@@ -501,7 +501,8 @@ ends stated. An
 architecture no backend decodes gives the symbol stretch the `undecodable` `Assembly` as the
 symbol view gets, and its gaps are `Bytes` like any other. The section's end is saturating,
 where `estimate_size`'s is `None`: a listing has to end somewhere. `tests/listing.rs` holds one
-invariant test over every fixture shape and both committed gcc objects — the stretches partition
+invariant test over every fixture shape, both committed gcc objects and gcc's stripped `.so` —
+the stretches partition
 the section exactly, every symbol inside it is at one label, each stretch's code is the symbol's
 own row for row, and the gap starts exactly where the extent stops — and a test per decision.
 
@@ -528,8 +529,8 @@ listings, and that is the sidebar's question.
 
 **"Never panic on any file input" is tested two ways, and they are different jobs.**
 `tests/mutations.rs` is the **search**: it takes every fixture the suite builds — both committed
-gcc objects, the synthesized DWARF one, the ELF `.so`, the PE DLL and the same DLL naming a
-`.pdb` that is nowhere — and the six that are files on disk, the linker's three DLLs each parsed
+gcc objects and gcc's stripped `.so`, the synthesized DWARF one, the ELF `.so`, the PE DLL and
+the same DLL naming a `.pdb` that is nowhere — and the six that are files on disk, the linker's three DLLs each parsed
 **beside its PDB** and those PDBs themselves, and truncates each at every length, writes poison values (`0`,
 `u32::MAX`, `u64::MAX`, the file's own length…) into every numeric field of every header, section
 header, symbol and relocation — and, for the PDB, of the MSF superblock and stream directory, and

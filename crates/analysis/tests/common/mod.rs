@@ -75,7 +75,8 @@ pub fn committed_fixture(name: &str) -> Vec<u8> {
             "{}: {error}\n\
              This fixture is committed to the repository, not generated. Restore it from \
              git, or rebuild it with the command in tests/fixtures/line_fixture.c (the gcc \
-             objects) or tests/pdb.rs (the DLL and its PDB).",
+             objects), tests/pdb.rs (the DLLs and their PDBs) or tests/unwind.rs (the \
+             shared object).",
             path.display()
         )
     })

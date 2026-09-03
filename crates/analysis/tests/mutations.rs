@@ -100,9 +100,10 @@ fn scratch(test: &str) -> PathBuf {
 }
 
 /// Every shape the crate can be asked about: relocatable objects with and without DWARF,
-/// real compiler output in DWARF 5, the two linked images, whose export and entry-point
-/// paths (`declared_code`) no `.o` reaches at all, one of them naming a `.pdb` that is
-/// nowhere, and the linker's three real DLLs each **beside its PDB**.
+/// real compiler output in DWARF 5, `gcc`'s stripped shared object whose only declarations
+/// are its FDEs, the two linked images, whose export and entry-point paths
+/// (`declared_code`) no `.o` reaches at all, one of them naming a `.pdb` that is nowhere,
+/// and the linker's three real DLLs each **beside its PDB**.
 fn corpus(test: &str) -> Vec<Case> {
     let mut corpus = vec![
         Case::in_memory("caller_and_target".to_owned(), caller_and_target()),
@@ -114,6 +115,10 @@ fn corpus(test: &str) -> Vec<Case> {
         Case::in_memory(
             "line_fixture_split.o".to_owned(),
             committed_fixture("line_fixture_split.o"),
+        ),
+        Case::in_memory(
+            "line_fixture_hidden.so".to_owned(),
+            committed_fixture("line_fixture_hidden.so"),
         ),
     ];
     corpus.extend(
