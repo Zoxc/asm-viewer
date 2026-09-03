@@ -186,7 +186,9 @@ invalidates in the same commit**: these are the record of why things are the way
 - `agents/Headless.md` — `freya-testing` as it actually behaves, checked against its sources.
 
 Bugs and gaps in dependencies are in `notes/upstream/`, one file per crate: what was hit, what
-it cost here, and whether it was reported. Add the note with the workaround.
+it cost here, and whether it was reported. Add the note with the workaround. Each file may end
+with a `## Wanted` section for features the crate lacks and the app substitutes for: add the
+feature there with the substitute, so a release that brings it is noticed.
 
 ## Rules that hold everywhere
 

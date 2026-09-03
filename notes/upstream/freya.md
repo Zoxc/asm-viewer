@@ -118,3 +118,29 @@ that as a `Size::Fn` **width** instead and report their content through `on_size
 `inner_sizes` (`src/ui/width.rs`), which costs a wide row one layout before it is drawn whole.
 `a_picked_rows_wash_runs_as_wide_as_the_widest_row` would catch the minimum coming back. Not
 reported yet.
+
+## Wanted
+
+**A pointer release nothing can cancel.** There is no `on_global_pointer_up`; a release is
+`on_global_pointer_press`, which any handler's `prevent_default` on the way cancels, and
+freya's own scrollbar thumb does (above). The app ends a sweep on the capture-phase press
+instead (`ui.rs`), which happens to run first; a plain "the button came up" event would say
+what is meant.
+
+**A highlight and a caret the size of the line box, on whole pixels.** A paragraph's
+`highlights` are painted as the glyphs' tight boxes, stretched by `CursorMode::Expanded` to
+the paragraph's area but never wider than the glyphs, and its `cursor_index` is drawn two
+pixels wide at the glyph's fractional edge; between one row's highlight and the next's there
+is a seam wherever the line's fonts or a placeholder make the line taller than a run. The
+code panes draw both marks themselves as rects of the row on the device pixel grid
+(`ui/code_row.rs`), reading the columns' x off the `ParagraphHolder` -- which is the one
+thing that could not be done without the engine, and which works.
+
+**One inline child is one unit, in writing.** `paragraph().child(..)` reserves a placeholder
+that skia counts as one UTF-16 unit of the text (U+FFFC), which is what makes a link inside a
+row selectable as a whole; nothing in freya's docs says so, and the registry cannot show
+skia's source, so the app pins it with a test
+(`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol`).
+
+**`SyntaxHighlighter::tree()`**, so the function spans the source rows' menu needs are not a
+second parse of the file (above, and `ui/highlight.rs`).
