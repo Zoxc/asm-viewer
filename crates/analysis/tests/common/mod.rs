@@ -905,17 +905,67 @@ pub struct SharedObject<'a> {
     pub static_symbols: &'a [ExportedSymbol<'a>],
     /// An offset into `.text`, or [`None`] for an image that declares no entry point.
     pub entry: Option<u64>,
+    /// Written to `.eh_frame` as one FDE each, `(begin, end)` offsets into `.text` — allowed
+    /// past its end, so a test can state a function where there is no code — and empty for
+    /// an image without an unwind table.
+    pub eh_frame: &'a [(u64, u64)],
+}
+
+/// The `.eh_frame` an ELF image carries, as `gcc` writes one: a `zR` CIE whose FDE addresses
+/// are `pcrel|sdata4`, an FDE per range, and the zero-length terminator. Through `gimli`'s
+/// writer, whose pc-relative encoding subtracts only its own offset into the section, so
+/// the address handed to it is made relative to the section's `address` first; the
+/// terminator is appended by hand, since the writer leaves it out.
+fn eh_frame_section(address: u64, ranges: &[(u64, u64)]) -> Vec<u8> {
+    use gimli::write::{
+        Address, CommonInformationEntry, EhFrame, EndianVec, FrameDescriptionEntry, FrameTable,
+    };
+    use gimli::{Encoding, Format, LittleEndian, Register};
+
+    let mut table = FrameTable::default();
+    let mut cie = CommonInformationEntry::new(
+        Encoding {
+            format: Format::Dwarf32,
+            version: 1,
+            address_size: 8,
+        },
+        1,
+        -8,
+        Register(16),
+    );
+    cie.fde_address_encoding = gimli::DwEhPe(gimli::DW_EH_PE_pcrel.0 | gimli::DW_EH_PE_sdata4.0);
+    let cie = table.add_cie(cie);
+    for &(begin, end) in ranges {
+        let function = TEXT_ADDRESS + begin;
+        table.add_fde(
+            cie,
+            FrameDescriptionEntry::new(
+                Address::Constant(function.wrapping_sub(address)),
+                (end - begin) as u32,
+            ),
+        );
+    }
+    let mut section = EhFrame(EndianVec::new(LittleEndian));
+    table
+        .write_eh_frame(&mut section)
+        .expect("writing the fixture's .eh_frame");
+    let mut bytes = section.0.into_vec();
+    bytes.extend_from_slice(&[0; 4]);
+    bytes
 }
 
 /// An x86-64 ELF **shared object** (`ET_DYN`), assembled byte by byte because `object`'s
 /// writer emits `ET_REL` relocatable objects and cannot write a dynamic symbol table —
-/// which is the shape being tested: a stripped `.so` has no `.symtab` at all.
+/// which is the shape being tested: a stripped `.so` has no `.symtab` at all. With
+/// `eh_frame` ranges, an `.eh_frame` section too ([`eh_frame_section`]), last, so an image
+/// without one is the eight-section one byte for byte.
 pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     const SHDR: usize = 64;
     const EHDR: usize = 64;
     const SYM: usize = 24;
 
-    // Section indices, in the order they are written below.
+    // Section indices, in the order they are written below; `.eh_frame`, when there is
+    // one, is the ninth.
     const TEXT: u16 = 1;
     const DATA: u16 = 2;
     const SHSTRTAB: u16 = 7;
@@ -926,11 +976,19 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
         dynamic,
         static_symbols,
         entry,
+        eh_frame,
     } = fixture;
 
     // `.data` exists only so a data symbol has somewhere to be that is not code.
     let data = [0u8; 8];
     let data_rva = TEXT_RVA + text.len() as u64 + 0x1000;
+    // A page past `.data`: decided up front, since the FDEs are written relative to it.
+    let eh_frame_rva = data_rva + 0x1000;
+    let eh_frame_bytes = if eh_frame.is_empty() {
+        Vec::new()
+    } else {
+        eh_frame_section(IMAGE_BASE + eh_frame_rva, eh_frame)
+    };
 
     // The entries start with the null entry every ELF symbol table has.
     let table = |symbols: &[ExportedSymbol]| {
@@ -976,6 +1034,7 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
         section_name(".strtab"),
         section_name(".shstrtab"),
     ];
+    let eh_frame_name = (!eh_frame.is_empty()).then(|| section_name(".eh_frame"));
 
     let mut out = vec![0u8; EHDR];
     let place = |out: &mut Vec<u8>, bytes: &[u8]| {
@@ -990,6 +1049,7 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     let symtab_at = place(&mut out, &symtab);
     let strtab_at = place(&mut out, &strtab);
     let shstrtab_at = place(&mut out, &shstrtab);
+    let eh_frame_at = (!eh_frame_bytes.is_empty()).then(|| place(&mut out, &eh_frame_bytes));
     let shoff = out.len() as u64;
 
     // sh_name, sh_type, sh_flags, sh_addr, (sh_offset, sh_size), sh_link, sh_entsize.
@@ -1037,6 +1097,10 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     out.extend_from_slice(&shdr(names[4], 2, 0, 0, symtab_at, 6, SYM as u64));
     out.extend_from_slice(&shdr(names[5], 3, 0, 0, strtab_at, 0, 0));
     out.extend_from_slice(&shdr(names[6], 3, 0, 0, shstrtab_at, 0, 0));
+    if let (Some(name), Some(at)) = (eh_frame_name, eh_frame_at) {
+        out.extend_from_slice(&shdr(name, 1, 2, IMAGE_BASE + eh_frame_rva, at, 0, 0));
+    }
+    let sections = SECTIONS + u16::from(eh_frame_at.is_some());
 
     // And the header, now that every offset is known. ET_DYN = 3, EM_X86_64 = 62.
     let header = &mut out[..EHDR];
@@ -1053,7 +1117,7 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     header[52..54].copy_from_slice(&(EHDR as u16).to_le_bytes()); // e_ehsize
     header[54..56].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
     header[58..60].copy_from_slice(&(SHDR as u16).to_le_bytes()); // e_shentsize
-    header[60..62].copy_from_slice(&SECTIONS.to_le_bytes());
+    header[60..62].copy_from_slice(&sections.to_le_bytes());
     header[62..64].copy_from_slice(&SHSTRTAB.to_le_bytes());
 
     out
@@ -1373,6 +1437,7 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
                 dynamic: SYMBOLS,
                 static_symbols: &[],
                 entry: Some(4),
+                eh_frame: UNWIND,
             }),
             2,
         ),

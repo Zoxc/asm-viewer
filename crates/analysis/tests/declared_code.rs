@@ -47,6 +47,7 @@ fn stripped(entry: Option<u64>) -> SharedObject<'static> {
         dynamic: EXPORTS,
         static_symbols: &[],
         entry,
+        eh_frame: &[],
     }
 }
 
@@ -205,6 +206,7 @@ fn an_export_that_is_already_a_symbol_table_entry_is_not_listed_twice() {
             code: true,
         }],
         entry: Some(0),
+        eh_frame: &[],
     }));
 
     let at_first = object

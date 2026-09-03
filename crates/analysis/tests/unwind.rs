@@ -4,8 +4,11 @@
 mod common;
 
 use analysis::{Architecture, Gap, GapKind, Listing};
-use common::{named, names, parse, pe_image, ExportedSymbol, PeDll, TEXT_ADDRESS};
-use object::Object as _;
+use common::{
+    elf_shared_object, named, names, parse, pe_image, ExportedSymbol, PeDll, SharedObject,
+    TEXT_ADDRESS,
+};
+use object::{Object as _, ObjectSection as _};
 
 /// Four functions back to back, each `nop`s then a `ret`, so every offset below is a real
 /// instruction boundary and a listing decoded from it terminates.
@@ -314,4 +317,38 @@ fn a_chained_entry_at_a_named_address_keeps_the_name() {
     }));
     assert_eq!(names(&object), ["first", "second"]);
     assert_eq!(named(&object, "second").extent(&object), Some(2));
+}
+
+/// The in-memory ELF writer's `.eh_frame` reads back through `gimli` as `gcc`'s does: a
+/// section by that name, ending in the zero-length terminator, whose FDEs — pc-relative,
+/// resolved against the section's own address — state exactly the ranges asked for.
+#[test]
+fn the_writers_eh_frame_reads_back_through_gimli() {
+    use gimli::{BaseAddresses, CieOrFde, EhFrame, LittleEndian, UnwindSection as _};
+
+    let image = elf_shared_object(SharedObject {
+        text: TEXT,
+        dynamic: &[FIRST],
+        static_symbols: &[],
+        entry: None,
+        eh_frame: &[(0, 4), (4, 6)],
+    });
+    let file = object::File::parse(image.as_slice()).expect("an ELF image");
+    let section = file.section_by_name(".eh_frame").expect("an .eh_frame");
+    let data = section.data().expect("its bytes");
+    assert_eq!(&data[data.len() - 4..], &[0; 4], "the terminator");
+
+    let eh_frame = EhFrame::new(data, LittleEndian);
+    let bases = BaseAddresses::default().set_eh_frame(section.address());
+    let mut entries = eh_frame.entries(&bases);
+    let mut fdes = Vec::new();
+    while let Some(entry) = entries.next().expect("every record parses") {
+        if let CieOrFde::Fde(partial) = entry {
+            let fde = partial
+                .parse(|section, bases, offset| section.cie_from_offset(bases, offset))
+                .expect("the FDE parses");
+            fdes.push((fde.initial_address(), fde.len()));
+        }
+    }
+    assert_eq!(fdes, [(TEXT_ADDRESS, 4), (TEXT_ADDRESS + 4, 2)]);
 }

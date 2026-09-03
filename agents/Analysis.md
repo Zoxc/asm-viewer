@@ -525,7 +525,8 @@ gcc objects, the synthesized DWARF one, the ELF `.so`, the PE DLL and the same D
 `u32::MAX`, `u64::MAX`, the file's own length…) into every numeric field of every header, section
 header, symbol and relocation — and, for the PDB, of the MSF superblock and stream directory, and
 for the DLL of its debug directory and CodeView record, its exception directory and every
-`RUNTIME_FUNCTION`'s three words — and splats pseudo-random runs over it,
+`RUNTIME_FUNCTION`'s three words, and for an ELF of every `.eh_frame` record's length, CIE
+pointer, address and range — and splats pseudo-random runs over it,
 running the whole pipeline over each result. A `.pdb` being a second file found beside its
 binary, a mutated PDB is written beside its pristine DLL before that is parsed, under a directory
 per test in the target directory; a sanity check first asks each intact pair for line info, so the

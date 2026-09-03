@@ -380,8 +380,9 @@ fn pdb_fields(data: &[u8]) -> Vec<(usize, usize)> {
 }
 
 /// Every `(offset, width)` in an ELF64 that a parser reads as a count, an offset or a
-/// size: the file header, every section header, and every entry of every symbol or
-/// relocation table those headers point at.
+/// size: the file header, every section header, every entry of every symbol or relocation
+/// table those headers point at, and every record of `.eh_frame` — its length, its CIE
+/// pointer, and an FDE's address and range.
 fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
     let mut fields = Vec::new();
     if data.len() < 64 || &data[..4] != b"\x7fELF" || data[4] != 2 {
@@ -416,6 +417,8 @@ fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
     // The tables the section headers point at. Every entry of each is 24 bytes, whether it
     // is a symbol or a RELA.
     let mut tables: Vec<(usize, usize)> = Vec::new();
+    // Every section's name offset and bytes, for the one section found by name.
+    let mut headers: Vec<(usize, usize, usize)> = Vec::new();
     for i in 0..shnum {
         let base = shoff + i * shentsize;
         if base + shentsize > data.len() {
@@ -438,13 +441,32 @@ fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
             fields.push((base + offset, width));
         }
 
+        let name = u32::from_le_bytes(data[base..base + 4].try_into().unwrap()) as usize;
+        let offset = u64::from_le_bytes(data[base + 24..base + 32].try_into().unwrap()) as usize;
+        let size = u64::from_le_bytes(data[base + 32..base + 40].try_into().unwrap()) as usize;
+        headers.push((name, offset, size));
+
         // SHT_SYMTAB, SHT_RELA and SHT_DYNSYM: the three with 24-byte entries.
         let kind = u32::from_le_bytes(data[base + 4..base + 8].try_into().unwrap());
         if matches!(kind, 2 | 4 | 11) {
-            let offset =
-                u64::from_le_bytes(data[base + 24..base + 32].try_into().unwrap()) as usize;
-            let size = u64::from_le_bytes(data[base + 32..base + 40].try_into().unwrap()) as usize;
             tables.push((offset, size));
+        }
+    }
+
+    // `.eh_frame`, by name through `e_shstrndx`: the one table here whose records are of
+    // variable length, so it is walked record by record rather than by entry size.
+    let shstrndx = u16::from_le_bytes(data[62..64].try_into().unwrap()) as usize;
+    if let Some(&(_, strings, strings_size)) = headers.get(shstrndx) {
+        for &(name, offset, size) in &headers {
+            let named = strings
+                .checked_add(name)
+                .and_then(|start| {
+                    data.get(start..(strings.saturating_add(strings_size)).min(data.len()))
+                })
+                .is_some_and(|bytes| bytes.starts_with(b".eh_frame\0"));
+            if named {
+                fields.extend(eh_frame_fields(data, offset, size));
+            }
         }
     }
 
@@ -465,6 +487,34 @@ fn elf_fields(data: &[u8]) -> Vec<(usize, usize)> {
         }
     }
 
+    fields
+}
+
+/// The records of an `.eh_frame` at `offset..offset + size`: each one's length word and
+/// the CIE id or pointer after it, and, for an FDE (a nonzero pointer), the two words after
+/// that — its address and its range as `gcc` encodes them, `pcrel|sdata4`. The walk stops
+/// at a zero length (the terminator), a 64-bit length marker, or one running past the
+/// section, since the length is what says where the next record is.
+fn eh_frame_fields(data: &[u8], offset: usize, size: usize) -> Vec<(usize, usize)> {
+    let mut fields = Vec::new();
+    let Some(end) = offset.checked_add(size).filter(|&end| end <= data.len()) else {
+        return fields;
+    };
+    let mut pos = offset;
+    while pos + 8 <= end {
+        let length = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+        fields.push((pos, 4));
+        if length == 0 || length == 0xffff_ffff || pos + 4 + length > end {
+            break;
+        }
+        fields.push((pos + 4, 4));
+        let cie_pointer = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
+        if cie_pointer != 0 && length >= 12 {
+            fields.push((pos + 8, 4));
+            fields.push((pos + 12, 4));
+        }
+        pos += 4 + length;
+    }
     fields
 }
 
