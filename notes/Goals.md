@@ -252,18 +252,37 @@ one item per part, so the unfinished half stays visible.
   being as wide as the row; and the widest is held under the listing's identity, so a file
   with short lines opened after one with a long line has nothing to scroll over. The gutter
   is a child of the row and goes with it. Four headless tests, one per mechanism.
-- [ ] Text selection, of characters, in both the assembly and the source pane: drag across
+- [x] Text selection, of characters, in both the assembly and the source pane: drag across
   part of a line or across lines and Ctrl+C copies the text, the way an editor does, beside
-  the row selection above, which stays for whole runs. Was deferred, with the cost read out
-  of the freya sources (`notes/Plan.md`, 7c), and the cost stands: a scroll view is *not*
-  what stops it — freya's selection is a range of char offsets into a rope held by the
-  editor, and its own `CodeEditor` selects across the rows of a `VirtualScrollView` happily —
-  but the model wants one rope, one line per row and **one `paragraph()` per line**, and an
-  assembly row is a gutter of rects, an address label and up to three separate elements, the
-  middle one being the clickable relocation target, which could only survive as an inline
-  child whose placeholder character is not a character of any rope. So it is a rewrite of
-  the relocation link and the arrow gutter on the assembly side; the source side could have
-  it cheaply and is wanted in the same step, so the two panes keep behaving alike.
+  the row selection above, which stays for whole runs. Built by hand rather than on freya's
+  editor: the model is the app's own (`src/chars.rs`, a row and a column in UTF-16 units, a
+  row's text in pieces), the gestures and the copy sit beside the rows' in `ui/marks.rs`,
+  and freya supplies only what a `paragraph()` has anyway -- the skia hit-test behind its
+  `ParagraphHolder` and its highlight paint. What was taken from `CodeEditor` is its shape:
+  one holder per row, per-row highlights, the release watched at the root. The cost read
+  out earlier was right about the row and wrong about the remedy: an assembly row's text is
+  now one paragraph with the relocation link as an inline child, which freya sizes as a
+  placeholder and moves the link's own node to, so the link is unchanged and is one unit of
+  the row to the engine, copying as its name. All three listings draw their rows through one
+  `code_row` (`src/ui/code_row.rs`), which is where both panes got it at once. Gutter picks
+  rows out alone; text picks characters out too; two presses take a word and three the row's
+  text; Ctrl+C prefers the characters and Escape drops them first. `agents/Panes.md`.
+- [ ] Autoscroll while sweeping a selection past the pane's edge: a `VirtualScrollView`
+  builds only the rows on screen, so a sweep stops at the last built row, as freya's own
+  editor's does. A `on_global_pointer_move` on the list clamping to its first or last row
+  and nudging the controller would do it.
+- [x] A caret at the pressed column, the highlight filling the row's height so a run of rows
+  reads as one block, and the pointer's icon over the code panes: an I-beam over text, the
+  hand over a link, the arrow over the gutter -- set from the row's move handler alone, the
+  links' `CursorArea`s removed so nothing fights it (`agents/Panes.md`).
+- [x] The rows of a listing sit on whole device pixels wherever the window puts the listing
+  (`Nudge`), so the washes of two selected rows meet on an edge instead of leaving a seam;
+  and the caret is the row's own one-pixel stroke on the grid, fainter than the text
+  (`caret_fg`), in place of the engine's two-pixel one on a fractional edge (`agents/Panes.md`).
+- [x] The row wash means the selection or the caret, not the run: the old grey is now the
+  selection's colour, painted under the characters a sweep picked out and worn whole by the
+  rows of a gutter's run (or Ctrl+A's, or a landing's), and the caret's row wears it faded
+  (`cursor_row_bg`). A text sweep washes no row: the highlight is the selection.
 - [ ] Ctrl+C copies whatever is selected, wherever it is: the run of rows in either pane
   today, the characters once the goal above lands, and the other places text is picked out
   -- a filter box, the scratchpad's editor, its diagnostics and its output -- so the one

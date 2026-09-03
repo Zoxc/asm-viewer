@@ -31,6 +31,94 @@ pub(crate) fn asm_line(instruction: &Instruction, bias: u64) -> String {
     text
 }
 
+/// Which element an instruction row draws in place of one of the formatter's spans.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Link {
+    /// The relocation target's name, in the operand the relocation applies to.
+    Relocation,
+    /// A branch's displacement, where the listing has the row it lands on.
+    Branch,
+}
+
+/// How an instruction's text is drawn after its address: the formatter's spans up to the
+/// link, the link, and the spans after it. `linked` says whether its branch, if it has
+/// one, is drawn as a link -- which is the listing's to know, being whether it has the
+/// row the branch lands on. The two spans are exclusive -- a branch whose displacement is
+/// a relocation placeholder names no address of its own -- so there is at most one link,
+/// and an instruction with no span has an empty tail.
+pub(crate) fn split(
+    instruction: &Instruction,
+    linked: bool,
+) -> (&[(String, SpanKind)], Option<Link>, &[(String, SpanKind)]) {
+    let link = match instruction.relocation_span {
+        Some(i) if instruction.relocation.is_some() => Some((i, Link::Relocation)),
+        _ => instruction
+            .branch_span
+            .filter(|_| linked)
+            .map(|i| (i, Link::Branch)),
+    };
+    match link {
+        Some((i, link)) if i < instruction.format.len() => (
+            &instruction.format[..i],
+            Some(link),
+            &instruction.format[i + 1..],
+        ),
+        _ => (&instruction.format[..], None, &[][..]),
+    }
+}
+
+/// Whether instruction `index`'s branch is drawn as a link: where the listing has the row
+/// it lands on, which is the same set the gutter draws an arrow for.
+pub(crate) fn linked(assembly: &Assembly, index: usize) -> bool {
+    assembly.instructions[index].branch_span.is_some() && assembly.edge_from(index).is_some()
+}
+
+/// The text instruction `index`'s row draws after its address, as the clipboard sees it:
+/// [`asm_line`] without the address column, the link as one inline piece. What the row
+/// draws is built from the same [`split`], so a column into one is a column into the other.
+pub(crate) fn instruction_line(assembly: &Assembly, index: usize) -> Line {
+    let instruction = &assembly.instructions[index];
+    let (head, link, tail) = split(instruction, linked(assembly, index));
+    let mut line = Line::default();
+    let push = |line: &mut Line, run: &[(String, SpanKind)]| {
+        for (text, _) in run {
+            line.push_text(text.clone());
+        }
+    };
+    push(&mut line, head);
+    match link {
+        Some(Link::Relocation) => {
+            if let Some(target) = &instruction.relocation {
+                line.push_inline(target.display().to_owned());
+            }
+        }
+        Some(Link::Branch) => {
+            if let Some((text, _)) = instruction
+                .branch_span
+                .and_then(|i| instruction.format.get(i))
+            {
+                line.push_inline(text.clone());
+            }
+        }
+        // The formatter offered no operand to put the name in: appended, as `asm_line`
+        // appends it.
+        None => {
+            if let Some(target) = &instruction.relocation {
+                line.push_text(" ");
+                line.push_inline(target.display().to_owned());
+            }
+        }
+    }
+    push(&mut line, tail);
+    // As `asm_line` ends: the formatter's padding after the last span is not text.
+    if let Some(crate::chars::Piece::Text(last)) = line.pieces.last_mut() {
+        last.truncate(last.trim_end().len());
+    }
+    line.pieces
+        .retain(|piece| !matches!(piece, crate::chars::Piece::Text(text) if text.is_empty()));
+    line
+}
+
 /// A disassembled symbol, where its branches are drawn and what says where its
 /// instructions came from, compared by pointer.
 #[derive(Clone)]
@@ -126,6 +214,8 @@ struct AsmRows {
     touching: Vec<PlacedEdge>,
     /// The run of rows picked out here, or `None` when there is none.
     rows: Option<RowSelection>,
+    /// The characters picked out here, for each row to draw its part of.
+    chars: Option<CharSelection>,
 }
 
 /// What one row draws in the gutter: its own lanes, and how much of it belongs to a branch
@@ -160,42 +250,40 @@ impl Component for RelocationLabel {
         };
         let text = self.target.display().to_owned();
 
-        CursorArea::new().child(
-            rect()
-                .maybe(hovering(), |rect| {
-                    rect.background(palette().link_hover_bg)
-                        .corner_radius(6.0)
-                        .border(
-                            Border::new()
-                                .fill(palette().name_hover_fg)
-                                .width(BorderWidth {
-                                    top: 0.0,
-                                    right: 0.0,
-                                    bottom: 2.0,
-                                    left: 0.0,
-                                }),
-                        )
-                })
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |e: Event<PressEventData>| {
-                    // Or the press bubbles into the row, which would pin the line the
-                    // instruction being left came from.
-                    e.stop_propagation();
+        rect()
+            .maybe(hovering(), |rect| {
+                rect.background(palette().link_hover_bg)
+                    .corner_radius(6.0)
+                    .border(
+                        Border::new()
+                            .fill(palette().name_hover_fg)
+                            .width(BorderWidth {
+                                top: 0.0,
+                                right: 0.0,
+                                bottom: 2.0,
+                                left: 0.0,
+                            }),
+                    )
+            })
+            .on_pointer_over(move |_| hovering.set_if_modified(true))
+            .on_pointer_out(move |_| hovering.set_if_modified(false))
+            .on_press(move |e: Event<PressEventData>| {
+                // Or the press bubbles into the row, which would pin the line the
+                // instruction being left came from.
+                e.stop_propagation();
 
-                    activate(
-                        open,
-                        history,
-                        Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
-                        Visit::Went,
-                    );
-                })
-                .child(label().text(text).max_lines(1).color(if hovering() {
-                    palette().name_hover_fg
-                } else {
-                    palette().name_fg
-                })),
-        )
+                activate(
+                    open,
+                    history,
+                    Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
+                    Visit::Went,
+                );
+            })
+            .child(label().text(text).max_lines(1).color(if hovering() {
+                palette().name_hover_fg
+            } else {
+                palette().name_fg
+            }))
     }
 }
 
@@ -235,43 +323,41 @@ impl Component for BranchLabel {
         let mut controller = self.controller;
         let viewport = self.viewport;
 
-        CursorArea::new().child(
-            rect()
-                .maybe(hovering(), |rect| {
-                    rect.background(palette().link_hover_bg)
-                        .corner_radius(6.0)
-                        .border(
-                            Border::new()
-                                .fill(palette().branch_lit_fg)
-                                .width(BorderWidth {
-                                    top: 0.0,
-                                    right: 0.0,
-                                    bottom: 2.0,
-                                    left: 0.0,
-                                }),
-                        )
-                })
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |e: Event<PressEventData>| {
-                    // Or the press bubbles into the row, which would keep the row *this*
-                    // instruction is picked out, where the reader asked for the one it
-                    // jumps to.
-                    e.stop_propagation();
-                    reveal_row(&mut controller, *viewport.peek(), to);
-                    // The row landed on becomes the picked-out one, replacing the row the
-                    // press started on -- which `pointer_down` has already marked, that
-                    // being the one handler a stopped press does not undo. The source
-                    // pane owes the scroll to the target's line, where it has one; this
-                    // pane has just been given its own, above.
-                    mark_row(marked, at.as_ref().map(|at| at.file.clone()), to);
-                })
-                .child(label().text(text).max_lines(1).color(if hovering() {
-                    palette().branch_lit_fg
-                } else {
-                    kind_color(SpanKind::Address)
-                })),
-        )
+        rect()
+            .maybe(hovering(), |rect| {
+                rect.background(palette().link_hover_bg)
+                    .corner_radius(6.0)
+                    .border(
+                        Border::new()
+                            .fill(palette().branch_lit_fg)
+                            .width(BorderWidth {
+                                top: 0.0,
+                                right: 0.0,
+                                bottom: 2.0,
+                                left: 0.0,
+                            }),
+                    )
+            })
+            .on_pointer_over(move |_| hovering.set_if_modified(true))
+            .on_pointer_out(move |_| hovering.set_if_modified(false))
+            .on_press(move |e: Event<PressEventData>| {
+                // Or the press bubbles into the row, which would keep the row *this*
+                // instruction is picked out, where the reader asked for the one it
+                // jumps to.
+                e.stop_propagation();
+                reveal_row(&mut controller, *viewport.peek(), to);
+                // The row landed on becomes the picked-out one, replacing the row the
+                // press started on -- which `pointer_down` has already marked, that
+                // being the one handler a stopped press does not undo. The source
+                // pane owes the scroll to the target's line, where it has one; this
+                // pane has just been given its own, above.
+                mark_row(marked, at.as_ref().map(|at| at.file.clone()), to);
+            })
+            .child(label().text(text).max_lines(1).color(if hovering() {
+                palette().branch_lit_fg
+            } else {
+                kind_color(SpanKind::Address)
+            }))
     }
 }
 
@@ -439,8 +525,8 @@ pub(crate) struct SeparatorRow {
     /// The listing row this is, for the picked-out run: a sweep that crosses a boundary
     /// must not stop tracking the pointer, and a copy takes the blank line it draws.
     pub(crate) row: usize,
-    /// Whether it is inside the picked-out run.
-    pub(crate) selected: bool,
+    /// The wash of its pane's selection, if it is in it.
+    pub(crate) wash: Wash,
     /// The gutter's width for the whole symbol, and the lanes crossing this boundary.
     pub(crate) width: usize,
     pub(crate) arrows: RowArrows,
@@ -459,36 +545,33 @@ impl KeyExt for SeparatorRow {
 
 impl Component for SeparatorRow {
     fn render(&self) -> impl IntoElement {
-        let marked = use_consume::<Marked>().0;
-        let shift = use_consume::<Shift>().0;
-        let row = self.row;
         let width = self.width;
-        let (widest, listing) = (self.widest, self.listing);
 
-        rect()
-            .horizontal()
-            // As wide as the instruction rows are, so the rule inside it -- which fills
-            // the row -- runs as far as the widest row does. **Never measured**: what it
-            // holds is the gutter and that rule, and the rule is as wide as the row, so
-            // a separator reporting itself would report the row plus its gutter and the
-            // widest row would grow by a gutter's width every layout, without end.
-            .width(Widest::row_width(widest.floor(listing), listing))
-            .height(Size::px(code_row_height()))
-            // The same horizontal padding the instruction rows take. Without it the
-            // gutter's lines step three pixels sideways at every boundary they cross.
-            .padding(Gaps::new_symmetric(0.0, 3.0))
-            .background(row_background(false, self.selected))
-            // The same two handlers the instruction rows carry, so a sweep down the
-            // listing is not cut in half by every boundary it crosses. A run started on
-            // a separator is a row of no file: the boundary is nobody's line.
-            .on_pointer_down(move |e: Event<PointerEventData>| {
-                if e.button() == Some(MouseButton::Left) {
-                    mark_press(marked, *shift.peek(), Pane::Assembly, None, row);
-                }
-            })
-            .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, row))
-            .maybe(width > 0, |el| el.child(gutter(width, self.arrows)))
-            .child(block_rule())
+        // The rows' own chrome, **never measured**: what it holds is the gutter and the
+        // rule, and the rule is as wide as the row, so a separator reporting itself would
+        // report the row plus its gutter and the widest row would grow by a gutter's
+        // width every layout, without end. It takes the mark handlers with the chrome,
+        // so a sweep down the listing is not cut in half by every boundary it crosses;
+        // a run started on a separator is a row of no file and no text.
+        code_row(
+            Chrome {
+                pane: Pane::Assembly,
+                row: self.row,
+                file: None,
+                paired: None,
+                wash: self.wash,
+                widest: self.widest,
+                listing: self.listing,
+                measured: false,
+            },
+            (width > 0)
+                .then(|| gutter(width, self.arrows).into_element())
+                .into_iter()
+                .collect(),
+            None,
+            None,
+        )
+        .child(block_rule())
     }
 
     fn render_key(&self) -> DiffKey {
@@ -524,10 +607,13 @@ pub(crate) struct InstructionRow {
     /// rather than read here, so that a run growing by a line leaves every row not on it
     /// untouched.
     pub(crate) paired: Option<Edges>,
-    /// Whether this row is one of the run picked out here. Worked out by the list too,
-    /// so a row re-renders on its own membership changing and not on every row a drag
-    /// passes over.
-    pub(crate) selected: bool,
+    /// The wash of its pane's selection: a row of a run picked out whole, or the caret's
+    /// row. Worked out by the list too, so a row re-renders on its own wash changing and
+    /// not on every row a drag passes over.
+    pub(crate) wash: Wash,
+    /// The columns of this row inside the pane's character selection, worked out by the
+    /// list for the reason `selected` is (`RowChars`).
+    pub(crate) chars: RowChars,
     pub(crate) key: DiffKey,
 }
 
@@ -537,7 +623,8 @@ impl PartialEq for InstructionRow {
             && self.index == other.index
             && self.row == other.row
             && self.paired == other.paired
-            && self.selected == other.selected
+            && self.wash == other.wash
+            && self.chars == other.chars
             && self.arrows == other.arrows
     }
 }
@@ -550,9 +637,8 @@ impl KeyExt for InstructionRow {
 
 impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
-        let marked = use_consume::<Marked>().0;
-        let shift = use_consume::<Shift>().0;
         // Consumed here, in the render, because the menu handler may not run a hook.
+        let marked = use_consume::<Marked>().0;
         let located = use_consume::<Locations>().0;
         let dock = use_consume::<ContentDock>().0;
         let open = use_open();
@@ -587,54 +673,55 @@ impl Component for InstructionRow {
         // each of the handlers, which all need the same answer.
         let at = self.data.position(self.index);
 
-        let relocation = instruction
-            .relocation
-            .as_ref()
-            .map(|target| RelocationLabel {
-                object: self.data.object.clone(),
-                target: target.clone(),
-            });
-
-        // A branch's displacement is a link only where this listing has the row it lands
-        // on -- the same set the gutter draws an arrow for, since both are asking
-        // `edges`. A tail call, or a jump into the middle of an instruction, keeps its
-        // plain operand.
-        let branch = match (
-            instruction.branch_span,
-            self.data.assembly.edge_from(self.index),
-        ) {
-            (Some(span), Some(edge)) => instruction.format.get(span).map(|(text, _)| BranchLabel {
-                text: text.clone(),
-                to: self.data.base + self.data.lanes.row_of(edge.to),
-                at: self.data.position(edge.to),
-                controller: self.controller,
-                viewport: self.viewport,
+        // The disassembler says which span the link replaced, so the text is three
+        // parts: the spans before that span, the link, and the spans after it. That
+        // keeps the link in the operand's own position, inside the brackets of a memory
+        // operand and after the `rip+` of a rip-relative one. The link is an inline child
+        // of the row's one paragraph, so it is one unit of the row's text to the engine
+        // and the row's columns are the clipboard's (`instruction_line`).
+        let (head, link, tail) = split(instruction, linked(&self.data.assembly, self.index));
+        let inline: Option<Element> = match link {
+            Some(Link::Relocation) => instruction.relocation.as_ref().map(|target| {
+                RelocationLabel {
+                    object: self.data.object.clone(),
+                    target: target.clone(),
+                }
+                .into_element()
             }),
-            _ => None,
-        };
-
-        // The disassembler says which span the link replaced, so the row is three
-        // children: the text before that span, the link, and the text after it. That keeps
-        // the link in the operand's own position, inside the brackets of a memory operand
-        // and after the `rip+` of a rip-relative one. The two spans are exclusive -- a
-        // branch whose displacement is a relocation placeholder names no address of its
-        // own -- so there is at most one link, and an instruction with no span has an
-        // empty tail and the relocation's name appended.
-        let link = match instruction.relocation_span {
-            Some(i) if relocation.is_some() => Some(i),
-            _ => branch.as_ref().and(instruction.branch_span),
-        };
-        let (head, tail) = match link {
-            Some(i) if i < instruction.format.len() => {
-                (&instruction.format[..i], &instruction.format[i + 1..])
+            // A branch's displacement is the other way to follow it: the row it lands
+            // on, and the run a press on that row would have made.
+            Some(Link::Branch) => {
+                let edge = self.data.assembly.edge_from(self.index);
+                let span = instruction
+                    .branch_span
+                    .and_then(|i| instruction.format.get(i));
+                edge.zip(span).map(|(edge, (text, _))| {
+                    BranchLabel {
+                        text: text.clone(),
+                        to: self.data.base + self.data.lanes.row_of(edge.to),
+                        at: self.data.position(edge.to),
+                        controller: self.controller,
+                        viewport: self.viewport,
+                    }
+                    .into_element()
+                })
             }
-            _ => (&instruction.format[..], &[][..]),
+            // The formatter offered no operand to put the name in: appended.
+            None => instruction.relocation.as_ref().map(|target| {
+                RelocationLabel {
+                    object: self.data.object.clone(),
+                    target: target.clone(),
+                }
+                .into_element()
+            }),
         };
+        let appended = link.is_none() && inline.is_some();
 
         // Whatever text runs up to the link ends in the formatter's padding to the
         // operand column, and Skia trims trailing whitespace when it measures a
         // paragraph — which would butt the name right up against the mnemonic. Make
-        // that padding non-breaking to keep the column.
+        // that padding non-breaking to keep the column; one unit each way, so the
+        // columns still agree with the plain text.
         let spans = |run: &[(String, SpanKind)], pad_end: bool| {
             let last = run.len().saturating_sub(1);
             run.iter()
@@ -658,119 +745,108 @@ impl Component for InstructionRow {
                 })
                 .collect::<Vec<_>>()
         };
+        let mut head = spans(head, link.is_some() || appended);
+        if appended {
+            // The space `asm_line` puts before an appended name, non-breaking for the
+            // reason above.
+            head.push(
+                Span::new("\u{a0}")
+                    .color(kind_color(SpanKind::Other))
+                    .assembly_font(),
+            );
+        }
+        let text = Text {
+            line: instruction_line(&self.data.assembly, self.index),
+            head,
+            inline,
+            tail: spans(tail, false),
+            chars: self.chars,
+        };
 
-        let head = paragraph()
-            .max_lines(1)
-            .spans_iter(spans(head, link.is_some()).into_iter());
-        let tail = (!tail.is_empty()).then(|| {
-            paragraph()
-                .max_lines(1)
-                .spans_iter(spans(tail, false).into_iter())
+        // The menu: the line's locations, where the debug info gives the row a line; the
+        // row shown among its neighbours, where it is not already; and the symbol
+        // bookmarked, always.
+        let menu: Rc<dyn Fn(Event<PressEventData>)> = Rc::new({
+            let at = at.clone();
+            move |e: Event<PressEventData>| {
+                let menu = match &at {
+                    Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None),
+                    None => Menu::new(),
+                };
+                let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {
+                    let at = at.clone();
+                    MenuButton::new()
+                        .on_press(move |_| {
+                            show_in_code(
+                                open,
+                                history,
+                                marked,
+                                landing,
+                                code_at,
+                                object.clone(),
+                                address,
+                                at.clone(),
+                            )
+                        })
+                        .child("Show in unified view")
+                }));
+                let menu = menu.maybe_child(alone.clone().map(|symbol| {
+                    let at = at.clone();
+                    MenuButton::new()
+                        .on_press(move |_| {
+                            open_as_symbol(
+                                open,
+                                history,
+                                marked,
+                                landing,
+                                symbol.clone(),
+                                at.clone(),
+                            )
+                        })
+                        .child("Open as symbol")
+                }));
+                let menu = menu.child(bookmark_item(
+                    bookmarked,
+                    objects,
+                    symbol_document.clone(),
+                    "Bookmark symbol",
+                ));
+                ContextMenu::open_from_event(&e, menu);
+            }
         });
 
-        let (widest, listing) = (self.widest, self.listing);
+        // Before the text: the gutter -- nothing at all for a symbol that branches
+        // nowhere inside itself, which most do, since an empty column would still be a
+        // column -- and the address, which is gutter too: a press on it picks the row
+        // out and no characters.
+        let before = (width > 0)
+            .then(|| gutter(width, self.arrows).into_element())
+            .into_iter()
+            .chain([label()
+                .text(format!("{address:016X} "))
+                .min_width(Size::px(200.0))
+                .color(palette().address_fg)
+                .max_lines(1)
+                .into_element()])
+            .collect();
 
-        rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            // As wide as the pane or the listing's widest row, whichever is more, and
-            // what it holds measured under it -- which is what lets the list scroll
-            // sideways to a long operand while the wash still runs the whole width. The
-            // width reported is the content's, not the laid-out one: see `ui/width.rs`.
-            .width(Widest::row_width(widest.floor(listing), listing))
-            .on_sized(move |e: Event<SizedEventData>| widest.note(listing, e.inner_sizes.width))
-            .height(Size::px(code_row_height()))
-            // Horizontally only: the gutter's lines run to the row's own top and bottom
-            // edges, and padding there would break every line in the column once per row.
-            .padding(Gaps::new_symmetric(0.0, 3.0))
-            .assembly_font()
-            // Nothing of this row's own under the pointer: it is lit by the source pane's
-            // run, where it is the same place, and by this pane's, where it is in it.
-            .background(row_background(self.paired.is_some(), self.selected))
-            .maybe(self.paired.is_some_and(Edges::any), |el| {
-                el.border(pair_border(self.paired.unwrap_or_default()))
-            })
-            // The *down* and not the press: a drag is over by the time a press fires, so a
-            // selection swept out with the button held has to begin as it goes down. The
-            // run is a run of the file this row was compiled from, which is what the
-            // source pane shows beside an object's code. The right button's down is the
-            // menu, **in the same handler**: `on_secondary_down` is `on_pointer_down`
-            // under another name and would replace this one (`secondary`).
-            .on_pointer_down({
-                let file = at.as_ref().map(|at| at.file.clone());
-                let at = at.clone();
-                move |e: Event<PointerEventData>| {
-                    if e.button() == Some(MouseButton::Left) {
-                        mark_press(marked, *shift.peek(), Pane::Assembly, file.clone(), row);
-                        return;
-                    }
-                    let Some(e) = secondary(e) else {
-                        return;
-                    };
-                    // The menu: the line's locations, where the debug info gives the
-                    // row a line; the row shown among its neighbours, where it is not
-                    // already; and the symbol bookmarked, always.
-                    let menu = match &at {
-                        Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None),
-                        None => Menu::new(),
-                    };
-                    let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {
-                        let at = at.clone();
-                        MenuButton::new()
-                            .on_press(move |_| {
-                                show_in_code(
-                                    open,
-                                    history,
-                                    marked,
-                                    landing,
-                                    code_at,
-                                    object.clone(),
-                                    address,
-                                    at.clone(),
-                                )
-                            })
-                            .child("Show in unified view")
-                    }));
-                    let menu = menu.maybe_child(alone.clone().map(|symbol| {
-                        let at = at.clone();
-                        MenuButton::new()
-                            .on_press(move |_| {
-                                open_as_symbol(
-                                    open,
-                                    history,
-                                    marked,
-                                    landing,
-                                    symbol.clone(),
-                                    at.clone(),
-                                )
-                            })
-                            .child("Open as symbol")
-                    }));
-                    let menu = menu.child(bookmark_item(
-                        bookmarked,
-                        objects,
-                        symbol_document.clone(),
-                        "Bookmark symbol",
-                    ));
-                    ContextMenu::open_from_event(&e, menu);
-                }
-            })
-            // Sweeping a selection out to here: the one thing the pointer does to a row.
-            .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, row))
-            // Nothing at all for a symbol that branches nowhere inside itself, which most
-            // do: an empty column would still be a column.
-            .maybe(width > 0, |el| el.child(gutter(width, self.arrows)))
-            .child(
-                label()
-                    .text(format!("{address:016X} "))
-                    .min_width(Size::px(200.0))
-                    .color(palette().address_fg)
-                    .max_lines(1),
-            )
-            .child(head)
-            .maybe_child(relocation)
-            .maybe_child(branch)
-            .maybe_child(tail)
+        // The run is a run of the file this row was compiled from, which is what the
+        // source pane shows beside an object's code.
+        code_row(
+            Chrome {
+                pane: Pane::Assembly,
+                row,
+                file: at.as_ref().map(|at| at.file.clone()),
+                paired: self.paired,
+                wash: self.wash,
+                widest: self.widest,
+                listing: self.listing,
+                measured: true,
+            },
+            before,
+            Some(text),
+            Some(menu),
+        )
     }
 
     fn render_key(&self) -> DiffKey {
@@ -812,6 +888,7 @@ impl Component for InstructionList {
     fn render(&self) -> impl IntoElement {
         let marked = use_consume::<Marked>().0;
         let rows = marked_rows(marked, Pane::Assembly);
+        let chars = chars_of(marked, Pane::Assembly);
         // The source pane's run, whose pair these rows light.
         let pair = pair_of(marked, Pane::Assembly);
         // The box the keyboard reaches this pane through: a `pointer_down` anywhere inside
@@ -901,16 +978,32 @@ impl Component for InstructionList {
         let on_key_down = {
             let assembly = self.assembly.clone();
             let lanes = self.lanes.clone();
+            let (text_assembly, text_lanes) = (assembly.clone(), lanes.clone());
             // A separator copies as the blank line it is drawn as, so a run lifted out of
             // the listing keeps the blocks apart on the way to the clipboard.
-            on_listing_key(marked, Pane::Assembly, length, move |row| {
-                lanes
-                    .instruction_at(row)
-                    .and_then(|index| assembly.instructions.get(index))
-                    .map(|instruction| asm_line(instruction, 0))
-                    .unwrap_or_default()
-            })
+            on_listing_key(
+                marked,
+                Pane::Assembly,
+                length,
+                move |row| {
+                    lanes
+                        .instruction_at(row)
+                        .and_then(|index| assembly.instructions.get(index))
+                        .map(|instruction| asm_line(instruction, 0))
+                        .unwrap_or_default()
+                },
+                move |row| {
+                    text_lanes
+                        .instruction_at(row)
+                        .filter(|&index| index < text_assembly.instructions.len())
+                        .map(|index| instruction_line(&text_assembly, index))
+                        .unwrap_or_default()
+                },
+            )
         };
+
+        let nudge = use_nudge();
+        let grid = pixel_grid();
 
         rect()
             .expanded()
@@ -918,7 +1011,12 @@ impl Component for InstructionList {
             .a11y_focusable(true)
             .on_pointer_down(move |_| a11y.request_focus())
             .on_key_down(on_key_down)
-            .on_sized(move |e: Event<SizedEventData>| viewport.set_if_modified(e.area.height()))
+            .on_sized(move |e: Event<SizedEventData>| {
+                viewport.set_if_modified(e.area.height());
+                nudge.measured(grid, e.area.min_y());
+            })
+            // On the grid: see `Nudge`.
+            .padding(nudge.padding())
             .child(
                 VirtualScrollView::new_with_data_controlled(
                     AsmRows {
@@ -926,9 +1024,10 @@ impl Component for InstructionList {
                         pair,
                         touching,
                         rows,
+                        chars,
                     },
                     move |i, rows: &AsmRows| {
-                        let selected = rows.rows.is_some_and(|run| run.contains(i));
+                        let wash = wash_of(rows.rows, rows.chars, i);
                         let Some(index) = rows.data.lanes.instruction_at(i) else {
                             // A separator, which belongs to the instruction below it: the
                             // lanes it carries are that row's, and it lights with them
@@ -942,7 +1041,7 @@ impl Component for InstructionList {
                             let address = rows.data.assembly.instructions[below].address;
                             return SeparatorRow {
                                 row: i,
-                                selected,
+                                wash,
                                 width: rows.data.width,
                                 arrows: RowArrows {
                                     lanes: rows.data.lanes.boundary(below),
@@ -970,7 +1069,8 @@ impl Component for InstructionList {
                             data: rows.data.clone(),
                             index,
                             row: i,
-                            selected,
+                            wash,
+                            chars: RowChars::of(rows.chars, i),
                             arrows: RowArrows {
                                 lanes: rows.data.lanes.row(index),
                                 lit: lanes::lit(&rows.touching, index),

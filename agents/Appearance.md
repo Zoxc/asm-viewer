@@ -15,8 +15,12 @@ contrast floor for every foreground on the surface it is really drawn on (3.0, n
 the light palette's address column and its comments are meant to recede and sit between 3 and
 3.5), the × on a dock tab included, whose surface is its own wash composited over whichever of two
 grounds the tab is on; and a visible-step floor for every wash over the row under it — a code
-row's three being the pair's green (`pair_bg`, the other pane's selection mapped here), the
-selection's grey (`row_select_bg`), and the deeper green a row that is both takes
+row's four being the pair's green (`pair_bg`, the other pane's selection mapped here), the
+selection's blue-grey (`text_select_bg`: the characters a sweep picked out, which the text
+engine paints under them, and the whole rows a gutter's run picks out, as the row's own
+wash -- held to the floor over the pane and over a paired row's green alike), that colour
+faded for the caret's row (`cursor_row_bg`, and the caret itself `caret_fg`, the text
+colour faded so it marks a place without reading as a character), and the deeper green a row that is both takes
 (`pair_selected_bg`, held to a step well past the pair's, since a shadow over so pale a green
 barely moved it), none answering to the pointer (`agents/Panes.md`), with `pair_edge`, the
 opaque rule along a run of paired rows, held a step past the pair's wash — and

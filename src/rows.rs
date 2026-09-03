@@ -1,7 +1,7 @@
 //! The run of rows a reader has picked out of a listing, and what a click, a shift-click
-//! and a drag do to it. Rows rather than characters: an assembly row is a gutter of rects,
-//! an address label and up to three elements, not the one `paragraph()` per line freya's
-//! character selection wants.
+//! and a drag do to it. The run of characters a sweep over a row's text makes lives
+//! beside it in `chars.rs`; this is the place the two panes point at each other through,
+//! and the gesture both runs share.
 
 use std::ops::RangeInclusive;
 

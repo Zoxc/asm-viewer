@@ -93,6 +93,8 @@ struct SectionRows {
     /// are in, for the gutter of every row those run through.
     touching: Vec<(usize, Vec<PlacedEdge>)>,
     marks: Option<RowSelection>,
+    /// The characters picked out here, for each row to draw its part of.
+    chars: Option<CharSelection>,
 }
 
 impl PartialEq for SectionRows {
@@ -166,6 +168,37 @@ pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
     }
 }
 
+/// The text row `row` draws after its address, as a character selection copies it:
+/// [`row_line`] without the address column, for the rows that have one.
+pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
+    match rows.row(row) {
+        Some(Row::Header { section }) => rows
+            .code()
+            .sections()
+            .get(section)
+            .map(|placed| Line::text(format!("section {}", placed.listing.section().name)))
+            .unwrap_or_default(),
+        Some(Row::Label { stretch, index }) => label_of(rows, stretch, index)
+            .map(|symbol| Line::text(format!("<{}>:", symbol.display())))
+            .unwrap_or_default(),
+        Some(Row::Instruction { stretch, index }) => reading
+            .held
+            .get(&stretch)
+            .and_then(|s| s.code.as_ref())
+            .and_then(|studied| studied.assembly.as_ref())
+            .filter(|assembly| index < assembly.instructions.len())
+            .map(|assembly| instruction_line(assembly, index))
+            .unwrap_or_default(),
+        Some(Row::Gap { stretch, index }) => gap_bytes(rows, reading, stretch, index)
+            .map(|(_, bytes)| {
+                let (mark, values) = dump_line(&bytes);
+                text_line(Some(mark), &values)
+            })
+            .unwrap_or_default(),
+        Some(Row::Empty { .. }) | Some(Row::Separator { .. }) | None => Line::default(),
+    }
+}
+
 /// The `index`th symbol at stretch `flat`'s address.
 fn label_of(rows: &Rows, flat: usize, index: usize) -> Option<Arc<SymbolData>> {
     let placed = rows.placed_of(flat)?;
@@ -211,7 +244,7 @@ struct TextRow {
     text: String,
     color: Color,
     bold: bool,
-    selected: bool,
+    wash: Wash,
     /// The symbol a label names, which a **Ctrl**-press on the row opens as a tab of its
     /// own: the door from a function read among its neighbours back to reading it alone.
     /// A plain press is a plain press, and picks the row out like any other.
@@ -222,6 +255,8 @@ struct TextRow {
     /// shape, which no instruction row has, so a page of data is not taken for a page of
     /// assembly. Said in the row's shape and not in a colour.
     mark: Option<&'static str>,
+    /// The columns of this row inside the pane's character selection (`RowChars`).
+    chars: RowChars,
     /// The listing's widest row and its key, as every row of a listing carries them:
     /// a gap's bytes are the widest row in the app, and what the others are floored to.
     widest: Widest,
@@ -270,104 +305,117 @@ impl KeyExt for TextRow {
 
 impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
-        let marked = use_consume::<Marked>().0;
-        let shift = use_consume::<Shift>().0;
         let ctrl = use_consume::<Ctrl>().0;
         let mut hovering = use_state(|| false);
         let open = use_open();
         let history = use_consume::<Hist>().0;
-        let row = self.row;
         let opens = self.opens.clone();
         // A label lights as a link only while Ctrl is held, which is when a press is one.
-        // The cue is the label's, in the relocation link's own wash, and the row draws
-        // nothing under the pointer: an assembly row's only wash is its pair's, and a
-        // listing of an object's code has no pair to light.
+        // The cue is the label's colour, the one the relocation link takes, and the row
+        // draws nothing under the pointer: an assembly row's only wash is its pair's,
+        // and a listing of an object's code has no pair to light.
         let link = opens.is_some() && ctrl();
-        let background = row_background(false, self.selected);
-        let (widest, listing) = (self.widest, self.listing);
+        let color = if hovering() && link {
+            palette().name_hover_fg
+        } else {
+            self.color
+        };
+        let weight = if self.bold {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        };
 
-        rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            // Sized and measured as an instruction row is: see `ui/width.rs`.
-            .width(Widest::row_width(widest.floor(listing), listing))
-            .on_sized(move |e: Event<SizedEventData>| widest.note(listing, e.inner_sizes.width))
-            .height(Size::px(code_row_height()))
-            .padding(Gaps::new_symmetric(0.0, 3.0))
-            .assembly_font()
-            .background(background)
-            .on_pointer_down(move |e: Event<PointerEventData>| {
-                if e.button() == Some(MouseButton::Left) {
-                    // A row of no file: a label or a header is nobody's line.
-                    mark_press(marked, *shift.peek(), Pane::Assembly, None, row);
-                }
-            })
-            .on_pointer_over(move |_| {
-                hovering.set_if_modified(true);
-                mark_drag(marked, Pane::Assembly, row);
-            })
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
-            .maybe(opens.is_some(), move |el| {
-                el.on_press(move |_| {
-                    if !*ctrl.peek() {
-                        return;
-                    }
-                    if let Some(symbol) = opens.clone() {
-                        activate(
-                            open,
-                            history,
-                            Some(Document::Assembly(Selection::Symbol(symbol))),
-                            Visit::Went,
-                        );
-                    }
-                })
-            })
-            // The gutter's width, so the address column starts where it does on an
-            // instruction row.
-            .child(rect().width(Size::px(gutter_width(lanes::MAX_LANES))))
-            .child(
-                label()
-                    .text(match self.address {
-                        Some(address) => format!("{address:016X} "),
-                        None => String::new(),
-                    })
-                    .min_width(Size::px(200.0))
-                    .color(palette().address_fg)
-                    .max_lines(1),
-            )
-            .maybe_child(self.mark.map(|mark| {
-                label()
-                    // Non-breaking: the text engine trims a trailing space off a label.
-                    .text(format!("{mark}\u{a0}"))
+        // The text: the data directive, where the row has one, then what the row says --
+        // one paragraph, as `row_line` spells it after the address.
+        let mut head = Vec::new();
+        if let Some(mark) = self.mark {
+            // Non-breaking, so the engine cannot trim it: it is one unit of the text
+            // either way.
+            head.push(
+                Span::new(format!("{mark}\u{a0}"))
                     .color(palette().keyword_fg)
                     .font_weight(FontWeight::BOLD)
-                    .max_lines(1)
-            }))
-            .child(
-                rect()
-                    .maybe(hovering() && link, |rect| {
-                        rect.background(palette().link_hover_bg).corner_radius(6.0)
-                    })
-                    .child(
-                        label()
-                            .text(self.text.clone())
-                            .color(if hovering() && link {
-                                palette().name_hover_fg
-                            } else {
-                                self.color
-                            })
-                            .font_weight(if self.bold {
-                                FontWeight::BOLD
-                            } else {
-                                FontWeight::NORMAL
-                            })
-                            .max_lines(1),
-                    ),
-            )
+                    .assembly_font(),
+            );
+        }
+        head.push(
+            Span::new(self.text.clone())
+                .color(color)
+                .font_weight(weight)
+                .assembly_font(),
+        );
+        let text = Text {
+            line: text_line(self.mark, &self.text),
+            head,
+            inline: None,
+            tail: Vec::new(),
+            chars: self.chars,
+        };
+
+        // The gutter's width, so the address column starts where it does on an
+        // instruction row; then the address, gutter too.
+        let before = vec![
+            rect()
+                .width(Size::px(gutter_width(lanes::MAX_LANES)))
+                .into_element(),
+            label()
+                .text(match self.address {
+                    Some(address) => format!("{address:016X} "),
+                    None => String::new(),
+                })
+                .min_width(Size::px(200.0))
+                .color(palette().address_fg)
+                .max_lines(1)
+                .into_element(),
+        ];
+
+        // A row of no file: a label or a header is nobody's line.
+        code_row(
+            Chrome {
+                pane: Pane::Assembly,
+                row: self.row,
+                file: None,
+                paired: None,
+                wash: self.wash,
+                widest: self.widest,
+                listing: self.listing,
+                measured: true,
+            },
+            before,
+            Some(text),
+            None,
+        )
+        .on_pointer_over(move |_| hovering.set_if_modified(true))
+        .on_pointer_out(move |_| hovering.set_if_modified(false))
+        .maybe(opens.is_some(), move |el| {
+            el.on_press(move |_| {
+                if !*ctrl.peek() {
+                    return;
+                }
+                if let Some(symbol) = opens.clone() {
+                    activate(
+                        open,
+                        history,
+                        Some(Document::Assembly(Selection::Symbol(symbol))),
+                        Visit::Went,
+                    );
+                }
+            })
+        })
     }
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
+    }
+}
+
+/// The text a [`TextRow`] draws after its address, as the clipboard sees it: the data
+/// directive and a space where the row has one, then the text.
+fn text_line(mark: Option<&str>, text: &str) -> Line {
+    match mark {
+        Some(mark) => Line::text(format!("{mark} {text}")),
+        None => Line::text(text),
     }
 }
 
@@ -376,7 +424,7 @@ impl Component for TextRow {
 #[derive(Clone, PartialEq)]
 struct EmptyRow {
     row: usize,
-    selected: bool,
+    wash: Wash,
     /// The listing's widest row and its key: empty space is washed too.
     widest: Widest,
     listing: u64,
@@ -391,22 +439,23 @@ impl KeyExt for EmptyRow {
 
 impl Component for EmptyRow {
     fn render(&self) -> impl IntoElement {
-        let marked = use_consume::<Marked>().0;
-        let shift = use_consume::<Shift>().0;
-        let row = self.row;
-        let (widest, listing) = (self.widest, self.listing);
-
-        rect()
-            // Nothing to measure: as wide as the pane, or as the widest row.
-            .width(Widest::row_width(widest.floor(listing), listing))
-            .height(Size::px(code_row_height()))
-            .background(row_background(false, self.selected))
-            .on_pointer_down(move |e: Event<PointerEventData>| {
-                if e.button() == Some(MouseButton::Left) {
-                    mark_press(marked, *shift.peek(), Pane::Assembly, None, row);
-                }
-            })
-            .on_pointer_over(move |_| mark_drag(marked, Pane::Assembly, row))
+        // Nothing to measure and nothing to press but the row: empty space is washed too,
+        // and swept across.
+        code_row(
+            Chrome {
+                pane: Pane::Assembly,
+                row: self.row,
+                file: None,
+                paired: None,
+                wash: self.wash,
+                widest: self.widest,
+                listing: self.listing,
+                measured: false,
+            },
+            Vec::new(),
+            None,
+            None,
+        )
     }
 
     fn render_key(&self) -> DiffKey {
@@ -447,6 +496,7 @@ impl Component for SectionList {
         let reading = reading_state.read().clone();
         let marked = use_consume::<Marked>().0;
         let marks = marked_rows(marked, Pane::Assembly);
+        let chars = chars_of(marked, Pane::Assembly);
         let pair = pair_of(marked, Pane::Assembly);
         let docs = use_consume::<OpenDocs>().0;
         let code_at = use_consume::<CodeAt>().0;
@@ -532,12 +582,27 @@ impl Component for SectionList {
 
         let on_key_down = {
             let rows = built.clone();
-            on_listing_key(marked, Pane::Assembly, length, move |row| {
-                rows.as_ref()
-                    .map(|built| row_line(built, &built.reading, row))
-                    .unwrap_or_default()
-            })
+            let drawn = built.clone();
+            on_listing_key(
+                marked,
+                Pane::Assembly,
+                length,
+                move |row| {
+                    rows.as_ref()
+                        .map(|built| row_line(built, &built.reading, row))
+                        .unwrap_or_default()
+                },
+                move |row| {
+                    drawn
+                        .as_ref()
+                        .map(|built| code_line(built, &built.reading, row))
+                        .unwrap_or_default()
+                },
+            )
         };
+
+        let nudge = use_nudge();
+        let grid = pixel_grid();
 
         rect()
             .expanded()
@@ -545,7 +610,12 @@ impl Component for SectionList {
             .a11y_focusable(true)
             .on_pointer_down(move |_| a11y.request_focus())
             .on_key_down(on_key_down)
-            .on_sized(move |e: Event<SizedEventData>| viewport.set_if_modified(e.area.height()))
+            .on_sized(move |e: Event<SizedEventData>| {
+                viewport.set_if_modified(e.area.height());
+                nudge.measured(grid, e.area.min_y());
+            })
+            // On the grid: see `Nudge`.
+            .padding(nudge.padding())
             .child(
                 VirtualScrollView::new_with_data_controlled(
                     SectionRows {
@@ -554,6 +624,7 @@ impl Component for SectionList {
                         pair,
                         touching,
                         marks,
+                        chars,
                     },
                     move |i, data: &SectionRows| {
                         build_row(i, data, controller, viewport, widest, listing)
@@ -579,7 +650,8 @@ fn build_row(
     let Some(rows) = data.rows.as_ref() else {
         return rect().height(Size::px(code_row_height())).into_element();
     };
-    let selected = data.marks.is_some_and(|run| run.contains(i));
+    let wash = wash_of(data.marks, data.chars, i);
+    let chars = RowChars::of(data.chars, i);
     // The edges lit in `stretch`, which is the stretch's own entry and nothing when it
     // has none.
     let touching = |stretch: usize| -> &[PlacedEdge] {
@@ -601,9 +673,10 @@ fn build_row(
             text,
             color,
             bold,
-            selected,
+            wash,
             opens,
             mark,
+            chars,
             widest,
             listing,
             key: DiffKey::None,
@@ -647,7 +720,7 @@ fn build_row(
         }
         Some(Row::Empty { stretch, index }) => EmptyRow {
             row: i,
-            selected,
+            wash,
             widest,
             listing,
             key: DiffKey::None,
@@ -700,7 +773,8 @@ fn build_row(
                 widest,
                 listing,
                 paired,
-                selected,
+                wash,
+                chars,
                 key: DiffKey::None,
             }
             .key(RowKey::Insn(address))
@@ -717,7 +791,7 @@ fn build_row(
             lit.corner = false;
             SeparatorRow {
                 row: i,
-                selected,
+                wash,
                 width: lanes::MAX_LANES,
                 arrows: RowArrows {
                     lanes: asm.lanes.boundary(below),

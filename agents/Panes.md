@@ -162,8 +162,9 @@ the file it is a run of, so the assembly side pairs a row by asking the row's ow
 `AsmData::position` against the run's file and lines, and the source side pairs a line by
 turning the run's rows into positions -- `Studied::places` for a symbol's listing, `code_places`
 over the held stretches for an object's code, through the rows the section view shares as
-`CodeRows` -- and keeping the lines of its own file. `row_background` is three colours -- the
-pair's green, the selection's grey, and a deeper green for a row that is both -- and a run of
+`CodeRows` -- and keeping the lines of its own file. `row_background` is four colours -- the
+pair's green, the selection's blue-grey for a row picked out whole, that colour faded for the
+caret's row, and a deeper green for a row that is both (`Wash`) -- and a run of
 paired rows wears a rule a step deeper along its top and its bottom (`pair_border`, on the
 rows at either end, which each list works out from its neighbours: `Edges::of`), so a block of
 them is told from the pane where the wash alone is faint. Nothing else lights a row: no hover,
@@ -171,7 +172,7 @@ no pin.
 
 **Every row of a listing is as wide as the pane or as the widest row the listing has drawn,
 whichever is more** (`Widest`, `src/ui/width.rs`), which is what lets both panes scroll
-sideways. A `VirtualScrollView` already scrolls on x -- the wheel's `delta_x`, Shift and the
+sideways; the chrome every row shares is `code_row` (`src/ui/code_row.rs`), below. A `VirtualScrollView` already scrolls on x -- the wheel's `delta_x`, Shift and the
 wheel, a horizontal scrollbar -- but only as far as the widest row it has *built*, and a row
 filling the pane leaves it nothing. A row measured to its content would give it that and lose
 the wash, which is the row's own background. So the rows follow freya's own `CodeEditor`, which
@@ -295,8 +296,18 @@ them over stop reading lighter than the run they point along. Only their pivot i
 is the run's own end. A corner's half-stroke now ends at the *far* edge of that run rather than on
 its centre line, so the joint is filled to the pixel instead of stopping inside the run behind an
 antialiased edge. All of it is relative to the gutter's own origin, which nothing inside a row can
-see: at 1× and 2× every offset above it is a whole number, and at 1.5× the pane's own padding
-decides. The gutter is a child of the row, so a sideways scroll carries it with the addresses
+see -- and **that origin is put on the grid by the list** (`Nudge`, `src/ui/code_row.rs`): the
+box around a listing's rows learns where it was laid out from its own `on_sized` and pads its
+top by the rest of the device pixel, so whatever fraction the bars, tabs and fonts above it add
+up to, its rows start on a pixel edge and, their height being whole pixels, stay on one. What
+that buys is the washes: two rows' backgrounds meeting on a fraction each fade into the other
+over the pixel they share, and a translucent wash fading twice reads as a light seam between
+every pair of selected rows. The scroll offset is whole logical pixels, so at 1× and 2× the
+rows stay on the grid as they scroll; at 1.5× they do not, and nothing here pretends otherwise.
+The caret is a stroke of the row's own on the same grid (`caret_x` off the laid-out paragraph,
+`Grid::stroke`, one device pixel wide, `caret_fg`), where the engine's own would sit on the
+glyph's fractional edge two pixels wide; it is drawn from the render after the paragraph's
+first layout, which is when the holder can say where a column is. The gutter is a child of the row, so a sideways scroll carries it with the addresses
 -- by a whole number of pixels, the scroll offset being an `i32` -- and the strokes stay on the
 grid. `the_gutter_puts_its_strokes_on_whole_device_pixels` pins the axis-aligned ones on a
 26-pixel row, that being the even height the old placement was worst on. The rule a separator
@@ -419,13 +430,12 @@ stopped from bubbling — the row under it would otherwise keep the row the inst
 list's handles and neither changes while it lives.
 
 **A run of rows can be picked out and copied** in both panes (press, sweep or shift-click, Ctrl+C;
-Ctrl+A takes the listing, Escape drops it). Character selection is deliberately absent: freya's
-selection is char offsets into a rope wanting one `paragraph()` per line, and an instruction row is
-a gutter of rects, an address label and up to three elements. The state is `Marked`, holding one
+Ctrl+A takes the listing, Escape drops it). The state is `Marked`, holding one
 `Picked` **per pane** (`Marks`) — independent, each the other pane's pair and the scroll it owes —
 and Ctrl+C copies the run of the pane whose box has the keyboard. The press is `pointer_down` (a
 press event arrives only once the button is back up), in the same handler as the right button's
-menu (`secondary`), and the sweep is the existing `pointer_over`. Shift is watched globally at the root, because a freya
+menu (`secondary`), and the sweep is `pointer_move` -- not `pointer_over`, which freya fires once
+on entry whatever its doc string says (`notes/upstream/freya.md`). Shift is watched globally at the root, because a freya
 pointer event carries no modifiers at all. The key handlers are on each pane's own focusable box
 and deliberately not global, or a Ctrl+C meant for a filter box would come back as a page of
 disassembly. Runs are dropped by `use_clear_marks` at the root, not by an effect inside each list —
@@ -436,4 +446,61 @@ object's code, each kind of row as it draws (`row_line`), a separator and an emp
 line they are. That listing's run is also dropped when its rows are counted afresh under it, since
 a run is listing rows: `use_clear_marks` watches the reading's generation, and only the generation,
 because the asks the view makes as it scrolls write the same state and change no row.
+
+**A sweep along a row's text picks characters out**, beside the rows and not instead of them
+(`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `code_row`
+(`src/ui/code_row.rs`) -- the shared width, wash and handlers, with what comes before the text
+(the arrow gutter, the address, a line number) and the text itself handed in -- and the text is
+**one `paragraph()`**, the relocation or branch link placed inside it as an inline child: freya
+reserves a placeholder sized from the child and moves the child's layout node to it, so the link
+keeps its hover, its cursor and its press, and to the text engine it is one unit of the row
+(`Piece::Inline`), which copies as the whole name. The model is the app's own and framework-free:
+a `Caret` is a row and a column in **UTF-16 units**, the unit skia answers a pointer in and takes
+a highlight in, and a `Line` is the row's text in pieces so a column into what is drawn is a
+column into what is copied -- `instruction_line`, `source_line` and `code_line` are built from the
+same splits the rows draw from, and `asm_line` is the address plus `instruction_line`. freya
+supplies exactly the two primitives a paragraph has anyway: the hit-test behind its
+`ParagraphHolder` (`caret_col`, `word_at`, in `ui/marks.rs`; `None` before layout where freya's
+own code would unwrap) and the highlight paint (`highlights`, `text_select_bg`,
+`CursorMode::Expanded` so it fills the row). No `use_editable`, no rope of the listing: the
+editor's model wants one rope and a line per row, and an object's code is estimated rows that are
+counted afresh with every answer. **Gutter against text**: the arrow gutter, the address column,
+the line number, a separator and an empty row are gutter, and a press there picks the row out
+alone; a press on the text anchors the characters too, and the sweep moves both leads -- the
+rows' to the row under the pointer, the characters' to the column, which is 0 left of the text
+and the end right of it. The column is the pointer's row-relative x less the paragraph's x within
+the row, both taken from `on_sized` into cells (scroll-invariant, and no font's advance assumed).
+**Nothing inside a row may listen to `pointer_down`**: a bubbling event is measured against the
+deepest listener and every ancestor gets the same data, so a child listening would hand the row a
+location relative to itself; the links listen to the press and to `over`/`out`. While the
+characters are non-empty their rows draw the highlight and no wash (the pair's green
+still shows); a plain press leaves an empty run and the caret's row washed, plus a **caret** at
+the pressed column (`cursor_index`, which the engine leaves undrawn under a highlight, so it
+shows for a press and not a sweep, as an editor's does). The paragraph takes the row's whole
+height (`height(fill)`, as `CodeEditor`'s lines do) so the highlight, which `Expanded` mode
+stretches to the paragraph's box, runs from one row into the next without a gap. The pointer's
+icon is the row's to set, in its move handler and nowhere else -- an I-beam over the text and
+to the right of it, the hand over a link (whose box in the paragraph says when it is under the
+pointer; the two labels' own `CursorArea`s went, or they would fight it), the arrow over the
+gutter and on leaving the row -- and only when it changes, through one cell for the thread:
+a set is a message to the platform, and a row's own memory of the icon would be wrong the
+moment its neighbour set another. **The row wash is the selection's colour or the caret's**
+(`wash_of`, `Wash`): a run with no characters under it -- picked out from the gutter, by
+Ctrl+A, or from outside the panes -- is selected whole and its rows wear `text_select_bg`, the
+colour the character highlight is painted in, so a gutter sweep and a text sweep read as one
+thing; the caret's row, where a press on the text has left a caret and no sweep has moved it,
+wears the same colour faded (`cursor_row_bg`); and a sweep of characters washes nothing, the
+highlight being the selection then. freya counts presses
+(`EventsCombos::pressed`, root state, 500 ms and 5 px): two on a word take the word as skia
+divides them (`get_word_boundary`), three the row's text, and a sweep after either goes on by
+character. Ctrl+C copies the characters where there are any and the rows otherwise
+(`copy_text`, pure, so the rule is tested without a clipboard); Escape peels the characters
+first and the rows on a second press (`peel`); Ctrl+A stays rows; everything that drops a run
+drops its characters with it. Each row is handed its own `highlight` by its list
+(`highlight_of`, unclamped at the end so a row's prop changes only when an end moves on it), the
+reason `selected` is a row prop. Five tests pin it, the ends of a row's text being what is
+pressed on so none measures a font: the sweep and the wash giving way, the address as gutter,
+copy and Escape's order, the link as one unit that still opens its symbol (the placeholder's
+one unit is skia's, which the registry cannot show, so the test is what says so), and the
+double press.
 

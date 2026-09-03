@@ -31,6 +31,7 @@ pub(crate) use analysis::{
 };
 
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};
+pub(crate) use crate::chars::{Caret, CharSelection, Line};
 pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs};
 pub(crate) use crate::files::{shows_as_source, FileRow, FileRows, FileTree, Fold};
@@ -63,6 +64,8 @@ mod assembly;
 pub(crate) use assembly::*;
 mod bookmarks_view;
 pub(crate) use bookmarks_view::*;
+mod code_row;
+pub(crate) use code_row::*;
 mod dock;
 pub(crate) use dock::*;
 mod documents;

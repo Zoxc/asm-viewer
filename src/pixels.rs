@@ -67,6 +67,19 @@ impl Grid {
         (logical * self.scale).round() / self.scale
     }
 
+    /// How far down from `top` the next device pixel boundary is: the padding that puts
+    /// whatever is laid out under a box at `top` on the grid, whatever fraction the boxes
+    /// above it added up to. Never negative, and less than one device pixel.
+    pub fn nudge(self, top: f32) -> f32 {
+        let device = top * self.scale;
+        let below = device.ceil() - device;
+        if below.is_finite() {
+            below / self.scale
+        } else {
+            0.0
+        }
+    }
+
     /// The stroke of `thick` logical pixels that best covers the line at `centre`: whole
     /// device pixels, never fewer than one, placed so the line runs down their middle.
     ///

@@ -1,5 +1,23 @@
 use super::*;
 
+/// The padding that carries a box laid out on a fraction down to the next device pixel:
+/// nothing on the grid already, the rest of the pixel otherwise, and in logical pixels at
+/// every scale.
+#[test]
+fn a_nudge_is_the_rest_of_the_device_pixel() {
+    let grid = Grid::new(1.0);
+    assert_eq!(grid.nudge(30.0), 0.0);
+    assert_eq!(grid.nudge(30.5), 0.5);
+    assert!((grid.nudge(30.25) - 0.75).abs() < 1e-6);
+
+    let grid = Grid::new(2.0);
+    assert_eq!(grid.nudge(30.5), 0.0);
+    assert_eq!(grid.nudge(30.25), 0.25);
+    let grid = Grid::new(1.25);
+    // 37.5 device pixels: half a device pixel to go, which is 0.4 logical.
+    assert!((grid.nudge(30.0) - 0.4).abs() < 1e-6);
+}
+
 /// Every scale a display is likely to hand us, plus a couple nobody sane would.
 const SCALES: [f64; 6] = [1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
 

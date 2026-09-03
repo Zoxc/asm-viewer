@@ -1,7 +1,10 @@
 //! The run of rows picked out in each of the two code panes, and what each run means to
 //! the other pane: the rows there that are the same place are lit, and a scroll to the
 //! first of them is owed once. One run per pane, independent of the other's; nothing
-//! here answers to the pointer.
+//! here answers to the pointer. Beside the rows, the run of **characters** a sweep over a
+//! row's text makes, which is what Ctrl+C copies when there is one.
+
+use freya::engine::prelude::{RectHeightStyle, RectWidthStyle};
 
 use super::*;
 
@@ -9,6 +12,10 @@ use super::*;
 #[derive(Clone, PartialEq)]
 pub(crate) struct Picked {
     pub(crate) rows: RowSelection,
+    /// The characters picked out, where the run was started on a row's text and not in
+    /// its gutter: anchored by the press, swept with the rows. Empty until swept, and
+    /// `None` for a run of rows alone.
+    pub(crate) chars: Option<CharSelection>,
     /// The file the run is read in: the source pane's own file for its run, and for the
     /// assembly pane's the file the pressed row was compiled from -- which is what the
     /// source pane shows beside an object's code. `None` where the row has no line.
@@ -197,6 +204,67 @@ pub(crate) fn secondary(e: Event<PointerEventData>) -> Option<Event<PressEventDa
     })
 }
 
+/// What a press on a row's text asked for, from where the pointer went down in it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Press {
+    /// A caret at a column: a single press.
+    At(usize),
+    /// A run of the row's own columns: the word under a double press, the whole text
+    /// under a triple.
+    Span(usize, usize),
+}
+
+/// The column of a laid-out paragraph under a point `x`, `y` in its own logical
+/// coordinates, in the UTF-16 units the text engine counts in. A point left of the text is
+/// column 0 and one right of it is the end. `None` before the paragraph has been laid out,
+/// which is a holder freya's own code unwraps and which a press cannot reach, the row
+/// having nothing to press on until it is drawn.
+pub(crate) fn caret_col(holder: &ParagraphHolder, x: f32, y: f32) -> Option<usize> {
+    let inner = holder.0.borrow();
+    let inner = inner.as_ref()?;
+    let scale = inner.scale_factor as f32;
+    let at = inner
+        .paragraph
+        .get_glyph_position_at_coordinate(((x * scale) as i32, (y * scale) as i32));
+    Some(at.position.max(0) as usize)
+}
+
+/// Where column `col` of a laid-out paragraph is, in logical pixels from its left edge: the
+/// left of the character there, or the right of the last one for the column past the end,
+/// and 0 for an empty text. `None` before layout, as [`caret_col`] is.
+pub(crate) fn caret_x(holder: &ParagraphHolder, col: usize) -> Option<f32> {
+    let inner = holder.0.borrow();
+    let inner = inner.as_ref()?;
+    let scale = inner.scale_factor as f32;
+    let rects = |from: usize, to: usize| {
+        inner
+            .paragraph
+            .get_rects_for_range(from..to, RectHeightStyle::Tight, RectWidthStyle::Tight)
+    };
+    let x = match rects(col, col + 1).first() {
+        Some(text) => text.rect.left,
+        None => match col
+            .checked_sub(1)
+            .and_then(|before| rects(before, col).first().map(|text| text.rect.right))
+        {
+            Some(right) => right,
+            None => 0.0,
+        },
+    };
+    Some(x / scale)
+}
+
+/// The word around column `col` of a laid-out paragraph, as the text engine divides
+/// words; `None` before layout, as [`caret_col`] is.
+pub(crate) fn word_at(holder: &ParagraphHolder, col: usize) -> Option<(usize, usize)> {
+    let inner = holder.0.borrow();
+    let inner = inner.as_ref()?;
+    let range = inner
+        .paragraph
+        .get_word_boundary(col.min(u32::MAX as usize) as u32);
+    Some((range.start, range.end))
+}
+
 /// The other pane from `pane`.
 fn other(pane: Pane) -> Pane {
     match pane {
@@ -217,9 +285,21 @@ pub(crate) fn pair_of(marked: State<Marks>, pane: Pane) -> Option<Picked> {
     marked.read().of(other(pane)).clone()
 }
 
+/// The run of characters `pane`'s run holds, for the rows to draw their part of. Reads,
+/// for the reason [`marked_rows`] does.
+pub(crate) fn chars_of(marked: State<Marks>, pane: Pane) -> Option<CharSelection> {
+    marked
+        .read()
+        .of(pane)
+        .as_ref()
+        .and_then(|picked| picked.chars)
+}
+
 /// Start a run at `row` in `pane`, or -- with Shift held and a run already there -- reach
 /// out to it from wherever that run started. `file` is what the pressed row is a row of
-/// (see [`Picked::file`]); a reach keeps the file the run began in.
+/// (see [`Picked::file`]); a reach keeps the file the run began in. `press` is what the
+/// row's text answered where the press was on it, and `None` for a press in the gutter:
+/// the rows are picked out either way, and the characters only from the text.
 ///
 /// The other pane's run is left alone: the two are independent.
 pub(crate) fn mark_press(
@@ -228,11 +308,21 @@ pub(crate) fn mark_press(
     pane: Pane,
     file: Option<Arc<str>>,
     row: usize,
+    press: Option<Press>,
 ) {
     let current = marked.peek().of(pane).clone();
     let picked = match current {
         Some(picked) if shift => Picked {
             rows: picked.rows.extended(row),
+            // The reach moves the characters' lead with the rows', where both sides have
+            // one; a reach from the gutter, or to it, leaves the characters as they were.
+            chars: match (picked.chars, press) {
+                (Some(chars), Some(Press::At(col))) => Some(chars.extended(Caret { row, col })),
+                (Some(chars), Some(Press::Span(_, col))) => {
+                    Some(chars.extended(Caret { row, col }))
+                }
+                (chars, _) => chars,
+            },
             ..picked
         },
         // The one-row run a press starts, which is a drag until the button comes up. The
@@ -244,6 +334,12 @@ pub(crate) fn mark_press(
                 lead: row,
                 dragging: true,
             },
+            chars: press.map(|press| match press {
+                Press::At(col) => CharSelection::at(Caret { row, col }),
+                Press::Span(from, to) => {
+                    CharSelection::between(Caret { row, col: from }, Caret { row, col: to })
+                }
+            }),
             file,
             owed: Owed::by(other(pane)),
         },
@@ -268,6 +364,7 @@ pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: us
             lead: row,
             dragging: false,
         },
+        chars: None,
         file,
         owed: Owed::by(Pane::Source),
     });
@@ -286,6 +383,7 @@ pub(crate) fn mark_line(mut marked: State<Marks>, file: Arc<str>, line: u32, owe
             lead: row,
             dragging: false,
         },
+        chars: None,
         file: Some(file),
         owed,
     });
@@ -293,7 +391,9 @@ pub(crate) fn mark_line(mut marked: State<Marks>, file: Arc<str>, line: u32, owe
 }
 
 /// Sweep `pane`'s run out to `row`, which does nothing unless a run is already started.
-pub(crate) fn mark_drag(mut marked: State<Marks>, pane: Pane, row: usize) {
+/// `col` is the column under the pointer where the row has text, and its characters --
+/// where the run has any -- follow it; a row with no text, or a gutter, is column 0.
+pub(crate) fn mark_drag(mut marked: State<Marks>, pane: Pane, row: usize, col: Option<usize>) {
     let Some(picked) = marked.peek().of(pane).clone() else {
         return;
     };
@@ -306,6 +406,12 @@ pub(crate) fn mark_drag(mut marked: State<Marks>, pane: Pane, row: usize) {
     let mut marks = marked.peek().clone();
     *marks.of_mut(pane) = Some(Picked {
         rows: picked.rows.extended(row),
+        chars: picked.chars.map(|chars| {
+            chars.extended(Caret {
+                row,
+                col: col.unwrap_or(0),
+            })
+        }),
         ..picked
     });
     marked.set_if_modified(marks);
@@ -391,6 +497,23 @@ pub(crate) fn reveal_made(mut marked: State<Marks>, pane: Pane) {
     }
 }
 
+/// What Ctrl+C takes from `pane`'s run: the characters, where a sweep picked any out, and
+/// otherwise the rows -- each row's own `line`, in listing order, newline-separated, so a
+/// sweep that went upwards copies what one that went down does. `text` is a row's text as
+/// it is drawn, which is what the characters are columns of. `None` with no run at all.
+pub(crate) fn copy_text(
+    marks: &Marks,
+    pane: Pane,
+    line: impl Fn(usize) -> String,
+    text: impl Fn(usize) -> Line,
+) -> Option<String> {
+    let picked = marks.of(pane).as_ref()?;
+    match picked.chars.filter(|chars| !chars.is_empty()) {
+        Some(chars) => Some(chars.copy(text)),
+        None => Some(picked.rows.rows().map(line).collect::<Vec<_>>().join("\n")),
+    }
+}
+
 /// What Ctrl+C, Ctrl+A and Escape do to a listing's selection.
 ///
 /// Goes on the pane's own focusable box and **not** on a global key handler, which would
@@ -402,6 +525,7 @@ pub(crate) fn on_listing_key(
     pane: Pane,
     rows: usize,
     line: impl Fn(usize) -> String + 'static,
+    text: impl Fn(usize) -> Line + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     let mut marked = marked;
 
@@ -410,14 +534,11 @@ pub(crate) fn on_listing_key(
 
         match &e.key {
             Key::Character(character) if command && character == "c" => {
-                let picked = marked.peek().of(pane).clone();
-                if let Some(picked) = picked {
+                let copied = copy_text(&marked.peek(), pane, &line, &text);
+                if let Some(copied) = copied {
                     // Failing silently: a platform whose display handle gave freya-winit
                     // no clipboard has none, and a listing has nowhere to say so.
-                    // Each row's own line, in listing order, newline-separated — so a
-                    // drag that went upwards copies what one that went down does.
-                    let text = picked.rows.rows().map(&line).collect::<Vec<_>>().join("\n");
-                    Clipboard::set(text).ok();
+                    Clipboard::set(copied).ok();
                 }
             }
             Key::Character(character) if command && character == "a" => {
@@ -436,16 +557,35 @@ pub(crate) fn on_listing_key(
                             lead: last,
                             dragging: false,
                         },
+                        chars: None,
                         file,
                         owed: Owed::default(),
                     });
                     marked.set(marks);
                 }
             }
-            Key::Named(NamedKey::Escape) => unmark(marked, pane),
+            Key::Named(NamedKey::Escape) => peel(marked, pane),
             _ => {}
         }
     }
+}
+
+/// Drop `pane`'s picked-out characters where a sweep made any, and otherwise the run
+/// itself: Escape peels the selection back a layer at a time, since the rows are a place
+/// the panes point at each other through and the characters are only what is copied.
+fn peel(mut marked: State<Marks>, pane: Pane) {
+    let Some(picked) = marked.peek().of(pane).clone() else {
+        return;
+    };
+    let mut marks = marked.peek().clone();
+    *marks.of_mut(pane) = match picked.chars.filter(|chars| !chars.is_empty()) {
+        Some(_) => Some(Picked {
+            chars: None,
+            ..picked
+        }),
+        None => None,
+    };
+    marked.set(marks);
 }
 
 /// Drop a pane's picked-out rows when the listing they index into is replaced: the

@@ -100,6 +100,8 @@ command.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
 - `src/rows.rs` — the run of rows a reader picks out to copy.
+- `src/chars.rs` — the run of characters a sweep over a row's text picks out: a place is a row
+  and a column in UTF-16 units, a row's text is pieces, and what each row draws and copies.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
 - `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the document it stands for.
@@ -138,6 +140,8 @@ command.
   loaded and kept dimmed when it is not.
 - `src/ui/files_view.rs` — the Files view: the project's directory as a tree, a file's row
   opening it as source and its menu offering it as a binary.
+- `src/ui/code_row.rs` — one row of a code listing as all three listings draw theirs: the
+  shared width, wash and pointer handlers, and the one paragraph a row's text is.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
 - `src/ui/source_view.rs` — the source side of one, and which file it is showing.
@@ -231,6 +235,11 @@ it cost here, and whether it was reported. Add the note with the workaround.
   `width(Size::auto())` with a `min_width` either: torin sizes an auto-width node from its
   minimum *plus* its children. The code panes' rows take `Widest::row_width`
   (`src/ui/width.rs`) and report their content through `on_sized`'s `inner_sizes`.
+- A bubbling pointer event (`pointer_down`, `press`) is measured once against the deepest
+  listener and every ancestor's handler gets the same data, so `element_location()` in an
+  ancestor is relative to that child. Nothing inside a code row listens to `pointer_down`
+  for this reason (`src/ui/code_row.rs`). And `pointer_over` fires on entry only, whatever
+  its doc string says; a sweep that follows the pointer is `pointer_move`.
 
 ## Testing the UI
 

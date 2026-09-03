@@ -23,6 +23,8 @@ struct SourceData {
     pairs: Arc<HashSet<u32>>,
     /// The run of rows picked out here, or `None` when there is none.
     rows: Option<RowSelection>,
+    /// The characters picked out here, for each row to draw its part of.
+    chars: Option<CharSelection>,
     /// Whether these rows *drive* the tab they are in -- true for a source-driven tab,
     /// where a click also says which assembly the other side shows, and false for the
     /// companion file beside a symbol, where the click picks the line out and no more.
@@ -44,6 +46,7 @@ impl PartialEq for SourceData {
             // most of those leave it as it was.
             && self.pairs == other.pairs
             && self.rows == other.rows
+            && self.chars == other.chars
             && self.drives == other.drives
     }
 }
@@ -59,9 +62,11 @@ struct SourceRow {
     /// Whether an instruction of the assembly pane's picked-out run was compiled from
     /// this line, and if so which of its edges end the run of such lines.
     paired: Option<Edges>,
-    /// Whether this row is one of the run picked out to be copied, told to it by the list
-    /// for the reason `InstructionRow`'s is.
-    selected: bool,
+    /// The wash of its pane's selection, told to it by the list for the reason
+    /// `InstructionRow`'s is.
+    wash: Wash,
+    /// The columns of this row inside the pane's character selection, likewise.
+    chars: RowChars,
     /// Whether a click here also drives the tab's assembly side. See [`SourceData`].
     drives: bool,
     /// The listing's widest row and its key, as an `InstructionRow` carries them.
@@ -76,7 +81,8 @@ impl PartialEq for SourceRow {
             && Arc::ptr_eq(&self.file, &other.file)
             && self.index == other.index
             && self.paired == other.paired
-            && self.selected == other.selected
+            && self.wash == other.wash
+            && self.chars == other.chars
             && self.drives == other.drives
     }
 }
@@ -87,16 +93,51 @@ impl KeyExt for SourceRow {
     }
 }
 
+/// The pieces row `index` of `source` draws, each in its colour: the spans a parse
+/// resolved, with leading indentation as spaces. What the row draws and what a character
+/// selection copies, so a column into one is a column into the other.
+///
+/// In range because the list's length is the file's own `lines`, which is at most
+/// `blocks.len()` -- and `SyntaxBlocks::get_line` unwraps rather than answering `None`,
+/// so being in range is checked here.
+fn source_pieces(source: &SourceText, index: usize) -> Vec<(Color, String)> {
+    let source = &source.0;
+    if index >= source.lines {
+        return Vec::new();
+    }
+    source
+        .blocks
+        .get_line(index)
+        .iter()
+        .map(|(color, node)| {
+            let text = match node {
+                TextNode::Range(range) => source.rope.slice(range.clone()).to_string(),
+                // Leading indentation, handed over as a length so an editor can draw it
+                // as dots. Plain spaces here, this pane showing a file and not editing
+                // one.
+                TextNode::LineOfChars { len, .. } => " ".repeat(*len),
+            };
+            (*color, text)
+        })
+        .collect()
+}
+
+/// The text row `index` draws, as the clipboard sees a character selection of it.
+pub(crate) fn source_line(source: &SourceText, index: usize) -> Line {
+    let mut line = Line::default();
+    for (_, text) in source_pieces(source, index) {
+        line.push_text(text);
+    }
+    line
+}
+
 impl Component for SourceRow {
     fn render(&self) -> impl IntoElement {
         let mut driven = use_consume::<Drives>().0;
-        let marked = use_consume::<Marked>().0;
-        let shift = use_consume::<Shift>().0;
         // Consumed here, in the render, because the menu handler may not run a hook.
         let located = use_consume::<Locations>().0;
         let dock = use_consume::<ContentDock>().0;
         let index = self.index;
-        let source = &self.source.0;
 
         // The position this row is, and so the one its menu asks about. Lines are
         // 1-based, as DWARF's are.
@@ -105,108 +146,87 @@ impl Component for SourceRow {
             line: self.index as u32 + 1,
         };
 
-        // In range because the list's length is this file's own `lines`, which is at most
-        // `blocks.len()` -- and `SyntaxBlocks::get_line` unwraps rather than answering
-        // `None`, so being in range is this row's responsibility.
-        let spans = source
-            .blocks
-            .get_line(self.index)
-            .iter()
-            .map(|(color, node)| {
-                let text = match node {
-                    TextNode::Range(range) => source.rope.slice(range.clone()).to_string(),
-                    // Leading indentation, handed over as a length so an editor can draw it
-                    // as dots. Plain spaces here, this pane showing a file and not editing
-                    // one.
-                    TextNode::LineOfChars { len, .. } => " ".repeat(*len),
-                };
-                Span::new(text).color(*color).assembly_font()
-            })
-            .collect::<Vec<_>>();
-
-        let (widest, listing) = (self.widest, self.listing);
-
-        rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            // As wide as the pane or the file's widest row drawn, whichever is more, the
-            // line measured under it: the list scrolls sideways to a long line, and the
-            // wash still runs the whole width. See `ui/width.rs`.
-            .width(Widest::row_width(widest.floor(listing), listing))
-            .on_sized(move |e: Event<SizedEventData>| widest.note(listing, e.inner_sizes.width))
-            .height(Size::px(code_row_height()))
-            .padding(3.0)
-            .assembly_font()
-            // Nothing of this row's own under the pointer: it is lit by the assembly
-            // pane's run, where an instruction of it came from this line, and by this
-            // pane's, where the row is in it.
-            .background(row_background(self.paired.is_some(), self.selected))
-            .maybe(self.paired.is_some_and(Edges::any), |el| {
-                el.border(pair_border(self.paired.unwrap_or_default()))
-            })
-            // The same gesture as the assembly pane's, in the same order. The run is a
-            // run of this file, and the right button's down is the menu, in the same
-            // handler for the reason the assembly row's is (`secondary`).
-            .on_pointer_down({
-                let file = self.file.clone();
-                let at = at.clone();
-                // A location found from the file a source-driven tab is about is chosen
-                // for that tab; from a companion it opens the symbol.
-                let subject = self.drives.then(|| self.file.clone());
-                // The function this row is a line of, looked for on the press and not
-                // per render: it is a walk of the file's functions, and a row is
-                // rendered far more often than it is right-clicked.
-                let source = self.source.clone();
-                move |e: Event<PointerEventData>| {
-                    if e.button() == Some(MouseButton::Left) {
-                        mark_press(
-                            marked,
-                            *shift.peek(),
-                            Pane::Source,
-                            Some(file.clone()),
-                            index,
-                        );
-                        return;
-                    }
-                    let Some(e) = secondary(e) else {
-                        return;
-                    };
-                    let function = functions::enclosing(&source.0.functions, at.line).cloned();
-                    ContextMenu::open_from_event(
-                        &e,
-                        locate_menu(located, dock, at.clone(), subject.clone(), function),
-                    );
+        let pieces = source_pieces(&self.source, index);
+        let text = Text {
+            line: {
+                let mut line = Line::default();
+                for (_, text) in &pieces {
+                    line.push_text(text.clone());
                 }
+                line
+            },
+            head: pieces
+                .into_iter()
+                .map(|(color, text)| Span::new(text).color(color).assembly_font())
+                .collect(),
+            inline: None,
+            tail: Vec::new(),
+            chars: self.chars,
+        };
+
+        // The menu: the line's locations and, inside a function as the file's parse
+        // says, the function's instances. A location found from the file a
+        // source-driven tab is about is chosen for that tab; from a companion it opens
+        // the symbol. The function this row is a line of is looked for on the press and
+        // not per render: it is a walk of the file's functions, and a row is rendered
+        // far more often than it is right-clicked.
+        let menu: Rc<dyn Fn(Event<PressEventData>)> = Rc::new({
+            let at = at.clone();
+            let subject = self.drives.then(|| self.file.clone());
+            let source = self.source.clone();
+            move |e: Event<PressEventData>| {
+                let function = functions::enclosing(&source.0.functions, at.line).cloned();
+                ContextMenu::open_from_event(
+                    &e,
+                    locate_menu(located, dock, at.clone(), subject.clone(), function),
+                );
+            }
+        });
+
+        // The line number, which is gutter: a press on it picks the row out and no
+        // characters. A fixed width and not a minimum: skia lays a paragraph out to the
+        // width it is given and aligns within *that*, so a label free to be wider puts
+        // its number at the far right of the row, on top of the text. The gap is
+        // non-breaking because skia trims trailing whitespace when it measures.
+        let number = label()
+            .text(format!("{}\u{a0}", self.index + 1))
+            .width(Size::px(60.0))
+            .text_align(TextAlign::Right)
+            .color(palette().address_fg)
+            .max_lines(1)
+            .into_element();
+
+        // The same gesture as the assembly pane's, from the same chrome. The run is a
+        // run of this file.
+        code_row(
+            Chrome {
+                pane: Pane::Source,
+                row: index,
+                file: Some(self.file.clone()),
+                paired: self.paired,
+                wash: self.wash,
+                widest: self.widest,
+                listing: self.listing,
+                measured: true,
+            },
+            vec![number],
+            Some(text),
+            Some(menu),
+        )
+        // A press in a source-driven tab's own file also says which listing the
+        // other side shows; the row is picked out by `pointer_down` either way.
+        .maybe(self.drives, |el| {
+            el.on_press(move |_| {
+                // **The only writer of `Driven` inside the panes.** A click in the
+                // file a source-driven tab is about is what says which assembly its
+                // other side shows; a click in a companion file picks the line out
+                // and no more, and a click in the assembly pane never comes here at
+                // all, so there is no way for the listing to re-drive itself.
+                driven
+                    .write()
+                    .remember(Document::Source(at.file.clone()), at.line);
             })
-            .on_pointer_over(move |_| mark_drag(marked, Pane::Source, index))
-            // A press in a source-driven tab's own file also says which listing the
-            // other side shows; the row is picked out by `pointer_down` either way.
-            .maybe(self.drives, |el| {
-                el.on_press(move |_| {
-                    // **The only writer of `Driven` inside the panes.** A click in the
-                    // file a source-driven tab is about is what says which assembly its
-                    // other side shows; a click in a companion file picks the line out
-                    // and no more, and a click in the assembly pane never comes here at
-                    // all, so there is no way for the listing to re-drive itself.
-                    driven
-                        .write()
-                        .remember(Document::Source(at.file.clone()), at.line);
-                })
-            })
-            .child(
-                label()
-                    // A fixed width and not a minimum: skia lays a paragraph out to the
-                    // width it is given and aligns within *that*, so a label free to be
-                    // wider puts its number at the far right of the row, on top of the
-                    // text. The gap is non-breaking because skia trims trailing whitespace
-                    // when it measures.
-                    .text(format!("{}\u{a0}", self.index + 1))
-                    .width(Size::px(60.0))
-                    .text_align(TextAlign::Right)
-                    .color(palette().address_fg)
-                    .max_lines(1),
-            )
-            .child(paragraph().max_lines(1).spans_iter(spans.into_iter()))
+        })
     }
 
     fn render_key(&self) -> DiffKey {
@@ -242,6 +262,7 @@ impl Component for SourceList {
     fn render(&self) -> impl IntoElement {
         let marked = use_consume::<Marked>().0;
         let rows = marked_rows(marked, Pane::Source);
+        let chars = chars_of(marked, Pane::Source);
         // The assembly pane's run, and the lines of this file it was compiled from.
         let pair = pair_of(marked, Pane::Source);
         let analysis = use_consume::<Analysis>().0;
@@ -311,21 +332,33 @@ impl Component for SourceList {
             self.opening,
         );
 
+        let nudge = use_nudge();
+        let grid = pixel_grid();
         let on_key_down = {
             let source = self.source.clone();
-            on_listing_key(marked, Pane::Source, length, move |index| {
-                // The file's own text and not the row's spans: what is pasted is the line
-                // as it is on disk, tabs and all. The newline is the join's business.
-                source
-                    .0
-                    .rope
-                    .get_line(index)
-                    .map(|line| {
-                        let line = line.to_string();
-                        line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
-                    })
-                    .unwrap_or_default()
-            })
+            let drawn = self.source.clone();
+            on_listing_key(
+                marked,
+                Pane::Source,
+                length,
+                move |index| {
+                    // The file's own text and not the row's spans: what is pasted is the
+                    // line as it is on disk, tabs and all. The newline is the join's
+                    // business.
+                    source
+                        .0
+                        .rope
+                        .get_line(index)
+                        .map(|line| {
+                            let line = line.to_string();
+                            line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
+                        })
+                        .unwrap_or_default()
+                },
+                // The characters are columns of the line as drawn, so that is what they
+                // copy: an indentation as the spaces the row draws it as.
+                move |index| source_line(&drawn, index),
+            )
         };
 
         rect()
@@ -340,8 +373,11 @@ impl Component for SourceList {
                     .on_pointer_down(move |_| a11y.request_focus())
                     .on_key_down(on_key_down)
                     .on_sized(move |e: Event<SizedEventData>| {
-                        viewport.set_if_modified(e.area.height())
+                        viewport.set_if_modified(e.area.height());
+                        nudge.measured(grid, e.area.min_y());
                     })
+                    // On the grid: see `Nudge`.
+                    .padding(nudge.padding())
                     .child(
                         VirtualScrollView::new_with_data_controlled(
                             SourceData {
@@ -349,6 +385,7 @@ impl Component for SourceList {
                                 file: self.file.clone(),
                                 pairs,
                                 rows,
+                                chars,
                                 // A source-driven tab's subject is the file its own
                                 // document names; a companion's tab is a symbol's.
                                 drives: matches!(self.document, Document::Source(_)),
@@ -362,7 +399,8 @@ impl Component for SourceList {
                                     file: data.file.clone(),
                                     index: i,
                                     paired: paired_at(i).then(|| Edges::of(i, paired_at)),
-                                    selected: data.rows.is_some_and(|rows| rows.contains(i)),
+                                    wash: wash_of(data.rows, data.chars, i),
+                                    chars: RowChars::of(data.chars, i),
                                     drives: data.drives,
                                     widest: data.widest,
                                     listing: data.listing,

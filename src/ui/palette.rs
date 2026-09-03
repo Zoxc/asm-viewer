@@ -65,9 +65,17 @@ pub(crate) struct Palette {
     /// width of the pane, where the gutter's stroke is a few pixels -- so it is quieter
     /// against the pane than `branch_fg` is, and the palette test says so.
     pub(crate) block_rule: Color,
-    /// The run of rows a reader has picked out, in either pane, where it is not also the
-    /// pair: a translucent blue-grey, a shade off the pane and a hue off the pair's green.
-    pub(crate) row_select_bg: Color,
+    /// The selection, in either pane: the characters a sweep over a row's text picked out,
+    /// painted under the text by the text engine, and the whole rows a run picked out from
+    /// the gutter, as the row's own wash. A translucent blue-grey, a shade off the pane and
+    /// a hue off the pair's green.
+    pub(crate) text_select_bg: Color,
+    /// The row the caret is on, where a press on the text has left one and no sweep has
+    /// followed: the selection's colour, faded.
+    pub(crate) cursor_row_bg: Color,
+    /// The caret itself: a one-pixel stroke, the text colour faded so it marks a place
+    /// without reading as a character of the line.
+    pub(crate) caret_fg: Color,
 
     // The code colours. Which syntactic category takes which is [`Palette::syntax`] on
     // the source side and `kind_color` on the assembly side. Not every one of them is
@@ -133,7 +141,9 @@ impl Palette {
         branch_fg: Color::from_rgb(176, 188, 202),
         branch_lit_fg: Color::from_rgb(90, 116, 148),
         block_rule: Color::from_rgb(211, 216, 222),
-        row_select_bg: Color::from_argb(44, 40, 70, 130),
+        text_select_bg: Color::from_argb(44, 40, 70, 130),
+        cursor_row_bg: Color::from_argb(20, 40, 70, 130),
+        caret_fg: Color::from_argb(150, 0, 0, 0),
 
         address_fg: Color::from_rgb(118, 141, 169),
         keyword_fg: Color::from_rgb(116, 94, 147),
@@ -180,7 +190,9 @@ impl Palette {
         branch_fg: Color::from_rgb(96, 108, 124),
         branch_lit_fg: Color::from_rgb(150, 178, 210),
         block_rule: Color::from_rgb(66, 72, 80),
-        row_select_bg: Color::from_argb(100, 160, 175, 200),
+        text_select_bg: Color::from_argb(100, 160, 175, 200),
+        cursor_row_bg: Color::from_argb(45, 160, 175, 200),
+        caret_fg: Color::from_argb(160, 232, 232, 232),
 
         address_fg: Color::from_rgb(132, 156, 186),
         keyword_fg: Color::from_rgb(178, 150, 214),
@@ -362,19 +374,33 @@ pub(crate) fn dimmed(color: Color, surface: Color) -> Color {
     )
 }
 
+/// The wash a code row wears for its own pane's selection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum Wash {
+    #[default]
+    None,
+    /// The caret's row: a press on the text left a caret here and no sweep has followed.
+    Cursor,
+    /// A row of a run picked out from the gutter -- or by Ctrl+A, or from outside the
+    /// panes -- which is selected whole, as its wash.
+    Selected,
+}
+
 /// The background of a code row: the pair -- this row is where the other pane's
-/// picked-out run maps to -- the run picked out here, or the one over the other.
+/// picked-out run maps to -- the wash of its own pane's selection, or the one over the
+/// other.
 ///
 /// Nothing here answers to the pointer: a row is lit by a selection, its own pane's or
 /// the other's, and by nothing else.
-pub(crate) fn row_background(paired: bool, selected: bool) -> Color {
+pub(crate) fn row_background(paired: bool, wash: Wash) -> Color {
     // Three colours and not one wash over another: the selection's shadow over the
     // pair's pale green barely moved it, so a row that is both has a green of its own.
-    match (paired, selected) {
-        (true, true) => palette().pair_selected_bg,
-        (true, false) => palette().pair_bg,
-        (false, true) => palette().row_select_bg,
-        (false, false) => Color::TRANSPARENT,
+    match (paired, wash) {
+        (true, Wash::Selected | Wash::Cursor) => palette().pair_selected_bg,
+        (true, Wash::None) => palette().pair_bg,
+        (false, Wash::Selected) => palette().text_select_bg,
+        (false, Wash::Cursor) => palette().cursor_row_bg,
+        (false, Wash::None) => Color::TRANSPARENT,
     }
 }
 

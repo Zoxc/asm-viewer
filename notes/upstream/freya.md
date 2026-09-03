@@ -23,6 +23,22 @@ doing both, the right button mapped by `secondary` (`ui/marks.rs`);
 `picking_out_a_row_below_a_separator_lights_that_rows_own_branch` presses a row and would
 have caught it.
 
+**A bubbling event is measured once, against its deepest listener.** `pointer_down`, the
+press and the other events that bubble are emitted once (`ragnarok-0.4.3/src/measurement.rs:170`)
+with `element_location` taken from the deepest listening node, and every ancestor's handler is
+re-dispatched that same data (`freya-core-0.4.3/src/runner.rs:320-354`), so an ancestor's
+`element_location()` is relative to whichever descendant listened. Non-bubbling events
+(`pointer_move`, `pointer_over`, the globals) are measured per listener. **Cost:** nothing
+inside a code row listens to `pointer_down` -- the links listen to the press -- so the row's
+handler can turn the location into a column (`ui/code_row.rs`);
+`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol` presses a link and would catch a
+child that started listening.
+
+**`pointer_over` fires on entry only.** Its doc says it fires when the pointer is over the
+element; `nodes_state.rs:163` dedups it against the hovered set, so it is `pointer_enter`
+that also fires for the ancestors. **Cost:** the sweep that picks characters out follows the
+pointer with `pointer_move` (`ui/code_row.rs`).
+
 **`SyntaxHighlighter` keeps its `Tree` private** (`syntax.rs:120-125`), with no accessor,
 so anything else wanted from the parse -- the function spans for C and C++ -- is a second
 parse of the file (`ui/highlight.rs`). Not a bug; a gap worth a PR for a `tree()` getter.

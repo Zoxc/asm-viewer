@@ -339,11 +339,11 @@ impl Component for SourceEditor {
                     .background(palette().pane_bg)
                     .text(palette().name_fg)
                     .cursor(palette().text_fg)
-                    // What would land on the clipboard, which is what `row_select_bg`
+                    // What would land on the clipboard, which is what `text_select_bg`
                     // already says in both code panes.
                     // already says in both code panes -- a character selection here where
                     // it is a run of rows there, and the same question either way.
-                    .highlight(palette().row_select_bg)
+                    .highlight(palette().text_select_bg)
                     // "You are here": the cursor's line, in the green the two code panes
                     // light the other side's place in. Safe to reuse, the editor being
                     // no pane's pair.

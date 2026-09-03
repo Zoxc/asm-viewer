@@ -15,7 +15,10 @@ analysis = { path = "crates/analysis" }
 # state private, and both are things that pane has to do. And `CodeEditor` itself, for the
 # scratchpad's editor, where neither of those objections applies and where it brings a
 # cursor, a selection, an undo history and an incremental re-parse per keystroke.
-freya = { version = "0.4", features = ["code-editor", "icons-lucide"] }
+# `engine` is an empty feature that only opens `freya::engine`, the re-export of the skia
+# bindings freya is built on: the rows ask a laid-out paragraph where a column is
+# (`ui/marks.rs`, `caret_x`), and the two rect styles that call takes live nowhere else.
+freya = { version = "0.4", features = ["code-editor", "icons-lucide", "engine"] }
 # The grammars the highlighter parses with; that crate deliberately ships none. Their
 # `tree-sitter-language` must be the one the `tree-sitter` below and `freya-code-editor`'s
 # share, or the `Language` handed over is a different type.
