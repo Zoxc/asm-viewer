@@ -42,6 +42,7 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
         sections: vec![section],
         data: ObjectData::from(&b"a build"[..]),
         debug_info: Default::default(),
+        by_address: Default::default(),
     })
 }
 

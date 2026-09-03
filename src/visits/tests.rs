@@ -18,6 +18,7 @@ fn place(name: &str) -> Document {
         sections: Vec::new(),
         data: ObjectData::from(&b""[..]),
         debug_info: Default::default(),
+        by_address: Default::default(),
     })))
 }
 

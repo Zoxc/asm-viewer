@@ -412,6 +412,15 @@ one item per part, so the unfinished half stays visible.
   object with no line info, the file and the scroll lighting the other pane where the reader
   has arrived rather than where they left. A branch out of the symbol — a tail call — keeps its
   plain operand; making that one navigate like a call target is an item of its own.
+- [x] Name the target of a direct `call` in a linked image. A relocatable object's calls were
+  links because their relocations named the function; a linked ELF or PE has had those consumed,
+  and every `call rel32` to a function in the same image drew as a bare address. Where no
+  relocation covers the instruction, the displacement is looked up as the start of a text symbol
+  in the instruction's own section — exactly the start, so a call into the middle of a function
+  keeps its number — and handed out through the same `relocation`/`relocation_span` the UI
+  already draws a `RelocationLabel` from. The lookup is `Object::by_address`, sorted by placed
+  address and built once per object on the first disassembly rather than per click. A `jmp` out
+  of the symbol is left as the item above says.
 - [ ] Show the current symbol as a breadcrumb in the unified view. The bar over the pane names
   the object for a code tab, and nothing on screen says which function the rows under the
   pointer, or at the top of the pane, belong to once its label has scrolled off — a reader

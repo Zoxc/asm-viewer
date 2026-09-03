@@ -221,6 +221,7 @@ fn symbol(path: &str, name: &str) -> Symbol {
         sections: Vec::new(),
         data: ObjectData::from(b"bytes".as_slice()),
         debug_info: Default::default(),
+        by_address: Default::default(),
     });
     Symbol { object, data }
 }

@@ -18,6 +18,7 @@ fn object(path: &str, name: &str) -> Arc<Object> {
         sections: Vec::new(),
         data: ObjectData::from(&[][..]),
         debug_info: DebugInfoCache::default(),
+        by_address: Default::default(),
     })
 }
 

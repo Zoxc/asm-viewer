@@ -8,7 +8,7 @@ use std::{
     hash::Hasher as _,
     ops::{ControlFlow, Range},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 mod demangle;
@@ -64,6 +64,56 @@ pub struct Object {
     /// here so it is not opened twice. Anything building an `Object` by hand writes
     /// `DebugInfoCache::default()`. See [`Object::line_info`].
     pub debug_info: DebugInfoCache,
+
+    /// The same symbols by the address they are **placed** at, built on the first
+    /// disassembly and derived from `symbols_sorted`, so anything building an `Object` by
+    /// hand writes `AddressIndex::default()` and cannot disagree with it. See
+    /// [`Object::symbol_at`].
+    pub by_address: AddressIndex,
+}
+
+/// [`Object::by_address`]: every text symbol with a section, keyed by its placed address
+/// ([`Section::bias`] added to its own) and sorted by it, each address once.
+///
+/// Built once per object and not per disassembly, behind a `OnceLock` like the debug info:
+/// 67 ms for the 115k-symbol sample in an unoptimized build, which is nothing once and
+/// everything at every click. Lazy rather than built at parse because an archive's members
+/// are parsed all at once and read one at a time.
+#[derive(Default)]
+pub struct AddressIndex(OnceLock<Vec<(u64, Arc<SymbolData>)>>);
+
+impl Object {
+    /// The text symbol that **starts** at `placed`, in the one address space every section
+    /// of this object shares ([`Section::bias`]); [`None`] where no symbol does. Two names
+    /// for one address answer the first by name — the order `symbols_sorted` holds — so the
+    /// answer is the same however the map behind them was iterated.
+    ///
+    /// The address alone is only a key with the bias in it: in a relocatable object every
+    /// code section starts at 0. A caller holding an address in a section's own terms adds
+    /// the section's bias first, and one that knows which section the address is in checks
+    /// the answer is in it too — the bias makes two sections two places, but a number past
+    /// one section's end is still just a number.
+    pub fn symbol_at(&self, placed: u64) -> Option<&Arc<SymbolData>> {
+        let index = self.by_address.0.get_or_init(|| {
+            let mut placed: Vec<(u64, Arc<SymbolData>)> = self
+                .symbols_sorted
+                .iter()
+                .filter_map(|symbol| {
+                    let section = symbol.section.as_ref()?;
+                    Some((symbol.address.wrapping_add(section.bias), symbol.clone()))
+                })
+                .collect();
+            // Stable, so that of two symbols at one address the first by name is the one
+            // `dedup` keeps.
+            placed.sort_by_key(|(address, _)| *address);
+            placed.dedup_by_key(|(address, _)| *address);
+            placed
+        });
+        let at = index
+            .binary_search_by_key(&placed, |(address, _)| *address)
+            .ok()?;
+        index.get(at).map(|(_, symbol)| symbol)
+    }
 }
 
 /// A digest of a whole file's bytes: what tells "the same binary" from "one rebuilt
@@ -408,12 +458,7 @@ impl SymbolData {
     /// [`undecodable`](Assembly::undecodable) names it.
     pub fn assembly(&self, object: &Object) -> Option<Arc<Assembly>> {
         let bytes = self.data_in(object)?;
-        let code = Code::new(
-            bytes,
-            self.address,
-            self.section.as_deref(),
-            &object.symbols,
-        );
+        let code = Code::new(bytes, self.address, self.section.as_deref(), object);
         Some(Arc::new(Assembly::decode(object.architecture, &code)))
     }
 }
@@ -875,6 +920,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         sections: object.sections,
         data,
         debug_info: object.debug_info,
+        by_address: AddressIndex::default(),
     }))
 }
 

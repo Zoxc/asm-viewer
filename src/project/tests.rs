@@ -52,6 +52,7 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         sections: vec![section],
         data: ObjectData::from(bytes),
         debug_info: Default::default(),
+        by_address: Default::default(),
     })
 }
 

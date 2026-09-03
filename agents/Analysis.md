@@ -100,7 +100,8 @@ looking the address up in the kept **text** sections, which doubles as the filte
 is a real function's first byte. The two nameless declarations, the entry point and an unwind
 entry, are called `<entry point>` and `<function 0x…>` or `<fragment 0x…>` — angle brackets
 because no assembler, linker or mangling scheme emits them, so none can collide with a real one. `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target
-lookup) and `symbols_sorted` (name-sorted, for the UI list). `Object::data` is an `ObjectData` —
+lookup), `symbols_sorted` (name-sorted, for the UI list) and `by_address` (placed-address-sorted,
+built on the first disassembly, for a call target's name; below). `Object::data` is an `ObjectData` —
 an `Arc<[u8]>` of the whole file plus a `Range` — kept for the object's lifetime, because parsing
 keeps decompressed bytes only for sections holding text symbols and the lazy line-info pass needs
 the rest; every object from one file shares that one allocation, so an archive costs its bytes
@@ -430,8 +431,9 @@ buys is not the virtual call, one per symbol being nothing, but the allocation g
 backend's formatting and span-mapping becoming inlinable into the per-instruction loop. The trade is
 that a new architecture is a new arm rather than a new impl behind a registry, which is what a set
 closed at compile time wants anyway. `Code` is the bytes, the address
-they sit at, and one question — `Code::relocation`, asked per instruction, because a relocation
-names a byte range and never an operand number. A row carries the *address* its own branch names
+they sit at, the object they belong to, and two questions asked per instruction — `Code::relocation`,
+because a relocation names a byte range and never an operand number, and `Code::symbol_at`, for
+the address an unrelocated call names. A row carries the *address* its own branch names
 (`Instruction::branch`); turning those into row indices is `Assembly::decoded`'s binary search, so
 `edges`' drop rules hold for every backend rather than once per backend. What stays *behind* the seam is everything x86
 spells its own way: the `SymbolResolver` substitution, the per-instruction `rip_relative_addresses`
@@ -462,6 +464,33 @@ override of `write_symbol`; that is what lets `InstructionRow` render the run be
 branch target reaches the output: it is the span an instruction's *own* displacement was printed
 into. The two are exclusive by construction, since a branch covered by a relocation is not one
 that named an address, so a row has at most one link and the same three-child split serves both.
+
+**A linked image's calls resolve by address**, since the linker consumed the relocations that
+named their targets and left the displacement as the answer. Where no relocation covers an
+instruction and it is a direct near `call`, the backend asks `Code::symbol_at` for the text symbol
+that **starts exactly** at the address the encoding names, and hands it out through the same
+`relocation`/`relocation_span` pair a relocated call uses — the resolver substitutes the name for
+the operand, `write_symbol` records the span, and the UI's `RelocationLabel` draws it with no
+change of its own. Three limits, each deliberate. *Exact start only*: a call into the middle of a
+function stays the number it is, and a target no symbol starts at (a PLT stub, a stripped
+static) stays plain text. *Same section*: the index is by placed address (`Section::bias` added),
+which makes a relocatable object's all-at-0 code sections distinct places, but a displacement
+past a section's end still lands in the placed space on some other section's function, so the hit
+has to be in the instruction's own section — `tests/linked_call.rs` pins a two-section object
+whose call would otherwise name the other's. *Calls only*: an unconditional `jmp` out of the
+symbol is a tail call and could be named the same way, but its displacement is `branch_span`'s and
+the two spans are exclusive, so making it a link to a function is the item of its own that
+`notes/Goals.md` says it is. The relocation still wins where there is one: a relocated call whose
+target is a section symbol keeps `None`, since its displacement is a placeholder whatever address
+it happens to spell. The index is `Object::by_address`, a `Vec<(u64, Arc<SymbolData>)>` sorted by
+placed address with each address once (two names for one address keep the first by name, the
+order `symbols_sorted` has, so the answer is stable), behind a `OnceLock` like the debug info and
+derived from `symbols_sorted`, so an `Object` built by hand writes `Default::default()` and cannot
+disagree with it. Lazy rather than built at parse because an archive's members are parsed all at
+once and read one at a time. Building it for the sample's 115,577 symbols measured 67 ms in an
+unoptimized test build, once per object on the first disassembly; a lookup after that is a binary
+search, 5 µs. A sort per click would have been the same 67 ms on every symbol opened, which is why
+it is not rebuilt per disassembly.
 
 **Branch edges** (`Assembly::edges`) are the branches staying inside one symbol, for the arrow
 gutter. Both ends are **indices into `instructions`**, not addresses, because that is what a row

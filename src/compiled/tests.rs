@@ -44,6 +44,7 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
         sections: vec![section],
         data: ObjectData::from(b"bytes".as_slice()),
         debug_info: Default::default(),
+        by_address: Default::default(),
     })
 }
 

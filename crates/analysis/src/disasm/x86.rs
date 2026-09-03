@@ -67,7 +67,12 @@ impl Disassembler for X86 {
             // resolves to `None` and its displacement is a placeholder all the same. Only
             // this question says whether the encoded branch target means anything.
             let relocated = relocation.is_some();
-            let relocation = relocation.and_then(|relocation| relocation.target);
+            let relocation = match relocation {
+                Some(relocation) => relocation.target,
+                // No relocation, so the displacement is real: in a linked image it is the
+                // function a call reaches, and a symbol starting exactly there is its name.
+                None => call_target(&instruction).and_then(|target| code.symbol_at(target)),
+            };
 
             let branch = if relocated {
                 None
@@ -257,7 +262,22 @@ fn branch_target(instruction: &iced_x86::Instruction) -> Option<u64> {
         | iced_x86::FlowControl::XbeginXabortXend => {}
         _ => return None,
     }
+    near_target(instruction)
+}
 
+/// The address `instruction` calls, when it is a direct near `call`: [`branch_target`]'s
+/// counterpart for the one kind of branch it leaves out, asked so the function there can be
+/// named — never so the gutter draws it. A `jmp` out of the symbol is a tail call and could
+/// be named the same way, but its displacement is a branch's own span (`branch_span`) and
+/// making it a link to a function is a decision of its own.
+fn call_target(instruction: &iced_x86::Instruction) -> Option<u64> {
+    (instruction.flow_control() == iced_x86::FlowControl::Call)
+        .then(|| near_target(instruction))
+        .flatten()
+}
+
+/// `near_branch_target` for exactly the operands it means something for.
+fn near_target(instruction: &iced_x86::Instruction) -> Option<u64> {
     matches!(
         instruction.op0_kind(),
         iced_x86::OpKind::NearBranch16

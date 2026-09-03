@@ -10,9 +10,9 @@
 //! and no signature here says `dyn`, so a backend's formatting and span-mapping can inline
 //! into the per-instruction decode loop.
 
-use crate::{Section, SymbolData};
-use object::{Architecture, RelocationTarget, SymbolIndex};
-use std::{collections::HashMap, sync::Arc};
+use crate::{Object, Section, SymbolData};
+use object::{Architecture, RelocationTarget};
+use std::sync::Arc;
 
 mod x86;
 
@@ -56,9 +56,10 @@ pub struct Code<'a> {
     /// section.
     section: Option<&'a Section>,
 
-    /// The object's text symbols by index, for turning a relocation's target into something
-    /// a reader can click.
-    symbols: &'a HashMap<SymbolIndex, Arc<SymbolData>>,
+    /// The object the bytes belong to, for its symbols: by index, for turning a
+    /// relocation's target into something a reader can click, and by address, for a call
+    /// whose relocation a linker has already applied.
+    object: &'a Object,
 }
 
 impl<'a> Code<'a> {
@@ -66,13 +67,13 @@ impl<'a> Code<'a> {
         bytes: &'a [u8],
         address: u64,
         section: Option<&'a Section>,
-        symbols: &'a HashMap<SymbolIndex, Arc<SymbolData>>,
+        object: &'a Object,
     ) -> Self {
         Self {
             bytes,
             address,
             section,
-            symbols,
+            object,
         }
     }
 
@@ -98,10 +99,26 @@ impl<'a> Code<'a> {
         }
 
         let target = match found?.target() {
-            RelocationTarget::Symbol(index) => self.symbols.get(&index).cloned(),
+            RelocationTarget::Symbol(index) => self.object.symbols.get(&index).cloned(),
             _ => None,
         };
         Some(Relocated { target })
+    }
+
+    /// The text symbol starting at `address`, an address in this code's own section — the
+    /// one a branch's encoding names — where one does. The other way a target gets a name:
+    /// in a linked image the relocations are gone and the displacement is the answer.
+    ///
+    /// The object's index is by *placed* address, so the section's bias goes on first, and
+    /// the hit has to be in this section: with every code section of a relocatable object
+    /// at 0, a displacement past this section's end lands on some other section's function
+    /// in the placed space, and that is not where the call goes. A target nothing starts at
+    /// is [`None`], and the operand stays the number it is.
+    pub fn symbol_at(&self, address: u64) -> Option<Arc<SymbolData>> {
+        let section = self.section?;
+        let symbol = self.object.symbol_at(address.wrapping_add(section.bias))?;
+        let home = symbol.section.as_ref()?;
+        std::ptr::eq(Arc::as_ptr(home), section).then(|| symbol.clone())
     }
 }
 
@@ -143,6 +160,9 @@ pub struct Instruction {
     pub address: u64,
     pub bytes: Vec<u8>,
     pub format: Vec<(String, SpanKind)>,
+    /// The symbol this instruction's operand names: the target of a relocation covering its
+    /// bytes, or, with none, the function a direct `call` reaches ([`Code::symbol_at`]) —
+    /// which is what a linked image's calls are, the linker having applied theirs.
     pub relocation: Option<Arc<SymbolData>>,
 
     /// Where in [`format`](Self::format) the relocation target's name was substituted for
