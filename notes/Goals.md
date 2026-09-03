@@ -430,6 +430,13 @@ one item per part, so the unfinished half stays visible.
   already draws a `RelocationLabel` from. The lookup is `Object::by_address`, sorted by placed
   address and built once per object on the first disassembly rather than per click. A `jmp` out
   of the symbol is left as the item above says.
+- [ ] Drop the `<` `>` around a symbol's label in the unified view. A stretch's label is
+  drawn `<name>:` (`src/ui/section_view.rs`, in the rows and in what is copied), objdump's
+  spelling, and the brackets say nothing the colon and the row's own colour do not; a demangled
+  Rust or C++ name is full of angle brackets of its own, so a pair more around it reads as
+  part of the name. Two things to keep straight: the two made-up names the app itself puts in
+  angle brackets, `<entry point>` and `<function 0x…>`, must still read as made up once the
+  label's own pair is gone, and the headless tests find labels by their drawn text.
 - [ ] Show the current symbol as a breadcrumb in the unified view. The bar over the pane names
   the object for a code tab, and nothing on screen says which function the rows under the
   pointer, or at the top of the pane, belong to once its label has scrolled off — a reader
