@@ -104,11 +104,14 @@ command.
   and a column in UTF-16 units, a row's text is pieces, and what each row draws and copies.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
-- `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the document it stands for.
+- `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the trail behind it: every
+  place the tab has shown with a cursor on the one it shows, and which tab is the temporal one.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.
 - `src/tabs.rs` — `landing`, the rule a close obeys; `Positions`, where each tab was left;
   `Driven`, which line a source-driven tab's assembly side follows and which symbol was chosen.
-- `src/history.rs` — back/forward navigation history.
+- `src/history.rs` — one tab's back/forward trail.
+- `src/visits.rs` — everywhere the reader has been, across every tab: what the History panel
+  lists.
 - `src/bookmarks.rs` — the reader's bookmarks: a saved place and the name it was made under,
   in the order they were added; saved in `project.toml`, live only against what is loaded.
 - `src/naming.rs` — a demangled name cut down to the `module::fn_name` a tab is called by.
@@ -197,9 +200,9 @@ feature there with the substitute, so a release that brings it is noticed.
   caught, so anything recursing over file-controlled input is bounded before the call.
 - **Nothing is analysed on the UI thread**, and nothing is cached in the UI: the worker's answer
   is held, not memoized.
-- **A document is a place in a binary or a file; everything else is a view.** `activate`,
-  `close_tab`, `close_others` and `close_binary` are the only four functions that change what is
-  open.
+- **A document is a place in a binary or a file; everything else is a view.** `open_document`,
+  `raise`, `navigate`, `close_tab`, `close_others` and `close_binary` are the only six functions
+  that change what is open or what a tab shows.
 - **Identity in the UI is `Arc` pointer identity**, never names or indices: list keys are
   `Arc::as_ptr(..).addr()` and prop `PartialEq`s are hand-written with `Arc::ptr_eq`.
 - **Asking for a colour or a font is what subscribes a scope to it** (`palette()`, `fonts()`);

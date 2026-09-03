@@ -5,6 +5,8 @@ use std::sync::Arc;
 use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData};
 
 use super::*;
+use crate::docs::Docs;
+use crate::project::Document;
 
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_string()).collect()
@@ -115,11 +117,11 @@ fn a_row_past_the_end_clamps_to_the_last_one() {
 #[test]
 fn forgetting_a_tab_leaves_the_others() {
     let mut positions = positions(&[("a", 1), ("b", 2)]);
-    positions.forget(&"a".to_owned());
+    positions.forgetting(|tab| tab != "a");
     assert_eq!(positions.at(&"a".to_owned()), None);
     assert_eq!(positions.at(&"b".to_owned()), Some(2));
     // And forgetting one that was never there is not an error.
-    positions.forget(&"c".to_owned());
+    positions.forgetting(|tab| tab != "c");
     assert_eq!(positions.at(&"b".to_owned()), Some(2));
 }
 
@@ -132,10 +134,22 @@ fn a_closing_binary_forgets_every_position_into_it() {
     assert_eq!(positions.at(&"lib.a:three".to_owned()), None);
 }
 
-/// A source-driven tab, which is the only kind [`Driven`] ever holds. Compared by its
-/// text, so two of these naming one file are one tab.
-fn source(file: &str) -> Document {
-    Document::Source(file.into())
+/// An entry of a source-driven tab's trail, which is the only kind [`Driven`] ever
+/// holds, on the tab `nth` ids from the first. The document is compared by its text, so
+/// two of these naming one file on one tab are one entry.
+fn source_on(nth: u32, file: &str) -> Entry {
+    let mut docs = Docs::default();
+    let document = Document::Source(file.into());
+    let mut id = docs.open(document.clone());
+    for _ in 0..nth {
+        id = docs.open(document.clone());
+    }
+    (id, document)
+}
+
+/// The same, on the first tab.
+fn source(file: &str) -> Entry {
+    source_on(0, file)
 }
 
 #[test]
@@ -156,18 +170,36 @@ fn a_driven_line_comes_back_and_a_second_click_replaces_it() {
     assert_eq!(driven.line(&source("lib.rs")), Some(7));
 }
 
+/// A line is kept per tab *and* entry: two tabs on one file are driven from two lines,
+/// and closing one tab forgets every entry of it and nothing of the other.
 #[test]
-fn closing_a_tab_forgets_what_it_was_driven_from() {
+fn closing_a_tab_forgets_what_its_entries_were_driven_from() {
     let mut driven = Driven::default();
     driven.remember(source("main.rs"), 42);
+    driven.remember(source_on(1, "main.rs"), 43);
     driven.remember(source("lib.rs"), 7);
+    assert_eq!(driven.line(&source("main.rs")), Some(42));
+    assert_eq!(driven.line(&source_on(1, "main.rs")), Some(43));
 
-    driven.forget(&source("main.rs"));
+    driven.forget_tab(source("main.rs").0);
     assert_eq!(driven.line(&source("main.rs")), None);
-    assert_eq!(driven.line(&source("lib.rs")), Some(7));
+    assert_eq!(driven.line(&source("lib.rs")), None);
+    assert_eq!(driven.line(&source_on(1, "main.rs")), Some(43));
     // And forgetting a tab that was never driven is not an error.
-    driven.forget(&source("other.rs"));
-    assert_eq!(driven.line(&source("lib.rs")), Some(7));
+    driven.forget_tab(source_on(2, "other.rs").0);
+    assert_eq!(driven.line(&source_on(1, "main.rs")), Some(43));
+}
+
+/// A closing binary takes entries off surviving trails, and the lines kept by them go
+/// too, whichever tab they were on.
+#[test]
+fn a_closing_binary_forgets_the_lines_of_the_entries_it_takes() {
+    let mut driven = Driven::default();
+    driven.remember(source("main.rs"), 42);
+    driven.remember(source_on(1, "lib.rs"), 7);
+    driven.forgetting(|(_, document)| *document != Document::Source("main.rs".into()));
+    assert_eq!(driven.line(&source("main.rs")), None);
+    assert_eq!(driven.line(&source_on(1, "lib.rs")), Some(7));
 }
 
 /// A bare symbol in a bare object at `path`: only what [`Driven::release`] looks at.
@@ -215,18 +247,19 @@ fn a_choice_comes_back_and_outlives_the_next_line() {
 #[test]
 fn closing_a_tab_forgets_its_choice_and_a_closing_binary_releases_the_choices_into_it() {
     let mut driven = Driven::default();
+    let other = source_on(1, "lib.rs");
     driven.remember(source("main.rs"), 42);
     driven.choose(source("main.rs"), symbol("lib.a", "f"));
-    driven.remember(source("lib.rs"), 7);
-    driven.choose(source("lib.rs"), symbol("other.o", "g"));
+    driven.remember(other.clone(), 7);
+    driven.choose(other.clone(), symbol("other.o", "g"));
 
-    driven.forget(&source("main.rs"));
+    driven.forget_tab(source("main.rs").0);
     assert!(driven.choice(&source("main.rs")).is_none());
-    assert!(driven.choice(&source("lib.rs")).is_some());
+    assert!(driven.choice(&other).is_some());
 
     // The file closing takes the choice into it and leaves the line: the tab stands, and
     // its next ask answers out of whatever is still open.
     driven.release(&PathBuf::from("other.o"));
-    assert!(driven.choice(&source("lib.rs")).is_none());
-    assert_eq!(driven.line(&source("lib.rs")), Some(7));
+    assert!(driven.choice(&other).is_none());
+    assert_eq!(driven.line(&other), Some(7));
 }

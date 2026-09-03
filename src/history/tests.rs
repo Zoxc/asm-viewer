@@ -85,54 +85,23 @@ fn navigating_back_does_not_re_record_where_it_landed() {
 }
 
 #[test]
-fn recent_lists_every_entry_newest_first() {
+fn the_entries_are_kept_oldest_first_whatever_the_cursor_does() {
     let (a, b, c) = (selection("a"), selection("b"), selection("c"));
     let mut history = History::default();
     for entry in [&a, &b, &c] {
         history.push(entry.clone());
     }
 
-    let recent: Vec<_> = history
-        .recent()
-        .map(|(i, entry)| (i, entry.clone()))
-        .collect();
-    assert!(recent == vec![(2, c), (1, b), (0, a)]);
+    assert!(newest_first(&history) == vec![c.clone(), b, a]);
 
     history.back();
-    assert!(history.recent().len() == 3);
-    assert!(history.recent().next().map(|(i, _)| i) == Some(2));
+    assert!(history.entries().len() == 3);
+    assert!(newest_first(&history).first() == Some(&c));
 }
 
-#[test]
-fn jumping_moves_the_cursor_without_pushing() {
-    let (a, b, c) = (selection("a"), selection("b"), selection("c"));
-    let mut history = History::default();
-    for entry in [&a, &b, &c] {
-        history.push(entry.clone());
-    }
-
-    // The entry under the cursor and one past the end are both no-ops: the panel's rows
-    // call this for every click, the current row's included.
-    assert!(!history.can_jump(2));
-    assert!(history.jump(2).is_none());
-    assert!(!history.can_jump(3));
-    assert!(history.jump(3).is_none());
-    assert!(history.cursor() == Some(2));
-
-    assert!(history.can_jump(0));
-    let landed = history.jump(0).expect("the oldest entry");
-    assert!(landed == a);
-    assert!(history.current() == Some(&a));
-
-    // Nothing in front was dropped, and nothing is left to record.
-    assert!(history.can_forward());
-    assert!(history.recent().len() == 3);
-    assert!(!history.would_push(&landed));
-}
-
-/// The entries newest first, which is the order the history panel shows.
+/// The entries newest first.
 fn newest_first(history: &History) -> Vec<Document> {
-    history.recent().map(|(_, entry)| entry.clone()).collect()
+    history.entries().iter().rev().cloned().collect()
 }
 
 #[test]
@@ -334,15 +303,16 @@ fn restoring_keeps_the_newest_entries_and_carries_the_cursor() {
 
 #[test]
 fn restoring_collapses_duplicates_before_capping() {
-    // 380 saved entries, 190 destinations: the collapse runs first, so all 190 fit.
-    // Capping first would have thrown away half of them.
-    let unique: Vec<Document> = (0..190).map(|i| selection(&format!("e{i}"))).collect();
+    // Twice the cap saved, ten under the cap distinct: the collapse runs first, so all
+    // of them fit. Capping first would have thrown away half of them.
+    let distinct = MAX_ENTRIES - 10;
+    let unique: Vec<Document> = (0..distinct).map(|i| selection(&format!("e{i}"))).collect();
     let saved: Vec<Document> = unique.iter().flat_map(|e| [e.clone(), e.clone()]).collect();
 
-    let history = History::restored(saved, 379);
-    assert!(history.entries().len() == 190);
+    let history = History::restored(saved, 2 * distinct - 1);
+    assert!(history.entries().len() == distinct);
     assert!(history.entries() == unique);
-    assert!(history.cursor() == Some(189));
+    assert!(history.cursor() == Some(distinct - 1));
 }
 
 /// What an entry is called, so the tests below can name the file that is closing without

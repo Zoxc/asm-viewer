@@ -48,16 +48,17 @@ pub(crate) fn asked_of(ask: &Ask) -> Document {
 ///
 /// `None` for an object (which is not a place with a listing), for a tab that is not a
 /// document, and for a source-driven tab nothing has been clicked in yet.
-pub(crate) fn ask(active: Option<&Document>, driven: &Driven) -> Option<Ask> {
-    match active? {
+pub(crate) fn ask(active: Option<&Entry>, driven: &Driven) -> Option<Ask> {
+    let entry = active?;
+    match &entry.1 {
         Document::Assembly(Selection::Symbol(symbol)) => Some(Ask::Symbol(symbol.clone())),
         Document::Assembly(Selection::Object(_)) | Document::Code(_) => None,
-        document @ Document::Source(file) => driven.line(document).map(|line| Ask::Source {
+        Document::Source(file) => driven.line(entry).map(|line| Ask::Source {
             at: LinePos {
                 file: file.clone(),
                 line,
             },
-            chosen: driven.choice(document),
+            chosen: driven.choice(entry),
         }),
     }
 }
@@ -500,7 +501,7 @@ pub(crate) trait ReadsAsk: Copy + 'static {
 /// wanted.
 #[derive(Clone, Copy)]
 pub(crate) struct Asked {
-    pub(crate) active: Memo<Option<Document>>,
+    pub(crate) active: Memo<Option<Entry>>,
     pub(crate) driven: State<Driven>,
 }
 
@@ -528,16 +529,12 @@ impl ReadsAsk for State<Option<Ask>> {
 
 /// Where the reader has been, newest first, with the symbol on screen at its head --
 /// which is what keeps reading down the lines of a generic function inside one
-/// instantiation, nothing being pushed onto the history between two clicks in one.
-fn recent_symbols(shown: Option<&Shown>, history: &History) -> Vec<Symbol> {
+/// instantiation, nothing being recorded between two clicks in one.
+fn recent_symbols(shown: Option<&Shown>, visits: &Visits) -> Vec<Symbol> {
     shown
         .map(|shown| shown.studied.symbol.clone())
         .into_iter()
-        .chain(
-            history
-                .recent()
-                .filter_map(|(_, entry)| entry.symbol().cloned()),
-        )
+        .chain(visits.recent().filter_map(|entry| entry.symbol().cloned()))
         .collect()
 }
 
@@ -558,7 +555,7 @@ fn recent_symbols(shown: Option<&Shown>, history: &History) -> Vec<Symbol> {
 pub(crate) fn use_analysis_with(
     asked: impl ReadsAsk,
     objects: State<Vec<Arc<Object>>>,
-    history: State<History>,
+    visits: State<Visits>,
     mut analysis: State<Analyzed>,
     mut located: State<Located>,
     mut reading: State<Reading>,
@@ -762,7 +759,7 @@ pub(crate) fn use_analysis_with(
                 objects: open,
                 // Peeked, not read: the ranking is an input to an answer and a visit must
                 // not re-ask a question that has been answered.
-                recent: recent_symbols(state.shown.as_ref(), &history.peek()),
+                recent: recent_symbols(state.shown.as_ref(), &visits.peek()),
             },
         };
 

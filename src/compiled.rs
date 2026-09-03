@@ -48,16 +48,16 @@ pub fn compiled_from(
 ///
 /// `recent` is where the reader has been, newest first, **with the symbol already on
 /// screen at its head** — which is the whole of what keeps reading down the lines of a
-/// generic function inside one instantiation. Nothing is pushed onto the history between
-/// two clicks in one function, so without that head the answer would fall through to the
-/// order below, which differs line by line.
+/// generic function inside one instantiation. Nothing is recorded between two clicks in
+/// one function, so without that head the answer would fall through to the order below,
+/// which differs line by line.
 ///
 /// And that order is arbitrary: the first candidate is the lowest-addressed symbol of the
 /// first object that answered. It is a tie-break and not a judgement; Step 5's picker is
 /// where a reader says which instance they meant.
 pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
-    // Indexed rather than scanned: one line can answer with thousands of symbols and a
-    // history holds two hundred, so the nested walk is a million pointer compares. The
+    // Indexed rather than scanned: one line can answer with thousands of symbols and the
+    // record of visits holds two hundred, so the nested walk is a million pointer compares. The
     // key is `Symbol`'s own equality written out -- both `Arc`s, not just the data's.
     let where_at: HashMap<(usize, usize), usize> = candidates
         .iter()

@@ -6,8 +6,9 @@
 //!
 //! A project is a directory under `projects/`, and [`ProjectId`] is that directory's
 //! name. It is two files: `project.toml` is what the user said (name, directory,
-//! binaries) and is written at once; `session.toml` is what the app noticed (tabs, rows,
-//! active document, history, digests) and is written on a timer. The *when* of saving is
+//! binaries) and is written at once; `session.toml` is what the app noticed (tabs with
+//! their trails and rows, active document, visits, digests) and is written on a timer.
+//! The *when* of saving is
 //! [`Saves`]: [`record`] writes or marks pending, [`flush`] writes what is pending.
 //!
 //! There is no published version of this app, so a schema change is just a schema change:
@@ -25,8 +26,10 @@ use analysis::{Object, Symbol, SymbolData};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::bookmarks::Bookmark;
+use crate::docs::{DocId, Entry};
 use crate::history::History;
 use crate::tabs::{Driven, Positions, Spot};
+use crate::visits::Visits;
 
 /// The one directory everything this app stores lives under: the projects, the recent
 /// list, the settings and the scratchpads.
@@ -278,14 +281,34 @@ pub struct Session {
     pub history: SavedHistory,
 }
 
-/// One of the open tabs: a place, and the row each of its two sides was left at.
+/// One of the open tabs: its trail, oldest place first, with the cursor on the place it
+/// showed, and whether it was the temporal tab.
 ///
-/// The rows travel *with* the tab rather than in lists beside [`Session::tabs`], because
-/// [`Session::resolve_tabs`] drops the tabs that no longer resolve, which would shift
-/// every later row of a parallel array onto the wrong tab. Field order is load-bearing:
-/// both rows are plain values and `document` is written as a sub-table.
+/// The whole trail and not the current place alone, so that Back works across a
+/// restart: reopening after a rebuild is this app's daily loop, and a trail lost on every
+/// restart would be worth little. The entries travel *with* the tab rather than in lists
+/// beside [`Session::tabs`], because [`Session::resolve_tabs`] drops the entries and the
+/// tabs that no longer resolve, which would shift every later row of a parallel array
+/// onto the wrong tab. Field order is load-bearing: `temporal` and `cursor` are plain
+/// values and `entries` is written as an array of tables.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedTab {
+    /// Whether this was the temporal tab, the preview a sidebar row opens in.
+    #[serde(default)]
+    pub temporal: bool,
+    /// An index into `entries`: the place the tab showed.
+    #[serde(default)]
+    pub cursor: usize,
+    #[serde(default)]
+    pub entries: Vec<SavedEntry>,
+}
+
+/// One place on a saved tab's trail, and the row each of its two sides was left at.
+///
+/// Field order is load-bearing: the rows, the line and the address are plain values and
+/// `document` is written as a sub-table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedEntry {
     /// Which row was at the top of the assembly side, `0` being the first instruction.
     /// `serde(default)` because it is a hint and not a fact.
     #[serde(default)]
@@ -293,9 +316,9 @@ pub struct SavedTab {
     /// Which line was at the top of the source side, `0` being the file's first line.
     #[serde(default)]
     pub src_row: usize,
-    /// Which line of the file a source-driven tab's assembly side was driven from, and
-    /// absent for every other tab. It is what makes `asm_row` mean anything for such a
-    /// tab: without it the listing that row is a row of is not there to come back to.
+    /// Which line of the file a source-driven place's assembly side was driven from, and
+    /// absent for every other kind. It is what makes `asm_row` mean anything for such a
+    /// place: without it the listing that row is a row of is not there to come back to.
     ///
     /// Nothing resolves it -- it is a number, not a place -- so a rebuilt binary simply
     /// answers it again out of what is loaded now.
@@ -310,12 +333,23 @@ pub struct SavedTab {
     pub document: SavedDocument,
 }
 
-/// A saved tab that still points somewhere: what [`Session::resolve_tabs`] hands back.
-///
-/// Named rather than a tuple because it is five things now, and because the rows and the
-/// address drop under a rebuilt binary while the line does not.
+/// A saved tab with something left on its trail: what [`Session::resolve_tabs`] hands
+/// back. The trail is live, its cursor carried past the entries that no longer resolve;
+/// `entries` holds the rows of every place still on it, in the trail's own order.
 #[derive(Clone, PartialEq)]
 pub struct RestoredTab {
+    pub temporal: bool,
+    pub trail: History,
+    pub entries: Vec<RestoredEntry>,
+}
+
+/// One place of a restored tab that still points somewhere, with the rows its two sides
+/// were left at.
+///
+/// Named rather than a tuple because it is five things, and because the rows and the
+/// address drop under a rebuilt binary while the line does not.
+#[derive(Clone, PartialEq)]
+pub struct RestoredEntry {
     pub document: Document,
     pub asm_row: usize,
     pub src_row: usize,
@@ -323,22 +357,18 @@ pub struct RestoredTab {
     pub address: Option<u64>,
 }
 
-/// The navigation history in saved form: the index of the entry that was on screen, and
-/// every visited selection, oldest first. Field order is load-bearing: `entries` is
-/// written as an array of tables, so the plain `cursor` has to precede it.
+/// The record of visits in saved form: every place visited, oldest first. No cursor --
+/// the cursors are the tabs' -- so nothing has to precede the array of tables.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedHistory {
-    /// An index into `entries`, and `0` — meaning nothing — while it is empty.
-    pub cursor: usize,
     #[serde(default)]
     pub entries: Vec<SavedDocument>,
 }
 
 impl SavedHistory {
-    fn from_history(history: &History) -> SavedHistory {
+    fn from_visits(visits: &Visits) -> SavedHistory {
         SavedHistory {
-            cursor: history.cursor().unwrap_or(0),
-            entries: history
+            entries: visits
                 .entries()
                 .iter()
                 .map(SavedDocument::from_document)
@@ -655,7 +685,6 @@ impl Session {
             tabs: Vec::new(),
             // Spelt out rather than `SavedHistory::default()`, which is not a `const fn`.
             history: SavedHistory {
-                cursor: 0,
                 entries: Vec::new(),
             },
         }
@@ -663,17 +692,18 @@ impl Session {
 
     /// The session described by the state the app is currently in — the one place the
     /// app's state is turned into what would be saved, [`binaries`] being the other half
-    /// of it for the other file. A side that was never scrolled has no entry in its
-    /// [`Positions`] at all and is written out as row `0`.
+    /// of it for the other file. `tabs` is each open tab in strip order: its id, its
+    /// trail, and whether it is the temporal one. A side that was never scrolled has no
+    /// entry in its [`Positions`] at all and is written out as row `0`.
     pub fn from_state(
         objects: &[Arc<Object>],
-        tabs: &[Document],
-        asm_rows: &Positions<Document>,
-        src_rows: &Positions<Document>,
-        places: &Positions<Document, Spot>,
+        tabs: &[(DocId, &History, bool)],
+        asm_rows: &Positions<Entry>,
+        src_rows: &Positions<Entry>,
+        places: &Positions<Entry, Spot>,
         driven: &Driven,
         active: Option<&Document>,
-        history: &History,
+        visits: &Visits,
     ) -> Session {
         let mut digests: BTreeMap<PathBuf, String> = BTreeMap::new();
         for object in objects {
@@ -689,15 +719,26 @@ impl Session {
             active: active.map(SavedDocument::from_document),
             tabs: tabs
                 .iter()
-                .map(|tab| SavedTab {
-                    asm_row: asm_rows.at(tab).unwrap_or(0),
-                    src_row: src_rows.at(tab).unwrap_or(0),
-                    line: driven.line(tab),
-                    asm_address: places.at(tab).map(|spot| spot.address),
-                    document: SavedDocument::from_document(tab),
+                .map(|(id, trail, temporal)| SavedTab {
+                    temporal: *temporal,
+                    cursor: trail.cursor().unwrap_or(0),
+                    entries: trail
+                        .entries()
+                        .iter()
+                        .map(|document| {
+                            let entry = (*id, document.clone());
+                            SavedEntry {
+                                asm_row: asm_rows.at(&entry).unwrap_or(0),
+                                src_row: src_rows.at(&entry).unwrap_or(0),
+                                line: driven.line(&entry),
+                                asm_address: places.at(&entry).map(|spot| spot.address),
+                                document: SavedDocument::from_document(document),
+                            }
+                        })
+                        .collect(),
                 })
                 .collect(),
-            history: SavedHistory::from_history(history),
+            history: SavedHistory::from_visits(visits),
         }
     }
 
@@ -709,49 +750,74 @@ impl Session {
         saved.resolve_or_degrade(objects, &Rebuilt::of(self, objects))
     }
 
-    /// The saved tabs as live documents, in strip order, each with the rows its two sides
-    /// were left at. A tab that no longer resolves is **dropped** rather than degraded: a
-    /// strip whose tabs all degraded onto the same object would collapse into one.
+    /// The saved tabs as live trails, in strip order, each place with the rows its two
+    /// sides were left at. A place that no longer resolves is **dropped** from its trail
+    /// rather than degraded, the cursor carried the way [`History::rebuilt`] carries it
+    /// -- the same walk closing a file goes through, so the two cannot drift -- and a tab
+    /// with nothing left on its trail is dropped: a strip whose tabs all degraded onto
+    /// the same object would collapse into one.
     pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<RestoredTab> {
         let rebuilt = Rebuilt::of(self, objects);
         self.tabs
             .iter()
             .filter_map(|saved| {
-                let document = saved.document.resolve(objects, &rebuilt)?;
-                // A row is a claim about a listing, so a rebuilt listing takes both its
-                // rows with it; the tab itself survives. A file has no binary path and so
-                // is never rebuilt. The driven line is a claim about a *file* rather than
-                // about a listing, so it survives a rebuild and is simply asked again.
-                let changed = saved
-                    .document
-                    .binary_path()
-                    .is_some_and(|path| rebuilt.changed(path));
-                let (asm_row, src_row, address) = match changed {
-                    true => (0, 0, None),
-                    false => (saved.asm_row, saved.src_row, saved.asm_address),
-                };
+                let resolved: Vec<Option<RestoredEntry>> = saved
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        let document = entry.document.resolve(objects, &rebuilt)?;
+                        // A row is a claim about a listing, so a rebuilt listing takes
+                        // both its rows with it; the place itself survives. A file has
+                        // no binary path and so is never rebuilt. The driven line is a
+                        // claim about a *file* rather than about a listing, so it
+                        // survives a rebuild and is simply asked again.
+                        let changed = entry
+                            .document
+                            .binary_path()
+                            .is_some_and(|path| rebuilt.changed(path));
+                        let (asm_row, src_row, address) = match changed {
+                            true => (0, 0, None),
+                            false => (entry.asm_row, entry.src_row, entry.asm_address),
+                        };
+                        Some(RestoredEntry {
+                            document,
+                            asm_row,
+                            src_row,
+                            line: entry.line,
+                            address,
+                        })
+                    })
+                    .collect();
+                let trail = History::rebuilt(
+                    resolved
+                        .iter()
+                        .map(|entry| entry.as_ref().map(|entry| entry.document.clone())),
+                    saved.cursor,
+                );
+                trail.current()?;
+                // The rows of what survived, in the trail's order; `rebuilt` keeps the
+                // survivors in the order they were given, so the two agree.
+                let entries = resolved.into_iter().flatten().collect();
                 Some(RestoredTab {
-                    document,
-                    asm_row,
-                    src_row,
-                    line: saved.line,
-                    address,
+                    temporal: saved.temporal,
+                    trail,
+                    entries,
                 })
             })
             .collect()
     }
 
-    /// The saved history as a live one. An entry that no longer resolves is dropped;
-    /// where the cursor lands is [`History::rebuilt`]'s business, the same walk closing a
-    /// file goes through, so the two cannot drift.
-    pub fn resolve_history(&self, objects: &[Arc<Object>]) -> History {
+    /// The saved record of visits as a live one. A place that no longer resolves is
+    /// dropped: a list of places the reader cannot get back to is worse than a short
+    /// list.
+    pub fn resolve_history(&self, objects: &[Arc<Object>]) -> Visits {
         let rebuilt = Rebuilt::of(self, objects);
-        History::rebuilt(
+        Visits::restored(
             self.history
                 .entries
                 .iter()
-                .map(|saved| saved.resolve(objects, &rebuilt)),
-            self.history.cursor,
+                .filter_map(|saved| saved.resolve(objects, &rebuilt))
+                .collect(),
         )
     }
 

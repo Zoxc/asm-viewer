@@ -168,17 +168,16 @@ fn facts(named: &Named) -> Vec<Element> {
 #[derive(Clone, PartialEq)]
 pub(crate) struct SymbolBar {
     pub(crate) named: Named,
-    /// The tab this bar is in, which is what its open-or-shut is filed under. `None` for a
-    /// tab the table has no id for, which cannot happen for a mounted pane and draws no
-    /// triangle rather than one that would do nothing.
-    pub(crate) tab: Option<DocId>,
+    /// The tab this bar is in, which is what its open-or-shut is filed under -- the tab
+    /// and not the place on its trail, so the section stays open along the trail.
+    pub(crate) tab: DocId,
 }
 
 impl Component for SymbolBar {
     fn render(&self) -> impl IntoElement {
         let expanded = use_consume::<Expanded>().0;
         let mut hovering = use_state(|| false);
-        let open = self.tab.is_some_and(|tab| expanded.read().contains(&tab));
+        let open = expanded.read().contains(&self.tab);
         // The mangled row only where there is a demangling: `display()` falls back to the
         // mangled name, so a symbol that was never mangled would otherwise be named twice.
         let names: Vec<Element> = match &self.named {
@@ -224,9 +223,6 @@ impl Component for SymbolBar {
                     .on_pointer_over(move |_| hovering.set_if_modified(true))
                     .on_pointer_out(move |_| hovering.set_if_modified(false))
                     .on_press(move |_| {
-                        let Some(tab) = tab else {
-                            return;
-                        };
                         let mut expanded = expanded.write();
                         if !expanded.remove(&tab) {
                             expanded.insert(tab);
@@ -234,11 +230,7 @@ impl Component for SymbolBar {
                     })
                     .child(
                         label()
-                            .text(match (self.tab.is_some(), open) {
-                                (false, _) => "",
-                                (true, false) => "\u{25b8}",
-                                (true, true) => "\u{25be}",
-                            })
+                            .text(if open { "\u{25be}" } else { "\u{25b8}" })
                             .color(palette().address_fg)
                             .max_lines(1),
                     ),

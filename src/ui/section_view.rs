@@ -30,7 +30,7 @@ pub(crate) const WINDOW: usize = 64;
 /// address rather than a row because the rows of a listing being decoded are counted
 /// afresh with every answer.
 #[derive(Clone, Copy)]
-pub(crate) struct CodeAt(pub(crate) State<Positions<Document, Spot>>);
+pub(crate) struct CodeAt(pub(crate) State<Positions<Entry, Spot>>);
 
 /// The rows and the reading they were counted from, **together**: the rows are rebuilt by
 /// an effect a pass after an answer lands, so for that one pass the reading the pane can
@@ -313,7 +313,7 @@ impl Component for TextRow {
         let ctrl = use_consume::<Ctrl>().0;
         let mut hovering = use_state(|| false);
         let open = use_open();
-        let history = use_consume::<Hist>().0;
+        let visits = use_consume::<Visited>().0;
         let opens = self.opens.clone();
         // A label lights as a link only while Ctrl is held, which is when a press is one.
         // The cue is the label's colour, the one the relocation link takes, and the row
@@ -398,12 +398,13 @@ impl Component for TextRow {
                 if !*ctrl.peek() {
                     return;
                 }
+                // A tab of its own, as Ctrl opens one everywhere.
                 if let Some(symbol) = opens.clone() {
-                    activate(
+                    open_document(
                         open,
-                        history,
-                        Some(Document::Assembly(Selection::Symbol(symbol))),
-                        Visit::Went,
+                        visits,
+                        Document::Assembly(Selection::Symbol(symbol)),
+                        Reach::NewTab,
                     );
                 }
             })
@@ -483,13 +484,17 @@ enum RowKey {
 /// The listing of one object's code.
 #[derive(Clone)]
 pub(crate) struct SectionList {
+    /// The tab this listing is in, which with `document` is what its place is kept under.
+    pub(crate) tab: DocId,
     pub(crate) document: Document,
     pub(crate) object: Arc<Object>,
 }
 
 impl PartialEq for SectionList {
     fn eq(&self, other: &Self) -> bool {
-        self.document == other.document && Arc::ptr_eq(&self.object, &other.object)
+        self.tab == other.tab
+            && self.document == other.document
+            && Arc::ptr_eq(&self.object, &other.object)
     }
 }
 
@@ -523,9 +528,10 @@ impl Component for SectionList {
         } else {
             None
         };
+        let entry = (self.tab, self.document.clone());
         use_kept_place(
             code_at,
-            move |document: &Document| docs.peek().id_of(document).is_some(),
+            move |(tab, document): &Entry| docs.peek().contains(*tab, document),
             // The scroll this pane owes: to the source pane's run, the row of the first
             // instruction compiled from one of its lines, in whichever held stretch has
             // one. Left owed while none does -- the stretch may not be decoded yet, and
@@ -549,7 +555,7 @@ impl Component for SectionList {
             marked,
             rows,
             controller,
-            &self.document,
+            &entry,
             generation,
         );
         use_window(
@@ -844,20 +850,20 @@ fn build_row(
 /// the pass that first draws new rows draws them at the corrected offset rather than one
 /// frame early.
 fn use_kept_place(
-    mut places: State<Positions<Document, Spot>>,
-    is_open: impl Fn(&Document) -> bool + 'static,
+    mut places: State<Positions<Entry, Spot>>,
+    is_open: impl Fn(&Entry) -> bool + 'static,
     mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
     reading: State<Reading>,
     marked: State<Marks>,
     mut rows: State<Option<Arc<Built>>>,
     mut controller: ScrollController,
-    tab: &Document,
+    tab: &Entry,
     generation: Option<u64>,
 ) {
     /// What the hook remembers between runs, none of it rendered from.
     #[derive(Default)]
     struct Held {
-        tab: Option<Document>,
+        tab: Option<Entry>,
         built: Option<u64>,
         /// The place last derived from the offset, to tell a scroll from a write made
         /// from outside.
@@ -880,7 +886,7 @@ fn use_kept_place(
 
     use_side_effect_with_deps(
         &(tab.clone(), generation),
-        move |(tab, generation): &(Document, Option<u64>)| {
+        move |(tab, generation): &(Entry, Option<u64>)| {
             // Subscribes this effect to the pane's scroll, so it comes before any return.
             let (_, offset) = <(i32, i32)>::from(controller);
             // In `f64`: a listing of a large binary is millions of rows, tens of millions
@@ -1015,38 +1021,51 @@ fn use_kept_place(
 }
 
 /// Show the instruction at `address` -- placed, in `object`'s code -- among its
-/// neighbours: the object's code tab, opened on that address, with the line the
-/// instruction was compiled from picked out in the source pane where it has one.
+/// neighbours: the object's code tab, opened in a tab of its own on that address, with
+/// the line the instruction was compiled from picked out in the source pane where it has
+/// one.
 ///
-/// The place is written **before** the tab is opened, the order a restore uses, so the
-/// pane's first run finds it; when the code tab is already on top the write is what moves
-/// the view, `use_kept_place` reading the map for exactly this. The line goes through
-/// `land`, which knows whether the tab is on top.
+/// The place is written in the same handler as the open and before any render, so the
+/// pane's first run finds it; it comes *after* the open only because the entry it is kept
+/// under names the tab, and a new tab has no id until it is opened. When the code tab is
+/// already on top the write is what moves the view, `use_kept_place` reading the map for
+/// exactly this. The line goes through `land`, which knows whether the tab is on top.
 pub(crate) fn show_in_code(
     open: Open,
-    history: State<History>,
+    visits: State<Visits>,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
-    mut places: State<Positions<Document, Spot>>,
+    mut places: State<Positions<Entry, Spot>>,
     object: Arc<Object>,
     address: u64,
     at: Option<LinePos>,
 ) {
     let code = Document::Code(object);
-    places
-        .write()
-        .remember(code.clone(), Spot { address, rows: 0 });
-    match at {
-        Some(at) => land(open, history, marked, landing, code, at),
-        None => activate(open, history, Some(code), Visit::Went),
+    let id = match at {
+        Some(at) => land(
+            open,
+            visits,
+            marked,
+            landing,
+            code.clone(),
+            at,
+            Reach::NewTab,
+        ),
+        None => open_document(open, visits, code.clone(), Reach::NewTab),
+    };
+    if let Some(id) = id {
+        places
+            .write()
+            .remember((id, code), Spot { address, rows: 0 });
     }
 }
 
 /// Open `symbol`'s own tab from a row of it read among its neighbours, landing on the
-/// line the row was compiled from where it has one: `show_in_code`'s door the other way.
+/// line the row was compiled from where it has one: `show_in_code`'s door the other way,
+/// and a tab of its own likewise.
 pub(crate) fn open_as_symbol(
     open: Open,
-    history: State<History>,
+    visits: State<Visits>,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
     symbol: Symbol,
@@ -1054,8 +1073,12 @@ pub(crate) fn open_as_symbol(
 ) {
     let tab = Document::Assembly(Selection::Symbol(symbol));
     match at {
-        Some(at) => land(open, history, marked, landing, tab, at),
-        None => activate(open, history, Some(tab), Visit::Went),
+        Some(at) => {
+            land(open, visits, marked, landing, tab, at, Reach::NewTab);
+        }
+        None => {
+            open_document(open, visits, tab, Reach::NewTab);
+        }
     }
 }
 

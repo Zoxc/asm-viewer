@@ -33,7 +33,8 @@ impl Component for BookmarkRow {
         let open = use_open();
         // Consumed and not read: a row hands the list an index back and draws nothing of
         // it that the tab has not already handed it.
-        let history = use_consume::<Hist>().0;
+        let visits = use_consume::<Visited>().0;
+        let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let index = self.index;
         let live = self.live.clone();
@@ -74,7 +75,11 @@ impl Component for BookmarkRow {
                     let live = live.clone();
                     row.on_pointer_over(move |_| hovering.set_if_modified(true))
                         .on_pointer_out(move |_| hovering.set_if_modified(false))
-                        .on_press(move |_| activate(open, history, live.clone(), Visit::Went))
+                        .on_press(move |_| {
+                            if let Some(live) = live.clone() {
+                                open_document(open, visits, live, reach(ctrl));
+                            }
+                        })
                 })
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(&e, remove_menu(bookmarked, index));

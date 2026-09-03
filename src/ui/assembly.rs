@@ -131,9 +131,10 @@ pub(crate) struct AsmData {
     /// so it can never be a beat behind the rows it is drawn over.
     pub(crate) lanes: Arc<Lanes>,
     pub(crate) lines: SymbolLines,
-    /// The file of the source-driven tab this listing is the assembly side of, or `None`
-    /// for an assembly-driven tab's own listing. Compared by text, as `LinePos` is.
-    pub(crate) subject: Option<Arc<str>>,
+    /// The source-driven tab this listing is the assembly side of and the file it is
+    /// showing, or `None` for an assembly-driven tab's own listing. The file is compared
+    /// by text, as `LinePos` is.
+    pub(crate) subject: Option<(DocId, Arc<str>)>,
     /// The listing row this symbol's first instruction row is drawn at: 0 in a listing
     /// that is one symbol, and where the symbol starts in a listing of a whole object's
     /// code. What `lanes` answers in rows is relative to the symbol, and this is what the
@@ -243,7 +244,8 @@ impl Component for RelocationLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let open = use_open();
-        let history = use_consume::<Hist>().0;
+        let visits = use_consume::<Visited>().0;
+        let ctrl = use_consume::<Ctrl>().0;
         let symbol = Symbol {
             object: self.object.clone(),
             data: self.target.clone(),
@@ -272,11 +274,19 @@ impl Component for RelocationLabel {
                 // instruction being left came from.
                 e.stop_propagation();
 
-                activate(
+                // A link inside the tab: followed in place, the way a browser follows
+                // one, so the function left is one Back away -- or, with Ctrl, in a tab
+                // of its own beside this one.
+                let reach = if *ctrl.peek() {
+                    Reach::NewTab
+                } else {
+                    Reach::InPlace
+                };
+                open_document(
                     open,
-                    history,
-                    Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
-                    Visit::Went,
+                    visits,
+                    Document::Assembly(Selection::Symbol(symbol.clone())),
+                    reach,
                 );
             })
             .child(label().text(text).max_lines(1).color(if hovering() {
@@ -291,8 +301,9 @@ impl Component for RelocationLabel {
 /// the row it names on screen and pins the line that row came from.
 ///
 /// **Not** a navigation. The document does not change, so nothing is pushed onto the
-/// history -- following a jump is reading further down the same listing, and a Back button
-/// that undid it would be answering a question nobody asked. It *is* a selection, though:
+/// tab's trail -- following a jump is reading further down the same listing, and a Back
+/// button that undid it would be answering a question nobody asked. It *is* a selection,
+/// though:
 /// arriving at the target and then having to click it to light it up made the reader say
 /// twice where they had gone, so the press pins exactly what a press on the target row
 /// would, source pane owed the scroll and all.
@@ -642,7 +653,7 @@ impl Component for InstructionRow {
         let located = use_consume::<Locations>().0;
         let dock = use_consume::<ContentDock>().0;
         let open = use_open();
-        let history = use_consume::<Hist>().0;
+        let visits = use_consume::<Visited>().0;
         let landing = use_consume::<Land>().0;
         let code_at = use_consume::<CodeAt>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
@@ -779,7 +790,7 @@ impl Component for InstructionRow {
                         .on_press(move |_| {
                             show_in_code(
                                 open,
-                                history,
+                                visits,
                                 marked,
                                 landing,
                                 code_at,
@@ -796,7 +807,7 @@ impl Component for InstructionRow {
                         .on_press(move |_| {
                             open_as_symbol(
                                 open,
-                                history,
+                                visits,
                                 marked,
                                 landing,
                                 symbol.clone(),
@@ -859,16 +870,18 @@ impl Component for InstructionRow {
 /// re-render the pane above, which changes only when a symbol is analysed.
 #[derive(Clone)]
 struct InstructionList {
+    /// The tab these rows are in.
+    tab: DocId,
     assembly: Arc<Assembly>,
     /// The whole symbol and not just its object, because these rows draw a disassembly
     /// *and* answer to it -- a relocation label navigates to a symbol in the same object.
     symbol: Symbol,
     /// The question this listing answers, and **not** the one being asked: while the
     /// worker catches up the pane is still drawing the listing being left. Two things
-    /// come out of it -- [`asked_of`], the tab whose viewing position this is (the file's
-    /// tab for a source-driven one, never the resolved symbol's, which is very likely not
-    /// open at all), and the file a source-driven tab is about, which its rows' menus
-    /// choose a location for.
+    /// come out of it -- [`asked_of`], the place on the tab's trail whose viewing
+    /// position this is (the file for a source-driven one, never the resolved symbol,
+    /// which is very likely on no trail at all), and the file a source-driven tab is
+    /// about, which its rows' menus choose a location for.
     asked: Ask,
     lanes: Arc<Lanes>,
     lines: SymbolLines,
@@ -876,7 +889,8 @@ struct InstructionList {
 
 impl PartialEq for InstructionList {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.assembly, &other.assembly)
+        self.tab == other.tab
+            && Arc::ptr_eq(&self.assembly, &other.assembly)
             && self.symbol == other.symbol
             && self.asked == other.asked
             && Arc::ptr_eq(&self.lanes, &other.lanes)
@@ -913,7 +927,7 @@ impl Component for InstructionList {
             lanes: self.lanes.clone(),
             lines: self.lines.clone(),
             subject: match &self.asked {
-                Ask::Source { at, .. } => Some(at.file.clone()),
+                Ask::Source { at, .. } => Some((self.tab, at.file.clone())),
                 Ask::Symbol(_) => None,
             },
             // A listing that is one symbol: its rows start at the top, its addresses
@@ -931,9 +945,10 @@ impl Component for InstructionList {
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll this pane owes a run, which wins over it.
         let docs = use_consume::<OpenDocs>().0;
+        let entry = (self.tab, asked_of(&self.asked));
         use_kept_position(
             use_consume::<AsmAt>().0,
-            move |document: &Document| docs.peek().id_of(document).is_some(),
+            move |(tab, document): &Entry| docs.peek().contains(*tab, document),
             {
                 let data = data.clone();
                 move |controller: &mut ScrollController| {
@@ -963,7 +978,7 @@ impl Component for InstructionList {
                 }
             },
             controller,
-            &asked_of(&self.asked),
+            &entry,
             length,
             // The top: a listing *is* the symbol, so its first row is its own first line.
             0,
@@ -1123,12 +1138,15 @@ impl Component for InstructionList {
 /// tab -- a source-driven one is waiting for a line to be clicked in it.
 #[derive(Clone)]
 pub(crate) struct AssemblyPane {
+    /// The tab this pane is in: what its bar's open-or-shut and its rows' positions are
+    /// filed under.
+    pub(crate) tab: DocId,
     pub(crate) document: Document,
 }
 
 impl PartialEq for AssemblyPane {
     fn eq(&self, other: &Self) -> bool {
-        self.document == other.document
+        self.tab == other.tab && self.document == other.document
     }
 }
 
@@ -1160,6 +1178,7 @@ impl AssemblyPane {
                 .expanded()
                 .padding(5.0)
                 .child(SectionList {
+                    tab: self.tab,
                     document: self.document.clone(),
                     object: object.clone(),
                 })
@@ -1190,6 +1209,7 @@ impl AssemblyPane {
             // runs the full width of the pane the way a header does.
             .padding(5.0)
             .child(InstructionList {
+                tab: self.tab,
                 assembly,
                 symbol: studied.symbol.clone(),
                 // The question the *drawn* answer answers, never the one being asked.
@@ -1204,10 +1224,7 @@ impl AssemblyPane {
 impl Component for AssemblyPane {
     fn render(&self) -> impl IntoElement {
         let analysis = use_consume::<Analysis>().0.read().clone();
-        // The tab the bar's open-or-shut is filed under. Read and not peeked, the table
-        // being what says a document is open at all; the pane is mounted for one document
-        // and never another, so the answer does not change while it lives.
-        let tab = use_consume::<OpenDocs>().0.read().id_of(&self.document);
+        let tab = self.tab;
 
         rect()
             .expanded()

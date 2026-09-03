@@ -188,7 +188,7 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
     // and then moves to a neighbour, so the run that follows is holding a tab that is gone.
     let (mut open, mut at) = (open, at);
     open.write().retain(|tab| tab != "a");
-    at.write().forget(&"a".to_owned());
+    at.write().forgetting(|tab| tab != "a");
     tab.set("b".to_owned());
     for _ in 0..4 {
         test.sync_and_update();
@@ -411,13 +411,13 @@ macro_rules! project_states {
             .provide_root_context(|| OpenDocs(State::create(Docs::default())))
             .0;
         $runner.provide_root_context(move || {
-            Active(Memo::create(move || {
-                active_document(&dock.read(), &docs.read())
-            }))
+            Active(Memo::create(move || active_tab(&dock.read(), &docs.read())))
         });
         // Provided but not returned, like `Active`: nothing here asserts on it, and the
         // Assembly pane's bar reads it wherever a harness mounts one.
         $runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
+        // Likewise: every row and link asks it whether a press opens a tab of its own.
+        $runner.provide_root_context(|| Ctrl(State::create(false)));
 
         ProjectStates {
             proj: $runner
@@ -442,8 +442,8 @@ macro_rules! project_states {
             code_at: $runner
                 .provide_root_context(|| CodeAt(State::create(Positions::default())))
                 .0,
-            history: $runner
-                .provide_root_context(|| Hist(State::create(History::default())))
+            visits: $runner
+                .provide_root_context(|| Visited(State::create(Visits::default())))
                 .0,
             bookmarks: $runner
                 .provide_root_context(|| Bookmarked(State::create(Bookmarks::default())))
@@ -452,8 +452,58 @@ macro_rules! project_states {
     }};
 }
 
+/// The tab showing `document`, for the tests that speak of tabs by what they show.
+fn tab_showing(states: &ProjectStates, document: &Document) -> Option<DocId> {
+    states.open.docs.peek().showing(document)
+}
+
+/// The entry of the tab showing `document`: what its positions are kept under.
+fn entry_of(states: &ProjectStates, document: &Document) -> Entry {
+    (
+        tab_showing(states, document).expect("the document is open"),
+        document.clone(),
+    )
+}
+
+/// `close_tab` on the tab showing `document`.
+fn close_document(states: &ProjectStates, document: &Document) {
+    if let Some(id) = tab_showing(states, document) {
+        close_tab(
+            states.open,
+            states.asm_at,
+            states.src_at,
+            states.code_at,
+            states.driven,
+            id,
+        );
+    }
+}
+
+/// `raise` on the tab showing `document`: the strip's own move.
+fn raise_document(states: &ProjectStates, document: &Document) {
+    if let Some(id) = tab_showing(states, document) {
+        raise(states.open, id);
+    }
+}
+
+/// Where the active tab's trail cursor is.
+fn cursor_of(states: &ProjectStates) -> Option<usize> {
+    let id = states.open.active_id()?;
+    states.open.docs.peek().trail(id)?.cursor()
+}
+
+/// The tab a harness mounts a pane in: the one showing `document`, or a stray id for a
+/// pane mounted with no tab behind it, whose positions then go nowhere.
+fn pane_tab(document: &Document) -> DocId {
+    use_consume::<OpenDocs>()
+        .0
+        .read()
+        .showing(document)
+        .unwrap_or(DocId::stray())
+}
+
 /// Leaving a project leaves nothing of it behind: no object, no tab of either kind, no
-/// viewing position, no history entry and nothing active.
+/// viewing position, no visit and nothing active.
 ///
 /// Headless because `close_binary` and `close_tab` each read a state and then write it,
 /// which is legal to the compiler and panics at the moment it runs if the read is still
@@ -475,17 +525,18 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     let (mut objects, mut asm_at, mut src_at) = (states.objects, states.asm_at, states.src_at);
     objects.write().push(object.clone());
     let tab = |symbol: &Symbol| Document::Assembly(Selection::Symbol(symbol.clone()));
-    let went = |target: Document| activate(states.open, states.history, Some(target), Visit::Went);
+    let went = |target: Document| open_document(states.open, states.visits, target, Reach::NewTab);
     went(tab(&first));
     went(tab(&second));
     went(source.clone());
-    asm_at.write().remember(tab(&first), 12);
-    src_at.write().remember(source.clone(), 7);
+    let (first_entry, source_entry) = (entry_of(&states, &tab(&first)), entry_of(&states, &source));
+    asm_at.write().remember(first_entry.clone(), 12);
+    src_at.write().remember(source_entry.clone(), 7);
     test.sync_and_update();
 
     assert_eq!(states.open.documents().len(), 3);
     // Three visits, the source file included: the history records documents.
-    assert_eq!(states.history.peek().entries().len(), 3);
+    assert_eq!(states.visits.peek().entries().len(), 3);
 
     clear_project(states);
     test.sync_and_update();
@@ -496,17 +547,17 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     );
     assert!(states.open.documents().is_empty(), "a tab was left behind");
     assert!(
-        states.history.peek().entries().is_empty(),
+        states.visits.peek().entries().is_empty(),
         "a history entry was left behind"
     );
     // Not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into.
     assert_eq!(
-        states.asm_at.peek().at(&tab(&first)),
+        states.asm_at.peek().at(&first_entry),
         None,
         "a viewing position was left behind"
     );
     assert_eq!(
-        states.src_at.peek().at(&source),
+        states.src_at.peek().at(&source_entry),
         None,
         "a source position was left behind"
     );
@@ -544,11 +595,11 @@ fn a_history_row_names_the_function_and_not_the_whole_symbol() {
     let (mut test, states) =
         TestingRunner::new(history_harness, (400., 200.).into(), project_states!(), 1.);
     test.sync_and_update();
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Assembly(Selection::Symbol(symbol))),
-        Visit::Went,
+        states.visits,
+        Document::Assembly(Selection::Symbol(symbol)),
+        Reach::NewTab,
     );
     test.sync_and_update();
 
@@ -612,13 +663,13 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
     test.sync_and_update();
 
     // A row far wider than the three-view menu, arriving after it is on screen.
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Source(Arc::from(
+        states.visits,
+        Document::Source(Arc::from(
             "/x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.rs",
-        ))),
-        Visit::Went,
+        )),
+        Reach::NewTab,
     );
     for _ in 0..6 {
         test.sync_and_update();
@@ -664,11 +715,11 @@ fn the_tab_menu_hangs_from_the_buttons_right_edge() {
     let mut objects = states.objects;
     objects.write().push(object);
     for symbol in symbols.iter().take(2) {
-        activate(
+        open_document(
             states.open,
-            states.history,
-            Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
-            Visit::Went,
+            states.visits,
+            Document::Assembly(Selection::Symbol(symbol.clone())),
+            Reach::NewTab,
         );
     }
     test.sync_and_update();
@@ -731,11 +782,11 @@ fn the_document_menu_opens_and_closes() {
     let mut objects = states.objects;
     objects.write().push(object);
     for symbol in symbols.iter().take(2) {
-        activate(
+        open_document(
             states.open,
-            states.history,
-            Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
-            Visit::Went,
+            states.visits,
+            Document::Assembly(Selection::Symbol(symbol.clone())),
+            Reach::NewTab,
         );
     }
     test.sync_and_update();
@@ -839,16 +890,21 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
         .take(3)
         .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
         .collect();
-    for document in &documents {
-        activate(
-            states.open,
-            states.history,
-            Some(document.clone()),
-            Visit::Went,
-        );
+    // Along one tab's trail: the first opens the tab, the next two are followed in it.
+    open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::NewTab,
+    );
+    for document in &documents[1..] {
+        open_document(states.open, states.visits, document.clone(), Reach::InPlace);
     }
-    test.sync_and_update();
-    assert_eq!(states.history.peek().cursor(), Some(2));
+    // Settled and not synced once: the pair reads `Active`, a memo, which is a beat
+    // behind the states it is over.
+    settle(&mut test);
+    assert_eq!(states.open.documents().len(), 1);
+    assert_eq!(cursor_of(&states), Some(2));
 
     let side = toggle_size();
     let columns = nav_button_columns(&test);
@@ -866,7 +922,7 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
     );
 
     press_at(&mut test, back);
-    assert_eq!(states.history.peek().cursor(), Some(1));
+    assert_eq!(cursor_of(&states), Some(1));
     assert!(
         states.open.active().as_ref() == Some(&documents[1]),
         "the step back did not land on the entry before it"
@@ -878,7 +934,7 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
     );
 
     press_at(&mut test, back);
-    assert_eq!(states.history.peek().cursor(), Some(0));
+    assert_eq!(cursor_of(&states), Some(0));
     assert!(
         !washes_under_the_pointer(&mut test, back),
         "back is on the oldest entry and still looks live"
@@ -886,14 +942,10 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
 
     // A press on a dimmed button is not a press at all.
     press_at(&mut test, back);
-    assert_eq!(
-        states.history.peek().cursor(),
-        Some(0),
-        "a dimmed button navigated"
-    );
+    assert_eq!(cursor_of(&states), Some(0), "a dimmed button navigated");
 
     press_at(&mut test, forward);
-    assert_eq!(states.history.peek().cursor(), Some(1));
+    assert_eq!(cursor_of(&states), Some(1));
     assert!(
         states.open.active().as_ref() == Some(&documents[1]),
         "the step forward did not land on the entry after it"
@@ -941,7 +993,7 @@ fn close_harness() -> impl IntoElement {
 fn one_close_target(test: &mut TestingRunner, states: &ProjectStates) -> Area {
     let symbols = fixture_symbols();
     let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
-    activate(states.open, states.history, Some(document), Visit::Went);
+    open_document(states.open, states.visits, document, Reach::NewTab);
     test.sync_and_update();
 
     let target = test
@@ -1097,36 +1149,23 @@ fn the_panel_and_the_table_hold_the_same_documents() {
     };
 
     for document in &documents {
-        activate(
-            states.open,
-            states.history,
-            Some(document.clone()),
-            Visit::Went,
-        );
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     }
     test.sync_and_update();
     assert!(agree(&states) == documents);
 
     // Opening one that is already open adds neither a tab nor an entry.
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(documents[0].clone()),
-        Visit::Went,
+        states.visits,
+        documents[0].clone(),
+        Reach::NewTab,
     );
     test.sync_and_update();
     assert!(agree(&states) == documents);
 
     for document in &documents {
-        close_tab(
-            states.open,
-            states.history,
-            states.asm_at,
-            states.src_at,
-            states.code_at,
-            states.driven,
-            document,
-        );
+        close_document(&states, &document);
     }
     test.sync_and_update();
     assert!(agree(&states).is_empty());
@@ -1152,32 +1191,14 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
     objects.write().push(object);
 
     for document in &documents {
-        activate(
-            states.open,
-            states.history,
-            Some(document.clone()),
-            Visit::Went,
-        );
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     }
     // On the middle one, whose neighbours are on both sides -- the only arrangement
     // in which "the right-hand one" and "the leftmost one" are different answers.
-    activate(
-        states.open,
-        states.history,
-        Some(documents[1].clone()),
-        Visit::Moved,
-    );
+    raise_document(&states, &documents[1]);
     test.sync_and_update();
 
-    close_tab(
-        states.open,
-        states.history,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        &documents[1],
-    );
+    close_document(&states, &documents[1]);
     test.sync_and_update();
     assert!(
         states.open.active() == Some(documents[2].clone()),
@@ -1185,28 +1206,12 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
     );
 
     // And closing the last one moves left, there being nothing to its right.
-    close_tab(
-        states.open,
-        states.history,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        &documents[2],
-    );
+    close_document(&states, &documents[2]);
     test.sync_and_update();
     assert!(states.open.active() == Some(documents[0].clone()));
 
     // Closing the only one left leaves nothing active at all.
-    close_tab(
-        states.open,
-        states.history,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        &documents[0],
-    );
+    close_document(&states, &documents[0]);
     test.sync_and_update();
     assert!(states.open.active().is_none());
 }
@@ -1232,12 +1237,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
     objects.write().push(object);
 
     for document in &documents {
-        activate(
-            states.open,
-            states.history,
-            Some(document.clone()),
-            Visit::Went,
-        );
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     }
     // A view dragged into the document panel, which the dock allows and this must not
     // close: the × it has no place for is the whole of the argument.
@@ -1248,8 +1248,12 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         panel.tabs.push(Tab::View(View::History));
     }
     let mut asm_at = states.asm_at;
-    for (row, document) in documents.iter().enumerate() {
-        asm_at.write().remember(document.clone(), row + 1);
+    let entries: Vec<Entry> = documents
+        .iter()
+        .map(|document| entry_of(&states, document))
+        .collect();
+    for (row, entry) in entries.iter().enumerate() {
+        asm_at.write().remember(entry.clone(), row + 1);
     }
     test.sync_and_update();
 
@@ -1259,11 +1263,10 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         .open
         .docs
         .peek()
-        .id_of(&documents[1])
+        .showing(&documents[1])
         .expect("the kept tab is open");
     close_others(
         states.open,
-        states.history,
         states.asm_at,
         states.src_at,
         states.code_at,
@@ -1278,13 +1281,13 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         "the tab on screen closed without landing on the one that was kept"
     );
     assert_eq!(
-        states.asm_at.peek().at(&documents[1]),
+        states.asm_at.peek().at(&entries[1]),
         Some(2),
         "the kept tab lost the row it was left at"
     );
     assert!(
-        states.asm_at.peek().at(&documents[0]).is_none()
-            && states.asm_at.peek().at(&documents[2]).is_none(),
+        states.asm_at.peek().at(&entries[0]).is_none()
+            && states.asm_at.peek().at(&entries[2]).is_none(),
         "a closed tab's position was kept, and with it the binary it points into"
     );
     assert!(
@@ -1316,45 +1319,38 @@ fn switching_to_an_open_tab_is_not_a_visit() {
 
     let mut objects = states.objects;
     objects.write().push(object);
-    let go = |target: &Document, visit| {
-        activate(states.open, states.history, Some(target.clone()), visit)
+    let go = |target: &Document| {
+        open_document(states.open, states.visits, target.clone(), Reach::NewTab)
     };
 
-    go(&first, Visit::Went);
-    go(&second, Visit::Went);
+    go(&first);
+    go(&second);
     test.sync_and_update();
-    assert!(states.history.peek().entries() == [first.clone(), second.clone()]);
+    assert!(states.visits.peek().entries() == [first.clone(), second.clone()]);
 
     // Back to the first through the strip: it is already open, so the reader has gone
-    // nowhere and the cursor stays where it was.
-    go(&first, Visit::Moved);
+    // nowhere and the record stays as it was.
+    raise_document(&states, &first);
     test.sync_and_update();
     assert!(states.open.active() == Some(first.clone()));
     assert!(
-        states.history.peek().entries() == [first.clone(), second.clone()],
+        states.visits.peek().entries() == [first.clone(), second.clone()],
         "a strip click was recorded as a visit"
     );
-    assert_eq!(states.history.peek().cursor(), Some(1));
 
-    // Going there deliberately *is* one, and bumps it to the newest position.
-    go(&first, Visit::Went);
+    // Going there deliberately *is* one, and bumps it to the newest position -- and
+    // raises the tab that shows it rather than opening another.
+    go(&first);
     test.sync_and_update();
-    assert!(states.history.peek().entries() == [second, first.clone()]);
+    assert!(states.visits.peek().entries() == [second, first.clone()]);
+    assert_eq!(states.open.documents().len(), 2);
 
     // And closing the tab lands on the neighbour without recording it.
-    close_tab(
-        states.open,
-        states.history,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        &first,
-    );
+    close_document(&states, &first);
     test.sync_and_update();
     assert_eq!(states.open.documents().len(), 1);
     assert_eq!(
-        states.history.peek().entries().len(),
+        states.visits.peek().entries().len(),
         2,
         "closing a tab recorded the neighbour it landed on"
     );
@@ -1378,7 +1374,7 @@ fn closing_a_binary_keeps_the_source_tabs() {
 
     let mut objects = states.objects;
     objects.write().push(object);
-    let went = |target: Document| activate(states.open, states.history, Some(target), Visit::Went);
+    let went = |target: Document| open_document(states.open, states.visits, target, Reach::NewTab);
     went(source.clone());
     went(function.clone());
     test.sync_and_update();
@@ -1392,7 +1388,7 @@ fn closing_a_binary_keeps_the_source_tabs() {
         states.src_at,
         states.code_at,
         states.driven,
-        states.history,
+        states.visits,
         &path,
     );
     test.sync_and_update();
@@ -1567,7 +1563,7 @@ fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
         states.src_at,
         states.code_at,
         states.driven,
-        states.history,
+        states.visits,
         &path,
     );
     test.sync_and_update();
@@ -1703,7 +1699,7 @@ fn analysis_harness() -> impl IntoElement {
     let asking = use_consume::<Wanted>().0;
     let analysis = use_consume::<Analysis>().0;
     let objects = use_consume::<Objects>().0;
-    let history = use_consume::<Hist>().0;
+    let history = use_consume::<Visited>().0;
     let work = use_consume::<Work>().0;
     let mut seen = use_consume::<Seen>().0;
     let located = use_consume::<Locations>().0;
@@ -1758,7 +1754,7 @@ macro_rules! analysis_states {
                 .provide_root_context(|| Objects(State::create(Vec::new())))
                 .0,
             $runner
-                .provide_root_context(|| Hist(State::create(History::default())))
+                .provide_root_context(|| Visited(State::create(Visits::default())))
                 .0,
             $runner
                 .provide_root_context(|| Locations(State::create(Located::default())))
@@ -2842,10 +2838,10 @@ fn a_location_row_opens_its_symbol() {
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
     assert!(states.open.active() == Some(document.clone()));
     assert!(states
-        .history
+        .visits
         .peek()
         .recent()
-        .any(|(_, entry)| *entry == document));
+        .any(|entry| *entry == document));
 }
 
 /// A row's press lands on the line as well as opening the symbol: the pin is the line,
@@ -2869,11 +2865,11 @@ fn a_location_row_lands_on_its_line() {
     );
     let mut located = location.located;
     // Another document on top first, so the press is a change of document.
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Assembly(Selection::Symbol(symbols[0].clone()))),
-        Visit::Went,
+        states.visits,
+        Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        Reach::NewTab,
     );
     located.write().asked = Some(Query::line(at.clone()));
     located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
@@ -2935,21 +2931,17 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
         1.,
     );
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
-    activate(
-        states.open,
-        states.history,
-        Some(document.clone()),
-        Visit::Went,
-    );
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     settle(&mut test);
 
     land(
         states.open,
-        states.history,
+        states.visits,
         location.marked,
         location.landing,
         document.clone(),
         at.clone(),
+        Reach::NewTab,
     );
     assert!(
         location.landing.peek().is_none(),
@@ -3135,9 +3127,10 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
         1.,
     );
     let mut located = location.located;
-    activate(states.open, states.history, Some(tab.clone()), Visit::Went);
+    open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
+    let entry = entry_of(&states, &tab);
     located.write().asked = Some(Query::line(at.clone()));
-    located.write().subject = Some(at.file.clone());
+    located.write().subject = Some((entry.0, at.file.clone()));
     located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
 
@@ -3157,12 +3150,12 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
         1,
         "a tab was opened for the symbol"
     );
-    assert!(states.driven.peek().choice(&tab) == Some(wanted.clone()));
-    assert_eq!(states.driven.peek().line(&tab), Some(at.line));
+    assert!(states.driven.peek().choice(&entry) == Some(wanted.clone()));
+    assert_eq!(states.driven.peek().line(&entry), Some(at.line));
     assert!(source_line(location.marked) == Some(at.clone()));
     // Which is the question the tab now asks.
     assert!(
-        ask(Some(&tab), &states.driven.peek())
+        ask(Some(&entry), &states.driven.peek())
             == Some(Ask::Source {
                 at: at.clone(),
                 chosen: Some(wanted.clone()),
@@ -3170,15 +3163,7 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     );
 
     // The tab closed, the same row opens the symbol as a tab of its own.
-    close_tab(
-        states.open,
-        states.history,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        &tab,
-    );
+    close_document(&states, &tab);
     settle(&mut test);
     let row = label_area(&test, "sum_to").expect("the row is still drawn");
     let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
@@ -3209,11 +3194,11 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
         tab: Document::Assembly(Selection::Symbol(symbols[0].clone())),
         at: at.clone(),
     }));
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Assembly(Selection::Symbol(symbols[1].clone()))),
-        Visit::Went,
+        states.visits,
+        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+        Reach::NewTab,
     );
     settle(&mut test);
 
@@ -3399,7 +3384,7 @@ fn the_row_lit_is_the_symbol_drawn_and_not_the_active_document() {
         1.,
     );
     let (mut located, mut analysis) = (location.located, location.analysis);
-    activate(states.open, states.history, Some(tab.clone()), Visit::Went);
+    open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
     located.write().asked = Some(Query::line(at.clone()));
     located.write().found = Some(Found::new(
         Query::line(at.clone()),
@@ -3470,12 +3455,13 @@ struct Subject(Arc<str>);
 /// ancestor scope -- which `app()` mounts on the root and no other harness here does.
 fn source_menu_harness() -> impl IntoElement {
     let file = use_consume::<Subject>().0;
-    rect()
-        .expanded()
-        .child(ContextMenuViewer::new())
-        .child(SourcePane {
-            document: Document::Source(file),
-        })
+    rect().expanded().child(ContextMenuViewer::new()).child({
+        let document = Document::Source(file);
+        SourcePane {
+            tab: pane_tab(&document),
+            document,
+        }
+    })
 }
 
 /// Where the label reading `text` is, as a point to put the pointer on.
@@ -3546,11 +3532,11 @@ fn a_source_row_inside_a_function_offers_its_instances() {
         },
         1.,
     );
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Source(file.clone())),
-        Visit::Went,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
     );
     settle(&mut test);
 
@@ -3587,7 +3573,14 @@ fn a_source_row_inside_a_function_offers_its_instances() {
                 }
             )
     );
-    assert!(located.peek().subject.as_deref() == Some(&*file));
+    assert!(
+        located
+            .peek()
+            .subject
+            .as_ref()
+            .map(|(_, subject)| &**subject)
+            == Some(&*file)
+    );
     assert!(
         !labels(&test).contains(&"Find instances of add".to_owned()),
         "the menu stayed open"
@@ -3800,33 +3793,46 @@ fn what_a_tab_asks_follows_its_kind_and_its_driven_line() {
     let file: Arc<str> = "src/main.rs".into();
     let tab = Document::Source(file.clone());
     let mut driven = Driven::default();
+    // Two tabs, so a line can be seen to belong to one entry and not to a file.
+    let mut docs = Docs::default();
+    let (first, second) = (docs.open(tab.clone()), docs.open(tab.clone()));
+    let on = |id: DocId, document: Document| (id, document);
 
     assert!(ask(None, &driven).is_none(), "nothing open asks nothing");
     assert!(
         ask(
-            Some(&Document::Assembly(Selection::Symbol(symbol.clone()))),
+            Some(&on(
+                first,
+                Document::Assembly(Selection::Symbol(symbol.clone()))
+            )),
             &driven
         ) == Some(Ask::Symbol(symbol.clone()))
     );
     // An object is a place in a binary but not one with a listing.
     assert!(ask(
-        Some(&Document::Assembly(Selection::Object(object))),
+        Some(&on(first, Document::Assembly(Selection::Object(object)))),
         &driven
     )
     .is_none());
     // A source-driven tab nothing has been clicked in yet.
-    assert!(ask(Some(&tab), &driven).is_none());
+    assert!(ask(Some(&on(first, tab.clone())), &driven).is_none());
 
-    driven.remember(tab.clone(), 42);
+    driven.remember(on(first, tab.clone()), 42);
     assert!(
-        ask(Some(&tab), &driven)
+        ask(Some(&on(first, tab.clone())), &driven)
             == Some(Ask::Source {
                 at: LinePos { file, line: 42 },
                 chosen: None
             })
     );
-    // And the line belongs to that tab and not to source-driven tabs at large.
-    assert!(ask(Some(&Document::Source("other.rs".into())), &driven).is_none());
+    // And the line belongs to that tab's entry: not to source-driven tabs at large, and
+    // not to another tab on the same file.
+    assert!(ask(
+        Some(&on(first, Document::Source("other.rs".into()))),
+        &driven
+    )
+    .is_none());
+    assert!(ask(Some(&on(second, tab)), &driven).is_none());
 }
 
 /// The one thing in the analysis that can outlive the document that named it: a
@@ -3964,7 +3970,10 @@ fn listing_harness() -> impl IntoElement {
         .map(|shown| asked_of(&shown.ask))
         .unwrap_or_else(|| Document::Source(Arc::from("")));
 
-    rect().expanded().child(AssemblyPane { document })
+    rect().expanded().child(AssemblyPane {
+        tab: pane_tab(&document),
+        document,
+    })
 }
 
 /// The contexts a listing's rows read, beside the project's.
@@ -4288,8 +4297,12 @@ struct Showing(State<Arc<str>>);
 /// The Source pane over whatever file [`Showing`] names.
 fn showing_harness() -> impl IntoElement {
     let showing = use_consume::<Showing>().0;
-    rect().expanded().child(SourcePane {
-        document: Document::Source(showing.read().clone()),
+    rect().expanded().child({
+        let document = Document::Source(showing.read().clone());
+        SourcePane {
+            tab: pane_tab(&document),
+            document,
+        }
     })
 }
 
@@ -4319,11 +4332,11 @@ fn source_file_harness(
         },
         1.,
     );
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Source(file.clone())),
-        Visit::Went,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
     );
     settle(&mut test);
     (test, states, showing)
@@ -4368,11 +4381,11 @@ fn a_listings_extent_does_not_outlive_it() {
     );
 
     showing.set(narrow.clone());
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Source(narrow.clone())),
-        Visit::Went,
+        states.visits,
+        Document::Source(narrow.clone()),
+        Reach::NewTab,
     );
     settle(&mut test);
     let drawn = labels(&test);
@@ -4534,7 +4547,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
 
     // Still not a navigation: nothing was opened or visited by either press.
     assert!(states.open.active().is_none());
-    assert_eq!(states.history.peek().recent().count(), 0);
+    assert_eq!(states.visits.peek().recent().count(), 0);
 }
 
 /// A row a branch lands on has a separator **row of its own** above it, so the listing
@@ -4770,7 +4783,10 @@ struct PaneTab(State<Document>);
 fn tab_pane_harness() -> impl IntoElement {
     let document = use_consume::<PaneTab>().0.read().clone();
 
-    rect().expanded().child(AssemblyPane { document })
+    rect().expanded().child(AssemblyPane {
+        tab: pane_tab(&document),
+        document,
+    })
 }
 
 /// A symbol with both spellings, out of the fixture's object so that it is a symbol of an
@@ -4918,11 +4934,11 @@ fn the_expanded_section_says_what_the_info_pane_said() {
     );
     // Opened, or the table has no id for this tab and the bar files its flag nowhere --
     // which is a bar with no triangle to press.
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Assembly(Selection::Symbol(sum_to.clone()))),
-        Visit::Went,
+        states.visits,
+        Document::Assembly(Selection::Symbol(sum_to.clone())),
+        Reach::NewTab,
     );
     settle(&mut test);
     assert!(
@@ -4978,7 +4994,7 @@ fn the_symbol_section_is_remembered_per_tab() {
         1.,
     );
     // Both tabs open, or the table has no id for either and the bar files its flag nowhere.
-    let went = |target: Document| activate(states.open, states.history, Some(target), Visit::Went);
+    let went = |target: Document| open_document(states.open, states.visits, target, Reach::NewTab);
     went(tab(&first));
     went(tab(&second));
     settle(&mut test);
@@ -5032,9 +5048,10 @@ fn source_pane_harness() -> impl IntoElement {
         .map(|shown| asked_of(&shown.ask))
         .unwrap_or_else(|| Document::Source(Arc::from("")));
 
+    let tab = pane_tab(&document);
     rect()
         .expanded()
-        .maybe_child(mounted().then(|| SourcePane { document }.into_element()))
+        .maybe_child(mounted().then(|| SourcePane { tab, document }.into_element()))
 }
 
 /// A tab opened for the first time puts its source side on the **symbol's own lines**,
@@ -5093,12 +5110,7 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
     );
     // Open before the first pass: a position is written down only for a tab that is open,
     // which is what the second half of this test leans on.
-    activate(
-        states.open,
-        states.history,
-        Some(document.clone()),
-        Visit::Went,
-    );
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
 
     // Which lines the gutter is drawing, which is where the pane is. The number carries
     // the non-breaking space skia is stopped from trimming; the companion header's label
@@ -5141,7 +5153,7 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
     // And a tab that has been somewhere comes back to where it was, over the symbol's
     // own lines: the first open is the only one this answers.
     let mut src_at = states.src_at;
-    src_at.write().remember(document.clone(), 120);
+    src_at.write().remember(entry_of(&states, &document), 120);
     let mut mounted = mounted;
     mounted.set(false);
     land(&mut test);
@@ -5316,7 +5328,7 @@ fn panes_harness() -> impl IntoElement {
     // activated, and `Active` is a memo and a beat behind.
     let id = {
         let (dock, docs) = (open.dock.read(), open.docs.read());
-        active_document(&dock, &docs).and_then(|document| docs.id_of(&document))
+        active_document(&dock, &docs).and_then(|document| docs.showing(&document))
     };
 
     rect()
@@ -5397,7 +5409,7 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
     // Where the leading panel ends: its share of the window less the handle between the
     // two. A pane's own padding is a few pixels and cannot carry a label across it.
     let boundary = (600.0 - ResizableContext::HANDLE_SIZE) * LEADING / 100.0;
-    let went = |target: Document| activate(states.open, states.history, Some(target), Visit::Went);
+    let went = |target: Document| open_document(states.open, states.visits, target, Reach::NewTab);
 
     went(Document::Assembly(Selection::Symbol(sum_to.clone())));
     settle(&mut test);
@@ -5481,11 +5493,11 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
             1.,
         );
         settle(&mut test);
-        activate(
+        open_document(
             states.open,
-            states.history,
-            Some(Document::Assembly(Selection::Symbol(sum_to.clone()))),
-            Visit::Went,
+            states.visits,
+            Document::Assembly(Selection::Symbol(sum_to.clone())),
+            Reach::NewTab,
         );
         settle(&mut test);
 
@@ -7986,7 +7998,7 @@ fn a_picked_out_instruction_lights_its_line() {
         1.,
     );
     let mut marked = marked;
-    activate(states.open, states.history, Some(document), Visit::Went);
+    open_document(states.open, states.visits, document, Reach::NewTab);
     settle(&mut test);
     settle(&mut test);
 
@@ -8063,8 +8075,8 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
         1.,
     );
     let mut driven = states.driven;
-    driven.write().remember(tab.clone(), 7);
-    activate(states.open, states.history, Some(tab.clone()), Visit::Went);
+    open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
+    driven.write().remember(entry_of(&states, &tab), 7);
     settle(&mut test);
 
     let expected = LinePos {
@@ -8086,11 +8098,11 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
         "a scroll was owed to the driven line"
     );
 
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Assembly(Selection::Symbol(symbols[0].clone()))),
-        Visit::Went,
+        states.visits,
+        Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        Reach::NewTab,
     );
     settle(&mut test);
     assert!(
@@ -8098,7 +8110,7 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
         "the run outlived its tab"
     );
 
-    activate(states.open, states.history, Some(tab), Visit::Went);
+    open_document(states.open, states.visits, tab, Reach::NewTab);
     settle(&mut test);
     assert!(source_line(location.marked) == Some(expected));
 }
@@ -8147,10 +8159,10 @@ fn pressing_an_object_row_opens_its_code() {
     let document = Document::Code(object.clone());
     assert!(states.open.active() == Some(document.clone()));
     assert!(states
-        .history
+        .visits
         .peek()
         .recent()
-        .any(|(_, entry)| *entry == document));
+        .any(|entry| *entry == document));
     assert!(
         states.open.active() != Some(Document::Assembly(Selection::Object(object))),
         "the object tab is not what opened"
@@ -8171,8 +8183,12 @@ fn code_harness() -> impl IntoElement {
     let reading = use_consume::<Sections>().0;
     let object = reading.read().object.clone();
     match object {
-        Some(object) => rect().expanded().child(AssemblyPane {
-            document: Document::Code(object),
+        Some(object) => rect().expanded().child({
+            let document = Document::Code(object);
+            AssemblyPane {
+                tab: pane_tab(&document),
+                document,
+            }
         }),
         None => rect().expanded(),
     }
@@ -8319,12 +8335,7 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     let mut sections = sections;
     let document = Document::Code(object.clone());
     // Open, as a tab is in the app: a place is written down only for an open tab.
-    activate(
-        states.open,
-        states.history,
-        Some(document.clone()),
-        Visit::Went,
-    );
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     settle(&mut test);
 
     // Scroll so that `sum_to`'s label is the row at the top.
@@ -8340,7 +8351,7 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000030 ");
     assert_eq!(
-        states.code_at.peek().at(&document),
+        states.code_at.peek().at(&entry_of(&states, &document)),
         Some(Spot {
             address: 0x30,
             rows: 0
@@ -8383,14 +8394,9 @@ fn a_code_tab_comes_back_to_the_address_it_was_left_at() {
         1.,
     );
     let document = Document::Code(object.clone());
-    activate(
-        states.open,
-        states.history,
-        Some(document.clone()),
-        Visit::Went,
-    );
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     states.code_at.write().remember(
-        document.clone(),
+        entry_of(&states, &document),
         Spot {
             address: 0x14,
             rows: 0,
@@ -8450,33 +8456,21 @@ fn closing_a_code_tab_forgets_its_address() {
         |runner| project_states!(runner),
         1.,
     );
-    activate(
-        states.open,
-        states.history,
-        Some(document.clone()),
-        Visit::Went,
-    );
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    let entry = entry_of(&states, &document);
     states.code_at.write().remember(
-        document.clone(),
+        entry.clone(),
         Spot {
             address: 0x30,
             rows: 2,
         },
     );
     test.sync_and_update();
-    assert!(states.code_at.peek().at(&document).is_some());
+    assert!(states.code_at.peek().at(&entry).is_some());
 
-    close_tab(
-        states.open,
-        states.history,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        &document,
-    );
+    close_document(&states, &document);
     test.sync_and_update();
-    assert!(states.code_at.peek().at(&document).is_none());
+    assert!(states.code_at.peek().at(&entry).is_none());
     assert!(states.open.active().is_none());
 }
 
@@ -8485,8 +8479,12 @@ fn code_source_harness() -> impl IntoElement {
     let reading = use_consume::<Sections>().0;
     let object = reading.read().object.clone();
     match object {
-        Some(object) => rect().expanded().child(SourcePane {
-            document: Document::Code(object),
+        Some(object) => rect().expanded().child({
+            let document = Document::Code(object);
+            SourcePane {
+                tab: pane_tab(&document),
+                document,
+            }
         }),
         None => rect().expanded(),
     }
@@ -8553,7 +8551,7 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     );
     let mut sections = sections;
     let code = Document::Code(object.clone());
-    activate(states.open, states.history, Some(code.clone()), Visit::Went);
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
 
     // The caret on `twice`'s label, at its start.
@@ -8826,7 +8824,7 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     );
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
-    activate(states.open, states.history, Some(code.clone()), Visit::Went);
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
 
     // A plain press is a plain press: the tab stays.
@@ -8851,11 +8849,7 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     };
     let symbol = Document::Assembly(Selection::Symbol(twice));
     assert!(states.open.active() == Some(symbol.clone()));
-    assert!(states
-        .history
-        .peek()
-        .recent()
-        .any(|(_, entry)| *entry == symbol));
+    assert!(states.visits.peek().recent().any(|entry| *entry == symbol));
 }
 
 /// The Assembly pane over a symbol's listing, with a menu viewer above it so a row's
@@ -8872,7 +8866,10 @@ fn menu_listing_harness() -> impl IntoElement {
     rect()
         .expanded()
         .child(ContextMenuViewer::new())
-        .child(AssemblyPane { document })
+        .child(AssemblyPane {
+            tab: pane_tab(&document),
+            document,
+        })
 }
 
 /// An instruction's menu offers to show it among its neighbours: the object's code tab
@@ -8899,7 +8896,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
         1.,
     );
     let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
-    activate(states.open, states.history, Some(symbol), Visit::Went);
+    open_document(states.open, states.visits, symbol, Reach::NewTab);
     settle(&mut test);
 
     let row = centre_of(&test, &format!("{first:016X} "));
@@ -8913,7 +8910,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
     let code = Document::Code(object.clone());
     assert!(states.open.active() == Some(code.clone()));
     assert_eq!(
-        states.code_at.peek().at(&code),
+        states.code_at.peek().at(&entry_of(&states, &code)),
         Some(Spot {
             address: first,
             rows: 0
@@ -8939,14 +8936,14 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
         1.,
     );
     let code = Document::Code(object.clone());
-    activate(states.open, states.history, Some(code.clone()), Visit::Went);
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
-    let visits = states.history.peek().recent().count();
+    let visits = states.visits.peek().recent().count();
 
     show_in_code(
         states.open,
-        states.history,
+        states.visits,
         marked,
         landing,
         states.code_at,
@@ -8958,7 +8955,7 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000030 ");
     assert!(states.open.active() == Some(code));
-    assert_eq!(states.history.peek().recent().count(), visits);
+    assert_eq!(states.visits.peek().recent().count(), visits);
 }
 
 /// The rows of an object's code that are bytes and not instructions read as data and not
@@ -9056,8 +9053,12 @@ fn menu_code_harness() -> impl IntoElement {
         .expanded()
         .child(ContextMenuViewer::new())
         .maybe_child(object.map(|object| {
-            AssemblyPane {
-                document: Document::Code(object),
+            {
+                let document = Document::Code(object);
+                AssemblyPane {
+                    tab: pane_tab(&document),
+                    document,
+                }
             }
             .into_element()
         }))
@@ -9087,7 +9088,7 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
         1.,
     );
     let code = Document::Code(object.clone());
-    activate(states.open, states.history, Some(code), Visit::Went);
+    open_document(states.open, states.visits, code, Reach::NewTab);
     settle(&mut test);
 
     // The second instruction: the first shares its address text with the label above
@@ -9124,8 +9125,12 @@ fn app_like_code_harness() -> impl IntoElement {
     let reading = use_consume::<Sections>().0;
     let window = use_consume::<Window>().0;
     use_reading_of(active, objects, reading, window);
-    rect().expanded().child(AssemblyPane {
-        document: Document::Code(object),
+    rect().expanded().child({
+        let document = Document::Code(object);
+        AssemblyPane {
+            tab: pane_tab(&document),
+            document,
+        }
     })
 }
 
@@ -9163,11 +9168,11 @@ fn a_unified_view_asks_for_its_skeleton_once_the_reading_is_its_own() {
 
     // The tab is opened; the memo catches up, the reading becomes the object's, and the
     // pane -- untouched otherwise -- asks for the skeleton.
-    activate(
+    open_document(
         states.open,
-        states.history,
-        Some(Document::Code(object.clone())),
-        Visit::Went,
+        states.visits,
+        Document::Code(object.clone()),
+        Reach::NewTab,
     );
     settle(&mut test);
     settle(&mut test);
@@ -9350,10 +9355,10 @@ fn a_bookmark_row_opens_its_place() {
 
     assert!(states.open.active() == Some(document.clone()));
     assert!(states
-        .history
+        .visits
         .peek()
         .recent()
-        .any(|(_, entry)| *entry == document));
+        .any(|entry| *entry == document));
 }
 
 /// A bookmark outlives its binary: with the object gone the row is still drawn, under the
@@ -9546,7 +9551,7 @@ fn a_history_row_bookmarks_its_place_from_its_menu() {
         project_states!(),
         1.,
     );
-    activate(states.open, states.history, Some(file.clone()), Visit::Went);
+    open_document(states.open, states.visits, file.clone(), Reach::NewTab);
     settle(&mut test);
 
     let row = centre_of(&test, "main.rs");
@@ -9605,12 +9610,7 @@ fn a_tabs_menu_bookmarks_its_document() {
     );
     let mut objects = states.objects;
     objects.set(vec![symbols[0].object.clone()]);
-    activate(
-        states.open,
-        states.history,
-        Some(first.clone()),
-        Visit::Went,
-    );
+    open_document(states.open, states.visits, first.clone(), Reach::NewTab);
     settle(&mut test);
 
     let tab = centre_of(&test, &entry_text(&first));
@@ -9629,7 +9629,7 @@ fn a_tabs_menu_bookmarks_its_document() {
         [bookmark_of(&first)]
     );
 
-    activate(states.open, states.history, Some(second), Visit::Went);
+    open_document(states.open, states.visits, second, Reach::NewTab);
     settle(&mut test);
     right_click(&mut test, tab);
     let drawn = labels(&test);
@@ -9660,12 +9660,7 @@ fn an_instruction_rows_menu_bookmarks_its_symbol() {
     let mut objects = states.objects;
     objects.set(vec![sum_to.object.clone()]);
     let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
-    activate(
-        states.open,
-        states.history,
-        Some(symbol.clone()),
-        Visit::Went,
-    );
+    open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
     settle(&mut test);
 
     let row = centre_of(&test, &format!("{first:016X} "));
@@ -9753,10 +9748,10 @@ fn a_source_row_opens_a_source_driven_tab() {
     let document = Document::Source(Arc::from(&*path.to_string_lossy()));
     assert!(states.open.active() == Some(document.clone()));
     assert!(states
-        .history
+        .visits
         .peek()
         .recent()
-        .any(|(_, entry)| *entry == document));
+        .any(|entry| *entry == document));
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -10400,7 +10395,10 @@ fn offset_listing_harness() -> impl IntoElement {
     rect()
         .expanded()
         .child(rect().height(Size::px(0.5)).width(Size::fill()))
-        .child(rect().expanded().child(AssemblyPane { document }))
+        .child(rect().expanded().child(AssemblyPane {
+            tab: pane_tab(&document),
+            document,
+        }))
 }
 
 /// A listing laid out half a pixel down still draws its rows on whole device pixels: the
@@ -10776,7 +10774,7 @@ fn the_keys_move_the_caret_along_a_row_the_worker_decoded() {
         1.,
     );
     let code = Document::Code(object.clone());
-    activate(states.open, states.history, Some(code.clone()), Visit::Went);
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
 
     let rows = paragraphs(&test);
@@ -10932,4 +10930,417 @@ fn a_sweep_held_past_the_panes_side_scrolls_the_view_sideways() {
     assert!(lead.col > edge, "{lead:?} against {edge}");
     test.release_cursor((700.0, at.1));
     mark_release(marked);
+}
+
+/// A link followed from inside a tab replaces what the tab shows and leaves the place it
+/// showed one Back away: one tab, a trail of three, and the row the first place was left
+/// at kept under that place's own entry through it all -- so Back comes back to it. A
+/// link to the place already on screen pushes nothing. Headless because `open_document`
+/// peeks the states it then writes, which is legal to the compiler and panics at the
+/// moment it runs if a read is still borrowed.
+#[test]
+fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let documents: Vec<Document> = symbols
+        .iter()
+        .take(3)
+        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .collect();
+
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    let id = open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::NewTab,
+    )
+    .expect("a document panel");
+    let mut asm_at = states.asm_at;
+    asm_at.write().remember((id, documents[0].clone()), 12);
+    for document in &documents[1..] {
+        let landed = open_document(states.open, states.visits, document.clone(), Reach::InPlace);
+        assert_eq!(landed, Some(id), "a link opened a tab of its own");
+    }
+    test.sync_and_update();
+
+    assert!(states.open.documents() == [documents[2].clone()]);
+    assert!(states.open.docs.peek().trail(id).map(History::entries) == Some(&documents[..]));
+    assert_eq!(cursor_of(&states), Some(2));
+    assert!(states.visits.peek().entries() == documents);
+    assert_eq!(
+        states.asm_at.peek().at(&(id, documents[0].clone())),
+        Some(12),
+        "the row of the place left was forgotten"
+    );
+
+    // The place on screen again: nothing to push.
+    open_document(
+        states.open,
+        states.visits,
+        documents[2].clone(),
+        Reach::InPlace,
+    );
+    assert!(states.open.docs.peek().trail(id).map(History::entries) == Some(&documents[..]));
+
+    navigate(states.open, Nav::Back);
+    navigate(states.open, Nav::Back);
+    test.sync_and_update();
+    assert!(states.open.active() == Some(documents[0].clone()));
+    assert_eq!(
+        states.asm_at.peek().at(&(id, documents[0].clone())),
+        Some(12)
+    );
+    navigate(states.open, Nav::Forward);
+    test.sync_and_update();
+    assert!(states.open.active() == Some(documents[1].clone()));
+    // Nothing of that was a visit.
+    assert!(states.visits.peek().entries() == documents);
+}
+
+/// A click from outside the panes opens its place in one temporal tab, which the next such
+/// click reuses by pushing onto its trail -- so Back inside it walks the rows clicked --
+/// and a tab already showing the place is raised instead, whichever tab that is. Walking
+/// the trail leaves the tab temporal.
+#[test]
+fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let documents: Vec<Document> = symbols
+        .iter()
+        .take(3)
+        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .collect();
+
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    let kept = open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::NewTab,
+    )
+    .expect("a document panel");
+    let preview = open_document(
+        states.open,
+        states.visits,
+        documents[1].clone(),
+        Reach::Preview,
+    )
+    .expect("a document panel");
+    assert_ne!(kept, preview);
+    assert_eq!(states.open.docs.peek().temporal(), Some(preview));
+    assert_eq!(states.open.active_id(), Some(preview));
+
+    let again = open_document(
+        states.open,
+        states.visits,
+        documents[2].clone(),
+        Reach::Preview,
+    );
+    assert_eq!(again, Some(preview), "a second row opened a second tab");
+    assert_eq!(states.open.documents().len(), 2);
+    assert!(states.open.docs.peek().trail(preview).map(History::entries) == Some(&documents[1..]));
+
+    // A place a tab already shows: that tab, the temporal one left as it is.
+    let raised = open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::Preview,
+    );
+    assert_eq!(raised, Some(kept));
+    assert_eq!(states.open.active_id(), Some(kept));
+    assert_eq!(states.open.docs.peek().temporal(), Some(preview));
+    let raised = open_document(
+        states.open,
+        states.visits,
+        documents[2].clone(),
+        Reach::Preview,
+    );
+    assert_eq!(raised, Some(preview));
+    assert!(
+        states.open.docs.peek().trail(preview).map(History::entries) == Some(&documents[1..]),
+        "raising the temporal tab pushed onto it"
+    );
+
+    navigate(states.open, Nav::Back);
+    test.sync_and_update();
+    assert!(states.open.active() == Some(documents[1].clone()));
+    assert_eq!(
+        states.open.docs.peek().temporal(),
+        Some(preview),
+        "walking the trail promoted the tab"
+    );
+    // Every opening was a visit, the raises included.
+    assert!(
+        states.visits.peek().entries()
+            == [
+                documents[1].clone(),
+                documents[0].clone(),
+                documents[2].clone()
+            ]
+    );
+}
+
+/// A new tab opens beside the tab on screen, and at the end of the strip when a view is
+/// on top.
+#[test]
+fn a_new_tab_opens_beside_the_one_on_screen() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let documents: Vec<Document> = symbols
+        .iter()
+        .take(3)
+        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .collect();
+
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::NewTab,
+    );
+    open_document(
+        states.open,
+        states.visits,
+        documents[1].clone(),
+        Reach::NewTab,
+    );
+    raise_document(&states, &documents[0]);
+    open_document(
+        states.open,
+        states.visits,
+        documents[2].clone(),
+        Reach::NewTab,
+    );
+    test.sync_and_update();
+    assert!(
+        states.open.documents()
+            == [
+                documents[0].clone(),
+                documents[2].clone(),
+                documents[1].clone()
+            ],
+        "the new tab did not open beside the one on screen"
+    );
+
+    // A view on top: nothing to open beside, so the end.
+    {
+        let mut dock = states.open.dock;
+        let mut dock = dock.write();
+        let panel = dock.document_panel_mut().expect("the document panel");
+        panel.tabs.insert(0, Tab::View(View::History));
+        panel.active_tab_id = Some(Tab::View(View::History));
+    }
+    let source = Document::Source(Arc::from("/src/main.rs"));
+    open_document(states.open, states.visits, source.clone(), Reach::Preview);
+    test.sync_and_update();
+    assert!(states.open.documents().last() == Some(&source));
+}
+
+/// What makes a temporal tab stay: Ctrl on the place it shows, or navigating in place
+/// inside it. Back does not, and the next preview after either opens a temporal tab of
+/// its own.
+#[test]
+fn a_temporal_tab_is_promoted_by_ctrl_and_by_a_link_followed_in_it_and_not_by_back() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let documents: Vec<Document> = symbols
+        .iter()
+        .take(3)
+        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .collect();
+    let source = Document::Source(Arc::from("/src/main.rs"));
+
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    let first = open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::Preview,
+    )
+    .expect("a document panel");
+    open_document(
+        states.open,
+        states.visits,
+        documents[1].clone(),
+        Reach::Preview,
+    );
+    navigate(states.open, Nav::Back);
+    assert_eq!(states.open.docs.peek().temporal(), Some(first));
+    // Ctrl on the place the temporal tab shows: it stays, and no second tab opens.
+    let kept = open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::NewTab,
+    );
+    assert_eq!(kept, Some(first));
+    assert_eq!(states.open.docs.peek().temporal(), None);
+    assert_eq!(states.open.documents().len(), 1);
+
+    let second = open_document(
+        states.open,
+        states.visits,
+        documents[2].clone(),
+        Reach::Preview,
+    )
+    .expect("a document panel");
+    assert_ne!(second, first, "the promoted tab was reused as the preview");
+    assert_eq!(states.open.docs.peek().temporal(), Some(second));
+    // A link followed inside it: reading in it, so it stays.
+    open_document(states.open, states.visits, source.clone(), Reach::InPlace);
+    assert_eq!(states.open.docs.peek().temporal(), None);
+    assert_eq!(states.open.active_id(), Some(second));
+
+    let third = open_document(
+        states.open,
+        states.visits,
+        documents[1].clone(),
+        Reach::Preview,
+    );
+    assert!(third.is_some_and(|third| third != first && third != second));
+    test.sync_and_update();
+    assert_eq!(states.open.documents().len(), 3);
+}
+
+/// Closing a binary closes the tabs showing a place in it and thins the trails of the
+/// rest: a source-driven tab reached from a symbol keeps its slot and loses the symbol,
+/// with the row kept for it and its visit.
+#[test]
+fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let path = object.path.clone();
+    let symbol = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let other = Document::Assembly(Selection::Symbol(symbols[1].clone()));
+    let source = Document::Source(Arc::from("/src/main.rs"));
+
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    let survivor = open_document(states.open, states.visits, symbol.clone(), Reach::NewTab)
+        .expect("a document panel");
+    open_document(states.open, states.visits, source.clone(), Reach::InPlace);
+    open_document(states.open, states.visits, other.clone(), Reach::NewTab);
+    let mut asm_at = states.asm_at;
+    asm_at.write().remember((survivor, symbol.clone()), 12);
+    asm_at.write().remember((survivor, source.clone()), 3);
+    test.sync_and_update();
+    assert_eq!(states.open.documents().len(), 2);
+
+    close_binary(
+        states.objects,
+        states.loading,
+        states.open,
+        states.asm_at,
+        states.src_at,
+        states.code_at,
+        states.driven,
+        states.visits,
+        &path,
+    );
+    test.sync_and_update();
+
+    assert!(states.open.documents() == [source.clone()]);
+    assert!(states.open.active() == Some(source.clone()));
+    assert!(
+        states
+            .open
+            .docs
+            .peek()
+            .trail(survivor)
+            .map(History::entries)
+            == Some(&[source.clone()][..])
+    );
+    assert_eq!(
+        states.asm_at.peek().at(&(survivor, symbol.clone())),
+        None,
+        "a position into the closed file was kept, and with it the file's bytes"
+    );
+    assert_eq!(
+        states.asm_at.peek().at(&(survivor, source.clone())),
+        Some(3)
+    );
+    assert!(states.visits.peek().entries() == [source]);
+}
+
+/// The slant of the label reading `text`, or `None` for an upright one.
+fn label_slant(test: &TestingRunner, text: &str) -> Option<FontSlant> {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    test.find(|node, _element| {
+        let element = node.element();
+        let element = element.as_ref() as &dyn Any;
+        element
+            .downcast_ref::<LabelElement>()
+            .filter(|label| label.text == text)
+            .map(|label| label.text_style_data.font_slant)
+    })
+    .flatten()
+}
+
+/// The temporal tab's name is italic and a tab that stays is upright, which is the whole of
+/// how the two are told apart; a double press on the header makes it stay. Headless
+/// because the press count is freya's, and whether the header's handler sees it is a
+/// question about the wiring.
+#[test]
+fn the_temporal_tabs_name_is_italic_and_a_double_press_makes_it_stay() {
+    let symbols = fixture_symbols();
+    let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let (mut test, states) = TestingRunner::new(
+        header_menu_harness,
+        (300., 100.).into(),
+        project_states!(),
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    let id = open_document(states.open, states.visits, document.clone(), Reach::Preview)
+        .expect("a document panel");
+    settle(&mut test);
+
+    let name = entry_text(&document);
+    assert_eq!(label_slant(&test, &name), Some(FontSlant::Italic));
+
+    // One press is a press: the tab stays temporal.
+    let at = centre_of(&test, &name);
+    press_at(&mut test, at);
+    settle(&mut test);
+    assert_eq!(states.open.docs.peek().temporal(), Some(id));
+
+    // Two in quick succession promote it, and the name goes upright.
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(&mut test);
+    assert_eq!(states.open.docs.peek().temporal(), None);
+    assert_eq!(label_slant(&test, &name), None);
 }

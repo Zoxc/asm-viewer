@@ -765,7 +765,7 @@ fn peel(mut marked: State<Marks>, pane: Pane) {
 /// themselves**: `AsmData` carries an `Arc<Lanes>` rebuilt every render, so an effect
 /// inside each list would fire on every render and wipe the run the press just started.
 pub(crate) fn use_clear_marks(
-    active: Memo<Option<Document>>,
+    active: Memo<Option<Entry>>,
     asked: Asked,
     analysis: State<Analyzed>,
     marked: State<Marks>,
@@ -787,7 +787,8 @@ pub(crate) fn use_clear_marks(
         // functions from one file leave the same lines on screen. Compared against what
         // it last was rather than answered to directly, since reading the analysis
         // subscribes this to writes -- a request, the slow flag -- that change no listing.
-        let file = source_side(active.read().as_ref(), &analysis.read(), &marked.read())
+        let active = active.read().clone().map(|(_, document)| document);
+        let file = source_side(active.as_ref(), &analysis.read(), &marked.read())
             .map(|side| side.file().clone());
         // Cloned out of the borrow before the `borrow_mut`.
         let was = showing.borrow().clone();
@@ -822,7 +823,7 @@ pub(crate) fn use_clear_marks(
 /// for the next arrival only, and one left lying would pick a line out in a document
 /// opened for some other reason later.
 pub(crate) fn use_land(
-    active: Memo<Option<Document>>,
+    active: Memo<Option<Entry>>,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
     driven: State<Driven>,
@@ -838,12 +839,12 @@ pub(crate) fn use_land(
             landing.set(None);
         }
         let landed = asked
-            .filter(|landing| Some(&landing.tab) == active.as_ref())
+            .filter(|landing| Some(&landing.tab) == active.as_ref().map(|(_, document)| document))
             .map(|landing| (landing.at.file, landing.at.line, Owed::BOTH));
         let planted = landed.or_else(|| match &active {
-            Some(document @ Document::Source(file)) => driven
+            Some(entry @ (_, Document::Source(file))) => driven
                 .peek()
-                .line(document)
+                .line(entry)
                 .map(|line| (file.clone(), line, Owed::default())),
             _ => None,
         });

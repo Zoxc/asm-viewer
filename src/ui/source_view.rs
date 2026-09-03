@@ -25,13 +25,13 @@ struct SourceData {
     rows: Option<RowSelection>,
     /// The characters picked out here, for each row to draw its part of.
     chars: Option<CharSelection>,
-    /// Whether these rows *drive* the tab they are in -- true for a source-driven tab,
-    /// where a click also says which assembly the other side shows, and false for the
-    /// companion file beside a symbol, where the click picks the line out and no more.
+    /// The tab these rows *drive*, for a source-driven tab, where a click also says which
+    /// assembly the other side shows -- and `None` for the companion file beside a
+    /// symbol, where the click picks the line out and no more.
     ///
     /// It travels here and through `new_with_data` rather than being captured by the
     /// builder closure, which is never compared across renders.
-    drives: bool,
+    drives: Option<DocId>,
     /// The widest row drawn, under the highlighted file's identity, and that key: what
     /// every row is at least as wide as. Handles, so out of the `PartialEq` below.
     widest: Widest,
@@ -67,8 +67,8 @@ struct SourceRow {
     wash: Wash,
     /// The columns of this row inside the pane's character selection, likewise.
     chars: RowChars,
-    /// Whether a click here also drives the tab's assembly side. See [`SourceData`].
-    drives: bool,
+    /// The tab a click here also drives the assembly side of, if any. See [`SourceData`].
+    drives: Option<DocId>,
     /// The listing's widest row and its key, as an `InstructionRow` carries them.
     widest: Widest,
     listing: u64,
@@ -172,7 +172,7 @@ impl Component for SourceRow {
         // far more often than it is right-clicked.
         let menu: Rc<dyn Fn(Event<PressEventData>)> = Rc::new({
             let at = at.clone();
-            let subject = self.drives.then(|| self.file.clone());
+            let subject = self.drives.map(|tab| (tab, self.file.clone()));
             let source = self.source.clone();
             move |e: Event<PressEventData>| {
                 let function = functions::enclosing(&source.0.functions, at.line).cloned();
@@ -215,16 +215,19 @@ impl Component for SourceRow {
         )
         // A press in a source-driven tab's own file also says which listing the
         // other side shows; the row is picked out by `pointer_down` either way.
-        .maybe(self.drives, |el| {
+        .maybe(self.drives.is_some(), |el| {
+            let tab = self.drives;
             el.on_press(move |_| {
                 // **The only writer of `Driven` inside the panes.** A click in the
                 // file a source-driven tab is about is what says which assembly its
                 // other side shows; a click in a companion file picks the line out
                 // and no more, and a click in the assembly pane never comes here at
                 // all, so there is no way for the listing to re-drive itself.
-                driven
-                    .write()
-                    .remember(Document::Source(at.file.clone()), at.line);
+                if let Some(tab) = tab {
+                    driven
+                        .write()
+                        .remember((tab, Document::Source(at.file.clone())), at.line);
+                }
             })
         })
     }
@@ -240,9 +243,12 @@ impl Component for SourceRow {
 struct SourceList {
     source: SourceText,
     file: Arc<str>,
-    /// The tab these rows belong to, which is what the viewing position is kept under and
-    /// is **not** the same as the file being shown: two functions compiled from one file
-    /// are two tabs, and keying by the file would have them share a position.
+    /// The tab these rows are in.
+    tab: DocId,
+    /// The place on that tab's trail these rows belong to, which with the tab is what the
+    /// viewing position is kept under and is **not** the same as the file being shown:
+    /// two functions compiled from one file are two places, and keying by the file would
+    /// have them share a position.
     document: Document,
     /// The row this tab opens at the first time it is shown, from [`opening_row`]. A row
     /// remembered for the tab wins over it -- see `use_kept_position`.
@@ -253,6 +259,7 @@ impl PartialEq for SourceList {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
             && Arc::ptr_eq(&self.file, &other.file)
+            && self.tab == other.tab
             && self.document == other.document
             && self.opening == other.opening
     }
@@ -283,11 +290,12 @@ impl Component for SourceList {
         let listing = Widest::key(Arc::as_ptr(&self.source.0).addr());
 
         let length = self.source.0.lines;
-        // The tab and not the file: see `SourceList::document`.
+        // The tab's entry and not the file: see `SourceList::document`.
         let docs = use_consume::<OpenDocs>().0;
+        let entry = (self.tab, self.document.clone());
         use_kept_position(
             use_consume::<SrcAt>().0,
-            move |document: &Document| docs.peek().id_of(document).is_some(),
+            move |(tab, document): &Entry| docs.peek().contains(*tab, document),
             {
                 let file = self.file.clone();
                 let document = self.document.clone();
@@ -327,7 +335,7 @@ impl Component for SourceList {
                 }
             },
             controller,
-            &self.document,
+            &entry,
             length,
             self.opening,
         );
@@ -407,7 +415,8 @@ impl Component for SourceList {
                                 chars,
                                 // A source-driven tab's subject is the file its own
                                 // document names; a companion's tab is a symbol's.
-                                drives: matches!(self.document, Document::Source(_)),
+                                drives: matches!(self.document, Document::Source(_))
+                                    .then_some(self.tab),
                                 widest,
                                 listing,
                             },
@@ -586,7 +595,8 @@ fn stale_banner() -> Element {
 /// only run unconditionally in a component's body.
 fn companion_header(
     open: Open,
-    history: State<History>,
+    visits: State<Visits>,
+    ctrl: State<bool>,
     file: Arc<str>,
     sweeping: bool,
 ) -> Element {
@@ -608,7 +618,15 @@ fn companion_header(
                 .spacing(6.0)
                 .background(palette().header_bg)
                 .border(bottom_hairline())
-                .on_press(move |_| activate(open, history, Some(document.clone()), Visit::Went))
+                // A click inside the tab: in place, or a tab of its own with Ctrl.
+                .on_press(move |_| {
+                    let reach = if *ctrl.peek() {
+                        Reach::NewTab
+                    } else {
+                        Reach::InPlace
+                    };
+                    open_document(open, visits, document.clone(), reach);
+                })
                 .child(entry_icon(&Document::Source(file.clone())))
                 .child(label().text(file_name(&file)).max_lines(1)),
         ))
@@ -618,12 +636,14 @@ fn companion_header(
 /// The Source pane: the tab's source side, whichever of the two sides that is.
 #[derive(Clone)]
 pub(crate) struct SourcePane {
+    /// The tab this pane is in, for the positions its rows keep.
+    pub(crate) tab: DocId,
     pub(crate) document: Document,
 }
 
 impl PartialEq for SourcePane {
     fn eq(&self, other: &Self) -> bool {
-        self.document == other.document
+        self.tab == other.tab && self.document == other.document
     }
 }
 
@@ -632,7 +652,8 @@ impl Component for SourcePane {
         // Whether a sweep is under way, for the header not to answer the pointer during one.
         let sweeping = sweeping(use_consume::<Marked>().0);
         let open = use_open();
-        let history = use_consume::<Hist>().0;
+        let visits = use_consume::<Visited>().0;
+        let ctrl = use_consume::<Ctrl>().0;
         // Reading it is what subscribes this tab to the analysis, so the pane fills in when
         // a newly selected symbol's line info is worked out.
         let analysis = use_consume::<Analysis>().0.read().clone();
@@ -710,7 +731,7 @@ impl Component for SourcePane {
             .background(palette().pane_bg)
             .maybe_child(match &side {
                 SourceSide::Companion(file) => {
-                    Some(companion_header(open, history, file.clone(), sweeping))
+                    Some(companion_header(open, visits, ctrl, file.clone(), sweeping))
                 }
                 SourceSide::Subject(_) => None,
             })
@@ -725,6 +746,7 @@ impl Component for SourcePane {
                         Some(source) => SourceList {
                             source,
                             file,
+                            tab: self.tab,
                             document,
                             opening,
                         }

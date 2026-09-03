@@ -27,7 +27,8 @@ in which nothing was ever opened leaves nothing behind.
 **Each project is two files, and the line between them is the one the save policy already
 drew.** `project.toml` is what the user *said* — `name`, `directory`, `binaries`, `bookmarks` — and
 is written **at once**, because a binaries change is what `Saves` writes immediately. `session.toml`
-is what the app *noticed* — `digests`, `active`, `tabs`, `history` — and is the file rewritten
+is what the app *noticed* — `digests`, `active`, `tabs` with their trails, `history` (the record
+of visits) — and is the file rewritten
 every thirty seconds. So the file a user might keep, copy or hand-edit is exactly
 the one that changes only when they do something. Three things follow, and they are why it is two
 files rather than two tables: a `session.toml` that will not parse loses a scroll position and
@@ -70,15 +71,20 @@ strip — `SavedDocument::Code`, an object's whole code, is saved by its object'
 exactly as the object is and joins the same list: the reader's own interleaved order is what comes back, and the one document that was on
 screen is `active` whichever kind it is — written out in full rather than as an index, since a tab
 that no longer resolves is *dropped* (which would shift the index) while the active one *degrades*.
-Each entry carries **the rows both of its sides were left at**: a `tabs` entry is a `SavedTab`
-(`asm_row` + `src_row` + `line` + `asm_address` + `document`), rather than the list having arrays
-of rows beside it. `asm_address` is where an object's **code** tab was left, as a placed address,
+**A `tabs` entry is a whole trail**: a `SavedTab` is `temporal` + `cursor` + `entries`, every
+place the tab has shown oldest first with the cursor on the one it showed, so that Back works
+across a restart — reopening after a rebuild is this app's daily loop, and a trail lost on every
+restart would be worth little; the cost is a file a few entries longer per tab, capped at
+`history::MAX_ENTRIES` (50) per trail. Each place carries **the rows both of its sides were left
+at**: an entry is a `SavedEntry` (`asm_row` + `src_row` + `line` + `asm_address` + `document`),
+rather than the tab having arrays of rows beside its trail. `asm_address` is where an object's
+**code** tab was left, as a placed address,
 and is absent for every other kind: that listing's rows are counted afresh as it is decoded, so a
 row there is no place to come back to and an address is (`agents/UI.md`, `CodeAt`). It is a claim
 about a layout, so a rebuilt binary takes it with the rows; how many rows past the address the
 tab was is not saved, a label being a fine place to come back to. The
-rows travel with their tab because `resolve_tabs` drops the tabs that no longer resolve, which
-would shift every later row of a parallel array onto the wrong tab. They are rows and not pixel
+rows travel with their place because `resolve_tabs` drops the places that no longer resolve, which
+would shift every later row of a parallel array onto the wrong place. They are rows and not pixel
 offsets so that the row height following the fonts (Step 9c) does not move every saved position,
 and they are hints and not facts — `#[serde(default)]`, and clamped to what the tab holds *now* by
 `Positions::row`. `line` is which line a **source-driven** tab's assembly side was driven from and
@@ -86,12 +92,16 @@ is absent for every other kind. It is what makes such a tab's `asm_row` mean any
 the listing that row is a row of is not there to come back to. Nothing resolves it, being a number
 and not a place, so a rebuilt binary takes the two rows with it and leaves the line, which is
 simply asked again out of what is loaded now. `resolve_tabs` answers with a named `RestoredTab`
-rather than a tuple, the rows and the line no longer surviving the same things. **Field order within these structs is load-bearing**: TOML emits plain values
+— the live trail, `History::rebuilt` over the places that resolved with the saved cursor carried
+past the ones that did not, and a `RestoredEntry` per surviving place — rather than a tuple, the
+rows and the line no longer surviving the same things; a tab with nothing left on its trail is
+dropped whole. **Field order within these structs is load-bearing**: TOML emits plain values
 before tables, so `binaries` sits beside the name only because every other field of `Project` is
 a plain value and `bookmarks` — the one array of tables in that file — comes last, `SavedTab`'s
-two rows must precede its `document`, `SavedHistory::cursor` its `entries`, and a `Bookmark`'s
-`name` its `document`. Getting it wrong fails at *runtime*, not at compile time, and a round trip through real
-TOML per struct is what holds it.
+`temporal` and `cursor` must precede its `entries`, a `SavedEntry`'s rows its `document`, and a
+`Bookmark`'s `name` its `document` (`SavedHistory` has no plain field at all now that the record
+has no cursor). Getting it wrong fails at *runtime*, not at compile time, and a round trip
+through real TOML per struct is what holds it.
 
 `Session::digests` is the digest each binary had when the session was saved, keyed by path — in
 the *other* file from `binaries` and not a field beside them, because `binaries` is the list to *open* and a digest is
@@ -104,12 +114,13 @@ being a claim about a listing this build no longer has. A path with *no* saved d
 state, not a mismatch: it behaves as everything did before digests existed.
 
 Coming back, the **active document degrades** (symbol -> its object -> nothing, since there is one
-of it and the app must open somewhere) while **history entries are dropped** (a list of places the
-reader cannot get back to is worse than a short list). A source-driven entry resolves against
-nothing, so it neither degrades nor drops: a deleted file comes back as a tab over the pane's own
-"Source file not found". `History::rebuilt` is the one walk both a restore
-and a file-close go through, carrying the cursor to the last survivor at or before it.
-`History::restored` also collapses duplicates and trims to the newest `MAX_ENTRIES` (200).
+of it and the app must open somewhere) while **a trail's places and the visits are dropped** (a
+list of places the reader cannot get back to is worse than a short list). A source-driven entry
+resolves against nothing, so it neither degrades nor drops: a deleted file comes back as a tab
+over the pane's own "Source file not found". `History::rebuilt` is the one walk both a restore
+and a file-close go through for each trail, carrying the cursor to the last survivor at or before
+it; `History::restored` also collapses duplicates and trims to the newest `MAX_ENTRIES` (50, per
+tab), and `Visits::restored` does the same for the record, at its own `MAX_VISITS` (200).
 
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
 two of the three things driving it sit outside the component tree. `record(details, binaries,
@@ -118,8 +129,8 @@ change to the `binaries` writes **both files immediately**; a change to the user
 the name and the directory — or to the `bookmarks` writes **`project.toml` alone**, since neither
 lets go of a binary and so neither can leave the two files disagreeing; a change to only the
 session marks it **pending** — a tab because it is expressed against the binaries rather than the
-other way round, costs one click to remake, and arrives on every navigation, `activate` opening one
-on the way to each change of document. Nothing in `record` has to *say* which is which: which file
+other way round, costs one click to remake, and arrives on every navigation, `open_document`
+pushing onto a trail or opening a tab on the way to each change of document. Nothing in `record` has to *say* which is which: which file
 a field lives in is what decides it, and the `Option<Session>` beside the `Project` it hands back
 is how it says which half it decided. `flush()` writes the pending
 session — on a 30s timer and from the window's close hook, which is the one exit hook freya 0.4
@@ -157,18 +168,22 @@ of it — and `use_restore_on_startup` knows nothing about where they came from,
 a project picker out of it. The binaries stream in the way any other open does, so the sidebar
 fills in behind them, but the **session waits for the whole load**: a tab, a selection or a history
 entry is resolved against the objects by name, and resolving one against a half-filled list would
-drop the tabs whose object had not landed yet. The strip is then restored, and **through the two
-functions that hold the invariants** rather than by writing the list: `use_restore_on_startup`
-sets the history, then `activate`s each tab and then the active one. Two orderings are
-load-bearing. The **rows go into the two `Positions` maps, and the driven line into `Driven`,
-before the tabs are opened** — those three maps are the one thing the restore writes directly, and
-a pane puts its view back when it notices the tab it is showing has changed, so a row arriving
-after the `activate` arrives after the only moment anything looks at it. And tabs before the active document, because `activate` opens what it
-cannot find and would otherwise append it at the end of the strip instead of finding it in place
-(the other direction is safe: a document that degraded to its object while the strip holds the
-symbol simply opens a tab). An assembly-driven tab that no longer resolves is **dropped**, like a
-history entry; a source-driven one is never resolved at all, so a file that has been deleted comes
-back as a tab over the pane's own "Source file not found" rather than silently vanishing.
+drop the tabs whose object had not landed yet. The strip is then restored, and **through the
+functions that hold the invariants** rather than by writing the list: `restore_project` sets the
+visits, then for each tab opens its trail whole (`Docs::open_trail`, temporal flag and all),
+writes its rows and puts it on screen, and then opens the active document with `Reach::NewTab`,
+which raises the tab already showing it and, for one that degraded, opens a tab. Two orderings are
+load-bearing. The **rows go into the `Positions` maps, and the driven line into `Driven`, per
+entry and before the tab is shown** — those maps are the one thing the restore writes directly,
+and a pane puts its view back when it notices the place it is showing has changed, so a row
+arriving after the tab is on screen arrives after the only moment anything looks at it. And tabs
+before the active document, because `open_document` opens what it cannot find and would otherwise
+put it beside whichever tab was on screen instead of finding it in place; each restored tab
+becomes the one on screen as it is shown, so `show_document`'s "after the tab on screen"
+reproduces the saved order. A place that no longer resolves is **dropped** off its trail, like a
+visit, and a tab left with none is dropped; a source-driven place is never resolved at all, so a
+file that has been deleted comes back as a tab over the pane's own "Source file not found" rather
+than silently vanishing.
 
 **The settings are a file of their own, above the projects** (`src/settings.rs`, `settings.toml`
 at the top of the state directory beside `recents.toml`, since a setting is the user's and not any

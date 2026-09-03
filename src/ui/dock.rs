@@ -16,7 +16,14 @@ use super::*;
 ///
 /// **Nothing here activates the tab.** freya wraps a tab header in a `DropZone` around a
 /// `rect().on_press(set_active)` around a `DragZone`, so pressing this makes it the
-/// panel's active tab.
+/// panel's active tab. The press handler this takes runs *before* that one, the chip
+/// being the deeper element, and must not stop the event or the tab would stop
+/// answering the click.
+///
+/// A temporal tab -- the preview a sidebar row opens in, which the next row reuses -- is
+/// told from one that stays by its name being **italic**, and by nothing else: it is the
+/// same tab in every other way, and the slant is the one cue that says "provisional"
+/// without taking room from the name.
 ///
 /// A stateless helper rather than a component, the hover state belonging to the caller, so
 /// no hook runs here -- which is exactly why the × arrives as an element already built: it
@@ -26,8 +33,10 @@ fn chip(
     text: String,
     tooltip: String,
     active: bool,
+    temporal: bool,
     mut hovering: State<bool>,
     close: Element,
+    mut on_press: impl FnMut(Event<PressEventData>) + 'static,
     mut on_menu: impl FnMut(Event<PressEventData>) + 'static,
 ) -> impl IntoElement {
     // The active chip takes the pane's own background, so it reads as the top edge of the
@@ -57,8 +66,14 @@ fn chip(
             // without it panics. A right-click is not a press, so this leaves the tab it
             // was opened on where it is rather than activating it first.
             .on_secondary_down(move |e: Event<PressEventData>| on_menu(e))
+            .on_press(move |e: Event<PressEventData>| on_press(e))
             .child(icon)
-            .child(label().text(elide(&text)).max_lines(1))
+            .child(
+                label()
+                    .text(elide(&text))
+                    .max_lines(1)
+                    .maybe(temporal, |name| name.font_slant(FontSlant::Italic)),
+            )
             .child(close),
     )
 }
@@ -84,7 +99,6 @@ impl Component for TabClose {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let open = use_open();
-        let history = use_consume::<Hist>().0;
         let asm_at = use_consume::<AsmAt>().0;
         let src_at = use_consume::<SrcAt>().0;
         let code_at = use_consume::<CodeAt>().0;
@@ -107,12 +121,7 @@ impl Component for TabClose {
             // wrapper and the close first switches to the tab it is closing.
             .on_press(move |e: Event<PressEventData>| {
                 e.stop_propagation();
-                // The document is looked up at the press and in a statement of its own,
-                // so the table's read guard is gone before `close_tab` writes to it.
-                let document = open.docs.peek().get(id).cloned();
-                if let Some(document) = document {
-                    close_tab(open, history, asm_at, src_at, code_at, driven, &document);
-                }
+                close_tab(open, asm_at, src_at, code_at, driven, id);
             })
             .child(
                 label()
@@ -145,7 +154,6 @@ impl Component for DocumentMenuButton {
         let mut hovering = use_state(|| false);
         let mut showing = use_state(|| false);
         let open = use_open();
-        let history = use_consume::<Hist>().0;
 
         // Every tab in the panel and its active one, read together so the menu is built
         // from one look at the dock. Views are listed beside the documents: they scroll
@@ -204,7 +212,7 @@ impl Component for DocumentMenuButton {
                     // leftward into the window instead of off the side of it.
                     .position(Position::new_absolute().top(list_row_height()))
                     .child(
-                        tabs_menu(open, history, &tabs, active, showing)
+                        tabs_menu(open, &tabs, active, showing)
                             .on_close(move |_| showing.set(false))
                             // Keyed by row count so a list that grows while the menu is
                             // open remounts it: `MenuContainer` measures itself once and
@@ -220,13 +228,7 @@ impl Component for DocumentMenuButton {
 
 /// The menu [`DocumentMenuButton`] opens: one row per tab in the document panel, in the
 /// bar's own order, with the one on screen marked. Built per press, like `close_menu`.
-fn tabs_menu(
-    open: Open,
-    history: State<History>,
-    tabs: &[Tab],
-    active: Option<Tab>,
-    mut close: State<bool>,
-) -> Menu {
+fn tabs_menu(open: Open, tabs: &[Tab], active: Option<Tab>, mut close: State<bool>) -> Menu {
     // Names and glyphs resolved in one pass, so the read guard on the table is gone before
     // any row's handler can run and write to it.
     let rows: Vec<(Tab, String, Element)> = {
@@ -247,11 +249,8 @@ fn tabs_menu(
                         match tab {
                             // A document already open is a place the reader has, so going
                             // to it is a move and records nothing.
-                            Tab::Document(id) => {
-                                let document = open.docs.peek().get(id).cloned();
-                                activate(open, history, document, Visit::Moved);
-                            }
-                            // A view is not a document and never goes through `activate`:
+                            Tab::Document(id) => raise(open, id),
+                            // A view is not a document and never goes through `raise`:
                             // making it the tab on top is the whole of showing it.
                             Tab::View(_) => {
                                 let mut dock = open.dock;
@@ -361,9 +360,15 @@ impl Component for DocumentHeader {
         let states = use_project_states();
         let open = states.open;
 
-        // Not reachable -- a tab and its table entry are closed together -- but a render
-        // is no place to panic.
-        let Some(document) = open.docs.read().get(self.id).cloned() else {
+        // What the tab shows and whether it is the temporal one, out of one read: the
+        // header follows the trail's current entry, so navigating in place renames it.
+        // Not reachable -- a tab and its trail are closed together -- but a render is no
+        // place to panic.
+        let (document, temporal) = {
+            let docs = open.docs.read();
+            (docs.get(self.id).cloned(), docs.temporal() == Some(self.id))
+        };
+        let Some(document) = document else {
             return rect().into_element();
         };
 
@@ -374,8 +379,27 @@ impl Component for DocumentHeader {
             entry_text(&document),
             entry_tooltip(&document),
             self.active,
+            temporal,
             hovering,
             TabClose { id }.into_element(),
+            move |e: Event<PressEventData>| {
+                // A double press on a temporal tab's header makes it a tab that stays.
+                // freya counts the presses (500 ms, 5 px), and nothing else on the header
+                // asks it, so the count is this handler's own. The event goes on up to
+                // freya's wrapper, which is what activates the tab on the first press.
+                let PressEventData::Mouse(mouse) = e.data() else {
+                    return;
+                };
+                if !EventsCombos::pressed(mouse.global_location).is_double() {
+                    return;
+                }
+                // Peeked in a statement of its own, so the guard is gone before the write.
+                let temporal = open.docs.peek().temporal() == Some(id);
+                if temporal {
+                    let mut docs = open.docs;
+                    docs.write().promote(id);
+                }
+            },
             move |e: Event<PressEventData>| {
                 // Read at the press rather than at the render: whether this tab has
                 // company is not something the header draws, so subscribing to the panel
@@ -594,17 +618,32 @@ impl DockArea {
 
     /// Put `tab` in the document panel if it is not there, and make it the tab on top.
     ///
-    /// Documents are appended *after* the views, so Project, Settings and the Scratchpad
-    /// keep the left of the bar: a restored session's dozen tabs would otherwise push all
-    /// three off the right-hand edge, and they are reachable from nowhere else.
+    /// A new tab goes in **beside the tab on screen** -- just after it, the way a
+    /// browser opens a link -- when that is a document, so a place opened out of a
+    /// function sits next to the function. With a view on top, or nothing, it goes at
+    /// the end: documents are then after the views, so Project, Settings and the
+    /// Scratchpad keep the left of the bar, where a restored session's dozen tabs would
+    /// otherwise push all three off the right-hand edge, and they are reachable from
+    /// nowhere else. A restore opens its tabs in strip order and each becomes the one on
+    /// screen, so "after the one on screen" reproduces the order it saved.
     pub(crate) fn show_document(&mut self, tab: Tab) {
         let Some(panel) = self.document_panel_mut() else {
             return;
         };
-        if !panel.tabs.contains(&tab) {
-            panel.tabs.push(tab);
+        if panel.tabs.contains(&tab) {
+            panel.active_tab_id = Some(tab);
+            return;
         }
-        panel.active_tab_id = Some(tab);
+        let after = match panel.active_tab_id {
+            Some(active @ Tab::Document(_)) => panel.tabs.iter().position(|open| *open == active),
+            _ => None,
+        };
+        // Both of freya's set the active tab themselves; `insert_tab` clamps a position
+        // past the end.
+        match after {
+            Some(index) => panel.insert_tab(tab, index + 1),
+            None => panel.append_tab(tab),
+        }
     }
 
     /// Bring `view` to the top of whichever panel of this area holds it, answering
@@ -851,8 +890,11 @@ fn tab_bar(ctx: TabBarContext<PanelId>, area: State<DockArea>) -> Element {
 /// side of the split it was given -- so nothing but their order changes.
 ///
 /// Only the *active* tab's content is mounted, so this whole subtree -- both panes, both
-/// scroll controllers -- is built afresh on every switch of document, which is what
-/// `use_kept_position` is for.
+/// scroll controllers -- is built afresh on every switch of tab, which is what
+/// `use_kept_position` is for. Navigating in place is not a switch of tab: this reads the
+/// table, so a push onto the trail re-renders it and the panes are handed the new
+/// document as a prop, keeping their controllers -- and the same hook files the row of
+/// the place left under that place's own entry before putting the arriving one back.
 #[derive(Clone, PartialEq)]
 pub(crate) struct DocumentBody {
     pub(crate) id: DocId,
@@ -892,20 +934,23 @@ impl Component for DocumentBody {
         // stay with the two places, the reader's side and the side that follows it, so
         // switching between the two kinds of tab leaves the handle where it was rather
         // than jumping it across the split.
+        let tab = self.id;
         let (leads, follows) = match &document {
             Document::Source(_) => (
                 SourcePane {
+                    tab,
                     document: document.clone(),
                 }
                 .into_element(),
-                AssemblyPane { document }.into_element(),
+                AssemblyPane { tab, document }.into_element(),
             ),
             Document::Assembly(_) | Document::Code(_) => (
                 AssemblyPane {
+                    tab,
                     document: document.clone(),
                 }
                 .into_element(),
-                SourcePane { document }.into_element(),
+                SourcePane { tab, document }.into_element(),
             ),
         };
 

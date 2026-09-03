@@ -32,6 +32,7 @@ impl Component for EntryRow {
         // Consumed here, in the render, because the handlers that use them may not run a
         // hook.
         let states = use_project_states();
+        let ctrl = use_consume::<Ctrl>().0;
         let fold = self.row.fold;
         let path = self.row.path.clone();
         let pressed = path.clone();
@@ -81,7 +82,7 @@ impl Component for EntryRow {
                     None => {
                         if shows_as_source(&pressed) {
                             let file = Document::Source(Arc::from(&*pressed.to_string_lossy()));
-                            activate(states.open, states.history, Some(file), Visit::Went);
+                            open_document(states.open, states.visits, file, reach(ctrl));
                         }
                     }
                 })

@@ -117,11 +117,12 @@ impl Query {
 pub(crate) struct Located {
     /// The question whose symbols are wanted, or `None` until anything has been asked.
     pub(crate) asked: Option<Query>,
-    /// The file of the source-driven tab the line was asked from, when it was asked
-    /// from one: a row is then **chosen for that tab** -- its assembly side follows the
-    /// symbol -- rather than opened as a tab of its own. Asked from an assembly-driven
-    /// tab, or once that tab has closed, a row opens the symbol.
-    pub(crate) subject: Option<Arc<str>>,
+    /// The source-driven tab the line was asked from and the file it was showing, when
+    /// it was asked from one: a row is then **chosen for that tab** -- its assembly side
+    /// follows the symbol -- rather than opened as a tab of its own. Asked from an
+    /// assembly-driven tab, or once that tab has closed or moved off the file, a row
+    /// opens the symbol.
+    pub(crate) subject: Option<(DocId, Arc<str>)>,
     /// The last answer, whatever it answered with -- an empty list is an answer.
     pub(crate) found: Option<Found>,
 }
@@ -194,7 +195,7 @@ pub(crate) fn find_locations(
     mut located: State<Located>,
     mut dock: State<DockArea>,
     query: Query,
-    subject: Option<Arc<str>>,
+    subject: Option<(DocId, Arc<str>)>,
 ) {
     let mut next = located.peek().clone();
     if next.found.as_ref().is_some_and(|found| found.of == query) {
@@ -222,7 +223,7 @@ pub(crate) fn locate_menu(
     located: State<Located>,
     dock: State<DockArea>,
     at: LinePos,
-    subject: Option<Arc<str>>,
+    subject: Option<(DocId, Arc<str>)>,
     function: Option<Function>,
 ) -> Menu {
     let line = Query::line(at.clone());
@@ -380,7 +381,8 @@ impl Component for LocationRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let open = use_open();
-        let history = use_consume::<Hist>().0;
+        let visits = use_consume::<Visited>().0;
+        let ctrl = use_consume::<Ctrl>().0;
         let marked = use_consume::<Marked>().0;
         let landing = use_consume::<Land>().0;
         let driven = use_consume::<Drives>().0;
@@ -414,34 +416,38 @@ impl Component for LocationRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
+                    let symbol_tab = Document::Assembly(Selection::Symbol(symbol.clone()));
                     // The line is the answer's own, peeked when the row was built: a row
                     // is a row of one answer and cannot outlive it.
                     let Some(at) = at.clone() else {
-                        activate(
-                            open,
-                            history,
-                            Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
-                            Visit::Went,
-                        );
+                        open_document(open, visits, symbol_tab, reach(ctrl));
                         return;
                     };
-                    // Asked from a source-driven tab that is still open: chosen for it.
-                    // The choice is the tab's, and the tab is driven from the line the
-                    // question was asked from, so its assembly side becomes this symbol
-                    // -- for an instance, provided the instance holds code from that
-                    // line, which `compiled::pick` falls back from where it does not.
-                    let tab = subject.clone().map(Document::Source);
-                    let tab = tab.filter(|tab| open.docs.peek().id_of(tab).is_some());
-                    let target = match tab {
-                        Some(tab) => {
-                            let mut driven = driven;
-                            driven.write().remember(tab.clone(), at.line);
-                            driven.write().choose(tab.clone(), symbol.clone());
-                            tab
+                    // Asked from a source-driven tab that is still open and still on the
+                    // file: chosen for it. The choice is that entry's, and the entry is
+                    // driven from the line the question was asked from, so the tab's
+                    // assembly side becomes this symbol -- for an instance, provided the
+                    // instance holds code from that line, which `compiled::pick` falls
+                    // back from where it does not. Bound to a `let` so the table's guard
+                    // is gone before `driven` is written.
+                    let subject = subject.clone().filter(|(id, file)| {
+                        open.docs.peek().get(*id) == Some(&Document::Source(file.clone()))
+                    });
+                    match subject {
+                        Some((id, file)) => {
+                            let entry = (id, Document::Source(file));
+                            {
+                                let mut driven = driven;
+                                let mut driven = driven.write();
+                                driven.remember(entry.clone(), at.line);
+                                driven.choose(entry, symbol.clone());
+                            }
+                            land_on(open, marked, landing, id, at);
                         }
-                        None => Document::Assembly(Selection::Symbol(symbol.clone())),
-                    };
-                    land(open, history, marked, landing, target, at);
+                        None => {
+                            land(open, visits, marked, landing, symbol_tab, at, reach(ctrl));
+                        }
+                    }
                 })
                 .child(tree_name(name, false))
                 // Capped rather than measured, or a long member name would take the row

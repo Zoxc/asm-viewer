@@ -17,35 +17,41 @@ pub(crate) struct Objects(pub(crate) State<Vec<Arc<Object>>>);
 #[derive(Clone, Copy)]
 pub(crate) struct Loading(pub(crate) State<Loads>);
 
-/// The active document, shared through context.
+/// The active tab and the document it shows, shared through context.
 ///
 /// **A derivation and not a state**: the document panel's active tab, read through
-/// [`Docs`] -- see [`active_document`]. `None` means both "nothing is open" and "the tab
-/// on top is a view", and deliberately does not distinguish them.
+/// [`Docs`] -- see [`active_tab`]. `None` means both "nothing is open" and "the tab on
+/// top is a view", and deliberately does not distinguish them. The id travels with the
+/// document because the two are read together: the driven line and the viewing positions
+/// are kept per tab *and* entry, and a document paired with an id read a beat apart would
+/// be another tab's for that beat, which the worker would answer with a re-ask.
 ///
 /// A [`Memo`] because the dock notifies on every layout change, and a drag that changed no
 /// document must wake nothing. **It is therefore a beat behind**, which is right for
 /// anything that renders and wrong for anything that must be true inside one event
-/// handler -- so the functions holding the invariants call [`active_document`] on the
-/// states directly instead of reading this.
+/// handler -- so the functions holding the invariants call [`active_tab`] on the states
+/// directly instead of reading this.
 #[derive(Clone, Copy)]
-pub(crate) struct Active(pub(crate) Memo<Option<Document>>);
+pub(crate) struct Active(pub(crate) Memo<Option<Entry>>);
 
 /// What is open: the panel the reader's document tabs are in, and the table saying what
 /// each of those tabs stands for.
 ///
-/// The panel's `tabs` vec *is* the list of open documents, in the reader's own order;
-/// [`Docs`] holds no order, only the mapping a dock tab id needs. Membership is the one
-/// thing the two share, and `activate`/`close_tab`/`close_binary` keep it true: a
-/// document's tab and its table entry are made together and closed together.
+/// The panel's `tabs` vec *is* the list of open tabs, in the reader's own order;
+/// [`Docs`] holds no order, only the trail behind each dock tab id. Membership is the one
+/// thing the two share, and `open_document`/`close_tab`/`close_binary` keep it true: a
+/// tab and its trail are made together and closed together.
 #[derive(Clone, Copy)]
 pub(crate) struct Open {
     pub(crate) dock: State<DockArea>,
     pub(crate) docs: State<Docs>,
 }
 
-/// Every open document, in the order the reader's tabs are in. Views are skipped: they are
-/// tabs in the same panel but they are not documents.
+/// Every open tab's document, in the order the reader's tabs are in. Views are skipped:
+/// they are tabs in the same panel but they are not documents. What the tests ask of the
+/// strip; the app itself asks for the ids ([`open_ids`]), a tab being a trail and not
+/// what it shows.
+#[cfg(test)]
 pub(crate) fn open_documents(dock: &DockArea, docs: &Docs) -> Vec<Document> {
     let Some(panel) = dock.document_panel() else {
         return Vec::new();
@@ -60,26 +66,63 @@ pub(crate) fn open_documents(dock: &DockArea, docs: &Docs) -> Vec<Document> {
         .collect()
 }
 
-/// The active document: the document panel's active tab, when that tab is a document.
-pub(crate) fn active_document(dock: &DockArea, docs: &Docs) -> Option<Document> {
+/// Every open document tab's id, in the order the reader's tabs are in.
+pub(crate) fn open_ids(dock: &DockArea) -> Vec<DocId> {
+    let Some(panel) = dock.document_panel() else {
+        return Vec::new();
+    };
+    panel
+        .tabs
+        .iter()
+        .filter_map(|tab| match tab {
+            Tab::Document(id) => Some(*id),
+            Tab::View(_) => None,
+        })
+        .collect()
+}
+
+/// The active tab and what it shows: the document panel's active tab, when that tab is a
+/// document.
+pub(crate) fn active_tab(dock: &DockArea, docs: &Docs) -> Option<Entry> {
     match dock.document_panel()?.active_tab_id? {
-        Tab::Document(id) => docs.get(id).cloned(),
+        Tab::Document(id) => docs.get(id).cloned().map(|document| (id, document)),
         Tab::View(_) => None,
     }
+}
+
+/// The active document alone.
+pub(crate) fn active_document(dock: &DockArea, docs: &Docs) -> Option<Document> {
+    active_tab(dock, docs).map(|(_, document)| document)
 }
 
 impl Open {
     /// The active document as of *now*, for the event handlers that cannot wait a beat
     /// for [`Active`] to catch up. `peek`, so asking subscribes nothing.
     pub(crate) fn active(&self) -> Option<Document> {
-        let (dock, docs) = (self.dock.peek(), self.docs.peek());
-        active_document(&dock, &docs)
+        self.active_tab().map(|(_, document)| document)
     }
 
-    /// Every open document as of now, in tab order. `peek`, for the same reason.
+    /// The active tab as of now, with what it shows. `peek`, for the same reason.
+    pub(crate) fn active_tab(&self) -> Option<Entry> {
+        let (dock, docs) = (self.dock.peek(), self.docs.peek());
+        active_tab(&dock, &docs)
+    }
+
+    /// The active tab's id as of now, a document or not.
+    pub(crate) fn active_id(&self) -> Option<DocId> {
+        self.active_tab().map(|(id, _)| id)
+    }
+
+    /// Every open tab's document as of now, in tab order. `peek`, for the same reason.
+    #[cfg(test)]
     pub(crate) fn documents(&self) -> Vec<Document> {
         let (dock, docs) = (self.dock.peek(), self.docs.peek());
         open_documents(&dock, &docs)
+    }
+
+    /// Every open document tab's id as of now, in tab order.
+    pub(crate) fn ids(&self) -> Vec<DocId> {
+        open_ids(&self.dock.peek())
     }
 }
 
@@ -104,12 +147,14 @@ pub(crate) struct SplitRatio(pub(crate) State<f32>);
 #[derive(Clone, Copy)]
 pub(crate) struct Splits(pub(crate) State<ResizableContext>);
 
-/// Which row each open tab's **assembly** side was left on. At the root rather than in the
-/// pane, which reuses one scroll controller for every symbol and so would leave a newly
-/// opened function at the offset the old one was at. Keyed by [`Document`], so an entry
-/// means "this tab" for exactly as long as that tab is in the list.
+/// Which row each place on each open tab's trail had its **assembly** side left on. At
+/// the root rather than in the pane, which reuses one scroll controller for every symbol
+/// and so would leave a newly opened function at the offset the old one was at. Keyed by
+/// [`Entry`] -- the tab and the document -- so going back along a trail comes back to the
+/// row that was left, and an entry means "this place on this tab" for exactly as long as
+/// the tab is open and the place is on its trail.
 #[derive(Clone, Copy)]
-pub(crate) struct AsmAt(pub(crate) State<Positions<Document>>);
+pub(crate) struct AsmAt(pub(crate) State<Positions<Entry>>);
 
 /// The documents the dock's tabs are handles into, and nothing about their order. See
 /// [`Docs`]: it exists because a dock tab id must be `Copy + Hash` and a [`Document`] is
@@ -117,10 +162,10 @@ pub(crate) struct AsmAt(pub(crate) State<Positions<Document>>);
 #[derive(Clone, Copy)]
 pub(crate) struct OpenDocs(pub(crate) State<Docs>);
 
-/// Which row each open tab's **source** side was left on. [`AsmAt`]'s other half, keyed by
-/// the same document rather than by the file the pane happens to be showing.
+/// Which row each place's **source** side was left on. [`AsmAt`]'s other half, keyed by
+/// the same entry rather than by the file the pane happens to be showing.
 #[derive(Clone, Copy)]
-pub(crate) struct SrcAt(pub(crate) State<Positions<Document>>);
+pub(crate) struct SrcAt(pub(crate) State<Positions<Entry>>);
 
 /// Which tabs have the section under their Assembly pane's symbol bar open.
 ///
@@ -128,14 +173,16 @@ pub(crate) struct SrcAt(pub(crate) State<Positions<Document>>);
 /// `use_state` there would collapse the section at every switch of tab, and a reader who
 /// opened it once would find it shut every time they came back.
 ///
-/// **Keyed by [`DocId`] and not by [`Document`]**, unlike [`AsmAt`] and [`Drives`] beside
-/// it, and that is what makes it cost nothing: a `DocId` is `Copy + Hash` and holds no
-/// `Arc<Object>`, where a document does and would have to be forgotten in all three of
-/// `close_tab`, `close_others` and `close_binary` or a closed binary's bytes would be held
-/// for as long as the app ran. Ids are never handed out twice ([`Docs::open`]), so an entry
-/// a closed tab left behind can never be mistaken for another tab's -- it is dead weight of
-/// four bytes, and a reopened tab correctly opens with its section shut. The Objects tree's
-/// fold set makes the same argument.
+/// **Keyed by [`DocId`] alone and not by [`Entry`]**, unlike [`AsmAt`] and [`Drives`]
+/// beside it, and that is what makes it cost nothing: a `DocId` is `Copy + Hash` and
+/// holds no `Arc<Object>`, where a document does and would have to be forgotten in all
+/// three of `close_tab`, `close_others` and `close_binary` or a closed binary's bytes
+/// would be held for as long as the app ran. Ids are never handed out twice
+/// ([`Docs::open`]), so an entry a closed tab left behind can never be mistaken for
+/// another tab's -- it is dead weight of four bytes, and a reopened tab correctly opens
+/// with its section shut. The Objects tree's fold set makes the same argument. It follows
+/// that the section stays open or shut across the whole of a tab's trail, which is a
+/// fact about the tab and not about any one place on it.
 ///
 /// Never saved: it is a view of a tab, like a filter.
 #[derive(Clone, Copy)]
@@ -147,9 +194,9 @@ pub(crate) struct Expanded(pub(crate) State<HashSet<DocId>>);
 #[derive(Clone, Copy)]
 pub(crate) struct Drives(pub(crate) State<Driven>);
 
-/// Where the reader has been.
+/// Everywhere the reader has been, across every tab: what the History panel lists.
 #[derive(Clone, Copy)]
-pub(crate) struct Hist(pub(crate) State<History>);
+pub(crate) struct Visited(pub(crate) State<Visits>);
 
 /// Where the reader chose to be able to come back to: the project's bookmarks, in their
 /// saved shape and nothing more. Whether one is live is asked of [`Objects`] where it is
@@ -280,13 +327,13 @@ pub(crate) struct ProjectStates {
     pub(crate) loading: State<Loads>,
     /// The document panel and the id table: what is open, and in what order.
     pub(crate) open: Open,
-    pub(crate) asm_at: State<Positions<Document>>,
-    pub(crate) src_at: State<Positions<Document>>,
+    pub(crate) asm_at: State<Positions<Entry>>,
+    pub(crate) src_at: State<Positions<Entry>>,
     /// Where each code tab was left, as an address.
-    pub(crate) code_at: State<Positions<Document, Spot>>,
+    pub(crate) code_at: State<Positions<Entry, Spot>>,
     /// Which line each source-driven tab's assembly side is driven from.
     pub(crate) driven: State<Driven>,
-    pub(crate) history: State<History>,
+    pub(crate) visits: State<Visits>,
     pub(crate) bookmarks: State<Bookmarks>,
 }
 
@@ -310,7 +357,7 @@ pub(crate) fn use_project_states() -> ProjectStates {
         code_at: use_consume::<CodeAt>().0,
         src_at: use_consume::<SrcAt>().0,
         driven: use_consume::<Drives>().0,
-        history: use_consume::<Hist>().0,
+        visits: use_consume::<Visited>().0,
         bookmarks: use_consume::<Bookmarked>().0,
     }
 }

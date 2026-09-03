@@ -33,7 +33,7 @@ pub(crate) use analysis::{
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};
 pub(crate) use crate::chars::{beyond, Bounds, Caret, CharSelection, Line, Motion};
 pub(crate) use crate::compiled;
-pub(crate) use crate::docs::{DocId, Docs};
+pub(crate) use crate::docs::{DocId, Docs, Entry};
 pub(crate) use crate::files::{shows_as_source, FileRow, FileRows, FileTree, Fold};
 pub(crate) use crate::filter::{Filter, Matcher};
 pub(crate) use crate::fonts::{self, Font, Fonts};
@@ -57,6 +57,7 @@ pub(crate) use crate::tabs::{self, Driven, Positions, Spot};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
+pub(crate) use crate::visits::Visits;
 
 mod analyzed;
 pub(crate) use analyzed::*;
@@ -111,12 +112,15 @@ pub(crate) use symbol_bar::*;
 mod width;
 pub(crate) use width::*;
 
-/// One of the two history buttons at the left of the toolbar: the step it makes, drawn as
-/// the chevron pointing that way, with the entry it would land on in its tooltip.
+/// One of the two history buttons at the left of the toolbar: the step it makes along
+/// the trail of the tab on screen, drawn as the chevron pointing that way, with the entry
+/// it would land on in its tooltip.
 ///
-/// **It reads `Hist` rather than peeking it**, and that is the whole of how the pair stays
-/// current: a visit pushed anywhere in the app, a close that drops entries, and every move
-/// of the cursor -- the one this button itself just made included -- repaints both.
+/// **It reads `Active` and the table rather than peeking them**, and that is the whole of
+/// how the pair stays current: a switch of tab, a push onto any trail, a close that drops
+/// entries, and every move of a cursor -- the one this button itself just made included
+/// -- repaints both. `Active` and not the dock: reading the dock would repaint the pair on
+/// every drag of a split, which is why `Active` is a memo at all.
 ///
 /// A button with nothing in its direction is **dimmed rather than hidden**. Hiding it would
 /// move the button beside it under the pointer, and a reader who has not been anywhere yet
@@ -126,8 +130,7 @@ pub(crate) use width::*;
 /// in step. The tooltip stays, naming the direction where it cannot name a destination.
 #[derive(Clone, PartialEq)]
 struct NavButton {
-    /// Which way it steps. A `bool` and not a [`Nav`], whose third variant is a history
-    /// row's jump to an index and is not something a toolbar button can be.
+    /// Which way it steps.
     back: bool,
 }
 
@@ -135,7 +138,7 @@ impl Component for NavButton {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let open = use_open();
-        let history = use_consume::<Hist>().0;
+        let active = use_consume::<Active>().0;
 
         let (nav, word, icon) = if self.back {
             (Nav::Back, "Back", ("chevron-left", lucide::chevron_left()))
@@ -147,9 +150,17 @@ impl Component for NavButton {
             )
         };
 
-        // The read, and with it the subscription. Bound to a `let` of its own and dropped
-        // here: the press below writes the very state this looked at.
-        let destination = nav.destination(&history.read()).map(entry_text);
+        // The reads, and with them the subscriptions. Bound to a `let` of their own and
+        // dropped here: the press below writes the very state this looked at.
+        let destination = {
+            let docs = open.docs.read();
+            active
+                .read()
+                .as_ref()
+                .and_then(|(id, _)| docs.trail(*id))
+                .and_then(|trail| nav.destination(trail))
+                .map(entry_text)
+        };
         let live = destination.is_some();
         let tooltip = match &destination {
             Some(name) => format!("{word} to {name}"),
@@ -174,7 +185,7 @@ impl Component for NavButton {
                     button
                         .on_pointer_over(move |_| hovering.set_if_modified(true))
                         .on_pointer_out(move |_| hovering.set_if_modified(false))
-                        .on_press(move |_| navigate(open, history, nav))
+                        .on_press(move |_| navigate(open, nav))
                 })
                 .child(
                     SvgViewer::new(icon)
@@ -290,7 +301,7 @@ pub fn app() -> impl IntoElement {
     };
     let active = use_provide_context(move || {
         Active(Memo::create(move || {
-            active_document(&content_dock.read(), &docs.read())
+            active_tab(&content_dock.read(), &docs.read())
         }))
     })
     .0;
@@ -307,7 +318,7 @@ pub fn app() -> impl IntoElement {
     let code_at = use_provide_context(|| CodeAt(State::create(Positions::default()))).0;
     let driven = use_provide_context(|| Drives(State::create(Driven::default()))).0;
     use_provide_context(|| Expanded(State::create(HashSet::new())));
-    let history = use_provide_context(|| Hist(State::create(History::default()))).0;
+    let visits = use_provide_context(|| Visited(State::create(Visits::default()))).0;
     let bookmarks = use_provide_context(|| Bookmarked(State::create(Bookmarks::default()))).0;
     let landing = use_provide_context(|| Land(State::create(None))).0;
     let marked = use_provide_context(|| Marked(State::create(Marks::default()))).0;
@@ -326,7 +337,7 @@ pub fn app() -> impl IntoElement {
         src_at,
         code_at,
         driven,
-        history,
+        visits,
         bookmarks,
     };
     use_save_on_change(states);
@@ -362,7 +373,7 @@ pub fn app() -> impl IntoElement {
     // changes when a line in it is clicked, which changes no document.
     let asked = Asked { active, driven };
     use_analysis_with(
-        asked, objects, history, analysis, located, reading, window, answer,
+        asked, objects, visits, analysis, located, reading, window, answer,
     );
     // After the analysis: the file the Source pane draws is what the analysis says it is.
     use_clear_marks(active, asked, analysis, marked);
@@ -404,8 +415,8 @@ pub fn app() -> impl IntoElement {
         // mouse's back/forward buttons work wherever the cursor is and no child can
         // swallow them by stopping propagation.
         .on_global_pointer_down(move |e: Event<PointerEventData>| match e.button() {
-            Some(MouseButton::Back) => navigate(open, history, Nav::Back),
-            Some(MouseButton::Forward) => navigate(open, history, Nav::Forward),
+            Some(MouseButton::Back) => navigate(open, Nav::Back),
+            Some(MouseButton::Forward) => navigate(open, Nav::Forward),
             _ => {}
         })
         // A sweep ends wherever the button comes up, very often not over the pane it

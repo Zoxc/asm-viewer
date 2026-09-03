@@ -27,8 +27,9 @@ pub(crate) enum Pane {
 /// A line to pick out the moment `tab` becomes the active document.
 ///
 /// What a click from outside the two panes -- a row in the Locations panel -- needs and
-/// a click inside them does not: opening the document is an `activate`, and the change of
-/// document that makes is exactly what `use_land` answers by dropping both panes' runs,
+/// a click inside them does not: opening the document is an `open_document`, and the
+/// change of document that makes is exactly what `use_land` answers by dropping both
+/// panes' runs,
 /// so a run picked out in the same handler would be gone a beat later. Left here instead,
 /// for that effect to turn into the source pane's run when the document it names arrives.
 #[derive(Clone, PartialEq)]

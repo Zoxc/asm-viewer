@@ -1,122 +1,187 @@
-//! Opening a document, closing one, and moving between them.
+//! Opening a document, closing a tab, and moving between them.
 //!
-//! The invariant "the active document is one of the open tabs, or `None`" is held by
-//! [`activate`], [`close_tab`], [`close_others`] and [`close_binary`] and by nothing else,
-//! so every path that opens a document -- [`navigate`] included -- goes through
-//! [`activate`].
+//! Two invariants are held here and nowhere else: "the active tab is one of the open
+//! tabs, or `None`", and "a tab and its trail are made together and closed together".
+//! [`open_document`], [`raise`], [`navigate`], [`close_tab`], [`close_others`] and
+//! [`close_binary`] are the six functions that change what is open or what a tab shows,
+//! and every path that opens a document -- [`land`] included -- goes through
+//! [`open_document`].
 
 use super::*;
 
-/// Why a document is becoming the active one, which decides whether the history records
-/// it. The cause is known at the call site and cannot be read off the state.
+/// How a document is reached: where it opens, which the click that opened it says and
+/// nothing about the state can.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Visit {
-    /// The reader went somewhere: a sidebar row, a relocation link, the Source pane's
-    /// companion header, or a restored session landing the app on a document. Recorded,
-    /// unless the history's cursor is on it already.
-    Went,
-    /// The reader moved between places already open: a tab in the strip, the neighbour a
-    /// close lands on, or [`navigate`], which moves the cursor itself. Recorded nowhere.
-    Moved,
+pub(crate) enum Reach {
+    /// From inside the tab on screen -- a relocation link, the companion header over the
+    /// Source pane. Pushed onto that tab's trail in place of what it showed, so the place
+    /// left is one Back away. Promotes a temporal tab: the reader is reading in it. With
+    /// no document tab on screen there is nothing to replace, and this is [`Reach::NewTab`].
+    InPlace,
+    /// In a tab of its own that stays, beside the tab on screen: Ctrl+click on anything,
+    /// or a menu item. A tab already showing the place is raised instead, and promoted
+    /// when it was the temporal one -- what was asked for is a tab of this place that
+    /// stays, and it has one.
+    NewTab,
+    /// From outside the panes -- a row in a sidebar list. Into the one temporal tab,
+    /// pushed onto its trail so that Back inside it walks the rows clicked, or a new
+    /// temporal tab beside the tab on screen while there is none. A tab already showing
+    /// the place is raised instead, the temporal one included, which promotes nothing.
+    Preview,
 }
 
-/// Make `target` the active document, opening a tab for it if it has none, and record the
-/// visit when there was one.
+/// Open `target` the way `reach` says, make the tab it lands in the active one, and
+/// record the visit. The one path by which a document is ever opened.
 ///
-/// The one path by which [`Active`] ever changes. `None` opens nothing and is how the
-/// content area goes back to its placeholder; it is never a visit.
-pub(crate) fn activate(
+/// The tab the document landed in, or `None` when there is no document panel to land
+/// in. Every read of the states is bound before any write to them.
+pub(crate) fn open_document(
     open: Open,
-    mut history: State<History>,
-    target: Option<Document>,
-    visit: Visit,
-) {
+    mut visits: State<Visits>,
+    target: Document,
+    reach: Reach,
+) -> Option<DocId> {
     let Open { mut dock, mut docs } = open;
 
-    let Some(target) = target else {
-        // Falling to the first tab keeps a panel that has tabs from having none of them
-        // active; an empty panel draws its own ground.
-        let mut dock = dock.write();
-        if let Some(panel) = dock.document_panel_mut() {
-            let first = panel.tabs.first().copied();
-            panel.active_tab_id = first;
+    // Recorded whatever else happens, and only when it changes the record: `State::write`
+    // notifies whether or not the value changes, and re-opening the place at the top must
+    // not wake the History panel.
+    if visits.peek().would_record(&target) {
+        visits.write().record(target.clone());
+    }
+
+    // The tab on screen and the tab showing the target, the tab on screen preferred when
+    // it is one of several: two tabs can show one place.
+    let active = open.active_tab();
+    let showing = match &active {
+        Some((id, current)) if *current == target => Some(*id),
+        _ => docs.peek().showing(&target),
+    };
+    let temporal = docs.peek().temporal();
+
+    match reach {
+        Reach::InPlace if active.is_some() => {
+            let (id, current) = active?;
+            // Already there: nothing to push, and a write would wake every header.
+            if current != target {
+                let mut docs = docs.write();
+                if let Some(trail) = docs.trail_mut(id) {
+                    trail.push(target);
+                }
+                docs.promote(id);
+            }
+            Some(id)
         }
-        return;
-    };
+        Reach::InPlace | Reach::NewTab => {
+            if let Some(id) = showing {
+                if temporal == Some(id) {
+                    docs.write().promote(id);
+                }
+                raise(open, id);
+                return Some(id);
+            }
+            let id = docs.write().open(target);
+            dock.write().show_document(Tab::Document(id));
+            Some(id)
+        }
+        Reach::Preview => {
+            if let Some(id) = showing {
+                raise(open, id);
+                return Some(id);
+            }
+            match temporal {
+                Some(id) => {
+                    {
+                        let mut docs = docs.write();
+                        if let Some(trail) = docs.trail_mut(id) {
+                            trail.push(target);
+                        }
+                    }
+                    raise(open, id);
+                    Some(id)
+                }
+                None => {
+                    let id = {
+                        let mut docs = docs.write();
+                        let id = docs.open(target);
+                        docs.mark_temporal(id);
+                        id
+                    };
+                    dock.write().show_document(Tab::Document(id));
+                    Some(id)
+                }
+            }
+        }
+    }
+}
 
-    // The copy that is *in the table* where there is one, so the identity a position is
-    // keyed by does not change when the same file is reached again through a different
-    // symbol's `LineInfo`: two of them naming one path hold two `Arc<str>`s of it. The
-    // read is bound to a `let` and dropped before the write below, never held across it.
-    let existing = docs.peek().id_of(&target);
-    let id = match existing {
-        Some(id) => id,
-        None => docs.write().open(target.clone()),
-    };
-    let target = docs.peek().get(id).cloned();
-
-    // Asked before it is written: `State::write` notifies whether or not the value
-    // changes, so re-focusing the tab already on top must not reach for it.
+/// Make the open tab `id` the active one. The reader moved between places already
+/// open -- a tab in the strip's menu, the neighbour a close lands on, a restored session
+/// -- so nothing is recorded and no trail moves. A no-op for a closed id.
+pub(crate) fn raise(open: Open, id: DocId) {
+    let mut dock = open.dock;
     let tab = Tab::Document(id);
-    let settled = dock
-        .peek()
-        .document_panel()
-        .is_some_and(|panel| panel.active_tab_id == Some(tab) && panel.tabs.contains(&tab));
-    if !settled {
+    // Asked before it is written: `State::write` notifies whether or not the value
+    // changes, so re-raising the tab already on top must not reach for it.
+    let (held, settled) = {
+        let dock = dock.peek();
+        match dock.document_panel() {
+            Some(panel) => (
+                panel.tabs.contains(&tab),
+                panel.active_tab_id == Some(tab) && panel.tabs.contains(&tab),
+            ),
+            None => (false, false),
+        }
+    };
+    if held && !settled {
         dock.write().show_document(tab);
     }
-
-    // Asked first for the same reason: a push that would dedup away must not wake the
-    // history panel.
-    let Some(target) = target.filter(|_| visit == Visit::Went) else {
-        return;
-    };
-    if history.peek().would_push(&target) {
-        history.write().push(target);
-    }
 }
 
-/// Close the tab showing `entry`, moving to a neighbouring one when it was the tab on
-/// screen and to the placeholder when it was the last one open.
+/// Close the tab `id`, moving to a neighbouring one when it was the tab on screen and
+/// to the placeholder when it was the last one open.
 ///
-/// Both of the tab's kept positions go with it: a [`Document::Assembly`] key holds the
-/// `Arc<Object>` it points into, so one left behind holds the file's bytes for the life of
-/// the app. The line it was driven from goes with it too, for consistency and **not** for
-/// that reason: a [`Document::Source`] key holds no object, so it holds nothing up.
+/// Everything kept by the tab's entries goes with it: an [`Entry`] key holds the
+/// `Arc<Object>` its document points into, so one left behind holds the file's bytes for
+/// the life of the app. The lines its entries were driven from go with it too, for
+/// consistency and **not** for that reason: a [`Document::Source`] key holds no object,
+/// so it holds nothing up.
 pub(crate) fn close_tab(
     open: Open,
-    history: State<History>,
-    mut asm_at: State<Positions<Document>>,
-    mut src_at: State<Positions<Document>>,
-    mut code_at: State<Positions<Document, Spot>>,
+    mut asm_at: State<Positions<Entry>>,
+    mut src_at: State<Positions<Entry>>,
+    mut code_at: State<Positions<Entry, Spot>>,
     mut driven: State<Driven>,
-    entry: &Document,
+    id: DocId,
 ) {
     let Open { mut dock, mut docs } = open;
-    let Some(id) = docs.peek().id_of(entry) else {
-        return;
-    };
     let tab = Tab::Document(id);
 
     // Worked out before anything is removed, which is what `tabs::landing` wants, and in
     // a scope of its own so no read guard is alive when the writes below start.
-    let (was_showing, next) = {
+    let (held, was_showing, next) = {
         let dock = dock.peek();
         let Some(panel) = dock.document_panel() else {
             return;
         };
         (
+            panel.tabs.contains(&tab),
             panel.active_tab_id == Some(tab),
             tabs::landing(&panel.tabs, panel.active_tab_id.as_ref(), |open| {
                 *open == tab
             }),
         )
     };
+    if !held {
+        return;
+    }
 
     {
         // Removed by hand and never through freya's `remove_tab_except`, which sets the
         // panel's active tab to `tabs.first()` when it takes the active one out. Landing
-        // on the *neighbour* (`tabs::landing`) is this app's rule.
+        // on the *neighbour* (`tabs::landing`) is this app's rule, and the write is the
+        // whole of the landing: a tab landed on is already open, so there is nothing to
+        // open and nothing to record.
         let mut dock = dock.write();
         if let Some(panel) = dock.document_panel_mut() {
             panel.tabs.retain(|open| *open != tab);
@@ -126,39 +191,31 @@ pub(crate) fn close_tab(
         }
     }
     docs.write().close(id);
-    asm_at.write().forget(entry);
-    src_at.write().forget(entry);
-    code_at.write().forget(entry);
-    driven.write().forget(entry);
-
-    // A document landed on goes through `activate`, even though it is by construction
-    // already open. A *view* landed on is not a document, and the write above has already
-    // put the panel on it.
-    if let (true, Some(Tab::Document(next))) = (was_showing, next) {
-        let document = docs.peek().get(next).cloned();
-        activate(open, history, document, Visit::Moved);
-    }
+    let kept = |(tab, _): &Entry| *tab != id;
+    asm_at.write().forgetting(kept);
+    src_at.write().forgetting(kept);
+    code_at.write().forgetting(kept);
+    driven.write().forget_tab(id);
 }
 
-/// Close every document tab except the one `keep` names, leaving the views in the panel
-/// alone and landing on the kept tab when the one on screen is among those closing.
+/// Close every document tab except `keep`, leaving the views in the panel alone and
+/// landing on the kept tab when the one on screen is among those closing.
 ///
 /// The unit is the **tab** and not the binary, so this is [`close_tab`] many times over
 /// rather than [`close_binary`] with another filter: what each of them lets go of is the
-/// same -- the tab, its entry in the table, both of its kept positions and the line it was
-/// driven from -- and for the same reason, a [`Document::Assembly`] key holding the
-/// `Arc<Object>` it points into. Done in one pass rather than by calling [`close_tab`] in
-/// a loop: each of those would work out a landing of its own and walk the panel through
-/// every intermediate state, and the landing here is known from the start.
+/// same -- the tab, its trail, everything kept by its entries -- and for the same reason,
+/// an [`Entry`] key holding the `Arc<Object>` it points into. Done in one pass rather
+/// than by calling [`close_tab`] in a loop: each of those would work out a landing of its
+/// own and walk the panel through every intermediate state, and the landing here is known
+/// from the start.
 ///
 /// A view that shares the document panel is not a document and never closes; it also
 /// keeps the screen when it is the tab on top, since nothing it is showing is going away.
 pub(crate) fn close_others(
     open: Open,
-    history: State<History>,
-    mut asm_at: State<Positions<Document>>,
-    mut src_at: State<Positions<Document>>,
-    mut code_at: State<Positions<Document, Spot>>,
+    mut asm_at: State<Positions<Entry>>,
+    mut src_at: State<Positions<Entry>>,
+    mut code_at: State<Positions<Entry, Spot>>,
     mut driven: State<Driven>,
     keep: DocId,
 ) {
@@ -193,16 +250,6 @@ pub(crate) fn close_others(
         return;
     }
 
-    // The documents themselves, since the positions and the driven lines are keyed by the
-    // document and not by its id. Taken before the table lets go of them.
-    let closed: Vec<Document> = {
-        let docs = docs.peek();
-        closing
-            .iter()
-            .filter_map(|id| docs.get(*id).cloned())
-            .collect()
-    };
-
     {
         let mut dock = dock.write();
         if let Some(panel) = dock.document_panel_mut() {
@@ -221,36 +268,25 @@ pub(crate) fn close_others(
         }
     }
 
-    let held = |tab: &Document| !closed.contains(tab);
+    let held = |(tab, _): &Entry| !closing.contains(tab);
     asm_at.write().forgetting(held);
     src_at.write().forgetting(held);
     code_at.write().forgetting(held);
-    {
-        // One guard rather than one write per tab: a write notifies whether or not it
-        // changed anything, and a dozen tabs closing is one change.
-        let mut driven = driven.write();
-        for tab in &closed {
-            driven.forget(tab);
-        }
-    }
-
-    // The kept tab goes through `activate` like every other change of active document,
-    // even though it is by construction already open.
-    if was_showing {
-        let document = docs.peek().get(keep).cloned();
-        activate(open, history, document, Visit::Moved);
-    }
+    // One guard rather than one write per tab: a write notifies whether or not it
+    // changed anything, and a dozen tabs closing is one change.
+    driven.write().forgetting(held);
 }
 
 /// Let go of the binary at `path`: drop every [`Object`] it contributed and answer for
 /// everything that was pointing at them.
 ///
-/// The third of the functions holding the tab invariants, beside [`activate`] and
-/// [`close_tab`]. The unit is the **file** and never the object, so one path opened twice
-/// closes once. Assembly-driven tabs in the file are closed and their positions forgotten;
-/// source-driven tabs survive; the history drops those entries rather than degrading them;
-/// a load still running is cancelled, or its objects would put the file back one member at
-/// a time.
+/// The unit is the **file** and never the object, so one path opened twice closes once.
+/// A tab *showing* a place in the file is closed, its positions forgotten with it; every
+/// other tab keeps its slot and loses the places in the file from its trail, the cursor
+/// carried to the nearest older survivor -- a source-driven tab's binary entries go this
+/// way, and the tab stands. The History panel drops those places rather than degrading
+/// them; a load still running is cancelled, or its objects would put the file back one
+/// member at a time.
 ///
 /// All the writes happen in this one handler, so the save observer wakes once on a settled
 /// state and never writes a binary the app has already let go of.
@@ -258,16 +294,16 @@ pub(crate) fn close_binary(
     mut objects: State<Vec<Arc<Object>>>,
     mut loading: State<Loads>,
     open: Open,
-    mut asm_at: State<Positions<Document>>,
-    mut src_at: State<Positions<Document>>,
-    mut code_at: State<Positions<Document, Spot>>,
+    mut asm_at: State<Positions<Entry>>,
+    mut src_at: State<Positions<Entry>>,
+    mut code_at: State<Positions<Entry, Spot>>,
     mut driven: State<Driven>,
-    mut history: State<History>,
+    mut visits: State<Visits>,
     path: &Path,
 ) {
     let Open { mut dock, mut docs } = open;
     // Every guard below is taken out of its own statement or its own scope, so none of
-    // them is still alive when the next write -- or `activate` at the end -- is reached.
+    // them is still alive when the next write is reached.
     let showing = open.active();
 
     // Which tabs go, and what is left to be on, both worked out before anything is
@@ -284,7 +320,14 @@ pub(crate) fn close_binary(
                 .is_some_and(|document| document.in_file(path)),
             Tab::View(_) => false,
         };
-        let closing: Vec<Tab> = panel.tabs.iter().copied().filter(in_file).collect();
+        let closing: Vec<DocId> = panel
+            .tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                Tab::Document(id) if in_file(tab) => Some(*id),
+                _ => None,
+            })
+            .collect();
         let next = tabs::landing(&panel.tabs, panel.active_tab_id.as_ref(), in_file);
         (closing, next)
     };
@@ -293,9 +336,12 @@ pub(crate) fn close_binary(
         .as_ref()
         .is_some_and(|showing| showing.in_file(path));
     {
+        // The write is the whole of the landing, as in `close_tab`.
         let mut dock = dock.write();
         if let Some(panel) = dock.document_panel_mut() {
-            panel.tabs.retain(|tab| !closing.contains(tab));
+            panel
+                .tabs
+                .retain(|tab| !matches!(tab, Tab::Document(id) if closing.contains(id)));
             if was_showing {
                 panel.active_tab_id = next;
             }
@@ -303,61 +349,85 @@ pub(crate) fn close_binary(
     }
     {
         let mut docs = docs.write();
-        for tab in &closing {
-            if let Tab::Document(id) = tab {
-                docs.close(*id);
-            }
+        for id in &closing {
+            docs.close(*id);
         }
+        // The surviving tabs' trails, thinned: every tab whose current entry is in the
+        // file has just been closed, so no trail is left with nothing on it.
+        docs.retain_entries(|document| !document.in_file(path));
     }
 
-    // The positions cannot outlive the tabs they belong to.
-    asm_at.write().forgetting(|tab| !tab.in_file(path));
-    src_at.write().forgetting(|tab| !tab.in_file(path));
-    code_at.write().forgetting(|tab| !tab.in_file(path));
-    // A source-driven tab stands, but a symbol it chose out of this file is let go: the
-    // line beside the choice is what survives a close, and the next ask answers out of
-    // what is left.
-    driven.write().release(path);
+    // Nothing kept by an entry can outlive the entry: not the closed tabs', and not the
+    // ones a surviving trail just lost, which hold the file's bytes just the same.
+    let kept = |(tab, document): &Entry| !closing.contains(tab) && !document.in_file(path);
+    asm_at.write().forgetting(kept);
+    src_at.write().forgetting(kept);
+    code_at.write().forgetting(kept);
+    {
+        // A source-driven tab stands, but a symbol it chose out of this file is let go:
+        // the line beside the choice is what survives a close, and the next ask answers
+        // out of what is left.
+        let mut driven = driven.write();
+        driven.release(path);
+        driven.forgetting(kept);
+    }
 
-    let remaining = history.peek().retaining(|entry| !entry.in_file(path));
-    history.set(remaining);
+    let remaining = visits.peek().retaining(|entry| !entry.in_file(path));
+    visits.set(remaining);
 
     objects.write().retain(|object| object.path != path);
     // Dropping the entry is what makes the next batch of objects out of this file be
     // dropped and the worker itself stop; see `take_load`.
     loading.write().cancel(path);
-
-    // Through `activate` like every other change of active document. A view landed on is
-    // not a document and the write above has already put the panel on it.
-    if let (true, Some(Tab::Document(next))) = (was_showing, next) {
-        let document = docs.peek().get(next).cloned();
-        activate(open, history, document, Visit::Moved);
-    }
 }
 
-/// Open `target` on `at`: activate it, and pick the line out in the source pane with
-/// both panes owed the scroll -- at once when the document is already on top, since
-/// `activate` then changes nothing and no effect would run, and otherwise as a
-/// [`Landing`] for the change of document to turn into the run. A visit either way, as
-/// any opening from a list is.
+/// Open `target` on `at`: open it the way `reach` says, and pick the line out in the
+/// source pane with both panes owed the scroll -- at once when the document is already
+/// on top, since opening then changes nothing and no effect would run, and otherwise as
+/// a [`Landing`] for the change of document to turn into the run.
 pub(crate) fn land(
     open: Open,
-    history: State<History>,
+    visits: State<Visits>,
     marked: State<Marks>,
     mut landing: State<Option<Landing>>,
     target: Document,
     at: LinePos,
-) {
+    reach: Reach,
+) -> Option<DocId> {
     if open.active().as_ref() == Some(&target) {
         mark_line(marked, at.file, at.line, Owed::BOTH);
-        return;
+        return open.active_id();
     }
 
     landing.set(Some(Landing {
         tab: target.clone(),
         at,
     }));
-    activate(open, history, Some(target), Visit::Went);
+    open_document(open, visits, target, reach)
+}
+
+/// Raise the open tab `id` on `at`: what a Locations row does for the source-driven tab
+/// its question was asked from, whose assembly side it has just chosen for. The tab is
+/// already open and shows the file, so this is a [`raise`] and not an opening -- nothing
+/// is recorded -- with the line picked out the way [`land`] picks it.
+pub(crate) fn land_on(
+    open: Open,
+    marked: State<Marks>,
+    mut landing: State<Option<Landing>>,
+    id: DocId,
+    at: LinePos,
+) {
+    if open.active_id() == Some(id) {
+        mark_line(marked, at.file, at.line, Owed::BOTH);
+        return;
+    }
+    // Bound in a statement of its own: the guard is gone before the writes.
+    let showing = open.docs.peek().get(id).cloned();
+    let Some(tab) = showing else {
+        return;
+    };
+    landing.set(Some(Landing { tab, at }));
+    raise(open, id);
 }
 
 /// The menu a document's tab opens on a right-click.
@@ -376,7 +446,6 @@ pub(crate) fn tab_menu(
 ) -> Menu {
     let ProjectStates {
         open,
-        history,
         asm_at,
         src_at,
         code_at,
@@ -389,9 +458,7 @@ pub(crate) fn tab_menu(
     Menu::new()
         .maybe_child(others.then(|| {
             MenuButton::new()
-                .on_press(move |_| {
-                    close_others(open, history, asm_at, src_at, code_at, driven, keep)
-                })
+                .on_press(move |_| close_others(open, asm_at, src_at, code_at, driven, keep))
                 // "tabs" and not "documents": the strip is what the reader is pointing at,
                 // and a view sharing the panel is a tab this leaves alone.
                 .child("Close other tabs")
@@ -436,7 +503,7 @@ pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
         src_at,
         code_at,
         driven,
-        history,
+        visits,
         ..
     } = states;
 
@@ -444,7 +511,7 @@ pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
         MenuButton::new()
             .on_press(move |_| {
                 close_binary(
-                    objects, loading, open, asm_at, src_at, code_at, driven, history, &path,
+                    objects, loading, open, asm_at, src_at, code_at, driven, visits, &path,
                 )
             })
             // "file" and not "object": the row may be one object of a file or the archive
@@ -604,10 +671,9 @@ pub(crate) fn document_glyph(source: impl Into<ImageSource>) -> Element {
         .into_element()
 }
 
-/// The identity of what a document points at, for keying the row or tab that names it. A
-/// history row pairs it with the entry's index, since a push can shift an entry to another
-/// place in the list. The variant is part of the key so a pointer and a path cannot hash
-/// into one key for two tabs of different kinds.
+/// The identity of what a document points at, for keying the row or tab that names it.
+/// The variant is part of the key so a pointer and a path cannot hash into one key for
+/// two tabs of different kinds.
 #[derive(Hash)]
 pub(crate) enum EntryKey<'a> {
     Object(usize),
@@ -635,7 +701,7 @@ pub(crate) fn entry_key(entry: &Document) -> EntryKey<'_> {
 /// A binary is a **path** throughout the app, so two generations of one file must not be
 /// in the objects list together. The close is therefore first and unconditional -- whether
 /// or not the new build parses, the objects in hand describe bytes that are gone -- and it
-/// takes that file's tabs, their positions and its history entries with it.
+/// takes that file's tabs, their positions and its visits with it.
 pub(crate) fn reopen_binary(states: ProjectStates, path: PathBuf) {
     close_binary(
         states.objects,
@@ -645,7 +711,7 @@ pub(crate) fn reopen_binary(states: ProjectStates, path: PathBuf) {
         states.src_at,
         states.code_at,
         states.driven,
-        states.history,
+        states.visits,
         &path,
     );
 
@@ -654,63 +720,56 @@ pub(crate) fn reopen_binary(states: ProjectStates, path: PathBuf) {
     });
 }
 
-/// A step through the navigation history: the mouse's back and forward buttons, and the
-/// history panel clicking an entry.
+/// A step along the trail of the tab on screen: the mouse's back and forward buttons, and
+/// the toolbar's two chevrons.
 #[derive(Clone, Copy)]
 pub(crate) enum Nav {
     Back,
     Forward,
-    /// Straight to the entry at this index, the one `History::recent` handed the row.
-    To(usize),
 }
 
 impl Nav {
-    /// The entry this step would land on, or `None` when it would not move. What the
-    /// toolbar's two buttons name in their tooltips, and the one place the answer is
-    /// worked out: [`Nav::possible`] is this asked as a question, so a button that is live
-    /// and a step that does something cannot disagree.
-    pub(crate) fn destination(self, history: &History) -> Option<&Document> {
-        let cursor = history.cursor()?;
+    /// The entry this step would land on along `trail`, or `None` when it would not
+    /// move. What the toolbar's two buttons name in their tooltips, and the one place the
+    /// answer is worked out, so a button that is live and a step that does something
+    /// cannot disagree.
+    pub(crate) fn destination(self, trail: &History) -> Option<&Document> {
+        let cursor = trail.cursor()?;
         let index = match self {
             Self::Back => cursor.checked_sub(1)?,
             Self::Forward => cursor + 1,
-            Self::To(index) => (index != cursor).then_some(index)?,
         };
-
-        history.entries().get(index)
-    }
-
-    /// Whether there is an entry to step to.
-    fn possible(self, history: &History) -> bool {
-        self.destination(history).is_some()
+        trail.entries().get(index)
     }
 
     /// Move the cursor and hand back the entry it landed on.
-    fn step(self, history: &mut History) -> Option<Document> {
+    fn step(self, trail: &mut History) -> Option<Document> {
         match self {
-            Self::Back => history.back(),
-            Self::Forward => history.forward(),
-            Self::To(index) => history.jump(index),
+            Self::Back => trail.back(),
+            Self::Forward => trail.forward(),
         }
     }
 }
 
-/// Move the cursor one entry back or forward through the history, and make the entry it
-/// landed on the active document.
-///
-/// The one place the cursor moves. It goes through [`activate`] because the history keeps
-/// entries long after their tab was closed, so going back to one has to reopen a tab.
-pub(crate) fn navigate(open: Open, mut history: State<History>, nav: Nav) {
+/// Move the active tab's cursor one entry back or forward along its trail. The tab is
+/// already on top, so what it shows is the whole of what changes: nothing is opened,
+/// nothing is recorded, and a temporal tab stays temporal -- walking a trail is not
+/// going somewhere new in it.
+pub(crate) fn navigate(open: Open, nav: Nav) {
+    let mut docs = open.docs;
+    let Some(id) = open.active_id() else {
+        return;
+    };
     // Asked before writing: `State::write` notifies whether or not the value changes, and
     // a no-op step has to wake nothing.
-    if !nav.possible(&history.peek()) {
+    let possible = docs
+        .peek()
+        .trail(id)
+        .is_some_and(|trail| nav.destination(trail).is_some());
+    if !possible {
         return;
     }
-
-    // The guard is released at the end of this statement, before `activate` peeks the
-    // history back.
-    let entry = nav.step(&mut history.write());
-    if entry.is_some() {
-        activate(open, history, entry, Visit::Moved);
+    if let Some(trail) = docs.write().trail_mut(id) {
+        nav.step(trail);
     }
 }

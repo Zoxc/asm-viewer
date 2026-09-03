@@ -63,13 +63,15 @@ a spinner, because a sidebar row is one of hundreds and none of the others move.
 **A file row is also how a binary is closed** — right-click opens a `ContextMenu` (which needs the
 `ContextMenuViewer` mounted at the root of `app()`; opening one without it panics) on a single
 "Close file". A member row offers nothing: the unit that closes is the file. `close_binary` is
-composed of three rules from the modules that own them — `Selection::in_file`, `Tabs::close_all`,
-`History::retaining` — plus a fourth for a file that is still arriving (`Loads::cancel`, without
-which the objects still coming out of the worker would put the file back one member at a time), and
-three decisions inside it matter: the selection **follows the tabs**
-rather than degrading (a file takes its objects and their symbols together, so there is nothing to
-fall back to); the history **drops** through the same `History::rebuilt` walk a restore uses, so
-the two cannot drift; and the unit is the **path**, so one file opened twice closes once.
+composed of rules from the modules that own them — `Selection::in_file`, `tabs::landing`,
+`Docs::retain_entries` and `Visits::retaining` — plus one for a file that is still arriving
+(`Loads::cancel`, without which the objects still coming out of the worker would put the file back
+one member at a time), and three decisions inside it matter: a tab **showing** a place in the file
+closes with it, the selection following the tabs rather than degrading (a file takes its objects
+and their symbols together, so there is nothing to fall back to), while every other tab keeps its
+slot and loses the places in the file off its trail, the cursor carried; the record of visits
+**drops** them through the same walk a restore uses, so the two cannot drift; and the unit is the
+**path**, so one file opened twice closes once.
 
 **The Bookmarks list is the reader's own** (`src/ui/bookmarks_view.rs` over `src/bookmarks.rs`;
 `agents/Persistence.md` for where it is saved), where the History is the app's record of where they
@@ -81,8 +83,9 @@ here, since the list holds no `Arc` to forget, and reopening the binary brings a
 without the list having changed. A **dead row is drawn, dimmed, and does nothing**: `tree_name`'s
 dimming, the loading-file-row idiom, with no press or hover handler at all, the way a history
 button with nowhere to go has none; dropping it would be the history's rule, and a reader's own
-list must not shrink behind their back. And a live row's press is `activate(.., Visit::Went)` like
-a Symbols row's, never `navigate`, since a bookmark is a place and not a position in the history.
+list must not shrink behind their back. And a live row's press is `open_document` like a Symbols
+row's — a `Preview` into the temporal tab, a `NewTab` with Ctrl (`reach`, the one rule every
+sidebar row reads) — never `navigate`, since a bookmark is a place and not a position on a trail.
 The row draws the **stored name** even when live — `short_name` of it for a symbol, the whole in the
 tooltip and under the filter, as a History row does — so a row does not change its spelling when
 its binary goes. Right-click offers **Remove bookmark**, by index rather than by place, because a
@@ -123,7 +126,7 @@ and not by reading its head, which was tried and taken out: it made the view a s
 about what an object is, and the parser already has the one that counts. So a press opens
 anything the source cache would read (`files::shows_as_source`: a regular file within
 `source::MAX_SIZE`, asked of the metadata, the one bound so a press cannot open a tab the pane
-would refuse), as `activate(.., Visit::Went)` on a `Document::Source` spelled as **the project
+would refuse), as `open_document` on a `Document::Source` spelled as **the project
 directory joined with each entry's own name, never canonicalised**: `compiled_from` matches a
 file on the exact string `addr2line` renders, `DW_AT_comp_dir` joined with the file entry, so a
 tree-opened file joins with the debug info's — and shares a tab with a companion-opened one —

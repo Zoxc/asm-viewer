@@ -184,7 +184,8 @@ impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let states = use_project_states();
-        let (open, history) = (states.open, states.history);
+        let (open, visits) = (states.open, states.visits);
+        let ctrl = use_consume::<Ctrl>().0;
         let object = self.object.clone();
         let path = self.object.path.clone();
 
@@ -216,14 +217,11 @@ impl Component for ObjectRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 // What pressing an object opens is all of its code as one listing --
-                // the one thing an object has to show that a symbol does not.
+                // the one thing an object has to show that a symbol does not. A row is
+                // a click from outside the panes: a preview, or a tab of its own with
+                // Ctrl.
                 .on_press(move |_| {
-                    activate(
-                        open,
-                        history,
-                        Some(Document::Code(object.clone())),
-                        Visit::Went,
-                    );
+                    open_document(open, visits, Document::Code(object.clone()), reach(ctrl));
                 })
                 // A lone object *is* the file it came out of, so it closes like one. A
                 // member was never opened on its own, and closing one would take the 195
@@ -276,7 +274,8 @@ impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let open = use_open();
-        let history = use_consume::<Hist>().0;
+        let visits = use_consume::<Visited>().0;
+        let ctrl = use_consume::<Ctrl>().0;
         // Consumed, never read: 115k rows subscribed to the bookmarks would re-render the
         // whole list on every bookmark made.
         let bookmarked = use_consume::<Bookmarked>().0;
@@ -309,11 +308,11 @@ impl Component for SymbolRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
-                    activate(
+                    open_document(
                         open,
-                        history,
-                        Some(Document::Assembly(Selection::Symbol(symbol.clone()))),
-                        Visit::Went,
+                        visits,
+                        Document::Assembly(Selection::Symbol(symbol.clone())),
+                        reach(ctrl),
                     );
                 })
                 .on_secondary_down(move |e: Event<PressEventData>| {
@@ -331,20 +330,20 @@ impl Component for SymbolRow {
     }
 }
 
-/// One visited document in the history list. Clicking it moves the history cursor to this
-/// entry rather than recording a new one, which is what `Nav::To` is for.
+/// One visited place in the History list. Clicking it is a click from outside the panes
+/// like any other row's: the place opens in the temporal tab, or the tab already showing
+/// it is raised, and the visit goes to the top of the list.
 #[derive(Clone)]
 struct HistoryRow {
     entry: Document,
-    index: usize,
-    /// Whether the cursor is on this entry, i.e. this is what is on screen.
+    /// Whether this is what the tab on screen shows.
     current: bool,
     key: DiffKey,
 }
 
 impl PartialEq for HistoryRow {
     fn eq(&self, other: &Self) -> bool {
-        self.entry == other.entry && self.index == other.index && self.current == other.current
+        self.entry == other.entry && self.current == other.current
     }
 }
 
@@ -358,14 +357,15 @@ impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let open = use_open();
-        // Consuming does not subscribe -- only reading would, and this row only hands an
-        // index back to `navigate`.
-        let history = use_consume::<Hist>().0;
+        // Consuming does not subscribe -- only reading would, and this row only records
+        // into it.
+        let visits = use_consume::<Visited>().0;
+        let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
-        let index = self.index;
         let text = entry_text(&self.entry);
         let entry = self.entry.clone();
+        let target = self.entry.clone();
 
         let background = if self.current {
             palette().selected_bg
@@ -388,7 +388,9 @@ impl Component for HistoryRow {
                 .overflow(Overflow::Clip)
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |_| navigate(open, history, Nav::To(index)))
+                .on_press(move |_| {
+                    open_document(open, visits, target.clone(), reach(ctrl));
+                })
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(
                         &e,
@@ -434,7 +436,7 @@ impl Component for ObjectsTab {
         // `VirtualScrollView` has to be `PartialEq` and an `Object` is not, while pointer
         // identity compares as a number.
         let selected = match &*use_consume::<Active>().0.read() {
-            Some(Document::Assembly(Selection::Object(object)) | Document::Code(object)) => {
+            Some((_, Document::Assembly(Selection::Object(object)) | Document::Code(object))) => {
                 Some(Arc::as_ptr(object).addr())
             }
             _ => None,
@@ -507,7 +509,7 @@ impl Component for SymbolsTab {
             use_memo(move || Filtered::new(symbols.read().clone(), &filter.read().matcher()));
         let filtered = filtered.read().clone();
         let selected = match &*use_consume::<Active>().0.read() {
-            Some(Document::Assembly(Selection::Symbol(symbol))) => Some(symbol.clone()),
+            Some((_, Document::Assembly(Selection::Symbol(symbol)))) => Some(symbol.clone()),
             _ => None,
         };
         let length = filtered.len();
@@ -544,32 +546,37 @@ pub(crate) struct HistoryTab;
 
 impl Component for HistoryTab {
     fn render(&self) -> impl IntoElement {
-        let history = use_consume::<Hist>().0;
+        let visits = use_consume::<Visited>().0;
+        // The place the tab on screen shows is the row marked, the way the Symbols list
+        // marks its symbol: the record itself has no cursor, the tabs having theirs.
+        let current = use_consume::<Active>()
+            .0
+            .read()
+            .clone()
+            .map(|(_, document)| document);
         let filter = use_state(Filter::default);
-        // A session's history is a handful of entries, so it is filtered where the rows
-        // are built rather than through a memo.
+        // A session's record is a couple of hundred places at most, so it is filtered
+        // where the rows are built rather than through a memo.
         let matcher = filter.read().matcher();
 
-        // `visited` is asked of the whole history rather than of the rows, because an empty
-        // list means two different things -- nowhere has been visited yet, or nothing
-        // visited matches -- and the two are worth different words.
+        // `visited` is asked of the whole record rather than of the rows, because an
+        // empty list means two different things -- nowhere has been visited yet, or
+        // nothing visited matches -- and the two are worth different words.
         let (rows, visited): (Vec<Element>, bool) = {
-            let history = history.read();
-            let cursor = history.cursor();
-            let visited = history.recent().len() > 0;
-            let rows = history
+            let visits = visits.read();
+            let visited = visits.recent().len() > 0;
+            let rows = visits
                 .recent()
                 // The whole name and not the shortened one the row draws: the generic
                 // arguments a tab has no room for are still worth searching for.
-                .filter(|(_, entry)| matcher.matches(&entry_name(entry)))
-                .map(|(index, entry)| {
+                .filter(|entry| matcher.matches(&entry_name(entry)))
+                .map(|entry| {
                     HistoryRow {
                         entry: entry.clone(),
-                        index,
-                        current: cursor == Some(index),
+                        current: current.as_ref() == Some(entry),
                         key: DiffKey::None,
                     }
-                    .key((index, entry_key(entry)))
+                    .key(entry_key(entry))
                     .into()
                 })
                 .collect();
@@ -590,5 +597,15 @@ impl Component for HistoryTab {
                     .into_element(),
             },
         )
+    }
+}
+
+/// How a row in a sidebar list opens its place: a preview in the temporal tab, or, with
+/// Ctrl held, a tab of its own that stays. Peeked, this being asked in a press handler.
+pub(crate) fn reach(ctrl: State<bool>) -> Reach {
+    if *ctrl.peek() {
+        Reach::NewTab
+    } else {
+        Reach::Preview
     }
 }

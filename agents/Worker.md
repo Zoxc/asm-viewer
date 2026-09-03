@@ -115,8 +115,8 @@ not the active document: for a source-driven tab the active document is a file, 
 is the one thing on screen that says which instance its assembly side is on.
 
 **`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at
-its head.** The head is the load-bearing part: nothing is pushed onto the history between two
-clicks in one function, so without it reading down the lines of a generic function would walk
+its head.** The head is the load-bearing part: nothing is recorded between two clicks in one
+function, so without it reading down the lines of a generic function would walk
 across its instantiations. Below the tie-break the order is the crate's own — the lowest-addressed
 symbol of the first object that answered — which is arbitrary and is said to be arbitrary; the
 instance picker above is where a reader says which instance they meant.
@@ -130,7 +130,7 @@ the two places an answer is judged: by the effect, so a closed binary is a quest
 of what is left, and by the task taking answers, so the one already in flight when the file closed
 is not taken either. It lives in `use_analysis_with` rather than in `close_binary` so that a close,
 a rebuild and a project switch are one line instead of three, and because no handler can reach the
-answer in flight. The effect therefore **reads** `Objects` where it only peeks the history: a
+answer in flight. The effect therefore **reads** `Objects` where it only peeks the visits: a
 question asked of a different set of objects is a different question, while the ranking is an input
 to an answer and a visit must not re-ask one. What is deliberately *not* covered: an answer is
 about the objects that were open when it was asked, so a line clicked while a file is still being

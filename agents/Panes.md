@@ -112,23 +112,25 @@ all. Each fact is a `field_row` cut to one line for the reason the names are.
 **Open or shut is the tab's and not the pane's**, which is `Expanded` at the root: both panes are
 mounted afresh for every document, so a `use_state` here would shut the section every time the
 reader looked at another tab, and a setting that undoes itself reads as a bug.
-It is keyed by **`DocId` and not `Document`**, unlike `AsmAt`, `SrcAt` and `Drives` beside it, and
-that is what makes it free: a `DocId` is `Copy + Hash` and holds no `Arc<Object>`, where a document
-does and would have to be forgotten in all three of `close_tab`, `close_others` and `close_binary`
-or a closed binary's bytes would be held for as long as the app ran. Ids are never handed out twice,
-so an entry a closed tab left behind is four bytes of dead weight and can never be taken for another
-tab's -- a reopened tab correctly comes up shut. It is not persisted: a view of a tab, like a
-filter. A pane whose tab the table has no id for draws no triangle rather than one that would do
-nothing, which cannot happen for a mounted pane and is what the headless harnesses see when they
-mount one without opening it.
+It is keyed by **`DocId` alone and not by `Entry`**, unlike `AsmAt`, `SrcAt` and `Drives` beside
+it, and that is what makes it free: a `DocId` is `Copy + Hash` and holds no `Arc<Object>`, where an
+entry's document does and would have to be forgotten in all three of `close_tab`, `close_others`
+and `close_binary` or a closed binary's bytes would be held for as long as the app ran. Ids are
+never handed out twice, so an entry a closed tab left behind is four bytes of dead weight and can
+never be taken for another tab's -- a reopened tab correctly comes up shut. It follows that the
+section stays open or shut along the whole of a tab's trail, a fact about the tab and not about any
+one place on it. It is not persisted: a view of a tab, like a filter. The pane takes its tab's id
+as a prop from `DocumentBody`; a headless harness mounting one with no tab behind it hands it a
+stray id (`DocId::stray`), under which nothing is ever kept.
 
 **A click in a source-driven tab's own file is the only writer of `Driven` inside the panes.**
 A click in a companion file picks the line out and nothing more, and a click in the *assembly*
 pane never reaches that handler at all — which is what stops a listing from re-driving itself. Nothing else changes: the
-active document does not, so nothing is pushed onto the history, the tab already being where the
-reader is. A line is kept per tab rather than one for the window, and it is a `u32` and holds no
-`Arc<Object>`, so it survives its binary being closed and the next ask simply answers out of what
-is left. A right-click on a source row is neither a selection nor a drive: it opens `locate_menu` --
+active document does not, so nothing is pushed onto the tab's trail, the tab already being where
+the reader is. A line is kept per tab *and* place -- an `Entry`, the key the positions use -- rather
+than one for the window or one per file, so a file reached twice along one trail is driven from one
+line and two tabs on one file from two; it is a `u32` and holds no `Arc<Object>`, so it survives
+its binary being closed and the next ask simply answers out of what is left. A right-click on a source row is neither a selection nor a drive: it opens `locate_menu` --
 the line's locations and, inside a function as the file's parse says, the function's instances
 -- both answered in the Locations view (`agents/Worker.md`), whose rows are what choose.
 
@@ -218,7 +220,8 @@ it or the run is dropped with its listing. **And the ask is the run** for a sour
 `use_land` drops both runs with the document and plants the driven line as the source pane's,
 with nothing owed, or coming back to one would show a listing with nothing lit and no reason
 given. None of this is a navigation: the selection does not change and nothing is pushed onto
-the history. `navigate` remains the only path for anything that does. **Both rows do the
+any trail. `open_document` remains the only path for anything that does, and `navigate` the only
+one that moves a cursor. **Both rows do the
 left button and the right in one `pointer_down`**: freya's `on_secondary_down` is
 `on_pointer_down` under another name and an element keeps one handler per event, so the row
 that set both kept the menu and never started its run (`secondary`, `notes/upstream/freya.md`).
@@ -227,29 +230,39 @@ that set both kept the menu and never started its run (`secondary`, `notes/upstr
 it makes.** A row in the Locations panel opens its symbol *and* picks the line out, so
 `Picked::owed` is a pair of flags (`Owed`) rather than an `Option<Pane>`: a click in one pane
 asks the other, a click in neither asks both, and each pane pays its own half -- the source pane
-to its own run, the assembly pane to the pair. Opening is an `activate`, and the change of
-document that makes is exactly what `use_land` answers by dropping both runs -- so the row does
-not pick anything out; it leaves a `Landing` (`Land`, at the root) naming the document and the
-line, and that effect turns it into the source pane's run when the document it names arrives.
-Whichever document arrives spends it, the one it named or another, since a landing left lying
-would pick a line out in a document opened for some other reason later. A row whose symbol is
-already on top picks the line out at once (`documents::land`), `activate` then changing nothing
-and no effect running. **Two doors join the two views** and both go through the same functions. A **Ctrl**-press on a
-label in an object's code opens the symbol's own tab, an `activate` and a visit like any opening
-from a list; a plain press picks the row out like any other, since a label is a row of the
-listing first, though a label's row is a row of no file. Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift`, both kept by
-`ModifierKeys`), a freya pointer event carrying no modifiers, and the label lights as a link only
-while it is held. A Caps Lock the desktop has made into Ctrl names itself Caps Lock in every event,
-so it is learnt from its first release (`ModifierKeys`' doc, `notes/upstream/freya.md`).
+to its own run, the assembly pane to the pair. Opening is an `open_document` -- a `Preview` from
+a row, as every sidebar row's is, or a `NewTab` with Ctrl held (`agents/UI.md` for the three
+reaches) -- and the change of document that makes is exactly what `use_land` answers by dropping
+both runs -- so the row does not pick anything out; it leaves a `Landing` (`Land`, at the root)
+naming the document and the line, and that effect turns it into the source pane's run when the
+document it names arrives. Whichever document arrives spends it, the one it named or another, since
+a landing left lying would pick a line out in a document opened for some other reason later. A row
+whose symbol is already on top picks the line out at once (`documents::land`), the opening then
+changing nothing and no effect running. A row answering a question asked from a source-driven tab
+chooses for that tab instead -- `Located::subject` carries the tab's id beside its file, and the
+choice is written under that entry while the tab still shows the file -- and `land_on` raises the
+tab with the line left as a landing, a move and not a visit, the tab being open already. **Two doors
+join the two views** and both go through the same functions. A **Ctrl**-press on a label in an
+object's code opens the symbol's own tab, a `NewTab` as Ctrl opens one everywhere; a plain press
+picks the row out like any other, since a label is a row of the listing first, though a label's
+row is a row of no file. Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift`,
+both kept by `ModifierKeys`), a freya pointer event carrying no modifiers, and the label lights as
+a link only while it is held. A Caps Lock the desktop has made into Ctrl names itself Caps Lock in
+every event, so it is learnt from its first release (`ModifierKeys`' doc,
+`notes/upstream/freya.md`). **A relocation link and the companion header are clicks inside the
+tab**, and are followed **in place**: pushed onto the tab's trail so the function left is one Back
+away, the way a browser follows a link, and in a tab of their own beside it with Ctrl.
 An instruction's menu offers to show it among its neighbours -- "Show in unified view", offered in
-a symbol's listing and not in the code listing it would open -- which is `show_in_code`: the code
-tab's place is written to `CodeAt` **first**, the order a restore uses, so the pane's first run
-finds it, and when the code tab is already on top that write is what moves the view, the
-place-keeping hook reading the map for exactly this; then `land` with the instruction's line where
-it has one, or a plain `activate` where it has none. Nothing new was added to `Landing` for it: a
-landing is a line, and the address travels as the tab's place. The same menu in the code listing
-offers the door the other way, "Open as symbol" (`open_as_symbol`): the symbol's own tab, landed
-on the row's line where it has one -- so a label is not the only way back. Both listings' menus end
+a symbol's listing and not in the code listing it would open -- which is `show_in_code`, a tab of
+its own: `land` with the instruction's line where it has one, or a plain `open_document` where it
+has none, and then the code tab's place written to `CodeAt` under the entry the open handed back
+-- in the same handler and before any render, so the pane's first run finds it, and after the open
+only because the entry names the tab and a new tab has no id until it is opened; when the code tab
+is already on top that write is what moves the view, the place-keeping hook reading the map for
+exactly this. Nothing new was added to `Landing` for it: a landing is a line, and the address
+travels as the tab's place. The same menu in the code listing offers the door the other way, "Open
+as symbol" (`open_as_symbol`): the symbol's own tab, landed on the row's line where it has one --
+so a label is not the only way back. Both listings' menus end
 with "Bookmark symbol" -- the symbol the row is code of, which in the code listing is the stretch's
 own -- through the same `bookmark_item` the sidebar rows and a tab's header use
 (`agents/Sidebar.md`), worded for a row that is an instruction and not the symbol; with it the menu
@@ -429,7 +442,7 @@ keeps its plain operand, having no row here to be pointed at. Pressing it is `re
 edge's target **and the run a press on that row would have made** — `mark_row`, the row landed on
 alone, of the target's file (`position(edge.to)`), with the Source pane owed the scroll and the
 Assembly pane not, since it has just been given one. It is still **not a navigation**: the
-document does not change and nothing is pushed onto the history, so a Back that undid reading
+document does not change and nothing is pushed onto the trail, so a Back that undid reading
 further down one function would be answering a question nobody asked. It is a selection, though,
 and in both of a selection's senses: the row picked out, which holds for an object with no line
 info at all, and the pair lit on the other side where the target has a line. Arriving at a target

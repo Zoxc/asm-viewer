@@ -1,18 +1,21 @@
-//! Where the reader has been: a browser-style back/forward history over [`Document`].
+//! Where one tab has been: a browser-style back/forward trail over [`Document`], one per
+//! tab. Everywhere the reader has been across every tab is [`crate::visits::Visits`].
 //!
 //! Entries are compared by `Arc` pointer, so entries made before a re-parse never compare
-//! equal to ones made after it. Persisted as [`crate::project::SavedHistory`].
+//! equal to ones made after it. Persisted as [`crate::project::SavedTab`].
 
 use crate::project::Document;
 
-/// The most entries a history ever holds; the oldest are dropped past it.
-const MAX_ENTRIES: usize = 200;
+/// The most entries a trail ever holds; the oldest are dropped past it. Per tab, so it is
+/// modest: every entry is saved with the session, rows and all.
+const MAX_ENTRIES: usize = 50;
 
 /// A list of visited documents plus a cursor into it.
 ///
 /// No two entries are ever equal: [`History::push`] and [`History::restored`] are the only
-/// ways in, and both bump a revisited entry rather than appending a copy.
-#[derive(Clone, Default)]
+/// ways in, and both bump a revisited entry rather than appending a copy. That is what
+/// lets a tab and one of its entries name a place, which its viewing positions are kept by.
+#[derive(Clone, Default, PartialEq)]
 pub struct History {
     entries: Vec<Document>,
     /// In range whenever `entries` is non-empty, and `0` — meaning nothing — while empty.
@@ -143,12 +146,6 @@ impl History {
         (self.cursor < self.entries.len()).then_some(self.cursor)
     }
 
-    /// Every entry with its index, newest first — the order a history panel shows them in.
-    /// The index is what [`History::jump`] takes.
-    pub fn recent(&self) -> impl ExactSizeIterator<Item = (usize, &Document)> + '_ {
-        self.entries.iter().enumerate().rev()
-    }
-
     pub fn can_back(&self) -> bool {
         self.cursor > 0
     }
@@ -171,22 +168,6 @@ impl History {
         self.can_forward().then(|| {
             self.cursor += 1;
             self.entries[self.cursor].clone()
-        })
-    }
-
-    /// Whether [`History::jump`] would move the cursor: `index` has to name an entry, and
-    /// not the one already under the cursor.
-    pub fn can_jump(&self, index: usize) -> bool {
-        index < self.entries.len() && index != self.cursor
-    }
-
-    /// Put the cursor on the entry at `index` and hand it back, or `None` when
-    /// [`History::can_jump`] is false. Nothing in front of it is dropped, so jumping back
-    /// leaves the newer entries to come back to.
-    pub fn jump(&mut self, index: usize) -> Option<Document> {
-        self.can_jump(index).then(|| {
-            self.cursor = index;
-            self.entries[index].clone()
         })
     }
 }

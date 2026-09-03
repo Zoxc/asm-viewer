@@ -154,40 +154,32 @@ one item per part, so the unfinished half stays visible.
   the top. A remembered row still wins, and a symbol whose debug info places it nowhere
   opens at the top of the file as before.
 - [x] Mouse buttons can navigate history so you can go back and forth.
-- [ ] Back and forward should be **per tab**, the way a browser's are: each tab keeps its own
-  trail, the mouse buttons walk the trail of the tab on screen, and going back in one tab does
-  not move another. With it, two rules that only make sense together: a click that navigates —
-  a relocation target in the assembly, a row in a sidebar list — **stays inside the current
-  tab**, replacing what it shows, and **Ctrl+click opens a new tab** instead; and the History
-  panel stays **global**, one record of everywhere the reader has been across every tab, since
-  that is what makes it a way of finding somewhere you were rather than a second copy of a
-  tab's own trail.
-  What is in the way is that today **a tab *is* its document**. `Docs` maps a tab's id to one
-  `Document`, the active document is that table read through the panel's active tab, and both
-  viewing-position maps are keyed by the document. A tab that shows several documents in turn
-  means the table holds a *trail and a cursor* per tab, with the document becoming the trail's
-  current entry. The tab id itself survives that unchanged, which is the one piece already
-  built: a dock tab has been a handle rather than a document since documents moved into the
-  dock.
-  Four things to decide before starting, none of them obvious. What the two `Positions` maps
-  are keyed by once one tab shows many documents — per tab, or per tab *and* document, which is
-  the difference between a tab remembering one scroll position and remembering one per place it
-  has been. What `session.toml` saves per tab: the current entry alone, which is what it holds
-  now, or the whole trail, which makes back work across a restart and makes the file bigger by
-  a factor of however far the reader wandered. What `close_binary` does with a tab whose trail
-  is *partly* in the closing file, where today the tab simply goes with its document. And what
-  a click in the History panel means once tabs have trails — go there in the current tab, or
-  raise the tab that already shows it.
-  It also settles the temporal-tab item under *Panels and tabs* from the other direction: that
-  one exists because walking a symbol list leaves a tab behind per click, and a click that
-  navigates in place leaves none. Decide the two together rather than building both.
+- [x] Back and forward are **per tab**, the way a browser's are: each tab keeps its own trail
+  (`Docs` maps a tab's id to a `History` and the document it shows is the trail's current
+  entry), the mouse buttons and the chevrons walk the trail of the tab on screen, and going
+  back in one tab does not move another. With it, the rules that only make sense together. A
+  click **inside** a tab — a relocation link, the companion header — navigates **in place**,
+  replacing what the tab shows and leaving the place left one Back away; Ctrl+click opens a
+  new tab beside the current one instead, as do "Open as symbol", "Show in unified view" and
+  the unified view's Ctrl-press on a label. A click **outside** a tab — a row in Symbols,
+  Objects, Bookmarks, Locations, Files or History — opens its place in the **temporal** tab
+  (below), and a tab already showing the place is raised instead. The History panel stays
+  **global**, one record of everywhere the reader has been across every tab with no cursor of
+  its own (`Visits`), the row of the place the tab on screen shows marked, since that is what
+  makes it a way of finding somewhere you were rather than a second copy of a tab's own trail.
+  The four decisions: the two `Positions` maps and `Driven` are keyed **per tab and place**
+  (`Entry`), so Back restores the rows each side was left at; `session.toml` saves **the whole
+  trail** per tab, capped at 50, so Back works across a restart; `close_binary` closes a tab
+  whose *current* place is in the file and thins every other trail, the cursor carried; and a
+  click in the History panel is a click from outside, into the temporal tab. New tabs open
+  beside the tab on screen.
 - [x] Add `<`, `>` navigation buttons to the top bar. Two chevrons at the left of the toolbar,
   driving the same `navigate` the mouse's side buttons do, so every rule about tabs, selection
   and history holds without a second spelling of it. Each names where it would land in its
   tooltip, and each is **dimmed rather than hidden** when there is nothing that way: the pair
   keeps its place under the pointer, and a reader who has been nowhere yet can still see it is
-  there. They read `Hist`, which is what repaints them as entries appear and as the cursor
-  moves.
+  there. They read `Active` and the tab table, which is what repaints them as the tab
+  changes, as its trail grows and as its cursor moves.
 - [ ] A file search dialog on Ctrl+P: type part of a path and open the file it names, the
   way an editor's quick-open does.
 
@@ -497,9 +489,9 @@ one item per part, so the unfinished half stays visible.
 - [x] History panel on the bottom left with recent functions.
 - [x] The history panel also lists recent source files. It falls out of the history recording
   *documents*: a visited file is an entry like any function, spelt by its own name and wearing
-  the same kind icon its tab does. The recording rule changed with it — the push moved into
-  `activate`, which is told why it is being called, so opening a document or going to one is a
-  visit and switching to a tab that is already open is not.
+  the same kind icon its tab does. The recording rule changed with it — the record is written
+  by `open_document` alone, so opening a document or going to one is a visit and switching to a
+  tab that is already open, or walking a tab's trail, is not.
 - [x] Don't insert duplicate history entries, bump existing ones instead.
 - [ ] A tab kind for a file, so an object or an archive can be opened and read about. Today
   a row in the Objects list can only be expanded or closed, and everything the parse learnt
@@ -639,10 +631,13 @@ one item per part, so the unfinished half stays visible.
 - [ ] Let the views close — Project, Settings, the Scratchpad and the rest — and add a menu at
   the top left of the window to reopen them. Today a view has no × because there is no way back
   once it is closed; the menu is that way back, so the × can come.
-- [ ] Selecting a symbol in a view opens a "temporal" tab when the symbol is not already open
-  in a tab: one preview tab reused by the next such selection, so walking down a list does
-  not leave a tab behind per click. What promotes it into a tab that stays is a design
-  decision for the step that builds it.
+- [x] Selecting a symbol in a view opens a "temporal" tab when the symbol is not already open
+  in a tab: one preview tab reused by the next such selection — each selection pushed onto its
+  trail, so Back inside it walks the rows clicked — so walking down a list does not leave a tab
+  behind per click. It opens beside the tab on screen, is drawn with an **italic** name and
+  stays in its slot. What promotes it into a tab that stays: Ctrl+click on the place it shows,
+  a double-click on its header, or a link followed in place inside it; Back and Forward do not.
+  It is saved with the session as the tab it is, flag and all.
 - [x] Close the other tabs from a tab's context menu. A right-click on a document's tab offers
   "Close other tabs", which keeps the tab it was opened on and closes every other document in
   the panel; the panel lands on the kept tab when what was on screen is among the ones closing,
@@ -733,9 +728,9 @@ one item per part, so the unfinished half stays visible.
   history and the active document already use, so the reader's own interleaving of functions
   and files survives a restart. Coming back goes through the functions that hold the tab
   invariants rather than writing the list, and the ordering is load-bearing — the tabs are
-  opened before the active one, or `activate` appends it at the end of the strip instead of
-  finding it in place. An assembly-driven tab that no longer resolves is dropped, the way a
-  history entry is; a source file that is no longer on disk still comes back, because the
+  opened before the active one, or `open_document` puts it beside the tab on screen instead of
+  finding it in place. An assembly-driven place that no longer resolves is dropped off its
+  trail, the way a visit is; a source file that is no longer on disk still comes back, because the
   pane's own "Source file not found" is the right answer and dropping it would silently lose
   a file the reader had open.
 - [x] Saves a viewing position per tab. Each open tab carries the row *each of its two sides*

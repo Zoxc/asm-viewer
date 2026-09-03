@@ -66,9 +66,10 @@ stops the walk up the ancestors, which for an event that does not bubble — a m
 leave, a global, a capture (`name.rs:248-254`) — is nothing at all.
 
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
-`use_consume`: `Objects`, `Active` (the active `Document`), `Open` (the open tabs),
-`AsmAt`/`SrcAt` (where each *side* of each of those tabs was left), `CodeAt` (where each code
-tab was left, as an address), `Hist`, `Bookmarked` (the project's bookmarks, in their saved
+`use_consume`: `Objects`, `Active` (the active tab and the `Document` it shows), `Open` (the open
+tabs and the trail behind each), `AsmAt`/`SrcAt` (where each *side* of each place on each of
+those trails was left), `CodeAt` (where each code tab's places were left, as addresses),
+`Visited` (everywhere the reader has been), `Bookmarked` (the project's bookmarks, in their saved
 shape), `Proj` (which project all of that belongs to), `Loading` (the files on their way into
 `Objects`), `Marked` (each pane's picked-out run, and what it owes the other) with `Shift`
 and `Ctrl`, `Land` (a line to pick out the moment a document arrives), `CodeRows` (the section
@@ -101,23 +102,30 @@ functions and `Files`/`Shown` for files — and the merge is what made the histo
 visited file and the session able to keep the strip's interleaved order.
 
 **`Active` is a derivation, not a state.** What is open is `Open { dock, docs }`: the content
-area's dock, whose **document panel**'s `tabs` vec *is* the list of open documents in the reader's
-own order, and `Docs`, the table saying which `Document` each tab's `DocId` stands for. There is no
-second list and no cursor — the active document is that panel's active tab read through the table,
-which is the whole of `active_document`, and `open_documents` is the same walk for the list. `Docs`
-holds no order at all; membership is the one thing the two share, and it is an invariant the three
-functions keep and a test asserts: a document's tab and its table entry are made together and
-closed together.
+area's dock, whose **document panel**'s `tabs` vec *is* the list of open tabs in the reader's own
+order, and `Docs`, the table holding the **trail** behind each tab's `DocId` — every place the
+tab has shown, oldest first, with a cursor on the one it shows now (`History`, one per tab). A tab
+is a trail and not a document: a link followed inside it pushes onto the trail, Back and Forward
+move its cursor, and what the tab shows is `Docs::get`, the entry under the cursor. There is no
+second list — the active tab is the panel's active tab read through the table, which is the whole
+of `active_tab`, and `open_ids` is the same walk for the list. `Docs` holds no order at all;
+membership is the one thing the two share, and it is an invariant the closers keep and a test
+asserts: a tab and its trail are made together and closed together. One tab may be the
+**temporal** one (`Docs::temporal`), the preview a sidebar row opens its place in and the next row
+reuses; it is a tab like any other with one flag on it, told apart by its name being italic.
 
 `Active` is a `Memo` over the two, because the dock notifies on every layout change and a reader
 dragging a split must not re-render every pane that draws a document — `Memo` writes with
-`set_if_modified`, so a drag that changed no document wakes nothing. It is therefore **a beat
+`set_if_modified`, so a drag that changed no document wakes nothing. It yields the **id and the
+document as one pair** (`Entry`), out of one read of both states: the driven line and the viewing
+positions are kept per tab *and* place, and an id read a beat apart from the document would pair
+another tab's for that beat, which the worker would answer with a re-ask. It is therefore **a beat
 behind**, a memo being recomputed by a task woken on a notify. That is right for anything that
-*renders* and wrong for anything that must be true inside one event handler, so `activate`,
-`close_tab`, `close_others`, `close_binary` and the save observer call `active_document` on the
-states directly and never read the memo. `use_kept_position` asks `Docs` for the same reason: it decides whether to
-write a row down for a tab that may have just been closed, and a memo could still be reporting it
-open during exactly that run.
+*renders* and wrong for anything that must be true inside one event handler, so `open_document`,
+the closers and the save observer call `active_tab` on the states directly and never read the
+memo. `use_kept_position` asks `Docs` for the same reason: it decides whether to write a row down
+for a place that may have just been closed or dropped off its trail, and a memo could still be
+reporting it there during exactly that run.
 
 `Active` being `None` means two things and deliberately does not distinguish them: nothing is open,
 or **the tab on top of the document panel is a view**. Making Settings the active tab therefore
@@ -126,13 +134,27 @@ a restart with a view on top restores every tab and shows none of them. That is 
 derivation, and it was taken over the alternative, which is remembering the last document that was
 active there: memory rather than a reading of the dock, and the second source of truth back again.
 
-The invariant — the active document is one of the open tabs, or `None` — is held by four functions
-and nothing else: `activate`, `close_tab`, `close_others`, `close_binary`. **Every** site that would *open* a
-document calls `activate`, `navigate` included, because the history keeps an entry long after its
-tab was closed; pressing a tab needs none of them, freya's own header wrapper setting the panel's
-active tab, which *is* the change. `Selection` itself has **no "nothing" variant**: having none open
-is an absent one, which is the only spelling that stays honest once a selection is something a tab
-can hold.
+The invariants — the active tab is one of the open tabs, or `None`; a tab and its trail are made
+and closed together — are held by six functions and nothing else: `open_document`, `raise`,
+`navigate`, `close_tab`, `close_others`, `close_binary`. **Every** site that would *open* a
+document calls `open_document` with a `Reach`, which is what the click that opened it says and
+nothing about the state can: **`InPlace`** from inside the tab on screen (a relocation link, the
+companion header), pushed onto that tab's trail so the place left is one Back away; **`NewTab`**
+beside the tab on screen in a tab that stays (Ctrl+click on anything, a menu item, the unified
+view's Ctrl-press on a label); **`Preview`** from outside the panes (a sidebar row), into the one
+temporal tab, pushed onto its trail so Back inside it walks the rows clicked, or a new temporal tab
+where there is none. Under every reach a tab already showing the place is **raised** instead, the
+one on screen preferred where two show it — `NewTab` promotes the temporal one, since what was
+asked for is a tab of this place that stays; `Preview` promotes nothing — and every opening is
+recorded in `Visited`. **What promotes** the temporal tab: `NewTab` on the place it shows, a link
+followed in place inside it (the reader is reading in it), or a double press on its header;
+`navigate` never does, walking a trail not being going somewhere new in it. `raise` is the move
+between places already open — the strip's menu, the neighbour a close lands on, a restored session
+— and records nothing; pressing a tab needs none of them, freya's own header wrapper setting the
+panel's active tab, which *is* the change. `Selection` itself has **no "nothing" variant**: having
+none open is an absent one, which is the only spelling that stays honest once a selection is
+something a tab can hold. A new tab goes in **after the tab on screen** (`show_document`, through
+freya's `insert_tab`), the way a browser opens a link, and at the end when a view is on top.
 
 **Layout** is a toolbar over a `ResizableContainer`: a `PanelSize::px(300.)` sidebar and a
 `PanelSize::percent(100.)` content pane, mixing the two sizing modes deliberately so the sidebar
@@ -147,10 +169,12 @@ its right, held apart by a `Size::flex(1.0)` gap under `Content::Flex` — measu
 controls left over, where a `Size::fill()` gap would claim the bar and push them off its end. The
 pair sits at the corner so it stays under the same one however many neighbours Open grows.
 `NavButton` calls the same `navigate` the mouse's side buttons do — a second spelling of
-the step would be a second set of rules about tabs, selection and recording — and **it reads
-`Hist` rather than peeking it**, which
-is the whole of how the pair stays current: a visit pushed anywhere, a close that drops entries and
-every move of the cursor, the one the button itself just made included, repaints both. A button
+the step would be a second set of rules about tabs, selection and recording — and both walk **the
+trail of the tab on screen** and no other. **It reads `Active` and the table rather than peeking
+them**, which is the whole of how the pair stays current: a switch of tab, a push onto any trail,
+a close that drops entries and every move of a cursor, the one the button itself just made
+included, repaint both. `Active` and not the dock, or the pair would repaint on every drag of a
+split, which is the whole reason `Active` is a memo. A button
 with nothing in its direction is **dimmed rather than hidden**, the first disabled drawing in this
 app: hiding it would slide the other one under the pointer, and a reader who has been nowhere yet
 would never learn the pair is there. Disabled is the whole of the drawing — no hover wash, no press
@@ -210,9 +234,13 @@ A document's header is `chip` — the same element the content area's own strip 
 × included. **Nothing in it activates the tab**: freya wraps a header in a `DropZone` around a
 `rect().on_press(set_active)` around a `DragZone`, so pressing it makes it the panel's active tab
 and therefore the active document. That is also why the × must `stop_propagation`, or a close would
-first switch to the tab it is closing. The × is drawn for documents only — the views are furniture,
-one of a kind, with no way back once closed, where a document is always reachable again from the
-symbol list or the history.
+first switch to the tab it is closing — and why the header's own press handler, which promotes the
+temporal tab on a **double press** (`EventsCombos::pressed`, freya's own count of 500 ms and 5 px,
+which nothing else on the header asks), must not: the first press still has to reach the wrapper.
+The temporal tab is told from one that stays by its name being **italic** (`font_slant`) and by
+nothing else, the header reading the flag out of the table beside the document. The × is drawn for
+documents only — the views are furniture, one of a kind, with no way back once closed, where a
+document is always reachable again from the symbol list or the History panel.
 
 **The × is a control of its own**, `TabClose`, and a component rather than another line of
 `chip` for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the
@@ -308,7 +336,7 @@ so a drag means the same thing either way round.
 Step 1's amendment — it used to end at "in a binary" — and everything below it is unchanged, so
 decide nothing about it again. The document panel holds `Document`s and never anything else, and
 that is what lets five separate things work without a case each: the Assembly *and* Source panes both
-render "the active tab", the history records it, `SavedDocument::from_document`/`::resolve` write
+render "the active tab", the record of visits holds it, `SavedDocument::from_document`/`::resolve` write
 it down and find it again after a restart, `close_binary` knows which tabs a closing file takes
 with it, and `entry_text` knows what to call it. A project view, the settings page and a
 scratchpad's editor are none of that: they resolve against no object, they are no file on disk the
@@ -328,16 +356,23 @@ persisted, so a view is **explicitly excluded** from the saved tabs and `SavedDo
 answer for it. What a scratchpad *builds* needs no rule at all — the artifact goes through
 `open_files` like any other binary, and its functions are ordinary tabs.
 
-**Each tab remembers where each of its sides was left.** A pane has one `ScrollController` and
-shows one tab at a time, so left alone it hands the tab arriving whatever offset the one leaving
-had. `AsmAt`/`SrcAt` are two root `Positions` maps beside `Open`, **both keyed by the `Document`**
-— so an entry means "this side of this tab" for exactly as long as the tab is open — and
-`use_kept_position` is the whole of the behaviour, called once by `InstructionList` and once by
-`SourceList`. Which tab a listing's row is filed under is `asked_of` the question that listing
-answers, never the tab the app is showing: while the worker catches up the pane is drawing the one
-being left, and for a source-driven tab the question's tab is the file's and not the resolved
-symbol's, which is very likely not open at all. Keying the source side by the *file*, which is what the Source pane's own strip did,
-made two functions compiled from one file share a position they have no reason to share. What is
+**Each place on each tab's trail remembers where each of its sides was left.** A pane has one
+`ScrollController` and shows one tab at a time, so left alone it hands the tab arriving whatever
+offset the one leaving had. `AsmAt`/`SrcAt` are two root `Positions` maps beside `Open`, **both
+keyed by an `Entry`** — the tab's `DocId` and a `Document` on its trail, so an entry means "this
+side of this place on this tab" for exactly as long as the tab is open and the place is on its
+trail, and going Back comes back to the rows that were left — and `use_kept_position` is the whole
+of the behaviour, called once by `InstructionList` and once by `SourceList`, each handed its tab's
+id as a prop from `DocumentBody`. Which place a listing's row is filed under is `asked_of` the
+question that listing answers, never the place the app is showing: while the worker catches up the
+pane is drawing the one being left, and for a source-driven tab the question's place is the file
+and not the resolved symbol, which is very likely on no trail at all. Navigating in place is not a
+switch of tab: `DocumentBody` reads the table, so a push re-renders it and the panes are handed
+the new document as a prop with their controllers kept, and the hook's switching arm files the
+row of the place left under that place's own entry (still on the trail, so still `contains`) before
+putting the arriving one back. Keying the source side by the *file*, which is what the Source
+pane's own strip did, made two functions compiled from one file share a position they have no
+reason to share. What is
 kept is a **row**, clamped to what the tab holds *now*, so a rebuilt binary or a shortened file
 cannot come back past the end. A tab nothing is remembered for opens at an **opening row** the
 caller hands in — `0` for the Assembly pane, whose first row is the symbol's own first line, and
@@ -357,15 +392,17 @@ owed at once — a Locations row opens a symbol on a line, so the tab changes an
 is owed a reveal — and two effects' scrolls land in whichever order the runtime wakes them; with
 the reveal first, it had marked itself made by the time the kept row was put over it, which reset
 both panes to the top. One effect has one order, and when a reveal scrolls, the effect wakes on
-that scroll and records where it landed. `close_tab`/`close_others`/`close_binary` forget both of a tab's positions with the tab, which is
-not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into — and the hook is
-handed the tab list precisely so that the run *after* a close, still holding the tab that has gone,
-cannot put it straight back. `close_tab` forgets the tab's driven line with them, which *is*
-tidiness: a `Document::Source` key holds no object, so nothing is being held up.
+that scroll and records where it landed. `close_tab`/`close_others`/`close_binary` forget every
+position of a tab's entries with the tab, by id, and `close_binary` forgets those of the entries it
+takes off the surviving trails too, which is not tidiness: an `Assembly` entry holds the
+`Arc<Object>` it points into — and the hook is handed `Docs::contains` precisely so that the run
+*after* a close, still holding the place that has gone, cannot put it straight back. The closers
+forget the driven lines with them, which *is* tidiness: a `Source` key holds no object, so nothing
+is being held up.
 
 **A code tab's place is an address, in the same map type.** The listing of an object's whole
 code is counted afresh with every answer that lands (`agents/Panes.md`), so a row there means
-nothing for long; `CodeAt` is a `Positions<Document, Spot>` — the map generalised over its value,
+nothing for long; `CodeAt` is a `Positions<Entry, Spot>` — the map generalised over its value,
 `row`'s clamp being the one rows-only answer — holding the placed address at the top of the pane
 and how many rows past that address's own row it was, a stretch's header, its labels and its first
 instruction all sitting at one address. It is forgotten in the three closers with the other two

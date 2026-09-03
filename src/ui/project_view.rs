@@ -256,7 +256,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         src_at,
         code_at,
         driven,
-        history,
+        visits,
         bookmarks,
     } = states;
 
@@ -271,15 +271,22 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                 // The dock and the table rather than `Active`, which is a memo and so a
                 // beat behind.
                 let (dock, docs) = (open.dock.read(), open.docs.read());
+                let tabs: Vec<(DocId, &History, bool)> = open_ids(&dock)
+                    .into_iter()
+                    .filter_map(|id| {
+                        docs.trail(id)
+                            .map(|trail| (id, trail, docs.temporal() == Some(id)))
+                    })
+                    .collect();
                 Session::from_state(
                     &objects,
-                    &open_documents(&dock, &docs),
+                    &tabs,
                     &asm_at.read(),
                     &src_at.read(),
                     &code_at.read(),
                     &driven.read(),
                     active_document(&dock, &docs).as_ref(),
-                    &history.read(),
+                    &visits.read(),
                 )
             },
         );
@@ -319,16 +326,17 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates) {
     });
 }
 
-/// Put a project's binaries, tabs, active document and history on screen. Shared by the
+/// Put a project's binaries, tabs, active document and visits on screen. Shared by the
 /// two things that do a restore -- the app starting and a switch -- so the second cannot
 /// drift from the first. Every step degrades silently.
 ///
-/// Two orderings are load-bearing. **Tabs before the active document**: `activate` opens
-/// what it cannot find, so restoring the active one first would leave its tab at the end
-/// of the strip. **The rows go into the two `Positions` maps before the tabs are
-/// opened**: a pane puts its view back when it notices the tab it is showing has
-/// changed, so a row arriving after the `activate` arrives after the only moment
-/// anything looks at it.
+/// Two orderings are load-bearing. **Tabs before the active document**: `open_document`
+/// opens what it cannot find, so restoring the active one first would leave its tab out
+/// of place in the strip. **The rows go into the `Positions` maps before each tab is
+/// shown**: a pane puts its view back when it notices the tab it is showing has changed,
+/// so a row arriving after the tab is on screen arrives after the only moment anything
+/// looks at it. A tab's trail is opened whole and its rows go in per entry, so Back
+/// after a restart comes back to the rows that were left.
 fn restore_project(states: ProjectStates, project: Project, session: Session) {
     let ProjectStates {
         objects,
@@ -338,7 +346,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         mut src_at,
         mut code_at,
         mut driven,
-        history,
+        visits,
         ..
     } = states;
 
@@ -352,16 +360,16 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         // a half-filled list would drop the tabs whose object had not landed yet.
         open_binaries(objects, loading, project.binaries.clone()).await;
 
-        let (objects, mut history) = (objects, history);
+        let (objects, mut visits) = (objects, visits);
         // Nothing opened: leave the app empty *and* leave the file alone.
         if objects.peek().is_empty() {
             return;
         }
 
         // Resolved against everything now loaded rather than just what this load
-        // All three computed before any is set, so no read guard is live when anything
-        // is notified.
-        let (restored_history, restored_tabs, restored_active) = {
+        // produced. All three computed before any is set, so no read guard is live when
+        // anything is notified.
+        let (restored_visits, restored_tabs, restored_active) = {
             let loaded = objects.read();
             (
                 session.resolve_history(&loaded),
@@ -370,31 +378,44 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
             )
         };
 
-        // The history first, so the `Visit::Went` below has a cursor to dedup against.
-        history.set(restored_history);
-        // Where each side of each tab was left, and what drove it, go in before the tab
-        // is opened. The line for the same reason the rows are: a pane looks at what it
-        // has been told exactly once, when it notices the tab it is showing has changed.
-        {
-            let (mut asm, mut src, mut from) = (asm_at.write(), src_at.write(), driven.write());
-            let mut places = code_at.write();
-            for tab in &restored_tabs {
-                asm.remember(tab.document.clone(), tab.asm_row);
-                src.remember(tab.document.clone(), tab.src_row);
-                if let Some(line) = tab.line {
-                    from.remember(tab.document.clone(), line);
-                }
-                if let Some(address) = tab.address {
-                    places.remember(tab.document.clone(), Spot { address, rows: 0 });
+        // The record first, so the opening below finds the active place already at its
+        // top and records nothing over it.
+        visits.set(restored_visits);
+        let (mut dock, mut docs) = (open.dock, open.docs);
+        for tab in restored_tabs {
+            // The trail whole, in a statement of its own so the guard is gone before
+            // the maps are written.
+            let id = docs.write().open_trail(tab.trail, tab.temporal);
+            let Some(id) = id else {
+                continue;
+            };
+            // Where each side of each place was left, and what drove it, go in before
+            // the tab is shown. The line for the same reason the rows are: a pane looks
+            // at what it has been told exactly once, when it notices the place it is
+            // showing has changed.
+            {
+                let (mut asm, mut src, mut from) = (asm_at.write(), src_at.write(), driven.write());
+                let mut places = code_at.write();
+                for entry in tab.entries {
+                    let key = (id, entry.document);
+                    asm.remember(key.clone(), entry.asm_row);
+                    src.remember(key.clone(), entry.src_row);
+                    if let Some(line) = entry.line {
+                        from.remember(key.clone(), line);
+                    }
+                    if let Some(address) = entry.address {
+                        places.remember(key, Spot { address, rows: 0 });
+                    }
                 }
             }
-        }
-        for tab in restored_tabs {
             // Reopening a tab is not visiting it.
-            activate(open, history, Some(tab.document), Visit::Moved);
+            dock.write().show_document(Tab::Document(id));
         }
-        // The document the app lands on is a place it went.
-        activate(open, history, restored_active, Visit::Went);
+        // The document the app lands on is a place it went: the tab showing it is
+        // raised, or -- degraded to its object, say -- it opens in a tab of its own.
+        if let Some(active) = restored_active {
+            open_document(open, visits, active, Reach::NewTab);
+        }
     });
 }
 
@@ -402,9 +423,9 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
 /// functions that hold the invariants and never by writing the lists.
 ///
 /// A closing binary deliberately leaves source-driven tabs standing, so they are closed
-/// here; the history is emptied outright, which is the one thing no walk reaches. The
-/// bookmarks are not touched: they are the file's content, and the project coming in sets
-/// them the way it sets the name.
+/// here; the record of visits is emptied outright, which is the one thing no walk
+/// reaches. The bookmarks are not touched: they are the file's content, and the project
+/// coming in sets them the way it sets the name.
 pub(crate) fn clear_project(states: ProjectStates) {
     let ProjectStates {
         objects,
@@ -414,7 +435,7 @@ pub(crate) fn clear_project(states: ProjectStates) {
         src_at,
         code_at,
         driven,
-        history,
+        visits,
         ..
     } = states;
 
@@ -427,18 +448,18 @@ pub(crate) fn clear_project(states: ProjectStates) {
     let binaries = project::binaries(&objects.peek());
     for path in binaries {
         close_binary(
-            objects, loading, open, asm_at, src_at, code_at, driven, history, &path,
+            objects, loading, open, asm_at, src_at, code_at, driven, visits, &path,
         );
     }
 
-    let remaining = open.documents();
-    for tab in &remaining {
-        close_tab(open, history, asm_at, src_at, code_at, driven, tab);
+    let remaining = open.ids();
+    for id in remaining {
+        close_tab(open, asm_at, src_at, code_at, driven, id);
     }
 
-    // And the history outright, which neither walk above does.
-    let mut history = history;
-    history.set(History::default());
+    // And the record outright, which neither walk above does.
+    let mut visits = visits;
+    visits.set(Visits::default());
 }
 
 /// Leave the project on screen and open the one `id` names in its place.

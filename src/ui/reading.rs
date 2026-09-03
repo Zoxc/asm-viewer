@@ -172,13 +172,13 @@ impl Reading {
 /// it too. The window goes with it, so nothing is asked for an object that is not on
 /// screen.
 pub(crate) fn use_reading_of(
-    active: Memo<Option<Document>>,
+    active: Memo<Option<Entry>>,
     objects: State<Vec<Arc<Object>>>,
     mut reading: State<Reading>,
     mut window: State<Option<CodeAsk>>,
 ) {
     use_side_effect(move || {
-        let active = active.read().clone();
+        let active = active.read().clone().map(|(_, document)| document);
         let open = objects.read();
         let wanted = match active {
             Some(Document::Code(object)) if open.iter().any(|o| Arc::ptr_eq(o, &object)) => {
