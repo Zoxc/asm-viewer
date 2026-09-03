@@ -199,9 +199,9 @@ pub struct Section {
     pub symbols: Vec<u64>,
 
     /// The address ranges the file's own unwind table states for the functions in this
-    /// section — an x86-64 PE's `.pdata`, out of [`unwind::entries`] — sorted by start, each
-    /// start once, ends clamped to the section's bytes. Empty for every other kind of file.
-    /// What [`SymbolData::extent`] answers from first.
+    /// section — an x86-64 PE's `.pdata`, an ELF's `.eh_frame`, out of [`unwind::entries`]
+    /// — sorted by start, each start once, ends clamped to the section's bytes. Empty for a
+    /// file with no table read. What [`SymbolData::extent`] answers from first.
     pub unwind: Vec<Range<u64>>,
 
     /// Whether the file marks this section as holding code (`SectionKind::Text`). Every
@@ -271,8 +271,8 @@ const SECTION_ALIGNMENT: u64 = 16;
 /// it is treated as having said nothing. Not a claim about how long a function can be — five
 /// times the largest in any sample here — but the point past which a sparse export table's
 /// derivation is certainly describing something else, at megabytes of decoding per redraw.
-/// On an x86-64 PE the unwind table now states where a function ends and the cap reaches
-/// only a symbol no entry covers; it stays for an ELF or an ARM64 image.
+/// Where the unwind table states where a function ends — an x86-64 PE, an ELF with an
+/// `.eh_frame` — the cap reaches only a symbol no entry covers; it stays for the rest.
 const MAX_DERIVED_SIZE: u64 = 1 << 20;
 
 #[derive(Debug)]
@@ -358,7 +358,7 @@ impl SymbolData {
     /// ([`unwind_extent`](Self::unwind_extent)): the image's statement, to its loader, of
     /// the very bytes the unwinder covers, so neither the estimate nor its cap bounds it —
     /// only the next symbol does, for the listing's sake — and the debug info is not asked.
-    /// On an x86-64 PE that is nearly every function.
+    /// On an x86-64 PE or an ELF with an `.eh_frame` that is nearly every function.
     ///
     /// **Else the smaller** of the extent the debug info declares for the function (DWARF's
     /// `DW_AT_low_pc`/`DW_AT_high_pc`, a PDB procedure's length) and
@@ -520,8 +520,8 @@ fn unwind_name(entry: &UnwindEntry) -> String {
 /// The code a file declares outside its symbol table: its **entry point**, its **exports**,
 /// its ELF `.dynsym`, the **procedures** and **publics** of the `.pdb` a PE names, where
 /// that was found and matches (`procedures` and `publics`, out of [`DebugInfo::pdb`]), and
-/// the **unwind entries** of an x86-64 PE's exception directory (`unwind`, out of
-/// [`unwind::entries`]). A stripped shared library is otherwise a file with nothing in it,
+/// the **unwind entries** of an x86-64 PE's exception directory or an ELF's `.eh_frame`
+/// (`unwind`, out of [`unwind::entries`]). A stripped shared library is otherwise a file with nothing in it,
 /// and a `/DEBUG` image has no symbol table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
 /// states outright, so the "nothing is scanned for" rule still holds.

@@ -463,3 +463,21 @@ fn split_sections_are_each_given_a_place_of_their_own() {
     let flat = parse(FLAT);
     assert!(flat.sections.iter().all(|section| section.bias == 0));
 }
+
+/// A relocatable object's `.eh_frame` is not read: gcc writes the FDEs before the addresses
+/// are known, so their address fields are zero with a relocation each, and read as they lie
+/// they decode to ranges that fall inside `.text` — `0x20..0x34` for `add` at 0 — which
+/// would give `sum_to` at 0x30 an extent of 4 instead of its 62. The unwind reader takes a
+/// linked image only; this pins the gate.
+#[test]
+fn a_relocatable_objects_eh_frame_is_not_read() {
+    let bytes = committed_fixture(FLAT);
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    let eh_frame = file.section_by_name(".eh_frame").expect("gcc writes one");
+    assert_eq!(eh_frame.relocations().count(), 3, "one per FDE");
+
+    let object = parse(FLAT);
+    let sum_to = symbol(&object, "sum_to");
+    assert!(sum_to.section.as_ref().unwrap().unwind.is_empty());
+    assert_eq!(sum_to.extent(&object), Some(62));
+}

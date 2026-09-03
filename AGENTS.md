@@ -74,7 +74,7 @@ command.
   seam: the two questions every backend answers, dispatched by `match`, and the one collector
   that makes every answer's rows hold `LineInfo`'s invariants. Names no debug format.
 - `crates/analysis/src/line/dwarf.rs` — the DWARF backend, and the only part that knows
-  `gimli`/`addr2line`.
+  DWARF's debug sections and `addr2line`.
 - `crates/analysis/src/line/pdb.rs` — the PDB backend: a PE's `.pdb` found by its CodeView
   record, matched by GUID and age, read a page at a time; the only part that knows `pdb2`. Also
   the one eager path through the seam: opened at parse for the procedures and publics it names,
@@ -82,8 +82,8 @@ command.
 - `crates/analysis/src/line/source.rs` — the same line info the other way: a file and a line,
   out to the symbols compiled from them, built on the seam and not on a backend.
 - `crates/analysis/src/unwind.rs` — the unwind tables a linked image states its functions'
-  bounds in, an x86-64 PE's `.pdata` today, read for the ranges they declare; the only part
-  that reads one.
+  bounds in — an x86-64 PE's `.pdata`, an ELF's `.eh_frame` — read for the ranges they
+  declare; the only part that reads call-frame information.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
 - `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.

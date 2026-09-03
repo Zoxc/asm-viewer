@@ -986,7 +986,7 @@ one item per part, so the unfinished half stays visible.
   symbol does, since the section listing decodes one stretch per symbol and an extent past
   the next label would draw its rows twice. The debug info is not asked for a covered
   symbol: the image's word to its loader over a second file's, the two agreeing in every
-  real image (a test pins which is asked). The cap stays for an ELF or an ARM64 image and,
+  real image (a test pins which is asked). The cap stays for an image without a table and,
   on an x86-64 PE, for a symbol no entry covers — a leaf without unwind info, assembler
   code. Measured, release: the LLVM DLL goes from 22 918 symbols to 73 793 (50 875 of them
   functions only an entry declares), none of its extents reaches the cap now and the largest
@@ -1021,24 +1021,31 @@ one item per part, so the unfinished half stays visible.
   DLLs, so it cannot be told by an import name; the magic would be the gate. Undecided
   whether reading a runtime's private tables is within the "nothing is scanned for" rule,
   or worth it for a name that is mostly `<cleanup of …>`.
-- [ ] ELF unwind entries: `.eh_frame`'s FDEs as declared code and extents, the way `.pdata`'s
-  are for a PE. Every FDE states a function's start and length (`initial_address`, `len`),
-  and `.eh_frame_hdr` is the sorted table of them with a count up front; `gimli`, already a
-  dependency, parses both (`EhFrame`, `EhFrameHdr`, `FrameDescriptionEntry`). Measured on
-  `librustc_driver.so` (712 MB, not stripped): 172 169 FDEs, every one beginning at a
-  `.symtab` function and every `.symtab` function but six (the six with `st_size` 0) having
-  one, `st_size` equal to the FDE's length in all 197 375 — so with a symbol table the FDEs
-  add nothing, and the gain is the stripped case: `.dynsym` names 16 728 addresses, so a
-  stripped copy would go from 16 728 functions to 172 169, the same tenfold the LLVM DLL got.
-  x86-64 builds asynchronous unwind tables by default, leaves included, which is more than
-  `.pdata` covers. A `.cold` part has an FDE of its own (24 here) and a `.symtab` name;
-  stripped, it would be a nameless range like a PE fragment, with no chained flag to tell it
-  by. Two things to settle first: `.debug_frame` is the same format for an object built
-  `-fno-asynchronous-unwind-tables`, and a relocatable `.o`'s FDEs need relocating — the
-  `declared_code` rule excludes an `.o` outright today. And a question the measurement
-  raises on its own: `st_size` was exact for every function here, while `SymbolData::extent`
-  never reads it and the DWARF extent pass costs 2.0 s on this app's binary for the same
-  answer — whether a nonzero `st_size` should come before the DWARF walk is its own item.
+- [x] ELF unwind entries: `.eh_frame`'s FDEs as declared code and extents, the way `.pdata`'s
+  are for a PE. Every FDE states a function's start and length, and `gimli`, already a
+  dependency, reads them (`unwind::elf`: `EhFrame`, its `entries` walked once front to back,
+  CIEs kept as they go by). The same format on every architecture, and on x86-64 every
+  function has one by default, leaves included, which is more than `.pdata` covers. Measured
+  on `librustc_driver.so` (712 MB, not stripped) before starting: 172 169 FDEs, every one
+  beginning at a `.symtab` function and every `.symtab` function but six having one,
+  `st_size` equal to the FDE's length in all 197 375 — so with a symbol table the FDEs add
+  no symbols, and the gains are a **stripped** ELF, whose `.dynsym` named 16 728 functions,
+  and every ELF's **extents**, which now come from the table before the DWARF walk. Three
+  things left out, deliberately: `.eh_frame_hdr`, the unwinder's lookup table over the same
+  records, which a walk of the whole section does not need; `.debug_frame`, the same format
+  in an object built `-fno-asynchronous-unwind-tables`, whose DWARF already declares the
+  extents; and a relocatable `.o`'s `.eh_frame`, written before its addresses are — read as
+  they lie the committed `.o`'s FDEs fall inside `.text` and would hand `sum_to` an extent of
+  4 — which the reader refuses and a test pins. A `.cold` part has an FDE of its own and no
+  chained flag, so stripped it is a `<function 0x…>` of its own. Mach-O's `__eh_frame` is
+  one match arm away and untested, so not taken.
+- [ ] Take a nonzero `st_size` before the DWARF extent walk. The `.eh_frame` measurement
+  says `st_size` was exact for every one of `librustc_driver.so`'s 197 375 functions, while
+  `SymbolData::extent` never reads it: an ELF with a symbol table and no `.eh_frame` (built
+  `-fno-asynchronous-unwind-tables`, or a Mach-O) still pays the DIE walk for an answer its
+  symbol table states. The estimate's clamp to the next symbol would apply as it does to an
+  unwind entry's end; what has to be settled is a COFF or assembler `st_size` that is wrong
+  rather than 0, which is what the "declared sizes are frequently 0" rule never had to face.
 - [?] Exception handlers as targets, both formats. The unwind data names what runs on an
   exception: on ELF the CIE's personality (`rust_eh_personality`, through a `DW.ref.` GOT
   slot, in 45 008 of `librustc_driver.so`'s 172 169 FDEs; `__gxx_personality_v0` for C++)

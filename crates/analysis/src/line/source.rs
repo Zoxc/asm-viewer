@@ -28,8 +28,9 @@
 //! 4 164 symbols — 94 ms for all of them together, 862 files and 25 870 pairs. Every ask after
 //! the first is two binary searches: 5 µs, or 750 µs for the worst line in the repo.
 //!
-//! So the extent pass is nine tenths of the build, and it is paid deliberately: it is a DIE
-//! walk of the whole object, which is what an extent that agrees with
+//! So the extent pass was nine tenths of the build, and it is paid deliberately: a DIE walk
+//! for every symbol no unwind entry covers — the whole object, before `.eh_frame` was read —
+//! which is what an extent that agrees with
 //! [`SymbolData::line_info`] costs. Attributing by [`SymbolData::estimate_size`] instead would
 //! be one binary search per row and no DWARF at all, and would let the index name a symbol
 //! whose own line info does not name the line back — the one thing a caller walking index →

@@ -352,3 +352,213 @@ fn the_writers_eh_frame_reads_back_through_gimli() {
     }
     assert_eq!(fdes, [(TEXT_ADDRESS, 4), (TEXT_ADDRESS + 4, 2)]);
 }
+
+/// A stripped shared object with FDEs on `first` and on two functions nothing names.
+fn shared_with(dynamic: &[ExportedSymbol], entry: Option<u64>, eh_frame: &[(u64, u64)]) -> Vec<u8> {
+    elf_shared_object(SharedObject {
+        text: TEXT,
+        dynamic,
+        static_symbols: &[],
+        entry,
+        eh_frame,
+    })
+}
+
+/// An ELF's FDEs are unwind entries as a PE's `RUNTIME_FUNCTION`s are: a function only its
+/// FDE declares is a `<function 0x…>` by its address, with the FDE's length as its declared
+/// size, and it disassembles like any other.
+#[test]
+fn an_elfs_fdes_are_symbols_where_nothing_names_them() {
+    let object = parse(&shared_with(&[FIRST], None, &[(0, 4), (4, 6), (7, 10)]));
+    assert_eq!(
+        names(&object),
+        [
+            format!("<function {:#x}>", TEXT_ADDRESS + 4),
+            format!("<function {:#x}>", TEXT_ADDRESS + 7),
+            "first".to_owned(),
+        ]
+    );
+    let second = named(&object, &format!("<function {:#x}>", TEXT_ADDRESS + 4));
+    assert_eq!(second.size, 2, "the FDE's length");
+    assert_eq!(second.demangled, None);
+    assert_eq!(
+        second.section.as_ref().map(|s| s.name.as_str()),
+        Some(".text")
+    );
+    let assembly = second.assembly(&object).expect("it decodes");
+    assert_eq!(assembly.instructions.len(), 2, "nop; ret");
+}
+
+/// The end an FDE states is the function's, padding excluded, where the next symbol's
+/// address is not: the same rule as a PE entry's, on an ELF's own table.
+#[test]
+fn an_fdes_end_beats_the_next_symbols_address() {
+    const TEXT: &[u8] = &[
+        0x90, 0x90, 0x90, 0x90, 0x90, 0xC3, // 0: five nops and a ret
+        0xCC, 0xCC, 0xCC, 0xCC, // 6: the linker's int3 padding
+        0x90, 0xC3, // 10
+    ];
+    let object = parse(&elf_shared_object(SharedObject {
+        text: TEXT,
+        dynamic: &[
+            FIRST,
+            ExportedSymbol {
+                name: "second",
+                offset: 10,
+                size: 0,
+                code: true,
+            },
+        ],
+        static_symbols: &[],
+        entry: None,
+        eh_frame: &[(0, 6), (10, 12)],
+    }));
+    let first = named(&object, "first");
+    assert_eq!(first.estimate_size(), Some(10));
+    assert_eq!(first.debug_extent(&object), None, "no debug info at all");
+    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.assembly(&object).unwrap().instructions.len(), 6);
+
+    let listing = Listing::new(&object, first.section.clone().unwrap());
+    let stretch = listing.decode(&object, 0).expect("first decodes");
+    assert_eq!(
+        stretch.gap,
+        Some(Gap {
+            range: TEXT_ADDRESS + 6..TEXT_ADDRESS + 10,
+            kind: GapKind::Bytes,
+        })
+    );
+}
+
+/// The cap on the derivation, which stayed for an ELF while only a PE's ends were stated,
+/// is beaten by an FDE's end the same way.
+#[test]
+fn an_fdes_end_beats_the_cap() {
+    let mut text = vec![0x90u8; (1 << 20) + 16];
+    *text.last_mut().unwrap() = 0xC3;
+    let object = parse(&elf_shared_object(SharedObject {
+        text: &text,
+        dynamic: &[FIRST],
+        static_symbols: &[],
+        entry: None,
+        eh_frame: &[(0, text.len() as u64)],
+    }));
+    let first = named(&object, "first");
+    assert_eq!(first.estimate_size(), Some(1 << 20));
+    assert_eq!(first.extent(&object), Some((1 << 20) + 16));
+}
+
+/// A `.dynsym` function inside an FDE's range is given the rest of it, and the function the
+/// FDE begins at stops at that label: the next-symbol clamp, on an ELF.
+#[test]
+fn an_fde_covering_a_label_inside_it_is_clamped_to_the_next_symbol() {
+    let object = parse(&shared_with(
+        &[
+            FIRST,
+            ExportedSymbol {
+                name: "label",
+                offset: 2,
+                size: 0,
+                code: true,
+            },
+        ],
+        None,
+        &[(0, 4)],
+    ));
+    assert_eq!(named(&object, "first").extent(&object), Some(2));
+    let label = named(&object, "label");
+    assert_eq!(label.estimate_size(), Some(8), "to the section's end");
+    assert_eq!(label.extent(&object), Some(2), "to the FDE's end");
+}
+
+/// An FDE's end past the section's bytes is clamped to them as it is placed.
+#[test]
+fn an_fde_reaching_past_the_section_is_clamped_to_its_bytes() {
+    let object = parse(&shared_with(
+        &[ExportedSymbol {
+            name: "last",
+            offset: 7,
+            size: 0,
+            code: true,
+        }],
+        None,
+        &[(7, 0x800)],
+    ));
+    let last = named(&object, "last");
+    let section = last.section.clone().unwrap();
+    assert_eq!(section.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
+    assert_eq!(last.extent(&object), Some(3));
+    assert!(last.assembly(&object).is_some());
+}
+
+/// An FDE at an address something names — a `.dynsym` function, the entry point — adds no
+/// second symbol; one of length 0 states nothing, and one whose start is not in code (a
+/// page past `.text` is `.data`) is dropped by the section lookup as a PE entry is.
+#[test]
+fn an_fde_at_a_named_address_adds_no_symbol_and_an_empty_one_nothing() {
+    let object = parse(&shared_with(
+        &[FIRST, SECOND],
+        Some(6),
+        &[(0, 4), (4, 6), (6, 7), (4, 4), (0x1000, 0x1004)],
+    ));
+    assert_eq!(names(&object), ["<entry point>", "first", "second"]);
+    assert_eq!(object.symbols.len(), 3);
+    let section = named(&object, "first").section.clone().unwrap();
+    assert_eq!(
+        section.unwind,
+        [
+            TEXT_ADDRESS..TEXT_ADDRESS + 4,
+            TEXT_ADDRESS + 4..TEXT_ADDRESS + 6,
+            TEXT_ADDRESS + 6..TEXT_ADDRESS + 7,
+        ]
+    );
+}
+
+/// `.eh_frame` is the same format on every architecture, so an AArch64 ELF's is read as an
+/// x86-64's — the opposite of `.pdata`, whose ARM64 record is another shape.
+#[test]
+fn an_aarch64_elfs_eh_frame_is_read() {
+    let mut image = shared_with(&[FIRST], None, &[(0, 4), (4, 6), (7, 10)]);
+    // `e_machine`: EM_AARCH64.
+    image[18..20].copy_from_slice(&183u16.to_le_bytes());
+    let object = parse(&image);
+    assert_eq!(object.architecture, Architecture::Aarch64);
+    assert_eq!(
+        names(&object),
+        [
+            format!("<function {:#x}>", TEXT_ADDRESS + 4),
+            format!("<function {:#x}>", TEXT_ADDRESS + 7),
+            "first".to_owned(),
+        ]
+    );
+}
+
+/// A record whose length cannot be trusted ends the walk where it stands: the FDEs before
+/// it are kept, nothing after it is guessed at, and nothing panics.
+#[test]
+fn a_cut_eh_frame_yields_what_parsed_before_the_cut() {
+    let mut image = shared_with(&[FIRST], None, &[(4, 6), (7, 10)]);
+    let (offset, size) = {
+        let file = object::File::parse(image.as_slice()).unwrap();
+        let section = file.section_by_name(".eh_frame").unwrap();
+        section.file_range().unwrap()
+    };
+    let start = offset as usize;
+    let bytes = &image[start..start + size as usize];
+    // The CIE, then the first FDE, then the second: each record's length word says where
+    // the next begins.
+    let cie_len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let fde1 = 4 + cie_len;
+    let fde1_len = u32::from_le_bytes(bytes[fde1..fde1 + 4].try_into().unwrap()) as usize;
+    let fde2 = fde1 + 4 + fde1_len;
+    image[start + fde2..start + fde2 + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+
+    let object = parse(&image);
+    assert_eq!(
+        names(&object),
+        [
+            format!("<function {:#x}>", TEXT_ADDRESS + 4),
+            "first".to_owned()
+        ]
+    );
+}

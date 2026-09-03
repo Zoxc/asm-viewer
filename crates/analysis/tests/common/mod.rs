@@ -1407,10 +1407,10 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
 
 /// The images `declared_code` reads, each with the number of symbols it declares: a stripped
 /// ELF `.so` whose only symbol table is `.dynsym`, and a PE DLL whose declarations are its
-/// export directory, its entry point and its unwind table — three entries, two of them on
-/// the export and the entry point and the third on a function nothing names. An `.o`
-/// declares none of these, so a corpus of relocatable objects leaves the export, entry-point
-/// and unwind paths unexercised entirely.
+/// export directory, its entry point and its unwind table — three entries in either table,
+/// two of them on the export and the entry point and the third on a function nothing names.
+/// An `.o` declares none of these, so a corpus of relocatable objects leaves the export,
+/// entry-point and unwind paths unexercised entirely.
 pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
     const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3, 0xC3];
     const UNWIND: &[(u64, u64)] = &[(0, 4), (4, 6), (6, 7)];
@@ -1439,7 +1439,7 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
                 entry: Some(4),
                 eh_frame: UNWIND,
             }),
-            2,
+            3,
         ),
         (
             "pe dll",

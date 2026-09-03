@@ -6,9 +6,10 @@
 //! section's sorted symbol addresses alone, one [`Stretch`] per address, and decodes nothing:
 //! x86 is variable-length, so instruction *n* of a section cannot be found without decoding
 //! from a known start, and the symbol addresses are those starts. A stretch is decoded on
-//! demand ([`Listing::decode`]), which is when the symbol's DWARF extent is asked for and the
-//! stretch's trailing [`Gap`] is known — the extent pass over a whole section is seconds on
-//! a large binary, which is not "up front".
+//! demand ([`Listing::decode`]), which is when the symbol's extent is asked for and the
+//! stretch's trailing [`Gap`] is known — a DWARF walk, for a symbol no unwind entry covers,
+//! and the pass over a whole section was seconds on a large binary before the unwind tables
+//! were read, which is not "up front".
 //!
 //! **A gap is never decoded.** Bytes no symbol claims are not known to be code, and decoding
 //! them would print a confident page of nonsense over a jump table or a run of padding — the
@@ -80,8 +81,8 @@ pub enum GapKind {
     /// The rest of a stretch whose symbol's derived extent hit [`MAX_DERIVED_SIZE`]: very
     /// likely the symbol's own code going on past the cap rather than anything between two
     /// functions, and starting wherever the cap fell rather than at an instruction. Said
-    /// apart so a reader is not told the function ends there. On an x86-64 PE only a symbol
-    /// no unwind entry covers can get here; the rest have their ends stated.
+    /// apart so a reader is not told the function ends there. Where the file has an unwind
+    /// table only a symbol no entry covers can get here; the rest have their ends stated.
     Cut,
 }
 

@@ -32,9 +32,15 @@ kept — plus, for a **linked image only**, the code it declares elsewhere: `dyn
 `exports` and `entry` (`declared_code`), and, for a PE whose `.pdb` is found beside it and
 matches, the **procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a nonzero length;
 `Pdb::procedures`, below) and then its **publics** (`S_PUB32` flagged as code or a function;
-`Pdb::publics`), and, for an x86-64 PE, the **unwind entries** its exception directory states
-(`.pdata`: one `RUNTIME_FUNCTION` per function with unwind info, a begin and an end and no
-name, plus one byte of the `UNWIND_INFO` it names for the chained flag; `unwind::entries`). All of them are *declared* — the PDB's by a file matched to the image by
+`Pdb::publics`), and the **unwind entries** the image's own table states — for an x86-64 PE
+its exception directory (`.pdata`: one `RUNTIME_FUNCTION` per function with unwind info, a
+begin and an end and no name, plus one byte of the `UNWIND_INFO` it names for the chained
+flag), for an ELF its `.eh_frame` (one FDE per function with any, a start and a length; the
+same format on every architecture, and on x86-64 every function has one by default, leaves
+included; no fragment flag, so a `.cold` part is a function of its own); `unwind::entries`,
+the one part that reads call-frame information, and for a linked image only, since a
+relocatable object's FDEs are written before their addresses are and read as they lie fall
+inside `.text`. All of them are *declared* — the PDB's by a file matched to the image by
 GUID and age, the unwind table's by the image to its own loader — so this keeps the "nothing is
 scanned for" rule; a prebuilt LLVM DLL with no COFF
 symbol table at all goes from zero functions to 22 918 on the strength of the exports, and
@@ -97,8 +103,8 @@ the 196-member rlib; 32 ms against 1.6 s on the 331 MB binary). Nothing in the c
 reads it: it exists so a restore can tell the file it saved from one rebuilt underneath it.
 `Section` owns decompressed bytes, relocations keyed by address, a sorted list of its
 text symbols' addresses, and the ranges the file's unwind table states for its functions
-(`unwind`, sorted by start, each start once, ends clamped to the section's bytes; empty but for
-an x86-64 PE). `SymbolData::estimate_size` derives a symbol's extent from the *next*
+(`unwind`, sorted by start, each start once, ends clamped to the section's bytes; empty for a
+file with no table read). `SymbolData::estimate_size` derives a symbol's extent from the *next*
 address in the symbol list — **clipped to the section's own bytes**, since that list is numbers out of
 the file and one wild `st_value` in it would otherwise cost the symbol *above* it its listing
 rather than only itself. Declared sizes are frequently 0 in ELF/COFF, which is why the
@@ -117,10 +123,11 @@ assembler label, a split cold part) would otherwise swallow the next function. T
 capped at `MAX_DERIVED_SIZE` (1 MiB) — not a claim about how long a function can be, but the
 point past which it is certainly describing something else: a stripped PE's export table is
 sparse, so nine of the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which was
-772 302 instructions decoded *per render*. The unwind table is the fix for that: on an x86-64
-PE every entry's begin is a symbol and every covered symbol's end is stated, so the cap reaches
-only a symbol no entry covers — a leaf without unwind info, hand-written assembly, a mutated
-table — and everything on an ELF or an ARM64 image, where it stays. Measured, release: none of
+772 302 instructions decoded *per render*. The unwind table is the fix for that: where there is
+one — an x86-64 PE, an ELF with an `.eh_frame` — every entry's begin is a symbol and every
+covered symbol's end is stated, so the cap reaches only a symbol no entry covers — a leaf
+without unwind info on a PE, hand-written assembly, a mutated table — and everything on an
+image without one, an ARM64 PE or a Mach-O, where it stays. Measured, release: none of
 the LLVM DLL's 73 793 extents reaches the cap now, the largest being 610 302 bytes and stated,
 21 of them over 64 KiB; the extent pass over all of them is 4.6 ms, where `rustc_driver.dll`'s
 234 070 take 756 ms because the 15 636 no entry covers each go to the PDB.
@@ -189,7 +196,8 @@ It answers two questions under one set of rules — the rows covering a range, a
 (`Object::function_extent`) — so everything below holds for both. `line.rs` is a **seam** that names
 no debug format: `DebugInfo` holds one `Backend`, a closed enum dispatched by `match` the way
 `Assembly::decode` is, and `line/dwarf.rs` is the first backend and the only module that knows
-`gimli`/`addr2line` (a DIE walk per unit visited for the extent, cached by unit offset). Every
+DWARF's debug sections and `addr2line` (a DIE walk per unit visited for the extent, cached by
+unit offset; `gimli`'s call-frame reader is `unwind.rs`'s, which is not a backend). Every
 backend's rows go through one `RowCollector`, whose `finish` is where `LineInfo`'s invariants are
 *made* (below), so they hold whoever produced the rows. `Object::debug_info` is a `DebugInfoCache`
 caching *both* answers — the built backend and the fact that there is none — so an object without
@@ -487,8 +495,9 @@ them would print the confident page of nonsense `undecodable` exists to prevent,
 copied, since the tail of a stripped PE's export can be megabytes. Two kinds only. `Bytes` is
 the ordinary one. `Cut` is the rest of a stretch whose derived extent hit `MAX_DERIVED_SIZE`,
 said apart because it is very likely the function going on past the cap rather than anything
-between two functions, and starts wherever the cap fell rather than at an instruction — on an
-x86-64 PE only a symbol no unwind entry covers can get one, the rest having their ends stated. An
+between two functions, and starts wherever the cap fell rather than at an instruction — where
+the file has an unwind table only a symbol no entry covers can get one, the rest having their
+ends stated. An
 architecture no backend decodes gives the symbol stretch the `undecodable` `Assembly` as the
 symbol view gets, and its gaps are `Bytes` like any other. The section's end is saturating,
 where `estimate_size`'s is `None`: a listing has to end somewhere. `tests/listing.rs` holds one

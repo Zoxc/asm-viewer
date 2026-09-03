@@ -1,22 +1,115 @@
 //! The unwind tables a linked image states its functions' bounds in, read for what they
 //! declare: an x86-64 PE's exception directory (`.pdata`), one `RUNTIME_FUNCTION` per
-//! function with unwind info. Each entry states **both ends** of a function — the loader's
-//! word, not a debugger's — which is what makes it worth reading past the export table, and
-//! why reading it keeps the "nothing is scanned for" rule. What the entries become — a
-//! symbol where nothing else names the address, and the stated end as the extent — is
-//! `declared_code`'s and `SymbolData::extent`'s business in `lib.rs`; this module only reads.
+//! function with unwind info, and an ELF's `.eh_frame`, one FDE per function with any.
+//! Each entry states **both ends** of a function — the loader's or the unwinder's word, not
+//! a debugger's — which is what makes it worth reading past the export table, and why
+//! reading it keeps the "nothing is scanned for" rule. What the entries become — a symbol
+//! where nothing else names the address, and the stated end as the extent — is
+//! `declared_code`'s and `SymbolData::extent`'s business in `lib.rs`; this module only
+//! reads. It is the one part of the crate that reads call-frame information; `line/dwarf.rs`
+//! is still the only one that knows DWARF's debug sections and `addr2line`.
 
-use object::{read::pe::PeFile64, Architecture, Object as _};
-use std::ops::Range;
+use gimli::{BaseAddresses, CieOrFde, EhFrame, EhFrameOffset, RunTimeEndian, UnwindSection as _};
+use object::{read::pe::PeFile64, Architecture, Object as _, ObjectKind, ObjectSection as _};
+use std::{collections::HashMap, ops::Range};
 
 /// The entries the file's unwind table states, in file order, placed on the image base and
 /// not yet placed in any section — that is `declared_code`'s lookup, which is also what
-/// drops one whose begin is not in code. Empty for a file with no table this reads.
+/// drops one whose begin is not in code. Empty for a file with no table this reads: a
+/// relocatable object among them, whose `.eh_frame` is written before its addresses are —
+/// see [`elf`].
 pub(crate) fn entries(file: &object::File<'_>) -> Vec<UnwindEntry> {
     match file {
         object::File::Pe64(pe) => self::pe(pe),
+        object::File::Elf32(_) | object::File::Elf64(_)
+            if file.kind() != ObjectKind::Relocatable =>
+        {
+            elf(file)
+        }
         _ => Vec::new(),
     }
+}
+
+/// The FDEs an ELF's `.eh_frame` states, each a function's start and length, on any
+/// architecture: the format is DWARF's call-frame information, the same everywhere, and on
+/// x86-64 every function has one by default (`-fasynchronous-unwind-tables`), leaves
+/// included, which is more than `.pdata` covers. No fragment flag exists here, so a `.cold`
+/// part a stripped image no longer names is a function of its own; `chained` is never set.
+///
+/// **Linked images only.** A relocatable object's `.eh_frame` is written before its
+/// addresses are: the FDEs' address fields are zero with a `R_X86_64_PC32` each, and read
+/// as they lie they decode to ranges that happen to fall inside `.text` — in the committed
+/// `line_fixture.o`, `0x20..0x34` for a function at 0 — which would hand `sum_to` at 0x30
+/// an extent of 4 instead of 62. `declared_code` refuses a relocatable object anyway; the
+/// ranges reaching `Section::unwind` is what this gate is for.
+///
+/// Read once, front to back: `.eh_frame_hdr` is the unwinder's lookup table over the same
+/// records and says nothing more, and `.debug_frame` is the same format in an object built
+/// without unwind tables, whose extents DWARF's own `DW_AT_high_pc` already gives. The walk
+/// ends at the section's end, at the zero-length terminator, or at the first record that
+/// will not parse — a bad record's length is exactly what cannot be trusted to find the
+/// next — keeping what was read; an FDE whose own parse fails is skipped. Every CIE comes
+/// before the FDEs that use it, so they are kept as they go by and re-read only on a miss.
+fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
+    let Some(section) = file.section_by_name(".eh_frame") else {
+        return Vec::new();
+    };
+    let Ok(data) = section.data() else {
+        return Vec::new();
+    };
+
+    let endian = if file.is_little_endian() {
+        RunTimeEndian::Little
+    } else {
+        RunTimeEndian::Big
+    };
+    let mut eh_frame = EhFrame::new(data, endian);
+    if let Some(size) = file.architecture().address_size() {
+        eh_frame.set_address_size(size.bytes());
+    }
+
+    // Where the pc-relative pointers are relative to; `.text` and `.got` for the rarer
+    // text- and data-relative ones, which a CIE's personality pointer can be, and a CIE
+    // that cannot be read ends the walk.
+    let mut bases = BaseAddresses::default().set_eh_frame(section.address());
+    if let Some(text) = file.section_by_name(".text") {
+        bases = bases.set_text(text.address());
+    }
+    if let Some(got) = file.section_by_name(".got") {
+        bases = bases.set_got(got.address());
+    }
+
+    let mut cies: HashMap<EhFrameOffset<usize>, gimli::CommonInformationEntry<_>> = HashMap::new();
+    let mut entries = Vec::new();
+    let mut records = eh_frame.entries(&bases);
+    while let Ok(Some(record)) = records.next() {
+        let partial = match record {
+            CieOrFde::Cie(cie) => {
+                cies.insert(EhFrameOffset(cie.offset()), cie);
+                continue;
+            }
+            CieOrFde::Fde(partial) => partial,
+        };
+        let fde = partial.parse(|section, bases, offset| match cies.get(&offset) {
+            Some(cie) => Ok(cie.clone()),
+            None => section.cie_from_offset(bases, offset),
+        });
+        let Ok(fde) = fde else {
+            continue;
+        };
+        let begin = fde.initial_address();
+        let Some(end) = begin.checked_add(fde.len()) else {
+            continue;
+        };
+        if fde.len() == 0 {
+            continue;
+        }
+        entries.push(UnwindEntry {
+            range: begin..end,
+            chained: false,
+        });
+    }
+    entries
 }
 
 /// One `RUNTIME_FUNCTION` of an x86-64 PE's exception directory, out of

@@ -10,7 +10,8 @@
 //! naming no debug format. The two questions — the rows covering an address range, and a
 //! function's declared extent — are asked of a [`DebugInfo`], which dispatches by `match` to
 //! the one backend the object has: [`dwarf`] for debug sections in the object itself, the
-//! only module that knows `gimli` and `addr2line`; [`pdb`] for a PE whose debug directory
+//! only module that knows DWARF's debug sections and `addr2line` (`gimli`'s call-frame reader
+//! is `unwind.rs`'s); [`pdb`] for a PE whose debug directory
 //! names a `.pdb` beside it, the only module that knows `pdb2`. A row out of any backend goes
 //! through one [`RowCollector`], so the invariants [`LineInfo`] promises hold whoever
 //! produced them.
