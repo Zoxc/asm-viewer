@@ -260,6 +260,15 @@ leaves this list when it is. That is a move made on request, like everything els
   the row reporting its own overflow. Settling that is the goal; the rule once it is settled
   is one line per list, and the same question decides it for the tab bar, whose tabs elide
   too.
+- [ ] Refresh a chip's hover when the bar scrolls under a still pointer. The strip slides its
+  row of chips by an `offset_x` and never moves the pointer, and freya's `pointer_over` and
+  `pointer_out` fire on entry and exit only, so a wheel over the bar leaves the highlight on the
+  chip the pointer has left and gives none to the chip now under it. The reveal that brings a
+  tab into view and the edge scroll a drag makes do the same. What to settle is where the answer
+  goes: a chip that rechecks itself when the offset changes, which is one more subscription per
+  chip, or the bar working out which chip the pointer is over and telling that one — and where
+  the pointer's last place comes from, `pointer_move` on the bar being the only thing that
+  reports it.
 - [x] Only close the assembly view by default in a source-driven tab if its file is not in a
   compiled language: a `Cargo.toml` or a `.json` opens with the source side alone, a `.rs` or
   `.c` with both, as now.
