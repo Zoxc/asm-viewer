@@ -9,6 +9,9 @@ Standing instructions from the user.
   a diff that then has to be picked apart by hand. The `--edition 2021` is load-bearing; plain
   `rustfmt` parses as 2015 and will mangle what it cannot read. Nothing here needs a
   `rustfmt.toml`: the defaults are what the formatted files already follow.
+- Commit messages. Keep the title brief -- a line, not a paragraph -- and put what needs
+  saying under it, ideally in one short paragraph. What changed is in the diff; the message
+  is for what it is and why.
 - Don't reference an uncommitted file from a committed one.
 - Keep `notes/Goals.md` current. It is the checklist of planned features.
 - `notes/specs/` is what a finished feature does, one file per area with a section per feature,
