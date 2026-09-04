@@ -61,9 +61,9 @@ leaves this list when it is. That is a move made on request, like everything els
 
 - [ ] Clicking on functions in source should navigate to them. A click on a source line moves
   the assembly pane to that line's instructions; a click on a *call* in the source still does
-  nothing, since nothing maps a source identifier to the symbol it names. Sequenced after
-  the LSP item under *Projects*: rust-analyzer is what should answer which symbol an
-  identifier names, rather than building name matching over demangled strings here.
+  nothing, since nothing maps a source identifier to the symbol it names. What is left is the
+  click: the language server answers where a name is defined, and the source-line index
+  answers which symbols were compiled from there.
 - [ ] A file search dialog on Ctrl+P: type part of a path and open the file it names, the
   way an editor's quick-open does.
 
@@ -243,7 +243,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Projects
 
-- [ ] Can have an LSP server (like rust-analyzer) / cargo integration so it can build for you and find binaries.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
 

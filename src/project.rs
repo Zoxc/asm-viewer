@@ -212,6 +212,8 @@ impl ProjectId {
 pub struct Details {
     pub name: Option<String>,
     pub directory: Option<PathBuf>,
+    pub language_server: Option<String>,
+    pub trusted: bool,
     pub cargo: Option<Cargo>,
 }
 
@@ -250,6 +252,17 @@ pub struct Project {
     /// The directory the project is about, not the one it is stored in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<PathBuf>,
+    /// The language server this project is read with, when it is not the usual one:
+    /// a program to run, found on the path or named outright. **Absent** means
+    /// rust-analyzer, which is what a Rust project has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_server: Option<String>,
+    /// Whether the reader has agreed to a language server being run over the directory
+    /// above. One reads the whole project and runs its build scripts and proc macros, so
+    /// it is asked about once and the answer kept. **Absent** is no, which is what a
+    /// directory nobody has been asked about has to be.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trusted: bool,
     /// The paths that were opened, deduplicated, in the order they were opened.
     pub binaries: Vec<PathBuf>,
     /// What to build the directory with. A table, so it comes after every plain value
@@ -260,6 +273,11 @@ pub struct Project {
     /// in this file, so it comes last; absent rather than empty when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bookmarks: Vec<Bookmark>,
+}
+
+/// `skip_serializing_if` for a plain `bool`, so a false one writes no key at all.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Project {
@@ -973,6 +991,8 @@ impl Saves {
             given: Details {
                 name: None,
                 directory: None,
+                language_server: None,
+                trusted: false,
                 cargo: None,
             },
             bookmarks: Vec::new(),
@@ -992,6 +1012,8 @@ impl Saves {
         Project {
             name: self.given.name.clone(),
             directory: self.given.directory.clone(),
+            language_server: self.given.language_server.clone(),
+            trusted: self.given.trusted,
             binaries,
             cargo: self.given.cargo.clone(),
             bookmarks: self.bookmarks.clone(),
@@ -1007,6 +1029,8 @@ impl Saves {
         self.given = Details {
             name: project.name.clone(),
             directory: project.directory.clone(),
+            language_server: project.language_server.clone(),
+            trusted: project.trusted,
             cargo: project.cargo.clone(),
         };
         self.bookmarks = project.bookmarks.clone();

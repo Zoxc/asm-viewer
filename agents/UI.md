@@ -77,7 +77,8 @@ after it); `CodeRows` (the section view's rows, which the Source pane beside it 
 `Analysis` (what the worker has to say about the selected symbol); `Sections`/`Window` (what it has
 decoded of the object whose code is on screen, and the stretches the view wants next); `Locations`
 (every symbol the line, or the function around it, last asked about was compiled into);
-`Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad); `SplitRatio`/`Splits`
+`Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad); `Talking` (whether a
+language server is running, and what would stop it -- `agents/Lsp.md`); `SplitRatio`/`Splits`
 (how wide a document's leading side is); plus the memos `Symbols` and `Active`. The eleven that a
 project *owns* travel together as a `ProjectStates`, since a project switch closes all of them and
 reopens all of them. `MarksAt` is among them for the closing and not the reopening, being the one

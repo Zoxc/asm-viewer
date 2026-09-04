@@ -111,7 +111,9 @@ someone is experimenting in and `Command::new` is an ordinary thing to experimen
 killed only the process this app holds a handle for would leave the rest running with nothing that
 could ever find them: the grandchild's pid was never anywhere but inside the program that is now
 gone. `Group` is that one idea with two implementations and the same three moments: something before
-the spawn, something taking hold of what was spawned, and a kill. On Unix it is
+the spawn, something taking hold of what was spawned, and a kill. It lives in `src/process.rs`,
+having moved there when the language server needed the same thing for the same reason
+(`agents/Lsp.md`). On Unix it is
 `Command::process_group(0)`, std's own, so only the kill needs a crate, and
 `libc::kill(-pgid, SIGKILL)`, the group being the child's own pid and the negative guarded, since
 `-1` is every process this user may signal. On Windows it is a **kill-on-close job object**, created

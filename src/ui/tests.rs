@@ -5815,6 +5815,17 @@ fn every_foreground_is_legible_on_its_own_surface() {
             );
         }
 
+        // The one control with a colour of its own, read on that colour: its name and its
+        // icon in `icon_fg`, and both in `invalid_fg` when a server would not start.
+        // Only those two, since a control that is not running has no colour under it.
+        for (name, color) in [
+            ("icon_fg", palette.icon_fg),
+            ("invalid_fg", palette.invalid_fg),
+        ] {
+            let ratio = contrast(color, palette.server_bg);
+            assert!(ratio >= 3.0, "{theme} {name} on server_bg: {ratio:.2}");
+        }
+
         // The chrome, on all three of the surfaces it is written over. `address_fg` is
         // here as well as over the code panes above: it is the app's dim text everywhere,
         // and the Assembly pane's bar draws a symbol's mangled spelling in it on
@@ -13415,7 +13426,30 @@ enum AskedToBuild {
 
 fn project_view_harness() -> Element {
     build_wiring();
-    rect().expanded().child(ProjectTab).into_element()
+    // The section's two buttons reach the worker the same way the top bar's control does,
+    // over a worker that starts nothing: what a press does to the state is the question.
+    let states = use_project_states();
+    let language = use_consume::<Talking>().0;
+    // A start is answered, so that a press here can reach a running server the way the top
+    // bar's does; and the project's own settings are really read, so the view lists what
+    // that read answered and a file on disk is what it is being asked about.
+    use_language_with(language, states.proj, |job: LspJob| match job {
+        LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
+            settings: lsp::settings_in(&directory),
+            directory,
+        }),
+        LspJob::Start { run, .. } => Some(LspAnswer::Started {
+            run,
+            server: Ok(lsp::Handle::to_nothing()),
+        }),
+        _ => None,
+    });
+    // The prompt the view's own Start button puts, drawn where the root draws it.
+    rect()
+        .expanded()
+        .child(TrustPrompt)
+        .child(ProjectTab)
+        .into_element()
 }
 
 fn build_wiring() {
@@ -13442,12 +13476,16 @@ macro_rules! mount_project {
             answer(job)
         };
 
-        let (mut test, (states, asking)) = TestingRunner::new(
+        let (mut test, (states, language, asking)) = TestingRunner::new(
             project_view_harness,
             (600., 700.).into(),
             move |runner: &mut _| {
                 let states = project_states!(runner);
                 runner.provide_root_context(move || BuildWorking(Arc::new(work)));
+                // The view says how the language server went; what it is is the root's.
+                let language = runner
+                    .provide_root_context(|| Talking(State::create(Language::default())))
+                    .0;
                 // A diagnostic's place is a link, and a link lands: the three states a
                 // landing is left in.
                 runner.provide_root_context(|| Marked(State::create(Marks::default())));
@@ -13456,13 +13494,13 @@ macro_rules! mount_project {
                 let asking = runner
                     .provide_root_context(|| BuildAsking(State::create(None)))
                     .0;
-                (states, asking)
+                (states, language, asking)
             },
             1.,
         );
         test.sync_and_update();
 
-        (test, states, asking, asks)
+        (test, states, language, asking, asks)
     }};
 }
 
@@ -13497,7 +13535,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
             },
         }
     };
-    let (mut test, states, asking, asks) = mount_project!(answer);
+    let (mut test, states, _language, asking, asks) = mount_project!(answer);
 
     let mut proj = states.proj;
     proj.write().directory = "/work/app".to_owned();
@@ -13575,7 +13613,7 @@ fn a_build_replaces_what_the_build_before_it_produced() {
             },
         }
     };
-    let (mut test, states, asking, _asks) = mount_project!(answer);
+    let (mut test, states, _language, asking, _asks) = mount_project!(answer);
     let jobs = asking.peek().clone().expect("the wiring handed one back");
 
     // Both files are open, and only one of them is the last build's.
@@ -13630,10 +13668,11 @@ fn a_build_replaces_what_the_build_before_it_produced() {
 /// on it starts nothing.
 #[test]
 fn a_directory_with_no_manifest_builds_nothing() {
-    let (mut test, states, _asking, _asks) = mount_project!(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        debug_lines: false,
-    });
+    let (mut test, states, _language, _asking, _asks) =
+        mount_project!(|_: BuildJob| BuildAnswer::Read {
+            manifest: None,
+            debug_lines: false,
+        });
 
     let mut proj = states.proj;
     proj.write().directory = "/work/not-a-workspace".to_owned();
@@ -13679,7 +13718,7 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
             },
         }
     };
-    let (mut test, states, _asking, _asks) = mount_project!(answer);
+    let (mut test, states, _language, _asking, _asks) = mount_project!(answer);
 
     let mut proj = states.proj;
     proj.write().directory = "/work/app".to_owned();
@@ -13736,10 +13775,11 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     };
 
     let manifest = directory.join("Cargo.toml");
-    let (mut test, states, _asking, _asks) = mount_project!(move |_: BuildJob| BuildAnswer::Read {
-        manifest: Some(manifest.clone()),
-        debug_lines: true,
-    });
+    let (mut test, states, _language, _asking, _asks) =
+        mount_project!(move |_: BuildJob| BuildAnswer::Read {
+            manifest: Some(manifest.clone()),
+            debug_lines: true,
+        });
 
     let mut proj = states.proj;
     proj.write().directory = directory.to_string_lossy().into_owned();
@@ -13822,4 +13862,1140 @@ fn the_rescued_window_names_every_path_and_its_button_empties_the_list() {
         1.,
     );
     assert!(label_area(&quiet, "Close").is_none());
+}
+
+// ---------------------------------------------------------------------------------------
+// The language server and its control.
+
+#[derive(Clone)]
+struct ServerWorking(Arc<dyn Fn(LspJob) -> Option<LspAnswer> + Send + Sync>);
+
+#[derive(Clone, Copy)]
+struct ServerAsking(State<Option<LspJobs>>);
+
+/// What the worker was asked for, as a test can compare it.
+#[derive(Debug, PartialEq, Eq)]
+enum AskedOfServer {
+    Start(PathBuf),
+    Ask(Lookup),
+    Read(PathBuf),
+    Stop,
+}
+
+fn server_harness() -> Element {
+    let states = use_project_states();
+    let language = use_consume::<Talking>().0;
+    let work = use_consume::<ServerWorking>().0;
+    let mut asking = use_consume::<ServerAsking>().0;
+
+    let jobs = use_language_with(language, states.proj, move |job| work(job));
+    use_hook(move || asking.set(Some(jobs)));
+    // The prompt is at the app's root, under the bar the control is in; here it is beside
+    // it, which is the same thing to everything that reaches it.
+    rect()
+        .expanded()
+        .child(ServerButton)
+        .child(TrustPrompt)
+        .into_element()
+}
+
+/// Mount the control over a worker that records every job and answers from `answer`.
+///
+/// The second form mounts over a project that is already there, which is what a restore
+/// leaves behind: it is set before the first render, so what the effects see on mount is
+/// the reopened project and not the empty one.
+macro_rules! mount_server {
+    ($answer:expr) => {
+        mount_server!($answer, OpenProject::default())
+    };
+    ($answer:expr, $open:expr) => {{
+        let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
+        let answer = $answer;
+        let work = move |job: LspJob| {
+            let recorded = match &job {
+                LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
+                LspJob::Ask { at, .. } => AskedOfServer::Ask(at.clone()),
+                LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
+                LspJob::Stop => AskedOfServer::Stop,
+            };
+            let _ = asked.send_blocking(recorded);
+            answer(job)
+        };
+
+        let (mut test, (states, language, asking)) = TestingRunner::new(
+            server_harness,
+            (200., 100.).into(),
+            move |runner: &mut _| {
+                let states = project_states!(runner);
+                let mut proj = states.proj;
+                proj.set($open);
+                runner.provide_root_context(move || ServerWorking(Arc::new(work)));
+                let language = runner
+                    .provide_root_context(|| Talking(State::create(Language::default())))
+                    .0;
+                let asking = runner
+                    .provide_root_context(|| ServerAsking(State::create(None)))
+                    .0;
+                (states, language, asking)
+            },
+            1.,
+        );
+        test.sync_and_update();
+
+        (test, states, language, asking, asks)
+    }};
+}
+
+/// The next job the worker was given, waited for: it takes them on a thread of its own.
+///
+/// Reading the project's own settings is passed over. It follows the project rather than
+/// a press, so every test with a directory in it would otherwise have to say so; the two
+/// that are about it read the state it fills instead.
+fn next_job(asks: &async_channel::Receiver<AskedOfServer>) -> Option<AskedOfServer> {
+    for _ in 0..500 {
+        match asks.try_recv() {
+            Ok(AskedOfServer::Read(_)) => continue,
+            Ok(asked) => return Some(asked),
+            Err(_) => {}
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    None
+}
+
+/// Whether the worker was asked for nothing a press asks for, the settings read that
+/// follows a project aside.
+fn nothing_pressed(asks: &async_channel::Receiver<AskedOfServer>) -> bool {
+    std::iter::from_fn(|| asks.try_recv().ok()).all(|asked| matches!(asked, AskedOfServer::Read(_)))
+}
+
+/// The middle of the control, which is the only thing in its harness.
+fn the_control() -> (f64, f64) {
+    let side = toggle_size();
+    ((side / 2.0) as f64, (side / 2.0) as f64)
+}
+
+/// Whether anything on screen is bordered in `colour`, which is how the control says which
+/// state it is in.
+fn bordered_in(test: &TestingRunner, colour: Color) -> bool {
+    test.find(|_, element| {
+        element
+            .style()
+            .borders
+            .iter()
+            .any(|border| border.fill == colour)
+            .then_some(())
+    })
+    .is_some()
+}
+
+/// Whether the control is drawn as the app's one coloured control, which is the whole of
+/// "a server is running" as the runner can see it.
+fn control_is_lit(test: &TestingRunner) -> bool {
+    test.find(|_, element| {
+        (element.style().background == Fill::Color(Palette::LIGHT.server_bg)).then_some(())
+    })
+    .is_some()
+}
+
+/// Sync until the control is in the state wanted, since the worker is a thread of its own
+/// and its answer arrives when it arrives -- and then a little further, so that what is
+/// drawn is that state and not the one before it. A pass is a render or a round of task
+/// polling and never both, so the pass that takes the answer draws nothing; ending on it
+/// leaves the control in the state before, which is what an assertion about its border
+/// then reads. `pump` settles again for the same reason.
+///
+/// Gives up rather than hanging: the assertion after it is what says what went wrong.
+fn until_server(test: &mut TestingRunner, language: State<Language>, wanted: &Lsp) {
+    for _ in 0..500 {
+        settle(test);
+        // Bound to a `let` of its own: the settle below polls the task that writes the
+        // very state this read.
+        let arrived = &language.read().state == wanted;
+        if arrived {
+            settle(test);
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// A project with somewhere to run a server over, and a reader who has agreed to it.
+///
+/// Two writes and a settle between them: the directory is what drops an agreement, so
+/// one made in the same write would be cleared by the effect that notices the change.
+/// The prompt is its own tests' subject.
+fn with_a_directory(test: &mut TestingRunner, states: &ProjectStates, directory: &str) {
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_owned();
+    settle(test);
+    proj.write().trusted = true;
+    settle(test);
+}
+
+/// The control is what starts a server: nothing else does, the worker is asked over the
+/// project's own directory, and the control lights when the answer comes back.
+#[test]
+fn the_control_starts_a_server_and_lights_when_it_answers() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, asks) = mount_server!({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                run,
+                server: Ok(handle.clone()),
+            }),
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    // Mounting one, and giving the project a directory, are not asking for a server.
+    assert!(nothing_pressed(&asks), "a server was started by itself");
+    assert_eq!(language.read().state, Lsp::Off);
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+    assert_eq!(language.read().state, Lsp::Running);
+    assert!(control_is_lit(&test), "a running server is not lit");
+}
+
+/// The control says what it is and how it is going: its name in words, and a border that
+/// is the failure's colour when there is one.
+#[test]
+fn the_control_is_named_and_bordered_in_the_state_it_is_in() {
+    let (mut test, states, language, _asking, _asks) = mount_server!(|job: LspJob| match job {
+        LspJob::Start { run, .. } => Some(LspAnswer::Started {
+            run,
+            server: Err(lsp::Failure::NoServer("not found".to_owned())),
+        }),
+        _ => None,
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    assert!(
+        labels(&test).iter().any(|label| label == "LSP"),
+        "the control does not say what it is: {:?}",
+        labels(&test)
+    );
+    // Off and untouched it is text alone: nothing has been started, so nothing is drawn
+    // as holding anything.
+    assert!(
+        !bordered_in(&test, Palette::LIGHT.hairline),
+        "a control nobody has asked anything of is drawn as a box"
+    );
+    test.move_cursor(the_control());
+    settle(&mut test);
+    assert!(
+        bordered_in(&test, Palette::LIGHT.hairline),
+        "the pointer over it does not say a press would do something"
+    );
+
+    press_at(&mut test, the_control());
+    until_server(
+        &mut test,
+        language,
+        &Lsp::Failed(lsp::Failure::NoServer("not found".to_owned()).to_string()),
+    );
+
+    assert!(
+        bordered_in(&test, Palette::LIGHT.invalid_fg),
+        "a failure is not on the control"
+    );
+    // And the name does not change with the state: the history buttons sit beside it.
+    assert!(labels(&test).iter().any(|label| label == "LSP"));
+}
+
+/// The next press stops it: the process is killed from here rather than asked to leave,
+/// and the worker is told to let go of what it was talking to.
+#[test]
+fn the_next_press_stops_the_server() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, asks) = mount_server!({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                run,
+                server: Ok(handle.clone()),
+            }),
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+    assert_eq!(language.read().state, Lsp::Running);
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+
+    assert_eq!(language.read().state, Lsp::Off);
+    assert!(
+        handle.finished(),
+        "the server was let go of instead of killed"
+    );
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+    assert_eq!(next_job(&asks), Some(AskedOfServer::Stop));
+    assert!(!control_is_lit(&test), "a stopped server is still lit");
+}
+
+/// A rust-analyzer that is not installed is what most machines will answer, and it is not
+/// an error anywhere: the control goes back to off, and the reason is on it.
+#[test]
+fn a_server_that_will_not_start_leaves_the_reason_on_the_control() {
+    let (mut test, states, language, _asking, _asks) = mount_server!(|job: LspJob| match job {
+        LspJob::Start { run, .. } => Some(LspAnswer::Started {
+            run,
+            server: Err(lsp::Failure::NoServer("not found".to_owned())),
+        }),
+        _ => None,
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    until_server(
+        &mut test,
+        language,
+        &Lsp::Failed(lsp::Failure::NoServer("not found".to_owned()).to_string()),
+    );
+
+    let state = language.read().state.clone();
+    let Lsp::Failed(why) = state else {
+        panic!("a server that would not start left the control at {state:?}");
+    };
+    assert!(why.contains("not found"), "{why}");
+    assert!(!control_is_lit(&test), "a server that never started is lit");
+
+    // And what the control says on hover is that reason, which is the only place it is
+    // said. The tooltip itself is half a second of real time away (`agents/Headless.md`),
+    // so what is asserted is the words it would be given.
+    assert!(
+        language.read().words().contains("not found"),
+        "the control would say nothing about why"
+    );
+
+    // And leaving the project takes the reason with it: it was about that project.
+    with_a_directory(&mut test, &states, "/elsewhere");
+    assert_eq!(language.read().state, Lsp::Off);
+}
+
+/// An answer about a server nobody is waiting for any more is dropped -- and the handle it
+/// carries is stopped rather than dropped, this being the first moment the app holds it.
+#[test]
+fn an_answer_for_a_server_that_was_stopped_is_dropped() {
+    let late = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, _asks) = mount_server!({
+        let late = late.clone();
+        move |job: LspJob| match job {
+            // An answer for the run before this one, which is what a start that was
+            // stopped while it was starting looks like from here.
+            LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                run: run.saturating_sub(1),
+                server: Ok(late.clone()),
+            }),
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    for _ in 0..500 {
+        settle(&mut test);
+        if late.finished() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    assert_eq!(
+        language.read().state,
+        Lsp::Starting,
+        "an answer for another run was taken"
+    );
+    assert!(
+        late.finished(),
+        "a server nobody wanted was dropped instead of stopped"
+    );
+}
+
+/// Leaving the project ends its server: it was started over that directory, and the next
+/// project is not what it read.
+#[test]
+fn changing_the_project_stops_the_server() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, asks) = mount_server!({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                run,
+                server: Ok(handle.clone()),
+            }),
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+    assert_eq!(language.read().state, Lsp::Running);
+
+    with_a_directory(&mut test, &states, "/elsewhere");
+
+    assert_eq!(language.read().state, Lsp::Off);
+    assert!(
+        handle.finished(),
+        "the old project's server is still running"
+    );
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+    assert_eq!(next_job(&asks), Some(AskedOfServer::Stop));
+}
+
+/// A question is only asked while a server is running: nothing about a question starts
+/// one, which is the other half of "the control is what starts it".
+#[test]
+fn a_question_asked_with_no_server_running_asks_nobody() {
+    let (mut test, states, language, asking, asks) = mount_server!(|job: LspJob| match job {
+        LspJob::Start { run, .. } => Some(LspAnswer::Started {
+            run,
+            server: Err(lsp::Failure::NoServer("not found".to_owned())),
+        }),
+        _ => None,
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    let jobs = asking.read().clone().expect("the worker");
+    let at = Lookup {
+        file: PathBuf::from("/p/src/main.rs"),
+        line: 12,
+        column: 4,
+    };
+    ask_definition(language, &jobs, at.clone());
+    settle(&mut test);
+    assert!(
+        nothing_pressed(&asks),
+        "a question was asked with nothing to ask"
+    );
+
+    // A server that was asked for and did not start is not one to ask either. The state
+    // is what says the worker has been round: the start is recorded before it answers.
+    press_at(&mut test, the_control());
+    until_server(
+        &mut test,
+        language,
+        &Lsp::Failed(lsp::Failure::NoServer("not found".to_owned()).to_string()),
+    );
+    assert!(matches!(language.read().state, Lsp::Failed(_)));
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+
+    ask_definition(language, &jobs, at);
+    settle(&mut test);
+    assert!(
+        nothing_pressed(&asks),
+        "a question was asked of a server that never started"
+    );
+}
+
+/// The Project view says how the language server went, the failure that keeps it from
+/// running included: the control in the top bar is a tooltip, and a reason worth reading
+/// twice belongs somewhere it stays.
+#[test]
+fn the_project_view_says_how_the_language_server_went() {
+    let (mut test, states, language, _asking, _asks) =
+        mount_project!(|_: BuildJob| BuildAnswer::Read {
+            manifest: None,
+            debug_lines: false,
+        });
+
+    let says = |test: &TestingRunner, wanted: &str| {
+        labels(test).iter().any(|label| label.starts_with(wanted))
+    };
+
+    // With no directory there is nothing to run one over, and that is what it says.
+    assert!(says(&test, "No directory"));
+
+    let mut proj = states.proj;
+    proj.write().directory = "/p".to_owned();
+    settle(&mut test);
+    assert!(says(&test, "Not running"), "{:?}", labels(&test));
+
+    let mut language = language;
+    let failed = "could not start rust-analyzer: not found";
+    let mut next = language.peek().clone();
+    next.state = Lsp::Failed(failed.to_owned());
+    language.set(next);
+    settle(&mut test);
+    assert!(
+        says(&test, failed),
+        "the reason is nowhere in the view: {:?}",
+        labels(&test)
+    );
+}
+
+/// A directory of this test's own with `text` in its `.vscode/settings.json`, named after
+/// the line that asked for it.
+fn a_project_with_settings(line: u32, text: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-lsp-settings-{}-{line}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join(".vscode")).expect("creating the test directory");
+    std::fs::write(directory.join(".vscode").join("settings.json"), text)
+        .expect("writing the settings file");
+    directory
+}
+
+/// The colour a label was drawn in, of the first one holding `has`.
+fn label_colour(test: &TestingRunner, has: &str) -> Option<Fill> {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    test.find(|node, _element| {
+        let element = node.element();
+        (element.as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .filter(|label| label.text.contains(has))
+            .map(|label| label.text_style_data.color.clone())
+    })
+    .flatten()
+}
+
+/// The Project view lists what the project's own settings file gave the server: the name
+/// with `rust-analyzer.` off it and the value as it will be sent, so a reader can see what
+/// theirs is being told. The editor's own keys are not the server's and are not listed.
+#[test]
+fn the_project_view_lists_the_settings_the_project_gave_the_server() {
+    let directory = a_project_with_settings(
+        line!(),
+        r#"{
+            // the tree's own
+            "rust-analyzer.cargo.features": ["one"],
+            "git.detectSubmodulesLimit": 20
+        }"#,
+    );
+    let (mut test, states, language, _asking, _asks) =
+        mount_project!(|_: BuildJob| BuildAnswer::Read {
+            manifest: None,
+            debug_lines: false,
+        });
+
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    pump(&mut test, || !language.peek().overrides().is_empty());
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "cargo.features"),
+        "{drawn:?}"
+    );
+    assert!(drawn.iter().any(|text| text == r#"["one"]"#), "{drawn:?}");
+    assert!(
+        drawn.iter().any(|text| text.contains(lsp::SETTINGS)),
+        "the file the settings came out of is not named: {drawn:?}"
+    );
+    assert!(
+        !drawn.iter().any(|text| text.contains("detectSubmodules")),
+        "an editor's own setting was listed: {drawn:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// And says why a settings file could not be used, in the colour the other failure in that
+/// section is in: it is read whether or not a server is running, and it is the one thing
+/// that stops a start before it is one.
+#[test]
+fn the_project_view_says_why_a_settings_file_could_not_be_used() {
+    let directory = a_project_with_settings(
+        line!(),
+        r#"{ "rust-analyzer.cargo.sysrootSrc": "${userHome}/rust" }"#,
+    );
+    let (mut test, states, language, _asking, _asks) =
+        mount_project!(|_: BuildJob| BuildAnswer::Read {
+            manifest: None,
+            debug_lines: false,
+        });
+
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    pump(&mut test, || language.peek().unreadable().is_some());
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text.contains("userHome")),
+        "the variable nothing could be put in place of is not named: {drawn:?}"
+    );
+    assert_eq!(
+        label_colour(&test, "userHome"),
+        Some(Fill::Color(Palette::LIGHT.invalid_fg)),
+        "a settings file that could not be read is not said to be a failure"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Which language server a project is read with is the project's own setting: typed into
+/// the view, saved with it, and what the press actually starts.
+#[test]
+fn the_project_names_the_language_server_it_is_read_with() {
+    let (mut test, states, _language, _asking, _asks) =
+        mount_project!(|_: BuildJob| BuildAnswer::Read {
+            manifest: None,
+            debug_lines: false,
+        });
+    let mut proj = states.proj;
+
+    // Unsaid, it is the usual one, and nothing is written into the file about it.
+    assert_eq!(proj.read().server(), lsp::SERVER);
+    assert_eq!(proj.read().details().language_server, None);
+
+    proj.write().language_server = "  ra-multiplex  ".to_owned();
+    settle(&mut test);
+    assert_eq!(proj.read().server(), "ra-multiplex");
+    // Trimmed on the way to the file, as the name and the directory are.
+    assert_eq!(
+        proj.read().details().language_server.as_deref(),
+        Some("ra-multiplex")
+    );
+}
+
+/// The view's own button starts the server and then stops it, the same two presses the
+/// top bar's control is, so a reader who is in the Project view need not go looking.
+#[test]
+fn the_project_views_button_starts_and_stops_the_language_server() {
+    let (mut test, states, language, _asking, _asks) =
+        mount_project!(|_: BuildJob| BuildAnswer::Read {
+            manifest: None,
+            debug_lines: false,
+        });
+    let mut proj = states.proj;
+    proj.write().directory = "/p".to_owned();
+    settle(&mut test);
+    proj.write().trusted = true;
+    settle(&mut test);
+
+    let start = centre_of(&test, "Start");
+    press_at(&mut test, start);
+    until_server(&mut test, language, &Lsp::Running);
+    assert_eq!(language.read().state, Lsp::Running);
+
+    // And the button is the other one now, which is the whole of it being one control.
+    let stop = centre_of(&test, "Stop");
+    press_at(&mut test, stop);
+    settle(&mut test);
+    assert_eq!(language.read().state, Lsp::Off);
+}
+
+/// A server reading the project says so through the same channel it was started with, and
+/// the control and the Project view both say it is working rather than that it is idle.
+#[test]
+fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, _asks) = mount_server!({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, notes, .. } => {
+                // What the server's own reader thread does when `$/progress` arrives.
+                let _ = notes.send_blocking((run, lsp::Note::Busy(true)));
+                Some(LspAnswer::Started {
+                    run,
+                    server: Ok(handle.clone()),
+                })
+            }
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+    for _ in 0..500 {
+        settle(&mut test);
+        if language.read().working {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let held = language.read().clone();
+    assert!(
+        held.working,
+        "the server's own account of itself was dropped"
+    );
+    // What the control draws a turning loader for instead of its icon, and what both
+    // places say in words.
+    assert!(held.busy());
+    assert!(
+        held.words().contains("reading the project"),
+        "{}",
+        held.words()
+    );
+    assert_eq!(held.status(true).0, "Reading the project...");
+
+    // And it is still running: working is what it is doing, not a state of its own.
+    assert!(control_is_lit(&test), "a working server is not lit");
+}
+
+/// A question asked while the server is still starting is asked all the same: it queues
+/// behind the start, and is answered once there is somebody to answer it.
+#[test]
+fn a_question_asked_while_it_is_starting_waits_for_it() {
+    // Nothing answers the start, so the control stays on `Starting`.
+    let (mut test, states, language, asking, asks) = mount_server!(|_: LspJob| None);
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+    assert_eq!(language.read().state, Lsp::Starting);
+
+    let jobs = asking.read().clone().expect("the worker");
+    let at = Lookup {
+        file: PathBuf::from("/p/src/main.rs"),
+        line: 3,
+        column: 0,
+    };
+    ask_definition(language, &jobs, at.clone());
+
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+    assert_eq!(next_job(&asks), Some(AskedOfServer::Ask(at)));
+}
+
+/// A start carries what the project's own settings file said, laid over what this app asks
+/// of every server. Both halves are silent when they are wrong -- a server ignores a key
+/// that kept its prefix and one whose dots were not split -- so what the worker is handed
+/// is the assertion.
+#[test]
+fn a_start_carries_the_projects_own_settings() {
+    let read = lsp::settings_from(
+        r#"{ "rust-analyzer.cargo.features": ["one"] }"#,
+        Path::new("/p"),
+    )
+    .expect("a file that reads");
+    let (sent, options) = async_channel::unbounded::<String>();
+    let (mut test, states, language, _asking, _asks) = mount_server!({
+        move |job: LspJob| match job {
+            LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
+                settings: Ok(read.clone()),
+                directory,
+            }),
+            LspJob::Start { run, settings, .. } => {
+                let _ = sent.send_blocking(settings.options().to_string());
+                Some(LspAnswer::Started {
+                    run,
+                    server: Ok(lsp::Handle::to_nothing()),
+                })
+            }
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+    pump(&mut test, || !language.peek().overrides().is_empty());
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+
+    let options = options.try_recv().expect("the start carried options");
+    assert_eq!(
+        options,
+        r#"{"cargo":{"features":["one"]},"checkOnSave":false}"#
+    );
+}
+
+/// A settings file that could not be used starts nothing, and the reason is where a
+/// failure to start is said. What would otherwise reach the server is a path that silently
+/// is not there, which is worse than not starting.
+#[test]
+fn a_settings_file_that_could_not_be_read_starts_nothing() {
+    let (mut test, states, language, _asking, asks) = mount_server!(|job: LspJob| match job {
+        LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
+            settings: Err(lsp::Unreadable::NotAnObject),
+            directory,
+        }),
+        LspJob::Start { run, .. } => Some(LspAnswer::Started {
+            run,
+            server: Ok(lsp::Handle::to_nothing()),
+        }),
+        _ => None,
+    });
+    with_a_directory(&mut test, &states, "/p");
+    pump(&mut test, || language.peek().unreadable().is_some());
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+
+    let held = language.read().clone();
+    assert_eq!(
+        held.state,
+        Lsp::Failed(lsp::Unreadable::NotAnObject.to_string())
+    );
+    assert!(nothing_pressed(&asks), "a server was started all the same");
+}
+
+/// The queue is drained to the last question, and to every start and stop: a reader
+/// clicking twice wants the second answer, and a press is never dropped.
+#[test]
+fn the_queue_keeps_the_last_question_and_every_press() {
+    let at = |line: u32| Lookup {
+        file: PathBuf::from("/p/src/main.rs"),
+        line,
+        column: 0,
+    };
+    let names = |jobs: &[LspJob]| -> Vec<String> {
+        jobs.iter()
+            .map(|job| match job {
+                LspJob::Start { .. } => "start".to_owned(),
+                LspJob::Ask { at, .. } => format!("ask {}", at.line),
+                LspJob::ReadSettings { directory } => format!("read {}", directory.display()),
+                LspJob::Stop => "stop".to_owned(),
+            })
+            .collect()
+    };
+
+    let drained = worth_doing(
+        LspJob::Ask { run: 1, at: at(1) },
+        vec![
+            LspJob::Ask { run: 1, at: at(2) },
+            LspJob::ReadSettings {
+                directory: PathBuf::from("/old"),
+            },
+            LspJob::Stop,
+            LspJob::Start {
+                run: 2,
+                directory: PathBuf::from("/p"),
+                program: "rust-analyzer".to_owned(),
+                settings: lsp::Settings::none(),
+                notes: async_channel::unbounded().0,
+            },
+            LspJob::ReadSettings {
+                directory: PathBuf::from("/p"),
+            },
+            LspJob::Ask { run: 2, at: at(3) },
+        ]
+        .into_iter(),
+    );
+    // The last read as well as the last question: a directory typed a letter at a time
+    // asks for one a keystroke, and only the last is about the project that is open.
+    assert_eq!(names(&drained), ["stop", "start", "read /p", "ask 3"]);
+
+    // One of a kind is simply itself.
+    let alone = worth_doing(LspJob::Ask { run: 1, at: at(9) }, std::iter::empty());
+    assert_eq!(names(&alone), ["ask 9"]);
+}
+
+/// A start over a directory nobody has agreed to is a question and not a start: a server
+/// runs the project's own build scripts and macros, so the reader is asked first.
+#[test]
+fn a_press_over_a_directory_nobody_agreed_to_asks_before_it_starts() {
+    let (mut test, states, language, _asking, asks) = mount_server!(|job: LspJob| match job {
+        LspJob::Start { run, .. } => Some(LspAnswer::Started {
+            run,
+            server: Ok(lsp::Handle::to_nothing()),
+        }),
+        _ => None,
+    });
+    let mut proj = states.proj;
+    proj.write().directory = "/p".to_owned();
+    settle(&mut test);
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+
+    assert_eq!(language.read().state, Lsp::Off, "a server was started");
+    assert!(nothing_pressed(&asks), "the worker was told to start one");
+
+    // The question, what it means, the directory it is about, and the two answers.
+    let drawn = labels(&test);
+    let says = |wanted: &str| drawn.iter().any(|text| text.contains(wanted));
+    assert!(says("read this directory"), "{drawn:?}");
+    assert!(says("build scripts"), "{drawn:?}");
+    assert!(says("/p"), "{drawn:?}");
+    assert!(says("Start it") && says("Not now"), "{drawn:?}");
+}
+
+/// Agreeing starts it, once, and the project keeps the answer: it is written where the
+/// name and the directory are.
+#[test]
+fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, asks) = mount_server!({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                run,
+                server: Ok(handle.clone()),
+            }),
+            _ => None,
+        }
+    });
+    let mut proj = states.proj;
+    proj.write().directory = "/p".to_owned();
+    settle(&mut test);
+    press_at(&mut test, the_control());
+    settle(&mut test);
+
+    let agree = centre_of(&test, "Start it");
+    press_at(&mut test, agree);
+    until_server(&mut test, language, &Lsp::Running);
+
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+    assert!(nothing_pressed(&asks), "the one press started two servers");
+    assert_eq!(language.read().state, Lsp::Running);
+
+    // The question is gone, and the answer is in what `project.toml` is written from.
+    assert!(!labels(&test).iter().any(|text| text == "Start it"));
+    assert!(proj.read().trusted);
+    assert!(proj.read().details().trusted);
+}
+
+/// Declining starts nothing and is remembered nowhere: the next press asks again, since
+/// what was answered was the press and not the project.
+#[test]
+fn declining_starts_nothing_and_is_not_remembered() {
+    let (mut test, states, language, _asking, asks) = mount_server!(|job: LspJob| match job {
+        LspJob::Start { run, .. } => Some(LspAnswer::Started {
+            run,
+            server: Ok(lsp::Handle::to_nothing()),
+        }),
+        _ => None,
+    });
+    let mut proj = states.proj;
+    proj.write().directory = "/p".to_owned();
+    settle(&mut test);
+    press_at(&mut test, the_control());
+    settle(&mut test);
+
+    let decline = centre_of(&test, "Not now");
+    press_at(&mut test, decline);
+    settle(&mut test);
+
+    assert!(
+        nothing_pressed(&asks),
+        "a declined start reached the worker"
+    );
+    assert_eq!(language.read().state, Lsp::Off);
+    assert!(language.read().asking.is_none(), "the question is still up");
+    assert!(!proj.read().trusted, "a no was written into the project");
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+    assert!(
+        labels(&test).iter().any(|text| text == "Start it"),
+        "the second press did not ask again"
+    );
+}
+
+/// A project that agreed in some earlier run is not asked again: the answer comes back
+/// with the project, and the effect that drops it on a change does not count its own
+/// mount as one.
+#[test]
+fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, asks) = mount_server!(
+        {
+            let handle = handle.clone();
+            move |job: LspJob| match job {
+                LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                    run,
+                    server: Ok(handle.clone()),
+                }),
+                _ => None,
+            }
+        },
+        OpenProject {
+            directory: "/p".to_owned(),
+            trusted: true,
+            ..OpenProject::default()
+        }
+    );
+
+    // Settled first, so the effect that drops an agreement on a change has been round:
+    // its first run is the mount, and the mount is not a change.
+    settle(&mut test);
+    assert!(
+        states.proj.read().trusted,
+        "the launch threw away what was restored"
+    );
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+    assert!(
+        !labels(&test).iter().any(|text| text == "Start it"),
+        "a project that had already agreed was asked again"
+    );
+}
+
+/// The agreement is about a directory, so editing the directory takes it back: the server
+/// stops and the next press asks about the new one.
+#[test]
+fn changing_the_directory_asks_about_the_new_one() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, _asks) = mount_server!({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                run,
+                server: Ok(handle.clone()),
+            }),
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+
+    let mut proj = states.proj;
+    proj.write().directory = "/elsewhere".to_owned();
+    settle(&mut test);
+
+    assert!(!proj.read().trusted, "the agreement outlived its directory");
+    assert_eq!(language.read().state, Lsp::Off);
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text == "Start it"), "{drawn:?}");
+    assert!(drawn.iter().any(|text| text == "/elsewhere"), "{drawn:?}");
+}
+
+/// The Project view says whether the reader has agreed to a server reading this directory,
+/// and is the way back: taking it back forgets the answer and stops the server it was
+/// given for, since a reader who did not mean to let a program read their project has said
+/// something about the one reading it now.
+#[test]
+fn the_project_view_shows_the_agreement_and_takes_it_back() {
+    let (mut test, states, language, _asking, _asks) =
+        mount_project!(|_: BuildJob| BuildAnswer::Read {
+            manifest: None,
+            debug_lines: false,
+        });
+    let mut proj = states.proj;
+    proj.write().directory = "/p".to_owned();
+    settle(&mut test);
+
+    // Nobody has agreed to anything yet, and it says so rather than saying nothing.
+    assert!(labels(&test).iter().any(|text| text == "Not agreed to"));
+    assert!(!labels(&test).iter().any(|text| text == "Take it back"));
+
+    // The view's own Start asks, and agreeing is what the question is for.
+    let start = centre_of(&test, "Start");
+    press_at(&mut test, start);
+    settle(&mut test);
+    let agree = centre_of(&test, "Start it");
+    press_at(&mut test, agree);
+    until_server(&mut test, language, &Lsp::Running);
+    assert!(proj.read().trusted);
+    assert!(labels(&test).iter().any(|text| text == "Agreed to"));
+
+    let back = centre_of(&test, "Take it back");
+    press_at(&mut test, back);
+    settle(&mut test);
+
+    assert!(!proj.read().trusted, "the answer outlived being taken back");
+    assert_eq!(
+        language.read().state,
+        Lsp::Off,
+        "a server kept reading a directory the reader had just refused it"
+    );
+    assert!(labels(&test).iter().any(|text| text == "Not agreed to"));
+}
+
+/// A project arriving is not the reader pointing this one somewhere else: the agreement
+/// travels with the project it was given to, and switching to one that agreed before does
+/// not ask again -- and, worse than asking, does not write that `false` back into the file
+/// it was just read from. The server still stops: it was the other project's.
+#[test]
+fn switching_projects_keeps_the_answer_the_new_one_brought() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, _asks) = mount_server!({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                run,
+                server: Ok(handle.clone()),
+            }),
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+
+    // What a switch does to these states: the id and the directory arrive together, out of
+    // the other project's own file, with its own answer.
+    let mut proj = states.proj;
+    let mut open = proj.peek().clone();
+    open.id = ProjectId::new("other-1");
+    open.directory = "/elsewhere".to_owned();
+    open.trusted = true;
+    proj.set(open);
+    settle(&mut test);
+
+    assert!(
+        proj.read().trusted,
+        "the project's own agreement was taken off it on the way in"
+    );
+    assert_eq!(
+        language.read().state,
+        Lsp::Off,
+        "the server outlived the project it was started for"
+    );
+
+    // And a press starts it, rather than asking about a directory this project already
+    // answered for.
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, &Lsp::Running);
+    let drawn = labels(&test);
+    assert!(!drawn.iter().any(|text| text == "Start it"), "{drawn:?}");
+}
+
+/// The Project view's own Start button asks the same question, which is answered in the
+/// same place: the two presses are one control.
+#[test]
+fn the_project_views_button_asks_before_it_starts_too() {
+    let (mut test, states, language, _asking, _asks) =
+        mount_project!(|_: BuildJob| BuildAnswer::Read {
+            manifest: None,
+            debug_lines: false,
+        });
+    let mut proj = states.proj;
+    proj.write().directory = "/p".to_owned();
+    settle(&mut test);
+
+    let start = centre_of(&test, "Start");
+    press_at(&mut test, start);
+    settle(&mut test);
+    assert_eq!(language.read().state, Lsp::Off, "it started without asking");
+
+    let agree = centre_of(&test, "Start it");
+    press_at(&mut test, agree);
+    until_server(&mut test, language, &Lsp::Running);
+
+    assert_eq!(language.read().state, Lsp::Running);
+    assert!(proj.read().trusted);
 }

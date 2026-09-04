@@ -28,6 +28,36 @@ fn binary_row(path: &Path, objects: usize) -> Element {
     .into_element()
 }
 
+/// One setting the project's own `.vscode/settings.json` gave the language server: the
+/// name with `rust-analyzer.` off it, and the value as it will be sent.
+///
+/// A row and not a `field_row`: these names are long enough to be the whole of the left
+/// column and there is no reason for the values to line up with the fields above.
+fn override_row(name: &str, value: &str) -> Element {
+    rect()
+        .width(Size::fill())
+        .height(Size::px(list_row_height()))
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .content(Content::Flex)
+        .spacing(8.0)
+        .padding(Gaps::new_symmetric(0.0, 5.0))
+        .child(
+            label()
+                .text(name.to_owned())
+                .color(palette().text_fg)
+                .max_lines(1),
+        )
+        .child(
+            label()
+                .text(value.to_owned())
+                .width(Size::flex(1.0))
+                .color(palette().address_fg)
+                .max_lines(1),
+        )
+        .into_element()
+}
+
 /// One thing the last build produced. Pressing it opens the file as a binary, unless it is
 /// open already: opening a path twice would put a second copy of each of its objects in
 /// the list.
@@ -291,6 +321,12 @@ impl Component for ProjectTab {
         // component to the build, so a finished one redraws the rows below.
         let build = states.build;
         let held = build.read().clone();
+        // The language server's, which this view only says how it went; the control that
+        // starts and stops it is in the top bar (`src/ui/language.rs`).
+        let language = use_consume::<Talking>().0;
+        // Read into a value of its own: the presses below write the state this looked at.
+        let spoken = language.read().clone();
+        let lsp = use_consume::<LspJobs>();
         let jobs = use_consume::<BuildJobs>();
         let directory = workspace(&open);
         let profile = open.profile;
@@ -538,6 +574,115 @@ impl Component for ProjectTab {
                                 .children(diagnostics)
                                 .into_element(),
                         })
+                        .child(section_heading(
+                            "Language server",
+                            Some({
+                                let lsp = lsp.clone();
+                                let started = spoken.started();
+                                Button::new()
+                                    // Nothing to run one over is the one state neither
+                                    // press has an answer to.
+                                    .enabled(directory.is_some())
+                                    .on_press(move |_| {
+                                        // Asked again at the press, and bound before the
+                                        // write: the state may have moved since the
+                                        // render, and a guard held over a write panics.
+                                        let started = language.peek().started();
+                                        match started {
+                                            true => stop_server(language, &lsp),
+                                            // Which asks first where the reader has not
+                                            // agreed to the directory yet.
+                                            false => start_server(language, proj, &lsp),
+                                        }
+                                    })
+                                    .child(match started {
+                                        true => "Stop",
+                                        false => "Start",
+                                    })
+                                    .into_element()
+                            }),
+                        ))
+                        // Which program, named rather than assumed: a project on a
+                        // toolchain of its own is read by a server this app cannot guess,
+                        // and a reader who has one needs somewhere to say so. Straight
+                        // into `Proj`, so a keystroke is saved like a rename.
+                        .child(field_row(
+                            "Program",
+                            Input::new(proj.into_writable().map(
+                                |open| &open.language_server,
+                                |open| &mut open.language_server,
+                            ))
+                            .placeholder(lsp::SERVER)
+                            .width(Size::fill()),
+                        ))
+                        // Whether the reader has agreed to a server reading this
+                        // directory, and the way back. Agreeing happens where the question
+                        // is asked, at the start it holds up; taking it back has nowhere
+                        // else to live, and a reader who cannot see the answer they gave
+                        // cannot change their mind about it.
+                        .maybe_child(directory.is_some().then(|| {
+                            field_row(
+                                "Directory",
+                                rect()
+                                    .width(Size::fill())
+                                    .horizontal()
+                                    .cross_align(Alignment::Center)
+                                    .content(Content::Flex)
+                                    .spacing(8.0)
+                                    .child(
+                                        label()
+                                            .text(match open.trusted {
+                                                true => "Agreed to".to_owned(),
+                                                false => "Not agreed to".to_owned(),
+                                            })
+                                            .width(Size::flex(1.0))
+                                            .color(palette().address_fg)
+                                            .max_lines(1),
+                                    )
+                                    .maybe(open.trusted, |row| {
+                                        row.child(
+                                            Button::new()
+                                                .on_press(move |_| {
+                                                    revoke_trust(language, proj, &lsp)
+                                                })
+                                                .child("Take it back"),
+                                        )
+                                    }),
+                            )
+                            .into_element()
+                        }))
+                        .child({
+                            let (text, bad) = spoken.status(directory.is_some());
+                            info_line_in(
+                                text,
+                                match bad {
+                                    true => palette().invalid_fg,
+                                    false => palette().address_fg,
+                                },
+                            )
+                            .into_element()
+                        })
+                        // What the project's own settings file gave the server, so a
+                        // reader can see what theirs is being told; and why it could not
+                        // be used, in the colour the failure above is in, since that file
+                        // is the one thing that stops a start before it is one. Nothing
+                        // at all where a project said nothing, which is most of them.
+                        .maybe_child(
+                            spoken
+                                .unreadable()
+                                .map(|why| info_line_in(why, palette().invalid_fg).into_element()),
+                        )
+                        .maybe_child((!spoken.overrides().is_empty()).then(|| {
+                            info_line_in(format!("From {}", lsp::SETTINGS), palette().address_fg)
+                                .into_element()
+                        }))
+                        .children(
+                            spoken
+                                .overrides()
+                                .iter()
+                                .map(|(name, value)| override_row(name, value))
+                                .collect::<Vec<Element>>(),
+                        )
                         .child(section_heading(
                             "Recent projects",
                             Some(

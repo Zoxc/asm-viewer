@@ -41,6 +41,7 @@ pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::functions::{self, Function};
 pub(crate) use crate::history::{History, Stop};
 pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
+pub(crate) use crate::lsp;
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::project::{
@@ -83,6 +84,8 @@ mod focus;
 pub(crate) use focus::*;
 mod highlight;
 pub(crate) use highlight::*;
+mod language;
+pub(crate) use language::*;
 mod locations;
 pub(crate) use locations::*;
 mod marks;
@@ -249,6 +252,7 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
                 .horizontal()
                 .margin(4.0)
                 .spacing(2.0)
+                .child(ServerButton)
                 .child(NavButton { back: true })
                 .child(NavButton { back: false }),
         )
@@ -442,6 +446,12 @@ pub fn app() -> impl IntoElement {
 
     use_building_with(build, states, build_work);
 
+    // At the root for the reason the other three are, and one more: a language server is a
+    // process, and a process that outlives the view it was started from is one nothing can
+    // stop.
+    let language = use_provide_context(|| Talking(State::create(Language::default()))).0;
+    use_language_with(language, proj, language_work());
+
     // Docking cannot express a fixed pixel width, which is why the outer split is a
     // `ResizableContainer` and not a `DockingArea`: a fixed 300px sidebar beside the one
     // proportional panel, which therefore takes whatever is left.
@@ -496,6 +506,11 @@ pub fn app() -> impl IntoElement {
         // Over everything, and drawn as nothing at all until a file has been moved aside.
         .child(RescuedPopup)
         .child(toolbar(objects, loading))
+        // Under the bar rather than in the view that has the other Start button: the
+        // control above is pressed from wherever the reader is, and a question drawn
+        // where they are not looking is a press that did nothing. Lays out as nothing
+        // while there is nothing to ask.
+        .child(TrustPrompt)
         // `ResizableContainer` renders itself `.expanded()`, so it needs a parent that
         // has already been given the leftover height under the toolbar.
         .child(

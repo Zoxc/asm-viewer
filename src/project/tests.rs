@@ -1181,6 +1181,8 @@ fn opening_a_binary_is_written_at_once() {
             Project {
                 name: None,
                 directory: None,
+                language_server: None,
+                trusted: false,
                 binaries: paths(&["/tmp/lib.a"]),
                 cargo: None,
                 bookmarks: Vec::new(),
@@ -1292,6 +1294,8 @@ fn a_record_keeps_the_name_the_project_was_given() {
     let named = Project {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
+        language_server: None,
+        trusted: false,
         binaries: paths(&["/tmp/vmlinux"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1314,6 +1318,8 @@ fn reopening_seeds_the_name_but_not_the_baseline() {
     let loaded = Project {
         name: Some("kernel".into()),
         directory: None,
+        language_server: None,
+        trusted: false,
         binaries: paths(&["/tmp/vmlinux"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1340,6 +1346,8 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
     let named = Details {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
+        language_server: None,
+        trusted: false,
         cargo: None,
     };
     let written = saves
@@ -1355,6 +1363,8 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
         Project {
             name: named.name.clone(),
             directory: named.directory.clone(),
+            language_server: None,
+            trusted: false,
             binaries: paths(&["/tmp/lib.a"]),
             cargo: None,
             bookmarks: Vec::new(),
@@ -1383,6 +1393,8 @@ fn clearing_a_name_is_a_change_too() {
     saves.opened(
         ProjectId::new("kernel-1").expect("an id"),
         &Project {
+            language_server: None,
+            trusted: false,
             name: Some("kernel".into()),
             ..Project::default()
         },
@@ -1404,6 +1416,8 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
     let loaded = Project {
         name: None,
         directory: None,
+        language_server: None,
+        trusted: false,
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1413,6 +1427,8 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
     let named = Details {
         name: Some("kernel".into()),
         directory: None,
+        language_server: None,
+        trusted: false,
         cargo: None,
     };
     let written = saves
@@ -1446,6 +1462,8 @@ fn entering_a_project_empties_every_baseline() {
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
 
     let entered = Project {
+        language_server: None,
+        trusted: false,
         name: Some("other".into()),
         ..Project::default()
     };
@@ -1458,6 +1476,8 @@ fn entering_a_project_empties_every_baseline() {
             Details {
                 name: entered.name.clone(),
                 directory: entered.directory.clone(),
+                language_server: None,
+                trusted: false,
                 cargo: None,
             },
             Vec::new(),
@@ -1482,6 +1502,8 @@ fn a_project() -> Project {
     Project {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
+        language_server: Some("ra-multiplex".into()),
+        trusted: true,
         binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1498,8 +1520,19 @@ fn a_project_round_trips_through_toml() {
 
     let name = text.find("name = ").expect("the name");
     let directory = text.find("directory = ").expect("the directory");
+    let server = text
+        .find("language_server = ")
+        .expect("the language server");
+    let trusted = text.find("trusted = ").expect("the agreement");
     let binaries = text.find("binaries = ").expect("the binaries");
-    assert!(name < directory && directory < binaries, "{text}");
+    assert!(
+        name < directory && directory < server && server < trusted && trusted < binaries,
+        "{text}"
+    );
+    assert_eq!(
+        toml::from_str::<Project>(&text).expect("reading it back"),
+        project
+    );
 }
 
 /// Anonymous is an *absent* key, never an empty name a later reader could mistake for one
@@ -1513,6 +1546,12 @@ fn an_anonymous_project_writes_no_name() {
     let text = round_trip(&project);
     assert!(!text.contains("name"), "{text}");
     assert!(!text.contains("directory"), "{text}");
+    // And so is the language server: absent means the usual one, and an empty key would
+    // be a program named "".
+    assert!(!text.contains("language_server"), "{text}");
+    // And so is the agreement to run one, absent being the "no" a project nobody has
+    // asked about has to have.
+    assert!(!text.contains("trusted"), "{text}");
 }
 
 /// The split seen from the disk: each half in its own file, neither holding a word of the
@@ -1782,6 +1821,8 @@ fn the_recent_view_names_each_project_from_its_own_file() {
             &Project {
                 name: Some(name.to_owned()),
                 directory: Some(PathBuf::from("/src").join(name)),
+                language_server: None,
+                trusted: false,
                 binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
                 cargo: None,
                 bookmarks: Vec::new(),
@@ -2108,6 +2149,8 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
 #[test]
 fn bookmarks_are_written_after_the_binaries_and_name_first() {
     let project = Project {
+        language_server: None,
+        trusted: false,
         bookmarks: vec![
             Bookmark {
                 name: "kernel::start".into(),
@@ -2152,6 +2195,8 @@ fn bookmarks_are_written_after_the_binaries_and_name_first() {
 fn a_bookmarks_change_writes_the_project_file_alone() {
     let mut saves = Saves::new();
     let reopened = Project {
+        language_server: None,
+        trusted: false,
         bookmarks: vec![Bookmark {
             name: "caller".into(),
             document: saved_symbol("a.o", "caller", 0),
@@ -2252,6 +2297,8 @@ fn a_cargo_section_is_written_where_toml_can_read_it_back() {
     let project = Project {
         name: Some("kernel".into()),
         directory: Some(PathBuf::from("/src/kernel")),
+        language_server: None,
+        trusted: false,
         binaries: paths(&["/tmp/vmlinux"]),
         cargo: Some(Cargo {
             profile: Profile::Debug,
@@ -2285,6 +2332,8 @@ fn nothing_chosen_and_nothing_built_write_no_section() {
     let project = Project {
         name: None,
         directory: None,
+        language_server: None,
+        trusted: false,
         binaries: Vec::new(),
         cargo: None,
         bookmarks: Vec::new(),

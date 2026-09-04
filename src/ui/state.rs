@@ -225,6 +225,13 @@ pub(crate) struct OpenProject {
     pub(crate) id: Option<ProjectId>,
     pub(crate) name: String,
     pub(crate) directory: String,
+    /// The language server to read this project with, empty for the usual one. A box like
+    /// the two above: a project on a toolchain of its own is the only one that fills it.
+    pub(crate) language_server: String,
+    /// Whether the reader has agreed to a language server being run over the directory
+    /// above. A plain value like the profile below: the prompt has no third answer, and
+    /// a project that was never asked is one that has not agreed.
+    pub(crate) trusted: bool,
     /// What to build the directory with. A plain value and not an `Option`, since the two
     /// buttons that set it have no third state either; the file is what leaves it out.
     pub(crate) profile: Profile,
@@ -241,8 +248,17 @@ impl OpenProject {
                 .as_ref()
                 .map(|directory| directory.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            language_server: project.language_server.clone().unwrap_or_default(),
+            trusted: project.trusted,
             profile: project.cargo.clone().unwrap_or_default().profile,
         }
+    }
+
+    /// The program to read this project with: what the reader named, or the usual one.
+    pub(crate) fn server(&self) -> String {
+        given(&self.language_server)
+            .unwrap_or(lsp::SERVER)
+            .to_owned()
     }
 
     /// What of this reaches `project.toml`. Trimmed, so a box holding nothing but spaces
@@ -251,6 +267,8 @@ impl OpenProject {
         Details {
             name: given(&self.name).map(str::to_owned),
             directory: given(&self.directory).map(PathBuf::from),
+            language_server: given(&self.language_server).map(str::to_owned),
+            trusted: self.trusted,
             // Absent while it says nothing the defaults do not: a reader who has never
             // touched the profile leaves no `[cargo]` behind, and choosing the default
             // back takes the section out again.

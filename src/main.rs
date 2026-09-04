@@ -9,9 +9,11 @@ mod fonts;
 mod functions;
 mod history;
 mod lanes;
+mod lsp;
 mod naming;
 mod panics;
 mod pixels;
+mod process;
 mod project;
 mod rescue;
 mod rows;
@@ -41,6 +43,7 @@ fn main() {
                 .with_on_close(|_, _| {
                     project::flush();
                     scratchpad::stop_all();
+                    lsp::stop_all();
                     CloseDecision::Close
                 }),
         ),

@@ -101,7 +101,8 @@ command.
   that lets a panic hook tell one of those from a panic that has broken the app.
 - `src/cargo.rs` — running cargo and reading what it said: the artifacts it names, the
   diagnostics it reports, and the profile's debug information in the manifest being built.
-- `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
+- `src/project.rs` — projects: their identity, the two files each is stored in, the save policy,
+  and which language server each is read with.
 - `src/rescue.rs` — a stored file that will not parse, moved aside before a write replaces it.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
 - `src/source.rs` — source files read off disk and cached by path, failures included.
@@ -114,6 +115,11 @@ command.
 - `src/files.rs` — the project's directory as a tree: read one level per unfold, forgotten on
   the fold, and flattened into the rows the Files view draws.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
+- `src/lsp.rs` — the language server: the program the project names started over its
+  directory, the messages spoken to it, the project's own `.vscode/settings.json` read into
+  what it is told, and the process a stop kills.
+- `src/process.rs` — the process group a child is started in, so a stop reaches what it
+  started; a scratchpad's run and the language server both have one.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
 - `src/rows.rs` — the run of rows a reader selects to copy.
 - `src/chars.rs` — the run of characters a sweep over a row's text selects: a place is a row
@@ -159,6 +165,9 @@ command.
 - `src/ui/section_view.rs` — the section view: an object's code as one listing, its rows, the
   place it keeps as an address, and the window it asks for.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
+- `src/ui/language.rs` — whether a language server is running, what the project's own
+  settings said, the worker that talks to it, and the control in the top bar that starts and
+  stops it.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.
 - `src/ui/building.rs` — building the project's own workspace: what is held about it, the one
@@ -173,7 +182,8 @@ command.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
 - `src/ui/source_view.rs` — the source side of one, and which file it is showing.
 - `src/ui/dock.rs` — the dock, its two-kinded tab, and the document panel's own tab bar.
-- `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers.
+- `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers,
+  and what the language server has to say for itself.
 - `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
@@ -181,9 +191,9 @@ command.
 - `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
   it takes from that: what lets the code panes scroll sideways with their wash whole.
 
-Nine `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+Ten `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
 `project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`,
-`rescued_view`); the rest is in `agents/UI.md`.
+`rescued_view`, `language`); the rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's
 tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at
@@ -210,6 +220,9 @@ invalidates in the same commit**: these are the record of why things are the way
   the pair, landing, the arrow gutter, copying rows.
 - `agents/Sidebar.md` — the filtered lists, the Objects tree, closing a binary, the Project view.
 - `agents/Appearance.md` — the palette, theme switching, fonts, row heights, the Settings page.
+- `agents/Lsp.md` — the language server: why it is a control, the hand-rolled protocol and
+  what rust-analyzer needs of it, the process, what an answer is about, and what a project's
+  own settings file is read into.
 - `agents/Headless.md` — `freya-testing` as it actually behaves, checked against its sources.
 
 What the app *does*, the rules a finished feature follows, is in `notes/specs/`, one file per

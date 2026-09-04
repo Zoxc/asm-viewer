@@ -46,6 +46,12 @@ pub(crate) struct Palette {
     /// A filter toggle that is on, and one the pointer is over: two shades of the header's
     /// own grey.
     pub(crate) toggle_on_bg: Color,
+    /// Behind the language server's control while a server is running: the one place in
+    /// the app with a colour of its own, so that a process the reader started is visible
+    /// at a glance and tells itself apart from a toggle that happens to be on. **Barely a
+    /// colour**: enough purple to be told from the grey of a hover wash, and no more, since
+    /// it sits in a bar the reader looks past all day.
+    pub(crate) server_bg: Color,
     pub(crate) toggle_hover_bg: Color,
     /// The wash under the × on a dock tab while the pointer is on the × *itself* rather
     /// than merely on the tab. Translucent, because it sits on either of two grounds --
@@ -138,6 +144,7 @@ impl Palette {
         drop_preview_bg: Color::from_argb(60, 105, 89, 132),
         icon_fg: Color::from_rgb(90, 90, 90),
         toggle_on_bg: Color::from_rgb(196, 196, 196),
+        server_bg: Color::from_rgb(233, 229, 243),
         toggle_hover_bg: Color::from_rgb(225, 225, 225),
         close_hover_bg: Color::from_argb(70, 90, 90, 96),
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
@@ -186,6 +193,7 @@ impl Palette {
         drop_preview_bg: Color::from_argb(90, 150, 130, 190),
         icon_fg: Color::from_rgb(160, 160, 160),
         toggle_on_bg: Color::from_rgb(88, 88, 92),
+        server_bg: Color::from_rgb(64, 60, 76),
         toggle_hover_bg: Color::from_rgb(60, 60, 64),
         // Translucent, and stated the same way as the three above: what it comes out as
         // over a tab, which here means lifting the surface rather than darkening it.
