@@ -230,6 +230,18 @@ picking an open one shows it. A page opens **beside the tab on screen**, the way
 reader opens does. What a closed page was showing is state at the root of the app, so closing one
 loses nothing: a build or a run it started goes on, and it comes back as it was.
 
+**The tab on screen wears a rule along its top**, two pixels of it, and the colour says where the
+keyboard is: the source gutter's own `compiled_fg` purple while it is inside the tab, and
+`dimmed(icon_fg, pane_bg)` while it is anywhere else. It is drawn as a second `Border` on the chip
+rather than as a child, so it takes no room from the name. What "inside the tab" means is
+`Keyboard`, a root list of the focusable boxes a tab's body has -- the two code panes, an object's
+code listing, the scratchpad's editor -- each registering itself while it is mounted
+(`use_tab_keyboard`), and only the tab on screen is mounted. It is a **registration and a question
+asked at the draw**, not a flag written when a box takes the focus, because focus is *lost* without
+an event: something else asks for it and nothing tells the loser. `AccessibilityId::is_focused`
+reads the platform's own state, so asking is what subscribes the chip to the focus moving -- and
+only the chip that is showing asks, or every chip would re-render whenever the keyboard moved.
+
 **The × is a control of its own**, `TabClose`, and a component rather than another line of `chip`
 for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the `use_state`
 with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper. That is why the × reaches

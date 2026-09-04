@@ -365,6 +365,7 @@ pub fn app() -> impl IntoElement {
     let code_at = use_provide_context(|| CodeAt(State::create(Positions::default()))).0;
     let driven = use_provide_context(|| Drives(State::create(Driven::default()))).0;
     use_provide_context(|| Expanded(State::create(HashSet::new())));
+    use_provide_context(|| Keyboard(State::create(Vec::new())));
     use_provide_context(|| Follows(State::create(HashMap::new())));
     let visits = use_provide_context(|| Visited(State::create(Visits::default()))).0;
     let bookmarks = use_provide_context(|| Bookmarked(State::create(Bookmarks::default()))).0;

@@ -244,6 +244,7 @@ impl Component for SourceEditor {
     fn render(&self) -> impl IntoElement {
         let text = use_consume::<PadText>().0;
         let a11y_id = use_hook(AccessibilityId::new_unique);
+        use_tab_keyboard(a11y_id);
         let (reading, writing) = (self.pad.clone(), self.pad.clone());
         let text = text.into_writable().map(
             move |buffers: &PadBuffers| buffers.get(&reading),

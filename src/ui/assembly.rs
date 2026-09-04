@@ -1138,6 +1138,7 @@ impl Component for InstructionList {
         // it bubbles to here and asks for focus, which is what makes Ctrl+C mean this
         // listing.
         let a11y = use_a11y();
+        use_tab_keyboard(a11y);
 
         let controller = use_scroll_controller(ScrollConfig::default);
         // How tall the list is, which `reveal_row` needs to know whether the row it was

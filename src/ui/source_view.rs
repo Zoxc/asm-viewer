@@ -510,6 +510,7 @@ impl Component for SourceList {
             }
         });
         let a11y = use_a11y();
+        use_tab_keyboard(a11y);
 
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);

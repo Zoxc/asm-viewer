@@ -309,3 +309,23 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
         }
     });
 }
+
+/// Register `a11y` as one of the boxes the keyboard can be in inside the tab on screen,
+/// for as long as this scope is mounted. See [`Keyboard`].
+///
+/// A registration and not a flag written when the box takes the focus: focus is **lost**
+/// without an event -- something else asks for it -- so what is asked of the platform has
+/// to be asked at the moment the answer is drawn.
+pub(crate) fn use_tab_keyboard(a11y: AccessibilityId) {
+    let mut boxes = use_consume::<Keyboard>().0;
+    use_hook(move || boxes.write().push(a11y));
+    use_drop(move || {
+        boxes.write().retain(|open| *open != a11y);
+    });
+}
+
+/// Whether the keyboard is inside the tab on screen. Asking is what subscribes the caller
+/// to the focus moving, `AccessibilityId::is_focused` reading the platform's own state.
+pub(crate) fn keyboard_in_tab(boxes: State<Vec<AccessibilityId>>) -> bool {
+    boxes.read().iter().any(|a11y| a11y.is_focused())
+}

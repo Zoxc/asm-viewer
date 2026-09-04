@@ -15,6 +15,12 @@ use super::*;
 /// above it that does so, the way freya's docking has one. The × therefore has to stop
 /// the press from reaching here, or a close would first switch to the tab it is closing.
 ///
+/// **The tab on screen wears a rule along its top**, and the colour says where the keyboard
+/// is: the gutter marks' own purple while it is inside the tab, and a dim grey while it is
+/// anywhere else -- a sidebar list, a filter box. The mark is drawn on the chip that is
+/// showing and on no other, so the bar says which tab is being read and whether it is
+/// being typed into, without a second wash to tell from the first.
+///
 /// A temporal tab -- the preview a sidebar row opens in, which the next row reuses -- is
 /// told from one that stays by its name being **italic**, and by nothing else: it is the
 /// same tab in every other way, and the slant is the one cue that says "provisional"
@@ -29,6 +35,7 @@ fn chip(
     text: String,
     tooltip: String,
     active: bool,
+    typing: bool,
     temporal: bool,
     mut hovering: State<bool>,
     close: Option<Element>,
@@ -46,6 +53,22 @@ fn chip(
         Color::TRANSPARENT
     };
 
+    // Painted and not laid out, so the mark takes no room from the name: a border is drawn
+    // inside the box it is on.
+    let marker = active.then(|| {
+        Border::new()
+            .fill(match typing {
+                true => palette().compiled_fg,
+                false => dimmed(palette().icon_fg, palette().pane_bg),
+            })
+            .width(BorderWidth {
+                top: TAB_MARKER,
+                right: 0.0,
+                bottom: 0.0,
+                left: 0.0,
+            })
+    });
+
     row_tooltip(
         tooltip,
         rect()
@@ -56,6 +79,7 @@ fn chip(
             .spacing(6.0)
             .background(background)
             .border(right_hairline())
+            .border(marker)
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
             // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
@@ -420,7 +444,12 @@ impl Component for TabHeader {
         // Consumed here, in the render, for the menu: its handler may not run a hook.
         let states = use_project_states();
         let open = states.open;
+        let boxes = use_consume::<Keyboard>().0;
         let tab = self.tab;
+        // Asked only of the chip that is showing, which is the only one that draws the
+        // mark: asking is a subscription to the focus moving, and every chip taking one
+        // would re-render the whole bar whenever it did.
+        let typing = self.active && keyboard_in_tab(boxes);
 
         let Tab::Document(id) = tab else {
             let Tab::Page(page) = tab else {
@@ -431,6 +460,7 @@ impl Component for TabHeader {
                 page.title().to_owned(),
                 page.title().to_owned(),
                 self.active,
+                typing,
                 false,
                 hovering,
                 Some(TabClose { tab }.into_element()),
@@ -461,6 +491,7 @@ impl Component for TabHeader {
             entry_text(&document),
             entry_tooltip(&document),
             self.active,
+            typing,
             temporal,
             hovering,
             Some(TabClose { tab }.into_element()),
@@ -502,6 +533,9 @@ impl Component for TabHeader {
         self.key.clone().or(self.default_key())
     }
 }
+
+/// How thick the rule over the tab on screen is.
+pub(crate) const TAB_MARKER: f32 = 2.0;
 
 /// How wide the empty ground past the last chip is.
 const PAST_LAST_TAB: f32 = 24.0;

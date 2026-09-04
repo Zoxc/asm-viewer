@@ -380,6 +380,9 @@ macro_rules! project_states {
         // Provided but not returned, like `Active`: nothing here asserts on it, and the
         // Assembly pane's bar reads it wherever a harness mounts one.
         $runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
+        // Likewise: every pane registers its focusable box here, and every chip asks it
+        // whether the keyboard is in the tab.
+        $runner.provide_root_context(|| Keyboard(State::create(Vec::new())));
         // Likewise: both panes' bars read it, and `DocumentBody` asks it which panes
         // there are.
         $runner.provide_root_context(|| Follows(State::create(HashMap::new())));
@@ -981,6 +984,67 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
         nav_button_columns(&test),
         vec![0.0, side],
         "an empty history left a button out of the bar"
+    );
+}
+
+/// The chips over a box the keyboard can be in, which is what a code pane is: pressing it
+/// puts the keyboard inside the tab, and nothing else here can take it.
+fn marker_harness() -> impl IntoElement {
+    let a11y = use_a11y();
+    use_tab_keyboard(a11y);
+
+    rect()
+        .expanded()
+        .child(chips_harness().into_element())
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(40.0))
+                .a11y_id(a11y)
+                .a11y_focusable(true)
+                .on_pointer_down(move |_| a11y.request_focus())
+                .child(label().text("the pane")),
+        )
+}
+
+/// The tab on screen wears a rule along its top, and its colour says where the keyboard
+/// is: the gutter marks' purple while it is inside the tab, a dim grey while it is
+/// anywhere else. Only the tab on screen wears one.
+#[test]
+fn the_tab_on_screen_is_marked_and_the_mark_says_where_the_keyboard_is() {
+    let (mut test, states) =
+        TestingRunner::new(marker_harness, (400., 200.).into(), project_states!(), 1.);
+    for name in ["/src/one.rs", "/src/two.rs"] {
+        let document = Document::Source(Arc::from(name));
+        open_document(states.open, states.visits, document, Reach::NewTab);
+    }
+    test.sync_and_update();
+
+    let markers = |test: &TestingRunner| -> Vec<Color> {
+        test.find_many(|_node, element| {
+            element
+                .style()
+                .borders
+                .iter()
+                .find(|border| border.width.top == TAB_MARKER)
+                .map(|border| border.fill)
+        })
+    };
+
+    let dim = dimmed(palette().icon_fg, palette().pane_bg);
+    assert_eq!(
+        markers(&test),
+        [dim],
+        "one mark, on the tab on screen, and grey while the keyboard is elsewhere"
+    );
+
+    let pane = centre_of(&test, "the pane");
+    press_at(&mut test, pane);
+    settle(&mut test);
+    assert_eq!(
+        markers(&test),
+        [palette().compiled_fg],
+        "the mark did not follow the keyboard into the tab"
     );
 }
 

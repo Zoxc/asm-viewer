@@ -528,6 +528,7 @@ impl Component for SectionList {
         let marks_at = use_consume::<MarksAt>().0;
         let plant = use_consume::<Plant>().0;
         let a11y = use_a11y();
+        use_tab_keyboard(a11y);
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut viewport = use_state(|| 0.0f32);
         // The widest row drawn, under the object's identity and not the rows': `Built`
