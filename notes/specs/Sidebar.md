@@ -1,9 +1,10 @@
 # Sidebar
 
-## Dock
+## Panels
 
-Every panel is a tab in one of the two dock areas, with an icon. A panel can be dragged between
-the areas, stacked with other panels as tabs, or split off into an area of its own.
+Each panel has an icon and sits in one of the sidebar's groups. A group shows one panel at a
+time and names the rest across its top. A panel can be dragged to another group or split off
+into one of its own. Panels stay in the sidebar; no document goes there.
 
 ## Filter bar
 

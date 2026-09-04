@@ -1,16 +1,36 @@
 # Tabs
 
-One tab per open document: a function, an object or a source file. A tab is assembly-driven,
-showing a symbol, or source-driven, showing a file; an icon tells them apart. Clicking a tab
-switches to it. Its × closes it and switches to the neighbour; closing the last shows the
+The tab bar sits over the documents; it cannot be folded or split, and a tab cannot be dragged
+out of it.
+
+A tab is one open document — a function, an object or a source file — or one of Project,
+Settings and the Scratchpad. A document tab is assembly-driven, showing a symbol, or
+source-driven, showing a file; an icon tells them apart. Clicking a tab switches to it and
+focuses it. Its × closes it and switches to the neighbour; closing the last shows the
 placeholder. The × has a square target with four pixels of air around it, and is highlighted
-under the pointer. The open tabs are saved with the session in their order.
+under the pointer. The tabs are saved with the session in their order.
 
-A control at the right of the tab bar lists every open document, the one on screen marked;
-picking one activates it.
+The tab on screen has a two-pixel rule along its top: lit while the tab has focus, dim
+otherwise. Every other tab's name is fainter.
 
-A tab's context menu has "Close other tabs", which closes every other document in the panel.
-If the tab on screen was closed, the kept tab is shown.
+The bar scrolls when the tabs do not fit. The wheel over it scrolls it, opening a tab or going
+to one brings that tab into view, and a drag held near either end scrolls that way. A bar
+scrolled by hand is left where it was.
+
+Dragging a tab along the bar moves it, a mark showing where it would land. A drag that ends
+outside the bar changes nothing.
+
+A control at the right of the tab bar lists every open tab, the one on screen marked; picking
+one activates it, and each row's × closes that tab.
+
+A tab's context menu has "Close" and "Close other tabs", which closes every other tab whatever
+its kind. If the tab on screen was closed, the kept tab is shown.
+
+## Project, Settings and the Scratchpad
+
+The three are tabs. A menu at the top left of the window lists them, the open ones marked.
+Picking a closed one opens it beside the tab on screen, and picking an open one shows it. A
+closed one keeps its state: a build or a run it started goes on, and it comes back as it was.
 
 ## Back and forward, per tab
 

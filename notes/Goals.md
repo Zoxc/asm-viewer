@@ -298,12 +298,11 @@ leaves this list when it is. That is a move made on request, like everything els
   the Search panel is the second, a box over a grep of the project's directory on a worker,
   hits streaming in grouped under their file and opening as source-driven tabs on their
   line. Ctrl+Shift+F reaches it from anywhere.
-- [ ] Refactor the tabs away from freya's dock panels and onto components of the app's own,
-  with a fixed panel for the tabs rather than one the reader can fold, split or drag documents
-  out of.
-- [ ] Let the views close — Project, Settings, the Scratchpad and the rest — and add a menu at
-  the top left of the window to reopen them. Today a view has no × because there is no way back
-  once it is closed; the menu is that way back, so the × can come.
+- [ ] Let the sidebar's panels close, and reopen them from the menu at the top left that
+  Project, Settings and the Scratchpad are reached by. The bar's own tabs close now; the seven
+  in the sidebar are still furniture with no ×, so the menu lists three where it could list
+  ten. What it needs deciding is where a closed panel comes back — the group it was in, which
+  the sidebar does not remember once the panel is gone, or the first group.
 - [ ] A tab should open immediately even while its binary is still being read, with a loading
   message inside it rather than nothing. Today a tab can only exist once the object it names
   does: a document is resolved against the objects list by path, object name and symbol name, so
@@ -329,7 +328,8 @@ leaves this list when it is. That is a move made on request, like everything els
   tab chips are pointer targets, a focused list has a cursor in neither sense — no row is
   current, and nothing moves between rows — and Ctrl+F goes from a list to the box over it and
   never back, which is the ranked-search item above seen from the other side. Note what it needs
-  deciding first: what "the focused pane" means when either dock area can hold any view.
+  deciding first: what "the focused pane" means, the sidebar's panels being arrangeable and the
+  bar's tabs not.
 
 ## Projects
 
