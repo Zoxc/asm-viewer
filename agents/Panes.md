@@ -367,27 +367,28 @@ paragraph takes one inline child, and an inline is one *unit* to the text engine
 (`src/chars.rs`), so a name made into an element would stop a source row's columns being the
 file's own -- which is the whole reason a press on one can say where it was in the terms the
 language server takes, with nothing converted. So the door is decided from the pressed
-column instead: `Text::links` carries the columns of every call in the row, `code_row` hit-
+column instead: `Text::links` carries the columns of every link in the row, `code_row` hit-
 tests the pointer against them for the hand and for the press, and lighting one changes a
 span's style and never where the spans are cut. A boundary that moved with the pointer would
 re-shape the row, and the widest row a listing has drawn only ever grows.
 
-Which runs those are is `links_in`. The colour is all the highlighting says here --
-`source_pieces` answers a colour per run and not the capture behind it -- and `function_fg`
-is exactly `function`, `function.macro` and `function.method`, so a run drawn in it is one of
-the three. What a colour cannot say is whether the name is being *called* or *declared*,
-which two things answer between them: the *first* name on a row that begins a function the
-file's own parse found is that function's own, and a name straight after the `fn` keyword is a
-declaration whether or not it has a body -- which a trait's method has not, and so is in no
-such list to be found in. Only that one name is passed over and not the row: a body written on
-the declaration's own line, as a trait's default method usually is, calls from there, and the
-row used to be dropped whole. A capture is its own colour run, so a link is always one whole
-piece.
+**The spans are cut at the links before the row is drawn** (`cut_at`), which is what keeps
+that true now the columns are the language server's and not the highlighting's. A link used
+to *be* a colour run -- the columns were taken from one -- so the span to light was always
+exactly there; a name the server placed need not line up with a colour boundary at all, and
+one that straddled it would have lit nothing, leaving a link the reader can click and cannot
+see. So the cut is made on **every** render and never only under the pointer: skia measures
+two spans a shade wider than the same characters in one, and a cut that came and went with
+the pointer would widen the listing for good. `light` then draws every span the run covers
+rather than the one that matches it, since a link may cross a colour boundary and be two.
 
-Nothing is a link with no server to ask, and **the list asks once**: a server says how far
-through the project it has got over and over, and a row that read that state would be drawn
-again for every word of it. `SourceList` holds a memo of it and carries the answer through
-`new_with_data` like everything else a row depends on.
+Which names are links at all is the server's answer and no longer a colour
+(`agents/Lsp.md`, `src/links.rs`); what a colour could never say -- whether a name is being
+*called* or *declared* -- is a modifier it sends. **The list asks once**: a file's names come
+back together and `SourceList` carries them through `new_with_data` like everything else a
+row depends on, an `Arc` inside so handing them down is a pointer compare. A row never reads
+the server's state itself -- it says how far through the project it has got over and over,
+and a row that read that would be drawn again for every word of it.
 
 **Alt held says a press is not a door this time.** Every door in a code row acts on a plain press,
 which left no way to put the pointer down on one and sweep: the release followed the link and the
