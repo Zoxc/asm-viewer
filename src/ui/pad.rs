@@ -32,32 +32,63 @@ pub(crate) struct Pad(pub(crate) State<Pads>);
 pub(crate) struct PadText(pub(crate) State<PadBuffers>);
 
 /// The buffers, keyed by the pad each belongs to. A pad has one from the moment its source
-/// has been read and for as long as the app runs.
-#[derive(Default)]
-pub(crate) struct PadBuffers(HashMap<PadId, CodeEditorData>);
+/// has been read until it is deleted.
+pub(crate) struct PadBuffers {
+    buffers: HashMap<PadId, CodeEditorData>,
+    /// Where an edit for a pad with no buffer goes.
+    ///
+    /// **A buffer can go while the editor drawing it is still taking events.** The editor
+    /// is mounted only for a pad [`PadBuffers::holds`], and that is not enough on its own:
+    /// freya emits every event of one press against the tree it measured before any of
+    /// them ran. The press that confirms a delete lets go of the shown pad's buffer, and
+    /// the editor's own global press is still in that batch — still mounted, still writing
+    /// through a `Writable` mapped through this table by the deleted pad's id. So the
+    /// index has to answer for a pad that has gone, and it answers here.
+    ///
+    /// **The tail of that batch is the whole of what it is for.** Nothing draws this
+    /// buffer: it has no lines, and a row asked to draw one panics inside freya. What
+    /// keeps a render off it is that the editor is keyed by its pad
+    /// (`pad_view::SourceEditor`), so a pad change takes the editor down rather than
+    /// leaving its rows mapped through this table by an id it no longer has.
+    gone: CodeEditorData,
+}
+
+impl Default for PadBuffers {
+    fn default() -> PadBuffers {
+        PadBuffers {
+            buffers: HashMap::new(),
+            gone: CodeEditorData::new(Rope::new(), None::<EditorLanguage>),
+        }
+    }
+}
 
 impl PadBuffers {
     pub(crate) fn holds(&self, pad: &PadId) -> bool {
-        self.0.contains_key(pad)
+        self.buffers.contains_key(pad)
     }
 
-    /// The buffer for `pad`. Panics if there is none, which is why the editor is mounted
-    /// only for a pad [`PadBuffers::holds`] — the mapped `Writable` the editor is handed
-    /// has to index something, exactly as a dependency row's two boxes do.
+    /// The buffer for `pad`, or [`PadBuffers::gone`] if it has none.
     pub(crate) fn get(&self, pad: &PadId) -> &CodeEditorData {
-        &self.0[pad]
+        self.buffers.get(pad).unwrap_or(&self.gone)
     }
 
     pub(crate) fn get_mut(&mut self, pad: &PadId) -> &mut CodeEditorData {
-        self.0.get_mut(pad).expect("a buffer for the pad shown")
+        let PadBuffers { buffers, gone } = self;
+        buffers.get_mut(pad).unwrap_or(gone)
     }
 
     fn put(&mut self, pad: PadId, editor: CodeEditorData) {
-        self.0.insert(pad, editor);
+        self.buffers.insert(pad, editor);
+    }
+
+    /// Let go of a deleted pad's buffer. The one thing that ever takes one away: a pad is
+    /// otherwise in this table from the moment its source arrives until the app stops.
+    fn forget(&mut self, pad: &PadId) {
+        self.buffers.remove(pad);
     }
 
     fn theme(&mut self) {
-        for editor in self.0.values_mut() {
+        for editor in self.buffers.values_mut() {
             editor.set_theme(palette().syntax());
             editor.parse();
         }
@@ -88,10 +119,9 @@ pub(crate) struct PadJobs {
 
 /// Every pad the app is holding, and which of them the pane draws.
 ///
-/// A pad is in `pads` from the moment it is first shown and never leaves: it may have a
-/// program running in it, and it is holding the reader's own source until the worker says
-/// the disk has it. There is one of them so far -- what makes a second reachable is the
-/// order on disk and the panel that draws it.
+/// A pad is in `pads` from the moment it is first shown and leaves only when the reader
+/// deletes it: it may have a program running in it, and it is holding the reader's own
+/// source until the worker says the disk has it.
 #[derive(Clone)]
 pub(crate) struct Pads {
     /// The pads there are, in the order the panel draws them: most recently shown first,
@@ -103,10 +133,15 @@ pub(crate) struct Pads {
     listed: bool,
     shown: PadId,
     pads: HashMap<PadId, PadState>,
-    /// Why the last New did not happen, or `None`. Here rather than in the view because a
-    /// dock tab that is not the active one is unmounted, and an answer that arrived while
-    /// the reader was elsewhere still has to be there when they come back.
-    pub(crate) refused: Option<Failure>,
+    /// Why the last New or Delete did not happen, as the sentence the panel draws, or
+    /// `None`. Here rather than in the view because a dock tab that is not the active one
+    /// is unmounted, and an answer that arrived while the reader was elsewhere still has to
+    /// be there when they come back.
+    pub(crate) refused: Option<String>,
+    /// Which pad the reader is being asked about deleting, or `None`. **A delete is the one
+    /// operation here that destroys their own source**, so it is a question and not a
+    /// press, and the question is held beside the pads for `refused`'s reason.
+    pub(crate) confirming: Option<PadId>,
 }
 
 impl Default for Pads {
@@ -121,6 +156,7 @@ impl Default for Pads {
             order,
             listed: false,
             refused: None,
+            confirming: None,
             pads: HashMap::from([(shown.clone(), PadState::of(scratchpad))]),
             shown,
         }
@@ -174,6 +210,31 @@ impl Pads {
             .or_insert_with(|| PadState::of(Scratchpad::of(pad.clone())));
         self.order.touch(&pad);
         self.shown = pad;
+    }
+
+    /// Let go of a deleted pad: out of the table, out of the order, and off the screen if
+    /// it was the one being drawn. Answers with the pad to read, when what takes its place
+    /// has never been shown.
+    ///
+    /// **There is always a pad to show**, which is what keeps [`Pads::state`] free of an
+    /// `Option`. The next one in the order takes over; when the last pad goes, the table
+    /// comes back to what a first run holds -- the default pad, opened like any other, so
+    /// nothing is written until something is typed into it.
+    fn forget(&mut self, name: &PadId) -> Option<Scratchpad> {
+        self.pads.remove(name);
+        self.order.forget(name);
+        if &self.shown != name {
+            return None;
+        }
+
+        let next = match self.order.first() {
+            Some(next) => next.clone(),
+            // The last pad. `show` holds a state for the default one, which is what
+            // `Pads::default` starts with.
+            None => Scratchpad::default().id().clone(),
+        };
+        self.show(next);
+        (!self.state().opened).then(|| self.state().scratchpad.clone())
     }
 }
 
@@ -339,6 +400,10 @@ pub(crate) enum PadJob {
     List,
     /// Make a pad nobody has named yet and write its package.
     New,
+    /// Take a pad's package off the disk. An id and not a whole scratchpad like the rest:
+    /// the app has already let the pad go, and what is deleted is the directory the id
+    /// names.
+    Delete(PadId),
     Open(Scratchpad),
     Save(Scratchpad),
     Build(Scratchpad),
@@ -363,6 +428,7 @@ impl PadJob {
     pub(crate) fn pad(&self) -> Option<&PadId> {
         match self {
             PadJob::List | PadJob::New => None,
+            PadJob::Delete(pad) => Some(pad),
             PadJob::Open(scratchpad)
             | PadJob::Save(scratchpad)
             | PadJob::Build(scratchpad)
@@ -375,13 +441,17 @@ impl PadJob {
 ///
 /// Every answer says which pad it is about, where a job says it by carrying the whole
 /// scratchpad. It has to: an answer can land long after the reader has moved to another
-/// pad, and it belongs to the pad that asked and to no other.
+/// pad, and it belongs to the pad that asked and to no other. The exception is
+/// [`PadAnswer::Deleted`], which is about a pad the app let go of before it asked.
 pub(crate) enum PadAnswer {
     /// The pads there are, in the order the panel draws them, each with the name out of
     /// its own package — which is what lets the panel draw a pad nothing has opened.
     Listed(Vec<PadListing>),
     /// The pad that was made, or why there is none.
     Created(Result<Scratchpad, Failure>),
+    /// Why the package is still on the disk, or `None` when it is gone. Nothing waits for
+    /// this: the app let the pad go when the reader said to.
+    Deleted(Option<Failure>),
     Opened(Scratchpad),
     /// Why the package could not be written, or `None` when it was.
     Saved {
@@ -408,6 +478,7 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
     match job {
         PadJob::List => PadAnswer::Listed(crate::scratchpad::pads()),
         PadJob::New => PadAnswer::Created(crate::scratchpad::new_pad()),
+        PadJob::Delete(name) => PadAnswer::Deleted(crate::scratchpad::delete_pad(&name).err()),
         PadJob::Open(scratchpad) => PadAnswer::Opened(match scratchpad.directory() {
             Some(directory) => {
                 let opened = scratchpad.opened_in(&directory);
@@ -553,10 +624,15 @@ pub(crate) fn use_scratchpad_with(
                                     let _ = requests.try_send(PadJob::Open(scratchpad));
                                 }
                                 Err(failure) => {
-                                    next.refused = Some(failure);
+                                    next.refused = Some(format!("Not made: {failure}"));
                                     pad.set(next);
                                 }
                             }
+                        }
+                        PadAnswer::Deleted(failure) => {
+                            let mut next = pad.peek().clone();
+                            next.refused = failure.map(|failure| format!("Not deleted: {failure}"));
+                            pad.set(next);
                         }
                         PadAnswer::Opened(scratchpad) => {
                             // The pad's own buffer, built once when its source arrives:
@@ -838,11 +914,52 @@ pub(crate) fn request_new_pad(jobs: &PadJobs) {
     let _ = jobs.jobs.try_send(PadJob::New);
 }
 
+/// Delete `name`: let go of it here, then ask the worker to take its package off the disk.
+/// Only ever reached through the pane's confirmation, this being the one operation that
+/// destroys what the reader wrote.
+///
+/// **The app lets go first, and that is the ordering that matters.** Every job for this pad
+/// still on the queue runs before the delete, the worker being one ordered thread, so a
+/// build in flight finishes against a directory that is still there; what it then answers
+/// arrives for a pad the table no longer has and is dropped, which is why the artifact of a
+/// build the reader deleted their way out of is not opened.
+///
+/// Its program is stopped first: the directory it was started in is about to go, and a
+/// program left behind by that is one nothing could ever find again. A run still forking is
+/// stopped where it lands, its handle arriving for no pad in the table.
+pub(crate) fn request_delete_pad(
+    mut pad: State<Pads>,
+    mut text: State<PadBuffers>,
+    jobs: &PadJobs,
+    name: PadId,
+) {
+    stop_run_of(pad, &name);
+
+    let mut next = pad.peek().clone();
+    next.confirming = None;
+    let arriving = next.forget(&name);
+    pad.set(next);
+
+    text.write().forget(&name);
+    // The baseline goes with the pad, so an id handed out again is read before it is
+    // written, exactly as a pad the app has never seen is.
+    jobs.sent.borrow_mut().remove(&name);
+
+    let _ = jobs.jobs.try_send(PadJob::Delete(name));
+    // Behind the delete, so a pad that has to be read is read after the directory has gone
+    // rather than before -- which matters for the one id this can arrive at twice, the
+    // default pad the last delete comes back to.
+    if let Some(arriving) = arriving {
+        let _ = jobs.jobs.try_send(PadJob::Open(arriving));
+    }
+}
+
 /// The newest of a run of saves of one pad, dropping the ones it has overtaken before any
 /// of them is started.
 ///
 /// A save is superseded only by a job for the **same** pad. Whatever is behind one of those
-/// is a newer save or a build, and a build writes the package itself; a job for another pad
+/// is a newer save, a build, which writes the package itself, or a delete, which is about to
+/// take the package away and has nothing to want from a write; a job for another pad
 /// says nothing about this pad's disk copy, so it goes to `hold` rather than being allowed
 /// to drop this save on the floor -- which is what a rule that took whatever was next would
 /// do, leaving that pad's package quietly behind what is on screen. Anything that is not a
@@ -925,21 +1042,31 @@ pub(crate) fn request_run(mut pad: State<Pads>, jobs: &PadJobs) {
 /// Stop the shown pad's program, for real. Only the shown pad has a Stop button, and only
 /// the shown pad's own rebuild or next run stops it -- another pad's program is about
 /// another executable and is left alone.
+pub(crate) fn stop_run(pad: State<Pads>) {
+    let shown = pad.peek().shown().clone();
+    stop_run_of(pad, &shown);
+}
+
+/// The whole of the above for a pad named outright, which a delete needs: the pad whose
+/// program has to stop is the one being taken away, and it is very often the shown one but
+/// need not be.
 ///
 /// The state is *not* set to `Over` in the `Going` case: the run's own `Ended` event says
 /// it, and that is emitted only once the process has been reaped, so the pane says
 /// "Stopped" when the program is gone rather than when the button was pressed.
 /// `Starting` is the case a `bool` would have lost -- the fork has not come back, so
 /// leaving `Starting` behind is what makes the handle unwanted when it arrives.
-pub(crate) fn stop_run(mut pad: State<Pads>) {
-    let state = pad.peek().state().clone();
-    match &state.run_state {
-        RunState::Going(running) => running.stop(),
-        RunState::Starting => {
+fn stop_run_of(mut pad: State<Pads>, name: &PadId) {
+    let run_state = pad.peek().get(name).map(|state| state.run_state.clone());
+    match run_state {
+        Some(RunState::Going(running)) => running.stop(),
+        Some(RunState::Starting) => {
             let mut next = pad.peek().clone();
-            next.state_mut().run_state = RunState::Over(Ended::Stopped);
+            if let Some(state) = next.get_mut(name) {
+                state.run_state = RunState::Over(Ended::Stopped);
+            }
             pad.set(next);
         }
-        RunState::Idle | RunState::Over(_) => {}
+        None | Some(RunState::Idle | RunState::Over(_)) => {}
     }
 }

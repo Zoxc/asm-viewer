@@ -203,6 +203,9 @@ pub enum Failure {
     /// No state directory and no local data directory on this system.
     NoDirectory,
     Write(String),
+    /// The package could not be removed, or what is under the id is not a package this
+    /// module would have written.
+    Delete(String),
     /// `cargo` could not be started at all — not on the `PATH`, or not executable.
     NoCargo(String),
     /// cargo reported success and named no executable.
@@ -503,6 +506,14 @@ impl PadOrder {
         true
     }
 
+    /// Drop `id`, for a pad that has just been deleted.
+    ///
+    /// The list the panel draws and not the file: an id whose directory has gone is one
+    /// [`pads_in`] already steps over, so nothing goes back to disk to say so.
+    pub fn forget(&mut self, id: &PadId) {
+        self.scratchpads.retain(|other| other != id);
+    }
+
     fn load_from(path: &Path) -> PadOrder {
         fs::read_to_string(path)
             .ok()
@@ -622,6 +633,41 @@ fn new_pad_in(base: &Path) -> Result<Scratchpad, Failure> {
         "no free id under {}",
         scratchpads.display()
     )))
+}
+
+/// Delete a pad: its directory and everything in it, cargo's `target/` included. Blocking,
+/// and the only thing here that destroys what the reader wrote — which is why the app asks
+/// before calling it.
+///
+/// **The path is narrowed twice.** It is [`pad_in`]'s and nothing else, and an id is a
+/// checked crate name, so it can be neither `..`, nor a separator, nor an absolute path.
+/// Then the directory must still be one [`Scratchpad::load_from`] answers for, so a
+/// `remove_dir_all` can only reach a directory holding a manifest this module wrote.
+/// [`fs::symlink_metadata`] is what makes that the directory itself rather than whatever a
+/// link put in its place.
+///
+/// A pad with no directory is already deleted and says so: the pad a first run holds has
+/// none until something is typed into it.
+pub fn delete_pad(id: &PadId) -> Result<(), Failure> {
+    delete_pad_in(&base().ok_or(Failure::NoDirectory)?, id)
+}
+
+fn delete_pad_in(base: &Path, id: &PadId) -> Result<(), Failure> {
+    let directory = pad_in(base, id);
+    let entry = match fs::symlink_metadata(&directory) {
+        Ok(entry) => entry,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Failure::Delete(error.to_string())),
+    };
+
+    if !entry.is_dir() || Scratchpad::load_from(&directory).is_none() {
+        return Err(Failure::Delete(format!(
+            "{} is not a scratchpad",
+            directory.display()
+        )));
+    }
+
+    fs::remove_dir_all(&directory).map_err(|error| Failure::Delete(error.to_string()))
 }
 
 /// Start the program a build made in `directory`, streaming what it writes into `emit`
@@ -1081,6 +1127,7 @@ impl fmt::Display for Failure {
             },
             Failure::NoDirectory => write!(formatter, "nowhere to keep a scratchpad"),
             Failure::Write(error) => write!(formatter, "could not write the package: {error}"),
+            Failure::Delete(error) => write!(formatter, "could not delete the package: {error}"),
             Failure::NoCargo(error) => write!(formatter, "could not run cargo: {error}"),
             Failure::NoArtifact => write!(formatter, "cargo built nothing to open"),
             Failure::NoProgram(error) => write!(formatter, "could not start it: {error}"),

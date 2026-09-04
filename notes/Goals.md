@@ -202,6 +202,19 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Panels and tabs
 
+- [ ] A menu item that opens the following pane's own contents as a tab. A tab is one place
+  with a second thing beside it: a source-driven tab's assembly side is the symbol its driven
+  line was compiled into, and a code tab's source side is the file the drawn symbol came from.
+  Either is somewhere a reader may want to go rather than glance at, and today only one of the
+  two has a door — pressing a companion's bar opens that file as a source-driven tab, where the
+  symbol a source-driven tab is following can only be reached by finding it in the Symbols list.
+  So: the same item on both bars, opening what the *following* pane is showing as a tab of its
+  own, in place or in a new tab with Ctrl as every other door here is. Two things to settle.
+  Where it sits, the bars having grown a toggle already and the assembly rows carrying "Open as
+  symbol" and "Show in unified view" in their own menu (`src/ui/assembly.rs`) — a menu on the
+  bar is a third kind of control there. And what it does with nothing to open: a source-driven
+  tab that has had no line clicked in it is following no symbol, which is the same emptiness
+  that leaves its assembly side saying so.
 - [ ] A tab kind for a file, so an object or an archive can be opened and read about. Today
   a row in the Objects list can only be expanded or closed, and everything the parse learnt
   about the file — its format, architecture, sections, symbol counts, what its members are,
@@ -370,7 +383,7 @@ leaves this list when it is. That is a move made on request, like everything els
   themed pane not being one of them. Rendering from the JSON instead makes the colour the app's
   by construction and costs the caret line, which would have to be drawn rather than reprinted.
   Sequenced after this, since what is coloured depends on which copy survives.
-- [ ] Delete a scratchpad, from its row in the side panel, behind a confirmation: it is the one
+- [x] Delete a scratchpad, from its row in the side panel, behind a confirmation: it is the one
   operation here that destroys a reader's source, so it is asked for and not one click.
 
 ## Binary inspection design

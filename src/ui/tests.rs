@@ -6670,6 +6670,7 @@ struct Asking(State<Option<PadJobs>>);
 enum Asked {
     List,
     New,
+    Delete(String),
     Open(String),
     Save(String),
     Build(String),
@@ -6684,12 +6685,16 @@ fn scratchpad_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// The same wiring under the real pane, for the one thing only the pane can be asked:
-/// whether its rows survive one of them being taken away.
+/// The same wiring under the real pane, for what only the pane can be asked: whether its
+/// rows survive one of them being taken away, and what a row's own menu does. The viewer is
+/// what `app()` mounts on its root, and opening a menu without one panics.
 fn scratchpad_view_harness() -> impl IntoElement {
     scratchpad_wiring();
 
-    rect().expanded().child(ScratchpadTab)
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(ScratchpadTab)
 }
 
 fn scratchpad_wiring() {
@@ -6731,6 +6736,7 @@ macro_rules! mount_scratchpad {
             let recorded = match &job {
                 PadJob::List => Asked::List,
                 PadJob::New => Asked::New,
+                PadJob::Delete(name) => Asked::Delete(name.as_str().to_owned()),
                 PadJob::Open(scratchpad) => Asked::Open(scratchpad.id().as_str().to_owned()),
                 PadJob::Save(scratchpad) => Asked::Save(scratchpad.source.clone()),
                 PadJob::Build(scratchpad) => Asked::Build(scratchpad.source.clone()),
@@ -6792,6 +6798,27 @@ fn labels(test: &TestingRunner) -> Vec<String> {
     .collect()
 }
 
+/// What the code editor is drawing, as one string: every paragraph on screen with its own
+/// spans joined, one line of the pad's source per paragraph.
+fn drawn_source(test: &TestingRunner) -> String {
+    use freya::elements::paragraph::ParagraphElement;
+    use std::any::Any;
+
+    test.find_many(|node, _element| {
+        let element = node.element();
+        (element.as_ref() as &dyn Any)
+            .downcast_ref::<ParagraphElement>()
+            .map(|paragraph| {
+                paragraph
+                    .spans
+                    .iter()
+                    .map(|span| span.text.to_string())
+                    .collect::<String>()
+            })
+    })
+    .join("\n")
+}
+
 /// An id, for the tests below that name pads the app would have generated ids for.
 fn pad_id(text: &str) -> PadId {
     PadId::new(text).expect("an id")
@@ -6823,6 +6850,7 @@ fn the_front_of_the_order_is_the_pad_that_opens() {
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("second"), pad_listing("first"),]),
             PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -6864,6 +6892,7 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
             PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -6941,6 +6970,7 @@ fn the_panel_draws_names_and_never_ids() {
                 failure: None,
             },
             PadJob::New => unreachable!("this test never makes one"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
@@ -6980,6 +7010,7 @@ fn a_new_pad_is_written_and_shown_at_once() {
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("pad")]),
             PadJob::New => PadAnswer::Created(Ok(answering.clone())),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7032,6 +7063,7 @@ fn renaming_a_pad_is_a_save_and_moves_nothing() {
                 failure: None,
             },
             PadJob::New => unreachable!("this test never makes one"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
@@ -7075,6 +7107,7 @@ fn a_program_goes_on_running_in_a_pad_that_is_not_shown() {
         mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
             PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7137,6 +7170,336 @@ fn a_program_goes_on_running_in_a_pad_that_is_not_shown() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// A delete is **asked for**. The row's menu item takes nothing away: it opens the question,
+/// and until that question is answered the pad is exactly where it was and the worker has
+/// been told nothing. Cancel is the same again. This is the one operation here that destroys
+/// the reader's own source, so a menu item that did it outright would be one slip from a pad
+/// being gone.
+#[test]
+fn a_delete_is_asked_for_before_anything_goes() {
+    let (mut test, _states, pad, _text, _asking, asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => unreachable!("a pad was deleted without being asked about"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    while asks.try_recv().is_ok() {}
+
+    // The row of the pad that is *not* on screen, since any row can be asked about.
+    let two = pad_id("two");
+    let row = centre_of(&test, "<two>");
+    right_click(&mut test, row);
+    let entry = centre_of(&test, "Delete scratchpad");
+    test.move_cursor(entry);
+    test.press_cursor(entry);
+    test.release_cursor(entry);
+    settle(&mut test);
+
+    // Asked, and nothing more: the pad is still there and the worker has heard nothing.
+    assert_eq!(pad.peek().confirming.as_ref(), Some(&two));
+    assert!(pad.peek().get(&two).is_some());
+    assert!(asks.is_empty(), "the worker was asked to delete a pad");
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "Delete <two>?"),
+        "the question does not name the pad: {drawn:?}"
+    );
+
+    // And no is no.
+    let cancel = centre_of(&test, "Cancel");
+    test.move_cursor(cancel);
+    test.press_cursor(cancel);
+    test.release_cursor(cancel);
+    settle(&mut test);
+
+    assert!(pad.peek().confirming.is_none());
+    assert!(pad.peek().get(&two).is_some());
+    assert!(asks.is_empty(), "cancelling deleted the pad");
+}
+
+/// A delete takes the whole pad and not only its row: the program it started is killed, the
+/// directory it was run in being about to go and a program left behind by that being one
+/// nothing could ever find again, and its buffer goes with it. **There is always a pad to draw** -- the next in the order
+/// takes over, and when the last one goes the table comes back to the pad a first run
+/// holds, which is what keeps `Pads::state` free of an `Option`.
+#[test]
+fn deleting_a_pad_stops_its_program_and_leaves_a_pad_to_show() {
+    let directory = run_directory(line!());
+    let executable = looping_program(&directory);
+    let cwd = directory.clone();
+
+    let (mut test, _states, pad, text, asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+            PadJob::New => unreachable!("no pad is made here"),
+            // The directory here is the test's own; what is under test is what the app
+            // lets go of when it asks for one of these.
+            PadJob::Delete(_) => PadAnswer::Deleted(None),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run {
+                run,
+                scratchpad,
+                executable,
+                emit,
+            } => PadAnswer::Started {
+                pad: scratchpad.id().clone(),
+                run,
+                started: crate::scratchpad::run_in(&executable, &cwd, emit),
+            },
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    let one = pad.peek().shown().clone();
+    already_built(pad, executable);
+    test.sync_and_update();
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_run(pad, &jobs);
+    pump(&mut test, || pad.peek().state().output.len() > 0);
+
+    let running = pad.peek().state().run_state.clone();
+    let RunState::Going(running) = running else {
+        panic!("a going run, got {:?}", pad.peek().state().run_status());
+    };
+    while asks.try_recv().is_ok() {}
+
+    request_delete_pad(pad, text, &jobs, one.clone());
+    pump(&mut test, || pad.peek().state().opened);
+
+    // Really dead, which nothing short of a real process can say.
+    pump(&mut test, || running.finished());
+    assert!(
+        running.finished(),
+        "the deleted pad's program is still going"
+    );
+
+    // Out of the table, out of the buffers, off the list -- and the pad beside it is what
+    // the pane draws now.
+    assert_eq!(pad.peek().shown().as_str(), "two");
+    assert!(pad.peek().get(&one).is_none());
+    assert!(!text.peek().holds(&one));
+    assert_eq!(
+        pad.peek()
+            .order
+            .ids()
+            .iter()
+            .map(PadId::as_str)
+            .collect::<Vec<_>>(),
+        ["two"]
+    );
+    assert_eq!(asks.try_recv(), Ok(Asked::Delete("one".to_owned())));
+    // The pad taking its place had never been shown, so it is read -- and behind the
+    // delete, the jobs being one ordered queue.
+    assert_eq!(asks.try_recv(), Ok(Asked::Open("two".to_owned())));
+
+    // The last one. A table with nothing in it would be a pane with nothing to draw, so
+    // what comes back is the pad the app boots holding.
+    let two = pad_id("two");
+    request_delete_pad(pad, text, &jobs, two.clone());
+    pump(&mut test, || pad.peek().state().opened);
+
+    assert_eq!(pad.peek().shown().as_str(), crate::scratchpad::DEFAULT_ID);
+    assert!(pad.peek().get(&two).is_none());
+    assert_eq!(asks.try_recv(), Ok(Asked::Delete("two".to_owned())));
+    assert_eq!(
+        asks.try_recv(),
+        Ok(Asked::Open(crate::scratchpad::DEFAULT_ID.to_owned()))
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Confirming a delete does not take the editor down with the buffer it lets go of.
+///
+/// One mouse-up is one batch of events, emitted against the tree freya measured before any
+/// of them ran, and the Delete button's press and the editor's own global press are both
+/// in it. The press lets go of the shown pad's buffer; the editor is still mounted behind
+/// the question, and its handler still writes through a `Writable` mapped through the
+/// table by that pad's id. So the index has to answer for a pad that has gone, which is not
+/// something the render before it can rule out. Both ways the shown pad goes are here: with
+/// a pad behind it, and as the last one.
+#[test]
+fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
+    let (mut test, _states, mut pad, text, _asking, asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => PadAnswer::Deleted(None),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    let (one, two) = (pad_id("one"), pad_id("two"));
+    assert!(text.peek().holds(&one), "the shown pad has a buffer");
+    while asks.try_recv().is_ok() {}
+
+    // The press on the pane's Delete and not `request_delete_pad`, since the press is what
+    // is under test. The question is opened by hand: what a row's menu does is pinned by
+    // the test above, and a second right-click here would have to wait out the closed
+    // popup's fade, whose overlay is still over the row.
+    let confirm_delete = |test: &mut TestingRunner| {
+        let at = centre_of(test, "Delete");
+        press_at(test, at);
+        settle(test);
+    };
+
+    pad.write().confirming = Some(one.clone());
+    settle(&mut test);
+    confirm_delete(&mut test);
+
+    assert!(!text.peek().holds(&one));
+    assert!(pad.peek().get(&one).is_none());
+    assert_eq!(asks.try_recv(), Ok(Asked::Delete("one".to_owned())));
+
+    // The pad behind it, read and drawn -- and then deleted in its turn, this time as the
+    // last one, which comes back to the pad a first run holds.
+    pump(&mut test, || text.peek().holds(&two));
+    assert_eq!(pad.peek().shown(), &two);
+    while asks.try_recv().is_ok() {}
+
+    pad.write().confirming = Some(two.clone());
+    settle(&mut test);
+    confirm_delete(&mut test);
+
+    assert!(!text.peek().holds(&two));
+    assert_eq!(pad.peek().shown().as_str(), crate::scratchpad::DEFAULT_ID);
+    assert_eq!(asks.try_recv(), Ok(Asked::Delete("two".to_owned())));
+}
+
+/// The source of two pads, so a test can tell from the screen which one the editor is
+/// drawing. The first is the longer: an editor still drawing it asks for lines the other
+/// one does not have.
+fn two_sources(scratchpad: Scratchpad) -> Scratchpad {
+    let mut opened = scratchpad;
+    opened.source = if opened.id().as_str() == "one" {
+        "// pad one\nfn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n".to_owned()
+    } else {
+        "// pad two\n".to_owned()
+    };
+    opened
+}
+
+/// Coming back to a pad whose buffer is already held draws **that** pad's text.
+///
+/// The editor reaches its buffer through a `Writable` mapped by the pad's id, and freya
+/// compares any two `Writable`s as equal, so a `CodeEditor` whose other props have not
+/// moved is never handed the new one: the map it keeps is the one it was mounted with.
+/// Switching to a pad that has never been read gets away with it, the editor being
+/// unmounted while the worker reads the disk and mounted again after; switching to one
+/// already read has no such gap, and the editor goes on drawing the pad it was left on.
+#[test]
+fn coming_back_to_a_pad_already_read_draws_its_own_buffer() {
+    let (mut test, _states, pad, text, _asking, _asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => unreachable!("no pad is deleted here"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(two_sources(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    let (one, two) = (pad_id("one"), pad_id("two"));
+    assert!(drawn_source(&test).contains("// pad one"));
+
+    let row = centre_of(&test, "<two>");
+    press_at(&mut test, row);
+    pump(&mut test, || text.peek().holds(&two));
+    assert!(drawn_source(&test).contains("// pad two"));
+
+    // Back to the first, whose buffer is still held: no gap, and so no remount.
+    let row = centre_of(&test, "<one>");
+    press_at(&mut test, row);
+    settle(&mut test);
+
+    assert_eq!(pad.peek().shown(), &one);
+    let drawn = drawn_source(&test);
+    assert!(
+        drawn.contains("// pad one") && !drawn.contains("// pad two"),
+        "the editor is drawing the pad that was left rather than the one shown: {drawn:?}"
+    );
+}
+
+/// Deleting a pad that is **not** the one on screen does not take the editor down.
+///
+/// Same map, one step further on. The editor left over from a switch back is drawing a
+/// buffer that belongs to another pad, so deleting that other pad takes the buffer out from
+/// under a mounted editor. What the pane draws is unchanged, so nothing above the rows is
+/// re-rendered; the rows are woken by the write on their own, and each asks a buffer with no
+/// lines in it for the line it drew last -- inside freya, where nothing here can catch it.
+#[test]
+fn deleting_a_pad_that_is_not_shown_leaves_the_editor_standing() {
+    let (mut test, _states, mut pad, text, _asking, asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => PadAnswer::Deleted(None),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(two_sources(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    let (one, two) = (pad_id("one"), pad_id("two"));
+
+    let row = centre_of(&test, "<two>");
+    press_at(&mut test, row);
+    pump(&mut test, || text.peek().holds(&two));
+    let row = centre_of(&test, "<one>");
+    press_at(&mut test, row);
+    settle(&mut test);
+    while asks.try_recv().is_ok() {}
+
+    // The question is opened by hand rather than through the row's menu, which the delete
+    // tests above already pin.
+    pad.write().confirming = Some(two.clone());
+    settle(&mut test);
+    let at = centre_of(&test, "Delete");
+    press_at(&mut test, at);
+    settle(&mut test);
+
+    assert!(!text.peek().holds(&two));
+    assert_eq!(asks.try_recv(), Ok(Asked::Delete("two".to_owned())));
+
+    // The pad on screen is untouched, and so is what the editor draws of it.
+    assert_eq!(pad.peek().shown(), &one);
+    assert!(text.peek().holds(&one));
+    let drawn = drawn_source(&test);
+    assert!(
+        drawn.contains("// pad one"),
+        "the editor lost the pad it was drawing: {drawn:?}"
+    );
+}
+
 /// A save of one pad may not be dropped in favour of a job for another. The supersede rule
 /// is what makes a burst of keystrokes one write, and keyed on nothing it would also make a
 /// switch away from a pad throw away the last thing typed in it -- silently, since the pad
@@ -7196,6 +7559,7 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(_) => PadAnswer::Opened(answering.clone()),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7233,6 +7597,7 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             // The real refusal, without a disk: `write` fails on exactly what
             // `manifest` fails on, the manifest being what it refuses to generate.
@@ -7302,6 +7667,7 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7383,6 +7749,7 @@ fn removing_a_dependency_row_does_not_take_the_pane_with_it() {
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7454,6 +7821,7 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
         mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7535,6 +7903,7 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
         mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7645,6 +8014,7 @@ fn a_run_streams_while_it_is_going_and_a_stop_really_ends_it() {
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7711,6 +8081,7 @@ fn a_rebuild_stops_the_program_the_last_one_started() {
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7767,6 +8138,7 @@ fn a_run_that_cannot_start_says_why() {
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),
@@ -7940,6 +8312,7 @@ fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
         mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
             PadJob::Save(scratchpad) => PadAnswer::Saved {
                 pad: scratchpad.id().clone(),

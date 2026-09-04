@@ -379,6 +379,60 @@ fn a_new_pad_steps_over_what_is_already_claimed() {
     let _ = fs::remove_dir_all(&base);
 }
 
+/// A delete takes the pad's whole directory, cargo's leavings included — and reaches
+/// nothing else. The path is the id's, and an id is a checked crate name, so the only way
+/// left to aim a `remove_dir_all` at something that is not a pad is for the directory to
+/// have stopped being one, which is what the load answers. The pad beside it is untouched,
+/// which is the assertion that would fail if the path were ever built from anything but the
+/// id.
+#[test]
+fn a_delete_takes_the_package_and_only_the_package() {
+    let base = directory(line!());
+    let pads = base.join("scratchpads");
+    fs::create_dir_all(&pads).expect("the directory");
+
+    for pad in ["going", "staying"] {
+        Scratchpad::of(id(pad))
+            .write_to(&pads.join(pad))
+            .expect("writing");
+    }
+    // What cargo leaves behind, which goes with the pad rather than being left orphaned.
+    fs::create_dir_all(pads.join("going").join("target")).expect("the directory");
+
+    assert_eq!(delete_pad_in(&base, &id("going")), Ok(()));
+    assert!(!pads.join("going").exists());
+    assert!(Scratchpad::load_from(&pads.join("staying")).is_some());
+
+    // Gone already is not a failure: the pad a first run holds has no directory until
+    // something is typed into it.
+    assert_eq!(delete_pad_in(&base, &id("going")), Ok(()));
+
+    // A directory that is not a package is refused rather than removed, whatever the order
+    // beside it says about it.
+    let stranger = pads.join("stranger");
+    fs::create_dir(&stranger).expect("the directory");
+    fs::write(stranger.join("notes.txt"), "someone's own").expect("the file");
+    assert!(matches!(
+        delete_pad_in(&base, &id("stranger")),
+        Err(Failure::Delete(_))
+    ));
+    assert!(stranger.join("notes.txt").exists());
+
+    // A link where a pad's directory should be is refused as well: `symlink_metadata` does
+    // not follow one, so a delete reaches the directory itself or nothing.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(pads.join("staying"), pads.join("linked")).expect("a link");
+        assert!(matches!(
+            delete_pad_in(&base, &id("linked")),
+            Err(Failure::Delete(_))
+        ));
+        assert!(Scratchpad::load_from(&pads.join("staying")).is_some());
+    }
+
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// The line cap: a program writing megabytes with no newline in it must still be
 /// *delivered*, in pieces, rather than kept in one growing string nobody ever sees.
 #[test]

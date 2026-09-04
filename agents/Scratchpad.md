@@ -71,8 +71,18 @@ directory for the `create_dir` to fail on.
 
 **There is no rename operation**, and that is the point of the id: renaming writes
 `Scratchpad::name` and the ordinary per-change save puts it on disk, exactly as typing in the source
-does. Deleting a pad is deliberately absent: it is the one operation here that destroys a reader's
-source, so it waits until it is asked for.
+does.
+
+**A delete is the one thing here that destroys what the reader wrote**, so it is behind a question
+(below) and the module's half of that is being narrow. `delete_pad` builds the path out of the id
+alone, a checked crate name that can be neither `..`, nor a separator, nor absolute, and then
+refuses a directory `load_from` no longer answers for -- so a `remove_dir_all` can only ever reach a
+directory holding a manifest this module wrote. `symlink_metadata` is what makes that the directory
+itself rather than whatever a link put in its place, and a pad with no directory is already deleted
+and says so. What goes is the whole directory, cargo's `target/` included: the package is the
+storage, so there is no part of a pad anywhere else. Nothing goes back to the order file --
+`PadOrder::forget` is about the list on screen, and an id whose directory has gone is one `pads_in`
+already steps over.
 
 A dependency is a `(name, version)` row and the **version is required**. A `*` is refused with its
 own reason, since a requirement whose answer changes with the day is the one thing a scratchpad must
@@ -155,6 +165,29 @@ Scratchpad view's own side panel, because the content area's strip is deliberate
 a second document list (a chip there is a *place in a binary*). What it **builds** needs no rule at
 all: the executable goes through `open_files` and its functions are ordinary tabs.
 
+**A delete is asked for, and a row is where it is asked from.** A right-click on a pad's row offers
+one item, and the item deletes nothing: it writes `Pads::confirming`, and the popup that field draws
+is the question -- `RescuedPopup`'s `Popup` in a second place, dimming what is under it and taking
+Escape or a press outside as no. Not the × a dependency row has: a × there is one press away from a
+list one row shorter, and this is one press away from the reader's own source being gone. The
+question names the pad and the path its package is at, since if there were anything to get back that
+is where it would be, and there is not. `confirming` sits beside `refused` at the root for the
+reason that one does, and a delete that fails is what `refused` then says -- which is why it holds
+the whole sentence now rather than a `Failure` the panel puts a word in front of.
+
+**Letting go comes first and the disk second.** `request_delete_pad` takes the pad out of the table,
+out of the order and out of the buffers, drops its save baseline, and only then queues
+`PadJob::Delete`. That order is what makes an answer about a deleted pad harmless: the worker is one
+ordered thread, so a build in flight finishes against a directory that is still there, and what it
+answers arrives for a pad nothing holds and is dropped -- which is how a build the reader deleted
+their way out of does not go on to open its artifact. A queued save of that pad is superseded by the
+delete, having nothing left to write to. The pad's program is stopped, the directory it was started
+in being about to go; a run still forking is stopped where it lands, its handle arriving for no pad
+in the table. **There is always a pad to show**: the next in the order takes over, and when the last
+one goes the table comes back to the pad a first run holds, opened like any other so that nothing is
+written until something is typed into it. That `Open` is queued *behind* the delete, or it would
+read the directory the delete is about to remove.
+
 **That panel is a fixed width** (`PAD_LIST_WIDTH`) and not a `ResizableContainer`, unlike the two
 splits in this app a reader can drag. A dock tab that is not the active one in its panel is
 unmounted, and a `ResizablePanel` forgets its size on unmount, so a draggable width here would need
@@ -219,8 +252,21 @@ window closing still stops every run everywhere, `stop_all` walking a `static` t
 pads in the first place. **Buffers are per pad too**: `PadText` is a `CodeEditorData` each rather
 than one replaced on every switch, so a pad comes back with the cursor, the selection and the undo
 history it was left with, and a rename moves its buffer with it. The editor is mounted only for a
-pad the table holds a buffer for, which is what makes its mapped `Writable` safe; a dependency row's
-two boxes are indexed the same way for the same reason.
+pad the table holds a buffer for, and that is *not* what makes its mapped `Writable` safe. Two
+things are wrong with it. Every event of one press is emitted against the tree freya measured before
+any of them ran, so the press that confirms a delete is followed, in that same batch, by the
+editor's own global press -- still mounted, still indexing the table by the pad whose buffer has
+just gone. And freya compares any two `Writable`s as equal, so a component holding one is never told
+it now points elsewhere: the editor's rows keep the map they mounted with, and a switch to a pad
+already read -- which has no gap to be unmounted in -- leaves them drawing the pad that was left.
+Delete *that* pad and the rows draw a buffer with no lines in it, which panics inside freya rather
+than here.
+
+So there are two answers, one for each. **The index is total**: a pad with no buffer gets the
+table's spare one, which is what the tail of an event batch writes into. **And the editor is keyed
+by its pad**, so a pad change is a different element and the editor and every row of it are taken
+down and built again against the pad on screen -- which is what keeps a render off the spare, and
+what makes the reader's own switch draw the right text.
 
 **Switching pads writes the one being left before it opens the next, and through the worker.** The
 jobs are one ordered queue, so a save queued ahead of the arriving pad's read lands ahead of it. A
@@ -352,12 +398,14 @@ costs is that a pad comes back following again, having been remounted. The follo
 arrives armed with rather than something carried across a switch, and it is the pad being looked at
 whose scrolling is worth keeping.
 
-**What stops a run**: its Stop button, its pad's rebuild, its pad's next run, and the window
-closing. The first three are per pad, since another pad's program is about another executable, and
-the last is still app-wide. A **rebuild** stops it for three separate sufficient reasons: cargo is
-about to write over the file the process *is*, `reopen_binary` is about to close the objects
-describing those bytes, and one pad has one output pane. The **next run** stops it because two
-generations of output arriving into one list is a pane with no answer to "what is this". An **edit**
+**What stops a run**: its Stop button, its pad's rebuild, its pad's next run, its pad being deleted,
+and the window closing. The first four are per pad, since another pad's program is about another
+executable, and the last is still app-wide. A **rebuild** stops it for three separate sufficient
+reasons: cargo is about to write over the file the process *is*, `reopen_binary` is about to close
+the objects describing those bytes, and one pad has one output pane. The **next run** stops it
+because two generations of output arriving into one list is a pane with no answer to "what is this".
+A **delete** stops it because the directory it was started in is about to go, and a program left
+behind by that is one nothing could ever find again. An **edit**
 stops nothing, deliberately: a run is of an executable and not of the buffer, and a keystroke that
 killed the reader's program would make it impossible to take a note about what it printed. **Leaving
 the pad** stops nothing either: the program goes on and its lines go on landing in that pad's own

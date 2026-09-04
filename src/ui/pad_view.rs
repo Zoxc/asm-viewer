@@ -26,6 +26,10 @@ use std::cell::Cell;
 /// The file a scratchpad's source is, as cargo and rustc spell it.
 pub(crate) const SOURCE_FILE: &str = "src/main.rs";
 
+/// How wide the delete question is: a pad's name over the path its package is at, which is
+/// the longest thing it draws.
+const DELETE_WIDTH: f32 = 520.0;
+
 /// How much of a dependency row the crate name takes against the version beside it.
 const NAME_FLEX: f32 = 2.0;
 const VERSION_FLEX: f32 = 1.0;
@@ -215,14 +219,28 @@ impl Component for DependencyRow {
 ///
 /// The pad is a prop and the buffer is that pad's own, so a switch does not hand the
 /// arriving pad the buffer the leaving one was being typed into. It is mounted only for a
-/// pad the table [`PadBuffers::holds`], which is what makes the mapped `Writable` safe --
-/// a dependency row's two boxes are indexed the same way for the same reason.
+/// pad the table [`PadBuffers::holds`], which is not on its own enough: the press that
+/// deletes a pad and this editor's own global press are one batch of events against one
+/// measured tree, so the index outlives the buffer by the tail of that batch, and
+/// [`PadBuffers`]'s index is total for it.
+///
+/// **Keyed by the pad, which is what keeps the map and the rows one pad's.** freya compares
+/// any two `Writable`s as equal (`notes/upstream/freya.md`), so a component holding one is
+/// never told it now points somewhere else: the editor's rows keep the map they mounted
+/// with, and a switch to a pad already read leaves them drawing the pad that was left --
+/// and, once that pad is deleted, drawing a buffer with no lines in it, which panics inside
+/// freya. The key makes a pad change a different element, so the editor and every row of it
+/// are taken down and built again against the pad on screen.
 #[derive(Clone, PartialEq)]
 struct SourceEditor {
     pad: PadId,
 }
 
 impl Component for SourceEditor {
+    fn render_key(&self) -> DiffKey {
+        DiffKey::from(&self.pad)
+    }
+
     fn render(&self) -> impl IntoElement {
         let text = use_consume::<PadText>().0;
         let a11y_id = use_hook(AccessibilityId::new_unique);
@@ -522,6 +540,117 @@ fn pad_label(id: &PadId, name: &str) -> String {
     }
 }
 
+/// Where a pad's package is, as the two places that draw it say so: the pane, under the
+/// name, and the delete question, over the buttons. The package cargo is handed **is** the
+/// storage, so this is the whole of what a pad is on disk.
+fn package_path(scratchpad: Option<&Scratchpad>) -> String {
+    match scratchpad.and_then(Scratchpad::directory) {
+        Some(directory) => directory.to_string_lossy().into_owned(),
+        None => "nowhere to keep a scratchpad".to_owned(),
+    }
+}
+
+/// The menu a pad's row opens on a right-click: one item, and it does not delete anything.
+/// It asks, which is what [`Pads::confirming`] is, and [`DeletePopup`] is the question.
+///
+/// A right-click and not the × a dependency row has: a × there is one press away from a
+/// list one row shorter, and this is one press away from the reader's own source being
+/// gone.
+fn delete_menu(pad: State<Pads>, id: PadId) -> Menu {
+    Menu::new().child(
+        MenuButton::new()
+            .on_press(move |_| {
+                let mut pad = pad;
+                pad.write().confirming = Some(id.clone());
+            })
+            .child("Delete scratchpad"),
+    )
+}
+
+/// The pad a delete question is about: what it is filed under, what the reader calls it,
+/// and where its package is.
+#[derive(Clone, PartialEq)]
+struct PadToDelete {
+    id: PadId,
+    name: String,
+    package: String,
+}
+
+/// The question a delete is behind: freya's `Popup`, which dims what is under it and takes
+/// Escape or a press outside as no — [`RescuedPopup`]'s window in a second place, mounted
+/// the same way. It shows exactly when it has children, so a pane nobody has asked anything
+/// of draws no window.
+///
+/// It says what will go and where it is, the name being the reader's word for the pad and
+/// the path being where they would look to get any of it back. There is nothing to get
+/// back: no pad is kept anywhere else, and the app has no undo.
+#[derive(Clone, PartialEq)]
+struct DeletePopup {
+    asking: Option<PadToDelete>,
+}
+
+impl Component for DeletePopup {
+    fn render(&self) -> impl IntoElement {
+        let mut pad = use_consume::<Pad>().0;
+        let text = use_consume::<PadText>().0;
+        let jobs = use_consume::<PadJobs>();
+
+        Popup::new()
+            .width(Size::px(DELETE_WIDTH))
+            .on_close_request(move |_| pad.write().confirming = None)
+            .map(self.asking.clone(), |popup, asking| {
+                let id = asking.id.clone();
+                popup
+                    .child(
+                        rect()
+                            .padding(8.0)
+                            .spacing(8.0)
+                            .font(&fonts().ui)
+                            .color(palette().text_fg)
+                            .child(
+                                label().text(format!(
+                                    "Delete {}?",
+                                    pad_label(&asking.id, &asking.name)
+                                )),
+                            )
+                            .child(
+                                label()
+                                    .text(
+                                        "Its source, its crates and everything built from it \
+                                         go with it."
+                                            .to_owned(),
+                                    )
+                                    .color(palette().address_fg),
+                            )
+                            // A path is as long as it is, and one that is cut off is one
+                            // the reader cannot go and look at.
+                            .child(
+                                paragraph()
+                                    .assembly_font()
+                                    .color(palette().address_fg)
+                                    .span(asking.package.clone()),
+                            ),
+                    )
+                    .child(
+                        PopupButtons::new()
+                            .child(
+                                Button::new()
+                                    .on_press(move |_| pad.write().confirming = None)
+                                    .child("Cancel"),
+                            )
+                            .child(
+                                Button::new()
+                                    .filled()
+                                    .on_press(move |_| {
+                                        request_delete_pad(pad, text, &jobs, id.clone())
+                                    })
+                                    .child("Delete"),
+                            ),
+                    )
+            })
+    }
+}
+
 /// One row of the pad list: a scratchpad that can be switched to, drawn by the name the
 /// reader gave it — never by the id it is filed under.
 ///
@@ -548,7 +677,7 @@ impl Component for PadRow {
         let mut hovering = use_state(|| false);
         let pad = use_consume::<Pad>().0;
         let jobs = use_consume::<PadJobs>();
-        let id = self.id.clone();
+        let (id, deleting) = (self.id.clone(), self.id.clone());
 
         let background = match (self.shown, hovering()) {
             (true, _) => palette().selected_bg,
@@ -572,6 +701,11 @@ impl Component for PadRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| show_pad(pad, &jobs, id.clone()))
+                // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
+                // without it panics.
+                .on_secondary_down(move |e: Event<PressEventData>| {
+                    ContextMenu::open_from_event(&e, delete_menu(pad, deleting.clone()));
+                })
                 // Dimmed when it is the placeholder and not something the reader wrote,
                 // which is how the recent-projects list draws a project with no name.
                 .child(tree_name(label, unnamed)),
@@ -609,6 +743,19 @@ impl Component for ScratchpadTab {
             })
             .collect();
         let refused = pads.refused.clone();
+        // The pad the reader is being asked about, which need not be the shown one: any row
+        // can be right-clicked.
+        let asking = pads.confirming.clone().map(|id| {
+            let scratchpad = pads.get(&id).map(|state| state.scratchpad.clone());
+            PadToDelete {
+                name: scratchpad
+                    .as_ref()
+                    .map(|scratchpad| scratchpad.name.clone())
+                    .unwrap_or_default(),
+                package: package_path(scratchpad.as_ref()),
+                id,
+            }
+        });
         drop(pads);
 
         let text = use_consume::<PadText>().0;
@@ -640,10 +787,7 @@ impl Component for ScratchpadTab {
         let refusal = state
             .refusal()
             .map(|message| text_block(message, palette().text_fg));
-        let package = match state.scratchpad.directory() {
-            Some(directory) => directory.to_string_lossy().into_owned(),
-            None => "nowhere to keep a scratchpad".to_owned(),
-        };
+        let package = package_path(Some(&state.scratchpad));
 
         // **One button, because there is one program.** While something is running the
         // only thing to want from it is to stop it.
@@ -708,17 +852,17 @@ impl Component for ScratchpadTab {
             .child(
                 ScrollView::new().child(rect().width(Size::fill()).children(pads).into_element()),
             )
-            // The one thing the panel can be told no about. Under the list rather than
-            // over it, so a list that fills the panel is not pushed down by a line that is
-            // there once in a blue moon.
-            .maybe_child(refused.map(|failure| {
+            // What the panel can be told no about: a New, and a delete. Under the list
+            // rather than over it, so a list that fills the panel is not pushed down by a
+            // line that is there once in a blue moon.
+            .maybe_child(refused.map(|refused| {
                 rect()
                     .width(Size::fill())
                     .padding(Gaps::new_symmetric(2.0, 6.0))
                     .overflow(Overflow::Clip)
                     .child(
                         label()
-                            .text(format!("Not made: {failure}"))
+                            .text(refused)
                             .color(palette().invalid_fg)
                             .max_lines(1),
                     )
@@ -874,6 +1018,9 @@ impl Component for ScratchpadTab {
             .horizontal()
             .content(Content::Flex)
             .background(palette().pane_bg)
+            // Over both of them, and drawn as nothing at all until a row has been asked
+            // about.
+            .child(DeletePopup { asking })
             .child(panel)
             .child(body)
     }

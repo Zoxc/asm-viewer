@@ -51,6 +51,33 @@ pointer from then on. **Cost:** the sweep beyond the rows is `on_sweep_beyond`
 (`ui/code_row.rs`), and the release is the root's `on_capture_global_pointer_press`, the
 capture phase running before anything can cancel it (`ui.rs`).
 
+**One press is one batch of events, against the tree measured before any of them ran.**
+Every event a mouse-up produces -- the targeted press, and `GlobalPointerPress` for every
+listener -- is emitted in one loop with no re-render between them
+(`ragnarok-0.4.3/src/executor.rs:70-101`), so a handler that takes something away is
+followed by handlers on nodes that the next render will unmount. A `Writable` mapped by a
+key is read *then*, after the render-time guard that justified it. **Cost:** deleting the
+shown scratchpad let go of its buffer, and the editor's own `on_global_pointer_press`
+(`freya-code-editor-0.4.3/src/editor_ui.rs:255-263`) then indexed the table for it and
+crashed the app; `PadBuffers`'s index is total (`ui/pad.rs`), and
+`confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from` pins it.
+
+**Two `Writable`s are always equal.** `PartialEq for Writable` returns `true` whatever it is
+handed (`lifecycle/writable.rs:60-64`), and props are diffed with `PartialEq`, so a component
+holding one mapped onto part of a table (`Writable::map`, `:152-172`) is never told the map
+now points at a different part: `run_scope` finds the props unchanged and keeps the old ones
+(`runner.rs:812-816`). The component goes on reading the part it mounted with, and there is no
+prop to change that would say otherwise. **Cost:** the scratchpad's editor draws its rows from
+a `Writable` mapped by the shown pad's id, so switching to a pad already read left the rows
+drawing the pad that was left, and deleting *that* pad left them drawing the table's spare
+empty buffer -- where `SyntaxBlocks::get_line`'s `self.blocks.get(&line).unwrap()`
+(`freya-code-editor-0.4.3/src/syntax.rs:98`) panics for any line at all, inside freya and out
+of reach. `SourceEditor` is keyed by its pad so a change remounts the editor and its rows
+(`ui/pad_view.rs`); `coming_back_to_a_pad_already_read_draws_its_own_buffer` and
+`deleting_a_pad_that_is_not_shown_leaves_the_editor_standing` pin the two halves. Worth
+reporting twice over: props holding a `Writable` cannot be diffed, and a line the blocks do
+not have should not be an unwrap.
+
 **`pointer_over` fires on entry only.** Its doc says it fires when the pointer is over the
 element; `nodes_state.rs:163` dedups it against the hovered set, so it is `pointer_enter`
 that also fires for the ancestors. **Cost:** the sweep that picks characters out follows the
@@ -137,6 +164,22 @@ shown before it runs. Installed there it replaces freya's -- `take_hook` and nev
 so `src/panics.rs` is what the reader sees in both builds, and a guarded panic goes back to
 being written down and nothing else. The window between `launch` and that first render is
 still freya's. Not reported yet.
+
+**A `Popup` that is closing goes on swallowing presses for the length of its fade.** The
+overlay is mounted while `show || background_animation.is_running()` (`popup.rs:207`), and the
+background animation is the same 150 ms colour run played in reverse on the way out
+(`popup.rs:185`), so the tree survives the close by that long. What survives with it is
+`PopupBackground`'s first child: a `Position::new_global()` rect of the whole window, at
+`Layer::Overlay`, carrying the `on_press` that asks the popup to close (`popup.rs:56-63`).
+Nothing makes it `interactive(false)` while it fades, so for those 150 ms every press lands on
+a full-window rect that is on its way to being invisible. In the app, a right-click on a
+scratchpad row within about a sixth of a second of dismissing the delete question does nothing
+at all. **What it cost:** a headless test that opens the question twice cannot get at the row's
+menu the second time, so `confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from`
+writes `Pads::confirming` directly and leaves the menu itself to
+`a_delete_is_asked_for_before_anything_goes`. There is no workaround in the app: the rect is
+inside freya's own component and nothing above it can reach the flag. Not reported yet; the fix
+upstream is one `interactive(false)` on the closing frames.
 
 ## Wanted
 

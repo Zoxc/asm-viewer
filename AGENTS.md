@@ -287,6 +287,14 @@ feature there with the substitute, so a release that brings it is noticed.
   `width(Size::auto())` with a `min_width` either: torin sizes an auto-width node from its
   minimum *plus* its children. The code panes' rows take `Widest::row_width`
   (`src/ui/width.rs`) and report their content through `on_sized`'s `inner_sizes`.
+- Two `Writable`s compare **equal**, always, so a component holding one mapped by a key is
+  never handed a new map: it goes on reading whatever the key said when it mounted. Anything
+  passing one down is keyed by that key, so a change remounts it (`src/ui/pad_view.rs`).
+- Every event one press produces -- the targeted press and every listener's global press --
+  is emitted against the tree measured before any of them ran, with no render between. So a
+  handler that takes something away is followed, in that same batch, by handlers on nodes
+  the next render will unmount, and a `Writable` mapped by a key is read *after* the render
+  that guarded it. `PadBuffers`'s index is total for this reason (`src/ui/pad.rs`).
 - A bubbling pointer event (`pointer_down`, `press`) is measured once against the deepest
   listener and every ancestor's handler gets the same data, so `element_location()` in an
   ancestor is relative to that child. Nothing inside a code row listens to `pointer_down`
