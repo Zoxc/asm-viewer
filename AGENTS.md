@@ -126,6 +126,8 @@ command.
 - `src/lsp.rs` — the language server: the program the project names started over its
   directory, the messages spoken to it, the project's own `.vscode/settings.json` read into
   what it is told, and the process a stop kills.
+- `src/references.rs` — the places a language server answered a question with, under the
+  file each is in and with the text of the line each is on: what the Locations panel draws.
 - `src/process.rs` — the process group a child is started in, so a stop reaches what it
   started; a scratchpad's run and the language server both have one.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.

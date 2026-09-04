@@ -80,7 +80,7 @@ waits for an answer carrying the id it asked under. The two questions are one sh
 place in, places out -- so they share the asking and the reading of an answer, and what
 tells one from the other is a `Wanted` the job carries and the answer names. That is the
 whole of what a second consumer needs: `ui::follow` takes the definitions and the Locations
-panel the uses, neither can take the other's, and the queue keeps the last question **of
+panel the references, neither can take the other's, and the queue keeps the last question **of
 each kind** rather than the last question.
 
 **A reader thread owns the server's output.** It began without one -- a request read frames
@@ -266,8 +266,9 @@ server is doing, so a handshake's answer and a first `$/progress` can arrive in 
 without one undoing the other.
 
 `worth_doing` drains the queue to the last question of each kind, keeping every start and
-stop: a reader clicking twice wants the second answer, a reader who asks for a name's uses
-has not taken back the definition they asked for, and a press is never dropped. A question asked
+stop: a reader clicking twice wants the second answer, a reader who asks for a name's
+references has not taken back the definition they asked for, and a press is never dropped.
+A question asked
 while the server is still starting is sent all the same -- it queues behind the start and
 is answered once there is somebody to answer it, and finds nothing to talk to if the start
 failed. A question with the server off is not sent: the control is what starts one.
@@ -338,13 +339,13 @@ its match with (`agents/Sidebar.md`). A name defined in the file the tab already
 the other path through `land`, which marks the line itself and leaves no landing; what keeps
 the column there is in `agents/Panes.md`, under the doors.
 
-A **uses** answer goes to the Locations panel instead (`agents/Sidebar.md`), and is asked
-for from the same place a definition is: the row's file and the pressed column, at the
+A **references** answer goes to the Locations panel instead (`agents/Sidebar.md`), and is
+asked for from the same place a definition is: the row's file and the pressed column, at the
 right-click rather than the press. It comes back grouped and with each line's text, both
-done on the worker: the reply is `Reply::Used` where a definition's is `Reply::Defined`,
+done on the worker: the reply is `Reply::Referenced` where a definition's is `Reply::Defined`,
 since reading those lines is a file read and belongs on the thread that already blocks. It
 follows the **name** and not the link, so the row a function is defined on offers it too --
-there is nothing to follow there, and it is where a reader asks what uses it. What comes
+there is nothing to follow there, and it is where a reader asks what refers to it. What comes
 back is a place in a file and not a symbol, so a row of it opens a source-driven tab
 through the same `open_source_place` the definition uses -- the same landing, the same
 drive, and the answer's columns selected there, where a definition leaves only a caret at

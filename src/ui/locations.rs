@@ -21,7 +21,7 @@
 //! because it is the same act -- a reader asking where else to look -- and a second list
 //! beside this one would be two panels showing one thing at a time. What comes back is a
 //! place in a file and not a symbol, so those rows are grouped under the file each is in
-//! (`src/uses.rs`) and open a source-driven tab; the symbols that line was compiled into
+//! (`src/references.rs`) and open a source-driven tab; the symbols that line was compiled into
 //! are then one right-click away, which is the question above.
 
 use super::*;
@@ -54,12 +54,12 @@ pub(crate) enum Scope {
         name: String,
         lines: RangeInclusive<u32>,
     },
-    /// Every use of the name at [`Query::at`], as the language server answers it.
+    /// Every reference to the name at [`Query::at`], as the language server answers it.
     ///
     /// `column` is where the name was asked about, in the UTF-16 units the protocol
     /// takes, and `run` is the server run it was asked in: an answer from a server
     /// started since is not an answer to this question.
-    Uses { name: String, column: u32, run: u64 },
+    References { name: String, column: u32, run: u64 },
 }
 
 impl Query {
@@ -82,22 +82,22 @@ impl Query {
         }
     }
 
-    /// The question about every use of `name`, asked at `column` of `at` in the server
+    /// The question about every reference to `name`, asked at `column` of `at` in the server
     /// run `run`.
-    pub(crate) fn uses(at: LinePos, name: String, column: u32, run: u64) -> Query {
+    pub(crate) fn references(at: LinePos, name: String, column: u32, run: u64) -> Query {
         Query {
             at,
-            scope: Scope::Uses { name, column, run },
+            scope: Scope::References { name, column, run },
         }
     }
 
     /// The lines the symbols are wanted for, and `None` where symbols are not what is
-    /// wanted: a question about uses is the language server's and never the worker's.
+    /// wanted: a question about references is the language server's and never the worker's.
     pub(crate) fn symbols_wanted(&self) -> Option<RangeInclusive<u32>> {
         match &self.scope {
             Scope::Line => Some(self.at.line..=self.at.line),
             Scope::Function { lines, .. } => Some(lines.clone()),
-            Scope::Uses { .. } => None,
+            Scope::References { .. } => None,
         }
     }
 
@@ -105,7 +105,7 @@ impl Query {
     fn spell(&self) -> String {
         match &self.scope {
             Scope::Line => spell(&self.at),
-            Scope::Function { name, .. } | Scope::Uses { name, .. } => name.clone(),
+            Scope::Function { name, .. } | Scope::References { name, .. } => name.clone(),
         }
     }
 
@@ -118,7 +118,7 @@ impl Query {
                 format!("{}:{}\u{2013}{}", self.at.file, lines.start(), lines.end())
             }
             // Where it was asked about, which is the one thing a name alone does not say.
-            Scope::Uses { .. } => format!("{}:{}", self.at.file, self.at.line),
+            Scope::References { .. } => format!("{}:{}", self.at.file, self.at.line),
         }
     }
 
@@ -127,7 +127,7 @@ impl Query {
         let (one, many) = match self.scope {
             Scope::Line => ("location for", "locations for"),
             Scope::Function { .. } => ("instance of", "instances of"),
-            Scope::Uses { .. } => ("use of", "uses of"),
+            Scope::References { .. } => ("reference to", "references to"),
         };
         format!(
             "{count} {} {}",
@@ -163,7 +163,7 @@ impl Located {
         (found != Some(asked)).then_some(asked)
     }
 
-    /// Take `found` as the answer to the uses question this is waiting for, `run` being
+    /// Take `found` as the answer to the references question this is waiting for, `run` being
     /// the server run it came back under. Whether anything changed, so the caller writes
     /// only then.
     ///
@@ -171,27 +171,27 @@ impl Located {
     /// a question already answered. **Every way of not answering is an empty answer**: a
     /// server that refused the question or stopped answering it leaves a question that
     /// would otherwise be looked for for ever.
-    pub(crate) fn answer_uses(&mut self, run: u64, found: uses::Uses) -> bool {
+    pub(crate) fn answer_references(&mut self, run: u64, found: references::References) -> bool {
         let asked = self.pending().filter(
-            |query| matches!(&query.scope, Scope::Uses { run: asked, .. } if *asked == run),
+            |query| matches!(&query.scope, Scope::References { run: asked, .. } if *asked == run),
         );
         let Some(of) = asked.cloned() else {
             return false;
         };
         self.found = Some(Found {
             of,
-            what: What::Uses(found),
+            what: What::References(found),
         });
         true
     }
 
-    /// Fold the file at `path` in a uses answer, or unfold it. Whether anything changed.
+    /// Fold the file at `path` in a references answer, or unfold it. Whether anything changed.
     pub(crate) fn fold(&mut self, path: &Path) -> bool {
         let Some(found) = self.found.as_mut() else {
             return false;
         };
         match &mut found.what {
-            What::Uses(uses) => uses.toggle(path),
+            What::References(references) => references.toggle(path),
             What::Symbols(_) => false,
         }
     }
@@ -214,8 +214,8 @@ pub(crate) enum What {
     /// [`SymbolList`] and not a `Vec`, so handing it to the rows is a pointer compare
     /// rather than a walk of thousands.
     Symbols(SymbolList),
-    /// Every use of the name, under the file each is in.
-    Uses(uses::Uses),
+    /// Every reference to the name, under the file each is in.
+    References(references::References),
 }
 
 impl Found {
@@ -226,18 +226,18 @@ impl Found {
         }
     }
 
-    /// The symbols it answered with, and `None` where it was a question about uses.
+    /// The symbols it answered with, and `None` where it was a question about references.
     pub(crate) fn symbols(&self) -> Option<&SymbolList> {
         match &self.what {
             What::Symbols(symbols) => Some(symbols),
-            What::Uses(_) => None,
+            What::References(_) => None,
         }
     }
 
-    /// The uses it answered with, and `None` where it was a question about symbols.
-    pub(crate) fn uses(&self) -> Option<&uses::Uses> {
+    /// The references it answered with, and `None` where it was a question about symbols.
+    pub(crate) fn references(&self) -> Option<&references::References> {
         match &self.what {
-            What::Uses(uses) => Some(uses),
+            What::References(references) => Some(references),
             What::Symbols(_) => None,
         }
     }
@@ -305,7 +305,7 @@ pub(crate) fn find_locations(
 /// sends the worker's: what it is asked in is a server run, and there is nothing to ask
 /// with no server -- a question is not what starts one, that being the control the reader
 /// presses (`follow_name`'s rule).
-pub(crate) fn find_uses(
+pub(crate) fn find_references(
     mut located: State<Located>,
     dock: State<DockArea>,
     language: State<Language>,
@@ -321,10 +321,10 @@ pub(crate) fn find_uses(
         line: at.line.saturating_sub(1),
         column,
     };
-    let Some(run) = ask_where(language, jobs, lookup, Wanted::Uses) else {
+    let Some(run) = ask_where(language, jobs, lookup, Wanted::References) else {
         return;
     };
-    let query = Query::uses(at, name, column, run);
+    let query = Query::references(at, name, column, run);
 
     // Asking again drops the answer that stands, which is what makes this question
     // pending; `find_locations`' rule, and here it cannot even be the same question,
@@ -343,7 +343,7 @@ pub(crate) fn find_uses(
 
 /// The menu a source row or an instruction row opens on a right-click: the line's
 /// locations, -- for a source row inside a function -- the function's instances, and
-/// `uses` where the press was on a name a server can be asked about, the things a row is
+/// `references` where the press was on a name a server can be asked about, the things a row is
 /// asked for that a click does not do. Built per press, as `close_menu` is, closing over
 /// the row's line; the states come in as arguments because this is called from an event
 /// handler, where no hook may run.
@@ -353,7 +353,7 @@ pub(crate) fn locate_menu(
     at: LinePos,
     subject: Option<(DocId, Arc<str>)>,
     function: Option<Function>,
-    uses: Option<MenuButton>,
+    references: Option<MenuButton>,
 ) -> Menu {
     let line = Query::line(at.clone());
     let instances = function.map(|function| {
@@ -364,10 +364,10 @@ pub(crate) fn locate_menu(
             .child(format!("Find instances of {}", function.name))
     });
 
-    // The name's uses first, where the press was on one: it is about what is under the
+    // The name's references first, where the press was on one: it is about what is under the
     // pointer, where the two below are about the line it is on.
     Menu::new()
-        .maybe_child(uses)
+        .maybe_child(references)
         .child(
             MenuButton::new()
                 .on_press(move |_| find_locations(located, dock, line.clone(), subject.clone()))
@@ -413,14 +413,15 @@ impl Component for LocationsTab {
             Filtered::new(symbols, &filter.read().matcher())
         });
         let filtered = filtered.read().clone();
-        // A uses answer is tens of rows where a line's symbols are thousands, so the
+        // A references answer is tens of rows where a line's symbols are thousands, so the
         // filter is applied where the rows are built (`filter_bar.rs`) -- but through a
         // memo all the same, since the rows are compared by the pointer they are shared
         // under and a fresh one every render would redraw every row.
         let used = use_memo(move || {
             let state = located.read();
-            let uses = state.found.as_ref().and_then(Found::uses);
-            uses.map(|uses| uses.rows_matching(&filter.read().matcher()))
+            let found = state.found.as_ref().and_then(Found::references);
+            found
+                .map(|found| found.rows_matching(&filter.read().matcher()))
                 .unwrap_or_default()
         });
         let used = used.read().clone();
@@ -443,22 +444,23 @@ impl Component for LocationsTab {
             ) => placeholder(format!("Finding locations for {}\u{2026}", query.spell())),
             (
                 Some(Query {
-                    scope: Scope::Uses { .. },
+                    scope: Scope::References { .. },
                     ..
                 }),
                 Some(query),
                 _,
-            ) => placeholder(format!("Finding uses of {}\u{2026}", query.spell())),
+            ) => placeholder(format!("Finding references to {}\u{2026}", query.spell())),
             (Some(_), Some(query), _) => {
                 placeholder(format!("Finding instances of {}\u{2026}", query.spell()))
             }
             (Some(query), None, Some(found))
-                if found.uses().is_some_and(|uses| uses.count() == 0) =>
+                if found.references().is_some_and(|found| found.count() == 0) =>
             {
-                placeholder(format!("No uses of {}", query.spell()))
+                placeholder(format!("No references to {}", query.spell()))
             }
-            (Some(query), None, Some(found)) if found.uses().is_some() => {
-                let heading = query.heading(found.uses().map_or(0, uses::Uses::count));
+            (Some(query), None, Some(found)) if found.references().is_some() => {
+                let heading =
+                    query.heading(found.references().map_or(0, references::References::count));
                 let length = used.len();
                 rect()
                     .expanded()
@@ -469,8 +471,8 @@ impl Component for LocationsTab {
                     ))
                     .child(
                         rect().width(Size::fill()).height(Size::flex(1.0)).child(
-                            VirtualScrollView::new_with_data(used, |row, used: &UseRows| {
-                                UsesRow {
+                            VirtualScrollView::new_with_data(used, |row, used: &ReferenceRows| {
+                                ReferencesRow {
                                     rows: used.clone(),
                                     index: row,
                                     key: DiffKey::None,
@@ -536,31 +538,31 @@ impl Component for LocationsTab {
     }
 }
 
-/// One row of a uses answer: a file, or one of the uses under it.
+/// One row of a references answer: a file, or one of the references under it.
 ///
 /// `HitRow`'s shape (`ui::search_view`), for the same reason -- a flattened tree drawn by
 /// a scroll view -- and not its rows: a hit carries the line's text, which a search read
 /// off the disk and a language server never says.
 #[derive(Clone)]
-struct UsesRow {
-    rows: UseRows,
+struct ReferencesRow {
+    rows: ReferenceRows,
     index: usize,
     key: DiffKey,
 }
 
-impl PartialEq for UsesRow {
+impl PartialEq for ReferencesRow {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows && self.index == other.index
     }
 }
 
-impl KeyExt for UsesRow {
+impl KeyExt for ReferencesRow {
     fn write_key(&mut self) -> &mut DiffKey {
         &mut self.key
     }
 }
 
-impl Component for UsesRow {
+impl Component for ReferencesRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let mut located = use_consume::<Locations>().0;
@@ -575,8 +577,10 @@ impl Component for UsesRow {
         let row = self.rows.row(self.index).clone();
         let pressed = row.clone();
         let tooltip = match &row {
-            UseRow::File { path, .. } => path.display().to_string(),
-            UseRow::Use { path, used } => format!("{}:{}", path.display(), used.line),
+            ReferenceRow::File { path, .. } => path.display().to_string(),
+            ReferenceRow::Reference { path, reference } => {
+                format!("{}:{}", path.display(), reference.line)
+            }
         };
 
         let background = if hovering() {
@@ -602,13 +606,13 @@ impl Component for UsesRow {
                 .on_press(move |_| match &pressed {
                     // Bound to a `let` of its own, so the guard the read hands back is
                     // gone before the write.
-                    UseRow::File { path, .. } => {
+                    ReferenceRow::File { path, .. } => {
                         let mut next = located.peek().clone();
                         if next.fold(path) {
                             located.set(next);
                         }
                     }
-                    UseRow::Use { path, used } => open_source_place(
+                    ReferenceRow::Reference { path, reference } => open_source_place(
                         open,
                         visits,
                         marked,
@@ -616,12 +620,12 @@ impl Component for UsesRow {
                         plant,
                         driven,
                         path,
-                        used.line,
-                        Some(used.columns.start as usize..used.columns.end as usize),
+                        reference.line,
+                        Some(reference.columns.start as usize..reference.columns.end as usize),
                         reach(ctrl),
                     ),
                 })
-                .children(use_row_children(&row)),
+                .children(reference_row_children(&row)),
         )
     }
 
@@ -630,11 +634,12 @@ impl Component for UsesRow {
     }
 }
 
-/// What a uses row draws: a file row is its fold, its name and its count, and a use row
-/// its line number and the line, both as the Search panel's rows draw theirs.
-fn use_row_children(row: &UseRow) -> Vec<Element> {
+/// What a references row draws: a file row is its fold, its name and its count, and a
+/// reference row its line number and the line, both as the Search panel's rows draw
+/// theirs.
+fn reference_row_children(row: &ReferenceRow) -> Vec<Element> {
     match row {
-        UseRow::File {
+        ReferenceRow::File {
             name,
             count,
             folded,
@@ -656,9 +661,9 @@ fn use_row_children(row: &UseRow) -> Vec<Element> {
         // The Search panel's match row: the line's number, and the line with the name
         // marked in it. A file that would not read leaves the text empty, and the row is
         // the number alone.
-        UseRow::Use { used, .. } => vec![
+        ReferenceRow::Reference { reference, .. } => vec![
             label()
-                .text(used.line.to_string())
+                .text(reference.line.to_string())
                 .width(Size::px(LINE_NUMBER_WIDTH))
                 .text_align(TextAlign::Right)
                 .color(palette().address_fg)
@@ -672,7 +677,7 @@ fn use_row_children(row: &UseRow) -> Vec<Element> {
                         .width(Size::fill())
                         .max_lines(1)
                         .text_overflow(TextOverflow::Ellipsis)
-                        .spans_iter(marked_spans(&used.text, &used.spans).into_iter()),
+                        .spans_iter(marked_spans(&reference.text, &reference.spans).into_iter()),
                 )
                 .into_element(),
         ],

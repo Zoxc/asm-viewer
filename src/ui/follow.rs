@@ -86,7 +86,7 @@ pub(crate) fn follow_name(
 
 /// Open what the answer named. Called once, at the root, beside `use_land`.
 ///
-/// The arrival itself is [`open_source_place`], which a row of the uses panel makes too.
+/// The arrival itself is [`open_source_place`], which a row of the references panel makes too.
 pub(crate) fn use_follow(
     mut follow: State<Follow>,
     open: Open,
@@ -136,7 +136,7 @@ pub(crate) fn use_follow(
 /// **at**, which the landing has just made, and not under the file.
 ///
 /// Both doors into a source file go through this: the definition an answer named, and a
-/// row of the uses the Locations panel lists.
+/// row of the references the Locations panel lists.
 pub(crate) fn open_source_place(
     open: Open,
     visits: State<Visits>,

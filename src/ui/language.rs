@@ -164,13 +164,14 @@ pub(crate) struct Lookup {
 
 /// Which question about a place is being asked. The two go out the same way and come
 /// back the same way, so this is what tells one answer from the other -- and what keeps a
-/// reader asking for uses from cancelling a definition still in flight (`worth_doing`).
+/// reader asking for references from cancelling a definition still in flight
+/// (`worth_doing`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Wanted {
     /// Where the name is defined, which `ui::follow` opens.
     Definition,
     /// Everywhere it is used, which the Locations panel lists.
-    Uses,
+    References,
 }
 
 /// What the worker is asked to do.
@@ -220,12 +221,12 @@ pub(crate) enum LspAnswer {
 
 /// What an answer holds, which is what was asked for.
 ///
-/// A definition is places and nothing more -- what opens one is a file and a line. Uses
-/// are grouped and carry the text of every line they are on, since the lines are **read
-/// here**: the read blocks, and this is the thread that may block.
+/// A definition is places and nothing more -- what opens one is a file and a line.
+/// References are grouped and carry the text of every line they are on, since the lines
+/// are **read here**: the read blocks, and this is the thread that may block.
 pub(crate) enum Reply {
     Defined(Vec<lsp::Place>),
-    Used(uses::Uses),
+    Referenced(references::References),
 }
 
 /// The blocking half, and the only part that talks to a server.
@@ -273,21 +274,23 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 let talk = talking.as_mut()?;
                 let places = match want {
                     Wanted::Definition => talk.definition(&at.file, at.line, at.column),
-                    Wanted::Uses => talk.references(&at.file, at.line, at.column),
+                    Wanted::References => talk.references(&at.file, at.line, at.column),
                 };
                 // A conversation that ended is a server that is gone, so it is let go of
                 // here and reported as the failure it is.
                 if matches!(places, Err(lsp::Failure::Broken(_))) {
                     *talking = None;
                 }
-                // The uses are grouped and their lines read here, with the ask: the
+                // The references are grouped and their lines read here, with the ask: the
                 // reading is what the panel draws and a file read is what this thread is
                 // for.
                 let reply = places.map(|places| match want {
                     Wanted::Definition => Reply::Defined(places),
-                    Wanted::Uses => Reply::Used(uses::Uses::of(&places, |path| {
-                        std::fs::read_to_string(path).ok()
-                    })),
+                    Wanted::References => {
+                        Reply::Referenced(references::References::of(&places, |path| {
+                            std::fs::read_to_string(path).ok()
+                        }))
+                    }
                 });
                 Some(LspAnswer::Answered { run, want, reply })
             }
@@ -307,10 +310,10 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
 ///
 /// Only the last question **of each kind** is asked: a reader clicking twice wants the
 /// second answer, and the first is a conversation the second would only wait behind -- but
-/// a reader who asks for a name's uses has not taken back the definition they asked for,
-/// and the two are answered by different parts of the app. The same for reading the
-/// project's settings, which a directory typed a letter at a time asks for once a
-/// keystroke and only the last of which is about the project that is open. Starting and
+/// a reader who asks for a name's references has not taken back the definition they
+/// asked for, and the two are answered by different parts of the app. The same for
+/// reading the project's settings, which a directory typed a letter at a time asks for
+/// once a keystroke and only the last of which is about the project that is open. Starting and
 /// stopping are never dropped -- they are what the reader pressed.
 pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -> Vec<LspJob> {
     let jobs: Vec<LspJob> = std::iter::once(first).chain(queued).collect();
@@ -318,7 +321,7 @@ pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -
     let asked = |want: Wanted| {
         last(&|job| matches!(job, LspJob::Ask { want: asked, .. } if *asked == want))
     };
-    let (defining, using) = (asked(Wanted::Definition), asked(Wanted::Uses));
+    let (defining, using) = (asked(Wanted::Definition), asked(Wanted::References));
     let read = last(&|job| matches!(job, LspJob::ReadSettings { .. }));
     jobs.into_iter()
         .enumerate()
@@ -328,7 +331,8 @@ pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -
                 ..
             } => Some(*at) == defining,
             LspJob::Ask {
-                want: Wanted::Uses, ..
+                want: Wanted::References,
+                ..
             } => Some(*at) == using,
             LspJob::ReadSettings { .. } => Some(*at) == read,
             _ => true,
@@ -460,16 +464,16 @@ pub(crate) fn use_language_with(
                                     follow.set(waiting);
                                 }
                             }
-                            Wanted::Uses => {
+                            Wanted::References => {
                                 let found = match reply {
-                                    Some(Reply::Used(uses)) => uses,
-                                    _ => uses::Uses::default(),
+                                    Some(Reply::Referenced(found)) => found,
+                                    _ => references::References::default(),
                                 };
                                 let mut waiting = located.peek().clone();
                                 // Nothing found and nothing to be found both leave the
                                 // panel saying so: a question that stayed pending would
                                 // say it was still looking for ever.
-                                if waiting.answer_uses(run, found) {
+                                if waiting.answer_references(run, found) {
                                     located.set(waiting);
                                 }
                             }

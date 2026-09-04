@@ -227,7 +227,7 @@ pub(crate) struct Link {
 }
 
 /// The name `column` is inside, and `None` where it is over none. **Declared or called**,
-/// unlike a link: where a name is defined is where a reader asks what uses it, and the
+/// unlike a link: where a name is defined is where a reader asks what refers to it, and the
 /// question is about the name and not about the door beside it.
 pub(crate) fn name_at(source: &SourceText, index: usize, column: usize) -> Option<Link> {
     names_in(source, index)
@@ -341,9 +341,9 @@ impl Component for SourceRow {
                 .map(|(language, _, jobs)| (language, jobs));
             move |e: Event<PressEventData>, column| {
                 let function = functions::enclosing(&source.0.functions, at.line).cloned();
-                // The name the press was on, which is what its uses would be of. Looked
-                // for on the press and not per render, as the function is.
-                let uses = column
+                // The name the press was on, which the question is about. Looked for
+                // on the press and not per render, as the function is.
+                let references = column
                     .and_then(|column| name_at(&source, index, column))
                     .zip(asking.clone())
                     .map(|(link, (language, jobs))| {
@@ -351,7 +351,7 @@ impl Component for SourceRow {
                         let name = link.name.clone();
                         MenuButton::new()
                             .on_press(move |_| {
-                                find_uses(
+                                find_references(
                                     located,
                                     dock,
                                     language,
@@ -361,11 +361,18 @@ impl Component for SourceRow {
                                     link.columns.start as u32,
                                 )
                             })
-                            .child(format!("Find uses of {}", link.name))
+                            .child(format!("Find references to {}", link.name))
                     });
                 ContextMenu::open_from_event(
                     &e,
-                    locate_menu(located, dock, at.clone(), subject.clone(), function, uses),
+                    locate_menu(
+                        located,
+                        dock,
+                        at.clone(),
+                        subject.clone(),
+                        function,
+                        references,
+                    ),
                 );
             }
         });

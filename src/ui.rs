@@ -47,6 +47,7 @@ pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::project::{
     self, Cargo, Details, Document, Project, ProjectId, Recent, SavedDocument, Selection, Session,
 };
+pub(crate) use crate::references::{self, ReferenceRow, ReferenceRows};
 pub(crate) use crate::rescue;
 pub(crate) use crate::reveal;
 pub(crate) use crate::rows::RowSelection;
@@ -61,7 +62,6 @@ pub(crate) use crate::tabs::{self, Driven, Positions, Spot};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
-pub(crate) use crate::uses::{self, UseRow, UseRows};
 pub(crate) use crate::visits::Visits;
 
 mod analyzed;

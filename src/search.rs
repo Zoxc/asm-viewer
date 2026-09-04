@@ -230,7 +230,7 @@ fn hit_from(path: &Path, matcher: &RegexMatcher, line: &[u8], number: u64) -> Hi
 /// shows, and the part of it in view is still what was found. One left with nothing in
 /// view goes.
 ///
-/// Shared with the uses list, whose rows are these rows (`src/uses.rs`).
+/// Shared with the references list, whose rows are these rows (`src/references.rs`).
 pub fn drawn(line: &str, spans: Vec<Range<usize>>) -> (String, Vec<Range<usize>>) {
     let start = line.len() - line.trim_start().len();
     let end = cut(&line[start..], MAX_LINE) + start;

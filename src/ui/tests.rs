@@ -2845,7 +2845,7 @@ macro_rules! location_states {
 /// Pressing a use opens its file on its line with the name selected there, and the
 /// assembly side follows that line as it follows a clicked one.
 #[test]
-fn a_use_row_opens_its_file_on_the_line_with_the_name_selected() {
+fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
     let directory =
         std::env::temp_dir().join(format!("assembly-viewer-uses-row-{}", std::process::id()));
     std::fs::create_dir_all(&directory).expect("creating the test directory");
@@ -2867,7 +2867,7 @@ fn a_use_row_opens_its_file_on_the_line_with_the_name_selected() {
         file: Arc::from("/p/src/main.rs"),
         line: 2,
     };
-    located.set(found_uses(at, "helper", &[(&used, 2, 12..18)]));
+    located.set(found_references(at, "helper", &[(&used, 2, 12..18)]));
     settle(&mut test);
 
     // The row draws the line it is on, as a search hit's row does -- the file was read
@@ -2926,8 +2926,8 @@ fn a_use_row_opens_its_file_on_the_line_with_the_name_selected() {
 }
 
 /// A uses answer as the panel takes one: the question, and the places the server named.
-fn found_uses(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)]) -> Located {
-    let query = Query::uses(at, name.to_owned(), 0, 7);
+fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)]) -> Located {
+    let query = Query::references(at, name.to_owned(), 0, 7);
     let places: Vec<lsp::Place> = places
         .iter()
         .map(|(file, line, columns)| lsp::Place {
@@ -2941,15 +2941,18 @@ fn found_uses(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)]) -> Lo
         ..Located::default()
     };
     // Grouped as the worker groups it, reading each file's text off the disk.
-    let found = uses::Uses::of(&places, |path| std::fs::read_to_string(path).ok());
-    assert!(located.answer_uses(7, found), "the answer was not taken");
+    let found = references::References::of(&places, |path| std::fs::read_to_string(path).ok());
+    assert!(
+        located.answer_references(7, found),
+        "the answer was not taken"
+    );
     located
 }
 
 /// The panel says which of the uses states it is in, groups what it found under the file
 /// each use is in, and folds a file away when its row is pressed.
 #[test]
-fn the_panel_groups_a_names_uses_under_their_files_and_folds_one_away() {
+fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
     let (mut test, (_states, location)) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
@@ -2963,15 +2966,15 @@ fn the_panel_groups_a_names_uses_under_their_files_and_folds_one_away() {
     };
     settle(&mut test);
 
-    located.write().asked = Some(Query::uses(at.clone(), "helper".to_owned(), 12, 7));
+    located.write().asked = Some(Query::references(at.clone(), "helper".to_owned(), 12, 7));
     settle(&mut test);
     assert!(
-        labels(&test).contains(&"Finding uses of helper\u{2026}".to_owned()),
+        labels(&test).contains(&"Finding references to helper\u{2026}".to_owned()),
         "{:?}",
         labels(&test)
     );
 
-    located.set(found_uses(
+    located.set(found_references(
         at.clone(),
         "helper",
         &[
@@ -2982,18 +2985,21 @@ fn the_panel_groups_a_names_uses_under_their_files_and_folds_one_away() {
     ));
     settle(&mut test);
     let drawn = labels(&test);
-    assert!(drawn.contains(&"3 uses of helper".to_owned()), "{drawn:?}");
+    assert!(
+        drawn.contains(&"3 references to helper".to_owned()),
+        "{drawn:?}"
+    );
     // A file row per file, by path, each with its fold and its count, and its uses under
     // it by line. Everything the list draws, from the heading down.
     let listed: Vec<String> = drawn
         .iter()
-        .skip_while(|text| *text != "3 uses of helper")
+        .skip_while(|text| *text != "3 references to helper")
         .cloned()
         .collect();
     assert_eq!(
         listed,
         [
-            "3 uses of helper",
+            "3 references to helper",
             "\u{25be}",
             "main.rs",
             "2",
@@ -3013,12 +3019,12 @@ fn the_panel_groups_a_names_uses_under_their_files_and_folds_one_away() {
     settle(&mut test);
     let folded: Vec<String> = labels(&test)
         .into_iter()
-        .skip_while(|text| text != "3 uses of helper")
+        .skip_while(|text| text != "3 references to helper")
         .collect();
     assert_eq!(
         folded,
         [
-            "3 uses of helper",
+            "3 references to helper",
             // Folded, and its count stays: the heading and the row both count what was
             // found and not what is drawn.
             "\u{25b8}",
@@ -3037,7 +3043,7 @@ fn the_panel_groups_a_names_uses_under_their_files_and_folds_one_away() {
 /// that answered no places, one that refused the question, and one that stopped
 /// answering all leave the panel saying there are none.
 #[test]
-fn a_uses_question_that_answers_nothing_says_there_are_none() {
+fn a_references_question_that_answers_nothing_says_there_are_none() {
     let (mut test, (_states, location)) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
@@ -3051,10 +3057,10 @@ fn a_uses_question_that_answers_nothing_says_there_are_none() {
     };
     settle(&mut test);
 
-    located.set(found_uses(at.clone(), "helper", &[]));
+    located.set(found_references(at.clone(), "helper", &[]));
     settle(&mut test);
     assert!(
-        labels(&test).contains(&"No uses of helper".to_owned()),
+        labels(&test).contains(&"No references to helper".to_owned()),
         "{:?}",
         labels(&test)
     );
@@ -3062,11 +3068,11 @@ fn a_uses_question_that_answers_nothing_says_there_are_none() {
     // An answer under a run this did not ask in is an answer to nobody: the question
     // stands and the panel is still looking for it.
     let mut asking = Located {
-        asked: Some(Query::uses(at, "helper".to_owned(), 12, 7)),
+        asked: Some(Query::references(at, "helper".to_owned(), 12, 7)),
         ..Located::default()
     };
     assert!(
-        !asking.answer_uses(8, uses::Uses::default()),
+        !asking.answer_references(8, references::References::default()),
         "an answer from another server"
     );
     assert!(asking.pending().is_some());
@@ -4390,7 +4396,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
 /// was: the question carries the name it was on and the column it begins at. A press
 /// elsewhere in the row offers no such thing -- the answer would be to no name.
 #[test]
-fn a_right_click_on_a_link_offers_the_names_uses() {
+fn a_right_click_on_a_link_offers_the_names_references() {
     let (file, _directory) = calling_file("uses");
     let (mut test, states, language, location, _driven, asks) =
         mount_linking!(|_job: LspJob| None, file.clone());
@@ -4415,7 +4421,7 @@ fn a_right_click_on_a_link_offers_the_names_uses() {
         "{drawn:?}"
     );
     assert!(
-        !drawn.iter().any(|text| text.starts_with("Find uses")),
+        !drawn.iter().any(|text| text.starts_with("Find references")),
         "{drawn:?}"
     );
     // The menu is closed by pressing away from it, as a reader closes one.
@@ -4426,18 +4432,18 @@ fn a_right_click_on_a_link_offers_the_names_uses() {
     right_click(&mut test, call);
     let drawn = labels(&test);
     assert!(
-        drawn.contains(&"Find uses of helper".to_owned()),
+        drawn.contains(&"Find references to helper".to_owned()),
         "{drawn:?}"
     );
 
-    let entry = centre_of(&test, "Find uses of helper");
+    let entry = centre_of(&test, "Find references to helper");
     press_at(&mut test, entry);
     settle(&mut test);
 
     // The question the panel now holds: the name, and where it was asked about.
     let asked = location.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 2, "the question is about the wrong line");
-    let Scope::Uses { name, column, .. } = &asked.scope else {
+    let Scope::References { name, column, .. } = &asked.scope else {
         panic!("the question is not about a name's uses");
     };
     assert_eq!(name, "helper");
@@ -4452,7 +4458,7 @@ fn a_right_click_on_a_link_offers_the_names_uses() {
 /// The name where a function is **defined** offers its uses too, though it is no link:
 /// where a name is defined is where a reader asks what uses it.
 #[test]
-fn a_right_click_on_a_definitions_own_name_offers_its_uses() {
+fn a_right_click_on_a_definitions_own_name_offers_its_references() {
     let (file, _directory) = calling_file("defuses");
     let (mut test, states, language, location, _driven, _asks) =
         mount_linking!(|_job: LspJob| None, file.clone());
@@ -4470,15 +4476,18 @@ fn a_right_click_on_a_definitions_own_name_offers_its_uses() {
     let defined = word_point(&test, "main");
     right_click(&mut test, defined);
     let drawn = labels(&test);
-    assert!(drawn.contains(&"Find uses of main".to_owned()), "{drawn:?}");
+    assert!(
+        drawn.contains(&"Find references to main".to_owned()),
+        "{drawn:?}"
+    );
 
-    let entry = centre_of(&test, "Find uses of main");
+    let entry = centre_of(&test, "Find references to main");
     press_at(&mut test, entry);
     settle(&mut test);
 
     let asked = location.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 1);
-    let Scope::Uses { name, column, .. } = &asked.scope else {
+    let Scope::References { name, column, .. } = &asked.scope else {
         panic!("the question is not about a name's uses");
     };
     assert_eq!(name, "main");
@@ -4490,7 +4499,7 @@ fn a_right_click_on_a_definitions_own_name_offers_its_uses() {
 /// list says there are no uses, where a question left pending would say it was still
 /// looking for ever.
 #[test]
-fn a_refused_uses_question_leaves_the_panel_saying_there_are_none() {
+fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
     let (file, _directory) = calling_file("refused");
     let (mut test, states, language, location, _driven, _asks) = mount_linking!(
         |job: LspJob| match job {
@@ -4519,7 +4528,7 @@ fn a_refused_uses_question_leaves_the_panel_saying_there_are_none() {
 
     let call = word_point(&test, "helper");
     right_click(&mut test, call);
-    let entry = centre_of(&test, "Find uses of helper");
+    let entry = centre_of(&test, "Find references to helper");
     press_at(&mut test, entry);
     // Waited for rather than counted in passes: two workers stand between the press and
     // the panel, and how many turns they take is not something a test can know.
@@ -4534,8 +4543,8 @@ fn a_refused_uses_question_leaves_the_panel_saying_there_are_none() {
         state
             .found
             .as_ref()
-            .and_then(Found::uses)
-            .map(uses::Uses::count),
+            .and_then(Found::references)
+            .map(references::References::count),
         Some(0),
         "a refusal is not an empty answer"
     );
@@ -4549,7 +4558,7 @@ fn a_refused_uses_question_leaves_the_panel_saying_there_are_none() {
 /// With no server there are no links, so there is no name to ask about and the menu
 /// offers nothing: a question is not what starts a server.
 #[test]
-fn a_right_click_with_no_server_offers_no_uses() {
+fn a_right_click_with_no_server_offers_no_references() {
     let (file, _directory) = calling_file("nouses");
     let (mut test, states, _language, _location, _driven, _asks) =
         mount_linking!(|_job: LspJob| None, file.clone());
@@ -4565,7 +4574,7 @@ fn a_right_click_with_no_server_offers_no_uses() {
     right_click(&mut test, call);
     let drawn = labels(&test);
     assert!(
-        !drawn.iter().any(|text| text.starts_with("Find uses")),
+        !drawn.iter().any(|text| text.starts_with("Find references")),
         "{drawn:?}"
     );
 }
@@ -16829,7 +16838,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
 /// used has not taken back the definition they asked for, and the two are answered by
 /// different parts of the app.
 #[test]
-fn a_question_about_uses_does_not_cancel_one_about_a_definition() {
+fn a_question_about_references_does_not_cancel_one_about_a_definition() {
     let at = |line: u32| Lookup {
         file: PathBuf::from("/p/src/main.rs"),
         line,
@@ -16854,19 +16863,19 @@ fn a_question_about_uses_does_not_cancel_one_about_a_definition() {
             LspJob::Ask {
                 run: 1,
                 at: at(2),
-                want: Wanted::Uses,
+                want: Wanted::References,
             },
             LspJob::Ask {
                 run: 1,
                 at: at(3),
-                want: Wanted::Uses,
+                want: Wanted::References,
             },
         ]
         .into_iter(),
     );
-    // The definition asked for first is still asked, and the second of the two uses
-    // questions is the one that stands.
-    assert_eq!(names(&drained), ["Definition 1", "Uses 3"]);
+    // The definition asked for first is still asked, and the second of the two
+    // references questions is the one that stands.
+    assert_eq!(names(&drained), ["Definition 1", "References 3"]);
 }
 
 /// A start over a directory nobody has agreed to is a question and not a start: a server

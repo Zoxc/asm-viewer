@@ -1,21 +1,21 @@
-//! Every use of a name the language server answered with, under the file each is in.
+//! Every reference to a name the language server answered with, under the file each is in.
 //!
 //! The server answers a flat list of places in whatever order it found them, so unlike a
 //! search -- which reports a file's hits together, as it walks -- the grouping is done
-//! here, once, when the answer lands. Files by path and uses by line: the whole answer
-//! arrives at once, so there is no order of arrival to keep, and the reader needs to be
-//! able to find a file in the list.
+//! here, once, when the answer lands. Files by path and references by line: the whole
+//! answer arrives at once, so there is no order of arrival to keep, and the reader needs
+//! to be able to find a file in the list.
 //!
-//! The rows a `VirtualScrollView` asks for are flattened ([`UseRows`]), for the reason
-//! `search.rs` and `files.rs` flatten theirs: the shape is in the data and never in the
-//! elements.
+//! The rows a `VirtualScrollView` asks for are flattened ([`ReferenceRows`]), for the
+//! reason `search.rs` and `files.rs` flatten theirs: the shape is in the data and never in
+//! the elements.
 //!
 //! A row draws its line's text, as a search hit's does and cut the same way
 //! ([`search::drawn`]) -- a list of line numbers says where a name is used and not how.
 //! The server says nothing about the text, so the lines are **read off the disk here**,
 //! each file once; the read blocks, which is why it happens with the ask on the language
-//! worker and never on the UI thread. A file that will not read leaves its uses with the
-//! line number they already have.
+//! worker and never on the UI thread. A file that will not read leaves its references with
+//! the line number they already have.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -26,13 +26,13 @@ use crate::filter::Matcher;
 use crate::lsp;
 use crate::search;
 
-/// One use: the line it is on, 1-based as every line in the app is, the columns of the
-/// name on it, and that line as a row draws it.
+/// One reference: the line it is on, 1-based as every line in the app is, the columns of
+/// the name on it, and that line as a row draws it.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Use {
+pub struct Reference {
     pub line: u32,
     /// Where the name is in the **file's own line**, in UTF-16 units, which is what a
-    /// pane counts columns in: what opening the use selects there. Kept apart from
+    /// pane counts columns in: what opening the reference selects there. Kept apart from
     /// `spans`, which are offsets into the text a row draws and say nothing about the
     /// whitespace trimmed off the front of it (`search::Hit`'s rule, for its reason).
     pub columns: Range<u32>,
@@ -43,32 +43,32 @@ pub struct Use {
     pub spans: Vec<Range<usize>>,
 }
 
-/// Every use, by the file it is in, and which files are folded away.
+/// Every reference, by the file it is in, and which files are folded away.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
-pub struct Uses {
+pub struct References {
     files: Vec<InFile>,
     count: usize,
 }
 
-/// One file and what is used in it.
+/// One file and what is referred to in it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct InFile {
     path: PathBuf,
     name: String,
-    lines: Vec<Use>,
+    lines: Vec<Reference>,
     folded: bool,
 }
 
-impl Uses {
+impl References {
     /// The places the server named, grouped, each with the text of the line it is on.
-    /// Two uses on one line are two rows: a name used twice there is used twice, and each
-    /// selects its own.
+    /// Two references on one line are two rows: a name used twice there is used twice, and
+    /// each selects its own.
     ///
     /// `read` answers a file's whole text, and is asked **once per file** however many
-    /// uses are in it. It is an argument so that the read is the caller's -- the worker
-    /// passes the filesystem and a test passes what it wrote -- and so that nothing here
-    /// blocks unless the caller's read does.
-    pub fn of(places: &[lsp::Place], read: impl Fn(&Path) -> Option<String>) -> Uses {
+    /// references are in it. It is an argument so that the read is the caller's -- the
+    /// worker passes the filesystem and a test passes what it wrote -- and so that nothing
+    /// here blocks unless the caller's read does.
+    pub fn of(places: &[lsp::Place], read: impl Fn(&Path) -> Option<String>) -> References {
         let mut by_file: BTreeMap<&Path, Vec<&lsp::Place>> = BTreeMap::new();
         for place in places {
             by_file.entry(&place.file).or_default().push(place);
@@ -79,9 +79,9 @@ impl Uses {
             .map(|(path, places)| {
                 let text = read(path);
                 let source: Vec<&str> = text.iter().flat_map(|text| text.lines()).collect();
-                let mut lines: Vec<Use> = places
+                let mut lines: Vec<Reference> = places
                     .into_iter()
-                    .map(|place| used(place, source.get(place.line as usize - 1).copied()))
+                    .map(|place| reference(place, source.get(place.line as usize - 1).copied()))
                     .collect();
                 lines.sort_by(|one, other| {
                     (one.line, one.columns.start).cmp(&(other.line, other.columns.start))
@@ -95,7 +95,7 @@ impl Uses {
                 }
             })
             .collect();
-        Uses { files, count }
+        References { files, count }
     }
 
     /// Fold the file at `path`, or unfold it. Whether anything changed, so the caller
@@ -108,72 +108,72 @@ impl Uses {
         true
     }
 
-    /// How many uses there are, over every file.
+    /// How many references there are, over every file.
     pub fn count(&self) -> usize {
         self.count
     }
 
     /// Everything found whose file `matcher` keeps, flattened in the order it is drawn: a
-    /// file and then its uses, unless it is folded.
+    /// file and then its references, unless it is folded.
     ///
-    /// A file is what a filter here matches: a use is a line of one, and a line number is
-    /// nothing to type at.
-    pub fn rows_matching(&self, matcher: &Matcher) -> UseRows {
+    /// A file is what a filter here matches: a reference is a line of one, and a line
+    /// number is nothing to type at.
+    pub fn rows_matching(&self, matcher: &Matcher) -> ReferenceRows {
         let mut rows = Vec::new();
         for file in self
             .files
             .iter()
             .filter(|file| matcher.matches(&file.path.to_string_lossy()))
         {
-            rows.push(UseRow::File {
+            rows.push(ReferenceRow::File {
                 path: file.path.clone(),
                 name: file.name.clone(),
                 count: file.lines.len(),
                 folded: file.folded,
             });
             if !file.folded {
-                rows.extend(file.lines.iter().map(|used| UseRow::Use {
+                rows.extend(file.lines.iter().map(|reference| ReferenceRow::Reference {
                     path: file.path.clone(),
-                    used: used.clone(),
+                    reference: reference.clone(),
                 }));
             }
         }
-        UseRows(Arc::new(rows))
+        ReferenceRows(Arc::new(rows))
     }
 }
 
-/// One row of the flattened uses.
+/// One row of the flattened references.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum UseRow {
-    /// A file, and how many uses are under it.
+pub enum ReferenceRow {
+    /// A file, and how many references are under it.
     File {
         path: PathBuf,
         name: String,
         count: usize,
         folded: bool,
     },
-    /// One use, with the file it is in: a row opens a place, and the place is both.
-    Use { path: PathBuf, used: Use },
+    /// One reference, with the file it is in: a row opens a place, and the place is both.
+    Reference { path: PathBuf, reference: Reference },
 }
 
 /// The rows the panel draws, in order. Built once per change and shared by an `Arc`,
 /// compared by that pointer, so handing them to a scroll view is one comparison and not a
 /// walk ([`crate::search::SearchRows`]'s rule).
 #[derive(Clone, Default)]
-pub struct UseRows(Arc<Vec<UseRow>>);
+pub struct ReferenceRows(Arc<Vec<ReferenceRow>>);
 
-impl PartialEq for UseRows {
+impl PartialEq for ReferenceRows {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
-impl UseRows {
+impl ReferenceRows {
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    pub fn row(&self, index: usize) -> &UseRow {
+    pub fn row(&self, index: usize) -> &ReferenceRow {
         &self.0[index]
     }
 }
@@ -184,7 +184,7 @@ impl UseRows {
 /// A line the file does not have is a line the file has changed since the server read it;
 /// the row is then the number alone, which is what it would be for a file that would not
 /// read at all.
-fn used(place: &lsp::Place, line: Option<&str>) -> Use {
+fn reference(place: &lsp::Place, line: Option<&str>) -> Reference {
     let (text, spans) = match line {
         Some(line) => {
             let name = bytes_of(line, &place.columns);
@@ -192,7 +192,7 @@ fn used(place: &lsp::Place, line: Option<&str>) -> Use {
         }
         None => (String::new(), Vec::new()),
     };
-    Use {
+    Reference {
         line: place.line,
         columns: place.columns.clone(),
         text,

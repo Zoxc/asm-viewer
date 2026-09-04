@@ -16,6 +16,7 @@ mod panics;
 mod pixels;
 mod process;
 mod project;
+mod references;
 mod rescue;
 mod reveal;
 mod rows;
@@ -27,7 +28,6 @@ mod source;
 mod tabs;
 mod tree;
 mod ui;
-mod uses;
 mod visits;
 mod walk;
 

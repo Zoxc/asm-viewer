@@ -320,7 +320,7 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
 }
 
 #[test]
-fn uses_are_asked_for_where_the_reader_pointed_and_leave_the_definition_out() {
+fn references_are_asked_for_where_the_reader_pointed_and_leave_the_definition_out() {
     let (said, found, _notes) = against(
         |fake, message| {
             fake.say(json!({

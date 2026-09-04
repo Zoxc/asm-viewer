@@ -114,12 +114,12 @@ document. For a source-driven tab the active document is a file, and the lit row
 screen that says which instance its assembly side is on.
 
 **The panel's third question is not the worker's at all.** Where a name is *used* only a language
-server can say (`agents/Lsp.md`), so a `Scope::Uses` query is sent at the right-click that asks it
+server can say (`agents/Lsp.md`), so a `Scope::References` query is sent at the right-click that
 and the locate effect steps over it; what makes them one panel is that they are one act, a reader
 asking where else to look, and two panels would show one thing at a time. The answer is a place in a
-file and not a symbol, so it is held as its own arm of `Found` (`src/uses.rs`, grouped under the file
-each use is in) and takes nothing from `retain_open`: a use holds no object for a closed binary to
-take. It carries the server run it was asked in, since the run is what an answer is about here, and
+file and not a symbol, so it is held as its own arm of `Found` (`src/references.rs`, grouped under
+the file each is in) and takes nothing from `retain_open`: a reference holds no object for a closed
+binary to take. It carries the server run it was asked in, since the run is what an answer is about here, and
 **every way of not answering is an empty answer** -- a refusal or a server that stopped answering
 would otherwise leave the panel looking for ever.
 
