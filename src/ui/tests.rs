@@ -4637,6 +4637,76 @@ fn a_question_on_its_way_is_not_asked_again() {
     assert!(linked.pending(1).is_some());
 }
 
+/// The spans each drawn paragraph is made of, in the order they are drawn.
+fn drawn_spans(test: &TestingRunner) -> Vec<Vec<String>> {
+    use freya::elements::paragraph::ParagraphElement;
+    use std::any::Any;
+
+    let mut found = test.find_many(|node, _element| {
+        let element = node.element();
+        (element.as_ref() as &dyn Any)
+            .downcast_ref::<ParagraphElement>()
+            .map(|paragraph| {
+                let texts: Vec<String> = paragraph
+                    .spans
+                    .iter()
+                    .map(|span| span.text.to_string())
+                    .collect();
+                (node.layout().area.origin.y, texts)
+            })
+    });
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    found.into_iter().map(|(_, texts)| texts).collect()
+}
+
+/// A link the server placed need not line up with a colour boundary, and the row is cut at
+/// its edges so that it does: without that the run to light would be part of a span, `light`
+/// would match nothing, and the reader would get a name they can click and cannot see.
+///
+/// The link here is deliberately **not** a whole colour run -- it is `elper` inside
+/// `helper` -- since a link that lines up would prove nothing about the cutting.
+#[test]
+fn a_link_that_is_not_a_colour_run_is_still_a_span_of_its_own() {
+    let (file, _directory) = calling_file("cuts");
+    let legend = lsp::Legend::of(&["function"], &[]);
+    let inside_a_run = links::Links::of(
+        &legend,
+        &[lsp::Token {
+            line: 2,
+            // `    let n = helper(1);` -- `elper`, four columns into the name.
+            columns: 13..18,
+            kind: 0,
+            modifiers: 0,
+        }],
+    );
+    let (mut test, states, language, _location, _driven, _asks) =
+        mount_linking!(|_job: LspJob| None, file.clone(), inside_a_run);
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let drawn = drawn_spans(&test);
+    let row = drawn
+        .iter()
+        .find(|spans| spans.concat().contains("helper"))
+        .expect("the row with the call in it");
+    assert!(
+        row.contains(&"elper".to_owned()),
+        "the link is not a span of its own: {row:?}"
+    );
+    // And the row still draws the text it was given, cut or not.
+    assert!(
+        row.concat().contains("let n = helper(1);"),
+        "the cut lost or reordered the row's text: {row:?}"
+    );
+}
+
 /// An item in a trait `impl` is the one name that asks the **other** question: its
 /// definition is itself, and the trait is where a reader following it wants to go. The
 /// server says which by putting `declaration` and `trait` on it together.
