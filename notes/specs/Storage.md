@@ -9,6 +9,16 @@ recent projects, and a project's two files when it is opened. It keeps the path 
 under an `incompatible` directory beside the settings. Nothing there is ever overwritten;
 a name already taken gets a number in front of it. A window then names every path written.
 
+## A panic
+
+Every panic is written down, in a `panics` directory beside the settings: one file per run, a
+record per panic, with what panicked, where, the message and the backtrace.
+
+A panic the app is hardened against — a name it cannot demangle, debug information it cannot
+read — is written down and nothing more; the app carries on. Any other panic is shown in a
+window naming what panicked and where it was saved, with the backtrace a button away. The app
+then saves what is open and closes.
+
 ## Settings
 
 The user's fonts and theme, saved apart from any project.

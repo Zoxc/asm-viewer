@@ -276,8 +276,11 @@ pub(crate) fn root_key_down(
 }
 
 pub fn app() -> impl IntoElement {
-    // Before everything else: the theme and the fonts are resolved from it and both have
-    // to be right on the first frame.
+    // First of all, and here rather than in `main`: freya installs a panic hook of its
+    // own inside `launch`, so this is where ours can be the outer one (`crate::panics`).
+    use_hook(crate::panics::install);
+    // Before everything else after that: the theme and the fonts are resolved from it and
+    // both have to be right on the first frame.
     let prefs =
         use_provide_context(|| Prefs(State::create(EditedSettings::of(&Settings::load())))).0;
     use_settings_with(prefs, |settings: &Settings| settings.save());

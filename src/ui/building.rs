@@ -185,18 +185,24 @@ pub(crate) fn use_building_with(
         let (requests, jobs) = async_channel::unbounded::<BuildJob>();
         let (answered, answers) = async_channel::unbounded::<BuildAnswer>();
 
-        std::thread::spawn(move || {
-            // Nothing supersedes: a build takes seconds and is asked for by a press, and
-            // the two manifest jobs are cheap and each of them is the answer to the one
-            // after it.
-            while let Ok(job) = jobs.recv_blocking() {
-                // A send that fails is the app shutting down and taking the receiver with
-                // it.
-                if answered.send_blocking(work(job)).is_err() {
-                    return;
+        // Named, so that a panic on it says which worker died (`crate::panics`).
+        let started = std::thread::Builder::new()
+            .name("the build worker".to_owned())
+            .spawn(move || {
+                // Nothing supersedes: a build takes seconds and is asked for by a press, and
+                // the two manifest jobs are cheap and each of them is the answer to the one
+                // after it.
+                while let Ok(job) = jobs.recv_blocking() {
+                    // A send that fails is the app shutting down and taking the receiver with
+                    // it.
+                    if answered.send_blocking(work(job)).is_err() {
+                        return;
+                    }
                 }
-            }
-        });
+            });
+        if let Err(error) = started {
+            log::warn!("the build worker could not be started: {error}");
+        }
 
         spawn(async move {
             while let Ok(answer) = answers.recv().await {

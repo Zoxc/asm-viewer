@@ -13,6 +13,7 @@ use std::{
 
 mod demangle;
 pub mod disasm;
+pub mod guard;
 mod line;
 mod listing;
 mod unwind;

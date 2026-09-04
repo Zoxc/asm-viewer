@@ -109,14 +109,20 @@ pub(crate) fn use_search_with(
         let work = work.clone();
         // A `std::thread` and not a task: this walks a directory and reads every file in
         // it, and freya's executor is the UI thread.
-        std::thread::spawn(move || {
-            work(&query, &mut |event| match hits.send_blocking(event) {
-                Ok(()) => ControlFlow::Continue(()),
-                // The receiver is gone: this search has been replaced or the app is
-                // closing, and either way nobody is waiting for the rest of it.
-                Err(_) => ControlFlow::Break(()),
+        // Named, so that a panic on it says which worker died (`crate::panics`).
+        let started = std::thread::Builder::new()
+            .name("the search worker".to_owned())
+            .spawn(move || {
+                work(&query, &mut |event| match hits.send_blocking(event) {
+                    Ok(()) => ControlFlow::Continue(()),
+                    // The receiver is gone: this search has been replaced or the app is
+                    // closing, and either way nobody is waiting for the rest of it.
+                    Err(_) => ControlFlow::Break(()),
+                });
             });
-        });
+        if let Err(error) = started {
+            log::warn!("the search worker could not be started: {error}");
+        }
 
         spawn(take_hits(searched, id, events));
     });

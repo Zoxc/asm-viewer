@@ -119,6 +119,25 @@ that as a `Size::Fn` **width** instead and report their content through `on_size
 `a_picked_rows_wash_runs_as_wide_as_the_widest_row` would catch the minimum coming back. Not
 reported yet.
 
+## The release build's own panic hook is fatal, and catches what the app catches on purpose
+
+`freya-winit 0.4.3`, `src/lib.rs:62`: `launch` installs a panic hook of its own, under
+`#[cfg(all(not(debug_assertions), not(target_os = "android")))]`, that shows an `rfd` box
+titled "Fatal Error" holding `panic_info.to_string()`, calls the hook it replaced, and then
+`std::process::exit(1)`. Three things follow. It is a **release-only** behaviour, so the app
+says something in one build and nothing in the other. It **exits**, so nothing the app would
+like to save on the way down gets a chance. And it fires for **every** panic, including one
+the app catches on purpose: `analysis` guards a demangler let loose on a name out of a string
+table (`analysis::guard`), and in a release build that guard used to put up "Fatal Error" and
+kill the app over a name it had already decided to do without.
+
+What it cost here: the app's own hook has to be installed from `ui::app`'s first render rather
+than from `main`, since a hook set before `launch` becomes the *inner* one and freya's box is
+shown before it runs. Installed there it replaces freya's -- `take_hook` and never call it --
+so `src/panics.rs` is what the reader sees in both builds, and a guarded panic goes back to
+being written down and nothing else. The window between `launch` and that first render is
+still freya's. Not reported yet.
+
 ## Wanted
 
 **A pointer release nothing can cancel.** There is no `on_global_pointer_up`; a release is

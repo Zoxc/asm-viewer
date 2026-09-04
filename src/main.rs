@@ -10,6 +10,7 @@ mod functions;
 mod history;
 mod lanes;
 mod naming;
+mod panics;
 mod pixels;
 mod project;
 mod rescue;

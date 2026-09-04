@@ -174,7 +174,7 @@ impl DebugInfo {
 /// Sound because a panic leaves nothing half-written: a backend is only ever read, and the
 /// lock a panic poisons is recovered explicitly.
 fn without_panicking<T>(f: impl FnOnce() -> T) -> Option<T> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+    crate::guard::guard(f)
 }
 
 /// A checksum the debug info records for a source file, so a reader can tell the file they

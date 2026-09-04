@@ -10,7 +10,6 @@
 
 use std::{
     ops::Range,
-    panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc::{self, Sender},
@@ -93,11 +92,8 @@ pub(crate) fn batch(names: &Names) -> Vec<Option<String>> {
 /// string table would otherwise take out the parse, or a pool thread with it.
 fn demangle_one(name: &str) -> Option<String> {
     let name = Some(name).filter(|name| name.len() <= MAX_MANGLED_NAME)?;
-    std::panic::catch_unwind(|| {
-        symbolic_common::Name::from(name).demangle(DemangleOptions::complete())
-    })
-    .ok()
-    .flatten()
+    crate::guard::guard(|| symbolic_common::Name::from(name).demangle(DemangleOptions::complete()))
+        .flatten()
 }
 
 /// A run of the batch, demangled in place order. The one definition of what a chunk of work
@@ -153,10 +149,8 @@ fn parallel(pool: &Pool, names: &Names) -> Vec<Option<String>> {
                 // A panic here is a job that hands back nothing rather than a pool thread
                 // that dies; `demangle_one` already guards each name, so this is for the
                 // allocation around them.
-                let values = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    demangle_range(&names, start..end)
-                }))
-                .unwrap_or_else(|_| vec![None; end - start]);
+                let values = crate::guard::guard(|| demangle_range(&names, start..end))
+                    .unwrap_or_else(|| vec![None; end - start]);
                 if done.send((start, values)).is_err() {
                     break;
                 }

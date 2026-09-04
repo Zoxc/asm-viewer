@@ -592,15 +592,21 @@ pub(crate) async fn open_binaries(
     };
 
     let (sender, events) = async_channel::unbounded::<Progress>();
-    std::thread::spawn(move || {
-        open_files_streaming(paths, |progress| match sender.send_blocking(progress) {
-            Ok(()) => ControlFlow::Continue(()),
-            // The receiver has gone, which is `take_load` deciding that nothing more from
-            // this load is wanted. Stopping here is what keeps a closed 331 MB file from
-            // being parsed to the end into a value that will be dropped.
-            Err(_) => ControlFlow::Break(()),
+    // Named, so that a panic on it says which worker died (`crate::panics`).
+    let started = std::thread::Builder::new()
+        .name("the binary reader".to_owned())
+        .spawn(move || {
+            open_files_streaming(paths, |progress| match sender.send_blocking(progress) {
+                Ok(()) => ControlFlow::Continue(()),
+                // The receiver has gone, which is `take_load` deciding that nothing more from
+                // this load is wanted. Stopping here is what keeps a closed 331 MB file from
+                // being parsed to the end into a value that will be dropped.
+                Err(_) => ControlFlow::Break(()),
+            });
         });
-    });
+    if let Err(error) = started {
+        log::warn!("the binary reader could not be started: {error}");
+    }
 
     take_load(objects, loading, id, events).await;
 }

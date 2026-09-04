@@ -980,28 +980,34 @@ fn pipe_thread<R: Read + Send + 'static>(
     process: &Arc<Process>,
 ) {
     let (emit, unfinished, process) = (emit.clone(), unfinished.clone(), process.clone());
-    thread::spawn(move || {
-        // A pipe that is not there is a pipe with nothing on it, which keeps the
-        // two-must-finish count honest either way.
-        if let Some(pipe) = pipe {
-            stream_lines(BufReader::new(pipe), stream, |line| {
-                let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
-                emit(RunEvent::Wrote(line));
-            });
-        }
+    // Named, so that a panic on it says which thread died (`crate::panics`).
+    let started = thread::Builder::new()
+        .name("a scratchpad's output reader".to_owned())
+        .spawn(move || {
+            // A pipe that is not there is a pipe with nothing on it, which keeps the
+            // two-must-finish count honest either way.
+            if let Some(pipe) = pipe {
+                stream_lines(BufReader::new(pipe), stream, |line| {
+                    let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
+                    emit(RunEvent::Wrote(line));
+                });
+            }
 
-        if unfinished.fetch_sub(1, Ordering::SeqCst) != 1 {
-            return;
-        }
+            if unfinished.fetch_sub(1, Ordering::SeqCst) != 1 {
+                return;
+            }
 
-        let ended = process.reap();
-        {
-            let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
-            list.retain(|other| !Arc::ptr_eq(&other.0, &process));
-        }
-        let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
-        emit(RunEvent::Ended(ended));
-    });
+            let ended = process.reap();
+            {
+                let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
+                list.retain(|other| !Arc::ptr_eq(&other.0, &process));
+            }
+            let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
+            emit(RunEvent::Ended(ended));
+        });
+    if let Err(error) = started {
+        log::warn!("a scratchpad's output reader could not be started: {error}");
+    }
 }
 
 /// Split what a program writes into lines and hand each one over as it arrives, cut at

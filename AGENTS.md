@@ -94,6 +94,8 @@ command.
   bounds in (an x86-64 PE's `.pdata`, an ELF's `.eh_frame`), read for the ranges they declare;
   the only part that reads call-frame information.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
+- `crates/analysis/src/guard.rs` — the calls whose panics are caught on purpose, and the flag
+  that lets a panic hook tell one of those from a panic that has broken the app.
 - `src/cargo.rs` — running cargo and reading what it said: the artifacts it names, the
   diagnostics it reports, and the profile's debug information in the manifest being built.
 - `src/project.rs` — projects: their identity, the two files each is stored in, and the save policy.
@@ -126,6 +128,8 @@ command.
 - `src/bookmarks.rs` — the reader's bookmarks: a saved place and the name it was made under,
   in the order they were added; saved in `project.toml`, live only against what is loaded.
 - `src/naming.rs` — a demangled name cut down to the `module::fn_name` a tab is called by.
+- `src/panics.rs` — a panic on any thread: the record, the file a run appends it to, the box
+  the reader is shown, and the shutdown after it.
 - `src/fonts.rs` — the desktop's font settings (KDE, Gnome, Win32) merged under the user's own.
 - `src/functions.rs` — the functions a source file defines, by the lines they span, and which
   one a line is inside; `functions/rust.rs` is the scanner that finds Rust's without the grammar.

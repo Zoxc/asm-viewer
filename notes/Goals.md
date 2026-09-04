@@ -222,20 +222,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Startup
 
-- [ ] Capture panic backtraces and store them. Nothing installs a panic hook, so a panic on a
-  worker thread kills that thread with a line on stderr nobody sees -- the window stays up and
-  the pane that thread feeds waits forever -- and one on the UI thread takes the window down,
-  leaving nothing to read afterwards. A hook set at startup should capture the backtrace itself
-  (`Backtrace::force_capture`, so it does not depend on `RUST_BACKTRACE` being set in the
-  environment the app was launched from), with the message, the thread and the location, and
-  write each panic as a file under the directory everything is stored in: `rescue.rs` mirrors a
-  file it moves aside there already, and its window is how the reader is told. It runs on a
-  panicking thread, so what it does has to be small and must not panic itself. The one
-  complication is `analysis`'s two `catch_unwind`s: a demangler panicking on a name out of a
-  file is caught on purpose, and a hook fires before the catch, so those must not fill the
-  store. Undecided: how many are kept, and whether one is shown in the app or only left on
-  disk. It costs a release build enough symbols for a backtrace to name anything.
-
 ## Fonts and settings
 
 - [ ] A syntax-highlighting sample on the settings page, with the colours chosen from it. A

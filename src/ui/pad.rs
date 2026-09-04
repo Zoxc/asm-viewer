@@ -481,24 +481,31 @@ pub(crate) fn use_scratchpad_with(
             // the pane.
             let (emitted, events) = async_channel::bounded::<(PadId, u64, RunEvent)>(512);
 
-            std::thread::spawn(move || {
-                // Jobs taken off the queue and not done yet, because they were behind a
-                // save of another pad and the supersede rule may not step over them.
-                let mut held = VecDeque::<PadJob>::new();
-                loop {
-                    let Some(job) = held.pop_front().or_else(|| jobs.recv_blocking().ok()) else {
-                        return;
-                    };
-                    let job =
-                        superseded(job, || jobs.try_recv().ok(), |newer| held.push_back(newer));
+            // Named, so that a panic on it says which worker died (`crate::panics`).
+            let started = std::thread::Builder::new()
+                .name("the scratchpad worker".to_owned())
+                .spawn(move || {
+                    // Jobs taken off the queue and not done yet, because they were behind a
+                    // save of another pad and the supersede rule may not step over them.
+                    let mut held = VecDeque::<PadJob>::new();
+                    loop {
+                        let Some(job) = held.pop_front().or_else(|| jobs.recv_blocking().ok())
+                        else {
+                            return;
+                        };
+                        let job =
+                            superseded(job, || jobs.try_recv().ok(), |newer| held.push_back(newer));
 
-                    // A send that fails is the app shutting down and taking the receiver
-                    // with it.
-                    if answered.send_blocking(work(job)).is_err() {
-                        return;
+                        // A send that fails is the app shutting down and taking the receiver
+                        // with it.
+                        if answered.send_blocking(work(job)).is_err() {
+                            return;
+                        }
                     }
-                }
-            });
+                });
+            if let Err(error) = started {
+                log::warn!("the scratchpad worker could not be started: {error}");
+            }
 
             let answering = sent.clone();
             spawn(async move {

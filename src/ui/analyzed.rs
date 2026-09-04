@@ -569,20 +569,26 @@ pub(crate) fn use_analysis_with(
 
         // A `std::thread` and not a spawned task: this is seconds of decoding, DWARF
         // parsing and index building, and freya's executor is the UI thread.
-        std::thread::spawn(move || {
-            while let Ok(question) = jobs.recv_blocking() {
-                // Everything the reader clicked past while the last job ran, dropped
-                // without being started rather than after the fact.
-                let questions = newest(question, std::iter::from_fn(|| jobs.try_recv().ok()));
+        // Named, so that a panic on it says which worker died (`crate::panics`).
+        let started = std::thread::Builder::new()
+            .name("the analysis worker".to_owned())
+            .spawn(move || {
+                while let Ok(question) = jobs.recv_blocking() {
+                    // Everything the reader clicked past while the last job ran, dropped
+                    // without being started rather than after the fact.
+                    let questions = newest(question, std::iter::from_fn(|| jobs.try_recv().ok()));
 
-                for question in questions {
-                    // A send that fails is the app shutting down.
-                    if answered.send_blocking(work(question)).is_err() {
-                        return;
+                    for question in questions {
+                        // A send that fails is the app shutting down.
+                        if answered.send_blocking(work(question)).is_err() {
+                            return;
+                        }
                     }
                 }
-            }
-        });
+            });
+        if let Err(error) = started {
+            log::warn!("the analysis worker could not be started: {error}");
+        }
 
         spawn(async move {
             let mut analysis = analysis;

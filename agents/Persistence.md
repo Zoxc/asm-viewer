@@ -259,3 +259,25 @@ through to, which is what the settings page draws in an empty box. Everything in
 because an override and the value it overrides have to be the same kind of number for the page to
 put them beside each other. The desktop's answer is cached per process (`desktop_answer`), since the
 page re-resolves on every change and a lookup is a subprocess.
+
+**A panic is written down beside everything else the app stores** (`src/panics.rs`, `panics/`
+under `project::base`). This is a windowed program: the default hook writes a line to a stderr
+nobody is looking at, and the work is done on threads of its own, so a panicking worker left a
+pane waiting for an answer that was never coming and no trace anywhere. The hook writes the
+thread, the location, the message and a `Backtrace::force_capture` -- forced, so a backtrace does
+not depend on `RUST_BACKTRACE` in whatever environment the app was launched from -- **appending**
+one record per panic to one file per launch, where every other file the app stores is replaced
+whole by `write_atomically`. A file per launch is what keeps a bad input honest: a guarded panic
+fires once per name, so a file that upsets the demangler is twenty thousand records in one file
+rather than twenty thousand files.
+
+Three things the hook's own position decides. It runs **before the unwind**, so it can ask
+`analysis::guard::guarded()` whether the panic is one the crate catches on purpose: those are
+written down and nothing else happens, since nothing has gone wrong with the app. It runs on the
+panicking thread while that thread still holds whatever it held, and `std::sync::Mutex` is not
+reentrant, so the shutdown -- `project::flush`, then `scratchpad::stop_all` -- goes on **a thread
+of its own** and reaches the lock only once the unwind has let it go. And it is installed from
+`ui::app`'s first render rather than from `main`, which is freya's doing (`notes/upstream/freya.md`):
+a hook set before `launch` is the inner one, and freya's box would be up and the process gone
+before ours ran. The app's workers are named (`thread::Builder::name`) for the one reason that
+the box then says which of them died.
