@@ -193,11 +193,15 @@ pub(crate) struct Chrome {
 
 /// The row: its chrome, what comes `before` the text -- a gutter, an address, a line
 /// number -- the `text` where the row has any, and the `menu` the right button opens.
+///
+/// The menu is handed the column the pointer was over, which is what a question about the
+/// name under it needs and only this knows: `None` in the gutter, and on a row with no
+/// text at all.
 pub(crate) fn code_row(
     chrome: Chrome,
     before: Vec<Element>,
     text: Option<Text>,
-    menu: Option<Rc<dyn Fn(Event<PressEventData>)>>,
+    menu: Option<Rc<dyn Fn(Event<PressEventData>, Option<usize>)>>,
 ) -> Rect {
     let marked = use_consume::<Marked>().0;
     let shift = use_consume::<Shift>().0;
@@ -484,11 +488,14 @@ pub(crate) fn code_row(
                     mark_press(marked, *shift.peek(), pane, file.clone(), row, press);
                     return;
                 }
+                // The column before the event is turned into a press: what the menu is
+                // asked about is where the pointer was.
+                let at = column(e.element_location(), true);
                 let Some(e) = secondary(e) else {
                     return;
                 };
                 if let Some(menu) = &menu {
-                    menu(e);
+                    menu(e, at);
                 }
             }
         })

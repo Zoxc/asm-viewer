@@ -26,6 +26,7 @@ mod source;
 mod tabs;
 mod tree;
 mod ui;
+mod uses;
 mod visits;
 
 use freya::prelude::*;

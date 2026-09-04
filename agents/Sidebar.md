@@ -193,6 +193,21 @@ made **before** the write and not at the end of the loop, or the old walk's last
 the new question. The work is an argument to the hook for the reason the analysis worker's is: a
 walk that answers as fast as it is asked can say nothing about superseding.
 
+**The uses panel is the Locations panel and its rows are the Search panel's** (`src/uses.rs`,
+`ui::locations`). The rows are a flattened tree the way a search's hits are -- a file row and its
+uses under it, folded by a press on the file, shared under one `Arc` so handing them to a scroll
+view is a pointer compare -- because it is the same drawing problem. They draw the same row too,
+down to the line's text with the name marked in it (`search::drawn` cuts a long line for both,
+`marked_spans` marks both): a list of line numbers says where a name is used and not how. The
+server says nothing about the text, so **the lines are read off the disk**, each file once, on the
+language worker with the ask -- a read blocks, and that is the thread that may block; a file that
+will not read leaves its uses the number they already have. Grouped there rather than as it
+arrives, since the whole answer lands at once: files by path and uses by line, so a reader can
+find a file, where a search keeps the order its walk found them in and only ever grows at the
+end. The filter matches the file's
+path, applied where the rows are built rather than through `Filtered`'s memo -- that is for the
+thousands a line's symbols can be, and a name's uses are tens.
+
 **A hit row is `land`, the Locations row's door**, with the file spelled exactly as the Files view
 spells it -- the entry's own path, never canonicalised -- since a `LinePos` is compared by text.
 `shows_as_source` guards it, so a row cannot open a tab the pane would refuse. It lands on the

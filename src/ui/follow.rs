@@ -73,7 +73,7 @@ pub(crate) fn follow_name(
     at: Lookup,
     reach: Reach,
 ) {
-    let Some(run) = ask_definition(language, jobs, at.clone()) else {
+    let Some(run) = ask_where(language, jobs, at.clone(), Wanted::Definition) else {
         return;
     };
     // Bound before the write, the read above being of another state.
@@ -86,12 +86,7 @@ pub(crate) fn follow_name(
 
 /// Open what the answer named. Called once, at the root, beside `use_land`.
 ///
-/// The landing is `land`'s, so following a name is the same arrival as every other door
-/// makes: the source pane on the line, its caret at the column the server named, both
-/// panes owed the scroll, and the place on the tab's trail so Back returns to the call.
-/// What `land` does not do is say which line the assembly side follows, so the drive is
-/// written here -- under the place the tab is **at**, which the landing has just made,
-/// and not under the file.
+/// The arrival itself is [`open_source_place`], which a row of the uses panel makes too.
 pub(crate) fn use_follow(
     mut follow: State<Follow>,
     open: Open,
@@ -99,7 +94,7 @@ pub(crate) fn use_follow(
     marked: State<Marks>,
     landing: State<Option<Landing>>,
     plant: State<Option<Planting>>,
-    mut driven: State<Driven>,
+    driven: State<Driven>,
 ) {
     use_side_effect(move || {
         // Reading is what wakes this; the write below clears what it read, so the run
@@ -110,36 +105,75 @@ pub(crate) fn use_follow(
         };
         follow.write().arrived = None;
 
-        let line = place.line;
-        let file: Arc<str> = Arc::from(place.file.to_string_lossy().as_ref());
-        let document = Document::Source(file.clone());
-        let id = land(
+        // An empty run at the column the name starts at: a caret at the head of the
+        // definition and not at the head of its line, the reader being taken there to
+        // read it and not to copy it. Those columns and a row's are both UTF-16 units,
+        // so nothing is converted.
+        let start = place.columns.start as usize;
+        let caret = start..start;
+        open_source_place(
             open,
             visits,
             marked,
             landing,
             plant,
-            Landing {
-                tab: document.clone(),
-                at: Some(LinePos {
-                    file: file.clone(),
-                    line,
-                }),
-                // A file and a line: the compiler named no instruction here, and which
-                // symbol the line is in is the assembly side's own question.
-                address: None,
-                // An empty run at the column the server named: a caret at the start
-                // of the name and not at the start of its line. That column and a
-                // row's are both UTF-16 units, so nothing is converted.
-                columns: Some(place.column as usize..place.column as usize),
-            },
+            driven,
+            &place.file,
+            place.line,
+            Some(caret),
             reach,
         );
-        let Some(id) = id else {
-            return;
-        };
-        // Bound to a `let` of its own, so the table's guard is gone before the write.
-        let entry = place_at(&open.docs.peek(), id, &document);
-        driven.write().remember((id, entry), line);
     });
+}
+
+/// Open `path` as a source-driven tab on `line`, `columns` of it selected, and let the
+/// assembly side follow that line.
+///
+/// The landing is `land`'s, so this is the same arrival every other door makes: the source
+/// pane on the line, both panes owed the scroll, and the place on the tab's trail so Back
+/// returns to where the reader pressed. What `land` does not do is say which line the
+/// assembly side follows, so the drive is written here -- under the place the tab is
+/// **at**, which the landing has just made, and not under the file.
+///
+/// Both doors into a source file go through this: the definition an answer named, and a
+/// row of the uses the Locations panel lists.
+pub(crate) fn open_source_place(
+    open: Open,
+    visits: State<Visits>,
+    marked: State<Marks>,
+    landing: State<Option<Landing>>,
+    plant: State<Option<Planting>>,
+    mut driven: State<Driven>,
+    path: &Path,
+    line: u32,
+    columns: Option<Range<usize>>,
+    reach: Reach,
+) {
+    let file: Arc<str> = Arc::from(path.to_string_lossy().as_ref());
+    let document = Document::Source(file.clone());
+    let id = land(
+        open,
+        visits,
+        marked,
+        landing,
+        plant,
+        Landing {
+            tab: document.clone(),
+            at: Some(LinePos {
+                file: file.clone(),
+                line,
+            }),
+            // A file and a line: the compiler named no instruction here, and which symbol
+            // the line is in is the assembly side's own question.
+            address: None,
+            columns,
+        },
+        reach,
+    );
+    let Some(id) = id else {
+        return;
+    };
+    // Bound to a `let` of its own, so the table's guard is gone before the write.
+    let entry = place_at(&open.docs.peek(), id, &document);
+    driven.write().remember((id, entry), line);
 }

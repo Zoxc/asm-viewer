@@ -269,32 +269,34 @@ fn row_children(row: &SearchRow) -> Vec<Element> {
                         .width(Size::fill())
                         .max_lines(1)
                         .text_overflow(TextOverflow::Ellipsis)
-                        .spans_iter(marked_spans(hit).into_iter()),
+                        .spans_iter(marked_spans(&hit.text, &hit.spans).into_iter()),
                 )
                 .into_element(),
         ],
     }
 }
 
-/// The line cut into the runs the pattern matched and the runs it did not, the matched
-/// ones bold and in the palette's own colour for them. The spans are byte ranges into the
-/// text and in order, so this is one walk.
-fn marked_spans(hit: &Hit) -> Vec<Span<'static>> {
+/// A line cut into the runs that were found and the runs that were not, the found ones
+/// bold and in the palette's own colour for them. `marked` are byte ranges into `text`
+/// and in order, so this is one walk.
+///
+/// Shared with the uses list, whose rows mark the name the same way (`ui::locations`).
+pub(crate) fn marked_spans(text: &str, marked: &[Range<usize>]) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut at = 0;
-    for span in &hit.spans {
+    for span in marked {
         if span.start > at {
-            spans.push(Span::new(hit.text[at..span.start].to_owned()));
+            spans.push(Span::new(text[at..span.start].to_owned()));
         }
         spans.push(
-            Span::new(hit.text[span.clone()].to_owned())
+            Span::new(text[span.clone()].to_owned())
                 .color(palette().match_fg)
                 .font_weight(FontWeight::BOLD),
         );
         at = span.end;
     }
-    if at < hit.text.len() {
-        spans.push(Span::new(hit.text[at..].to_owned()));
+    if at < text.len() {
+        spans.push(Span::new(text[at..].to_owned()));
     }
     spans
 }

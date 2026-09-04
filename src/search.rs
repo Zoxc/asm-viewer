@@ -247,30 +247,41 @@ fn hit_from(path: &Path, matcher: &RegexMatcher, line: &[u8], number: u64) -> Hi
     // over the file's line, where the spans below are cut down to what the row draws.
     let first = spans.first().cloned();
 
-    let start = text.len() - text.trim_start().len();
-    let end = cut(&text[start..], MAX_LINE) + start;
-    // Clamped to what is drawn and not dropped for reaching past it: a pattern that takes
-    // in the indentation -- `^\s*needle` -- matches from before the text the row shows,
-    // and the part of it in view is still what was found.
-    let spans = spans
-        .into_iter()
-        .map(|span| span.start.max(start) - start..span.end.clamp(start, end) - start)
-        .filter(|span| span.start < span.end)
-        .collect();
-
     let columns = first.map(|found| units(&text[..found.start])..units(&text[..found.end]));
+    let (text, spans) = drawn(&text, spans);
 
     Hit {
         path: path.to_path_buf(),
         line: u32::try_from(number).unwrap_or(u32::MAX),
-        text: text[start..end].to_owned(),
+        text,
         spans,
         columns,
     }
 }
 
+/// A line as a list row draws it: its leading whitespace gone and cut to [`MAX_LINE`]
+/// characters, since a row has one line's height and a sidebar's width; and `spans` --
+/// byte ranges into the whole line -- moved to what is left of it.
+///
+/// A span is clamped to what is drawn rather than dropped for reaching past it: a pattern
+/// that takes in the indentation -- `^\s*needle` -- matches from before the text the row
+/// shows, and the part of it in view is still what was found. One left with nothing in
+/// view goes.
+///
+/// Shared with the uses list, whose rows are these rows (`src/uses.rs`).
+pub fn drawn(line: &str, spans: Vec<Range<usize>>) -> (String, Vec<Range<usize>>) {
+    let start = line.len() - line.trim_start().len();
+    let end = cut(&line[start..], MAX_LINE) + start;
+    let spans = spans
+        .into_iter()
+        .map(|span| span.start.max(start) - start..span.end.clamp(start, end) - start)
+        .filter(|span| span.start < span.end)
+        .collect();
+    (line[start..end].to_owned(), spans)
+}
+
 /// How many UTF-16 units `text` is, the unit a pane counts columns in.
-fn units(text: &str) -> usize {
+pub fn units(text: &str) -> usize {
     text.encode_utf16().count()
 }
 

@@ -113,6 +113,16 @@ for any choice. **The row lit in the panel is the symbol drawn** (`Analysis`), n
 document. For a source-driven tab the active document is a file, and the lit row is the one thing on
 screen that says which instance its assembly side is on.
 
+**The panel's third question is not the worker's at all.** Where a name is *used* only a language
+server can say (`agents/Lsp.md`), so a `Scope::Uses` query is sent at the right-click that asks it
+and the locate effect steps over it; what makes them one panel is that they are one act, a reader
+asking where else to look, and two panels would show one thing at a time. The answer is a place in a
+file and not a symbol, so it is held as its own arm of `Found` (`src/uses.rs`, grouped under the file
+each use is in) and takes nothing from `retain_open`: a use holds no object for a closed binary to
+take. It carries the server run it was asked in, since the run is what an answer is about here, and
+**every way of not answering is an empty answer** -- a refusal or a server that stopped answering
+would otherwise leave the panel looking for ever.
+
 **A fourth kind is the Source gutter's marks** (`Question::Marks`, answered into `Coded` in
 `ui/source_view.rs`). The question is a file and the answer is the lines of it any open object has
 code from — `Object::lines_from_source`, which reads the same `SourceIndex` a locate does and hands

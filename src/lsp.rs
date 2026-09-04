@@ -1,5 +1,6 @@
 //! The language server: rust-analyzer started over the project's directory and asked, so
-//! far, one question -- where the thing under a source position is defined.
+//! far, two questions of one shape -- where the thing under a source position is defined,
+//! and where it is used.
 //!
 //! Hand-rolled over `serde_json` rather than a protocol crate. What is spoken here is four
 //! messages wide, and a crate for it would bring a type for every request in the
@@ -8,9 +9,9 @@
 //! for a protocol rather than a file).
 //!
 //! **One request is in flight at a time**, so there is no table of outstanding ids: a
-//! request writes its message and waits for the answer to that id. It is also the whole
-//! reason the surface is one call wide -- a second consumer wanting answers at the same
-//! time is what would end it.
+//! request writes its message and waits for the answer to that id. Two callers wanting
+//! answers at once is what would end that, so which of the two questions an answer is to
+//! is the caller's to keep (`src/ui/language.rs`).
 //!
 //! What the server says when nothing was asked is the other half. A reader thread owns the
 //! server's output: an answer goes to whoever is waiting for it, a request is replied to,
@@ -37,6 +38,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,18 +108,20 @@ pub enum Note {
     Busy(bool),
 }
 
-/// Where something is defined: a file, a **1-based** line in it, and the column the name
-/// starts at.
+/// Where something is: a file, a **1-based** line in it, and the columns of the name on
+/// that line.
 ///
 /// The protocol counts lines from zero and this counts from one, the unit line information
 /// is in everywhere else in the app (`Object::symbols_from_lines`), so the conversion
-/// happens here and once. The column is left as the protocol gives it, a UTF-16 unit
-/// counted from zero, which is what a pane counts columns in too (`src/chars.rs`).
+/// happens here and once. The columns are already the UTF-16 units a pane counts in
+/// (`src/chars.rs`) and are left as they came.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Place {
     pub file: PathBuf,
     pub line: u32,
-    pub column: u32,
+    /// The columns of the name on `line`. Empty where the answer's range spans lines: a
+    /// name does not, and an empty run selects nothing.
+    pub columns: Range<u32>,
 }
 
 /// A started server: the conversation, and the process it is with.
@@ -243,6 +247,16 @@ impl Server {
         column: u32,
     ) -> Result<Vec<Place>, Failure> {
         self.talk.definition(file, line, column)
+    }
+
+    /// Every use of what is at `line` and `column` of `file`, in the same units.
+    pub fn references(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<Place>, Failure> {
+        self.talk.references(file, line, column)
     }
 }
 
@@ -455,14 +469,28 @@ impl<W: Write + Send + 'static> Talk<W> {
         line: u32,
         column: u32,
     ) -> Result<Vec<Place>, Failure> {
-        let answer = self.request(
-            "textDocument/definition",
-            json!({
-                "textDocument": { "uri": uri_of(file) },
-                "position": { "line": line, "character": column },
-            }),
-        );
-        match answer {
+        self.places_at("textDocument/definition", asked_at(file, line, column))
+    }
+
+    /// Every use of what is at `line` and `column` of `file`, in the same units.
+    ///
+    /// Where it is **defined** is not one: a reader who is looking at the name has that
+    /// under the pointer already, and following the link is the door to it.
+    pub fn references(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<Place>, Failure> {
+        let mut params = asked_at(file, line, column);
+        params["context"] = json!({ "includeDeclaration": false });
+        self.places_at("textDocument/references", params)
+    }
+
+    /// The half the two questions share: the places an answer names, and the codes that
+    /// are not an answer at all.
+    fn places_at(&mut self, method: &str, params: Value) -> Result<Vec<Place>, Failure> {
+        match self.request(method, params) {
             Ok(value) => Ok(places(&value)),
             // "Ask again": the server is still reading the project, or what was asked
             // about changed under the question. Not a failure to report and not an
@@ -1055,7 +1083,15 @@ fn reply(id: Value, answer: Result<Value, Value>) -> Value {
     }
 }
 
-/// The places a definition answer names, whichever of the shapes it came in.
+/// The position a question is about, as both questions send it.
+fn asked_at(file: &Path, line: u32, column: u32) -> Value {
+    json!({
+        "textDocument": { "uri": uri_of(file) },
+        "position": { "line": line, "character": column },
+    })
+}
+
+/// The places an answer names, whichever of the shapes it came in.
 ///
 /// No `linkSupport` was declared, so a list of plain locations is what should arrive; the
 /// bare location and the link are read too, since a server that sends one costs a `match`
@@ -1069,18 +1105,23 @@ fn places(answer: &Value) -> Vec<Place> {
         let range = value.get("range").or_else(|| value.get("targetRange"))?;
         let start = range.get("start")?;
         let line = start.get("line")?.as_u64()?;
-        // A column the answer leaves out, or one no `u32` holds, is column 0: the line is
-        // what opens the file, and the column only says where the caret goes.
-        let column = start
-            .get("character")
-            .and_then(Value::as_u64)
-            .and_then(|character| u32::try_from(character).ok())
-            .unwrap_or(0);
+        let at = |place: &Value| -> u32 {
+            place
+                .get("character")
+                .and_then(Value::as_u64)
+                .and_then(|column| u32::try_from(column).ok())
+                .unwrap_or(0)
+        };
+        let from = at(start);
+        // The columns are a name's only where the range is one line's: one that ends on
+        // another names more than a name, and the empty run is what says so.
+        let ends_here = |end: &&Value| end.get("line").and_then(Value::as_u64) == Some(line);
+        let to = range.get("end").filter(ends_here).map_or(from, at);
         Some(Place {
             file: path_of(uri)?,
             // The protocol counts from zero and everything else here counts from one.
             line: u32::try_from(line).ok()?.saturating_add(1),
-            column,
+            columns: from..to.max(from),
         })
     };
 

@@ -15,6 +15,14 @@
 //! context's mutex -- seconds for a line that answers with thousands, with every symbol
 //! click waiting behind it. Landing on the line inside the symbol is the picked-out run's job
 //! instead.
+//!
+//! The panel answers one more question, which is not the crate's at all: where a name is
+//! **used**, which only a language server can say (`ui::language`). It is the same panel
+//! because it is the same act -- a reader asking where else to look -- and a second list
+//! beside this one would be two panels showing one thing at a time. What comes back is a
+//! place in a file and not a symbol, so those rows are grouped under the file each is in
+//! (`src/uses.rs`) and open a source-driven tab; the symbols that line was compiled into
+//! are then one right-click away, which is the question above.
 
 use super::*;
 
@@ -46,6 +54,12 @@ pub(crate) enum Scope {
         name: String,
         lines: RangeInclusive<u32>,
     },
+    /// Every use of the name at [`Query::at`], as the language server answers it.
+    ///
+    /// `column` is where the name was asked about, in the UTF-16 units the protocol
+    /// takes, and `run` is the server run it was asked in: an answer from a server
+    /// started since is not an answer to this question.
+    Uses { name: String, column: u32, run: u64 },
 }
 
 impl Query {
@@ -68,11 +82,22 @@ impl Query {
         }
     }
 
-    /// The lines the symbols are wanted for.
-    pub(crate) fn lines(&self) -> RangeInclusive<u32> {
+    /// The question about every use of `name`, asked at `column` of `at` in the server
+    /// run `run`.
+    pub(crate) fn uses(at: LinePos, name: String, column: u32, run: u64) -> Query {
+        Query {
+            at,
+            scope: Scope::Uses { name, column, run },
+        }
+    }
+
+    /// The lines the symbols are wanted for, and `None` where symbols are not what is
+    /// wanted: a question about uses is the language server's and never the worker's.
+    pub(crate) fn symbols_wanted(&self) -> Option<RangeInclusive<u32>> {
         match &self.scope {
-            Scope::Line => self.at.line..=self.at.line,
-            Scope::Function { lines, .. } => lines.clone(),
+            Scope::Line => Some(self.at.line..=self.at.line),
+            Scope::Function { lines, .. } => Some(lines.clone()),
+            Scope::Uses { .. } => None,
         }
     }
 
@@ -80,7 +105,7 @@ impl Query {
     fn spell(&self) -> String {
         match &self.scope {
             Scope::Line => spell(&self.at),
-            Scope::Function { name, .. } => name.clone(),
+            Scope::Function { name, .. } | Scope::Uses { name, .. } => name.clone(),
         }
     }
 
@@ -92,6 +117,8 @@ impl Query {
             Scope::Function { lines, .. } => {
                 format!("{}:{}\u{2013}{}", self.at.file, lines.start(), lines.end())
             }
+            // Where it was asked about, which is the one thing a name alone does not say.
+            Scope::Uses { .. } => format!("{}:{}", self.at.file, self.at.line),
         }
     }
 
@@ -100,6 +127,7 @@ impl Query {
         let (one, many) = match self.scope {
             Scope::Line => ("location for", "locations for"),
             Scope::Function { .. } => ("instance of", "instances of"),
+            Scope::Uses { .. } => ("use of", "uses of"),
         };
         format!(
             "{count} {} {}",
@@ -134,24 +162,83 @@ impl Located {
         let found = self.found.as_ref().map(|found| &found.of);
         (found != Some(asked)).then_some(asked)
     }
+
+    /// Take `found` as the answer to the uses question this is waiting for, `run` being
+    /// the server run it came back under. Whether anything changed, so the caller writes
+    /// only then.
+    ///
+    /// An answer under a run this did not ask in is an answer to nobody, and so is one to
+    /// a question already answered. **Every way of not answering is an empty answer**: a
+    /// server that refused the question or stopped answering it leaves a question that
+    /// would otherwise be looked for for ever.
+    pub(crate) fn answer_uses(&mut self, run: u64, found: uses::Uses) -> bool {
+        let asked = self.pending().filter(
+            |query| matches!(&query.scope, Scope::Uses { run: asked, .. } if *asked == run),
+        );
+        let Some(of) = asked.cloned() else {
+            return false;
+        };
+        self.found = Some(Found {
+            of,
+            what: What::Uses(found),
+        });
+        true
+    }
+
+    /// Fold the file at `path` in a uses answer, or unfold it. Whether anything changed.
+    pub(crate) fn fold(&mut self, path: &Path) -> bool {
+        let Some(found) = self.found.as_mut() else {
+            return false;
+        };
+        match &mut found.what {
+            What::Uses(uses) => uses.toggle(path),
+            What::Symbols(_) => false,
+        }
+    }
 }
 
-/// The answer to one question: every symbol compiled from its lines, over the objects
-/// that were open when it was asked, in the crate's own order -- object by object and by
-/// address within one, which is a tie-break and not a ranking.
+/// The answer to one question: what it was, and what came of it.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Found {
     pub(crate) of: Query,
+    pub(crate) what: What,
+}
+
+/// What an answer holds, which is what was asked for.
+#[derive(Clone, PartialEq)]
+pub(crate) enum What {
+    /// Every symbol compiled from the question's lines, over the objects that were open
+    /// when it was asked, in the crate's own order -- object by object and by address
+    /// within one, which is a tie-break and not a ranking.
+    ///
     /// [`SymbolList`] and not a `Vec`, so handing it to the rows is a pointer compare
     /// rather than a walk of thousands.
-    pub(crate) symbols: SymbolList,
+    Symbols(SymbolList),
+    /// Every use of the name, under the file each is in.
+    Uses(uses::Uses),
 }
 
 impl Found {
     pub(crate) fn new(of: Query, symbols: Vec<Symbol>) -> Found {
         Found {
             of,
-            symbols: SymbolList(Arc::new(symbols)),
+            what: What::Symbols(SymbolList(Arc::new(symbols))),
+        }
+    }
+
+    /// The symbols it answered with, and `None` where it was a question about uses.
+    pub(crate) fn symbols(&self) -> Option<&SymbolList> {
+        match &self.what {
+            What::Symbols(symbols) => Some(symbols),
+            What::Uses(_) => None,
+        }
+    }
+
+    /// The uses it answered with, and `None` where it was a question about symbols.
+    pub(crate) fn uses(&self) -> Option<&uses::Uses> {
+        match &self.what {
+            What::Uses(uses) => Some(uses),
+            What::Symbols(_) => None,
         }
     }
 
@@ -163,21 +250,25 @@ impl Found {
     /// them long after the file was closed. A set of the open objects' addresses rather
     /// than a scan per symbol, since it is thousands against however many are open.
     pub(crate) fn retain_open(&mut self, open: &[Arc<Object>]) -> bool {
+        // A use is a place in a file and holds no object, so there is nothing here for a
+        // closed binary to take.
+        let What::Symbols(symbols) = &self.what else {
+            return false;
+        };
         let open: HashSet<usize> = open
             .iter()
             .map(|object| Arc::as_ptr(object).addr())
             .collect();
-        let kept: Vec<Symbol> = self
-            .symbols
+        let kept: Vec<Symbol> = symbols
             .0
             .iter()
             .filter(|symbol| open.contains(&Arc::as_ptr(&symbol.object).addr()))
             .cloned()
             .collect();
-        if kept.len() == self.symbols.0.len() {
+        if kept.len() == symbols.0.len() {
             return false;
         }
-        self.symbols = SymbolList(Arc::new(kept));
+        self.what = What::Symbols(SymbolList(Arc::new(kept)));
         true
     }
 }
@@ -208,17 +299,61 @@ pub(crate) fn find_locations(
     raise_view(dock, View::Locations);
 }
 
+/// Ask where the name at `column` of `at` is used, and bring the panel to the front.
+///
+/// The question is the server's, so it is sent here rather than from the effect that
+/// sends the worker's: what it is asked in is a server run, and there is nothing to ask
+/// with no server -- a question is not what starts one, that being the control the reader
+/// presses (`follow_name`'s rule).
+pub(crate) fn find_uses(
+    mut located: State<Located>,
+    dock: State<DockArea>,
+    language: State<Language>,
+    jobs: &LspJobs,
+    at: LinePos,
+    name: String,
+    column: u32,
+) {
+    let lookup = Lookup {
+        file: PathBuf::from(&*at.file),
+        // The protocol counts lines from zero, where a `LinePos` is 1-based; the column
+        // is already what it takes.
+        line: at.line.saturating_sub(1),
+        column,
+    };
+    let Some(run) = ask_where(language, jobs, lookup, Wanted::Uses) else {
+        return;
+    };
+    let query = Query::uses(at, name, column, run);
+
+    // Asking again drops the answer that stands, which is what makes this question
+    // pending; `find_locations`' rule, and here it cannot even be the same question,
+    // since the run it was asked in is part of it.
+    let mut next = located.peek().clone();
+    if next.found.as_ref().is_some_and(|found| found.of == query) {
+        next.found = None;
+    }
+    next.asked = Some(query);
+    // A use is a place in a file: no row of this answer chooses a symbol for a tab.
+    next.subject = None;
+    located.set(next);
+
+    raise_view(dock, View::Locations);
+}
+
 /// The menu a source row or an instruction row opens on a right-click: the line's
-/// locations, and -- for a source row inside a function -- the function's instances,
-/// the two things a row is asked for that a click does not do. Built per press, as
-/// `close_menu` is, closing over the row's line; the states come in as arguments because
-/// this is called from an event handler, where no hook may run.
+/// locations, -- for a source row inside a function -- the function's instances, and
+/// `uses` where the press was on a name a server can be asked about, the things a row is
+/// asked for that a click does not do. Built per press, as `close_menu` is, closing over
+/// the row's line; the states come in as arguments because this is called from an event
+/// handler, where no hook may run.
 pub(crate) fn locate_menu(
     located: State<Located>,
     dock: State<DockArea>,
     at: LinePos,
     subject: Option<(DocId, Arc<str>)>,
     function: Option<Function>,
+    uses: Option<MenuButton>,
 ) -> Menu {
     let line = Query::line(at.clone());
     let instances = function.map(|function| {
@@ -229,7 +364,10 @@ pub(crate) fn locate_menu(
             .child(format!("Find instances of {}", function.name))
     });
 
+    // The name's uses first, where the press was on one: it is about what is under the
+    // pointer, where the two below are about the line it is on.
     Menu::new()
+        .maybe_child(uses)
         .child(
             MenuButton::new()
                 .on_press(move |_| find_locations(located, dock, line.clone(), subject.clone()))
@@ -269,11 +407,23 @@ impl Component for LocationsTab {
                 .read()
                 .found
                 .as_ref()
-                .map(|found| found.symbols.clone())
+                .and_then(Found::symbols)
+                .cloned()
                 .unwrap_or_else(|| SymbolList(Arc::new(Vec::new())));
             Filtered::new(symbols, &filter.read().matcher())
         });
         let filtered = filtered.read().clone();
+        // A uses answer is tens of rows where a line's symbols are thousands, so the
+        // filter is applied where the rows are built (`filter_bar.rs`) -- but through a
+        // memo all the same, since the rows are compared by the pointer they are shared
+        // under and a fresh one every render would redraw every row.
+        let used = use_memo(move || {
+            let state = located.read();
+            let uses = state.found.as_ref().and_then(Found::uses);
+            uses.map(|uses| uses.rows_matching(&filter.read().matcher()))
+                .unwrap_or_default()
+        });
+        let used = used.read().clone();
         let selected = use_consume::<Analysis>()
             .0
             .read()
@@ -291,16 +441,57 @@ impl Component for LocationsTab {
                 Some(query),
                 _,
             ) => placeholder(format!("Finding locations for {}\u{2026}", query.spell())),
+            (
+                Some(Query {
+                    scope: Scope::Uses { .. },
+                    ..
+                }),
+                Some(query),
+                _,
+            ) => placeholder(format!("Finding uses of {}\u{2026}", query.spell())),
             (Some(_), Some(query), _) => {
                 placeholder(format!("Finding instances of {}\u{2026}", query.spell()))
             }
-            (Some(query), None, Some(found)) if found.symbols.0.is_empty() => {
+            (Some(query), None, Some(found))
+                if found.uses().is_some_and(|uses| uses.count() == 0) =>
+            {
+                placeholder(format!("No uses of {}", query.spell()))
+            }
+            (Some(query), None, Some(found)) if found.uses().is_some() => {
+                let heading = query.heading(found.uses().map_or(0, uses::Uses::count));
+                let length = used.len();
+                rect()
+                    .expanded()
+                    .content(Content::Flex)
+                    .child(row_tooltip(
+                        query.tooltip(),
+                        section_heading(&heading, None),
+                    ))
+                    .child(
+                        rect().width(Size::fill()).height(Size::flex(1.0)).child(
+                            VirtualScrollView::new_with_data(used, |row, used: &UseRows| {
+                                UsesRow {
+                                    rows: used.clone(),
+                                    index: row,
+                                    key: DiffKey::None,
+                                }
+                                .into()
+                            })
+                            .length(length)
+                            .item_size(list_row_height()),
+                        ),
+                    )
+                    .into()
+            }
+            (Some(query), None, Some(found))
+                if found.symbols().is_some_and(|symbols| symbols.0.is_empty()) =>
+            {
                 placeholder(format!("No code compiled from {}", query.spell()))
             }
             (Some(query), None, Some(found)) => {
                 // Said over the list rather than in the tab's title: the rows are not
                 // the answer to anything until the question is in view with them.
-                let heading = query.heading(found.symbols.0.len());
+                let heading = query.heading(found.symbols().map_or(0, |symbols| symbols.0.len()));
                 let length = filtered.len();
                 rect()
                     .expanded()
@@ -342,6 +533,149 @@ impl Component for LocationsTab {
         };
 
         use_filter_pane(filter, palette().symbol_pane_bg, body)
+    }
+}
+
+/// One row of a uses answer: a file, or one of the uses under it.
+///
+/// `HitRow`'s shape (`ui::search_view`), for the same reason -- a flattened tree drawn by
+/// a scroll view -- and not its rows: a hit carries the line's text, which a search read
+/// off the disk and a language server never says.
+#[derive(Clone)]
+struct UsesRow {
+    rows: UseRows,
+    index: usize,
+    key: DiffKey,
+}
+
+impl PartialEq for UsesRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.rows == other.rows && self.index == other.index
+    }
+}
+
+impl KeyExt for UsesRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for UsesRow {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let mut located = use_consume::<Locations>().0;
+        let open = use_open();
+        let visits = use_consume::<Visited>().0;
+        let ctrl = use_consume::<Ctrl>().0;
+        let marked = use_consume::<Marked>().0;
+        let landing = use_consume::<Land>().0;
+        let plant = use_consume::<Plant>().0;
+        let driven = use_consume::<Drives>().0;
+
+        let row = self.rows.row(self.index).clone();
+        let pressed = row.clone();
+        let tooltip = match &row {
+            UseRow::File { path, .. } => path.display().to_string(),
+            UseRow::Use { path, used } => format!("{}:{}", path.display(), used.line),
+        };
+
+        let background = if hovering() {
+            palette().object_hover_bg
+        } else {
+            Color::TRANSPARENT
+        };
+
+        row_tooltip(
+            tooltip,
+            rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .content(Content::Flex)
+                .width(Size::fill())
+                .height(Size::px(list_row_height()))
+                .padding(Gaps::new_symmetric(0.0, 5.0))
+                .spacing(5.0)
+                .background(background)
+                .overflow(Overflow::Clip)
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| match &pressed {
+                    // Bound to a `let` of its own, so the guard the read hands back is
+                    // gone before the write.
+                    UseRow::File { path, .. } => {
+                        let mut next = located.peek().clone();
+                        if next.fold(path) {
+                            located.set(next);
+                        }
+                    }
+                    UseRow::Use { path, used } => open_source_place(
+                        open,
+                        visits,
+                        marked,
+                        landing,
+                        plant,
+                        driven,
+                        path,
+                        used.line,
+                        Some(used.columns.start as usize..used.columns.end as usize),
+                        reach(ctrl),
+                    ),
+                })
+                .children(use_row_children(&row)),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// What a uses row draws: a file row is its fold, its name and its count, and a use row
+/// its line number and the line, both as the Search panel's rows draw theirs.
+fn use_row_children(row: &UseRow) -> Vec<Element> {
+    match row {
+        UseRow::File {
+            name,
+            count,
+            folded,
+            ..
+        } => vec![
+            label()
+                .text(if *folded { "\u{25b8}" } else { "\u{25be}" })
+                .width(Size::px(CHEVRON_WIDTH))
+                .color(palette().icon_fg)
+                .into_element(),
+            tree_name(name.clone(), false).into_element(),
+            label()
+                .text(count.to_string())
+                .margin(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))
+                .color(palette().address_fg)
+                .max_lines(1)
+                .into_element(),
+        ],
+        // The Search panel's match row: the line's number, and the line with the name
+        // marked in it. A file that would not read leaves the text empty, and the row is
+        // the number alone.
+        UseRow::Use { used, .. } => vec![
+            label()
+                .text(used.line.to_string())
+                .width(Size::px(LINE_NUMBER_WIDTH))
+                .text_align(TextAlign::Right)
+                .color(palette().address_fg)
+                .max_lines(1)
+                .into_element(),
+            rect()
+                .width(Size::flex(1.0))
+                .overflow(Overflow::Clip)
+                .child(
+                    paragraph()
+                        .width(Size::fill())
+                        .max_lines(1)
+                        .text_overflow(TextOverflow::Ellipsis)
+                        .spans_iter(marked_spans(&used.text, &used.spans).into_iter()),
+                )
+                .into_element(),
+        ],
     }
 }
 

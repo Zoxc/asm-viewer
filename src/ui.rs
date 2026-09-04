@@ -61,6 +61,7 @@ pub(crate) use crate::tabs::{self, Driven, Positions, Spot};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
+pub(crate) use crate::uses::{self, UseRow, UseRows};
 pub(crate) use crate::visits::Visits;
 
 mod analyzed;
@@ -457,7 +458,7 @@ pub fn app() -> impl IntoElement {
     // stop.
     let language = use_provide_context(|| Talking(State::create(Language::default()))).0;
     let follow = use_provide_context(|| Following(State::create(Follow::default()))).0;
-    use_language_with(language, follow, proj, language_work());
+    use_language_with(language, follow, located, proj, language_work());
     // What a name followed in the source opens, which the answer above fills in.
     use_follow(follow, open, visits, marked, landing, plant, driven);
 

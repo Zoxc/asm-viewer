@@ -1750,12 +1750,12 @@ struct Seen(State<Vec<Symbol>>);
 /// building a dock to say what is being asked, and `use_analysis_with` takes anything
 /// that reads and peeks.
 #[derive(Clone, Copy)]
-struct Wanted(State<Option<Ask>>);
+struct Driving(State<Option<Ask>>);
 
 /// The analysis wiring and nothing else: no panes, since what is under test is which
 /// answers reach them rather than what they draw.
 fn analysis_harness() -> impl IntoElement {
-    let asking = use_consume::<Wanted>().0;
+    let asking = use_consume::<Driving>().0;
     let analysis = use_consume::<Analysis>().0;
     let objects = use_consume::<Objects>().0;
     let history = use_consume::<Visited>().0;
@@ -1803,7 +1803,7 @@ macro_rules! analysis_states {
         $runner.provide_root_context(|| Work(Arc::new($work)));
         (
             $runner
-                .provide_root_context(|| Wanted(State::create(None)))
+                .provide_root_context(|| Driving(State::create(None)))
                 .0,
             $runner
                 .provide_root_context(|| Analysis(State::create(Analyzed::default())))
@@ -2521,14 +2521,21 @@ fn a_lines_locations_come_back_from_every_open_object() {
     let found = state.found.expect("the line was looked for");
     assert!(found.of.at == at);
     let names: Vec<&str> = found
-        .symbols
+        .symbols()
+        .expect("symbols")
         .0
         .iter()
         .map(|symbol| symbol.data.name.as_str())
         .collect();
     assert_eq!(names, ["sum_to", "sum_to"]);
-    assert!(Arc::ptr_eq(&found.symbols.0[0].object, &wanted.object));
-    assert!(Arc::ptr_eq(&found.symbols.0[1].object, &twin));
+    assert!(Arc::ptr_eq(
+        &found.symbols().expect("symbols").0[0].object,
+        &wanted.object
+    ));
+    assert!(Arc::ptr_eq(
+        &found.symbols().expect("symbols").0[1].object,
+        &twin
+    ));
 
     // Past the end of any file the fixture names.
     let barren = LinePos {
@@ -2545,7 +2552,13 @@ fn a_lines_locations_come_back_from_every_open_object() {
     });
     let state = located.peek().clone();
     assert!(state.pending().is_none());
-    assert!(state.found.expect("answered").symbols.0.is_empty());
+    assert!(state
+        .found
+        .expect("answered")
+        .symbols()
+        .expect("symbols")
+        .0
+        .is_empty());
 }
 
 /// An answer for a line the reader has since asked about another line instead of is
@@ -2672,7 +2685,7 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
         .clone()
         .expect("the locate was answered");
     assert!(found.of.at == at);
-    assert!(!found.symbols.0.is_empty());
+    assert!(!found.symbols().expect("symbols").0.is_empty());
     assert!(analysis.peek().pending.is_none());
 }
 
@@ -2708,7 +2721,8 @@ fn closing_a_binary_takes_its_locations_with_it() {
             .found
             .as_ref()
             .expect("answered")
-            .symbols
+            .symbols()
+            .expect("symbols")
             .0
             .len(),
         2
@@ -2722,8 +2736,11 @@ fn closing_a_binary_takes_its_locations_with_it() {
     }
     let found = located.peek().found.clone().expect("the answer stands");
     assert!(found.of.at == at);
-    assert_eq!(found.symbols.0.len(), 1);
-    assert!(Arc::ptr_eq(&found.symbols.0[0].object, &twin));
+    assert_eq!(found.symbols().expect("symbols").0.len(), 1);
+    assert!(Arc::ptr_eq(
+        &found.symbols().expect("symbols").0[0].object,
+        &twin
+    ));
 
     // A load that adds an object changes nothing already found.
     objects.set(vec![twin.clone(), wanted.object.clone()]);
@@ -2736,7 +2753,8 @@ fn closing_a_binary_takes_its_locations_with_it() {
             .found
             .as_ref()
             .expect("stands")
-            .symbols
+            .symbols()
+            .expect("symbols")
             .0
             .len(),
         1
@@ -2749,7 +2767,13 @@ fn closing_a_binary_takes_its_locations_with_it() {
     }
     let state = located.peek().clone();
     assert!(state.asked == Some(Query::line(at.clone())));
-    assert!(state.found.expect("stands").symbols.0.is_empty());
+    assert!(state
+        .found
+        .expect("stands")
+        .symbols()
+        .expect("symbols")
+        .0
+        .is_empty());
 }
 
 /// The Locations view and nothing else, over the project's states and a `Located` the
@@ -2811,6 +2835,236 @@ macro_rules! location_states {
             },
         )
     }};
+}
+
+/// Pressing a use opens its file on its line with the name selected there, and the
+/// assembly side follows that line as it follows a clicked one.
+#[test]
+fn a_use_row_opens_its_file_on_the_line_with_the_name_selected() {
+    let directory =
+        std::env::temp_dir().join(format!("assembly-viewer-uses-row-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("used.rs");
+    std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
+        .expect("writing the source file");
+    let used = path.to_str().expect("a utf-8 temporary path").to_owned();
+
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut located = location.located;
+    settle(&mut test);
+
+    let at = LinePos {
+        file: Arc::from("/p/src/main.rs"),
+        line: 2,
+    };
+    located.set(found_uses(at, "helper", &[(&used, 2, 12..18)]));
+    settle(&mut test);
+
+    // The row draws the line it is on, as a search hit's row does -- the file was read
+    // where the answer was taken -- cut into the name and what is around it, so the name
+    // can be marked.
+    let drawn = labels(&test);
+    let line: Vec<String> = drawn
+        .iter()
+        .skip_while(|text| *text != "2")
+        .skip(1)
+        .cloned()
+        .collect();
+    assert_eq!(
+        line,
+        ["let n = ", "helper", "(1);"],
+        "the use's line is not drawn: {drawn:?}"
+    );
+
+    let row = label_area(&test, "2").expect("the use's row is drawn");
+    let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
+    press_at(&mut test, press);
+    settle(&mut test);
+
+    let opened: Arc<str> = Arc::from(&*used);
+    let document = Document::Source(opened.clone());
+    assert!(
+        states.open.active() == Some(document.clone()),
+        "the row opened nothing"
+    );
+    assert!(
+        source_line(location.marked)
+            == Some(LinePos {
+                file: opened,
+                line: 2,
+            }),
+        "the line was not picked out"
+    );
+    // The name is selected there, which is what the answer's columns are for.
+    let picked = location
+        .marked
+        .peek()
+        .source
+        .clone()
+        .expect("checked above");
+    assert_eq!(
+        picked.chars.ends(),
+        (Caret { row: 1, col: 12 }, Caret { row: 1, col: 18 }),
+        "the name was not selected"
+    );
+    let id = states.open.active_id().expect("a tab");
+    assert_eq!(
+        states.driven.peek().line(&(id, Stop::on(document, 2))),
+        Some(2),
+        "the assembly side follows no line"
+    );
+}
+
+/// A uses answer as the panel takes one: the question, and the places the server named.
+fn found_uses(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)]) -> Located {
+    let query = Query::uses(at, name.to_owned(), 0, 7);
+    let places: Vec<lsp::Place> = places
+        .iter()
+        .map(|(file, line, columns)| lsp::Place {
+            file: PathBuf::from(file),
+            line: *line,
+            columns: columns.clone(),
+        })
+        .collect();
+    let mut located = Located {
+        asked: Some(query),
+        ..Located::default()
+    };
+    // Grouped as the worker groups it, reading each file's text off the disk.
+    let found = uses::Uses::of(&places, |path| std::fs::read_to_string(path).ok());
+    assert!(located.answer_uses(7, found), "the answer was not taken");
+    located
+}
+
+/// The panel says which of the uses states it is in, groups what it found under the file
+/// each use is in, and folds a file away when its row is pressed.
+#[test]
+fn the_panel_groups_a_names_uses_under_their_files_and_folds_one_away() {
+    let (mut test, (_states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut located = location.located;
+    let at = LinePos {
+        file: Arc::from("/p/src/main.rs"),
+        line: 2,
+    };
+    settle(&mut test);
+
+    located.write().asked = Some(Query::uses(at.clone(), "helper".to_owned(), 12, 7));
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&"Finding uses of helper\u{2026}".to_owned()),
+        "{:?}",
+        labels(&test)
+    );
+
+    located.set(found_uses(
+        at.clone(),
+        "helper",
+        &[
+            ("/p/src/other.rs", 9, 4..10),
+            ("/p/src/main.rs", 2, 12..18),
+            ("/p/src/main.rs", 7, 4..10),
+        ],
+    ));
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"3 uses of helper".to_owned()), "{drawn:?}");
+    // A file row per file, by path, each with its fold and its count, and its uses under
+    // it by line. Everything the list draws, from the heading down.
+    let listed: Vec<String> = drawn
+        .iter()
+        .skip_while(|text| *text != "3 uses of helper")
+        .cloned()
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            "3 uses of helper",
+            "\u{25be}",
+            "main.rs",
+            "2",
+            "2",
+            "7",
+            "\u{25be}",
+            "other.rs",
+            "1",
+            "9",
+        ],
+        "{drawn:?}"
+    );
+
+    // The file row folds its uses away, and the count stays.
+    let file_row = centre_of(&test, "main.rs");
+    press_at(&mut test, file_row);
+    settle(&mut test);
+    let folded: Vec<String> = labels(&test)
+        .into_iter()
+        .skip_while(|text| text != "3 uses of helper")
+        .collect();
+    assert_eq!(
+        folded,
+        [
+            "3 uses of helper",
+            // Folded, and its count stays: the heading and the row both count what was
+            // found and not what is drawn.
+            "\u{25b8}",
+            "main.rs",
+            "2",
+            "\u{25be}",
+            "other.rs",
+            "1",
+            "9",
+        ],
+        "the fold did not take main.rs's uses away"
+    );
+}
+
+/// Nothing found says so, whatever way the question came back with nothing: a server
+/// that answered no places, one that refused the question, and one that stopped
+/// answering all leave the panel saying there are none.
+#[test]
+fn a_uses_question_that_answers_nothing_says_there_are_none() {
+    let (mut test, (_states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    let mut located = location.located;
+    let at = LinePos {
+        file: Arc::from("/p/src/main.rs"),
+        line: 2,
+    };
+    settle(&mut test);
+
+    located.set(found_uses(at.clone(), "helper", &[]));
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&"No uses of helper".to_owned()),
+        "{:?}",
+        labels(&test)
+    );
+
+    // An answer under a run this did not ask in is an answer to nobody: the question
+    // stands and the panel is still looking for it.
+    let mut asking = Located {
+        asked: Some(Query::uses(at, "helper".to_owned(), 12, 7)),
+        ..Located::default()
+    };
+    assert!(
+        !asking.answer_uses(8, uses::Uses::default()),
+        "an answer from another server"
+    );
+    assert!(asking.pending().is_some());
 }
 
 /// Where the text reading `text` was laid out, for a press on it: a `label()` of it, or
@@ -2880,7 +3134,11 @@ fn main() {
         let units: Vec<u16> = line.encode_utf16().collect();
         links_in(&source, index)
             .iter()
-            .map(|link| String::from_utf16_lossy(&units[link.start..link.end.min(units.len())]))
+            .map(|link| {
+                String::from_utf16_lossy(
+                    &units[link.columns.start..link.columns.end.min(units.len())],
+                )
+            })
             .collect()
     };
 
@@ -3519,7 +3777,8 @@ fn an_instance_query_answers_each_symbol_once() {
     assert!(found.of == query);
     assert!(found.of.at == at);
     let names: Vec<&str> = found
-        .symbols
+        .symbols()
+        .expect("symbols")
         .0
         .iter()
         .map(|symbol| symbol.data.name.as_str())
@@ -3537,8 +3796,8 @@ fn an_instance_query_answers_each_symbol_once() {
             .is_some_and(|found| found.of == query)
     });
     let found = located.peek().found.clone().expect("answered");
-    assert_eq!(found.symbols.0.len(), 1);
-    assert_eq!(found.symbols.0[0].data.name, "sum_to");
+    assert_eq!(found.symbols().expect("symbols").0.len(), 1);
+    assert_eq!(found.symbols().expect("symbols").0[0].data.name, "sum_to");
 
     let query = Query::function(at.clone(), &function("comment", 1..=19));
     located.write().asked = Some(query.clone());
@@ -3554,7 +3813,8 @@ fn an_instance_query_answers_each_symbol_once() {
         .found
         .as_ref()
         .expect("answered")
-        .symbols
+        .symbols()
+        .expect("symbols")
         .0
         .is_empty());
 }
@@ -3739,8 +3999,9 @@ fn linking_harness() -> impl IntoElement {
     let states = use_project_states();
     let language = use_consume::<Talking>().0;
     let follow = use_consume::<Following>().0;
+    let located = use_consume::<Locations>().0;
     let work = use_consume::<ServerWorking>().0;
-    use_language_with(language, follow, states.proj, move |job| work(job));
+    use_language_with(language, follow, located, states.proj, move |job| work(job));
 
     let open = use_open();
     let marked = use_consume::<Marked>().0;
@@ -3757,10 +4018,15 @@ fn linking_harness() -> impl IntoElement {
 
     let file = use_consume::<Subject>().0;
     let document = Document::Source(file);
-    rect().expanded().child(SourcePane {
-        tab: pane_tab(&document),
-        document,
-    })
+    // The viewer a context menu is drawn into, which `app()` mounts at its root: what a
+    // right-click on a link offers is one of the things asked of this harness.
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(SourcePane {
+            tab: pane_tab(&document),
+            document,
+        })
 }
 
 /// Mount [`linking_harness`] over `file`, with a worker that records every job and
@@ -3867,13 +4133,14 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     let place = lsp::Place {
         file: defined.clone(),
         line: 1,
-        column: 3,
+        columns: 3..9,
     };
     let (mut test, states, language, location, driven, _asks) = mount_linking!(
         move |job: LspJob| match job {
-            LspJob::Ask { run, .. } => Some(LspAnswer::Defined {
+            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
                 run,
-                places: Ok(vec![place.clone()]),
+                want,
+                reply: Ok(Reply::Defined(vec![place.clone()])),
             }),
             _ => None,
         },
@@ -3945,13 +4212,14 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
     let place = lsp::Place {
         file: defined.clone(),
         line: 1,
-        column: 7,
+        columns: 7..13,
     };
     let (mut test, states, language, location, _driven, _asks) = mount_linking!(
         move |job: LspJob| match job {
-            LspJob::Ask { run, .. } => Some(LspAnswer::Defined {
+            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
                 run,
-                places: Ok(vec![place.clone()]),
+                want,
+                reply: Ok(Reply::Defined(vec![place.clone()])),
             }),
             _ => None,
         },
@@ -4004,13 +4272,14 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
     let place = lsp::Place {
         file: PathBuf::from(&*file),
         line: 2,
-        column: 12,
+        columns: 12..18,
     };
     let (mut test, states, language, location, _driven, _asks) = mount_linking!(
         move |job: LspJob| match job {
-            LspJob::Ask { run, .. } => Some(LspAnswer::Defined {
+            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
                 run,
-                places: Ok(vec![place.clone()]),
+                want,
+                reply: Ok(Reply::Defined(vec![place.clone()])),
             }),
             _ => None,
         },
@@ -4043,6 +4312,190 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
         picked.chars.lead(),
         Caret { row: 1, col: 12 },
         "the caret is not on the name"
+    );
+}
+
+/// A right-click on a link offers the name's uses, and asks for them where the pointer
+/// was: the question carries the name it was on and the column it begins at. A press
+/// elsewhere in the row offers no such thing -- the answer would be to no name.
+#[test]
+fn a_right_click_on_a_link_offers_the_names_uses() {
+    let (file, _directory) = calling_file("uses");
+    let (mut test, states, language, location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    language.write().state = Lsp::Running;
+    settle(&mut test);
+
+    // Off the link, on the row's own gutter: the line's locations and nothing about a
+    // name.
+    let gutter = centre_of(&test, "2\u{a0}");
+    right_click(&mut test, gutter);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find all locations".to_owned()),
+        "{drawn:?}"
+    );
+    assert!(
+        !drawn.iter().any(|text| text.starts_with("Find uses")),
+        "{drawn:?}"
+    );
+    // The menu is closed by pressing away from it, as a reader closes one.
+    press_at(&mut test, (600.0, 380.0));
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find uses of helper".to_owned()),
+        "{drawn:?}"
+    );
+
+    let entry = centre_of(&test, "Find uses of helper");
+    press_at(&mut test, entry);
+    settle(&mut test);
+
+    // The question the panel now holds: the name, and where it was asked about.
+    let asked = location.located.peek().asked.clone().expect("a question");
+    assert_eq!(asked.at.line, 2, "the question is about the wrong line");
+    let Scope::Uses { name, column, .. } = &asked.scope else {
+        panic!("the question is not about a name's uses");
+    };
+    assert_eq!(name, "helper");
+    // Where `helper` begins on `    let n = helper(1);`.
+    assert_eq!(*column, 12);
+
+    // And the server was asked, at the same place, in the units the protocol takes.
+    let asked_of = next_ask(&mut test, &asks).expect("the server was asked");
+    assert_eq!((asked_of.line, asked_of.column), (1, 12));
+}
+
+/// The name where a function is **defined** offers its uses too, though it is no link:
+/// where a name is defined is where a reader asks what uses it.
+#[test]
+fn a_right_click_on_a_definitions_own_name_offers_its_uses() {
+    let (file, _directory) = calling_file("defuses");
+    let (mut test, states, language, location, _driven, _asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    language.write().state = Lsp::Running;
+    settle(&mut test);
+
+    let defined = word_point(&test, "main");
+    right_click(&mut test, defined);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"Find uses of main".to_owned()), "{drawn:?}");
+
+    let entry = centre_of(&test, "Find uses of main");
+    press_at(&mut test, entry);
+    settle(&mut test);
+
+    let asked = location.located.peek().asked.clone().expect("a question");
+    assert_eq!(asked.at.line, 1);
+    let Scope::Uses { name, column, .. } = &asked.scope else {
+        panic!("the question is not about a name's uses");
+    };
+    assert_eq!(name, "main");
+    // Where `main` begins on `fn main() {`.
+    assert_eq!(*column, 3);
+}
+
+/// A server that refuses the question answers it as far as the panel is concerned: the
+/// list says there are no uses, where a question left pending would say it was still
+/// looking for ever.
+#[test]
+fn a_refused_uses_question_leaves_the_panel_saying_there_are_none() {
+    let (file, _directory) = calling_file("refused");
+    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+        |job: LspJob| match job {
+            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
+                run,
+                want,
+                reply: Err(lsp::Failure::Refused {
+                    code: -32603,
+                    said: "file not found".to_owned(),
+                }),
+            }),
+            _ => None,
+        },
+        file.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    language.write().state = Lsp::Running;
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let entry = centre_of(&test, "Find uses of helper");
+    press_at(&mut test, entry);
+    for _ in 0..8 {
+        settle(&mut test);
+    }
+
+    let state = location.located.peek().clone();
+    assert!(
+        state.pending().is_none(),
+        "the panel is still looking for an answer that will not come"
+    );
+    assert_eq!(
+        state
+            .found
+            .as_ref()
+            .and_then(Found::uses)
+            .map(uses::Uses::count),
+        Some(0),
+        "a refusal is not an empty answer"
+    );
+    // And the server is still a server: refusing a question is answering it.
+    assert!(
+        matches!(language.peek().state, Lsp::Running),
+        "the control was told the server broke"
+    );
+}
+
+/// With no server there are no links, so there is no name to ask about and the menu
+/// offers nothing: a question is not what starts a server.
+#[test]
+fn a_right_click_with_no_server_offers_no_uses() {
+    let (file, _directory) = calling_file("nouses");
+    let (mut test, states, _language, _location, _driven, _asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let drawn = labels(&test);
+    assert!(
+        !drawn.iter().any(|text| text.starts_with("Find uses")),
+        "{drawn:?}"
     );
 }
 
@@ -4319,7 +4772,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     pump(&mut test, || located.peek().found.is_some());
     let found = located.peek().found.clone().expect("answered");
     assert!(found.of.at == at);
-    assert_eq!(found.symbols.0.len(), 1);
+    assert_eq!(found.symbols().expect("symbols").0.len(), 1);
 
     // The same line again is asked again, out of whatever is open now.
     let mut objects = objects;
@@ -4334,7 +4787,8 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
             .found
             .as_ref()
             .expect("stands")
-            .symbols
+            .symbols()
+            .expect("symbols")
             .0
             .len(),
         1,
@@ -4347,7 +4801,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
             .peek()
             .found
             .as_ref()
-            .is_some_and(|found| found.symbols.0.len() == 2)
+            .is_some_and(|found| found.symbols().expect("symbols").0.len() == 2)
     });
 }
 
@@ -14972,17 +15426,24 @@ fn project_view_harness() -> Element {
     // bar's does; and the project's own settings are really read, so the view lists what
     // that read answered and a file on disk is what it is being asked about.
     let follow = use_provide_root_context(|| Following(State::create(Follow::default()))).0;
-    use_language_with(language, follow, states.proj, |job: LspJob| match job {
-        LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
-            settings: lsp::settings_in(&directory),
-            directory,
-        }),
-        LspJob::Start { run, .. } => Some(LspAnswer::Started {
-            run,
-            server: Ok(lsp::Handle::to_nothing()),
-        }),
-        _ => None,
-    });
+    let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
+    use_language_with(
+        language,
+        follow,
+        located,
+        states.proj,
+        |job: LspJob| match job {
+            LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
+                settings: lsp::settings_in(&directory),
+                directory,
+            }),
+            LspJob::Start { run, .. } => Some(LspAnswer::Started {
+                run,
+                server: Ok(lsp::Handle::to_nothing()),
+            }),
+            _ => None,
+        },
+    );
     // The prompt the view's own Start button puts, drawn where the root draws it.
     rect()
         .expanded()
@@ -15428,7 +15889,8 @@ fn server_harness() -> Element {
     let mut asking = use_consume::<ServerAsking>().0;
 
     let follow = use_consume::<Following>().0;
-    let jobs = use_language_with(language, follow, states.proj, move |job| work(job));
+    let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
+    let jobs = use_language_with(language, follow, located, states.proj, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
     // The prompt is at the app's root, under the bar the control is in; here it is beside
     // it, which is the same thing to everything that reaches it.
@@ -15822,7 +16284,7 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
         line: 12,
         column: 4,
     };
-    ask_definition(language, &jobs, at.clone());
+    ask_where(language, &jobs, at.clone(), Wanted::Definition);
     settle(&mut test);
     assert!(
         nothing_pressed(&asks),
@@ -15843,7 +16305,7 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
         Some(AskedOfServer::Start(PathBuf::from("/p")))
     );
 
-    ask_definition(language, &jobs, at);
+    ask_where(language, &jobs, at, Wanted::Definition);
     settle(&mut test);
     assert!(
         nothing_pressed(&asks),
@@ -16110,7 +16572,7 @@ fn a_question_asked_while_it_is_starting_waits_for_it() {
         line: 3,
         column: 0,
     };
-    ask_definition(language, &jobs, at.clone());
+    ask_where(language, &jobs, at.clone(), Wanted::Definition);
 
     assert_eq!(
         next_job(&asks),
@@ -16211,9 +16673,17 @@ fn the_queue_keeps_the_last_question_and_every_press() {
     };
 
     let drained = worth_doing(
-        LspJob::Ask { run: 1, at: at(1) },
+        LspJob::Ask {
+            run: 1,
+            at: at(1),
+            want: Wanted::Definition,
+        },
         vec![
-            LspJob::Ask { run: 1, at: at(2) },
+            LspJob::Ask {
+                run: 1,
+                at: at(2),
+                want: Wanted::Definition,
+            },
             LspJob::ReadSettings {
                 directory: PathBuf::from("/old"),
             },
@@ -16228,7 +16698,11 @@ fn the_queue_keeps_the_last_question_and_every_press() {
             LspJob::ReadSettings {
                 directory: PathBuf::from("/p"),
             },
-            LspJob::Ask { run: 2, at: at(3) },
+            LspJob::Ask {
+                run: 2,
+                at: at(3),
+                want: Wanted::Definition,
+            },
         ]
         .into_iter(),
     );
@@ -16237,8 +16711,59 @@ fn the_queue_keeps_the_last_question_and_every_press() {
     assert_eq!(names(&drained), ["stop", "start", "read /p", "ask 3"]);
 
     // One of a kind is simply itself.
-    let alone = worth_doing(LspJob::Ask { run: 1, at: at(9) }, std::iter::empty());
+    let alone = worth_doing(
+        LspJob::Ask {
+            run: 1,
+            at: at(9),
+            want: Wanted::Definition,
+        },
+        std::iter::empty(),
+    );
     assert_eq!(names(&alone), ["ask 9"]);
+}
+
+/// The last question of **each** kind survives the drain: a reader asking where a name is
+/// used has not taken back the definition they asked for, and the two are answered by
+/// different parts of the app.
+#[test]
+fn a_question_about_uses_does_not_cancel_one_about_a_definition() {
+    let at = |line: u32| Lookup {
+        file: PathBuf::from("/p/src/main.rs"),
+        line,
+        column: 0,
+    };
+    let names = |jobs: &[LspJob]| -> Vec<String> {
+        jobs.iter()
+            .map(|job| match job {
+                LspJob::Ask { at, want, .. } => format!("{want:?} {}", at.line),
+                _ => "other".to_owned(),
+            })
+            .collect()
+    };
+
+    let drained = worth_doing(
+        LspJob::Ask {
+            run: 1,
+            at: at(1),
+            want: Wanted::Definition,
+        },
+        vec![
+            LspJob::Ask {
+                run: 1,
+                at: at(2),
+                want: Wanted::Uses,
+            },
+            LspJob::Ask {
+                run: 1,
+                at: at(3),
+                want: Wanted::Uses,
+            },
+        ]
+        .into_iter(),
+    );
+    // The definition asked for first is still asked, and the second of the two uses
+    // questions is the one that stands.
+    assert_eq!(names(&drained), ["Definition 1", "Uses 3"]);
 }
 
 /// A start over a directory nobody has agreed to is a question and not a start: a server

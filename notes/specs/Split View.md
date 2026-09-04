@@ -37,6 +37,9 @@ Back returns. Ctrl+click opens the definition in a new tab.
 
 Clicking a link does not select its line. A name the server cannot place does nothing.
 
+A name's context menu — a link, or the name where it is defined — has "Find uses of `foo`",
+which lists the name's uses in the Locations panel.
+
 ## Selection
 
 A drag selects text; Shift+click extends the selection to the clicked place. A drag in the

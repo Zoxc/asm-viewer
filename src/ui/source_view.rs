@@ -150,8 +150,8 @@ fn source_pieces(source: &SourceText, index: usize) -> Vec<(Color, String)> {
         .collect()
 }
 
-/// The columns of every name in row `index` that is a **call** to a function, a method or
-/// a macro: what the reader can follow to where it is defined.
+/// Every name in row `index` that is a function's, a method's or a macro's, each with
+/// whether it is being **declared** there rather than called.
 ///
 /// The colours are the whole of what the highlighting says here -- `source_pieces` answers
 /// a colour per run and not the capture it came from -- and `function_fg` is exactly
@@ -161,16 +161,17 @@ fn source_pieces(source: &SourceText, index: usize) -> Vec<(Color, String)> {
 /// them: the **first** name on a row that begins a function the file's own parse found is
 /// that function's own, and a name straight after the `fn` keyword is being declared
 /// whether or not it has a body -- which a trait's method has not, so it is in no such
-/// list to be found in. Only that one name is passed over, not the row: a body written on
-/// the declaration's own line, as a trait's default method usually is, calls from there.
+/// list to be found in. Only that one name is the declaration's, not the row: a body
+/// written on the declaration's own line, as a trait's default method usually is, calls
+/// from there.
 ///
-/// A capture is its own colour run, so a link is always one whole piece and never part of
+/// A capture is its own colour run, so a name is always one whole piece and never part of
 /// one: the row's spans are cut where they are cut whatever the pointer is over, which is
 /// what keeps hovering from re-shaping the row and widening the listing.
 ///
 /// The columns are UTF-16 units of the row as drawn, which is what a source row's columns
 /// are everywhere else and what the language server takes.
-pub(crate) fn links_in(source: &SourceText, index: usize) -> Vec<Range<usize>> {
+pub(crate) fn names_in(source: &SourceText, index: usize) -> Vec<(Link, bool)> {
     let line = index as u32 + 1;
     // The name of a function beginning here is still to come, and is the first of them:
     // `pub`, an `async` or a generic's bound is drawn in no function's colour.
@@ -180,7 +181,7 @@ pub(crate) fn links_in(source: &SourceText, index: usize) -> Vec<Range<usize>> {
         .iter()
         .any(|function| *function.lines.start() == line);
     let (function, keyword) = (palette().function_fg, palette().keyword_fg);
-    let mut links = Vec::new();
+    let mut names: Vec<(Link, bool)> = Vec::new();
     let mut column = 0;
     // Whether the last run with anything in it was the `fn` keyword, which makes the name
     // after it a declaration and not a call.
@@ -190,18 +191,49 @@ pub(crate) fn links_in(source: &SourceText, index: usize) -> Vec<Range<usize>> {
         let word = text.trim();
         if !word.is_empty() {
             if colour == function {
+                let link = Link {
+                    columns: column..column + units,
+                    name: word.to_owned(),
+                };
                 // Either answer makes this name the declaration's; whichever said so,
                 // the next name in the row is a call.
-                if !declaring && !declared {
-                    links.push(column..column + units);
-                }
+                names.push((link, declaring || declared));
                 declared = false;
             }
             declaring = colour == keyword && word == "fn";
         }
         column += units;
     }
-    links
+    names
+}
+
+/// The columns of every name in the row that is a **call**: what the reader can follow to
+/// where it is defined, a name where one is defined being nothing to follow.
+pub(crate) fn links_in(source: &SourceText, index: usize) -> Vec<Link> {
+    names_in(source, index)
+        .into_iter()
+        .filter(|(_, declared)| !declared)
+        .map(|(link, _)| link)
+        .collect()
+}
+
+/// One link in a row: the columns it spans, and the name it spells. The name is the
+/// link's own text, so what a menu built from a press calls it is what the reader
+/// right-clicked.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Link {
+    pub(crate) columns: Range<usize>,
+    pub(crate) name: String,
+}
+
+/// The name `column` is inside, and `None` where it is over none. **Declared or called**,
+/// unlike a link: where a name is defined is where a reader asks what uses it, and the
+/// question is about the name and not about the door beside it.
+pub(crate) fn name_at(source: &SourceText, index: usize, column: usize) -> Option<Link> {
+    names_in(source, index)
+        .into_iter()
+        .find(|(link, _)| link.columns.contains(&column))
+        .map(|(link, _)| link)
 }
 
 /// The text row `index` draws, as the clipboard sees a character selection of it.
@@ -258,10 +290,13 @@ impl Component for SourceRow {
             // server to ask, and a press with Ctrl held opens the definition in a tab of
             // its own -- the rule every door inside a pane follows.
             links: match self.linking {
-                true => links_in(&self.source, index),
+                true => links_in(&self.source, index)
+                    .into_iter()
+                    .map(|link| link.columns)
+                    .collect(),
                 false => Vec::new(),
             },
-            on_link: following.map(|(language, follow, jobs)| {
+            on_link: following.clone().map(|(language, follow, jobs)| {
                 let file = self.file.clone();
                 let row = self.index as u32;
                 Rc::new(move |columns: Range<usize>| {
@@ -292,15 +327,45 @@ impl Component for SourceRow {
         // the symbol. The function this row is a line of is looked for on the press and
         // not per render: it is a walk of the file's functions, and a row is rendered
         // far more often than it is right-clicked.
-        let menu: Rc<dyn Fn(Event<PressEventData>)> = Rc::new({
+        let menu: Rc<dyn Fn(Event<PressEventData>, Option<usize>)> = Rc::new({
             let at = at.clone();
             let subject = self.drives.map(|tab| (tab, self.file.clone()));
             let source = self.source.clone();
-            move |e: Event<PressEventData>| {
+            // Whom to ask where a name is used, where this row's names are links at all.
+            // A row drawing none is a row over no server, and a question nobody could
+            // answer is not offered.
+            let asking = self
+                .linking
+                .then(|| following.clone())
+                .flatten()
+                .map(|(language, _, jobs)| (language, jobs));
+            move |e: Event<PressEventData>, column| {
                 let function = functions::enclosing(&source.0.functions, at.line).cloned();
+                // The name the press was on, which is what its uses would be of. Looked
+                // for on the press and not per render, as the function is.
+                let uses = column
+                    .and_then(|column| name_at(&source, index, column))
+                    .zip(asking.clone())
+                    .map(|(link, (language, jobs))| {
+                        let at = at.clone();
+                        let name = link.name.clone();
+                        MenuButton::new()
+                            .on_press(move |_| {
+                                find_uses(
+                                    located,
+                                    dock,
+                                    language,
+                                    &jobs,
+                                    at.clone(),
+                                    name.clone(),
+                                    link.columns.start as u32,
+                                )
+                            })
+                            .child(format!("Find uses of {}", link.name))
+                    });
                 ContextMenu::open_from_event(
                     &e,
-                    locate_menu(located, dock, at.clone(), subject.clone(), function),
+                    locate_menu(located, dock, at.clone(), subject.clone(), function, uses),
                 );
             }
         });

@@ -162,6 +162,17 @@ pub(crate) struct Lookup {
     pub(crate) column: u32,
 }
 
+/// Which question about a place is being asked. The two go out the same way and come
+/// back the same way, so this is what tells one answer from the other -- and what keeps a
+/// reader asking for uses from cancelling a definition still in flight (`worth_doing`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Wanted {
+    /// Where the name is defined, which `ui::follow` opens.
+    Definition,
+    /// Everywhere it is used, which the Locations panel lists.
+    Uses,
+}
+
 /// What the worker is asked to do.
 pub(crate) enum LspJob {
     /// Start a server over `directory` and shake hands with it. The channel is what the
@@ -180,8 +191,8 @@ pub(crate) enum LspJob {
     /// here rather than on the UI thread; it is this worker's and not the build worker's
     /// because what it answers is what a start has to carry.
     ReadSettings { directory: PathBuf },
-    /// Where what is at a place is defined.
-    Ask { run: u64, at: Lookup },
+    /// What is at a place: where it is defined, or everywhere it is used.
+    Ask { run: u64, at: Lookup, want: Wanted },
     /// Let go of the server: it has been stopped already, and this is what reaps it.
     Stop,
 }
@@ -193,9 +204,11 @@ pub(crate) enum LspAnswer {
         run: u64,
         server: Result<lsp::Handle, lsp::Failure>,
     },
-    Defined {
+    /// What one question came back with, and which question it was.
+    Answered {
         run: u64,
-        places: Result<Vec<lsp::Place>, lsp::Failure>,
+        want: Wanted,
+        reply: Result<Reply, lsp::Failure>,
     },
     /// What the project's own settings file said. Named by the directory it was read in
     /// and not by a run: it is about a project and not about a process.
@@ -203,6 +216,16 @@ pub(crate) enum LspAnswer {
         directory: PathBuf,
         settings: Result<lsp::Settings, lsp::Unreadable>,
     },
+}
+
+/// What an answer holds, which is what was asked for.
+///
+/// A definition is places and nothing more -- what opens one is a file and a line. Uses
+/// are grouped and carry the text of every line they are on, since the lines are **read
+/// here**: the read blocks, and this is the thread that may block.
+pub(crate) enum Reply {
+    Defined(Vec<lsp::Place>),
+    Used(uses::Uses),
 }
 
 /// The blocking half, and the only part that talks to a server.
@@ -246,14 +269,27 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 };
                 Some(LspAnswer::Started { run, server })
             }
-            LspJob::Ask { run, at } => {
-                let places = talking.as_mut()?.definition(&at.file, at.line, at.column);
+            LspJob::Ask { run, at, want } => {
+                let talk = talking.as_mut()?;
+                let places = match want {
+                    Wanted::Definition => talk.definition(&at.file, at.line, at.column),
+                    Wanted::Uses => talk.references(&at.file, at.line, at.column),
+                };
                 // A conversation that ended is a server that is gone, so it is let go of
                 // here and reported as the failure it is.
                 if matches!(places, Err(lsp::Failure::Broken(_))) {
                     *talking = None;
                 }
-                Some(LspAnswer::Defined { run, places })
+                // The uses are grouped and their lines read here, with the ask: the
+                // reading is what the panel draws and a file read is what this thread is
+                // for.
+                let reply = places.map(|places| match want {
+                    Wanted::Definition => Reply::Defined(places),
+                    Wanted::Uses => Reply::Used(uses::Uses::of(&places, |path| {
+                        std::fs::read_to_string(path).ok()
+                    })),
+                });
+                Some(LspAnswer::Answered { run, want, reply })
             }
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
                 settings: lsp::settings_in(&directory),
@@ -269,20 +305,31 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
 
 /// The jobs worth doing, of the one taken off the channel and everything queued behind it.
 ///
-/// Only the last question is asked: a reader clicking twice wants the second answer, and
-/// the first is a conversation the second would only wait behind. The same for reading the
+/// Only the last question **of each kind** is asked: a reader clicking twice wants the
+/// second answer, and the first is a conversation the second would only wait behind -- but
+/// a reader who asks for a name's uses has not taken back the definition they asked for,
+/// and the two are answered by different parts of the app. The same for reading the
 /// project's settings, which a directory typed a letter at a time asks for once a
 /// keystroke and only the last of which is about the project that is open. Starting and
 /// stopping are never dropped -- they are what the reader pressed.
 pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -> Vec<LspJob> {
     let jobs: Vec<LspJob> = std::iter::once(first).chain(queued).collect();
-    let last = |wanted: fn(&LspJob) -> bool| jobs.iter().rposition(wanted);
-    let asked = last(|job| matches!(job, LspJob::Ask { .. }));
-    let read = last(|job| matches!(job, LspJob::ReadSettings { .. }));
+    let last = |wanted: &dyn Fn(&LspJob) -> bool| jobs.iter().rposition(|job| wanted(job));
+    let asked = |want: Wanted| {
+        last(&|job| matches!(job, LspJob::Ask { want: asked, .. } if *asked == want))
+    };
+    let (defining, using) = (asked(Wanted::Definition), asked(Wanted::Uses));
+    let read = last(&|job| matches!(job, LspJob::ReadSettings { .. }));
     jobs.into_iter()
         .enumerate()
         .filter(|(at, job)| match job {
-            LspJob::Ask { .. } => Some(*at) == asked,
+            LspJob::Ask {
+                want: Wanted::Definition,
+                ..
+            } => Some(*at) == defining,
+            LspJob::Ask {
+                want: Wanted::Uses, ..
+            } => Some(*at) == using,
             LspJob::ReadSettings { .. } => Some(*at) == read,
             _ => true,
         })
@@ -315,6 +362,7 @@ pub(crate) struct Talking(pub(crate) State<Language>);
 pub(crate) fn use_language_with(
     mut language: State<Language>,
     mut follow: State<Follow>,
+    mut located: State<Located>,
     mut proj: State<OpenProject>,
     work: impl Fn(LspJob) -> Option<LspAnswer> + Send + 'static,
 ) -> LspJobs {
@@ -389,41 +437,63 @@ pub(crate) fn use_language_with(
                             ..held
                         });
                     }
-                    LspAnswer::Defined { run, places } => {
+                    LspAnswer::Answered { run, want, reply } => {
                         let held = language.peek().clone();
                         if held.run != run {
                             continue;
                         }
-                        let why = match places {
-                            Ok(places) => {
-                                // Whoever asked takes it, and an answer naming nowhere
-                                // is an answer: the click was a question, not a promise.
-                                // Bound before the write, as ever.
+                        // Whichever question it was, whoever asked it takes the answer,
+                        // and gives up on it where there is none. Bound before the write,
+                        // as ever.
+                        let mut take = |reply: Option<Reply>| match want {
+                            Wanted::Definition => {
+                                let places = match &reply {
+                                    Some(Reply::Defined(places)) => places.as_slice(),
+                                    _ => &[],
+                                };
                                 let mut waiting = follow.peek().clone();
-                                if waiting.answer(run, &places) {
+                                let moved = match reply.is_some() {
+                                    true => waiting.answer(run, places),
+                                    false => waiting.give_up(run),
+                                };
+                                if moved {
                                     follow.set(waiting);
                                 }
+                            }
+                            Wanted::Uses => {
+                                let found = match reply {
+                                    Some(Reply::Used(uses)) => uses,
+                                    _ => uses::Uses::default(),
+                                };
+                                let mut waiting = located.peek().clone();
+                                // Nothing found and nothing to be found both leave the
+                                // panel saying so: a question that stayed pending would
+                                // say it was still looking for ever.
+                                if waiting.answer_uses(run, found) {
+                                    located.set(waiting);
+                                }
+                            }
+                        };
+                        let why = match reply {
+                            Ok(reply) => {
+                                // An answer naming nowhere is an answer: the click was a
+                                // question, not a promise.
+                                take(Some(reply));
                                 continue;
                             }
                             // The server refused the question -- it is still reading the
                             // project, or has no such file of its own. Nothing found, and
                             // not a server to say anything about: it is answering.
                             Err(failure @ lsp::Failure::Refused { .. }) => {
-                                log::warn!("the language server refused a definition: {failure}");
-                                let mut waiting = follow.peek().clone();
-                                if waiting.give_up(run) {
-                                    follow.set(waiting);
-                                }
+                                log::warn!("the language server refused a question: {failure}");
+                                take(None);
                                 continue;
                             }
                             Err(failure) => failure,
                         };
                         // What is left is a server that stopped answering, which is the
                         // one thing the control has to show.
-                        let mut waiting = follow.peek().clone();
-                        if waiting.give_up(run) {
-                            follow.set(waiting);
-                        }
+                        take(None);
                         let held = language.peek().clone();
                         language.set(Language {
                             state: Lsp::Failed(why.to_string()),
@@ -664,20 +734,29 @@ pub(crate) fn stop_server(mut language: State<Language>, jobs: &LspJobs) {
     jobs.send(LspJob::Stop);
 }
 
-/// Where what is at a place is defined. The answer is the worker's, and arrives under the
-/// run it was asked in, which is what this hands back so a caller can tell its own answer
-/// from another's.
+/// Ask `want` about the place `at`. The answer is the worker's, and arrives under the run
+/// it was asked in, which is what this hands back so a caller can tell its own answer from
+/// another's.
 ///
 /// `None` with no server: there is nobody to ask, and a question is not what starts one --
 /// that is the control, and only the reader presses it. One that is still starting is
 /// asked all the same, the question queueing behind the start to be answered once there is
 /// somebody to answer it, and finding nothing to talk to if the start failed.
-pub(crate) fn ask_definition(language: State<Language>, jobs: &LspJobs, at: Lookup) -> Option<u64> {
+pub(crate) fn ask_where(
+    language: State<Language>,
+    jobs: &LspJobs,
+    at: Lookup,
+    want: Wanted,
+) -> Option<u64> {
     let held = language.peek().clone();
     if !held.started() {
         return None;
     }
-    jobs.send(LspJob::Ask { run: held.run, at });
+    jobs.send(LspJob::Ask {
+        run: held.run,
+        at,
+        want,
+    });
     Some(held.run)
 }
 

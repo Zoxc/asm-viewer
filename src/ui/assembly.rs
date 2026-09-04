@@ -999,11 +999,13 @@ impl Component for InstructionRow {
         // The menu: the line's locations, where the debug info gives the row a line; the
         // row shown among its neighbours, where it is not already; and the symbol
         // bookmarked, always.
-        let menu: Rc<dyn Fn(Event<PressEventData>)> = Rc::new({
+        let menu: Rc<dyn Fn(Event<PressEventData>, Option<usize>)> = Rc::new({
             let at = at.clone();
-            move |e: Event<PressEventData>| {
+            // The column is the source pane's business: nothing in an instruction row is
+            // a name a server could be asked about.
+            move |e: Event<PressEventData>, _| {
                 let menu = match &at {
-                    Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None),
+                    Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None, None),
                     None => Menu::new(),
                 };
                 let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {

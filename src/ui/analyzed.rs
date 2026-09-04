@@ -240,7 +240,9 @@ pub(crate) fn answer(question: Question) -> Answer {
             }
         }
         Question::Locate { query, objects } => Answer::Located {
-            symbols: compiled::compiled_from(&objects, &query.at.file, query.lines()),
+            symbols: query.symbols_wanted().map_or_else(Vec::new, |lines| {
+                compiled::compiled_from(&objects, &query.at.file, lines)
+            }),
             query,
         },
         Question::Marks { file, objects } => Answer::Marked {
@@ -849,7 +851,9 @@ pub(crate) fn use_analysis_with(
     // A file closed afterwards is the effect below.
     use_side_effect(move || {
         let pending = located.read().pending().cloned();
-        let Some(query) = pending else {
+        // A question about a name's uses is the language server's, asked where it was
+        // pressed and answered into the same panel; nothing here can answer it.
+        let Some(query) = pending.filter(|query| query.symbols_wanted().is_some()) else {
             return;
         };
         let _ = requests_for_locate.try_send(Question::Locate {

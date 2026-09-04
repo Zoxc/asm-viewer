@@ -67,11 +67,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 - [ ] A file search dialog on Ctrl+P: type part of a path and open the file it names, the
   way an editor's quick-open does.
-- [ ] Find every use of a name, not only where it is defined. `textDocument/references` is
-  the same shape of question as the definition, and every answer is a file and a line the
-  source-line index already turns into symbols. The decisions are whether the hits are the
-  Locations panel's rows or a panel of their own, and what a hit opens: the line it is on, or
-  the symbol compiled from it.
 - [ ] Hold a question the server answered with nothing, and ask it again once the server is
   ready. rust-analyzer answers `null` to every question while it is still loading the project,
   which is the same answer as a name it cannot place (`notes/upstream/rust-analyzer.md`), so a

@@ -175,7 +175,7 @@ fn a_definition_answer_is_read_in_each_shape_it_may_come_in() {
         file: PathBuf::from("/p/src/main.rs"),
         // The protocol's line 11 is the twelfth line, and its column is kept as it came.
         line: 12,
-        column: 4,
+        columns: 4..9,
     };
 
     let location = json!({ "uri": "file:///p/src/main.rs", "range": range });
@@ -185,8 +185,9 @@ fn a_definition_answer_is_read_in_each_shape_it_may_come_in() {
     assert_eq!(places(&json!([link])), vec![place]);
 }
 
-/// The line is what opens the file, so an answer that leaves the column out is still a
-/// place -- read at column 0, where a caret with nothing better to say sits anyway.
+/// The line is what opens the file, so an answer that leaves the columns out is still a
+/// place -- read as an empty run at column 0, where a caret with nothing better to say
+/// sits anyway.
 #[test]
 fn an_answer_with_no_column_is_read_at_column_zero() {
     let range = json!({ "start": { "line": 0 }, "end": { "line": 0 } });
@@ -196,9 +197,22 @@ fn an_answer_with_no_column_is_read_at_column_zero() {
         vec![Place {
             file: PathBuf::from("/p/x.rs"),
             line: 1,
-            column: 0,
+            columns: 0..0,
         }]
     );
+}
+
+#[test]
+fn a_range_that_ends_on_another_line_names_no_columns() {
+    let answer = json!([{
+        "uri": "file:///p/src/main.rs",
+        "range": { "start": { "line": 3, "character": 7 },
+                   "end": { "line": 5, "character": 2 } },
+    }]);
+    let found = places(&answer);
+    assert_eq!(found[0].line, 4);
+    // Empty, and where the name begins: a run that selects nothing.
+    assert_eq!(found[0].columns, 7..7);
 }
 
 #[test]
@@ -300,7 +314,47 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
         vec![Place {
             file: PathBuf::from("/p/src/other.rs"),
             line: 4,
-            column: 8,
+            columns: 8..14,
+        }]
+    );
+}
+
+#[test]
+fn uses_are_asked_for_where_the_reader_pointed_and_leave_the_definition_out() {
+    let (said, found, _notes) = against(
+        |fake, message| {
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": [{
+                    "uri": "file:///p/src/other.rs",
+                    "range": { "start": { "line": 6, "character": 12 },
+                               "end": { "line": 6, "character": 16 } },
+                }],
+            }));
+        },
+        |talk| {
+            talk.references(Path::new("/p/src/main.rs"), 41, 17)
+                .expect("an answer")
+        },
+    );
+
+    assert_eq!(said[0]["method"], json!("textDocument/references"));
+    assert_eq!(
+        said[0]["params"]["position"],
+        json!({ "line": 41, "character": 17 })
+    );
+    // Where the name is defined is not a use of it.
+    assert_eq!(
+        said[0]["params"]["context"],
+        json!({ "includeDeclaration": false })
+    );
+    assert_eq!(
+        found,
+        vec![Place {
+            file: PathBuf::from("/p/src/other.rs"),
+            line: 7,
+            columns: 12..16,
         }]
     );
 }
