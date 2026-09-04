@@ -11305,6 +11305,24 @@ fn an_object_row_opens_from_its_menu() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// A directory's row has a menu of its own, and its one item is the file manager's: a
+/// folder is as showable as a file, and there is no object inside one to open.
+#[test]
+fn a_directory_row_offers_the_file_manager_alone() {
+    let (mut test, _states, directory) = files_over(line!());
+    std::fs::create_dir_all(directory.join("a")).expect("creating the test directory");
+    press(&mut test, "project");
+    press(&mut test, "project");
+
+    let row = centre_of(&test, "a");
+    right_click(&mut test, row);
+    settle(&mut test);
+
+    assert!(label_area(&test, "Show in file manager").is_some());
+    assert!(label_area(&test, "Open file").is_none());
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// A file past what the source cache will read opens nothing when pressed -- the tab
 /// could only say so -- and still has its menu, since what it is is not judged here.
 #[test]

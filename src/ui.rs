@@ -48,6 +48,7 @@ pub(crate) use crate::project::{
     self, Cargo, Details, Document, Project, ProjectId, Recent, SavedDocument, Selection, Session,
 };
 pub(crate) use crate::rescue;
+pub(crate) use crate::reveal;
 pub(crate) use crate::rows::RowSelection;
 pub(crate) use crate::scratchpad::{
     run_in, Build, Dependency, Ended, Failure, Half, PadId, PadListing, PadOrder, Problem,

@@ -1,6 +1,7 @@
 //! The Files view: the project's directory as a tree, read one level per unfold. A file's
 //! row opens it as a source-driven tab, and its context menu offers it to `open_binaries`,
-//! which is where whether it is an object is decided; a directory's row folds.
+//! which is where whether it is an object is decided, and to the desktop's file manager;
+//! a directory's row folds, and its menu is the file manager alone.
 
 use super::*;
 
@@ -86,23 +87,32 @@ impl Component for EntryRow {
                         }
                     }
                 })
-                // Every file's menu: opening a binary is a deliberate act, so it is not
-                // the press, and whether the file *is* one is the parser's question, asked
-                // when the reader chooses to open it. The item is Close when the path is
-                // already loaded or loading, since opening a path twice puts a second copy
-                // of each of its objects in the list. Needs the `ContextMenuViewer`
-                // mounted at the root; opening one without it panics.
-                .maybe(fold.is_none(), move |row| {
-                    row.on_secondary_down(move |e: Event<PressEventData>| {
-                        let loaded = states.objects.peek().iter().any(|o| o.path == path)
-                            || states.loading.peek().is_loading(&path);
-                        let menu = if loaded {
-                            close_menu(states, path.clone())
-                        } else {
-                            open_menu(states.objects, states.loading, path.clone())
-                        };
-                        ContextMenu::open_from_event(&e, menu);
-                    })
+                // Every row's menu. A file's opens with the binary item: opening a
+                // binary is a deliberate act, so it is not the press, and whether the
+                // file *is* one is the parser's question, asked when the reader chooses
+                // to open it. That item is Close when the path is already loaded or
+                // loading, since opening a path twice puts a second copy of each of its
+                // objects in the list. A directory has no such item, having no object in
+                // it to open. Under whatever there is, for either kind of row, sits the
+                // item that shows the path in the desktop's file manager. Needs the
+                // `ContextMenuViewer` mounted at the root; opening one without it panics.
+                .on_secondary_down(move |e: Event<PressEventData>| {
+                    let menu = match fold {
+                        Some(_) => Menu::new(),
+                        None => {
+                            let loaded = states.objects.peek().iter().any(|o| o.path == path)
+                                || states.loading.peek().is_loading(&path);
+                            if loaded {
+                                close_menu(states, path.clone())
+                            } else {
+                                open_menu(states.objects, states.loading, path.clone())
+                            }
+                        }
+                    };
+                    // Appended rather than built into either, so that the Objects rows,
+                    // which share `close_menu`, keep the one item they had.
+                    let menu = menu.child(reveal_item(path.clone()));
+                    ContextMenu::open_from_event(&e, menu);
                 })
                 .child(rect().width(Size::px(self.row.depth as f32 * TREE_INDENT)))
                 .child(

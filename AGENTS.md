@@ -104,6 +104,9 @@ command.
 - `src/project.rs` — projects: their identity, the two files each is stored in, the save policy,
   and which language server each is read with.
 - `src/rescue.rs` — a stored file that will not parse, moved aside before a write replaces it.
+- `src/reveal.rs` — showing a file or a folder in the desktop's file manager: the
+  programs each platform is asked with, in the order they are tried, and the thread they
+  are run on.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
 - `src/source.rs` — source files read off disk and cached by path, failures included; and
   `Language`, the one list of extensions the app knows, which says what compiles.

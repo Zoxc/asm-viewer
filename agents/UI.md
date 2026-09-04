@@ -253,7 +253,7 @@ not by the tab going out. It closes the tab itself rather than taking a handler,
 `PartialEq` where a closure is not: the `DocId` is the prop and the five states a close needs come
 from the contexts, the same ones the header reads a step above it.
 
-A right-click on a document's header opens a menu of two items. **Close other tabs** is
+A right-click on a document's header opens a menu of three items. **Close other tabs** is
 `close_others`: the tab it was opened on stays, every other *document* in the panel goes, and a view
 sharing the panel is left where it is. A view is not a document, and the × it has no place for is
 the same argument. It is its own function rather than `close_tab` in a loop, because each of those
@@ -265,6 +265,32 @@ first row is left out when nothing else is open, rather than drawn as a row that
 and the header asks the panel for that at the **press**: whether a tab has company is not something
 a header draws, so subscribing to the panel for it would re-render every tab whenever any one of
 them opened.
+
+**Show in file manager** is the third, the same `reveal_item` a Files row's menu ends with
+(`agents/Sidebar.md`), on `Document::file`: the binary for the two assembly-driven kinds and the
+source file itself for a file. It calls `src/reveal.rs`, which is a list of programs per platform
+run in order until one works, **on a thread of its own** -- one of them is a spawn and a wait, and
+freya's executor is the UI thread. On the freedesktop desktops the call is on
+`org.freedesktop.FileManager1` on the session bus, made through `gdbus` or `dbus-send` rather than
+by linking a D-Bus library; macOS is `open`, and Windows `explorer`, whose exit status is 1 either way and so is judged by
+whether it started. The path is made absolute and its trailing separator
+dropped before the URI is built, a relative one there naming a host rather than a file, and encoded
+a byte at a time, which is what lets both D-Bus calls take it unquoted. `explorer` is the one that
+does need quoting, its path going inside the switch it parses itself, and the backslashes ending a
+path are doubled there, `CommandLineToArgvW` halving a run of them before a quote.
+
+**Showing a folder means opening it, and every rung of every ladder is told which kind it has.**
+Each platform has one call that *reveals* -- the window around what it is given, with the item
+picked out, which is what showing a file means -- and given a folder that call opens the parent,
+which is not what showing a folder means. That was the first version of this and it was wrong on
+all three. So each has a second spelling for a folder: the D-Bus interface has `ShowFolders` beside
+`ShowItems`, macOS drops `-R`, and Windows drops `/select,`. The freedesktop pair is checked
+against a live session bus -- the handler runs as `dolphin --new-window --select <path>` for the
+first and `--new-window <path>` for the second. `xdg-open`, the last word when no D-Bus call
+answers, picks nothing out and can only open a window, so it opens the window each call above ends
+at -- a file's folder, and a folder itself. **When nothing answers the reader gets a box saying so**, the kind a panic uses: they
+pressed something, and an item that does nothing at all leaves them wondering whether the app
+heard.
 
 The document panel's tab bar is the horizontally scrolling one the strip used to be (`chip_strip`),
 because documents are opened by the dozen; a view panel's stays a plain row, nine views always

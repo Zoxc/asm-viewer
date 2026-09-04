@@ -16,6 +16,7 @@ mod pixels;
 mod process;
 mod project;
 mod rescue;
+mod reveal;
 mod rows;
 mod scratchpad;
 mod search;

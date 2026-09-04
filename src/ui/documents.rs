@@ -482,11 +482,11 @@ pub(crate) fn land_on(
 /// The menu a document's tab opens on a right-click.
 ///
 /// The menu a document's header opens on a right-click: **Close other tabs** where the tab
-/// has company, and the bookmark item for the tab's document always. Built per press, as
-/// [`close_menu`] is, closing over the tab it was opened on; the states come in as
-/// arguments because this is called from an event handler, where no hook may run. The
-/// header says whether there is another document to close, so the one row that would do
-/// nothing is left out rather than drawn dead.
+/// has company, and then the bookmark item and **Show in file manager**, both for the
+/// tab's document, always. Built per press, as [`close_menu`] is, closing over the tab it
+/// was opened on; the states come in as arguments because this is called from an event
+/// handler, where no hook may run. The header says whether there is another document to
+/// close, so the one row that would do nothing is left out rather than drawn dead.
 pub(crate) fn tab_menu(
     states: ProjectStates,
     keep: DocId,
@@ -505,6 +505,8 @@ pub(crate) fn tab_menu(
         ..
     } = states;
 
+    let file = document.file().to_path_buf();
+
     Menu::new()
         .maybe_child(others.then(|| {
             MenuButton::new()
@@ -516,6 +518,9 @@ pub(crate) fn tab_menu(
                 .child("Close other tabs")
         }))
         .child(bookmark_item(bookmarks, objects, document, "Add bookmark"))
+        // The file the tab is a place in: the binary for an assembly tab, the source
+        // file for a file's.
+        .child(reveal_item(file))
 }
 
 /// The menu a Files row over an object that is not loaded opens on a right-click: one

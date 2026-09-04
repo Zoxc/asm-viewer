@@ -229,8 +229,12 @@ whether anything parses and a file that does not leaves nothing behind but a `â€
 the load ends. When the path is already loaded or loading the item is instead the Objects row's own
 **Close file**, since opening a path twice puts a second copy of each of its objects in the list.
 That item spawns with `spawn_forever` and not `spawn`, because a task belongs to the scope that
-spawned it and the menu's button is unmounted by the press that chose it (`AGENTS.md`'s gotchas). A
-directory has no menu.
+spawned it and the menu's button is unmounted by the press that chose it (`AGENTS.md`'s gotchas).
+Under whichever of the two is drawn sits **Show in file manager**, the same `reveal_item` a
+document's tab carries (`agents/UI.md`), on the row's own path: appended to the menu here rather
+than built into either of them, so that the Objects rows, which share `close_menu`, keep the one
+item they had. **A directory's menu is that item alone**: a folder is as showable as a file, and
+there is no object inside one to open.
 
 **The Project view** (`Tab::Project`) is what a project's `name` and `directory` are finally set
 from. It is **one view and not two**, where `notes/Goals.md` asks for a project view and a

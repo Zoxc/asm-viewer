@@ -71,6 +71,14 @@ impl Selection {
             Selection::Symbol(symbol) => symbol.object.path == path,
         }
     }
+
+    /// The file it came out of: an archive for a member, and never an object's name.
+    pub fn file(&self) -> &Path {
+        match self {
+            Selection::Object(object) => &object.path,
+            Selection::Symbol(symbol) => &symbol.object.path,
+        }
+    }
 }
 
 impl PartialEq for Selection {
@@ -111,6 +119,17 @@ impl Document {
             Document::Assembly(selection) => selection.in_file(path),
             Document::Source(_) => false,
             Document::Code(object) => object.path == path,
+        }
+    }
+
+    /// The file on disk this is a place in: the binary for the two assembly-driven
+    /// kinds, and the source file itself for a file. Spelled the way the document is,
+    /// so a relative one stays relative.
+    pub fn file(&self) -> &Path {
+        match self {
+            Document::Assembly(selection) => selection.file(),
+            Document::Source(file) => Path::new(&**file),
+            Document::Code(object) => &object.path,
         }
     }
 

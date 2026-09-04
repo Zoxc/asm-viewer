@@ -160,6 +160,17 @@ leaves this list when it is. That is a move made on request, like everything els
   would take to move it.
 - [ ] Make the line-number gutter gray, in the scratchpad's editor and in the Source pane alike,
   so the numbers read as a margin beside the code and not as a column of it.
+- [ ] No text cursor over a scroll bar. The I-beam a code row sets follows the pointer onto the
+  bar beside it and stays there, so the one control in the pane that is not text is the one
+  wearing text's cursor. `set_icon` (`src/ui/code_row.rs`) is the only writer and a row's own
+  `on_pointer_out` the only thing that puts it back, so the first thing to find out is whether
+  leaving a row for a bar drawn over it fires that `out` at all — if it does, the icon is being
+  set again by a move the row still receives under the bar, and if it does not, nothing ever
+  resets it. Note what the answer cannot be: freya 0.4 keeps the scroll view's insides to
+  itself (`ScrollView`/`VirtualScrollView` pass `theme: None`, the override fields are
+  `pub(crate)` — the same wall the thicker-scrollbars item is deferred behind), so no
+  `CursorArea` can be put on the bar. What is left is the pane above it saying the arrow and
+  the rows overriding that, which wants checking against how freya resolves two of them.
 - [ ] Give the Assembly pane one background, with a listing on it or without. The pane paints
   `asm_pane_bg` — a shade off the interface white, which is what marks it out as the side the
   code is read on — and two of the four answers it can give instead of a listing paint over it:
@@ -201,7 +212,7 @@ leaves this list when it is. That is a move made on request, like everything els
   decisions are what document kind a file is (`Document` names a place in a binary or a file
   today, and a whole binary is neither), and whether the timings are always collected or
   gathered only when something asks.
-- [ ] Show a file in the desktop's file manager, from a document's tab menu and from a
+- [x] Show a file in the desktop's file manager, from a document's tab menu and from a
   Files panel row's. A reader who has found a file here often wants it where the rest of
   their tools are, and the app knows the path already. The item is the same one in both
   places, and the decision is how it is done per desktop -- what to call on each of the
@@ -228,6 +239,21 @@ leaves this list when it is. That is a move made on request, like everything els
   bars that puts the pane the tab is not driven from away and brings it back. Only the
   Assembly pane had a bar, so nothing but its own chip said which file a source-driven tab
   was reading. What the control says is kept per tab and beats the file's own answer above.
+- [ ] Ctrl+S as a second way to the Search panel, and the box seeded with what is picked out.
+  Two halves of one press. **The chord**: `is_search_chord` is the one place Ctrl+Shift+F is
+  spelt, so a second spelling goes there, and what has to be settled is that Ctrl+S means Save
+  everywhere else — this app has no explicit save, `project::flush` running off a timer and the
+  close hook (`agents/Persistence.md`), so there is nothing for it to collide with here except
+  a reader's habit. The scratchpad's editor is where that habit will bite, being the one pane
+  they type into; a box declines the find chord already (`FilterBar`), which is the shape of
+  whatever it is declined by. **The seed**: `reach_search` writes `focus` and raises the panel
+  today, so the text is one more thing to carry — the run picked out in a code pane, which is
+  the same text Ctrl+C would copy (`ui/marks.rs`, `src/chars.rs`). Three things to decide with
+  it: that a run of *rows* is a page of disassembly and not a search term, so this is the
+  character run and only within one row; that nothing picked out should leave whatever is in
+  the box rather than empty it; and whether the seed runs the search or only fills the box and
+  picks the text out, the way an editor does, leaving Enter to ask — the box already has a
+  submit counter for that.
 - [x] Make that search reachable and ranked. Ranked: under a filter the rows come back by how
   well they matched — a match at the start of the name, then one at the start of a word (the
   Word toggle's own `\b`), then one inside a word, the shorter name first among equals and the
