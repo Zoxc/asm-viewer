@@ -169,7 +169,8 @@ pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
                 format!("{address:016X} {mark} {values}")
             })
             .unwrap_or_default(),
-        Some(Row::Empty { .. }) | Some(Row::Separator { .. }) | None => String::new(),
+        Some(Row::Rule { .. } | Row::Space { .. } | Row::Empty { .. } | Row::Separator { .. })
+        | None => String::new(),
     }
 }
 
@@ -200,7 +201,8 @@ pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
                 text_line(Some(mark), &values)
             })
             .unwrap_or_default(),
-        Some(Row::Empty { .. }) | Some(Row::Separator { .. }) | None => Line::default(),
+        Some(Row::Rule { .. } | Row::Space { .. } | Row::Empty { .. } | Row::Separator { .. })
+        | None => Line::default(),
     }
 }
 
@@ -435,6 +437,10 @@ struct EmptyRow {
     /// The listing's widest row and its key: empty space is washed too.
     widest: Widest,
     listing: u64,
+    /// Whether the row carries the rule: the space over a stretch does, so one function
+    /// is told from the next the way one basic block is told from the one above it, and
+    /// the guessed rows of a stretch nobody has decoded do not.
+    rule: bool,
     key: DiffKey,
 }
 
@@ -463,6 +469,7 @@ impl Component for EmptyRow {
             None,
             None,
         )
+        .maybe(self.rule, |row| row.child(block_rule()))
     }
 
     fn render_key(&self) -> DiffKey {
@@ -475,6 +482,8 @@ impl Component for EmptyRow {
 #[derive(Hash)]
 enum RowKey {
     Header(usize),
+    Rule(u64),
+    Space(u64, bool),
     Label(u64, usize),
     Empty(u64, usize),
     Insn(u64),
@@ -754,11 +763,35 @@ fn build_row(
                 RowKey::Label(address, index),
             )
         }
+        // The rule over a stretch, and the two blanks: drawn as an empty row is, washed
+        // and swept across. Told apart by their kind, the three of one stretch standing
+        // for the one address.
+        Some(Row::Rule { stretch }) => EmptyRow {
+            row: i,
+            wash,
+            widest,
+            listing,
+            rule: true,
+            key: DiffKey::None,
+        }
+        .key(RowKey::Rule(rows.start_of(stretch).unwrap_or(0)))
+        .into_element(),
+        Some(Row::Space { stretch, under }) => EmptyRow {
+            row: i,
+            wash,
+            widest,
+            listing,
+            rule: false,
+            key: DiffKey::None,
+        }
+        .key(RowKey::Space(rows.start_of(stretch).unwrap_or(0), under))
+        .into_element(),
         Some(Row::Empty { stretch, index }) => EmptyRow {
             row: i,
             wash,
             widest,
             listing,
+            rule: false,
             key: DiffKey::None,
         }
         .key(RowKey::Empty(rows.start_of(stretch).unwrap_or(0), index))

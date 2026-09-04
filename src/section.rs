@@ -3,9 +3,10 @@
 //! and has to be told its length up front, so this is the one place that says how many
 //! rows there are and what row *n* is.
 //!
-//! The listing is [`CodeListing`]'s stretches, one after another: a **header** row where a
-//! section starts, a **label** row per symbol at a stretch's address, then the stretch's
-//! body. A body that has been decoded is the symbol's instruction rows and block
+//! The listing is [`CodeListing`]'s stretches, one after another: a **rule** row over each
+//! stretch but the first with a blank under it, a **header** row where a section starts
+//! with a blank under that, a **label** row per symbol at a stretch's address, then the
+//! stretch's body. A body that has been decoded is the symbol's instruction rows and block
 //! separators -- exactly the rows its own listing draws, `Lanes` and all -- followed by
 //! its gap as rows of hex bytes. A body nobody has decoded yet is a run of **empty** rows,
 //! as many as its bytes suggest, so the listing has its whole length from the first frame
@@ -73,6 +74,13 @@ fn gap_rows(gap: &Range<u64>) -> usize {
 pub enum Row {
     /// Where a placed section starts: its name.
     Header { section: usize },
+    /// The rule over a stretch: what a reader tells one function from the next by, drawn
+    /// as the rule between two basic blocks is.
+    Rule { stretch: usize },
+    /// A blank row: the one under the rule, and -- `under` -- the one between a section
+    /// header and the first label beneath it. The rule is not drawn against the name it
+    /// separates, and a header is not drawn against its first label.
+    Space { stretch: usize, under: bool },
     /// The `index`th symbol at the stretch's address.
     Label { stretch: usize, index: usize },
     /// One of the rows a stretch nobody has decoded is guessed to take.
@@ -92,6 +100,9 @@ struct StretchRows {
     start: u64,
     bytes: u64,
     bias: u64,
+    /// The rule over the stretch and the blank under it, which every stretch has but the
+    /// listing's first.
+    space: bool,
     header: bool,
     labels: usize,
     body: BodyRows,
@@ -110,8 +121,14 @@ impl StretchRows {
         }
     }
 
+    /// The rows above the body: the rule over the stretch and its blank, a section's
+    /// header and the blank under it, and one row per label.
+    fn above(&self) -> usize {
+        2 * usize::from(self.space) + 2 * usize::from(self.header) + self.labels
+    }
+
     fn rows(&self) -> usize {
-        usize::from(self.header) + self.labels + self.body_rows()
+        self.above() + self.body_rows()
     }
 
     /// How many rows to guess for a body nobody has decoded: never none, so every label
@@ -187,6 +204,7 @@ impl Rows {
                     start: placed.place(stretch.range.start),
                     bytes,
                     bias,
+                    space: flat > 0,
                     header: index == 0,
                     labels,
                     body,
@@ -244,7 +262,7 @@ impl Rows {
     /// rows are relative to.
     pub fn body_start(&self, flat: usize) -> Option<usize> {
         let stretch = self.stretches.get(flat)?;
-        Some(self.starts[flat] + usize::from(stretch.header) + stretch.labels)
+        Some(self.starts[flat] + stretch.above())
     }
 
     /// What was decoded for stretch `flat`, if anything was.
@@ -282,10 +300,30 @@ impl Rows {
         let flat = self.stretch_of(row)?;
         let stretch = &self.stretches[flat];
         let mut local = row - self.starts[flat];
+        if stretch.space {
+            if local == 0 {
+                return Some(Row::Rule { stretch: flat });
+            }
+            local -= 1;
+            if local == 0 {
+                return Some(Row::Space {
+                    stretch: flat,
+                    under: false,
+                });
+            }
+            local -= 1;
+        }
         if stretch.header {
             if local == 0 {
                 return Some(Row::Header {
                     section: stretch.place.section,
+                });
+            }
+            local -= 1;
+            if local == 0 {
+                return Some(Row::Space {
+                    stretch: flat,
+                    under: true,
                 });
             }
             local -= 1;
@@ -326,7 +364,8 @@ impl Rows {
     }
 
     /// The placed address row `row` stands for: what names it once the rows around it
-    /// have changed. A header is its section's start, a label its stretch's, an empty row
+    /// have changed. A header is its section's start, a rule, a blank row and a label its
+    /// stretch's, an empty row
     /// its share of the stretch's bytes, an instruction its own, a separator the
     /// instruction below it, and a gap row its first byte.
     pub fn address_of(&self, row: usize) -> Option<u64> {
@@ -334,7 +373,7 @@ impl Rows {
         let stretch = &self.stretches[flat];
         Some(match self.row(row)? {
             Row::Header { section } => self.code.sections().get(section)?.range().start,
-            Row::Label { .. } => stretch.start,
+            Row::Rule { .. } | Row::Space { .. } | Row::Label { .. } => stretch.start,
             Row::Empty { index, .. } => {
                 let BodyRows::Estimated(rows) = &stretch.body else {
                     return None;
@@ -364,8 +403,9 @@ impl Rows {
     }
 
     /// The row a placed address is drawn in: a stretch's **first** row for its start --
-    /// the header or the label, since the first instruction shares that address with them
-    /// and a reader landing on an address is better shown the label over it -- else the
+    /// the rule over it, or its header or label where it has none, since the first
+    /// instruction shares that address with them and a reader landing on an address is
+    /// better shown the label over it -- else the
     /// instruction, gap row or empty row covering it. [`None`] for an address in no
     /// stretch: between two sections, or outside every one. A view keeping its place by
     /// an address keeps how many rows past this it was, so the top row being a stretch's

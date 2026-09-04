@@ -405,8 +405,8 @@ it is the one of the four that `session.toml` never sees.
 counted afresh with every answer that lands (`agents/Panes.md`), so a row there means nothing for
 long. `CodeAt` is a `Positions<Entry, Spot>`, the map generalised over its value, `row`'s clamp
 being the one rows-only answer. It holds the placed address at the top of the pane and how many rows
-past that address's own row it was, since a stretch's header, its labels and its first instruction
-all sit at one address. It is forgotten in the three closers with the other two and travels in
+past that address's own row it was, since the rule over a stretch, the blank under it, its header,
+its labels and its first instruction all sit at one address. It is forgotten in the three closers with the other two and travels in
 `ProjectStates` as they do. `use_kept_place` in `src/ui/section_view.rs` is its `use_kept_position`,
 and the differences are the point. The map is **read** and not peeked, so a place written from
 outside while the tab is on top is answered (the run that wakes on its own write finds nothing moved

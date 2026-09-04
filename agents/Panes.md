@@ -456,8 +456,10 @@ long (`agents/Appearance.md`).
 **A listing of a whole object's code is rows before it is instructions** (`src/section.rs`). A
 `VirtualScrollView` has to be told its length up front, and x86 being variable-length, the
 instruction rows of a section cannot be counted without decoding it, which is the one thing the
-section view must not do eagerly. So `Rows` counts from the skeleton: a header row where a placed
-section starts, a label row per symbol at each stretch's address, and under them either the rows the
+section view must not do eagerly. So `Rows` counts from the skeleton: a rule row over every
+stretch but the listing's first with a blank under it, a header row where a placed section starts
+with a blank under that, a label row per symbol at each stretch's address, and under them either
+the rows the
 stretch's decoded body takes (the symbol's own instruction rows and separators, straight out of its
 `Lanes`, then its gap as rows of sixteen bytes) or, for a stretch nobody has decoded, a **guess**:
 its bytes over four, x86's mean instruction length, and never fewer than one. The listing therefore
@@ -467,8 +469,9 @@ settles. What makes that bearable is that **every row has an address and every a
 (`address_of` and `row_for`, placed addresses both, an empty row's being its share of the stretch's
 bytes rounded so the two agree), since an address is the one name for a row that survives the rows
 around it changing. The view keeps the reader's place as an address for exactly that reason, plus
-how many rows past `row_for` it was, since a stretch's header, its labels and its first instruction
-all sit at one address and `row_for` answers the first of them. Nothing here is a fourth answer to
+how many rows past `row_for` it was, since the rule over a stretch, the blank under it, its header,
+its labels and its first instruction all sit at one address and `row_for` answers the first of
+them. Nothing here is a fourth answer to
 the two index spaces above: a decoded stretch's rows *are* its `Lanes`' rows, at `body_start` into
 the listing, which is the `base` an `InstructionRow` is handed.
 

@@ -50,3 +50,6 @@ bytes. The place the tab keeps is an address.
 
 A label is the symbol's name and a colon. A name the app made up keeps its angle
 brackets, `<entry point>:`.
+
+A rule stands over every symbol but the listing's first, with a blank row under it, and a
+blank under a section's header. Two names at one address share the one rule.

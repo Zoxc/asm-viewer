@@ -8393,9 +8393,10 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
         states.code_at.peek().at(&entry_of(&states, &document)),
         Some(Spot {
             address: 0x30,
-            rows: 0
+            rows: 2
         }),
-        "the place is written down as the reader scrolls"
+        "the place is written down as the reader scrolls: two rows past the rule over \
+         the stretch, which is the row the address itself finds"
     );
 
     let before = label_area(&test, "sum_to:").expect("sum_to is labelled");
@@ -8757,7 +8758,8 @@ fn a_caret_walked_past_the_panes_edge_brings_the_pane_sideways_to_it() {
 
 /// A run copied out of an object's code spells each kind of row as it is drawn: the
 /// section's header, a symbol's label after its address, an instruction as its own tab
-/// copies it, and an empty row as the blank line it is.
+/// copies it, and a blank row -- the space over a stretch as much as an undecoded one --
+/// as the blank line it is.
 #[test]
 fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
     let (_path, objects) = fixture_objects(1);
@@ -8769,13 +8771,14 @@ fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
         .map(|row| row_line(&rows, &reading, row))
         .collect();
     assert_eq!(lines[0], "section .text");
-    assert_eq!(lines[1], "0000000000000000 add:");
+    assert_eq!(lines[1], "", "the blank under the header");
+    assert_eq!(lines[2], "0000000000000000 add:");
     let add = fixture_symbols()
         .into_iter()
         .find(|symbol| symbol.data.name == "add")
         .expect("the fixture holds add");
     let own = add.data.assembly(&add.object).expect("add decodes");
-    assert_eq!(lines[2], asm_line(&own.instructions[0], 0));
+    assert_eq!(lines[3], asm_line(&own.instructions[0], 0));
     // `twice` is not decoded: its label, then blank lines.
     let twice = lines
         .iter()
@@ -9150,6 +9153,37 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target_with_ctrl() {
     assert_eq!(landed.address, Some(target));
 }
 
+/// One function is told from the next by a rule, the way one basic block is told from the
+/// block above it: the row over a stretch carries it, so a symbol's label is never drawn
+/// against the last row of the function before it.
+#[test]
+fn a_rule_is_drawn_over_every_symbol_in_the_unified_view() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let (mut test, _) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    settle(&mut test);
+
+    let rules = rects_with(&test, palette().block_rule);
+    assert!(!rules.is_empty(), "no rule is drawn");
+    // Every label but the first has one in the row above it; `add` is the listing's first
+    // stretch and opens it, so it has none.
+    for (name, over) in [("add:", false), ("twice:", true), ("sum_to:", true)] {
+        let label = label_area(&test, name).unwrap_or_else(|| panic!("{name} is drawn"));
+        // Two rows over the name: the rule, then the blank that keeps it off the name.
+        let above = rules.iter().any(|rule| {
+            let gap = label.origin.y - rule.origin.y;
+            gap > code_row_height() && gap <= 2.0 * code_row_height()
+        });
+        assert_eq!(above, over, "{name}");
+    }
+}
+
 /// The code opened at a call's target lands on the row **at or below** the address: on
 /// the guessed row of the stretch while nothing there is decoded, and on the instruction
 /// holding the byte once it is -- the exact place the door asked for, not the row the
@@ -9180,7 +9214,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     let guessed = rows_of(&reading);
     let (mut test, (states, marked, sections, _window, _landing, ctrl)) = TestingRunner::new(
         code_harness,
-        (600., 4.0 * code_row_height()).into(),
+        (600., 6.0 * code_row_height()).into(),
         |runner| code_states!(runner, reading),
         1.,
     );

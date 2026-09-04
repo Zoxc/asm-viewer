@@ -621,7 +621,7 @@ pub(crate) fn gutter_width(width: usize) -> f32 {
 /// number, and a one-pixel rect centred on one straddles the two pixels either side of
 /// it. The offset is a padding rather than an absolute position so the rule still takes
 /// the width the row's flex leaves it.
-fn block_rule() -> impl IntoElement {
+pub(crate) fn block_rule() -> impl IntoElement {
     let rule = pixel_grid().stroke(code_row_height() / 2.0, BLOCK_RULE_STROKE);
 
     rect()

@@ -84,15 +84,6 @@ leaves this list when it is. That is a move made on request, like everything els
   that symbol beside the object, object › symbol, and pressing it would be the "Open as symbol"
   door in one more place. Whether it follows the top row or the pointer is the one decision:
   the top row is stable and the pointer lights nothing.
-- [ ] Space before a label in the unified view. A function's last instruction and the next
-  function's label are one row apart, so a long listing reads as one column of text with names
-  dropped into it and nothing says where a function ends -- objdump's blank line before a label
-  is what is missing. It wants a row of its own rather than padding: every row of a
-  `VirtualScrollView` is the height it was given, and a taller label row misaligns the scroll
-  (`agents/UI.md`); the block separator, `Row::Separator`, is the precedent. What it has to
-  keep is that every row has an address and every address a row (`src/section.rs`): the spacer
-  takes the label's, and `row_for` still has to land on the label. A section header wants the
-  same space, and a stretch with two names at one address wants one spacer and not two.
 - [ ] Following a link in the unified view should stay in it. A symbol named in an operand is
   followed in place, which in an object's code tab swaps the whole listing for that one
   symbol's (`src/ui/assembly.rs`, `Reach::InPlace` for a link inside a tab); a reader who

@@ -72,29 +72,104 @@ fn a_stretch_nobody_decoded_is_a_run_of_empty_rows_sized_by_its_bytes() {
             first.start, expected,
             "stretch {flat} starts where the last ended"
         );
-        assert_eq!(rows.row(first.start), Some(Row::Header { section: flat }));
+        // The rule over the stretch and the blank under it, which every stretch but the
+        // listing's first has, then the header, the blank under it and the label.
+        let mut at = first.start;
+        if flat > 0 {
+            assert_eq!(rows.row(at), Some(Row::Rule { stretch: flat }));
+            assert_eq!(
+                rows.row(at + 1),
+                Some(Row::Space {
+                    stretch: flat,
+                    under: false
+                })
+            );
+            at += 2;
+        }
+        assert_eq!(rows.row(at), Some(Row::Header { section: flat }));
         assert_eq!(
-            rows.row(first.start + 1),
+            rows.row(at + 1),
+            Some(Row::Space {
+                stretch: flat,
+                under: true
+            })
+        );
+        assert_eq!(
+            rows.row(at + 2),
             Some(Row::Label {
                 stretch: flat,
                 index: 0
             })
         );
-        assert_eq!(rows.body_start(flat), Some(first.start + 2));
+        let above = at + 3 - first.start;
+        assert_eq!(rows.body_start(flat), Some(first.start + above));
         for k in 0..estimate {
             assert_eq!(
-                rows.row(first.start + 2 + k),
+                rows.row(first.start + above + k),
                 Some(Row::Empty {
                     stretch: flat,
                     index: k
                 })
             );
         }
-        expected += 2 + estimate;
+        expected += above + estimate;
         assert_eq!(first.end, expected);
     }
     assert_eq!(rows.len(), expected);
     assert_eq!(rows.row(expected), None, "no row past the end");
+}
+
+/// A rule stands over every stretch but the listing's first, with a blank under it, and
+/// a blank under a section's header: so one function is told from the next by a line, and
+/// neither the line nor a header is ever drawn against a name.
+#[test]
+fn a_rule_and_a_blank_stand_over_every_stretch_and_a_blank_under_every_header() {
+    let object = fixture("line_fixture.o");
+    let code = Arc::new(CodeListing::new(&object));
+    let rows = nothing_decoded(code);
+    assert!(rows.stretches.len() > 2, "the fixture's layout moved");
+    let kinds = kinds(&rows);
+
+    for flat in 0..rows.stretches.len() {
+        let first = rows_of(&rows, flat).start;
+        let over = 2 * usize::from(flat > 0);
+        if flat == 0 {
+            assert!(
+                !matches!(kinds[first], Row::Rule { .. } | Row::Space { .. }),
+                "the listing opens on a rule"
+            );
+        } else {
+            assert_eq!(kinds[first], Row::Rule { stretch: flat });
+            assert_eq!(
+                kinds[first + 1],
+                Row::Space {
+                    stretch: flat,
+                    under: false
+                }
+            );
+        }
+        if matches!(kinds[first + over], Row::Header { .. }) {
+            assert_eq!(
+                kinds[first + over + 1],
+                Row::Space {
+                    stretch: flat,
+                    under: true
+                }
+            );
+        }
+    }
+
+    // Which is the whole of the point: nothing but a blank, or another name at the same
+    // address, is ever drawn against the row above a label -- the rule included.
+    for (row, kind) in kinds.iter().enumerate().skip(1) {
+        if matches!(kind, Row::Label { .. }) {
+            assert!(
+                matches!(kinds[row - 1], Row::Space { .. } | Row::Label { .. }),
+                "row {row}'s label sits on {:?}",
+                kinds[row - 1]
+            );
+        }
+    }
 }
 
 /// Every row names an address and that address finds the row again, decoded or not:
@@ -120,7 +195,9 @@ fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
                         stretch: 0,
                     })
                     .unwrap(),
-                Row::Label { stretch, .. }
+                Row::Rule { stretch }
+                | Row::Space { stretch, .. }
+                | Row::Label { stretch, .. }
                 | Row::Empty { stretch, .. }
                 | Row::Instruction { stretch, .. }
                 | Row::Separator { stretch, .. }
@@ -296,7 +373,9 @@ fn decoding_a_stretch_settles_its_rows_and_moves_none_above_it() {
         .lanes
         .listing_rows(body.assembly.as_ref().unwrap().instructions.len());
     let gap = body.gap.as_ref().map_or(0, |gap| gap_rows(gap));
-    assert_eq!(settled.end - settled.start, 2 + listing + gap);
+    // The rule over the stretch and its blank, its header, the blank under that, and
+    // its label.
+    assert_eq!(settled.end - settled.start, 5 + listing + gap);
     assert_ne!(middle.len(), settled.len(), "the guess was not the truth");
 
     for row in 0..middle.start {
@@ -319,16 +398,31 @@ fn decoding_a_stretch_settles_its_rows_and_moves_none_above_it() {
 
     // And the decoded rows are the symbol's own, in the symbol's own order.
     let kinds: Vec<Row> = kinds(&after)[settled.start..settled.end].to_vec();
-    assert_eq!(kinds[0], Row::Header { section: 1 });
+    assert_eq!(kinds[0], Row::Rule { stretch: 1 });
     assert_eq!(
         kinds[1],
+        Row::Space {
+            stretch: 1,
+            under: false
+        }
+    );
+    assert_eq!(kinds[2], Row::Header { section: 1 });
+    assert_eq!(
+        kinds[3],
+        Row::Space {
+            stretch: 1,
+            under: true
+        }
+    );
+    assert_eq!(
+        kinds[4],
         Row::Label {
             stretch: 1,
             index: 0
         }
     );
     assert_eq!(
-        kinds[2],
+        kinds[5],
         Row::Instruction {
             stretch: 1,
             index: 0
