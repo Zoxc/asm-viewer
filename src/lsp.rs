@@ -106,15 +106,18 @@ pub enum Note {
     Busy(bool),
 }
 
-/// Where something is defined: a file, and a **1-based** line in it.
+/// Where something is defined: a file, a **1-based** line in it, and the column the name
+/// starts at.
 ///
 /// The protocol counts lines from zero and this counts from one, the unit line information
 /// is in everywhere else in the app (`Object::symbols_from_lines`), so the conversion
-/// happens here and once.
+/// happens here and once. The column is left as the protocol gives it, a UTF-16 unit
+/// counted from zero, which is what a pane counts columns in too (`src/chars.rs`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Place {
     pub file: PathBuf,
     pub line: u32,
+    pub column: u32,
 }
 
 /// A started server: the conversation, and the process it is with.
@@ -1064,11 +1067,20 @@ fn places(answer: &Value) -> Vec<Place> {
             .or_else(|| value.get("targetUri"))
             .and_then(Value::as_str)?;
         let range = value.get("range").or_else(|| value.get("targetRange"))?;
-        let line = range.get("start")?.get("line")?.as_u64()?;
+        let start = range.get("start")?;
+        let line = start.get("line")?.as_u64()?;
+        // A column the answer leaves out, or one no `u32` holds, is column 0: the line is
+        // what opens the file, and the column only says where the caret goes.
+        let column = start
+            .get("character")
+            .and_then(Value::as_u64)
+            .and_then(|character| u32::try_from(character).ok())
+            .unwrap_or(0);
         Some(Place {
             file: path_of(uri)?,
             // The protocol counts from zero and everything else here counts from one.
             line: u32::try_from(line).ok()?.saturating_add(1),
+            column,
         })
     };
 

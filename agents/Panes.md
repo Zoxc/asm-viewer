@@ -285,7 +285,11 @@ new. Whichever document arrives spends it, the one it named or another, since a 
 would select a line in a document opened for some other reason later. The instruction is the half of
 a landing the change of document cannot answer, and goes on as a `Planting` (the paragraph after the
 doors). A row whose symbol is already on top selects the line at once (`documents::land`), the
-opening then changing nothing and no effect running. A row answering a question asked from a
+opening then changing no document and leaving no landing. The place still changes, though --
+the door pushes a stop -- and `use_land` wakes on that, finds no landing and no kept run, and
+would rebuild the source run from the driven line, which is a line and no column. So it keeps
+a run already on that very row instead of making one: what marked it said more than the line,
+and following a call used to arrive with the caret back at the row's start. A row answering a question asked from a
 source-driven tab chooses for that tab instead: `Located::subject` carries the tab's id beside its
 file, the choice is written under that entry while the tab still shows the file, and `land_on`
 raises the tab with the line left as a landing, a move and not a visit, the tab being open already.
@@ -345,6 +349,33 @@ end with "Bookmark symbol", the symbol the row is code of, which in the code lis
 stretch's own, through the same `bookmark_item` the sidebar rows and a tab's header use
 (`agents/Sidebar.md`), worded for a row that is an instruction and not the symbol. With it the menu
 always has something to offer, so a row opens one whether or not it has a line or a door.
+
+**A call in the source is a door of its own, and it is text and not an element.** A row's
+paragraph takes one inline child, and an inline is one *unit* to the text engine
+(`src/chars.rs`), so a name made into an element would stop a source row's columns being the
+file's own -- which is the whole reason a press on one can say where it was in the terms the
+language server takes, with nothing converted. So the door is decided from the pressed
+column instead: `Text::links` carries the columns of every call in the row, `code_row` hit-
+tests the pointer against them for the hand and for the press, and lighting one changes a
+span's style and never where the spans are cut. A boundary that moved with the pointer would
+re-shape the row, and the widest row a listing has drawn only ever grows.
+
+Which runs those are is `links_in`. The colour is all the highlighting says here --
+`source_pieces` answers a colour per run and not the capture behind it -- and `function_fg`
+is exactly `function`, `function.macro` and `function.method`, so a run drawn in it is one of
+the three. What a colour cannot say is whether the name is being *called* or *declared*,
+which two things answer between them: the *first* name on a row that begins a function the
+file's own parse found is that function's own, and a name straight after the `fn` keyword is a
+declaration whether or not it has a body -- which a trait's method has not, and so is in no
+such list to be found in. Only that one name is passed over and not the row: a body written on
+the declaration's own line, as a trait's default method usually is, calls from there, and the
+row used to be dropped whole. A capture is its own colour run, so a link is always one whole
+piece.
+
+Nothing is a link with no server to ask, and **the list asks once**: a server says how far
+through the project it has got over and over, and a row that read that state would be drawn
+again for every word of it. `SourceList` holds a memo of it and carries the answer through
+`new_with_data` like everything else a row depends on.
 
 **Alt held says a press is not a door this time.** Every door in a code row acts on a plain press,
 which left no way to put the pointer down on one and sweep: the release followed the link and the

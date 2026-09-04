@@ -65,11 +65,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Navigation
 
-- [ ] Clicking on functions in source should navigate to them. A click on a source line moves
-  the assembly pane to that line's instructions; a click on a *call* in the source still does
-  nothing, since nothing maps a source identifier to the symbol it names. What is left is the
-  click: the language server answers where a name is defined, and the source-line index
-  answers which symbols were compiled from there.
 - [ ] A file search dialog on Ctrl+P: type part of a path and open the file it names, the
   way an editor's quick-open does.
 - [ ] Find every use of a name, not only where it is defined. `textDocument/references` is
@@ -77,6 +72,27 @@ leaves this list when it is. That is a move made on request, like everything els
   source-line index already turns into symbols. The decisions are whether the hits are the
   Locations panel's rows or a panel of their own, and what a hit opens: the line it is on, or
   the symbol compiled from it.
+- [ ] Hold a question the server answered with nothing, and ask it again once the server is
+  ready. rust-analyzer answers `null` to every question while it is still loading the project,
+  which is the same answer as a name it cannot place (`notes/upstream/rust-analyzer.md`), so a
+  click in the first seconds does nothing and says nothing. The decisions are what makes a
+  question worth holding -- one asked before the server has ever answered anything, rather
+  than every empty answer, or the app would re-ask names that genuinely are not there -- what
+  says the server is ready, since the app declares no progress capability and reads only what
+  it is told, and how long a held question stays worth answering, a reader having moved on by
+  then. Not a retry loop: the one question already held (`ui::follow`) is the shape.
+- [ ] Say in a bar along the bottom that the app is waiting on the language server, and let any
+  movement call the wait off. Following a call is a question with two workers behind it and no
+  sign that anything is happening, so a slow answer is indistinguishable from a dead click; and
+  the answer moves the tab whenever it lands, which is wrong once the reader has gone somewhere
+  else meanwhile. The cancel is the smaller half and mostly exists: `Follow` holds the one
+  question asked, `give_up` already drops it when the server refuses or goes, and a movement
+  would drop it the same way, so a late answer opens nothing. The decisions are what counts as
+  movement -- a navigation and a click in either pane, surely; a caret moved by the keyboard,
+  a scroll, a switch of tab, less surely -- and whether the bar is this one wait's or the place
+  every slow thing says so: a build, a search, a server starting. There is no bar along the
+  bottom today, so its ground, its height and what it does when it has nothing to say are the
+  rest of it.
 
 ## Assembly viewer
 

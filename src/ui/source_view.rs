@@ -46,6 +46,11 @@ struct SourceData {
     /// It travels here and through `new_with_data` rather than being captured by the
     /// builder closure, which is never compared across renders.
     drives: Option<DocId>,
+    /// Whether a language server is running, which is what makes a call in the text a
+    /// link. Read once for the list and carried, never asked per row: what a server is
+    /// doing changes with every word it says about its progress, and every mounted row
+    /// would be drawn again for it.
+    linking: bool,
     /// The widest row drawn, under the highlighted file's identity, and that key: what
     /// every row is at least as wide as. Handles, so out of the `PartialEq` below.
     widest: Widest,
@@ -63,6 +68,7 @@ impl PartialEq for SourceData {
             && self.rows == other.rows
             && self.chars == other.chars
             && self.drives == other.drives
+            && self.linking == other.linking
     }
 }
 
@@ -87,6 +93,8 @@ struct SourceRow {
     chars: RowChars,
     /// The tab a click here also drives the assembly side of, if any. See [`SourceData`].
     drives: Option<DocId>,
+    /// Whether a call in this row is a link. See [`SourceData::linking`].
+    linking: bool,
     /// The listing's widest row and its key, as an `InstructionRow` carries them.
     widest: Widest,
     listing: u64,
@@ -103,6 +111,7 @@ impl PartialEq for SourceRow {
             && self.wash == other.wash
             && self.chars == other.chars
             && self.drives == other.drives
+            && self.linking == other.linking
     }
 }
 
@@ -141,6 +150,60 @@ fn source_pieces(source: &SourceText, index: usize) -> Vec<(Color, String)> {
         .collect()
 }
 
+/// The columns of every name in row `index` that is a **call** to a function, a method or
+/// a macro: what the reader can follow to where it is defined.
+///
+/// The colours are the whole of what the highlighting says here -- `source_pieces` answers
+/// a colour per run and not the capture it came from -- and `function_fg` is exactly
+/// `function`, `function.macro` and `function.method` and nothing else (`ui::palette`), so
+/// a run drawn in it is a name of one of those three. What the colour cannot say is
+/// whether the name is being *called* or *declared*, which two things answer between
+/// them: the **first** name on a row that begins a function the file's own parse found is
+/// that function's own, and a name straight after the `fn` keyword is being declared
+/// whether or not it has a body -- which a trait's method has not, so it is in no such
+/// list to be found in. Only that one name is passed over, not the row: a body written on
+/// the declaration's own line, as a trait's default method usually is, calls from there.
+///
+/// A capture is its own colour run, so a link is always one whole piece and never part of
+/// one: the row's spans are cut where they are cut whatever the pointer is over, which is
+/// what keeps hovering from re-shaping the row and widening the listing.
+///
+/// The columns are UTF-16 units of the row as drawn, which is what a source row's columns
+/// are everywhere else and what the language server takes.
+pub(crate) fn links_in(source: &SourceText, index: usize) -> Vec<Range<usize>> {
+    let line = index as u32 + 1;
+    // The name of a function beginning here is still to come, and is the first of them:
+    // `pub`, an `async` or a generic's bound is drawn in no function's colour.
+    let mut declared = source
+        .0
+        .functions
+        .iter()
+        .any(|function| *function.lines.start() == line);
+    let (function, keyword) = (palette().function_fg, palette().keyword_fg);
+    let mut links = Vec::new();
+    let mut column = 0;
+    // Whether the last run with anything in it was the `fn` keyword, which makes the name
+    // after it a declaration and not a call.
+    let mut declaring = false;
+    for (colour, text) in source_pieces(source, index) {
+        let units = text.encode_utf16().count();
+        let word = text.trim();
+        if !word.is_empty() {
+            if colour == function {
+                // Either answer makes this name the declaration's; whichever said so,
+                // the next name in the row is a call.
+                if !declaring && !declared {
+                    links.push(column..column + units);
+                }
+                declared = false;
+            }
+            declaring = colour == keyword && word == "fn";
+        }
+        column += units;
+    }
+    links
+}
+
 /// The text row `index` draws, as the clipboard sees a character selection of it.
 pub(crate) fn source_line(source: &SourceText, index: usize) -> Line {
     let mut line = Line::default();
@@ -156,6 +219,13 @@ impl Component for SourceRow {
         // Consumed here, in the render, because the menu handler may not run a hook.
         let located = use_consume::<Locations>().0;
         let docs = use_consume::<OpenDocs>().0;
+        // What a press on a link needs, all three or none: a pane mounted without them
+        // draws its text and no links (`links_in`).
+        let ctrl = use_consume::<Ctrl>().0;
+        let following = try_consume_context::<Talking>()
+            .zip(try_consume_context::<Following>())
+            .zip(try_consume_context::<LspJobs>())
+            .map(|((talking, follow), jobs)| (talking.0, follow.0, jobs));
         let dock = use_consume::<ContentDock>().0;
         let index = self.index;
 
@@ -183,6 +253,37 @@ impl Component for SourceRow {
             tail: Vec::new(),
             chars: self.chars,
             door: false,
+            // The calls in this row, and what a press on one does: ask the server where
+            // the name is defined, and go to what it answers. Nothing is a link with no
+            // server to ask, and a press with Ctrl held opens the definition in a tab of
+            // its own -- the rule every door inside a pane follows.
+            links: match self.linking {
+                true => links_in(&self.source, index),
+                false => Vec::new(),
+            },
+            on_link: following.map(|(language, follow, jobs)| {
+                let file = self.file.clone();
+                let row = self.index as u32;
+                Rc::new(move |columns: Range<usize>| {
+                    let reach = match *ctrl.peek() {
+                        true => Reach::NewTab,
+                        false => Reach::InPlace,
+                    };
+                    follow_name(
+                        language,
+                        follow,
+                        &jobs,
+                        Lookup {
+                            file: PathBuf::from(&*file),
+                            // The protocol counts lines from zero, where a row's line is
+                            // 1-based; the column is already what it takes.
+                            line: row,
+                            column: columns.start as u32,
+                        },
+                        reach,
+                    );
+                }) as Rc<dyn Fn(Range<usize>)>
+            }),
         };
 
         // The menu: the line's locations and, inside a function as the file's parse
@@ -353,6 +454,14 @@ impl Component for SourceList {
         let widest = use_widest();
         let listing = Widest::key(Arc::as_ptr(&self.source.0).addr());
 
+        // Whether a call is a link, which is whether a server is there to say what one
+        // names. A memo, so the rows are drawn again when it becomes so and not every
+        // time the server says how far through the project it has got; and asked
+        // through `try_consume_context`, a pane mounted without one having no links.
+        let talking = try_consume_context::<Talking>().map(|talking| talking.0);
+        let linking = use_memo(move || talking.is_some_and(|state| state.read().started()));
+        let linking = linking();
+
         let length = self.source.0.lines;
         // The tab's entry and not the file: see `SourceList::document`.
         let docs = use_consume::<OpenDocs>().0;
@@ -485,6 +594,7 @@ impl Component for SourceList {
                                 // document names; a companion's tab is a symbol's.
                                 drives: matches!(self.document, Document::Source(_))
                                     .then_some(self.tab),
+                                linking,
                                 widest,
                                 listing,
                             },
@@ -499,6 +609,7 @@ impl Component for SourceList {
                                     wash: wash_of(data.chars, i),
                                     chars: RowChars::of(data.chars, i),
                                     drives: data.drives,
+                                    linking: data.linking,
                                     widest: data.widest,
                                     listing: data.listing,
                                     key: DiffKey::None,

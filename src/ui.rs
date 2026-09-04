@@ -83,6 +83,8 @@ mod filter_bar;
 pub(crate) use filter_bar::*;
 mod focus;
 pub(crate) use focus::*;
+mod follow;
+pub(crate) use follow::*;
 mod highlight;
 pub(crate) use highlight::*;
 mod language;
@@ -454,7 +456,10 @@ pub fn app() -> impl IntoElement {
     // process, and a process that outlives the view it was started from is one nothing can
     // stop.
     let language = use_provide_context(|| Talking(State::create(Language::default()))).0;
-    use_language_with(language, proj, language_work());
+    let follow = use_provide_context(|| Following(State::create(Follow::default()))).0;
+    use_language_with(language, follow, proj, language_work());
+    // What a name followed in the source opens, which the answer above fills in.
+    use_follow(follow, open, visits, marked, landing, plant, driven);
 
     // Docking cannot express a fixed pixel width, which is why the outer split is a
     // `ResizableContainer` and not a `DockingArea`: a fixed 300px sidebar beside the one

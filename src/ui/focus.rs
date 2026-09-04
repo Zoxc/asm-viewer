@@ -48,8 +48,10 @@ pub(crate) struct Landing {
     /// an object's code, the symbol's own for a symbol's tab.
     pub(crate) address: Option<u64>,
     /// The characters to select on `at`'s line, in the UTF-16 units a pane counts columns
-    /// in: a search hit picks out what it matched, where every other door picks out the
-    /// row and leaves a caret at its start. Means nothing without `at`.
+    /// in: a search hit picks out what it matched, and a definition an empty run at the
+    /// name's own column, which is a caret there and nothing selected. `None` for the
+    /// doors that pick out the row and leave the caret at its start. Means nothing
+    /// without `at`.
     pub(crate) columns: Option<Range<usize>>,
 }
 

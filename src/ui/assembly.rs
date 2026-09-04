@@ -992,6 +992,8 @@ impl Component for InstructionRow {
             tail: spans(tail, false),
             chars: self.chars,
             door: link == Some(Link::Target),
+            links: Vec::new(),
+            on_link: None,
         };
 
         // The menu: the line's locations, where the debug info gives the row a line; the

@@ -30,6 +30,16 @@ pub(crate) struct Picked {
     pub(crate) owed: Owed,
 }
 
+impl Picked {
+    /// Whether this is a run of the one row `line` of `file`, which is what every door
+    /// onto a line makes ([`line_pick`]). The caret it holds on that row is its own: it
+    /// may be at a column, where a line alone says only the row.
+    pub(crate) fn is_line(&self, file: &Arc<str>, line: u32) -> bool {
+        let row = (line as usize).saturating_sub(1);
+        self.file.as_ref() == Some(file) && self.rows.anchor == row && self.rows.lead == row
+    }
+}
+
 /// Which of the two panes still owe a scroll to a run. A pair of flags and not an
 /// `Option<Pane>`: a click in one pane asks the other, but a row in the Locations panel
 /// is a click in neither and asks both.
@@ -535,7 +545,8 @@ pub(crate) fn mark_line(
 /// The one-row run [`mark_line`] makes of `line`: the row, and a caret at its start --
 /// or, where the door named `columns`, that run of the row's characters selected, which
 /// is what a search hit lands on. Copying then copies the match and not the line, since
-/// characters picked out are what `copy_text` prefers.
+/// characters picked out are what `copy_text` prefers. An empty run is a caret at that
+/// column and nothing selected, which is where following a name lands.
 fn line_pick(file: Arc<str>, line: u32, columns: Option<Range<usize>>, owed: Owed) -> Picked {
     let row = (line as usize).saturating_sub(1);
     let chars = match columns {
@@ -1102,6 +1113,11 @@ pub(crate) fn use_land(
             _ => None,
         };
 
+        // The run standing in the source pane as this runs. A door onto the document
+        // already on top marks its line here and leaves no landing, so what it picked
+        // out is already written when the new place wakes this ([`documents::land`]).
+        let standing = marked.peek().source.clone();
+
         let mut marks = Marks::default();
         match (landed, kept) {
             (Some(landing), _) => {
@@ -1143,11 +1159,17 @@ pub(crate) fn use_land(
                             ..
                         },
                     ),
-                ) => driven
-                    .peek()
-                    .line(entry)
-                    .or(entry.1.line)
-                    .map(|line| line_pick(file.clone(), line, None, Owed::default())),
+                ) => driven.peek().line(entry).or(entry.1.line).map(|line| {
+                    // A run already on that very row was put there by a door with
+                    // more to say than the line -- a column, or a run of the row --
+                    // and a line is the whole of what this knows. Keeping it is what
+                    // leaves the caret on the name a followed call was defined
+                    // under, the door onto the file already on top having marked it
+                    // before this place woke the effect.
+                    standing
+                        .filter(|picked| picked.is_line(file, line))
+                        .unwrap_or_else(|| line_pick(file.clone(), line, None, Owed::default()))
+                }),
                 _ => None,
             };
         }

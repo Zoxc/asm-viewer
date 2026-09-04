@@ -360,6 +360,8 @@ impl Component for TextRow {
             tail: Vec::new(),
             chars: self.chars,
             door: false,
+            links: Vec::new(),
+            on_link: None,
         };
 
         // The gutter's width, so the address column starts where it does on an

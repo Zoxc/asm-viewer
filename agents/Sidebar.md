@@ -197,10 +197,10 @@ walk that answers as fast as it is asked can say nothing about superseding.
 spells it -- the entry's own path, never canonicalised -- since a `LinePos` is compared by text.
 `shows_as_source` guards it, so a row cannot open a tab the pane would refuse. It lands on the
 **match** and not just its line: a `Landing` carries the columns to select, and `line_pick` makes
-them the row's `CharSelection` where every other door leaves a caret at column 0. So Ctrl+C there
-copies the match, `copy_text` preferring characters to rows. The columns are the *file's* line in
-UTF-16 units, counted before the line is trimmed for drawing and counted in units rather than
-bytes, or a multi-byte character ahead of the match would move it. The matched parts of
+them the row's `CharSelection` where a door naming no columns leaves a caret at column 0. So
+Ctrl+C there copies the match, `copy_text` preferring characters to rows. The columns are the
+*file's* line in UTF-16 units, counted before the line is trimmed for drawing and counted in units
+rather than bytes, or a multi-byte character ahead of the match would move it. The matched parts of
 the line are drawn **bold in `match_fg`** and not on a background: a span inside a paragraph carries
 a colour and a weight and no fill, so the selection's own highlight is not available here.
 

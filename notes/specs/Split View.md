@@ -24,6 +24,19 @@ no object holds code from leaves the listing as it is and lights nothing. A sour
 outlives its binary being closed. In an assembly-driven tab the source side only scrolls
 within the symbol.
 
+## Following a name
+
+While a language server is running, the name in a call to a function, method or macro is a
+link. A name where one is defined is not. Under the pointer a link is underlined and lit, and
+the pointer becomes a hand. With no server there are no links.
+
+Clicking one asks the server where the name is defined and goes to the file and line it
+names. The source pane lands on that line and the assembly side follows it, as it does a
+clicked line. The tab shows that file, so one that was assembly-driven becomes source-driven.
+Back returns. Ctrl+click opens the definition in a new tab.
+
+Clicking a link does not select its line. A name the server cannot place does nothing.
+
 ## Selection
 
 A drag selects text; Shift+click extends the selection to the clicked place. A drag in the

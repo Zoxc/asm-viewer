@@ -154,6 +154,8 @@ command.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
 - `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes, and
   where each side of a tab was left.
+- `src/ui/follow.rs` — following a name in the source to what it names: the question put to
+  the language server, and the place its answer opens.
 - `src/ui/marks.rs` — the run of rows selected in each pane, the pair it lights on the other
   side, the scroll it owes, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file parsed when loaded, its spans and its functions, and the

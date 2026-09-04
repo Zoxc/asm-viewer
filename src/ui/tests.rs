@@ -2840,6 +2840,75 @@ fn settle(test: &mut TestingRunner) {
     }
 }
 
+/// What a call is, and what it is not. The colour says a name is a function's, a
+/// method's or a macro's; what says it is being *called* is that the row does not begin a
+/// function the file's own parse found and the name does not follow the `fn` keyword --
+/// which is what covers a trait's method, declared with no body and so in no such list.
+#[test]
+fn only_calls_in_the_source_are_links() {
+    let directory =
+        std::env::temp_dir().join(format!("assembly-viewer-links-test-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("calls.rs");
+    let text = "\
+fn helper(n: u32) -> u32 {
+    n
+}
+
+trait Greets {
+    fn greet(&self);
+    fn twice(&self) -> u32 { helper(2) }
+}
+
+pub async fn spun<T: Into<u32>>(t: T) -> u32 { helper(t.into()) }
+
+fn main() {
+    let n = helper(1);
+    println!(\"helper {n}\");
+    // helper again
+    let mut v = Vec::new();
+    v.push(n);
+}
+";
+    std::fs::write(&path, text).expect("writing the source file");
+    let source = source_text(&path).expect("the file is read");
+
+    // What each row's links spell, so a range that slipped is a name that is wrong and
+    // not a number.
+    let named = |index: usize| -> Vec<String> {
+        let line = text.lines().nth(index).expect("a row of the file");
+        let units: Vec<u16> = line.encode_utf16().collect();
+        links_in(&source, index)
+            .iter()
+            .map(|link| String::from_utf16_lossy(&units[link.start..link.end.min(units.len())]))
+            .collect()
+    };
+
+    assert!(named(0).is_empty(), "the definition's own name is a link");
+    assert!(
+        named(5).is_empty(),
+        "a trait method's declaration is a link"
+    );
+    // The declaration's own name is passed over and the row goes on: a body written on
+    // the `fn` line calls from there, which is how a trait's default method is written.
+    assert_eq!(
+        named(6),
+        vec!["helper"],
+        "a call beside a declaration is not a link"
+    );
+    assert_eq!(
+        named(9),
+        vec!["helper", "into"],
+        "a call beside a declaration with keywords and a bound before it is not a link"
+    );
+    assert!(named(11).is_empty(), "the definition's own name is a link");
+    assert_eq!(named(12), vec!["helper"], "a call is not a link");
+    assert_eq!(named(13), vec!["println!"], "a macro is not a link");
+    assert!(named(14).is_empty(), "a name in a comment is a link");
+    assert_eq!(named(15), vec!["new"], "an associated call is not a link");
+    assert_eq!(named(16), vec!["push"], "a method call is not a link");
+}
+
 /// Two lines of one file reached one after the other are two places on the tab's trail,
 /// so Back returns to the line the reader came from. A source file used to be "one
 /// place", and a door that landed on a line of the file already on screen left nothing
@@ -3662,6 +3731,385 @@ fn source_menu_harness() -> impl IntoElement {
             document,
         }
     })
+}
+
+/// The Source pane over a source-driven tab with a language server behind it: what a
+/// press on a call in the text reaches, and what its answer opens.
+fn linking_harness() -> impl IntoElement {
+    let states = use_project_states();
+    let language = use_consume::<Talking>().0;
+    let follow = use_consume::<Following>().0;
+    let work = use_consume::<ServerWorking>().0;
+    use_language_with(language, follow, states.proj, move |job| work(job));
+
+    let open = use_open();
+    let marked = use_consume::<Marked>().0;
+    let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
+    let driven = use_consume::<Drives>().0;
+    let marks_at = use_consume::<MarksAt>().0;
+    let code_rows = use_consume::<CodeRows>().0;
+    let active = use_consume::<Active>().0;
+    use_land(
+        active, open.docs, marked, landing, plant, driven, marks_at, code_rows,
+    );
+    use_follow(follow, open, states.visits, marked, landing, plant, driven);
+
+    let file = use_consume::<Subject>().0;
+    let document = Document::Source(file);
+    rect().expanded().child(SourcePane {
+        tab: pane_tab(&document),
+        document,
+    })
+}
+
+/// Mount [`linking_harness`] over `file`, with a worker that records every job and
+/// answers from `answer`.
+macro_rules! mount_linking {
+    ($answer:expr, $file:expr) => {{
+        let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
+        let answer = $answer;
+        let work = move |job: LspJob| {
+            let recorded = match &job {
+                LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
+                LspJob::Ask { at, .. } => AskedOfServer::Ask(at.clone()),
+                LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
+                LspJob::Stop => AskedOfServer::Stop,
+            };
+            let _ = asked.send_blocking(recorded);
+            answer(job)
+        };
+        let file: Arc<str> = $file;
+        let (mut test, (states, language, location, driven)) = TestingRunner::new(
+            linking_harness,
+            (700., 400.).into(),
+            move |runner: &mut _| {
+                let (states, location) = location_states!(runner);
+                runner.provide_root_context(|| Shift(State::create(false)));
+                runner.provide_root_context(move || ServerWorking(Arc::new(work)));
+                let language = runner
+                    .provide_root_context(|| Talking(State::create(Language::default())))
+                    .0;
+                runner.provide_root_context(|| Following(State::create(Follow::default())));
+                runner.provide_root_context(move || Subject(file.clone()));
+                // Which line each tab's assembly side follows: what the answer writes.
+                let driven = runner
+                    .provide_root_context(|| Drives(State::create(Driven::default())))
+                    .0;
+                (states, language, location, driven)
+            },
+            1.,
+        );
+        test.sync_and_update();
+        (test, states, language, location, driven, asks)
+    }};
+}
+
+/// The middle of the run reading `word` in the one code row that draws it.
+///
+/// `label_area` answers with the whole paragraph for a span, a code row's text being one
+/// paragraph; a press has to land on the word. The font is fixed-width, so a column is a
+/// column's width along the paragraph and the arithmetic is exact enough to land inside a
+/// name.
+fn word_point(test: &TestingRunner, word: &str) -> (f64, f64) {
+    let (area, text, _) = paragraphs(test)
+        .into_iter()
+        .find(|(_, text, _)| text.contains(word))
+        .unwrap_or_else(|| panic!("{word:?} is drawn"));
+    let at = text.find(word).expect("found just above");
+    let column = text[..at].encode_utf16().count() as f32;
+    let width = area.width() / text.encode_utf16().count() as f32;
+    let middle = area.min_x() + (column + word.encode_utf16().count() as f32 / 2.0) * width;
+    (middle as f64, (area.origin.y + area.height() / 2.0) as f64)
+}
+
+/// The place the server was asked about, waited for: the worker takes its jobs on a
+/// thread of its own, and the stop that follows the project on mount comes first.
+fn next_ask(
+    test: &mut TestingRunner,
+    asks: &async_channel::Receiver<AskedOfServer>,
+) -> Option<Lookup> {
+    // The press writes; the worker is handed its job a pass later.
+    settle(test);
+    while let Some(job) = next_job(asks) {
+        if let AskedOfServer::Ask(at) = job {
+            return Some(at);
+        }
+    }
+    None
+}
+
+/// The file a call-following test reads, written where a test can put one.
+fn calling_file(name: &str) -> (Arc<str>, PathBuf) {
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-following-{}-{name}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("calls.rs");
+    std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
+        .expect("writing the source file");
+    (
+        Arc::from(path.to_str().expect("a utf-8 temporary path")),
+        directory,
+    )
+}
+
+/// The answer opens the definition: the tab goes to the file and line the server named,
+/// the assembly side follows that line as it follows a clicked one, and the place goes on
+/// the trail so Back returns to the call.
+#[test]
+fn a_definition_answer_opens_the_file_and_line_it_names() {
+    let (file, directory) = calling_file("opens");
+    let defined = directory.join("helper.rs");
+    std::fs::write(&defined, "fn helper(n: u32) -> u32 {\n    n\n}\n")
+        .expect("writing the definition's file");
+    let place = lsp::Place {
+        file: defined.clone(),
+        line: 1,
+        column: 3,
+    };
+    let (mut test, states, language, location, driven, _asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, .. } => Some(LspAnswer::Defined {
+                run,
+                places: Ok(vec![place.clone()]),
+            }),
+            _ => None,
+        },
+        file.clone()
+    );
+    let mut language = language;
+    let calling = Document::Source(file.clone());
+    open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
+    settle(&mut test);
+    language.write().state = Lsp::Running;
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    for _ in 0..8 {
+        settle(&mut test);
+    }
+
+    let opened: Arc<str> = Arc::from(defined.to_str().expect("a utf-8 temporary path"));
+    let document = Document::Source(opened.clone());
+    assert!(
+        states.open.active() == Some(document.clone()),
+        "the answer opened nothing"
+    );
+    assert!(
+        states.open.active_stop().map(|(_, stop)| stop.line) == Some(Some(1)),
+        "the place is the file and not the line in it"
+    );
+    // The assembly side follows that line, which is what a source-driven tab is driven
+    // from -- and it is written under the place, not the file.
+    let id = states.open.active_id().expect("a tab");
+    let entry = (id, Stop::on(document, 1));
+    assert_eq!(
+        location
+            .marked
+            .peek()
+            .source
+            .as_ref()
+            .map(|picked| picked.rows.anchor),
+        Some(0),
+        "the definition's line was not picked out"
+    );
+    assert_eq!(
+        driven.peek().line(&entry),
+        Some(1),
+        "the assembly side follows no line"
+    );
+
+    // And Back returns to the call.
+    navigate(states.open, Nav::Back);
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(calling),
+        "Back did not return to the call"
+    );
+}
+
+/// The caret lands on the **name** and not at the start of its line: the column the
+/// server named is where the answer's run is, and the run is empty, so nothing is
+/// selected.
+#[test]
+fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
+    let (file, directory) = calling_file("column");
+    let defined = directory.join("helper.rs");
+    std::fs::write(&defined, "pub fn helper(n: u32) -> u32 {\n    n\n}\n")
+        .expect("writing the definition's file");
+    // `helper` is the seventh column of the definition's first line, counted from zero
+    // in UTF-16 units, which is what the protocol answers in and what a row is drawn in.
+    let place = lsp::Place {
+        file: defined.clone(),
+        line: 1,
+        column: 7,
+    };
+    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, .. } => Some(LspAnswer::Defined {
+                run,
+                places: Ok(vec![place.clone()]),
+            }),
+            _ => None,
+        },
+        file.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    language.write().state = Lsp::Running;
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    for _ in 0..8 {
+        settle(&mut test);
+    }
+
+    let picked = location
+        .marked
+        .peek()
+        .source
+        .clone()
+        .expect("the definition's line was not picked out");
+    assert_eq!(
+        picked.chars.lead(),
+        Caret { row: 0, col: 7 },
+        "the caret is not on the name"
+    );
+    assert!(
+        picked.chars.is_empty(),
+        "the name was selected where a caret was wanted"
+    );
+}
+
+/// A name defined in the file the tab already shows lands the caret on it too. That door
+/// marks its line itself and leaves no landing, the document not having changed, so the
+/// new place woke the effect that rebuilds the runs and it found only the driven line --
+/// a line and no column, which put the caret back at the row's start.
+#[test]
+fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
+    let (file, directory) = calling_file("on-top");
+    let _ = &directory;
+    // The call's own file: line 2 is `    let n = helper(1);`, whose column 12 is the
+    // `h`. A definition in the file already shown is the same door and a different path.
+    let place = lsp::Place {
+        file: PathBuf::from(&*file),
+        line: 2,
+        column: 12,
+    };
+    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, .. } => Some(LspAnswer::Defined {
+                run,
+                places: Ok(vec![place.clone()]),
+            }),
+            _ => None,
+        },
+        file.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    language.write().state = Lsp::Running;
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    for _ in 0..8 {
+        settle(&mut test);
+    }
+
+    let picked = location
+        .marked
+        .peek()
+        .source
+        .clone()
+        .expect("the definition's line was not picked out");
+    assert_eq!(
+        picked.chars.lead(),
+        Caret { row: 1, col: 12 },
+        "the caret is not on the name"
+    );
+}
+
+/// A press on a call asks the server where the name is defined, at the place the pointer
+/// was on and in the units the protocol takes -- the line counted from zero and the
+/// column in UTF-16 units, which is what a source row's columns already are. And it picks
+/// no line out: the press is the question and not a place in the file.
+#[test]
+fn a_press_on_a_call_asks_where_the_name_is_defined() {
+    let (file, _directory) = calling_file("asks");
+    let (mut test, states, language, location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    let document = Document::Source(file.clone());
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    settle(&mut test);
+    // A server there to be asked: nothing is a link without one. Written after the
+    // project has settled, since a project arriving is what stops a server.
+    language.write().state = Lsp::Running;
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    settle(&mut test);
+
+    let asked = next_ask(&mut test, &asks).expect("the press asked the server");
+    assert_eq!(
+        asked,
+        Lookup {
+            file: PathBuf::from(&*file),
+            // `let n = helper(1);` is the file's second row, and `helper` its twelfth
+            // column: both counted from zero, which is the protocol's own counting.
+            line: 1,
+            column: 12,
+        }
+    );
+    assert!(
+        location.marked.peek().source.is_none(),
+        "the press picked a line out"
+    );
+}
+
+/// With no server there is nothing to ask, so a press on the same name is a press on the
+/// row: the line is picked out, as any other press in a source-driven tab picks it out.
+#[test]
+fn a_press_on_a_call_with_no_server_picks_the_line_out() {
+    let (file, _directory) = calling_file("nobody");
+    let (mut test, states, _language, location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let document = Document::Source(file.clone());
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    settle(&mut test);
+
+    settle(&mut test);
+    assert!(
+        std::iter::from_fn(|| asks.try_recv().ok())
+            .all(|asked| !matches!(asked, AskedOfServer::Ask(_))),
+        "a question was asked with no server"
+    );
+    assert!(
+        location.marked.peek().source.is_some(),
+        "the press picked no line out"
+    );
 }
 
 /// Where the label reading `text` is, as a point to put the pointer on.
@@ -14523,7 +14971,8 @@ fn project_view_harness() -> Element {
     // A start is answered, so that a press here can reach a running server the way the top
     // bar's does; and the project's own settings are really read, so the view lists what
     // that read answered and a file on disk is what it is being asked about.
-    use_language_with(language, states.proj, |job: LspJob| match job {
+    let follow = use_provide_root_context(|| Following(State::create(Follow::default()))).0;
+    use_language_with(language, follow, states.proj, |job: LspJob| match job {
         LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
             settings: lsp::settings_in(&directory),
             directory,
@@ -14978,7 +15427,8 @@ fn server_harness() -> Element {
     let work = use_consume::<ServerWorking>().0;
     let mut asking = use_consume::<ServerAsking>().0;
 
-    let jobs = use_language_with(language, states.proj, move |job| work(job));
+    let follow = use_consume::<Following>().0;
+    let jobs = use_language_with(language, follow, states.proj, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
     // The prompt is at the app's root, under the bar the control is in; here it is beside
     // it, which is the same thing to everything that reaches it.
@@ -15026,6 +15476,7 @@ macro_rules! mount_server {
                 let asking = runner
                     .provide_root_context(|| ServerAsking(State::create(None)))
                     .0;
+                runner.provide_root_context(|| Following(State::create(Follow::default())));
                 (states, language, asking)
             },
             1.,

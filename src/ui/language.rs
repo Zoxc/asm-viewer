@@ -181,8 +181,6 @@ pub(crate) enum LspJob {
     /// because what it answers is what a start has to carry.
     ReadSettings { directory: PathBuf },
     /// Where what is at a place is defined.
-    // The one consumer is Step 24; until then it is asked for by the tests alone.
-    #[cfg_attr(not(test), allow(dead_code))]
     Ask { run: u64, at: Lookup },
     /// Let go of the server: it has been stopped already, and this is what reaps it.
     Stop,
@@ -316,6 +314,7 @@ pub(crate) struct Talking(pub(crate) State<Language>);
 /// Start the worker and keep the state in step with it. Called once, at the root.
 pub(crate) fn use_language_with(
     mut language: State<Language>,
+    mut follow: State<Follow>,
     mut proj: State<OpenProject>,
     work: impl Fn(LspJob) -> Option<LspAnswer> + Send + 'static,
 ) -> LspJobs {
@@ -395,14 +394,39 @@ pub(crate) fn use_language_with(
                         if held.run != run {
                             continue;
                         }
-                        // Nothing takes an answer yet (Step 24 is the consumer). What is
-                        // taken here is the one thing the control has to show: a server
-                        // that stopped answering is no longer running.
-                        let Err(lsp::Failure::Broken(why)) = places else {
-                            continue;
+                        let why = match places {
+                            Ok(places) => {
+                                // Whoever asked takes it, and an answer naming nowhere
+                                // is an answer: the click was a question, not a promise.
+                                // Bound before the write, as ever.
+                                let mut waiting = follow.peek().clone();
+                                if waiting.answer(run, &places) {
+                                    follow.set(waiting);
+                                }
+                                continue;
+                            }
+                            // The server refused the question -- it is still reading the
+                            // project, or has no such file of its own. Nothing found, and
+                            // not a server to say anything about: it is answering.
+                            Err(failure @ lsp::Failure::Refused { .. }) => {
+                                log::warn!("the language server refused a definition: {failure}");
+                                let mut waiting = follow.peek().clone();
+                                if waiting.give_up(run) {
+                                    follow.set(waiting);
+                                }
+                                continue;
+                            }
+                            Err(failure) => failure,
                         };
+                        // What is left is a server that stopped answering, which is the
+                        // one thing the control has to show.
+                        let mut waiting = follow.peek().clone();
+                        if waiting.give_up(run) {
+                            follow.set(waiting);
+                        }
+                        let held = language.peek().clone();
                         language.set(Language {
-                            state: Lsp::Failed(lsp::Failure::Broken(why).to_string()),
+                            state: Lsp::Failed(why.to_string()),
                             working: false,
                             asking: held.asking,
                             settings: held.settings,
@@ -641,19 +665,20 @@ pub(crate) fn stop_server(mut language: State<Language>, jobs: &LspJobs) {
 }
 
 /// Where what is at a place is defined. The answer is the worker's, and arrives under the
-/// run it was asked in.
-// The one consumer is Step 24.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn ask_definition(language: State<Language>, jobs: &LspJobs, at: Lookup) {
+/// run it was asked in, which is what this hands back so a caller can tell its own answer
+/// from another's.
+///
+/// `None` with no server: there is nobody to ask, and a question is not what starts one --
+/// that is the control, and only the reader presses it. One that is still starting is
+/// asked all the same, the question queueing behind the start to be answered once there is
+/// somebody to answer it, and finding nothing to talk to if the start failed.
+pub(crate) fn ask_definition(language: State<Language>, jobs: &LspJobs, at: Lookup) -> Option<u64> {
     let held = language.peek().clone();
-    // With no server there is nobody to ask, and a question is not what starts one: that
-    // is the control, and only the reader presses it. One that is still starting is asked
-    // all the same -- the question queues behind the start and is answered when the server
-    // is there, and finds nothing to talk to if the start failed.
     if !held.started() {
-        return;
+        return None;
     }
     jobs.send(LspJob::Ask { run: held.run, at });
+    Some(held.run)
 }
 
 /// The control in the top bar: one press starts the language server, the next stops it.

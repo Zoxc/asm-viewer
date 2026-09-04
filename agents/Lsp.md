@@ -146,13 +146,15 @@ Things learned from rust-analyzer's own transport, each of which is a test:
 - The one notification worth keeping is `window/showMessage`, which is all a client with no
   capabilities is told when the server cannot make sense of the project; it goes to the log.
   A question asked before the workspace is loaded can also come back as InternalError with
-  "file not found", which is neither of the two "ask again" codes -- something for Step 24
-  to decide about, since nothing asks yet.
+  "file not found", which is neither of the two "ask again" codes and is left as the
+  refusal it is; what the consumer makes of that is below.
 
 Positions go out as the protocol takes them -- a line counted from zero and a column in
 UTF-16 units, which is what `src/chars.rs` already counts in -- and a `Place` comes back
 with a **1-based** line, the unit line information is in everywhere else in the app. The
-conversion is in one place and happens once.
+conversion is in one place and happens once. The column comes back as it was given, a
+UTF-16 unit counted from zero, since that is the unit a pane counts columns in; an answer
+that leaves it out is column 0 and not no place at all, the line being what opens the file.
 
 **The file is not opened first.** rust-analyzer reads the project's files itself, and this
 app only ever shows what is on disk, so a `didOpen` would put an overlay over the file that
@@ -306,8 +308,39 @@ the reason one could not be used, in the same `invalid_fg`. A reader who cannot 
 their server was told cannot tell a setting that was ignored from one that was never sent.
 Nothing at all where a project said nothing, which is most of them.
 
-## Not here yet
+## What a definition answer opens
 
-Nothing consumes a definition; Step 24 is the consumer. `$/progress` is not asked for, so
-"running" means the handshake returned and not that indexing finished -- a first question
-can come back empty while rust-analyzer is still reading the project.
+`src/ui/follow.rs`. A press on a call sends the row's file, its index and the pressed
+column, all three already in the units the protocol takes, and what its answer opens is
+decided **at the press** and kept -- `Asking`'s rule once more. Two workers stand between
+the press and the tab moving, so by the time the answer lands the reader may have moved on
+and Ctrl may no longer be held; what was asked for is what was asked for.
+
+One question is held. A reader clicking twice wants the second answer, `worth_doing`
+already drops all but the last, and an answer arriving under a run this no longer holds is
+an answer to nobody.
+
+The place is opened through `land` like every other door: the source pane on the line, both
+panes owed the scroll, and the place on the tab's trail so Back returns to the call --
+which is what a source `Stop` carrying a line is for (`agents/UI.md`). What `land` does not
+do is say which line the assembly side follows, so the drive is written beside it, under
+the place the tab is **at** and never under the file.
+
+The caret goes on the **name** and not at the start of its line, which is what the answer's
+column is for. It travels as the `Landing`'s `columns`, an empty run, so `line_pick` leaves
+a caret there and selects nothing -- the same field a search hit selects its match with
+(`agents/Sidebar.md`). A name defined in the file the tab already shows takes the other
+path through `land`, which marks the line itself and leaves no landing; what keeps the
+column there is in `agents/Panes.md`, under the doors.
+
+**Every way of not answering is nothing found.** An empty answer is one; so is
+`Refused`, which is where a question asked before the workspace is loaded arrives --
+`-32801` and `-32800` the crate already turns into an empty answer, and InternalError
+"file not found" it does not, since it is not a code that means "ask again". It goes to the
+log and leaves the control alone: a server that refuses a question is a server that is
+answering. Only `Broken` still says the server stopped answering, which is the one thing
+the control has to show.
+
+`$/progress` says a server is reading the project, and "running" means the handshake
+returned rather than that indexing finished -- so a first question can come back empty
+while rust-analyzer is still working, and the reader presses again.

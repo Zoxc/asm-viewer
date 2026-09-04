@@ -64,6 +64,18 @@ pub(crate) struct Text {
     /// object's code -- which is when the hand is shown over it; a link that is one
     /// always shows the hand always.
     pub(crate) door: bool,
+    /// The columns of the runs of this row's own text that are links, in the order they
+    /// are drawn. A door that is text and not an element: the row's columns stay the
+    /// file's own, which is what lets a press on one say where it was in the terms
+    /// everything else speaks (`src/chars.rs`).
+    ///
+    /// Each one is exactly one of `head`'s spans, so lighting a link changes a span's
+    /// style and never where the spans are cut -- a boundary that moved with the pointer
+    /// would re-shape the row and widen the listing for good.
+    pub(crate) links: Vec<Range<usize>>,
+    /// What a press on one of them does, given its columns. Built per row, as the menu
+    /// is.
+    pub(crate) on_link: Option<Rc<dyn Fn(Range<usize>)>>,
 }
 
 /// What one row draws of the pane's character selection, as the list tells it: its
@@ -203,8 +215,29 @@ pub(crate) fn code_row(
     // Whether the link is one now: always, or only while Ctrl is held, for a door. Asked
     // at the pointer's move and not subscribed to, the icon being set from handlers.
     let ctrl = try_consume_context::<Ctrl>().map(|ctrl| ctrl.0);
+    let alt = try_consume_context::<Alt>().map(|alt| alt.0);
     let door = text.as_ref().is_some_and(|text| text.door);
     let hand = move || !door || ctrl.is_some_and(|ctrl| *ctrl.peek());
+    // The links in the row's own text, and what a press on one does. Taken out of `text`
+    // before it is moved into the paragraph below, since the handlers need them.
+    let links: Vec<Range<usize>> = text
+        .as_ref()
+        .map(|text| text.links.clone())
+        .unwrap_or_default();
+    let on_link = text.as_ref().and_then(|text| text.on_link.clone());
+    // Which of them the pointer is over, or `None`. Written with `set_if_modified`, so a
+    // row is drawn again when the pointer crosses a link's edge and not as it moves along
+    // one.
+    let mut over = use_state(|| None::<usize>);
+    // Alt says a press on a link is not a door, so what is under the pointer is text.
+    let held = move || alt.is_some_and(|alt| *alt.peek());
+    let at_link = {
+        let links = Rc::new(links.clone());
+        move |column: Option<usize>| -> Option<usize> {
+            let column = column?;
+            links.iter().position(|link| link.contains(&column))
+        }
+    };
     // Whether the paragraph has been laid out, which is when the holder can answer where
     // a column is: the caret is drawn from the render after that.
     let mut laid = use_state(|| false);
@@ -252,6 +285,7 @@ pub(crate) fn code_row(
         );
     }
 
+    let lit = over();
     let paragraph = text.map(|text| {
         let units = text.line.units();
         let highlight = text
@@ -367,7 +401,7 @@ pub(crate) fn code_row(
                 laid.set_if_modified(true);
             })
             .vertical_align(VerticalAlign::Center)
-            .spans_iter(text.head.into_iter())
+            .spans_iter(light(text.head, lit.and_then(|lit| links.get(lit))).into_iter())
             .maybe_child(inline)
             .spans_iter(text.tail.into_iter());
         (paragraph, selected, caret)
@@ -413,12 +447,31 @@ pub(crate) fn code_row(
         .on_pointer_down({
             let column = column.clone();
             let holder = holder.clone();
+            let at_link = at_link.clone();
+            let links = links.clone();
             move |e: Event<PointerEventData>| {
                 if e.button() == Some(MouseButton::Left) {
-                    let press = column(e.element_location(), true).map(|col| {
-                        // freya counts the presses in one place: two on a word take the
-                        // word, three the row's text, as the text engine divides them.
-                        match EventsCombos::pressed(e.global_location()) {
+                    let at = column(e.element_location(), true);
+                    // freya counts the presses in one place, and **asking is counting**:
+                    // a press it was not asked about is one the next reads as a double.
+                    // So it is asked exactly once, whatever the press turns out to be.
+                    let presses = EventsCombos::pressed(e.global_location());
+                    // A link is followed on a single press with nothing held: two presses
+                    // on a name are what take the word, and Alt says this one is not a
+                    // door.
+                    let link = at_link(at)
+                        .filter(|_| presses == PressEventType::Single && !held())
+                        .zip(on_link.clone());
+                    if let Some((link, follow)) = link {
+                        // And it picks no line out: the press is the question and not a
+                        // place in the file.
+                        follow(links[link].clone());
+                        return;
+                    }
+                    let press = at.map(|col| {
+                        // Two presses on a word take the word, three the row's text, as
+                        // the text engine divides them.
+                        match presses {
                             PressEventType::Double => word_at(&holder.read(), col)
                                 .map(|(from, to)| Press::Span(from, to))
                                 .unwrap_or(Press::At(col)),
@@ -447,9 +500,17 @@ pub(crate) fn code_row(
             let (row_x, text_x) = (row_x.clone(), text_x.clone());
             move |e: Event<PointerEventData>| {
                 let at = e.element_location();
-                mark_drag(marked, pane, row, column(at, false));
+                let column = column(at, false);
+                mark_drag(marked, pane, row, column);
+                // Not while a selection is being swept out: a drag along a line would
+                // otherwise underline every name it passed under.
+                let hovered = match dragging(marked, pane) || held() {
+                    true => None,
+                    false => at_link(column),
+                };
+                over.set_if_modified(hovered);
                 let on_text = has_text && at.x as f32 >= text_x.get() - row_x.get();
-                set_icon(if over_link.get() && hand() {
+                set_icon(if (over_link.get() && hand()) || hovered.is_some() {
                     CursorIcon::Pointer
                 } else if on_text {
                     CursorIcon::Text
@@ -458,7 +519,10 @@ pub(crate) fn code_row(
                 });
             }
         })
-        .on_pointer_out(|_| set_icon(CursorIcon::Default))
+        .on_pointer_out(move |_| {
+            over.set_if_modified(None);
+            set_icon(CursorIcon::Default);
+        })
         .children(before)
         // Before the paragraph in the tree, so it is painted under the text -- and
         // **always there**, as is the caret's slot: freya matches siblings by position,
@@ -470,6 +534,37 @@ pub(crate) fn code_row(
                 .maybe_child(paragraph)
                 .child(caret.unwrap_or_else(nothing))
         })
+}
+
+/// `head` with the run at `columns` drawn as a link under the pointer, and unchanged
+/// where nothing is.
+///
+/// A link is exactly one of these spans -- a name is one colour run and the run is what
+/// the columns were taken from ([`links_in`]) -- so this changes a span's **style** and
+/// never where the spans are cut. A boundary that moved with the pointer would re-shape
+/// the row, and the widest row a listing has drawn only ever grows.
+///
+/// The colour is the underline's too: freya's spans carry a decoration and no colour for
+/// it, and skia draws one in the text's own. Which is what is wanted -- one colour says
+/// both -- and is what `name_hover_fg` already describes itself as.
+fn light(head: Vec<Span<'static>>, columns: Option<&Range<usize>>) -> Vec<Span<'static>> {
+    let Some(columns) = columns else {
+        return head;
+    };
+    let mut column = 0;
+    head.into_iter()
+        .map(|span| {
+            let units = span.text.encode_utf16().count();
+            let at = column;
+            column += units;
+            match at == columns.start && column == columns.end {
+                true => span
+                    .color(palette().name_hover_fg)
+                    .text_decoration(TextDecoration::Underline),
+                false => span,
+            }
+        })
+        .collect()
 }
 
 /// A mark's slot with no mark in it: nothing drawn, nothing hit, no size.

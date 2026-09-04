@@ -173,8 +173,9 @@ fn a_definition_answer_is_read_in_each_shape_it_may_come_in() {
         json!({ "start": { "line": 11, "character": 4 }, "end": { "line": 11, "character": 9 } });
     let place = Place {
         file: PathBuf::from("/p/src/main.rs"),
-        // The protocol's line 11 is the twelfth line.
+        // The protocol's line 11 is the twelfth line, and its column is kept as it came.
         line: 12,
+        column: 4,
     };
 
     let location = json!({ "uri": "file:///p/src/main.rs", "range": range });
@@ -182,6 +183,22 @@ fn a_definition_answer_is_read_in_each_shape_it_may_come_in() {
     assert_eq!(places(&location), vec![place.clone()]);
     let link = json!({ "targetUri": "file:///p/src/main.rs", "targetRange": range });
     assert_eq!(places(&json!([link])), vec![place]);
+}
+
+/// The line is what opens the file, so an answer that leaves the column out is still a
+/// place -- read at column 0, where a caret with nothing better to say sits anyway.
+#[test]
+fn an_answer_with_no_column_is_read_at_column_zero() {
+    let range = json!({ "start": { "line": 0 }, "end": { "line": 0 } });
+    let location = json!({ "uri": "file:///p/x.rs", "range": range });
+    assert_eq!(
+        places(&location),
+        vec![Place {
+            file: PathBuf::from("/p/x.rs"),
+            line: 1,
+            column: 0,
+        }]
+    );
 }
 
 #[test]
@@ -258,8 +275,8 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
                 "id": message["id"].clone(),
                 "result": [{
                     "uri": "file:///p/src/other.rs",
-                    "range": { "start": { "line": 3, "character": 0 },
-                               "end": { "line": 3, "character": 1 } },
+                    "range": { "start": { "line": 3, "character": 8 },
+                               "end": { "line": 3, "character": 14 } },
                 }],
             }));
         },
@@ -283,6 +300,7 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
         vec![Place {
             file: PathBuf::from("/p/src/other.rs"),
             line: 4,
+            column: 8,
         }]
     );
 }
