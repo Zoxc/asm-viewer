@@ -127,6 +127,11 @@ pub(crate) struct Palette {
 
     /// What a pattern that will not compile, and the reason it will not, are written in.
     pub(crate) invalid_fg: Color,
+    /// Under the file finder's panel, falling on whatever the window was showing: what
+    /// lifts it off the app rather than dimming the app to say the same thing. The
+    /// reader is choosing a file by what they can see of the window under it, so nothing
+    /// there is taken away.
+    pub(crate) panel_shadow: Color,
     /// The part of a Search row's line that the pattern matched, drawn bold in this on
     /// top of the row's own colour. A colour and a weight and not a background: a span
     /// inside a paragraph can carry no fill of its own.
@@ -148,6 +153,7 @@ impl Palette {
         pair_selected_bg: Color::from_argb(190, 197, 214, 184),
         pair_edge: Color::from_rgb(186, 208, 168),
         drop_preview_bg: Color::from_argb(60, 105, 89, 132),
+        panel_shadow: Color::from_argb(70, 0, 0, 0),
         icon_fg: Color::from_rgb(90, 90, 90),
         toggle_on_bg: Color::from_rgb(196, 196, 196),
         server_bg: Color::from_rgb(233, 229, 243),
@@ -198,6 +204,7 @@ impl Palette {
         pair_selected_bg: Color::from_argb(190, 120, 160, 110),
         pair_edge: Color::from_rgb(104, 140, 96),
         drop_preview_bg: Color::from_argb(90, 150, 130, 190),
+        panel_shadow: Color::from_argb(140, 0, 0, 0),
         icon_fg: Color::from_rgb(160, 160, 160),
         toggle_on_bg: Color::from_rgb(88, 88, 92),
         server_bg: Color::from_rgb(64, 60, 76),

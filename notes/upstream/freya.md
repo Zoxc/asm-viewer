@@ -183,6 +183,14 @@ upstream is one `interactive(false)` on the closing frames.
 
 ## Wanted
 
+**A `Popup` that need not be centred down the window.** `PopupBackground` stacks two
+window-sized global rects and `.center()`s the content in the second, and nothing on `Popup`
+says otherwise, so a window pinned near the top of the screen -- an editor's quick-open, which
+is where a reader typing a path is looking -- cannot use it. The file finder hand-rolls the
+overlay layer, the press outside and the Escape key that `Popup` would have given it
+(`ui/finder.rs`); `RescuedPopup`, which is content to be centred, still uses `Popup`. An
+alignment on the background would do it.
+
 **A pointer release nothing can cancel.** There is no `on_global_pointer_up`; a release is
 `on_global_pointer_press`, which any handler's `prevent_default` on the way cancels, and
 freya's own scrollbar thumb does (above). The app ends a sweep on the capture-phase press

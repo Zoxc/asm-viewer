@@ -74,8 +74,6 @@ leaves this list when it is. That is a move made on request, like everything els
   draws it unscrolled. Removing it means a listing deciding its own offset as it renders,
   which is a change to how everything here scrolls rather than to the doors, so the decision
   is what a `VirtualScrollView` can be told before its first layout.
-- [ ] A file search dialog on Ctrl+P: type part of a path and open the file it names, the
-  way an editor's quick-open does.
 - [ ] Hold a question the server answered with nothing, and ask it again once the server is
   ready. rust-analyzer answers `null` to every question while it is still loading the project,
   which is the same answer as a name it cannot place (`notes/upstream/rust-analyzer.md`), so a

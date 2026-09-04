@@ -117,6 +117,15 @@ pub(crate) fn is_search_chord(key: &Key, modifiers: Modifiers) -> bool {
         && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case("f"))
 }
 
+/// The chord that opens the file finder: Ctrl+P -- Ctrl or Meta, and neither Shift nor
+/// Alt. Answered at the root, wherever the keyboard is; a box only has to decline it, or
+/// it is typed in as a `p`.
+pub(crate) fn is_finder_chord(key: &Key, modifiers: Modifiers) -> bool {
+    modifiers.contains(Modifiers::ctrl_or_meta())
+        && !modifiers.intersects(Modifiers::SHIFT | Modifiers::ALT)
+        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case("p"))
+}
+
 /// The filter over one of the sidebar lists: a text box, and the three toggles that say
 /// how to read what is in it. The state it edits arrives as a prop, never as a context.
 #[derive(Clone, PartialEq)]
@@ -188,6 +197,9 @@ impl Component for FilterBar {
                             // the same rule already answered once, for the modifier the
                             // root tracks.
                             if is_search_chord(&e.key, e.modifiers) {
+                                return false;
+                            }
+                            if is_finder_chord(&e.key, e.modifiers) {
                                 return false;
                             }
                             if let (Key::Named(NamedKey::Enter), Some(mut submits)) =

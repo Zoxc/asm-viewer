@@ -12,6 +12,7 @@ use super::*;
 // explicit import wins over a glob, so this is what the name means here: ours.
 use super::settings_view::use_theme;
 use crate::search::{Hit, SearchEvent, SearchQuery};
+use crate::walk::WalkEvent;
 use freya_testing::TestingRunner;
 
 /// Three rows wired exactly the way the two panes are: the press that starts a run, the
@@ -7265,6 +7266,14 @@ fn every_wash_reads_against_the_pane_under_it() {
             ),
             ("pair_edge", palette.pair_edge, palette.asm_pane_bg),
             ("drop_preview_bg", palette.drop_preview_bg, palette.pane_bg),
+            // Under the file finder's panel, falling on whatever the window was showing:
+            // a pane and, where the finder is wider than one, the chrome around it.
+            ("panel_shadow", palette.panel_shadow, palette.pane_bg),
+            (
+                "panel_shadow over the chrome",
+                palette.panel_shadow,
+                palette.header_bg,
+            ),
             // The × on a tab sits on either of two grounds and has to say the same thing
             // over both: the active tab's own pane, and a hovered tab's grey.
             ("close_hover_bg", palette.close_hover_bg, palette.pane_bg),
@@ -15120,7 +15129,7 @@ fn search_over(
     line: u32,
     work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync + 'static,
 ) -> (TestingRunner, ProjectStates, PathBuf) {
-    let (test, states, directory, _, _) = search_and_modifiers(line, work);
+    let (test, states, directory, _, _, _) = search_and_modifiers(line, work);
     (test, states, directory)
 }
 
@@ -15135,6 +15144,7 @@ fn search_and_modifiers(
     PathBuf,
     Modifiers5,
     State<Marks>,
+    State<Finder>,
 ) {
     let directory = run_directory(line).join("searched");
     let _ = std::fs::remove_dir_all(&directory);
@@ -15165,14 +15175,19 @@ fn search_and_modifiers(
             let marked = runner
                 .provide_root_context(|| Marked(State::create(Marks::default())))
                 .0;
-            (project_states!(runner), held, marked)
+            // The root's key handler answers the finder's chord beside the Search
+            // panel's, so it needs the state the finder is opened through.
+            let finder = runner
+                .provide_root_context(|| Finding(State::create(Finder::default())))
+                .0;
+            (project_states!(runner), held, marked, finder)
         },
         1.,
     );
     let mut proj = states.0.proj;
     proj.write().directory = directory.to_string_lossy().into_owned();
     settle(&mut test);
-    (test, states.0, directory, states.1, states.2)
+    (test, states.0, directory, states.1, states.2, states.3)
 }
 
 /// The five states `ModifierKeys` is made of, created where freya's context is: a test
@@ -15197,10 +15212,11 @@ fn search_with_modifiers(
     ModifierKeys,
     State<bool>,
     State<bool>,
+    State<Finder>,
 ) {
-    let (test, states, directory, held, _) = search_and_modifiers(line, |_query, _emit| {});
+    let (test, states, directory, held, _, finder) = search_and_modifiers(line, |_query, _emit| {});
     let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
-    (test, states, directory, keys, held.0, held.1)
+    (test, states, directory, keys, held.0, held.1, finder)
 }
 
 /// One hit, spelled as the walk spells one.
@@ -15325,7 +15341,7 @@ fn a_hit_from_a_replaced_search_is_dropped() {
 /// at, and a file the source pane would refuse opens nothing.
 #[test]
 fn pressing_a_hit_opens_its_file_on_the_line() {
-    let (mut test, states, directory, _, marked) =
+    let (mut test, states, directory, _, marked, _) =
         search_and_modifiers(line!(), |_query, _emit| {});
     let path = directory.join("x.c");
     std::fs::write(&path, "int x;\nint y;\nint z;\n").expect("writing the source");
@@ -15422,12 +15438,14 @@ fn enter_in_the_box_asks_for_what_is_in_it() {
 fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
     // A runner, because every `State` here belongs to freya's own context, and the panel
     // is what spends what the chord asks for.
-    let (mut test, states, directory, keys, shift, ctrl) = search_with_modifiers(line!());
+    let (mut test, states, directory, keys, shift, ctrl, finder) = search_with_modifiers(line!());
     let searched = states.searched;
     let dock = states.open.dock;
+    let proj = states.proj;
 
-    let chord =
-        |key: Key, modifiers: Modifiers| root_key_down(keys, searched, dock, &key, modifiers);
+    let chord = |key: Key, modifiers: Modifiers| {
+        root_key_down(keys, searched, finder, proj, dock, &key, modifiers)
+    };
 
     chord(Key::Character("f".into()), Modifiers::CONTROL);
     assert!(!searched.peek().focus, "Ctrl+F is the filter boxes' own");
@@ -17456,5 +17474,545 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
          which is long enough to draw the file where it was before"
     );
 
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+// ---------------------------------------------------------------------------------------
+// The file finder.
+
+/// The finder over a walk the test hands in, so that one can be held still: a real walk
+/// answers faster than the runner settles, and the list that is kept is a race by
+/// construction.
+#[derive(Clone)]
+struct Walking(Arc<dyn Fn(&Path, &mut dyn FnMut(WalkEvent) -> ControlFlow<()>) + Send + Sync>);
+
+fn finder_harness() -> impl IntoElement {
+    let finder = use_consume::<Finding>().0;
+    let work = use_consume::<Walking>().0;
+    use_finder_with(finder, move |root, emit| work(root, emit));
+
+    rect().expanded().child(FinderOverlay)
+}
+
+/// The overlay over `work`, with the project's directory set to a real one of this test's
+/// own, and the states the root's key handler writes.
+fn finder_over(
+    line: u32,
+    work: impl Fn(&Path, &mut dyn FnMut(WalkEvent) -> ControlFlow<()>) + Send + Sync + 'static,
+) -> (
+    TestingRunner,
+    ProjectStates,
+    State<Finder>,
+    ModifierKeys,
+    PathBuf,
+) {
+    let directory = run_directory(line).join("found");
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let work = Arc::new(work);
+    let (mut test, states) = TestingRunner::new(
+        finder_harness,
+        (800., 600.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context({
+                let work = work.clone();
+                move || Walking(work.clone())
+            });
+            let finder = runner
+                .provide_root_context(|| Finding(State::create(Finder::default())))
+                .0;
+            // The root's one key handler tracks the modifiers beside answering the
+            // chord, so the chord is pressed through the real thing.
+            let held = runner.provide_root_context(|| {
+                Modifiers5(
+                    State::create(false),
+                    State::create(false),
+                    State::create(false),
+                    State::create(false),
+                    State::create(false),
+                )
+            });
+            (project_states!(runner), finder, held)
+        },
+        1.,
+    );
+    let (states, finder, held) = states;
+    let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    settle(&mut test);
+    (test, states, finder, keys, directory)
+}
+
+/// A file as the walk reports one, under `root`.
+fn walked_file(root: &Path, relative: &str) -> WalkEvent {
+    WalkEvent::File(
+        crate::walk::found_under(root, &root.join(relative)).expect("a path with a name"),
+    )
+}
+
+/// What each row of the list says: a paragraph's spans joined, so a name cut into marked
+/// and unmarked runs reads as the one string a reader sees.
+///
+/// The box is a paragraph too and comes first, being above the list; it is dropped here so
+/// that a row's index is a row's index.
+fn finder_rows(test: &TestingRunner) -> Vec<String> {
+    use freya::elements::paragraph::ParagraphElement;
+    use std::any::Any;
+
+    let mut drawn: Vec<String> = test.find_many(|node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<ParagraphElement>()
+            .map(|paragraph| {
+                paragraph
+                    .spans
+                    .iter()
+                    .map(|span| span.text.to_string())
+                    .collect::<String>()
+            })
+    });
+    if !drawn.is_empty() {
+        drawn.remove(0);
+    }
+    drawn
+}
+
+/// Ctrl+P through the root's one key handler, which is where it is answered: not through
+/// the focused node, since the chord works from wherever the keyboard is.
+fn press_finder_chord(states: &ProjectStates, finder: State<Finder>, keys: ModifierKeys) {
+    root_key_down(
+        keys,
+        states.searched,
+        finder,
+        states.proj,
+        states.open.dock,
+        &Key::Character("p".into()),
+        Modifiers::CONTROL,
+    );
+}
+
+/// The overlay is drawn as nothing at all until the chord, and the walk's files are what
+/// the box then picks out. Fails on a finder that draws its list before it is opened.
+#[test]
+fn the_chord_opens_the_finder_over_the_project_files() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+        let _ = emit(walked_file(root, "notes/Goals.md"));
+        let _ = emit(WalkEvent::Finished);
+    });
+
+    assert!(
+        finder_rows(&test).is_empty(),
+        "the finder is drawn before it is opened"
+    );
+
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("s");
+    settle(&mut test);
+
+    let rows = finder_rows(&test);
+    assert!(
+        rows.iter().any(|row| row.starts_with("files_view.rs")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with("Goals.md")),
+        "{rows:?}"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// With nothing typed the list is the source files opened most recently, newest first --
+/// not everything the walk found. Fails on a finder that lists the walk when the box is
+/// empty.
+#[test]
+fn an_empty_box_lists_the_files_opened_most_recently() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "walked.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    assert!(
+        labels(&test)
+            .iter()
+            .any(|label| label == "No files opened yet. Type to find one."),
+        "a box with nothing typed and nowhere visited lists nothing"
+    );
+
+    // Two files visited, the second last.
+    for name in ["first.rs", "second.rs"] {
+        let path = directory.join(name);
+        open_document(
+            states.open,
+            states.visits,
+            Document::Source(Arc::from(&*path.to_string_lossy())),
+            Reach::Preview,
+        );
+    }
+    press_finder_chord(&states, finder, keys);
+    settle(&mut test);
+
+    let rows = finder_rows(&test);
+    assert_eq!(
+        rows,
+        ["second.rs", "first.rs"],
+        "newest first, and only these"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A row is the file's name and then the directories above it, which is not the order the
+/// path is written in: a column of names all starting `src/ui/` says nothing.
+#[test]
+fn a_row_is_the_name_and_then_the_directories_above_it() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+        let _ = emit(walked_file(root, "top.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("s");
+    settle(&mut test);
+
+    let rows = finder_rows(&test);
+    assert!(
+        rows.iter().any(|row| row == "files_view.rs  src/ui"),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|row| row == "top.rs"), "{rows:?}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Typing narrows the list to the paths the characters appear in, in order, and the best
+/// match is first. Fails on a finder that filters by anything but the fuzzy match.
+#[test]
+fn typing_narrows_the_list_to_the_characters_in_order() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+        let _ = emit(walked_file(root, "src/ui/source_view.rs"));
+        let _ = emit(walked_file(root, "notes/Goals.md"));
+        let _ = emit(WalkEvent::Finished);
+    });
+
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("srcuivw");
+    settle(&mut test);
+
+    let rows = finder_rows(&test);
+    assert!(
+        rows.iter().all(|row| !row.starts_with("Goals.md")),
+        "the query let a path through that does not hold its characters: {rows:?}"
+    );
+    assert!(
+        rows.first()
+            .is_some_and(|row| row.starts_with("files_view.rs")),
+        "{rows:?}"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Enter opens the row the keyboard is on, as pressing a Files item does: the temporal
+/// tab, or a new one with Ctrl held. And the finder closes behind it.
+#[test]
+fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "first.rs"));
+        let _ = emit(walked_file(root, "second.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+    // The files have to be there: a file the source pane would refuse opens nothing.
+    for name in ["first.rs", "second.rs"] {
+        std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
+    }
+    let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
+
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    // Typed, so the list is the walk's and not the places visited. Which of the two rows
+    // is first is the matcher's business and pinned in its own tests; this reads it.
+    test.write_text("rs");
+    settle(&mut test);
+    let rows = finder_rows(&test);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    settle(&mut test);
+
+    let first = tab_showing(&states, &opened(&rows[0])).expect("the first row's file opened");
+    assert!(!finder.peek().open, "the finder closes behind the file");
+    assert_eq!(
+        states.open.docs.peek().temporal(),
+        Some(first),
+        "a row opens in the temporal tab, as a Files row does"
+    );
+
+    // The row under it, in a tab of its own.
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("rs");
+    settle(&mut test);
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    settle(&mut test);
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::CONTROL);
+    settle(&mut test);
+
+    let second = tab_showing(&states, &opened(&rows[1])).expect("the second row's file opened");
+    assert_ne!(
+        states.open.docs.peek().temporal(),
+        Some(second),
+        "Ctrl+Enter opens a tab that stays"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Escape closes it, and keeps nothing of what was typed.
+#[test]
+fn escape_closes_the_finder_and_keeps_nothing_typed() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "first.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("first");
+    settle(&mut test);
+    assert_eq!(finder.peek().typed, "first");
+
+    key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
+    settle(&mut test);
+    assert!(!finder.peek().open);
+    assert!(finder_rows(&test).is_empty(), "the overlay is gone");
+
+    press_finder_chord(&states, finder, keys);
+    settle(&mut test);
+    assert_eq!(finder.peek().typed, "", "the box is empty each time");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The list is kept between opens: the second open draws it before its own walk has said
+/// anything. Fails on a finder that empties the list when it opens.
+#[test]
+fn the_second_open_shows_the_files_the_first_walk_found() {
+    let held = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate = held.clone();
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        // The second walk says nothing at all, so anything drawn after it is the list the
+        // first one left.
+        if gate.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("kept");
+    settle(&mut test);
+    assert!(finder_rows(&test).iter().any(|row| row == "kept.rs"));
+
+    key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
+    settle(&mut test);
+    held.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    press_finder_chord(&states, finder, keys);
+    settle(&mut test);
+    test.write_text("kept");
+    settle(&mut test);
+    assert!(
+        finder_rows(&test).iter().any(|row| row == "kept.rs"),
+        "the second open walked again instead of showing what it had"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The chord is not typed into a filter box: the `Input`'s pre-key hook declines it, which
+/// is also what keeps it reaching the root -- the hook's other arms call `prevent_default`,
+/// and that cancels the global key event beside them.
+#[test]
+fn the_finder_chord_is_declined_by_a_filter_box() {
+    let symbols = fixture_symbols();
+    let (mut test, states) =
+        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let mut objects = states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    settle(&mut test);
+
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum");
+    key_with(&mut test, Key::Character("p".into()), Modifiers::CONTROL);
+    settle(&mut test);
+
+    // The pattern is what was typed: a `p` in it would have filtered the row away.
+    assert!(labels(&test).iter().any(|label| label == "sum_to"));
+}
+
+/// The chord is not typed into the scratchpad's editor either. The editor inserts any
+/// character it has no chord of its own for, Ctrl held or not, so without the decline
+/// Ctrl+P puts a `p` in the source and never opens the finder.
+#[test]
+fn the_finder_chord_is_declined_by_the_scratchpad_editor() {
+    let (mut test, _states, pad, text, _asking, _asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: scratchpad.manifest().err(),
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    let before = shown_rope(text, pad);
+
+    let editor = centre_of(&test, "fn");
+    press_at(&mut test, editor);
+    settle(&mut test);
+    key_with(&mut test, Key::Character("p".into()), Modifiers::CONTROL);
+    settle(&mut test);
+
+    assert_eq!(
+        shown_rope(text, pad),
+        before,
+        "the chord was typed into the source"
+    );
+}
+
+/// The box is the panel's width, less the air around it, and inside the panel. Centring
+/// a flex child in a column rect laid it out from the panel's middle at nearly the
+/// panel's width, so it ran off the right-hand edge of the window.
+#[test]
+fn the_box_fills_the_panel_with_air_around_it() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+
+    let drawn = label_area(&test, "Find a file").expect("the box is drawn");
+    // The panel is centred across the window the runner was given.
+    let left = (800.0 - FINDER_WIDTH) / 2.0;
+    assert!(
+        drawn.min_x() >= left + FINDER_PAD && drawn.max_x() <= left + FINDER_WIDTH - FINDER_PAD,
+        "the box is not inside the panel with air around it: {drawn:?}"
+    );
+    assert!(
+        drawn.width() >= FINDER_WIDTH - 4.0 * FINDER_PAD,
+        "the box is {} of the panel's {FINDER_WIDTH}",
+        drawn.width()
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A press outside the panel closes it. The rect that takes that press covers the window
+/// and draws nothing at all -- the app behind the finder is not dimmed -- so this is also
+/// what says a rect with no background is still there to be pressed.
+#[test]
+fn a_press_outside_the_panel_closes_the_finder() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    assert!(finder.peek().open);
+
+    // Near the bottom of the window, well under the panel.
+    press_at(&mut test, (400.0, 560.0));
+    settle(&mut test);
+    assert!(!finder.peek().open, "the press outside did not close it");
+
+    // And a press inside it does not: the panel stops it reaching the rect behind.
+    press_finder_chord(&states, finder, keys);
+    settle(&mut test);
+    let drawn = label_area(&test, "Find a file").expect("the box is drawn");
+    press_at(
+        &mut test,
+        (drawn.min_x() as f64 + 4.0, drawn.min_y() as f64 + 4.0),
+    );
+    settle(&mut test);
+    assert!(finder.peek().open, "a press in the box closed the finder");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A source reached through a binary's debug info -- the standard library's own, a
+/// dependency's out of the registry -- is not one of the project's files, so the empty
+/// box does not list it however recently it was read.
+#[test]
+fn a_file_outside_the_project_is_not_listed() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "own.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+
+    for path in [
+        directory.join("own.rs"),
+        PathBuf::from("/rustc/0000/library/std/src/io/mod.rs"),
+    ] {
+        open_document(
+            states.open,
+            states.visits,
+            Document::Source(Arc::from(&*path.to_string_lossy())),
+            Reach::Preview,
+        );
+    }
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+
+    assert_eq!(
+        finder_rows(&test),
+        ["own.rs"],
+        "a file outside the project's directory was listed"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Pressing a row opens its file, as Enter on it does.
+#[test]
+fn pressing_a_row_opens_its_file() {
+    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
+    std::fs::write(directory.join("kept.rs"), "fn one() {}\n").expect("writing the file");
+
+    press_finder_chord(&states, finder, keys);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("kept");
+    settle(&mut test);
+
+    // The row's second span: the first is the marked run, which the box's own text also
+    // reads, and the box is drawn above the list.
+    let row = centre_of(&test, ".rs");
+    press_at(&mut test, row);
+    settle(&mut test);
+
+    let file = Document::Source(Arc::from(&*directory.join("kept.rs").to_string_lossy()));
+    let opened = tab_showing(&states, &file).expect("the pressed file opened");
+    assert!(!finder.peek().open, "the finder closes behind the file");
+    assert_eq!(
+        states.open.docs.peek().temporal(),
+        Some(opened),
+        "a row opens in the temporal tab, as a Files row does"
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }

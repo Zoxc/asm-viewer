@@ -82,6 +82,8 @@ mod files_view;
 pub(crate) use files_view::*;
 mod filter_bar;
 pub(crate) use filter_bar::*;
+mod finder;
+pub(crate) use finder::*;
 mod focus;
 pub(crate) use focus::*;
 mod follow;
@@ -263,7 +265,8 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
 }
 
 /// Every key the window answers to whatever holds the keyboard: the modifiers each
-/// pointer gesture is read against, and the chord that reaches the Search panel.
+/// pointer gesture is read against, and the two chords that reach a panel and the file
+/// finder.
 ///
 /// **One handler and not two.** An element keeps one handler per event name, so a second
 /// `on_global_key_down` on the root would replace this one and take the modifier tracking
@@ -273,6 +276,8 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
 pub(crate) fn root_key_down(
     keys: ModifierKeys,
     searched: State<Searched>,
+    finder: State<Finder>,
+    proj: State<OpenProject>,
     dock: State<DockArea>,
     key: &Key,
     modifiers: Modifiers,
@@ -280,6 +285,10 @@ pub(crate) fn root_key_down(
     keys.down(key, modifiers);
     if is_search_chord(key, modifiers) {
         reach_search(searched, dock);
+    }
+    if is_finder_chord(key, modifiers) {
+        let root = given(&proj.peek().directory).map(PathBuf::from);
+        open_finder(finder, root);
     }
 }
 
@@ -378,6 +387,9 @@ pub fn app() -> impl IntoElement {
     let keys = ModifierKeys::new(shift, ctrl, alt, caps_is_ctrl, control_held);
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
     let searched = use_provide_context(|| Searching(State::create(Searched::default()))).0;
+    // At the root, not in the overlay: the list of a project's files is kept between
+    // opens, and the walk that fills it outlives the overlay being closed.
+    let finder = use_provide_context(|| Finding(State::create(Finder::default()))).0;
     // At the root, not in the Project view: an inactive dock tab is unmounted, and a build
     // that survives the reader looking away cannot live there.
     let build = use_provide_context(|| Building(State::create(Builds::default()))).0;
@@ -443,6 +455,9 @@ pub fn app() -> impl IntoElement {
     // The search's own worker, beside the analysis one and for its reasons: the walk reads
     // every file under the project directory, which is not the UI thread's to do.
     use_search_with(searched, |query, emit| crate::search::search(query, emit));
+    // Here and not in the overlay: the walk fills a list that is kept between opens, and
+    // has to go on after the overlay it was started from is closed.
+    use_finder_with(finder, |root, emit| crate::walk::walk_files(root, emit));
 
     // At the root rather than in the view: an inactive dock tab is unmounted, and neither
     // a buffer being typed into nor a program that was started can live there. The buffers
@@ -506,7 +521,15 @@ pub fn app() -> impl IntoElement {
         // A freya pointer event carries no modifiers, so Shift and Ctrl have to be known
         // before the click that asks about them: `ModifierKeys`.
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
-            root_key_down(keys, searched, content_dock, &e.key, e.modifiers)
+            root_key_down(
+                keys,
+                searched,
+                finder,
+                proj,
+                content_dock,
+                &e.key,
+                e.modifiers,
+            )
         })
         .on_global_key_up(move |e: Event<KeyboardEventData>| keys.up(&e.key, e.modifiers))
         // Provides the root state `ContextMenu::open_from_event` looks up: opening a menu
@@ -515,6 +538,9 @@ pub fn app() -> impl IntoElement {
         .child(ContextMenuViewer::new())
         // Over everything, and drawn as nothing at all until a file has been moved aside.
         .child(RescuedPopup)
+        // The same, until Ctrl+P. Over the window and not in a pane, so it is reached
+        // from wherever the reader is.
+        .child(FinderOverlay)
         .child(toolbar(objects, loading))
         // Under the bar rather than in the view that has the other Start button: the
         // control above is pressed from wherever the reader is, and a question drawn

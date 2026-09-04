@@ -113,8 +113,12 @@ command.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
-- `src/search.rs` — the project's directory searched for a pattern: the walk, the match, and
-  the hits grouped under the file each is in.
+- `src/fuzzy.rs` — characters in order: what the file finder's box asks of a path, where it
+  hit, and how well.
+- `src/walk.rs` — the project's directory walked: the rules both readers of it share, and
+  the files that came back.
+- `src/search.rs` — the project's directory searched for a pattern: the match, and the hits
+  grouped under the file each is in.
 - `src/tree.rs` — the Objects list's tree shape, and which files are still being read into it.
 - `src/files.rs` — the project's directory as a tree: read one level per unfold, forgotten on
   the fold, and flattened into the rows the Files view draws.
@@ -152,6 +156,8 @@ command.
 - `src/ui/palette.rs` — every colour, the theme it is resolved from, and the compositing rules.
 - `src/ui/state.rs` — the contexts provided once at the root and read with `use_consume`.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
+- `src/ui/finder.rs` — the file finder: the box Ctrl+P opens over the app, the files of the
+  project's directory under it, and the one worker that walks them.
 - `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes, and
   where each side of a tab was left.
 - `src/ui/follow.rs` — following a name in the source to what it names: the question put to
@@ -227,6 +233,8 @@ invalidates in the same commit**: these are the record of why things are the way
 - `agents/Panes.md` — the Source and Assembly panes: companion files, `Driven`, the two runs and
   the pair, landing, the arrow gutter, copying rows.
 - `agents/Sidebar.md` — the filtered lists, the Objects tree, closing a binary, the Project view.
+- `agents/Finding.md` — the file finder: the shared walk, the matcher, the list that is kept,
+  and the overlay that is not a `Popup`.
 - `agents/Appearance.md` — the palette, theme switching, fonts, row heights, the Settings page.
 - `agents/Lsp.md` — the language server: why it is a control, the hand-rolled protocol and
   what rust-analyzer needs of it, the process, what an answer is about, and what a project's

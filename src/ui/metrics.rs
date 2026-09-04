@@ -120,6 +120,27 @@ pub(crate) const COUNT_GUTTER: f32 = 6.0;
 /// default: neither says anything the eye has already read off the control.
 pub(crate) const TOOLTIP_DELAY: Duration = Duration::ZERO;
 
+/// How wide the file finder's panel is: enough for a deep path and its name beside it,
+/// and narrow enough that the window behind it is still recognisable.
+pub(crate) const FINDER_WIDTH: f32 = 600.0;
+
+/// How far under the top of the window it sits. Not centred down the window: a reader
+/// typing a path is looking at the box, and the box is where an editor's is.
+pub(crate) const FINDER_TOP: f32 = 80.0;
+
+/// The air between the finder's panel and the box in it.
+pub(crate) const FINDER_PAD: f32 = 8.0;
+
+/// The corner the finder's panel is cut to, and how far its shadow is blurred: with the
+/// app undimmed behind it, the shadow is the whole of what says the panel is over it, so
+/// it is a soft one and not a hairline.
+pub(crate) const FINDER_RADIUS: f32 = 6.0;
+pub(crate) const FINDER_BLUR: f32 = 20.0;
+
+/// The most rows it draws at once; the rest are scrolled to. A list as tall as the window
+/// would cover the app it is drawn over.
+pub(crate) const FINDER_ROWS: usize = 12;
+
 /// How long a symbol may be under analysis before the panes admit they are waiting. Only
 /// ever *started* by a selection change (`use_analysis`) and never polled.
 pub(crate) const SLOW_ANALYSIS: Duration = Duration::from_millis(180);

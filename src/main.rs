@@ -7,6 +7,7 @@ mod files;
 mod filter;
 mod fonts;
 mod functions;
+mod fuzzy;
 mod history;
 mod lanes;
 mod lsp;
@@ -28,6 +29,7 @@ mod tree;
 mod ui;
 mod uses;
 mod visits;
+mod walk;
 
 use freya::prelude::*;
 

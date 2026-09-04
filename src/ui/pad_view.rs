@@ -289,7 +289,25 @@ impl Component for SourceEditor {
                     .line_selected_background(palette().pair_bg)
                     .gutter_selected(palette().text_fg)
                     .gutter_unselected(palette().address_fg)
-                    .whitespace(palette().punctuation_fg),
+                    .whitespace(palette().punctuation_fg)
+                    // The window's chords, declined before the edit. The editor inserts
+                    // any character it has no chord of its own for, Ctrl held or not, so
+                    // Ctrl+P in here would type a `p` and never open the finder --
+                    // declining is also what keeps the chord reaching the root, since
+                    // the default hook's `prevent_default` cancels the global key event
+                    // beside it. The rest of that hook is kept as it is.
+                    .on_pre_key_down(Callback::new(move |e: Event<KeyboardEventData>| {
+                        if is_finder_chord(&e.key, e.modifiers)
+                            || is_search_chord(&e.key, e.modifiers)
+                        {
+                            return false;
+                        }
+                        e.stop_propagation();
+                        if let Key::Named(NamedKey::Tab) = &e.key {
+                            e.prevent_default();
+                        }
+                        true
+                    })),
             )
     }
 }

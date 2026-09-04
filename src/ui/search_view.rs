@@ -282,11 +282,29 @@ fn row_children(row: &SearchRow) -> Vec<Element> {
 ///
 /// Shared with the uses list, whose rows mark the name the same way (`ui::locations`).
 pub(crate) fn marked_spans(text: &str, marked: &[Range<usize>]) -> Vec<Span<'static>> {
+    marked_spans_in(text, marked, None)
+}
+
+/// The same over a `base` the unmatched runs are drawn in, for a row that draws part of
+/// its text dimmed: the file finder's, whose directories are a step back from the name.
+/// `None` leaves them the colour they inherit.
+pub(crate) fn marked_spans_in(
+    text: &str,
+    marked: &[Range<usize>],
+    base: Option<Color>,
+) -> Vec<Span<'static>> {
+    let plain = |text: &str| {
+        let span = Span::new(text.to_owned());
+        match base {
+            Some(colour) => span.color(colour),
+            None => span,
+        }
+    };
     let mut spans = Vec::new();
     let mut at = 0;
     for span in marked {
         if span.start > at {
-            spans.push(Span::new(text[at..span.start].to_owned()));
+            spans.push(plain(&text[at..span.start]));
         }
         spans.push(
             Span::new(text[span.clone()].to_owned())
@@ -296,7 +314,7 @@ pub(crate) fn marked_spans(text: &str, marked: &[Range<usize>]) -> Vec<Span<'sta
         at = span.end;
     }
     if at < text.len() {
-        spans.push(Span::new(text[at..].to_owned()));
+        spans.push(plain(&text[at..]));
     }
     spans
 }

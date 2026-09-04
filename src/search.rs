@@ -1,9 +1,10 @@
 //! The project's directory searched for a pattern: the walk, the match, and the hits the
 //! panel draws. Framework-free.
 //!
-//! The walk is ripgrep's own (`ignore`, `grep-searcher`, `grep-regex`), which is what makes
-//! the search skip what git is told to ignore without being told twice, and what recognises
-//! a binary file rather than printing its bytes at a reader. Hits leave here through a
+//! The walk is [`crate::walk`]'s, shared with the file finder so that both readers of a
+//! project's directory agree about what is in it. What is here is the reading: ripgrep's
+//! own `grep-searcher` and `grep-regex`, which recognise a binary file rather than
+//! printing its bytes at a reader. Hits leave here through a
 //! **callback** and not a channel, [`analysis::open_files_streaming`]'s shape and for its
 //! reason: whoever draws the result is who should decide what to do when they arrive faster
 //! than they can be drawn. The callback answering [`ControlFlow::Break`] is how a search
@@ -16,9 +17,7 @@ use crate::filter::{Filter, Matcher};
 use grep_matcher::Matcher as _;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
-use ignore::WalkBuilder;
 use std::{
-    cmp::Ordering,
     io,
     ops::{ControlFlow, Range},
     path::{Path, PathBuf},
@@ -95,15 +94,7 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
         .binary_detection(BinaryDetection::quit(0))
         .build();
 
-    let walk = WalkBuilder::new(&query.root)
-        // `ignore`'s default is to read `.gitignore` only inside a git working tree, so
-        // without this a project directory that is not one has its `target/` walked whole.
-        .require_git(false)
-        // The bound the source pane reads by: a file it would refuse to show is a file no
-        // hit in it could open.
-        .max_filesize(Some(crate::source::MAX_SIZE))
-        .sort_by_file_path(order)
-        .build();
+    let walk = crate::walk::walker(&query.root);
 
     let mut sent = 0usize;
     let mut stopped = false;
@@ -153,35 +144,6 @@ fn compile(filter: &Filter) -> Option<RegexMatcher> {
         .case_insensitive(!filter.case_sensitive)
         .build(&filter.expression())
         .ok()
-}
-
-/// One directory's entries, files before the directories under them and each by name
-/// without regard to case and then with it. The order the reader sees the list grow in, so
-/// it is settled here rather than left to the walker: a hit in a directory's own files
-/// arrives before the walk descends, and the list only ever grows at its end.
-///
-/// The comparator is handed paths and not entries, so the kind costs a `symlink_metadata`
-/// per comparison. A path that cannot be stat'ed sorts as a file, which is where a walker
-/// that cannot list it does the least.
-fn order(a: &Path, b: &Path) -> Ordering {
-    let directory = |path: &Path| {
-        path.symlink_metadata()
-            .map(|data| data.is_dir())
-            .unwrap_or(false)
-    };
-    let (a_name, b_name) = (name_of(a), name_of(b));
-    directory(a)
-        .cmp(&directory(b))
-        .then_with(|| a_name.to_lowercase().cmp(&b_name.to_lowercase()))
-        .then_with(|| a_name.cmp(&b_name))
-}
-
-/// What a path is called without its directory, the whole path where it has no name.
-fn name_of(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// One file's matches on their way out: the sink `grep-searcher` reports to.
@@ -301,7 +263,8 @@ fn trim_terminator(line: &[u8]) -> &[u8] {
 
 /// Every hit a search has found, by the file each is in, and which files are folded away.
 ///
-/// Files are kept in the order they arrived, which is the order [`order`] walked them in,
+/// Files are kept in the order they arrived, which is the order
+/// [`crate::walk`] walked them in,
 /// so the list only ever grows at its end and nothing a reader is looking at moves. The
 /// rows a `VirtualScrollView` asks for are [`SearchRows`], flattened here for the reason
 /// `files.rs` flattens its tree: the shape is in the data and never in the elements.
@@ -333,7 +296,7 @@ impl SearchHits {
             }
         }
         self.files.push(Found {
-            name: name_of(&hit.path),
+            name: crate::walk::name_of(&hit.path),
             path: hit.path.clone(),
             lines: vec![hit],
             folded: false,
