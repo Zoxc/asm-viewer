@@ -658,7 +658,7 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
     // A page is a tab, so the button is there before any document is.
     {
         let mut strip = states.open.strip;
-        strip.write().push(Tab::Page(Page::Project));
+        strip.write().show(Tab::Page(Page::Project));
     }
     test.sync_and_update();
 
@@ -984,6 +984,121 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
     );
 }
 
+/// The menu at the top left is the whole of the way back to a closed page, so it lists all
+/// three whether or not they are open, marks the ones that are, and opens a closed one
+/// beside the tab on screen. It is mounted alone: where it sits in the toolbar is not what
+/// this is about.
+fn pages_harness() -> impl IntoElement {
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(PagesButton)
+}
+
+#[test]
+fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
+    let (mut test, states) =
+        TestingRunner::new(pages_harness, (300., 300.).into(), project_states!(), 1.);
+    let document = Document::Source(Arc::from("/src/one.rs"));
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    {
+        let mut strip = states.open.strip;
+        strip.write().show(Tab::Page(Page::Settings));
+    }
+    // Back on the document, so a page opened from the menu has somewhere to land beside.
+    raise_tab(states.open, Tab::Document(states.open.ids()[0]));
+    test.sync_and_update();
+
+    // The glyph is an image and not a label, so the button is found as the one box the
+    // harness draws at the toggle's own size.
+    let area = test
+        .find(|node, _| {
+            let area = node.layout().area;
+            (area.width() == toggle_size() && area.height() == toggle_size()).then_some(area)
+        })
+        .expect("the button is a square of its own");
+    let button = (
+        (area.origin.x + area.width() / 2.0) as f64,
+        (area.origin.y + area.height() / 2.0) as f64,
+    );
+    press_at(&mut test, button);
+    settle(&mut test);
+
+    let rows = labels(&test);
+    for page in Page::ALL {
+        assert!(
+            rows.iter().any(|row| row == page.title()),
+            "{} is not in the menu: {rows:?}",
+            page.title()
+        );
+    }
+
+    let row = centre_of(&test, "Project");
+    press_at(&mut test, row);
+    settle(&mut test);
+    let strip = states.open.strip.peek();
+    assert_eq!(
+        strip.tabs(),
+        [
+            Tab::Document(strip.documents().next().expect("the document")),
+            Tab::Page(Page::Project),
+            Tab::Page(Page::Settings),
+        ],
+        "the page did not open beside the tab on screen"
+    );
+    assert_eq!(strip.active(), Some(Tab::Page(Page::Project)));
+}
+
+/// A page closes like any other tab, landing on the neighbour, and what it was showing is
+/// there again when it is reopened: the state it draws lives at the root of the app.
+#[test]
+fn closing_a_page_lands_on_its_neighbour_and_keeps_what_it_held() {
+    let (mut test, states) =
+        TestingRunner::new(chips_harness, (400., 100.).into(), project_states!(), 1.);
+    {
+        let mut strip = states.open.strip;
+        let mut strip = strip.write();
+        strip.show(Tab::Page(Page::Project));
+        strip.show(Tab::Page(Page::Settings));
+        strip.show(Tab::Page(Page::Scratchpad));
+        strip.raise(Tab::Page(Page::Settings));
+    }
+    test.sync_and_update();
+
+    // Pressed, and not called: a page's chip draws a × of its own now, and that it does
+    // is half of what this is about.
+    let name = label_area(&test, "Settings").expect("the page's chip");
+    let close = test
+        .find_many(|node, _| {
+            let area = node.layout().area;
+            (area.width() == close_target()
+                && area.height() == close_target()
+                && area.origin.x > name.max_x())
+            .then_some(area)
+        })
+        .into_iter()
+        .min_by(|left, right| left.origin.x.total_cmp(&right.origin.x))
+        .expect("the × on the page's chip");
+    press_at(
+        &mut test,
+        (
+            (close.origin.x + close.width() / 2.0) as f64,
+            (close.origin.y + close.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+    let strip = states.open.strip.peek();
+    assert_eq!(
+        strip.tabs(),
+        [Tab::Page(Page::Project), Tab::Page(Page::Scratchpad)]
+    );
+    assert_eq!(
+        strip.active(),
+        Some(Tab::Page(Page::Scratchpad)),
+        "closing the page on screen did not land on its neighbour"
+    );
+}
+
 /// A page resolves against no object, so a session that saved one puts it back **without
 /// waiting for a binary** -- and a project with no binaries at all still opens on the page
 /// the reader left it on. Written as the file spells it, so this pins the format as well
@@ -1067,9 +1182,12 @@ fn close_harness() -> impl IntoElement {
     let open = use_open();
     let id = open.strip.read().documents().next();
 
-    rect()
-        .expanded()
-        .maybe_child(id.map(|id| TabClose { id }.into_element()))
+    rect().expanded().maybe_child(id.map(|id| {
+        TabClose {
+            tab: Tab::Document(id),
+        }
+        .into_element()
+    }))
 }
 
 /// One open document, and the × that closes it as it was actually laid out -- asserting on
@@ -1319,12 +1437,12 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
     let mut objects = states.objects;
     objects.write().push(object);
 
-    // A page in the bar, which this must not close: it is not a document, and nothing it
-    // is showing is going away. Opened first, so the last document is still the tab on
-    // screen when the close is asked for.
+    // A page in the bar, which this closes with the documents: what the reader asked for
+    // is every other tab. Opened first, so the last document is still the tab on screen
+    // when the close is asked for.
     {
         let mut strip = states.open.strip;
-        strip.write().push(Tab::Page(Page::Settings));
+        strip.write().show(Tab::Page(Page::Settings));
     }
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -1354,7 +1472,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         states.code_at,
         states.driven,
         states.marks_at,
-        keep,
+        Tab::Document(keep),
     );
     test.sync_and_update();
 
@@ -1374,8 +1492,8 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         "a closed tab's position was kept, and with it the binary it points into"
     );
     assert!(
-        states.open.strip.peek().contains(Tab::Page(Page::Settings)),
-        "a page in the bar was closed with the documents"
+        !states.open.strip.peek().contains(Tab::Page(Page::Settings)),
+        "a page in the bar outlived \"Close other tabs\""
     );
 }
 

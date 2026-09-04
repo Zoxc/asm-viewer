@@ -210,8 +210,15 @@ pub(crate) fn close_tab(
     driven.write().forget_tab(id);
 }
 
-/// Close every document tab except `keep`, landing on the kept tab when the one on screen
-/// is among those closing.
+/// Close the page `page`, which is a tab leaving the bar and nothing else: what it was
+/// showing is state at the root of the app, so it is all there when the page comes back.
+pub(crate) fn close_page(open: Open, page: Page) {
+    let mut strip = open.strip;
+    strip.write().close(|tab| *tab == Tab::Page(page));
+}
+
+/// Close every tab except `keep`, whatever kind either is, landing on the kept tab when
+/// the one on screen is among those closing.
 ///
 /// The unit is the **tab** and not the binary, so this is [`close_tab`] many times over
 /// rather than [`close_binary`] with another filter: what each of them lets go of is the
@@ -219,9 +226,6 @@ pub(crate) fn close_tab(
 /// an [`Entry`] key holding the `Arc<Object>` it points into. Done in one pass rather
 /// than by calling [`close_tab`] in a loop: each of those would work out a landing of its
 /// own and walk the bar through every intermediate state.
-///
-/// A page is not a document and stays open; it also keeps the screen when it is the tab on
-/// screen, since nothing it is showing is going away.
 pub(crate) fn close_others(
     open: Open,
     mut asm_at: State<Positions<Entry>>,
@@ -229,32 +233,34 @@ pub(crate) fn close_others(
     mut code_at: State<Positions<Entry, Spot>>,
     mut driven: State<Driven>,
     mut marks_at: State<Positions<Entry, Kept>>,
-    keep: DocId,
+    keep: Tab,
 ) {
     let Open {
         mut strip,
         mut docs,
     } = open;
-    let kept = Tab::Document(keep);
 
-    // Which tabs go, worked out before anything is removed and in a scope of its own, so
-    // no read guard is alive when the writes below start. A tab that is not in the bar any
-    // more keeps its neighbours: this is the menu of a tab that was closed while the menu
-    // was open.
+    // Which documents go, worked out before anything is removed and in a scope of its own,
+    // so no read guard is alive when the writes below start. A tab that is not in the bar
+    // any more keeps its neighbours: this is the menu of a tab that was closed while the
+    // menu was open. The pages closing need no working out -- a page is a tab and nothing
+    // else -- so the predicate below says "every tab but the kept one" and this says what
+    // has to be let go of.
     let closing: Vec<DocId> = {
         let strip = strip.peek();
-        if !strip.contains(kept) {
+        if !strip.contains(keep) {
             return;
         }
-        strip.documents().filter(|id| *id != keep).collect()
+        strip
+            .documents()
+            .filter(|id| Tab::Document(*id) != keep)
+            .collect()
     };
-    if closing.is_empty() {
+
+    let closed = strip.write().close(|tab| *tab != keep);
+    if closed.is_empty() {
         return;
     }
-
-    strip
-        .write()
-        .close(|tab| matches!(tab, Tab::Document(id) if closing.contains(id)));
     {
         let mut docs = docs.write();
         for id in &closing {
@@ -504,19 +510,19 @@ pub(crate) fn land_on(
     raise(open, id);
 }
 
-/// The menu a document's tab opens on a right-click.
+/// The menu a tab opens on a right-click: **Close**, **Close other tabs** where the tab
+/// has company, and then, for a document, the bookmark item and **Show in file manager**
+/// for the file it is a place in.
 ///
-/// The menu a document's header opens on a right-click: **Close other tabs** where the tab
-/// has company, and then the bookmark item and **Show in file manager**, both for the
-/// tab's document, always. Built per press, as [`close_menu`] is, closing over the tab it
-/// was opened on; the states come in as arguments because this is called from an event
-/// handler, where no hook may run. The header says whether there is another document to
-/// close, so the one row that would do nothing is left out rather than drawn dead.
+/// Built per press, as [`close_menu`] is, closing over the tab it was opened on; the
+/// states come in as arguments because this is called from an event handler, where no hook
+/// may run. The chip says whether there is another tab to close, so the one row that would
+/// do nothing is left out rather than drawn dead.
 pub(crate) fn tab_menu(
     states: ProjectStates,
-    keep: DocId,
+    keep: Tab,
     others: bool,
-    document: Document,
+    document: Option<Document>,
 ) -> Menu {
     let ProjectStates {
         open,
@@ -530,22 +536,34 @@ pub(crate) fn tab_menu(
         ..
     } = states;
 
-    let file = document.file().to_path_buf();
-
     Menu::new()
+        .child(
+            MenuButton::new()
+                .on_press(move |_| match keep {
+                    Tab::Document(id) => {
+                        close_tab(open, asm_at, src_at, code_at, driven, marks_at, id)
+                    }
+                    Tab::Page(page) => close_page(open, page),
+                })
+                .child("Close"),
+        )
         .maybe_child(others.then(|| {
             MenuButton::new()
                 .on_press(move |_| {
                     close_others(open, asm_at, src_at, code_at, driven, marks_at, keep)
                 })
-                // "tabs" and not "documents": the strip is what the reader is pointing at,
-                // and a view sharing the panel is a tab this leaves alone.
+                // "tabs" and not "documents": the bar is what the reader is pointing at,
+                // and a page in it goes the way a document does.
                 .child("Close other tabs")
         }))
-        .child(bookmark_item(bookmarks, objects, document, "Add bookmark"))
-        // The file the tab is a place in: the binary for an assembly tab, the source
-        // file for a file's.
-        .child(reveal_item(file))
+        // The file the tab is a place in: the binary for an assembly tab, the source file
+        // for a file's. A page is neither, and has neither row.
+        .maybe_child(
+            document
+                .clone()
+                .map(|document| bookmark_item(bookmarks, objects, document, "Add bookmark")),
+        )
+        .maybe_child(document.map(|document| reveal_item(document.file().to_path_buf())))
 }
 
 /// The menu a Files row over an object that is not loaded opens on a right-click: one

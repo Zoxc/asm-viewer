@@ -85,10 +85,10 @@ fn chip(
 /// interface text, so what is about to happen is said twice.
 ///
 /// It closes the tab itself rather than taking a handler: a `Component` is `PartialEq`, a
-/// closure is not, and the [`DocId`] is all the identity a close needs.
+/// closure is not, and the [`Tab`] is all the identity a close needs.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct TabClose {
-    pub(crate) id: DocId,
+    pub(crate) tab: Tab,
 }
 
 impl Component for TabClose {
@@ -100,7 +100,7 @@ impl Component for TabClose {
         let code_at = use_consume::<CodeAt>().0;
         let driven = use_consume::<Drives>().0;
         let marks_at = use_consume::<MarksAt>().0;
-        let id = self.id;
+        let tab = self.tab;
 
         rect()
             .width(Size::px(close_target()))
@@ -118,7 +118,12 @@ impl Component for TabClose {
             // close first switches to the tab it is closing.
             .on_press(move |e: Event<PressEventData>| {
                 e.stop_propagation();
-                close_tab(open, asm_at, src_at, code_at, driven, marks_at, id);
+                match tab {
+                    Tab::Document(id) => {
+                        close_tab(open, asm_at, src_at, code_at, driven, marks_at, id)
+                    }
+                    Tab::Page(page) => close_page(open, page),
+                }
             })
             .child(
                 label()
@@ -288,6 +293,103 @@ fn page_body(page: Page) -> Element {
     }
 }
 
+/// The menu at the **top left of the window** that opens Project, Settings and the
+/// Scratchpad, and the whole of the way back to one that has been closed.
+///
+/// It lists all three and marks the ones that are open, rather than listing only the
+/// closed ones: a menu whose rows come and go as tabs are closed is a menu a reader has to
+/// read every time, where a list that is always the same three is one they learn. Picking
+/// an open one shows it, which is what the reader meant by picking it.
+///
+/// The popup is positioned by hand, as [`TabListButton`]'s is: `ContextMenu` pins a menu
+/// to the pointer and clamps to nothing.
+#[derive(PartialEq)]
+pub(crate) struct PagesButton;
+
+impl Component for PagesButton {
+    fn render(&self) -> impl IntoElement {
+        let mut hovering = use_state(|| false);
+        let mut showing = use_state(|| false);
+        let open = use_open();
+        // Read and not peeked: the marks are drawn from it, so the menu has to follow a
+        // page opening or closing while it is up.
+        let strip = open.strip.read();
+        let is_open: Vec<bool> = Page::ALL
+            .into_iter()
+            .map(|page| strip.contains(Tab::Page(page)))
+            .collect();
+        drop(strip);
+
+        let side = toggle_size();
+        let button = row_tooltip(
+            "Project, Settings and the Scratchpad".to_owned(),
+            rect()
+                .width(Size::px(side))
+                .height(Size::px(side))
+                .center()
+                .corner_radius(4.0)
+                .background(if showing() || hovering() {
+                    palette().toggle_hover_bg
+                } else {
+                    Color::TRANSPARENT
+                })
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| {
+                    let was = showing();
+                    showing.set(!was);
+                })
+                .child(bar_icon(("menu", lucide::menu()))),
+        );
+
+        rect()
+            .width(Size::px(side))
+            .height(Size::px(side))
+            .child(button)
+            .maybe_child(showing().then(|| {
+                rect()
+                    // Under the button and hanging from its left edge, which is the
+                    // window's: the menu opens rightward into it.
+                    .position(Position::new_absolute().top(side))
+                    .child(
+                        pages_menu(open, &is_open, showing).on_close(move |_| showing.set(false)),
+                    )
+                    .into_element()
+            }))
+            .into_element()
+    }
+}
+
+/// The menu [`PagesButton`] opens: one row per page, the open ones marked. Built per
+/// press, like the bar's own.
+fn pages_menu(open: Open, is_open: &[bool], mut close: State<bool>) -> Menu {
+    Page::ALL.into_iter().zip(is_open.iter().copied()).fold(
+        Menu::new(),
+        |menu, (page, open_already)| {
+            menu.child(
+                MenuItem::new()
+                    .selected(open_already)
+                    .on_press(move |_| {
+                        // `show` and not `push`: a page opens beside the tab on screen,
+                        // the way anything else the reader opens does, and one already
+                        // open is only raised.
+                        let mut strip = open.strip;
+                        strip.write().show(Tab::Page(page));
+                        close.set(false);
+                    })
+                    .child(
+                        rect()
+                            .horizontal()
+                            .cross_align(Alignment::Center)
+                            .spacing(6.0)
+                            .child(page_icon(page))
+                            .child(label().text(page.title()).max_lines(1)),
+                    ),
+            )
+        },
+    )
+}
+
 /// How wide [`TabListButton`] is.
 pub(crate) const TAB_LIST_WIDTH: f32 = 26.0;
 
@@ -331,9 +433,12 @@ impl Component for TabHeader {
                 self.active,
                 false,
                 hovering,
-                None,
+                Some(TabClose { tab }.into_element()),
                 move |_| raise_tab(open, tab),
-                |_| {},
+                move |e: Event<PressEventData>| {
+                    let others = open.strip.peek().tabs().iter().any(|other| *other != tab);
+                    ContextMenu::open_from_event(&e, tab_menu(states, tab, others, None));
+                },
             )
             .into_element();
         };
@@ -358,7 +463,7 @@ impl Component for TabHeader {
             self.active,
             temporal,
             hovering,
-            Some(TabClose { id }.into_element()),
+            Some(TabClose { tab }.into_element()),
             move |e: Event<PressEventData>| {
                 raise_tab(open, tab);
                 // A double press on a temporal tab's chip makes it a tab that stays.
@@ -383,13 +488,11 @@ impl Component for TabHeader {
                 // for it would re-render every tab whenever any one of them opened. The
                 // only tab open still gets its menu, the bookmark item being about the
                 // tab itself; what it does without is the one row that would do nothing.
-                let others = open
-                    .strip
-                    .peek()
-                    .tabs()
-                    .iter()
-                    .any(|other| matches!(other, Tab::Document(other) if *other != id));
-                ContextMenu::open_from_event(&e, tab_menu(states, id, others, subject.clone()));
+                let others = open.strip.peek().tabs().iter().any(|other| *other != tab);
+                ContextMenu::open_from_event(
+                    &e,
+                    tab_menu(states, tab, others, Some(subject.clone())),
+                );
             },
         )
         .into_element()

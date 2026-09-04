@@ -167,7 +167,7 @@ keeps a fixed width and the content takes the rest, with freya's 4px `ResizableH
 `Size::flex(..)` only works under a parent with `.content(Content::Flex)`. The content panel holds
 `ContentArea` and nothing else: the app's own bar, and under it the tab on screen.
 
-The toolbar itself holds three controls: Open at its left edge and the two history chevrons at its
+The toolbar holds the pages menu and Open at its left edge and the history chevrons at its
 right, held apart by a `Size::flex(1.0)` gap under `Content::Flex`. The gap is measured out of what
 the controls left over, where a `Size::fill()` gap would claim the bar and push them off its end.
 The pair sits at the corner so it stays under the same one however many neighbours Open grows.
@@ -222,8 +222,13 @@ that before -- it wraps a header in a `DropZone` around a `rect().on_press(set_a
 The × still has to `stop_propagation`, now so the press does not reach the chip under it and switch
 to the tab being closed. The temporal tab is told from one that stays by its name being **italic**
 (`font_slant`) and by nothing else, the chip reading the flag out of the table beside the document.
-The × is drawn for documents only for now; the pages have no way back until the menu that reopens
-them is written.
+Every tab has a ×, pages included, because there is a way back to one now: the **menu at the top
+left of the window** (`PagesButton`), which is the whole of it. It lists all three and marks the
+ones that are open rather than listing only the closed ones -- a menu whose rows come and go is one
+a reader has to read every time, where a list that is always the same three is one they learn -- and
+picking an open one shows it. A page opens **beside the tab on screen**, the way anything else the
+reader opens does. What a closed page was showing is state at the root of the app, so closing one
+loses nothing: a build or a run it started goes on, and it comes back as it was.
 
 **The × is a control of its own**, `TabClose`, and a component rather than another line of `chip`
 for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the `use_state`
@@ -241,12 +246,15 @@ not by the tab going out. It closes the tab itself rather than taking a handler,
 `PartialEq` where a closure is not: the `DocId` is the prop and the five states a close needs come
 from the contexts, the same ones the header reads a step above it.
 
-A right-click on a document's chip opens a menu of three items. **Close other tabs** is
-`close_others`: the tab it was opened on stays, every other *document* goes, and a page is left
-where it is. It is its own function rather than `close_tab` in a loop, because each of those would
-work out a landing of its own and walk the bar through every intermediate state. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the
-sidebar rows and the instruction rows use (`agents/Sidebar.md`), for the tab's own document. The
-first row is left out when nothing else is open, rather than drawn as a row that would do nothing,
+A right-click on a chip opens a menu: **Close**, then **Close other tabs** where the tab has
+company, and then, for a document, the two rows about the file it is a place in. **Close other
+tabs** is `close_others`: the tab it was opened on stays and every other tab goes, a page as
+readily as a document, since what the reader pointed at is the bar. It is its own function rather
+than `close_tab` in a loop, because each of those would work out a landing of its own and walk the
+bar through every intermediate state. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the
+sidebar rows and the instruction rows use (`agents/Sidebar.md`), for the tab's own document, and a
+page has neither it nor **Show in file manager**, being no place in a file. The close-others row is
+left out when nothing else is open, rather than drawn as a row that would do nothing,
 and the chip asks the strip for that at the **press**: whether a tab has company is not something a
 chip draws, so subscribing to the strip for it would re-render every tab whenever any one of them
 opened.

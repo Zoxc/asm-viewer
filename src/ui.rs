@@ -257,7 +257,13 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
         .border(bottom_hairline())
         .child(
             rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
                 .margin(4.0)
+                .spacing(4.0)
+                // At the very left of the window: the way back to a page that has been
+                // closed, which is why it comes before Open rather than after it.
+                .child(PagesButton)
                 .child(Button::new().on_press(on_open).child("Open")),
         )
         // The bar's controls sit at its two ends, so the pair the reader reaches for
@@ -336,17 +342,9 @@ pub fn app() -> impl IntoElement {
         ])))
     })
     .0;
-    let strip = use_provide_context(|| {
-        OpenTabs(State::create({
-            let mut strip = Strip::default();
-            for page in Page::ALL {
-                strip.push(Tab::Page(page));
-            }
-            strip.raise(Tab::Page(Page::Project));
-            strip
-        }))
-    })
-    .0;
+    // Empty: what a restored session puts in it is the bar the reader left, and a session
+    // that saved nothing opens on the placeholder, the pages being one menu away.
+    let strip = use_provide_context(|| OpenTabs(State::create(Strip::default()))).0;
     let open = Open { strip, docs };
     let active = use_provide_context(move || {
         Active(Memo::create(move || {

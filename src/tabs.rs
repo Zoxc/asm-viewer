@@ -102,11 +102,6 @@ impl Strip {
         })
     }
 
-    /// Put `tab` at the end and show it.
-    pub fn push(&mut self, tab: Tab) {
-        self.insert(tab, self.tabs.len());
-    }
-
     /// Put `tab` at `position`, or at the end when that is past it, and show it: what a
     /// restore does, stating the saved order outright rather than reproducing it a tab at
     /// a time. A tab already open only comes to the front.

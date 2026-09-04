@@ -25,7 +25,7 @@ fn strip(count: u32) -> (Strip, Vec<Tab>, Docs) {
         .collect();
     let mut strip = Strip::default();
     for tab in &tabs {
-        strip.push(*tab);
+        strip.show(*tab);
     }
     (strip, tabs, docs)
 }
