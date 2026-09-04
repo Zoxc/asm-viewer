@@ -575,6 +575,31 @@ impl Component for SourceList {
                     true
                 }
             },
+            {
+                // The landing a door has left and `use_land` has yet to turn into this
+                // pane's run: taken here when it names a line of the file on screen, so
+                // the pane draws the arriving document on that line rather than at the
+                // offset the outgoing place left. Nothing is marked -- the run is
+                // `use_land`'s to plant -- and the reveal it plants finds the row here.
+                let file = self.file.clone();
+                let document = self.document.clone();
+                move |asked: &Landing, controller: &mut ScrollController| {
+                    if asked.tab != document {
+                        return false;
+                    }
+                    let Some(at) = asked.at.as_ref().filter(|at| at.file == file) else {
+                        return false;
+                    };
+                    let Some(index) = (at.line as usize)
+                        .checked_sub(1)
+                        .filter(|index| *index < length)
+                    else {
+                        return false;
+                    };
+                    reveal_row(controller, *viewport.peek(), index);
+                    true
+                }
+            },
             controller,
             &entry,
             length,

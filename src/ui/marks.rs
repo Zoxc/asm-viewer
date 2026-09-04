@@ -1028,7 +1028,10 @@ pub(crate) fn use_clear_marks(
 /// has gone and would put its binary straight back. A landing is spent by whichever
 /// document arrives, the one it named or another: it is for the next arrival only, and
 /// one left lying would pick a line out in a document opened for some other reason
-/// later.
+/// later. The one exception is a landing whose document is **already on top**, which
+/// this run has yet to catch up with: two arrivals can fall between two runs of this
+/// effect, and the landing left by the second, spent on the first, would leave the door
+/// that made it planting nothing at all.
 ///
 /// **A landing's instruction is planted later than its line.** The line is a row of a
 /// file, which has the same rows every time; the instruction is a row of a listing that
@@ -1049,7 +1052,7 @@ pub(crate) fn use_clear_marks(
 /// never a run of rows that are gone.
 pub(crate) fn use_land(
     active: Memo<Option<Entry>>,
-    docs: State<Docs>,
+    open: Open,
     marked: State<Marks>,
     landing: State<Option<Landing>>,
     plant: State<Option<Planting>>,
@@ -1079,7 +1082,7 @@ pub(crate) fn use_land(
         // value changes. A place left with nothing picked out and nothing kept gets no
         // entry: it comes back as a place never seen does, and a restored session walks
         // through every tab it reopens.
-        let left = leaving.filter(|(tab, stop)| docs.peek().contains(*tab, stop));
+        let left = leaving.filter(|(tab, stop)| open.docs.peek().contains(*tab, stop));
         if let Some(entry) = left {
             let was = marks_at.peek().at(&entry);
             let kept = Kept {
@@ -1092,13 +1095,26 @@ pub(crate) fn use_land(
             }
         }
 
+        // Whose landing this is: a door leaves one for the arrival of the document it
+        // names, which is not always the arrival this run is answering.
         let asked = landing.peek().clone();
-        if asked.is_some() {
+        let names_this = asked.as_ref().is_some_and(|asked| {
+            Some(&asked.tab) == active.as_ref().map(|(_, stop)| &stop.document)
+        });
+        // And whether the arrival it is waiting for is still to come, which is what the
+        // **live** tables say and not this run's arrival: two arrivals can fall between
+        // two runs of this effect -- a door pressed while the one before it is still
+        // settling -- and a landing left for the second, spent here on the first, would
+        // leave the door that made it planting nothing at all.
+        let waiting = asked.as_ref().is_some_and(|asked| {
+            !names_this
+                && active_document(&open.dock.peek(), &open.docs.peek()).as_ref()
+                    == Some(&asked.tab)
+        });
+        if asked.is_some() && !waiting {
             landing.set(None);
         }
-        let landed = asked.filter(|landing| {
-            Some(&landing.tab) == active.as_ref().map(|(_, stop)| &stop.document)
-        });
+        let landed = asked.filter(|_| names_this);
         // The caret the arriving listing is to plant, or none: a planting left by the
         // last arrival is spent by this one whether or not it named it.
         let planting = landed.as_ref().and_then(|landing| {

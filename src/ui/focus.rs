@@ -85,18 +85,26 @@ pub(crate) struct Plant(pub(crate) State<Option<Planting>>);
 /// A `VirtualScrollView` counts its offset *down* from zero and clamps whatever is set
 /// here against the content on the next layout, so the arithmetic need not know how long
 /// the list is.
+///
+/// **Already there is measured against the offset this would write**, and not against the
+/// context rows on their own. A row in the first `CONTEXT_ROWS` of a listing cannot have
+/// them all above it, so asking for them was asking for an offset above the top of the
+/// list: the scroll went to 0, the next call measured it against the same impossible
+/// margin, and found it wanting again. That is a write per call for ever, and the caller
+/// that reads the scroll to make it is woken by it (`use_kept_position`).
 pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
     let (_, scrolled) = <(i32, i32)>::from(*controller);
     let top = -scrolled as f32;
     let height = code_row_height();
     let row = index as f32 * height;
     let margin = CONTEXT_ROWS * height;
+    let wanted = (row - margin).max(0.0);
 
-    if row >= top + margin && row + height <= top + viewport {
+    if top <= wanted && row + height <= top + viewport {
         return;
     }
 
-    controller.scroll_to_y(-((row - margin).max(0.0) as i32));
+    controller.scroll_to_y(-(wanted as i32));
 }
 
 /// Bring the row the caret is on into view, and only when it is not: no context rows,
@@ -114,6 +122,15 @@ pub(crate) fn reveal_caret(controller: &mut ScrollController, viewport: f32, ind
     } else if row + height > top + viewport {
         controller.scroll_to_y(-((row + height - viewport).max(0.0) as i32));
     }
+}
+
+/// What a pane's [`use_kept_position`] asks of it every render: the reveal it owes, the
+/// landing it can take, and the row it opens at. Held so the effect reads the latest and
+/// not the first.
+struct Asked {
+    reveal: Box<dyn FnMut(&mut ScrollController) -> bool>,
+    coming: Box<dyn FnMut(&Landing, &mut ScrollController) -> bool>,
+    opening: usize,
 }
 
 /// Keep `controller` pointed at the row `tab` was last left at, and keep [`Positions`]
@@ -142,10 +159,30 @@ pub(crate) fn reveal_caret(controller: &mut ScrollController, viewport: f32, ind
 /// land in whichever order the runtime wakes them -- with the reveal first, it had
 /// marked itself made by the time the kept row was put over it. One effect has one
 /// order. `reveal` reads the marks, which is what wakes this on a click inside a tab.
+///
+/// **A tab arriving with a landing on its way goes to the row the landing names as it
+/// draws it, and holds the move it would otherwise make until the landing is spent.**
+/// `use_land` turns a landing into a run two passes after the switch reaches here -- it
+/// runs off `Active`, which is a memo -- so a pane left to its own devices drew the
+/// arriving document at the outgoing place's offset until then, and a pane that made its
+/// move first drew it at the top of the file. `coming` is asked to take the landing: it
+/// answers for a row of what this pane is drawing, with the same `reveal_row` the run
+/// makes later, so the run finds the row already on screen and moves nothing. A landing
+/// it does not take -- a door that knew only an address, or one meant for the other pane
+/// -- leaves the move held rather than made, since that pass may still plant this pane a
+/// run. Nothing is stranded by a landing that never lands: one is only ever left by a
+/// move that changes the place, and that arrival is what spends it.
+///
+/// `reveal` and `opening` are the **latest render's**, kept in a cell for the effect to
+/// take. A tab handed another document is not mounted again -- a link followed in place,
+/// a search hit shown in the temporal tab -- so a reveal held from the mount would go on
+/// measuring the row it owes against the file the pane drew then, refuse it, and leave
+/// the pane to fall back to the top.
 pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     mut positions: State<Positions<T>>,
     is_open: impl Fn(&T) -> bool + 'static,
-    mut reveal: impl FnMut(&mut ScrollController) -> bool + 'static,
+    reveal: impl FnMut(&mut ScrollController) -> bool + 'static,
+    coming: impl FnMut(&Landing, &mut ScrollController) -> bool + 'static,
     mut controller: ScrollController,
     tab: &T,
     length: usize,
@@ -154,6 +191,31 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     // Which tab the controller is scrolled for. An `Rc<RefCell>` and not a `State`:
     // nothing renders from it, and a state would cost the pane a render per switch.
     let held = use_hook(|| Rc::new(RefCell::new(None::<T>)));
+
+    // The reveal and the opening row as this render made them. The effect below is handed
+    // fresh deps, but its callback is built once in a `use_hook`, so a value passed to it
+    // by hand would stay the first render's. The one the hook makes is never read: every
+    // render writes over it before the effect can run.
+    let latest = use_hook(|| {
+        Rc::new(RefCell::new(Asked {
+            reveal: Box::new(|_| false),
+            coming: Box::new(|_, _| false),
+            opening: 0,
+        }))
+    });
+    *latest.borrow_mut() = Asked {
+        reveal: Box::new(reveal),
+        coming: Box::new(coming),
+        opening,
+    };
+
+    // The move this hook owes the view and has not made. An `Rc<RefCell>` for the same
+    // reason as the tab above.
+    let owing = use_hook(|| Rc::new(RefCell::new(None::<usize>)));
+    // A landing on its way, whichever document it names. Asked through
+    // `try_consume_context`, a pane mounted without the landing machinery having none on
+    // its way.
+    let landing = try_consume_context::<Land>().map(|land| land.0);
 
     // With deps and not a bare `use_side_effect`, whose callback is built in a `use_hook`
     // and would hold the first tab this pane ever showed.
@@ -172,7 +234,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
         let back_to = positions.peek().row(tab, *length);
         // Clamped the way a remembered row is, and for the same reason: a symbol's line
         // is a hint out of debug info and the file under it may have been cut short since.
-        let opening = opening.min(length.saturating_sub(1));
+        let opening = latest.borrow().opening.min(length.saturating_sub(1));
 
         // Whose row the offset above is, and where this run has to move the view to.
         let (owner, moving) = match (&holding, known) {
@@ -180,6 +242,8 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
             (Some(held), _) if held == tab => (Some(tab.clone()), None),
             // A switch: the offset belongs to the tab being left, and the one arriving
             // goes back to where it was, or to where a tab seen for the first time opens.
+            // A `0` moves here, where the first run below leaves one alone: the offset on
+            // screen is the tab being left, and the arriving one must not inherit it.
             (Some(out), Some(_)) => (Some(out.clone()), Some(back_to)),
             (Some(out), None) => (Some(out.clone()), Some(opening)),
             // This pane's first run, on a tab it has a row for: a remount or a restored
@@ -209,13 +273,38 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
         if switching {
             *held.borrow_mut() = Some(tab.clone());
         }
+        // Read and not peeked: this subscribes the effect to the landing, which is what
+        // wakes it on the pass the landing is spent.
+        let coming = landing.and_then(|asked| asked.read().clone());
+        if let Some(row) = moving {
+            *owing.borrow_mut() = Some(row);
+        }
+
         // The reveal first, and the kept row only when it made none: either scroll is a
         // write this effect is subscribed to, so it wakes once more, finds the tab it is
         // holding is the tab it is showing, and writes the row down.
-        if reveal(&mut controller) {
+        let mut asked = latest.borrow_mut();
+        if (asked.reveal)(&mut controller) {
+            *owing.borrow_mut() = None;
             return;
         }
-        if let Some(row) = moving {
+        // Then the landing that has not been spent yet, which the pane takes when it
+        // names a row of what it is drawing. The row is where this pane is going, so it
+        // goes there as it draws the document and not two passes later, when `use_land`
+        // has turned the same row into a run.
+        if let Some(asking) = &coming {
+            if (asked.coming)(asking, &mut controller) {
+                *owing.borrow_mut() = None;
+                return;
+            }
+            // Not this pane's row: the move is held rather than made, since the pass that
+            // spends the landing may still plant this pane a run -- a door that knew only
+            // an address leaves the other pane one -- and going to the opening row first
+            // would show the top of the listing on the way.
+            return;
+        }
+        drop(asked);
+        if let Some(row) = owing.borrow_mut().take() {
             controller.scroll_to_y(-((row as f32 * code_row_height()) as i32));
         }
     });

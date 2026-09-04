@@ -1211,6 +1211,10 @@ impl Component for InstructionList {
                     true
                 }
             },
+            // A landing's half for this pane is an address, and an address is a row of a
+            // listing that arrives later than the document: it is left as a `Planting`
+            // and spent below, never taken here.
+            |_: &Landing, _: &mut ScrollController| false,
             controller,
             &entry,
             length,

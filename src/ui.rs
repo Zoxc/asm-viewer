@@ -398,7 +398,7 @@ pub fn app() -> impl IntoElement {
     };
     use_save_on_change(states);
     use_land(
-        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the

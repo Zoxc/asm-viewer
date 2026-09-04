@@ -255,15 +255,24 @@ show and the switch it causes must not be what drops it. A change of the active 
 effect's to answer, being a switch of place, which `use_land` owns whole (below). And **the scroll
 is a request, answered once**: `Picked::owed` says which panes have yet to scroll to the run,
 `owed_reveal` only *looks*, `reveal_made` is what clears a pane's flag, and `reveal_row` does
-nothing when the row is already on screen. A click in one pane owes the other; a landing owes both.
-The split is not tidiness: in a source-driven tab the click that selects a line is the click that
-asks for the listing, so the run it wakes is still holding the previous one, in which no row
-matches; a single take would spend the request there and the listing that can answer it would arrive
-to nothing owed. A request nothing matches stays owed until the next click replaces it or the run is
-dropped with its listing. **And the ask is the run** for a source-driven tab: `use_land` plants the
-driven line as the source pane's run whenever the tab arrives with none kept for it, with nothing
-owed, or coming back to one would show a listing with nothing lit and no reason given. None of this
-is a navigation: the selection does not change and nothing is pushed onto any trail. `open_document`
+nothing when the row is already on screen -- measured against the offset it would write and not
+against the `CONTEXT_ROWS` alone, a row in the first few of a listing having nowhere to put them,
+so that asking for them again is a write for ever and the caller reading the scroll is woken by
+it. What pays it is the pane as it stands **now**: the reveal
+`use_kept_position` calls is the closure the latest render made, taken out of a cell rather than
+handed to the effect, since a tab given another document keeps the panes it had, and one held from
+the mount would go on measuring the row against the file before it (`agents/UI.md`), and a move of
+its own is held back while a landing is on its way -- taken by the pane where the landing names a
+row of what it draws, so the arriving document is drawn on that row and not at the offset the
+outgoing place left (`agents/UI.md`). A click in one pane owes the other; a landing owes both. The
+split is not tidiness: in a source-driven tab the click that selects a line is the click that asks
+for the listing, so the run it wakes is still holding the previous one, in which no row matches; a
+single take would spend the request there and the listing that can answer it would arrive to nothing
+owed. A request nothing matches stays owed until the next click replaces it or the run is dropped
+with its listing. **And the ask is the run** for a source-driven tab: `use_land` plants the driven
+line as the source pane's run whenever the tab arrives with none kept for it, with nothing owed, or
+coming back to one would show a listing with nothing lit and no reason given. None of this is a
+navigation: the selection does not change and nothing is pushed onto any trail. `open_document`
 remains the only path for anything that does, and `navigate` the only one that moves a cursor.
 **Both rows do the left button and the right in one `pointer_down`**: freya's `on_secondary_down` is
 `on_pointer_down` under another name and an element keeps one handler per event, so the row that set
@@ -282,73 +291,76 @@ That effect turns the line into the source pane's run when the document it names
 whatever the place had kept** (below): a click from outside named a place, and the run it makes is
 the only run in either pane, or the assembly pane would light its old run beside the pair of the
 new. Whichever document arrives spends it, the one it named or another, since a landing left lying
-would select a line in a document opened for some other reason later. The instruction is the half of
-a landing the change of document cannot answer, and goes on as a `Planting` (the paragraph after the
-doors). A row whose symbol is already on top selects the line at once (`documents::land`), the
-opening then changing no document and leaving no landing. The place still changes, though --
-the door pushes a stop -- and `use_land` wakes on that, finds no landing and no kept run, and
-would rebuild the source run from the driven line, which is a line and no column. So it keeps
-a run already on that very row instead of making one: what marked it said more than the line,
-and following a call used to arrive with the caret back at the row's start. A row answering a question asked from a
-source-driven tab chooses for that tab instead: `Located::subject` carries the tab's id beside its
-file, the choice is written under that entry while the tab still shows the file, and `land_on`
-raises the tab with the line left as a landing, a move and not a visit, the tab being open already.
-**Two doors join the two views** and both go through the same functions. A **Ctrl**-press on a label
-in an object's code opens the symbol's own tab, a `NewTab` as Ctrl opens one everywhere; a plain
-press selects the row like any other, since a label is a row of the listing first, though a label's
-row is a row of no file. Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift`
-and `Alt`, all three kept by `ModifierKeys`), a freya pointer event carrying no modifiers, and the
-label lights as a link only while it is held. A Caps Lock the desktop has made into Ctrl names
-itself Caps Lock in every event, so it is learnt from its first release (`ModifierKeys`' doc,
-`notes/upstream/freya.md`). **The third door is the address an instruction goes to when nothing
-names it**: a call into the middle of a function, a call to a function a stripped image has no
-symbol for, a jump out of the symbol in a listing with no row for it (`Instruction::target`,
-`agents/Analysis.md`). The number is drawn as a `TargetLabel` (`Link::Target`, the third of
-`split`'s links), inline in the row's paragraph as the other two are, and a Ctrl-press on it is
-`show_in_code` with the **placed** address and no line: the object's code in a tab of its own,
-landed on the row **at or below** the address, the view and the caret both. That rounding is
-`section::Rows::row_for`'s and holds for every kind of row (the instruction holding the byte, the
-row of bytes covering it, the guessed row of a stretch nobody has decoded), and `use_kept_place`
-finishes it. A move has arrived when the view's top row is the row the place names, by row and not
-by spot, since a spot derived from the offset never spells an address inside a row. And when the
-rows are rebuilt under a view that was at the map's place as well as the old rows could tell, the
-map's place is re-applied and not the derived one, so a target in a stretch the worker had not
-reached lands on its own instruction once the stretch is decoded, not on the row its guess was
+would select a line in a document opened for some other reason later. The exception is a landing
+whose document is already on top, which `use_land` has yet to catch up with: two arrivals can fall
+between two of its runs, and the one left by the second, spent on the first, would leave the door
+that made it planting nothing at all. The instruction is the half of a landing the change of
+document cannot answer, and goes on as a `Planting` (the paragraph after the doors). A door into the
+document already on top leaves a landing just the same (`documents::land`): a line of a file is a
+place, so the move it makes changes the active entry and `use_land` runs on it. Selecting the line
+there instead left the arriving run on screen while the entry changed, which saved it under the
+place being left and had the arrival wipe it back to the place's bare line, without the columns the
+door named or the scroll it owed. A door that moves nothing -- the same place again, or one naming
+only the document -- selects the line itself, no effect being woken to do it. A row answering a
+question asked from a source-driven tab chooses for that tab instead: `Located::subject` carries the
+tab's id beside its file, the choice is written under that entry while the tab still shows the file,
+and `land_on` raises the tab with the line left as a landing, a move and not a visit, the tab being
+open already. **Two doors join the two views** and both go through the same functions. A
+**Ctrl**-press on a label in an object's code opens the symbol's own tab, a `NewTab` as Ctrl opens
+one everywhere; a plain press selects the row like any other, since a label is a row of the listing
+first, though a label's row is a row of no file. Ctrl is watched at the root exactly as Shift is
+(`Ctrl` beside `Shift` and `Alt`, all three kept by `ModifierKeys`), a freya pointer event carrying
+no modifiers, and the label lights as a link only while it is held. A Caps Lock the desktop has made
+into Ctrl names itself Caps Lock in every event, so it is learnt from its first release
+(`ModifierKeys`' doc, `notes/upstream/freya.md`). **The third door is the address an instruction
+goes to when nothing names it**: a call into the middle of a function, a call to a function a
+stripped image has no symbol for, a jump out of the symbol in a listing with no row for it
+(`Instruction::target`, `agents/Analysis.md`). The number is drawn as a `TargetLabel`
+(`Link::Target`, the third of `split`'s links), inline in the row's paragraph as the other two are,
+and a Ctrl-press on it is `show_in_code` with the **placed** address and no line: the object's code
+in a tab of its own, landed on the row **at or below** the address, the view and the caret both.
+That rounding is `section::Rows::row_for`'s and holds for every kind of row (the instruction holding
+the byte, the row of bytes covering it, the guessed row of a stretch nobody has decoded), and
+`use_kept_place` finishes it. A move has arrived when the view's top row is the row the place names,
+by row and not by spot, since a spot derived from the offset never spells an address inside a row.
+And when the rows are rebuilt under a view that was at the map's place as well as the old rows could
+tell, the map's place is re-applied and not the derived one, so a target in a stretch the worker had
+not reached lands on its own instruction once the stretch is decoded, not on the row its guess was
 nearest (`agents/UI.md`). A plain press on the number is a press on the row's text; the label lights
 as a link, and the row shows the hand over it (`Text::door`), only while Ctrl is held. **In the
-unified view a link does not leave it.** The rows a target is in are rows of the listing already,
-so a plain press on a name or on a bare address is `show_in_code` at the target's placed address,
-which `documents::land` turns into a plant in the tab that is already showing that document: a
-scroll and a caret, and no tab opened. It **is** pushed onto that tab's trail, as a `Stop` naming
-the address, so Back comes back to the instruction that was followed -- the place left keeps its own
-rows and runs, being an entry of its own (`agents/UI.md`) -- and it is not recorded as a *visit*,
-the History panel listing documents and a move inside one being no new document to have been at.
-Ctrl keeps its own meaning over a name -- the symbol alone, in a tab of its own -- and the bare
-address lights as a link in that listing whether or not Ctrl is held, since there a plain press is
-the door. Following a link in a symbol's own listing is unchanged: there is nowhere to move to, so
-it replaces what the tab shows and the function left is one Back away. Both doors
-into the object's code, this one and the menu's, take `AsmData::placed`, the section's bias added to
-the row's own address: the bias the *listing* draws is nothing in a symbol's own tab, and the code
-tab's rows are placed. Undefined imports and relocations against a section symbol stay plain text;
-the crate says why. **A relocation link and the companion header are clicks inside the tab**, and
-are followed **in place**: pushed onto the tab's trail so the function left is one Back away, the
-way a browser follows a link, and in a tab of their own beside it with Ctrl. An instruction's menu
-offers to show it among its neighbours, "Show in unified view", offered in a symbol's listing and
-not in the code listing it would open. That is `show_in_code`, a tab of its own: `land` with the
-instruction's placed address and its line where it has one, and then the code tab's place written to
-`CodeAt` under the entry the open handed back. That write is in the same handler and before any
-render, so the pane's first run finds it, and after the open only because the entry names the tab
-and a new tab has no id until it is opened; when the code tab is already on top that write is what
-moves the view, the place-keeping hook reading the map for exactly this. The address therefore
-travels twice: as the tab's place, which is where the view goes, and in the landing, which is where
-the caret goes. The same menu in the code listing offers the door the other way, "Open as symbol"
-(`open_as_symbol`): the symbol's own tab, the caret on the row's instruction, by the symbol's
-**own** address, the space that listing draws, where the code tab's doors take the placed one, and
-landed on the row's line where it has one, so a label is not the only way back. Both listings' menus
-end with "Bookmark symbol", the symbol the row is code of, which in the code listing is the
-stretch's own, through the same `bookmark_item` the sidebar rows and a tab's header use
-(`agents/Sidebar.md`), worded for a row that is an instruction and not the symbol. With it the menu
-always has something to offer, so a row opens one whether or not it has a line or a door.
+unified view a link does not leave it.** The rows a target is in are rows of the listing already, so
+a plain press on a name or on a bare address is `show_in_code` at the target's placed address, which
+`documents::land` turns into a plant in the tab that is already showing that document: a scroll and
+a caret, and no tab opened. It **is** pushed onto that tab's trail, as a `Stop` naming the address,
+so Back comes back to the instruction that was followed -- the place left keeps its own rows and
+runs, being an entry of its own (`agents/UI.md`) -- and it is not recorded as a *visit*, the History
+panel listing documents and a move inside one being no new document to have been at. Ctrl keeps its
+own meaning over a name -- the symbol alone, in a tab of its own -- and the bare address lights as a
+link in that listing whether or not Ctrl is held, since there a plain press is the door. Following a
+link in a symbol's own listing is unchanged: there is nowhere to move to, so it replaces what the
+tab shows and the function left is one Back away. Both doors into the object's code, this one and
+the menu's, take `AsmData::placed`, the section's bias added to the row's own address: the bias the
+*listing* draws is nothing in a symbol's own tab, and the code tab's rows are placed. Undefined
+imports and relocations against a section symbol stay plain text; the crate says why. **A relocation
+link and the companion header are clicks inside the tab**, and are followed **in place**: pushed
+onto the tab's trail so the function left is one Back away, the way a browser follows a link, and in
+a tab of their own beside it with Ctrl. An instruction's menu offers to show it among its
+neighbours, "Show in unified view", offered in a symbol's listing and not in the code listing it
+would open. That is `show_in_code`, a tab of its own: `land` with the instruction's placed address
+and its line where it has one, and then the code tab's place written to `CodeAt` under the entry the
+open handed back. That write is in the same handler and before any render, so the pane's first run
+finds it, and after the open only because the entry names the tab and a new tab has no id until it
+is opened; when the code tab is already on top that write is what moves the view, the place-keeping
+hook reading the map for exactly this. The address therefore travels twice: as the tab's place,
+which is where the view goes, and in the landing, which is where the caret goes. The same menu in
+the code listing offers the door the other way, "Open as symbol" (`open_as_symbol`): the symbol's
+own tab, the caret on the row's instruction, by the symbol's **own** address, the space that listing
+draws, where the code tab's doors take the placed one, and landed on the row's line where it has
+one, so a label is not the only way back. Both listings' menus end with "Bookmark symbol", the
+symbol the row is code of, which in the code listing is the stretch's own, through the same
+`bookmark_item` the sidebar rows and a tab's header use (`agents/Sidebar.md`), worded for a row that
+is an instruction and not the symbol. With it the menu always has something to offer, so a row opens
+one whether or not it has a line or a door.
 
 **A call in the source is a door of its own, and it is text and not an element.** A row's
 paragraph takes one inline child, and an inline is one *unit* to the text engine
@@ -399,29 +411,30 @@ as the stretch decodes), and a caret planted before the rows exist would be plan
 the address half of a `Landing` goes on as a `Planting` (`Plant`, at the root) naming the document.
 It is left by `use_land` in the same run that plants the line, never before it, which is what makes
 the order safe: `use_land` resets both panes' runs as a place arrives, and a caret planted ahead of
-that would be reset with them. Or it is left by `land` itself for a tab already on top, where no
-document changes and `use_land` never runs. Two listings spend it, each reading the state so a door
-opened over the tab on top wakes it. **In an object's code** `use_kept_place` plants it in the first
-run that has rows and finds a planting naming its document, over the kept run: on the row **holding
-the byte** (`Rows::body_row_for`, `row_for` past a stretch's header and labels, since the view is
-better shown the label over a function and a caret is not), and with `Owed::default()`. The tab's
-place is the same address, written by the same door, and it is what scrolls the view there; a reveal
-beside it would cancel the place's move (`use_kept_place` returns after a reveal) and put the row
-three rows down instead of at the top. The place is authoritative in that pane, and the line's run,
-where the door left one, stops owing this pane the pair for the same reason (`land_row`). The
-planted address is what is kept for the caret's row (`Kept::spots`): a guessed row's own place is
-its share of an undecoded stretch, and carrying the caret by that once the stretch decoded put it on
-the row nearest the guess, one row off the instruction. So a place already kept for a row of the run
-**stays** for as long as it still names the row on screen (`row_of`), the exact address a planting
-gave and a derived one alike, and the carry across a recount goes through the kept place before the
-derived one. **In a symbol's listing** `InstructionList`'s planting effect, keyed on the entry the
-drawn answer is of (not the tab's document, since the pane draws the listing being left until the
-worker answers), plants it on the row of the instruction at or below the address and owes the pane
-the reveal, `Owed::by(Assembly)`, which `use_kept_position` pays first and over the kept row as it
-pays any reveal; there the reveal is authoritative, a symbol's tab having no place by address.
-Either listing spends the planting whether or not it could answer it (an address in no stretch, or
-before the first instruction, is dropped, not left owed), and `use_land` drops it on every arrival
-besides, so a listing that never came leaves no caret for a document opened later.
+that would be reset with them. Or it is left by `land` itself where the door moves the tab nowhere
+-- the same place again -- since nothing is woken there to leave it. Two listings spend it, each
+reading the state so a door opened over the tab on top wakes it. **In an object's code**
+`use_kept_place` plants it in the first run that has rows and finds a planting naming its document,
+over the kept run: on the row **holding the byte** (`Rows::body_row_for`, `row_for` past a
+stretch's header and labels, since the view is better shown the label over a function and a caret
+is not), and with `Owed::default()`. The tab's place is the same address, written by the same door,
+and it is what scrolls the view there; a reveal beside it would cancel the place's move
+(`use_kept_place` returns after a reveal) and put the row three rows down instead of at the top. The
+place is authoritative in that pane, and the line's run, where the door left one, stops owing this
+pane the pair for the same reason (`land_row`). The planted address is what is kept for the caret's
+row (`Kept::spots`): a guessed row's own place is its share of an undecoded stretch, and carrying
+the caret by that once the stretch decoded put it on the row nearest the guess, one row off the
+instruction. So a place already kept for a row of the run **stays** for as long as it still names
+the row on screen (`row_of`), the exact address a planting gave and a derived one alike, and the
+carry across a recount goes through the kept place before the derived one. **In a symbol's listing**
+`InstructionList`'s planting effect, keyed on the entry the drawn answer is of (not the tab's
+document, since the pane draws the listing being left until the worker answers), plants it on the
+row of the instruction at or below the address and owes the pane the reveal, `Owed::by(Assembly)`,
+which `use_kept_position` pays first and over the kept row as it pays any reveal; there the reveal
+is authoritative, a symbol's tab having no place by address. Either listing spends the planting
+whether or not it could answer it (an address in no stretch, or before the first instruction, is
+dropped, not left owed), and `use_land` drops it on every arrival besides, so a listing that never
+came leaves no caret for a document opened later.
 
 **Navigating brings back each pane's caret and selection with the place.** Back, Forward, a switch
 of tab and a place a tab has been at before put back, in **both** panes, what the reader had

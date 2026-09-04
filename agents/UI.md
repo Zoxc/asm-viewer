@@ -426,19 +426,35 @@ Locations row opens a symbol on a line, so the tab changes and the arriving one 
 and two effects' scrolls land in whichever order the runtime wakes them. With the reveal first, it
 had marked itself made by the time the kept row was put over it, which reset both panes to the top.
 One effect has one order, and when a reveal scrolls, the effect wakes on that scroll and records
-where it landed. `close_tab`/`close_others`/`close_binary` forget every position of a tab's entries
-with the tab, by id, and `close_binary` forgets those of the entries it takes off the surviving
-trails too. That is not tidiness: an `Assembly` entry holds the `Arc<Object>` it points into, and
-the hook is handed `Docs::contains` precisely so that the run *after* a close, still holding the
-place that has gone, cannot put it straight back. The closers forget the driven lines with them,
-which *is* tidiness: a `Source` key holds no object, so nothing is being held up. **Each place
-remembers what was selected in each of its panes** the same way: `MarksAt` is a fourth map keyed by
-the same `Entry`, holding both panes' runs as they were left (the caret and the selection, no
-gesture, nothing owed) and, for an object's code, the place each row of the assembly run stood for.
-`use_land` (`agents/Panes.md`) saves under the entry being left and restores for the one arriving, a
-landing winning over what was kept and a kept run over a source-driven tab's driven line. It is
-forgotten in the three closers with the other three and by `Docs::contains` for the same reason, and
-it is the one of the four that `session.toml` never sees.
+where it landed. **The reveal and the opening row are read out of a cell the pane rewrites every
+render**, not passed into the effect: `use_side_effect_with_deps` builds its callback once in a
+`use_hook` and refreshes only the deps, and a tab handed another document is not mounted again -- a
+link followed in place, a search hit shown in the temporal tab -- so a closure kept from the mount
+measured the row it owed against the file that render drew, refused it for ever, and left the pane
+to fall back to the opening row. **A tab arriving with a landing on its way goes to the row the
+landing names as it draws it**, and holds the move it would otherwise make until the landing has
+been spent. `use_land` turns a landing into a run two passes after the switch reaches the hook -- it
+runs off `Active`, and that is a memo -- so a pane that waited for it drew the arriving document at
+the outgoing place's offset until then, and one that made its move first drew it at the top of the
+file. The hook asks the pane to take the landing instead (`coming`), which the source pane does for
+a line of the file it is drawing, with the same `reveal_row` the run makes later, so the run finds
+the row already there. A landing the pane does not take -- a door that knew only an address, or one
+meant for the other pane -- leaves the move held rather than made, since that pass may still plant
+this pane a run. Nothing strands the pane on the offset of the tab it left: a landing is only ever
+left by a move that changes the place, and that arrival is what spends it.
+`close_tab`/`close_others`/`close_binary` forget every position of a tab's entries with the tab, by
+id, and `close_binary` forgets those of the entries it takes off the surviving trails too. That is
+not tidiness: an `Assembly` entry holds the `Arc<Object>` it points into, and the hook is handed
+`Docs::contains` precisely so that the run *after* a close, still holding the place that has gone,
+cannot put it straight back. The closers forget the driven lines with them, which *is* tidiness: a
+`Source` key holds no object, so nothing is being held up. **Each place remembers what was selected
+in each of its panes** the same way: `MarksAt` is a fourth map keyed by the same `Entry`, holding
+both panes' runs as they were left (the caret and the selection, no gesture, nothing owed) and, for
+an object's code, the place each row of the assembly run stood for. `use_land` (`agents/Panes.md`)
+saves under the entry being left and restores for the one arriving, a landing winning over what was
+kept and a kept run over a source-driven tab's driven line. It is forgotten in the three closers
+with the other three and by `Docs::contains` for the same reason, and it is the one of the four that
+`session.toml` never sees.
 
 **A code tab's place is an address, in the same map type.** The listing of an object's whole code is
 counted afresh with every answer that lands (`agents/Panes.md`), so a row there means nothing for

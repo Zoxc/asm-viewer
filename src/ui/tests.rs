@@ -74,6 +74,8 @@ fn scrolling_harness() -> impl IntoElement {
         at,
         move |tab: &String| open.peek().contains(tab),
         |_| false,
+        // No landing machinery here, so no landing to take.
+        |_: &Landing, _: &mut ScrollController| false,
         controller,
         &showing,
         rows,
@@ -224,6 +226,8 @@ fn revealing_harness() -> impl IntoElement {
             reveal_row(controller, 100.0, row);
             true
         },
+        // No landing machinery here, so no landing to take.
+        |_: &Landing, _: &mut ScrollController| false,
         controller,
         &showing,
         rows,
@@ -2786,11 +2790,11 @@ fn locations_harness() -> impl IntoElement {
     let landing = use_consume::<Land>().0;
     let plant = use_consume::<Plant>().0;
     let driven = use_consume::<Drives>().0;
-    let docs = use_open().docs;
+    let open = use_open();
     let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
     use_land(
-        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
 
     rect().expanded().child(LocationsTab)
@@ -3258,6 +3262,72 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     navigate(states.open, Nav::Back);
     settle(&mut test);
     assert!(states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::whole(document)));
+}
+
+/// A door into the document already on top lands through the change of *place* it makes,
+/// as one into another document lands through the change of document: the run is the
+/// arriving place's, so the columns the door named and the scroll it owes both panes
+/// survive, and the place left keeps the run it was left with. `land` used to pick the
+/// line out itself: the run was then on screen under the place being left, saved there,
+/// and wiped a pass later by the arrival, which found no landing and fell back to the
+/// place's own line.
+#[test]
+fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
+    let file: Arc<str> = Arc::from("/src/main.rs");
+    let document = Document::Source(file.clone());
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    settle(&mut test);
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab)
+        .expect("the file opens");
+    settle(&mut test);
+
+    // The columns are a search hit's: what the landing carries beyond the line.
+    let land_on_line = |test: &mut TestingRunner, line: u32| {
+        land(
+            states.open,
+            states.visits,
+            location.marked,
+            location.landing,
+            location.plant,
+            Landing {
+                tab: document.clone(),
+                at: Some(LinePos {
+                    file: file.clone(),
+                    line,
+                }),
+                address: None,
+                columns: Some(3..7),
+            },
+            Reach::InPlace,
+        );
+        settle(test);
+    };
+
+    land_on_line(&mut test, 20);
+    land_on_line(&mut test, 40);
+    let (_, source) = runs_of(location.marked);
+    let source = source.expect("the landing picked nothing out");
+    assert!(
+        source.chars.ends() == (Caret { row: 39, col: 3 }, Caret { row: 39, col: 7 }),
+        "the match itself is not selected, only its line"
+    );
+    assert!(source.owed == Owed::BOTH, "neither pane was owed a scroll");
+
+    // And the run the first line was left with is the first line's, not the second's:
+    // what is on screen when the place changes belongs to the place being left.
+    navigate(states.open, Nav::Back);
+    settle(&mut test);
+    let (_, source) = runs_of(location.marked);
+    let source = source.expect("the place came back with no run");
+    assert_eq!(
+        source.rows.anchor, 19,
+        "Back came back holding the line it left for"
+    );
 }
 
 /// The panel says which of its four states it is in off `Located`'s two fields, and a
@@ -4012,7 +4082,7 @@ fn linking_harness() -> impl IntoElement {
     let code_rows = use_consume::<CodeRows>().0;
     let active = use_consume::<Active>().0;
     use_land(
-        active, open.docs, marked, landing, plant, driven, marks_at, code_rows,
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
     use_follow(follow, open, states.visits, marked, landing, plant, driven);
 
@@ -4450,9 +4520,9 @@ fn a_refused_uses_question_leaves_the_panel_saying_there_are_none() {
     right_click(&mut test, call);
     let entry = centre_of(&test, "Find uses of helper");
     press_at(&mut test, entry);
-    for _ in 0..8 {
-        settle(&mut test);
-    }
+    // Waited for rather than counted in passes: two workers stand between the press and
+    // the panel, and how many turns they take is not something a test can know.
+    pump(&mut test, || location.located.peek().found.is_some());
 
     let state = location.located.peek().clone();
     assert!(
@@ -6160,6 +6230,21 @@ fn source_pane_harness() -> impl IntoElement {
         .maybe_child(mounted().then(|| SourcePane { tab, document }.into_element()))
 }
 
+/// The line numbers the Source pane's gutter is drawing, which is where the pane is. The
+/// number carries the non-breaking space skia is stopped from trimming; the companion
+/// header's label is the file's name and parses as nothing.
+fn gutter_lines(test: &TestingRunner) -> Vec<u32> {
+    let mut rows: Vec<u32> = labels(test)
+        .into_iter()
+        .filter_map(|text| {
+            text.strip_suffix('\u{a0}')
+                .and_then(|number| number.parse().ok())
+        })
+        .collect();
+    rows.sort_unstable();
+    rows
+}
+
 /// A tab opened for the first time puts its source side on the **symbol's own lines**,
 /// and not at the top of a file the symbol may be a hundred lines into. A row remembered
 /// for the tab still wins: this is the first open it answers and not every one.
@@ -6218,25 +6303,11 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
     // which is what the second half of this test leans on.
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
 
-    // Which lines the gutter is drawing, which is where the pane is. The number carries
-    // the non-breaking space skia is stopped from trimming; the companion header's label
-    // is the file's name and parses as nothing.
-    let drawn = |test: &TestingRunner| {
-        let mut rows: Vec<u32> = labels(test)
-            .into_iter()
-            .filter_map(|text| {
-                text.strip_suffix('\u{a0}')
-                    .and_then(|number| number.parse().ok())
-            })
-            .collect();
-        rows.sort_unstable();
-        rows
-    };
     let land = |test: &mut TestingRunner| {
         for _ in 0..8 {
             test.sync_and_update();
         }
-        drawn(test)
+        gutter_lines(test)
     };
 
     let rows = land(&mut test);
@@ -10102,7 +10173,21 @@ fn bare_harness() -> impl IntoElement {
 
 /// The Assembly pane over an object's code, the reading seeded by the test: the skeleton
 /// and whatever stretches it says are decoded, with no worker between the two.
+/// `use_land` is mounted because a door into the listing leaves a `Landing` for it, and
+/// the caret it plants is what these tests ask about.
 fn code_harness() -> impl IntoElement {
+    let active = use_consume::<Active>().0;
+    let marked = use_consume::<Marked>().0;
+    let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
+    let driven = use_consume::<Drives>().0;
+    let open = use_open();
+    let marks_at = use_consume::<MarksAt>().0;
+    let code_rows = use_consume::<CodeRows>().0;
+    use_land(
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
+    );
+
     let reading = use_consume::<Sections>().0;
     let object = reading.read().object.clone();
     match object {
@@ -11654,7 +11739,7 @@ fn doors_harness() -> impl IntoElement {
     let reading = use_consume::<Sections>().0;
     let window = use_consume::<Window>().0;
     use_land(
-        active, open.docs, marked, landing, plant, driven, marks_at, code_rows,
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
     use_reading_of(active, objects, reading, window);
 
@@ -14342,7 +14427,7 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
 /// listing is replaced within one place -- and must not drop one for the switch.
 fn navigating_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let docs = use_open().docs;
+    let open = use_open();
     let marked = use_consume::<Marked>().0;
     let landing = use_consume::<Land>().0;
     let plant = use_consume::<Plant>().0;
@@ -14351,7 +14436,7 @@ fn navigating_harness() -> impl IntoElement {
     let code_rows = use_consume::<CodeRows>().0;
     let analysis = use_consume::<Analysis>().0;
     use_land(
-        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
     use_clear_marks(
         active,
@@ -14701,7 +14786,7 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
 /// through, as [`navigating_harness`] is for a document's two panes.
 fn code_navigating_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let docs = use_open().docs;
+    let open = use_open();
     let marked = use_consume::<Marked>().0;
     let landing = use_consume::<Land>().0;
     let plant = use_consume::<Plant>().0;
@@ -14710,7 +14795,7 @@ fn code_navigating_harness() -> impl IntoElement {
     let code_rows = use_consume::<CodeRows>().0;
     let analysis = use_consume::<Analysis>().0;
     use_land(
-        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
     use_clear_marks(
         active,
@@ -15019,11 +15104,11 @@ fn search_harness() -> impl IntoElement {
     let landing = use_consume::<Land>().0;
     let plant = use_consume::<Plant>().0;
     let driven = use_consume::<Drives>().0;
-    let docs = use_open().docs;
+    let open = use_open();
     let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
     use_land(
-        active, docs, marked, landing, plant, driven, marks_at, code_rows,
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
 
     rect().expanded().child(SearchTab)
@@ -17064,4 +17149,312 @@ fn the_project_views_button_asks_before_it_starts_too() {
 
     assert_eq!(language.read().state, Lsp::Running);
     assert!(proj.read().trusted);
+}
+
+/// The two panes as the dock mounts them, with the landing machinery behind them: what a
+/// door from outside a document reaches, and what answers it.
+fn landing_panes_harness() -> impl IntoElement {
+    let active = use_consume::<Active>().0;
+    let marked = use_consume::<Marked>().0;
+    let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
+    let driven = use_consume::<Drives>().0;
+    let marks_at = use_consume::<MarksAt>().0;
+    let code_rows = use_consume::<CodeRows>().0;
+    let open = use_open();
+    use_land(
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
+    );
+    panes_harness()
+}
+
+/// [`landing_panes_harness`] over the contexts `app()` gives it.
+fn landing_panes() -> (TestingRunner, ProjectStates, LocationStates) {
+    let (test, (states, location)) = TestingRunner::new(
+        landing_panes_harness,
+        (500., 300.).into(),
+        |runner| {
+            let (states, location) = location_states!(runner);
+            // Whether Shift is held, which every code row reads.
+            runner.provide_root_context(|| Shift(State::create(false)));
+            // The two `app()` provides beside the project's, which `DocumentBody` sizes
+            // its panels from.
+            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
+            runner.provide_root_context(|| {
+                Splits(State::create(ResizableContext {
+                    direction: Direction::Horizontal,
+                    ..Default::default()
+                }))
+            });
+            (states, location)
+        },
+        1.,
+    );
+    (test, states, location)
+}
+
+/// **A door into another file scrolls the pane to the line it landed on, in a tab that
+/// was already showing something else.** A link followed in the source, and a row in the
+/// Search panel, both reach a document through the tab on screen -- in place, or into the
+/// temporal one -- and a tab handed another document is not mounted again, so the pane's
+/// controller and its hooks are the ones the file before it left behind.
+///
+/// Headless because the answer is a scroll offset a `VirtualScrollView` turns into rows,
+/// asked of the pane the way the reader asks it: by which line numbers are drawn.
+#[test]
+fn a_door_into_another_file_shows_the_line_it_landed_on() {
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-landing-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    // The file the tab is showing when the door is pressed, and the one it opens. The
+    // second is long enough that the line landed on is nowhere near the top, and longer
+    // than the first, so a reveal measuring against the first refuses it.
+    let first = directory.join("first.rs");
+    std::fs::write(&first, "fn a() {}\nfn b() {}\n").expect("writing the first file");
+    let second = directory.join("second.rs");
+    let text: String = (1..=200).map(|n| format!("fn line_{n}() {{}}\n")).collect();
+    std::fs::write(&second, text).expect("writing the second file");
+    let opened: Arc<str> = Arc::from(first.to_str().expect("a utf-8 temporary path"));
+    let landed: Arc<str> = Arc::from(second.to_str().expect("a utf-8 temporary path"));
+    const LINE: u32 = 150;
+
+    let (mut test, states, location) = landing_panes();
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(opened.clone()),
+        Reach::Preview,
+    );
+    for _ in 0..8 {
+        test.sync_and_update();
+    }
+
+    // The door: the same `land` a followed name and a search hit both make, in place, so
+    // the tab on screen is handed the second file rather than mounting a new one.
+    land(
+        states.open,
+        states.visits,
+        location.marked,
+        location.landing,
+        location.plant,
+        Landing {
+            tab: Document::Source(landed.clone()),
+            at: Some(LinePos {
+                file: landed.clone(),
+                line: LINE,
+            }),
+            address: None,
+            columns: None,
+        },
+        Reach::InPlace,
+    );
+    for _ in 0..12 {
+        test.sync_and_update();
+    }
+
+    let rows = gutter_lines(&test);
+    assert!(
+        rows.contains(&LINE),
+        "the pane does not show line {LINE}, which the door landed on: {rows:?}"
+    );
+    // With the margin a reveal keeps above the row it scrolls to, and no more.
+    let top = *rows.first().expect("the gutter drew no line numbers");
+    assert!(
+        (LINE.saturating_sub(CONTEXT_ROWS as u32)..=LINE).contains(&top),
+        "the pane is at line {top}, not on the line {LINE} it landed on"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// **A door moves the pane once: from where it was to the line it landed on, and not by
+/// way of the top of the file.** The run a landing names is planted by `use_land`, which
+/// runs off `Active` and so a pass later than the switch reaches the pane's own hook. A
+/// hook that put the arriving tab at its opening row meanwhile showed the top of the file
+/// for those passes, which is the flicker the reader sees; the move is held instead until
+/// the landing has been spent.
+///
+/// Headless because the answer is the pane's position on the passes *between* the press
+/// and the pane settling, which only a test that looks at every pass can see.
+#[test]
+fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-flicker-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    // Two long files, so a move to the top of either is a move and not the offset the
+    // pane already had.
+    let write = |path: &Path, name: &str| {
+        let text: String = (1..=200)
+            .map(|n| format!("fn {name}_{n}() {{}}\n"))
+            .collect();
+        std::fs::write(path, text).expect("writing a source file");
+    };
+    let first = directory.join("first.rs");
+    let second = directory.join("second.rs");
+    write(&first, "one");
+    write(&second, "two");
+    let opened: Arc<str> = Arc::from(first.to_str().expect("a utf-8 temporary path"));
+    let landed: Arc<str> = Arc::from(second.to_str().expect("a utf-8 temporary path"));
+
+    let (mut test, states, location) = landing_panes();
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(opened.clone()),
+        Reach::Preview,
+    );
+    for _ in 0..8 {
+        test.sync_and_update();
+    }
+
+    // The same `land` a followed name and a search hit both make, in place, so the tab on
+    // screen is handed the document rather than mounting a pane for it.
+    let door = |test: &mut TestingRunner, file: &Arc<str>, line: u32| {
+        land(
+            states.open,
+            states.visits,
+            location.marked,
+            location.landing,
+            location.plant,
+            Landing {
+                tab: Document::Source(file.clone()),
+                at: Some(LinePos {
+                    file: file.clone(),
+                    line,
+                }),
+                address: None,
+                columns: None,
+            },
+            Reach::InPlace,
+        );
+        // The top line of the gutter after each pass, with the runs of equal ones
+        // collapsed: where the pane was, where it went, and anywhere it went on the way.
+        let mut seen: Vec<u32> = Vec::new();
+        for _ in 0..14 {
+            test.sync_and_update();
+            let top = *gutter_lines(test)
+                .first()
+                .expect("the gutter drew no numbers");
+            if seen.last() != Some(&top) {
+                seen.push(top);
+            }
+        }
+        seen
+    };
+
+    // Each door, and the margin a reveal keeps above the row it scrolls to. Down the
+    // file the pane is already showing: away from the top first, and then between two
+    // lines of it, which is where a visit to the top on the way shows plainest.
+    let at = |line: u32| line - CONTEXT_ROWS as u32;
+    assert_eq!(
+        door(&mut test, &opened, 100),
+        vec![1, at(100)],
+        "the pane did not go straight from the top of the file to line 100"
+    );
+    assert_eq!(
+        door(&mut test, &opened, 150),
+        vec![at(100), at(150)],
+        "the pane went by way of another line on its way to line 150"
+    );
+    // And into another file, whose top the pane must not be shown at either.
+    assert_eq!(
+        door(&mut test, &landed, 40),
+        vec![at(150), at(40)],
+        "the pane went by way of another line on its way into the second file"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// **A door lands as the pane draws the document it opened**, and not two passes later.
+/// `use_land` turns a landing into the source pane's run off `Active`, which is a memo,
+/// so the pane that waited for it drew the arriving file at the offset the outgoing
+/// place had left -- a line of the new file nobody asked for, held there long enough to
+/// read, and then a jump. The pane takes the landing itself instead, on the first run
+/// after the switch.
+///
+/// The two doors follow one another without settling in between, which is what leaves
+/// `use_land` an arrival behind: the landing the second leaves must survive the first
+/// being answered, or the door plants nothing and the pane opens at the top instead.
+///
+/// Headless because what is under test is *when*: the pass the landed row first shows,
+/// which only a test that looks at every pass can say.
+#[test]
+fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-promptly-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let write = |path: &Path, name: &str| {
+        let text: String = (1..=200)
+            .map(|n| format!("fn {name}_{n}() {{}}\n"))
+            .collect();
+        std::fs::write(path, text).expect("writing a source file");
+    };
+    let first = directory.join("first.rs");
+    let second = directory.join("second.rs");
+    write(&first, "one");
+    write(&second, "two");
+    let opened: Arc<str> = Arc::from(first.to_str().expect("a utf-8 temporary path"));
+    let landed: Arc<str> = Arc::from(second.to_str().expect("a utf-8 temporary path"));
+
+    let (mut test, states, location) = landing_panes();
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(opened.clone()),
+        Reach::Preview,
+    );
+    for _ in 0..8 {
+        test.sync_and_update();
+    }
+
+    // A door, and the pass on which the row it landed on first shows.
+    let door = |test: &mut TestingRunner, file: &Arc<str>, line: u32| -> Option<usize> {
+        land(
+            states.open,
+            states.visits,
+            location.marked,
+            location.landing,
+            location.plant,
+            Landing {
+                tab: Document::Source(file.clone()),
+                at: Some(LinePos {
+                    file: file.clone(),
+                    line,
+                }),
+                address: None,
+                columns: None,
+            },
+            Reach::InPlace,
+        );
+        let wanted = line - CONTEXT_ROWS as u32;
+        (0..16).find(|_| {
+            test.sync_and_update();
+            gutter_lines(test).first() == Some(&wanted)
+        })
+    };
+
+    // Away from the top first, and then into the other file: the second door is the one
+    // under test, and it follows the first without settling, which is also what leaves
+    // `use_land` an arrival behind.
+    assert!(
+        door(&mut test, &opened, 100).is_some(),
+        "line 100 never showed"
+    );
+    let passes = door(&mut test, &landed, 150).expect("line 150 never showed");
+    // The render that draws the document, the effect that scrolls it, and the layout that
+    // shows the scroll: three passes, and nothing waiting on the landing being spent.
+    assert!(
+        passes <= 3,
+        "the pane took {passes} passes to show the line it landed on, \
+         which is long enough to draw the file where it was before"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
 }

@@ -418,11 +418,11 @@ pub(crate) fn close_binary(
 
 /// Open `landing`'s tab on its line and its instruction: open it the way `reach` says,
 /// pick the line out in the source pane with both panes owed the scroll, and put the
-/// assembly pane's caret on the instruction. The line is picked out at once when the
-/// document is already on top, since opening then changes nothing and no effect would
-/// run, and otherwise left as the [`Landing`] for the change of document to turn into
-/// the run; the instruction is always a [`Planting`], the listing it is a row of coming
-/// after the document -- left here for a tab on top, and by `use_land` otherwise.
+/// assembly pane's caret on the instruction. The line is left as the [`Landing`] for the
+/// change of *place* the door makes -- an opening, a raise, or a move inside the document
+/// already on top -- and picked out here only where the door moves nothing at all; the
+/// instruction is always a [`Planting`], the listing it is a row of coming after the
+/// document, left here in that one case and by `use_land` otherwise.
 pub(crate) fn land(
     open: Open,
     visits: State<Visits>,
@@ -438,12 +438,20 @@ pub(crate) fn land(
         // runs: the push here is the only record that the reader was somewhere else in
         // it a moment ago.
         let id = open.active_id();
-        if let Some(id) = id {
-            moved_to(open, id, &stop);
+        let moved = id.is_some_and(|id| moved_to(open, id, &stop));
+        // A move inside the document is a change of place, and every change of place is
+        // `use_land`'s: it keeps the runs of the place being left and gives the arriving
+        // place its own. So a landing that moves the tab is left for it, as one that opens
+        // a document is. Picked out here instead, the run would be on screen when the
+        // entry changes -- saved there under the place being left, and then wiped by the
+        // arrival, which finds no landing and falls back to the place's own line, without
+        // the columns the door named or the scroll it owed.
+        if moved {
+            land.set(Some(landing));
+            return id;
         }
-        // The line and the instruction are put here and not left as a `Landing`: the
-        // document has not changed, so what a landing waits for is the pane's own next
-        // run, and a code tab's caret would be planted by nothing.
+        // The same place again, or a stop naming the document alone: nothing changes, so
+        // no effect runs and the line and the instruction are put here.
         if let Some(at) = landing.at {
             mark_line(
                 marked,
