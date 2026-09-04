@@ -385,13 +385,18 @@ answer for it. What a scratchpad *builds* needs no rule at all: the artifact goe
 **Each place on each tab's trail remembers where each of its sides was left.** A pane has one
 `ScrollController` and shows one tab at a time, so left alone it hands the tab arriving whatever
 offset the one leaving had. `AsmAt`/`SrcAt` are two root `Positions` maps beside `Open`, **both
-keyed by an `Entry`**, the tab's `DocId` and a `Stop` on its trail -- a document, plus the address
-it was reached at where that document is an object's code. So an entry means "this side of this
-place on this tab" for exactly as long as the tab is open and the place is on its trail, and going
-Back comes back to the rows that were left. **A place and not a document** is what makes following
-a link inside the unified view a step Back returns from: the two addresses are two entries, and a
-step between them is a switch to every pane, which is the whole of the behaviour -- there is no
-second mechanism for moving the view inside one listing. `use_kept_position` is the whole of the behaviour,
+keyed by an `Entry`**, the tab's `DocId` and a `Stop` on its trail -- a document, plus where in it
+the tab was: the address for an object's code, the line for a source file, and neither for a
+document opened at no place in particular. So an entry means "this side of this place on this tab"
+for exactly as long as the tab is open and the place is on its trail, and going Back comes back to
+the rows that were left. **A place and not a document** is what makes following a link inside the
+unified view, or a name inside a file, a step Back returns from: the two addresses, or the two
+lines, are two entries, and a step between them is a switch to every pane, which is the whole of
+the behaviour -- there is no second mechanism for moving the view inside one listing. Which is
+also why every key is built from the stop the tab is **at** (`place_at`) and never from its
+document: a key made of the document alone names a place the trail does not hold, and the two maps
+it is the key to answer "never seen" and "closed tab" to that -- a position that reads as the top
+of the file and a write that is silently dropped. `use_kept_position` is the whole of the behaviour,
 called once by `InstructionList` and once by `SourceList`, each handed its tab's id as a prop from
 `DocumentBody`. Which place a listing's row is filed under is `asked_of` the question that listing
 answers, never the place the app is showing: while the worker catches up the pane is drawing the one

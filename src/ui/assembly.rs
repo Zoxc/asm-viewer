@@ -1168,9 +1168,14 @@ impl Component for InstructionList {
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll this pane owes a run, which wins over it.
         let docs = use_consume::<OpenDocs>().0;
-        // The question this listing answers is one place and never a place *inside*
-        // one, so the stop it is filed under carries no address.
-        let entry = (self.tab, Stop::whole(asked_of(&self.asked)));
+        // The place the tab is at, which for a source-driven tab is a line of the file
+        // and not the file: two lines of one file reached along one trail are two
+        // entries, each with its own scroll. Read and not peeked, so a step between them
+        // re-renders this pane.
+        let entry = (
+            self.tab,
+            place_at(&docs.read(), self.tab, &asked_of(&self.asked)),
+        );
         use_kept_position(
             use_consume::<AsmAt>().0,
             move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),

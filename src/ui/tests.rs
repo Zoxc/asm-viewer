@@ -472,6 +472,16 @@ macro_rules! project_states {
 
 /// The documents on the trail behind `id`, oldest first: what a test asserts a trail by,
 /// a stop's own address being the business of the tests that walk one inside a listing.
+fn stops_of(states: &ProjectStates, id: DocId) -> Vec<Stop> {
+    states
+        .open
+        .docs
+        .peek()
+        .trail(id)
+        .map(|trail| trail.entries().to_vec())
+        .unwrap_or_default()
+}
+
 fn trail_of(states: &ProjectStates, id: DocId) -> Vec<Document> {
     states
         .open
@@ -2828,6 +2838,99 @@ fn settle(test: &mut TestingRunner) {
     for _ in 0..4 {
         test.sync_and_update();
     }
+}
+
+/// Two lines of one file reached one after the other are two places on the tab's trail,
+/// so Back returns to the line the reader came from. A source file used to be "one
+/// place", and a door that landed on a line of the file already on screen left nothing
+/// to come back to.
+#[test]
+fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
+    let file: Arc<str> = Arc::from("/src/main.rs");
+    let document = Document::Source(file.clone());
+    let (mut test, (states, location)) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner| location_states!(runner),
+        1.,
+    );
+    settle(&mut test);
+    let id = open_document(states.open, states.visits, document.clone(), Reach::NewTab)
+        .expect("the file opens");
+    settle(&mut test);
+    assert!(
+        stops_of(&states, id) == vec![Stop::whole(document.clone())],
+        "a file asked for by name is the file and not a line of it"
+    );
+
+    // The columns are a search hit's: what the landing carries beyond the line, and the
+    // one part of it nothing else can put back.
+    let at = |line: u32| Landing {
+        tab: document.clone(),
+        at: Some(LinePos {
+            file: file.clone(),
+            line,
+        }),
+        address: None,
+        columns: Some(3..7),
+    };
+    let land_on_line = |test: &mut TestingRunner, line: u32| {
+        land(
+            states.open,
+            states.visits,
+            location.marked,
+            location.landing,
+            location.plant,
+            at(line),
+            Reach::InPlace,
+        );
+        settle(test);
+    };
+
+    // Two doors, one after the other, into the file that is already on screen.
+    land_on_line(&mut test, 20);
+    land_on_line(&mut test, 40);
+    assert!(
+        stops_of(&states, id)
+            == vec![
+                Stop::whole(document.clone()),
+                Stop::on(document.clone(), 20),
+                Stop::on(document.clone(), 40),
+            ],
+        "the two lines are not two places behind the file"
+    );
+
+    // And the same place again is no move at all.
+    land_on_line(&mut test, 40);
+    assert_eq!(stops_of(&states, id).len(), 3, "landing again was a move");
+
+    // And the landing is picked out at the place landed on, columns and all: moving to a
+    // new place inside the file must leave the same run behind it as arriving at one in
+    // another file does.
+    let (_, source) = runs_of(location.marked);
+    let source = source.expect("the landing picked nothing out");
+    assert!(
+        source_line(location.marked)
+            == Some(LinePos {
+                file: file.clone(),
+                line: 40,
+            }),
+        "the move landed on no line"
+    );
+    assert!(
+        source.chars.ends() == (Caret { row: 39, col: 3 }, Caret { row: 39, col: 7 }),
+        "the move landed without the landing's columns"
+    );
+
+    navigate(states.open, Nav::Back);
+    settle(&mut test);
+    assert!(
+        states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::on(document.clone(), 20)),
+        "Back left the file it was inside"
+    );
+    navigate(states.open, Nav::Back);
+    settle(&mut test);
+    assert!(states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::whole(document)));
 }
 
 /// The panel says which of its four states it is in off `Located`'s two fields, and a

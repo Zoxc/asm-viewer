@@ -879,13 +879,15 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
                 let (mut asm, mut src, mut from) = (asm_at.write(), src_at.write(), driven.write());
                 let mut places = code_at.write();
                 for entry in tab.entries {
-                    // The place itself, address and all: two stops in one object's code
-                    // are two keys, as they were when they were saved.
+                    // The place itself, address and line and all: two stops in one
+                    // object's code, or in one file, are two keys, as they were when
+                    // they were saved.
                     let key = (
                         id,
                         Stop {
                             document: entry.document,
                             address: entry.address,
+                            line: entry.src_line,
                         },
                     );
                     asm.remember(key.clone(), entry.asm_row);

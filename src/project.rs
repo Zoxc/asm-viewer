@@ -402,6 +402,13 @@ pub struct SavedEntry {
     /// rebuilt binary takes it with the rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asm_address: Option<u64>,
+    /// The line of the file this place *is*, for a stop in a source file, and absent for
+    /// every other kind. Not the same thing as `line` above, which is what a
+    /// source-driven place's assembly side follows: this is where the reader arrived and
+    /// what Back comes back to, and the two part company the moment they click elsewhere
+    /// in the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_line: Option<u32>,
     pub document: SavedDocument,
 }
 
@@ -418,8 +425,8 @@ pub struct RestoredTab {
 /// One place of a restored tab that still points somewhere, with the rows its two sides
 /// were left at.
 ///
-/// Named rather than a tuple because it is five things, and because the rows and the
-/// address drop under a rebuilt binary while the line does not.
+/// Named rather than a tuple because it is six things, and because the rows and the
+/// address drop under a rebuilt binary while the two lines do not.
 #[derive(Clone, PartialEq)]
 pub struct RestoredEntry {
     pub document: Document,
@@ -427,6 +434,8 @@ pub struct RestoredEntry {
     pub src_row: usize,
     pub line: Option<u32>,
     pub address: Option<u64>,
+    /// The line the place itself is, where it is a place in a source file.
+    pub src_line: Option<u32>,
 }
 
 /// The record of visits in saved form: every place visited, oldest first. No cursor --
@@ -812,6 +821,7 @@ impl Session {
                                 src_row: src_rows.at(&entry).unwrap_or(0),
                                 line: driven.line(&entry),
                                 asm_address: places.at(&entry).map(|spot| spot.address),
+                                src_line: stop.line,
                                 document: SavedDocument::from_document(&stop.document),
                             }
                         })
@@ -865,6 +875,7 @@ impl Session {
                             src_row,
                             line: entry.line,
                             address,
+                            src_line: entry.src_line,
                         })
                     })
                     .collect();
@@ -873,6 +884,7 @@ impl Session {
                         entry.as_ref().map(|entry| Stop {
                             document: entry.document.clone(),
                             address: entry.address,
+                            line: entry.src_line,
                         })
                     }),
                     saved.cursor,

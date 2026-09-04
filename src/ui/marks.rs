@@ -1146,6 +1146,7 @@ pub(crate) fn use_land(
                 ) => driven
                     .peek()
                     .line(entry)
+                    .or(entry.1.line)
                     .map(|line| line_pick(file.clone(), line, None, Owed::default())),
                 _ => None,
             };

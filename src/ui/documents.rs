@@ -78,18 +78,30 @@ pub(crate) fn open_stop(
     match reach {
         Reach::InPlace if active.is_some() => {
             let (id, current) = active?;
-            // Already there: nothing to push, and a write would wake every header.
-            if current != target {
-                let mut docs = docs.write();
-                if let Some(trail) = docs.trail_mut(id) {
-                    trail.push(stop);
+            // Already showing the document: only a place inside it is a move, and only
+            // a different one. Otherwise nothing is pushed, and a write would wake every
+            // header.
+            let moved = match current != target {
+                true => {
+                    let mut docs = docs.write();
+                    if let Some(trail) = docs.trail_mut(id) {
+                        trail.push(stop);
+                    }
+                    true
                 }
-                docs.promote(id);
+                false => moved_to(open, id, &stop),
+            };
+            // A link followed inside the temporal tab is the reader reading in it,
+            // whether it left the document or moved within one.
+            if moved {
+                docs.write().promote(id);
             }
             Some(id)
         }
         Reach::InPlace | Reach::NewTab => {
             if let Some(id) = showing {
+                // The tab has the document; what it may not have is the place.
+                moved_to(open, id, &stop);
                 if temporal == Some(id) {
                     docs.write().promote(id);
                 }
@@ -102,6 +114,7 @@ pub(crate) fn open_stop(
         }
         Reach::Preview => {
             if let Some(id) = showing {
+                moved_to(open, id, &stop);
                 raise(open, id);
                 return Some(id);
             }
@@ -419,7 +432,18 @@ pub(crate) fn land(
     landing: Landing,
     reach: Reach,
 ) -> Option<DocId> {
+    let stop = stop_of(&landing);
     if open.active().as_ref() == Some(&landing.tab) {
+        // The document is already on top, so nothing is opened and `open_stop` never
+        // runs: the push here is the only record that the reader was somewhere else in
+        // it a moment ago.
+        let id = open.active_id();
+        if let Some(id) = id {
+            moved_to(open, id, &stop);
+        }
+        // The line and the instruction are put here and not left as a `Landing`: the
+        // document has not changed, so what a landing waits for is the pane's own next
+        // run, and a code tab's caret would be planted by nothing.
         if let Some(at) = landing.at {
             mark_line(
                 marked,
@@ -435,19 +459,69 @@ pub(crate) fn land(
                 address,
             }));
         }
-        return open.active_id();
+        return id;
     }
 
-    let tab = landing.tab.clone();
-    // A door into an object's code at an address opens *that place*, so the trail holds
-    // it and a later Back comes back to it. Every other landing's address is a caret in
-    // the one place its document is.
-    let stop = match (&tab, landing.address) {
-        (Document::Code(_), Some(address)) => Stop::at(tab.clone(), address),
-        _ => Stop::whole(tab.clone()),
-    };
     land.set(Some(landing));
     open_stop(open, visits, stop, reach)
+}
+
+/// The place `tab` is at: the stop under its trail's cursor, and the whole of `document`
+/// for a tab whose trail is not there to ask.
+///
+/// **What a pane keys its position and its runs by, and what a click in it writes
+/// under.** Two stops in one document are two places -- two addresses in an object's
+/// code, two lines of a file -- and stepping between them is what Back does inside a
+/// listing, so a key built as the document alone would name a place the trail does not
+/// hold: the position would read as never seen and the write would be dropped as a
+/// closed tab's.
+///
+/// The borrow is the caller's, which is the point: a pane takes it from a `read`, so a
+/// step re-renders it, and a handler from a `peek`.
+pub(crate) fn place_at(docs: &Docs, tab: DocId, document: &Document) -> Stop {
+    docs.current(tab)
+        .cloned()
+        .unwrap_or_else(|| Stop::whole(document.clone()))
+}
+
+/// The place a landing arrives at, as the trail holds one.
+///
+/// A door into an object's code at an address, or into a file at a line, opens *that
+/// place*, so the trail holds it and a later Back comes back to it. Each document says
+/// where in its own terms, and a symbol's landing is the one place its document is: an
+/// address there is a caret in it and a line is a row of the file beside it.
+fn stop_of(landing: &Landing) -> Stop {
+    let tab = landing.tab.clone();
+    match (&landing.tab, landing.address, &landing.at) {
+        (Document::Code(_), Some(address), _) => Stop::at(tab, address),
+        (Document::Source(file), _, Some(at)) if at.file == *file => Stop::on(tab, at.line),
+        _ => Stop::whole(tab),
+    }
+}
+
+/// Put `stop` on the trail of `id`, a tab already showing its document, where it is a
+/// place inside that document and not the place the tab is at. Whether it moved.
+///
+/// A move inside one document opens nothing, so this is the whole of what makes it a
+/// place the reader has been -- and the place left keeps its own rows and runs, being an
+/// entry of its own. A stop naming only its document has nothing to come back to that
+/// the document is not, so it is no move at all.
+fn moved_to(open: Open, id: DocId, stop: &Stop) -> bool {
+    if !stop.inside() {
+        return false;
+    }
+    // Bound before the write, as ever.
+    let current = open.docs.peek().current(id).cloned();
+    if current.as_ref() == Some(stop) {
+        return false;
+    }
+    let mut docs = open.docs;
+    let mut docs = docs.write();
+    let Some(trail) = docs.trail_mut(id) else {
+        return false;
+    };
+    trail.push(stop.clone());
+    true
 }
 
 /// Raise the open tab `id` on `at`: what a Locations row does for the source-driven tab
@@ -675,17 +749,22 @@ pub(crate) async fn take_load(
 }
 
 /// What a stop on a trail is called: the document's own name, except for a place inside
-/// an object's code, which is named by the symbol **starting** at that address -- so
-/// stepping back through a listing says which function each step goes to and not the
-/// object's name three times over. A place no symbol starts at, which is what a call into
-/// the middle of a function makes, has no name to give and is the object's.
+/// one, which says where. A place in an object's code is named by the symbol
+/// **starting** at that address -- so stepping back through a listing says which function
+/// each step goes to and not the object's name three times over -- and a place no symbol
+/// starts at, which is what a call into the middle of a function makes, has no name to
+/// give and is the object's. A place in a file is the file and the line, which is all
+/// that tells two of them apart.
 pub(crate) fn stop_text(stop: &Stop) -> String {
-    match (&stop.document, stop.address) {
-        (Document::Code(object), Some(address)) => match object.symbol_at(address) {
+    match (&stop.document, stop.address, stop.line) {
+        (Document::Code(object), Some(address), _) => match object.symbol_at(address) {
             Some(symbol) => short_name(symbol.display()),
             None => entry_text(&stop.document),
         },
-        (document, _) => entry_text(document),
+        (document @ Document::Source(_), _, Some(line)) => {
+            format!("{}:{line}", entry_text(document))
+        }
+        (document, _, _) => entry_text(document),
     }
 }
 

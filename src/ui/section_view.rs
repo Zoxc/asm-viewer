@@ -1221,20 +1221,11 @@ pub(crate) fn show_in_code(
     at: Option<LinePos>,
 ) {
     let code = Document::Code(object);
-    let stop = Stop::at(code.clone(), address);
-    // Moving inside the listing the reader is already in: `land` plants the address and
-    // opens nothing, so the push is the only record that they were somewhere else in it a
-    // moment ago. The place left keeps its own rows and runs, being an entry of its own,
+    // The stop `land` makes of the landing below, kept for the place written down after
+    // it. Moving inside the listing the reader is already in is put on the trail there,
     // so Back comes back to the instruction that was followed and not to where the jump
-    // landed.
-    if open.active().as_ref() == Some(&code) {
-        if let Some(id) = open.active_id() {
-            let mut docs = open.docs;
-            if let Some(trail) = docs.write().trail_mut(id) {
-                trail.push(stop.clone());
-            }
-        }
-    }
+    // landed, and the place left keeps its own rows and runs, being an entry of its own.
+    let stop = Stop::at(code.clone(), address);
     let id = land(
         open,
         visits,

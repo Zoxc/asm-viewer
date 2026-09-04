@@ -155,6 +155,7 @@ impl Component for SourceRow {
         let mut driven = use_consume::<Drives>().0;
         // Consumed here, in the render, because the menu handler may not run a hook.
         let located = use_consume::<Locations>().0;
+        let docs = use_consume::<OpenDocs>().0;
         let dock = use_consume::<ContentDock>().0;
         let index = self.index;
 
@@ -262,10 +263,12 @@ impl Component for SourceRow {
                 // and no more, and a click in the assembly pane never comes here at
                 // all, so there is no way for the listing to re-drive itself.
                 if let Some(tab) = tab {
-                    driven.write().remember(
-                        (tab, Stop::whole(Document::Source(at.file.clone()))),
-                        at.line,
-                    );
+                    // The place the tab is at and not the file: two lines of one file
+                    // reached along one trail are two entries, and a drive written
+                    // under the wrong one is a drive nothing reads. Bound before the
+                    // write, the guard being live until the end of the statement.
+                    let entry = place_at(&docs.peek(), tab, &Document::Source(at.file.clone()));
+                    driven.write().remember((tab, entry), at.line);
                 }
             })
         })
@@ -353,8 +356,10 @@ impl Component for SourceList {
         let length = self.source.0.lines;
         // The tab's entry and not the file: see `SourceList::document`.
         let docs = use_consume::<OpenDocs>().0;
-        // A file is one place, so the stop it is filed under carries no address.
-        let entry = (self.tab, Stop::whole(self.document.clone()));
+        // The place the tab is at: two lines of one file reached along one trail are two
+        // entries, each with its own scroll. Read and not peeked, so a step between them
+        // re-renders this pane and the hook sees the switch.
+        let entry = (self.tab, place_at(&docs.read(), self.tab, &self.document));
         use_kept_position(
             use_consume::<SrcAt>().0,
             move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),

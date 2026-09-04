@@ -161,10 +161,13 @@ persisted: a view of a tab, like a filter. The pane takes its tab's id as a prop
 **A click in a source-driven tab's own file is the only writer of `Driven` inside the panes.** A
 click in a companion file selects the line and nothing more, and a click in the *assembly* pane
 never reaches that handler at all, which is what stops a listing from re-driving itself. Nothing
-else changes: the active document does not, so nothing is pushed onto the tab's trail, the tab
-already being where the reader is. A line is kept per tab *and* place (an `Entry`, the key the
-positions use) rather than one for the window or one per file, so a file reached twice along one
-trail is driven from one line and two tabs on one file from two. It is a `u32` and holds no
+else changes: the active document does not, and neither does the place, so nothing is pushed onto
+the tab's trail -- the tab already being where the reader is. A line is kept per tab *and* place
+(an `Entry`, the key the positions use) rather than one for the window or one per file, so a file
+reached twice along one trail is driven from two lines and two tabs on one file likewise. The
+place's own line is what a drive falls back to (`ask`), so a door that lands on a line drives the
+assembly side with nothing else said and a restored session does too; the click wins over it,
+being what the reader is reading now rather than where they came in. It is a `u32` and holds no
 `Arc<Object>`, so it survives its binary being closed and the next ask simply answers out of what is
 left. A right-click on a source row is neither a selection nor a drive: it opens `locate_menu`, the
 line's locations and, inside a function as the file's parse says, the function's instances, both

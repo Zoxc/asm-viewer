@@ -128,7 +128,8 @@ one it showed, so that Back works across a restart. Reopening after a rebuild is
 loop, and a trail lost on every restart would be worth little; the cost is a file a few entries
 longer per tab, capped at `history::MAX_ENTRIES` (50) per trail. Each place carries **the rows both
 of its sides were left at**: an entry is a `SavedEntry` (`asm_row` + `src_row` + `line` +
-`asm_address` + `document`), rather than the tab having arrays of rows beside its trail.
+`asm_address` + `src_line` + `document`), rather than the tab having arrays of rows beside its
+trail.
 `asm_address` is where an object's **code** tab was left, as a placed address, and is absent for
 every other kind: that listing's rows are counted afresh as it is decoded, so a row there is no
 place to come back to and an address is (`agents/UI.md`, `CodeAt`). It is a claim about a layout, so
@@ -141,7 +142,12 @@ position, and they are hints and not facts: `#[serde(default)]`, and clamped to 
 from and is absent for every other kind. It is what makes such a tab's `asm_row` mean anything:
 without it the listing that row is a row of is not there to come back to. Nothing resolves it, being
 a number and not a place, so a rebuilt binary takes the two rows with it and leaves the line, which
-is simply asked again out of what is loaded now. `resolve_tabs` answers with a named `RestoredTab`
+is simply asked again out of what is loaded now. `src_line` is the other line and not the same one:
+it is which line of the file the **place** is, where the place is one in a file, and what Back comes
+back to. The two part company the moment the reader clicks elsewhere in the file, which is why one
+cannot be spelled with the other; the place's own is what the drive falls back to when nothing was
+clicked (`agents/Panes.md`). It is no more a claim about a layout than a file is, so a rebuilt
+binary keeps it. `resolve_tabs` answers with a named `RestoredTab`
 rather than a tuple, since the rows and the line no longer survive the same things: the live trail,
 `History::rebuilt` over the places that resolved with the saved cursor carried past the ones that
 did not, and a `RestoredEntry` per surviving place. A tab with nothing left on its trail is dropped

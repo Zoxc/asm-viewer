@@ -12,15 +12,22 @@ const MAX_ENTRIES: usize = 50;
 
 /// One place on a tab's trail: a document, and where in it the tab was.
 ///
-/// The address is `Some` only for an object's code, which is the one document a tab
-/// visits at more than one place -- following a link there moves the listing rather than
-/// opening anything, so the trail is the only record that the reader was somewhere else
-/// in it a moment ago. Every other document *is* the place, and carries none.
+/// Two documents are visited at more than one place, and each says where in its own
+/// terms: an object's code by the address, a source file by the line. Following a link
+/// into either moves what is drawn rather than opening anything, so the trail is the
+/// only record that the reader was somewhere else in it a moment ago. A symbol *is* the
+/// place, and carries neither.
+///
+/// Both are `None` for a document opened at no place in particular -- a file a reader
+/// asked for by name is the file and not a line of it -- which is why they are options
+/// and not a default of zero.
 #[derive(Clone, PartialEq)]
 pub struct Stop {
     pub document: Document,
     /// The placed address the tab was at, for a stop in an object's code.
     pub address: Option<u64>,
+    /// The line the tab was at, for a stop in a source file. 1-based, as DWARF's are.
+    pub line: Option<u32>,
 }
 
 impl From<Document> for Stop {
@@ -30,12 +37,13 @@ impl From<Document> for Stop {
 }
 
 impl Stop {
-    /// A whole document, at no place in particular: what everything but a jump inside an
-    /// object's code makes.
+    /// A whole document, at no place in particular: what a door that names nowhere in
+    /// particular makes.
     pub fn whole(document: Document) -> Stop {
         Stop {
             document,
             address: None,
+            line: None,
         }
     }
 
@@ -44,7 +52,24 @@ impl Stop {
         Stop {
             document,
             address: Some(address),
+            line: None,
         }
+    }
+
+    /// A place in a source file.
+    pub fn on(document: Document, line: u32) -> Stop {
+        Stop {
+            document,
+            address: None,
+            line: Some(line),
+        }
+    }
+
+    /// Whether this names a place *inside* its document rather than the document itself.
+    /// What decides whether arriving at it is a move worth putting on the trail: a door
+    /// that names only a document has nothing to come back to that the document is not.
+    pub fn inside(&self) -> bool {
+        self.address.is_some() || self.line.is_some()
     }
 }
 

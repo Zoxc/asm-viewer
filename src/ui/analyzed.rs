@@ -48,13 +48,19 @@ pub(crate) fn asked_of(ask: &Ask) -> Document {
 /// names, or the symbol the line a source-driven tab is driven from was compiled into.
 ///
 /// `None` for an object (which is not a place with a listing), for a tab that is not a
-/// document, and for a source-driven tab nothing has been clicked in yet.
+/// document, and for a source-driven tab nothing has been clicked in and which arrived
+/// at no line.
+///
+/// The line the reader clicked wins over the one the place itself is: a place naming a
+/// line is where they arrived, and a click after that is what they are reading now.
+/// Falling back to it is what makes a door that lands on a line drive the assembly side
+/// without a word from anything else, a restored session included.
 pub(crate) fn ask(active: Option<&Entry>, driven: &Driven) -> Option<Ask> {
     let entry = active?;
     match &entry.1.document {
         Document::Assembly(Selection::Symbol(symbol)) => Some(Ask::Symbol(symbol.clone())),
         Document::Assembly(Selection::Object(_)) | Document::Code(_) => None,
-        Document::Source(file) => driven.line(entry).map(|line| Ask::Source {
+        Document::Source(file) => driven.line(entry).or(entry.1.line).map(|line| Ask::Source {
             at: LinePos {
                 file: file.clone(),
                 line,

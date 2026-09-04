@@ -430,7 +430,11 @@ impl Component for LocationRow {
                     });
                     match subject {
                         Some((id, file)) => {
-                            let entry = (id, Stop::whole(Document::Source(file)));
+                            // The place that tab is at, not the file: a drive written
+                            // under a stop the trail does not hold is a drive nothing
+                            // reads. The guard is gone before `driven` is written.
+                            let at_place = place_at(&open.docs.peek(), id, &Document::Source(file));
+                            let entry = (id, at_place);
                             {
                                 let mut driven = driven;
                                 let mut driven = driven.write();

@@ -615,6 +615,7 @@ fn saved_entry(document: SavedDocument, asm_row: usize) -> SavedEntry {
         src_row: 0,
         line: None,
         asm_address: None,
+        src_line: None,
         document,
     }
 }
@@ -638,6 +639,7 @@ fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
         src_row,
         line: None,
         asm_address: None,
+        src_line: None,
         document: SavedDocument::Source {
             path: path.to_owned(),
         },
@@ -658,6 +660,7 @@ fn restored(document: &Document, asm_row: usize, src_row: usize) -> RestoredTab 
             src_row,
             line: None,
             address: None,
+            src_line: None,
         }],
     }
 }
@@ -1937,6 +1940,47 @@ fn a_code_document_closes_with_its_file() {
     assert!(code.in_file(Path::new("/tmp/lib.a")));
     assert!(!code.in_file(Path::new("/tmp/some.dll")));
     assert!(code.symbol().is_none(), "no symbol to ask the worker about");
+}
+
+/// A place in a source file is the line of it, written before its document as the address
+/// is, and it comes back as the place the tab is at -- so a trail through two lines of one
+/// file survives a restart with both.
+#[test]
+fn a_source_places_line_is_written_before_its_document_and_comes_back() {
+    let objects = objects();
+    let file = file_tab("/src/main.rs");
+    let mut trail = History::default();
+    trail.push(Stop::whole(file.clone()));
+    trail.push(Stop::on(file.clone(), 42));
+    assert_eq!(
+        trail.entries().len(),
+        2,
+        "two lines of one file are two places"
+    );
+
+    let mut docs = Docs::default();
+    let id = docs.open_trail(trail.clone(), false).expect("a trail");
+    let session = Session::from_state(
+        &objects,
+        &[(id, docs.trail(id).expect("open"), false)],
+        &Positions::default(),
+        &Positions::default(),
+        &Positions::default(),
+        &Driven::default(),
+        None,
+        &Visits::default(),
+        &[],
+    );
+    assert_eq!(session.tabs[0].entries[1].src_line, Some(42));
+
+    let text = toml::to_string(&session).expect("serialises");
+    let line = text.find("src_line = 42").expect("the line is written");
+    let document = text[line..].find("document").expect("the document follows") + line;
+    assert!(line < document, "{text}");
+
+    let back: Session = toml::from_str(&text).expect("parses back");
+    let restored = back.resolve_tabs(&objects);
+    assert!(restored[0].trail == trail, "the lines did not come back");
 }
 
 /// The address a code tab was left at is written before its document, as the rows are:
