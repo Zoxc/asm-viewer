@@ -375,7 +375,7 @@ leaves this list when it is. That is a move made on request, like everything els
   DLLs, so it cannot be told by an import name; the magic would be the gate. Undecided
   whether reading a runtime's private tables is within the "nothing is scanned for" rule,
   or worth it for a name that is mostly `<cleanup of …>`.
-- [ ] Take a nonzero `st_size` before the DWARF extent walk. The `.eh_frame` measurement
+- [x] Take a nonzero `st_size` before the DWARF extent walk. The `.eh_frame` measurement
   says `st_size` was exact for every one of `librustc_driver.so`'s 197 375 functions, while
   `SymbolData::extent` never reads it: an ELF with a symbol table and no `.eh_frame` (built
   `-fno-asynchronous-unwind-tables`, or a Mach-O) still pays the DIE walk for an answer its

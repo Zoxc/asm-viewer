@@ -343,6 +343,79 @@ pub fn elf_text_padded(
     obj.write().expect("writing the fixture object")
 }
 
+/// An x86-64 **COFF** relocatable object whose `.text` holds `symbols` back to back, each an
+/// `IMAGE_SYM_CLASS_EXTERNAL` function whose auxiliary function-definition record declares
+/// the given `TotalSize` — the one nonzero size `object` reads out of a COFF symbol.
+/// Assembled byte by byte because `object`'s COFF writer emits no auxiliary function
+/// records, which is the whole point of the fixture. Names have to fit the 8 bytes a symbol
+/// entry holds inline, so nothing here needs a string table.
+pub fn coff_x86_64(symbols: &[(TextSymbol, u32)]) -> Vec<u8> {
+    const HEADER: usize = 20;
+    const SECTION_HEADER: usize = 40;
+    /// One symbol table entry, and one auxiliary record.
+    const SYMBOL: usize = 18;
+
+    let text: Vec<u8> = symbols
+        .iter()
+        .flat_map(|(symbol, _)| symbol.bytes)
+        .copied()
+        .collect();
+    let symtab = HEADER + SECTION_HEADER + text.len();
+
+    let mut file = Vec::new();
+    file.extend_from_slice(&0x8664u16.to_le_bytes()); // Machine
+    file.extend_from_slice(&1u16.to_le_bytes()); // NumberOfSections
+    file.extend_from_slice(&0u32.to_le_bytes()); // TimeDateStamp
+    file.extend_from_slice(&(symtab as u32).to_le_bytes()); // PointerToSymbolTable
+    let entries = (symbols.len() * 2) as u32; // Each symbol plus its auxiliary record.
+    file.extend_from_slice(&entries.to_le_bytes()); // NumberOfSymbols
+    file.extend_from_slice(&0u16.to_le_bytes()); // SizeOfOptionalHeader
+    file.extend_from_slice(&0u16.to_le_bytes()); // Characteristics
+
+    file.extend_from_slice(b".text\0\0\0"); // Name
+    file.extend_from_slice(&0u32.to_le_bytes()); // VirtualSize
+    file.extend_from_slice(&0u32.to_le_bytes()); // VirtualAddress
+    file.extend_from_slice(&(text.len() as u32).to_le_bytes()); // SizeOfRawData
+    file.extend_from_slice(&((HEADER + SECTION_HEADER) as u32).to_le_bytes()); // PointerToRawData
+    file.extend_from_slice(&0u32.to_le_bytes()); // PointerToRelocations
+    file.extend_from_slice(&0u32.to_le_bytes()); // PointerToLinenumbers
+    file.extend_from_slice(&0u16.to_le_bytes()); // NumberOfRelocations
+    file.extend_from_slice(&0u16.to_le_bytes()); // NumberOfLinenumbers
+
+    // Characteristics: IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ.
+    file.extend_from_slice(&0x6000_0020u32.to_le_bytes());
+
+    file.extend_from_slice(&text);
+
+    let mut offset = 0u32;
+    for (symbol, total_size) in symbols {
+        let bytes = symbol.name.as_bytes();
+        assert!(bytes.len() <= 8, "`{}` needs a string table", symbol.name);
+        let mut name = [0u8; 8];
+        name[..bytes.len()].copy_from_slice(bytes);
+
+        file.extend_from_slice(&name); // Name
+        file.extend_from_slice(&offset.to_le_bytes()); // Value
+        file.extend_from_slice(&1i16.to_le_bytes()); // SectionNumber, one-based
+        file.extend_from_slice(&0x20u16.to_le_bytes()); // IMAGE_SYM_DTYPE_FUNCTION << 4
+        file.push(2); // IMAGE_SYM_CLASS_EXTERNAL
+        file.push(1); // NumberOfAuxSymbols
+
+        file.extend_from_slice(&0u32.to_le_bytes()); // TagIndex
+        file.extend_from_slice(&total_size.to_le_bytes()); // TotalSize
+        file.extend_from_slice(&0u32.to_le_bytes()); // PointerToLinenumber
+        file.extend_from_slice(&0u32.to_le_bytes()); // PointerToNextFunction
+        file.extend_from_slice(&0u16.to_le_bytes()); // Unused
+
+        offset += symbol.bytes.len() as u32;
+    }
+
+    // A string table of its own length alone, which is what "empty" is written as.
+    file.extend_from_slice(&4u32.to_le_bytes());
+    debug_assert_eq!(symtab + symbols.len() * 2 * SYMBOL + 4, file.len());
+    file
+}
+
 /// `caller` = `call rel32; ret`, relocated at offset 1 against `target` = `ret`.
 pub fn caller_and_target() -> Vec<u8> {
     elf_x86_64(
@@ -517,8 +590,17 @@ pub enum UnitRanges {
 /// [`elf_x86_64`] plus a DWARF compilation unit and line program describing its code
 /// sections. Addresses a compiler would relocate go through [`RelocWriter`], which records
 /// where each landed, so the ELF carries the same relocations against the same symbols —
-/// no byte pattern is searched for.
+/// no byte pattern is searched for. Every symbol declares an `st_size` of 0, as
+/// [`TextSymbol`] does everywhere else.
 pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
+    elf_x86_64_with_dwarf_declaring(fixture, &[])
+}
+
+/// [`elf_x86_64_with_dwarf`] with an `st_size` per symbol, in the order the sections list
+/// them and running on across section boundaries; a symbol past the end of `declared`
+/// declares 0. The one thing [`TextSymbol`] cannot say, and the case where the symbol table
+/// answers what DWARF would have been walked for.
+pub fn elf_x86_64_with_dwarf_declaring(fixture: DwarfFixture, declared: &[u64]) -> Vec<u8> {
     use gimli::write::{
         Address, AttributeValue, DwarfUnit, LineProgram, LineString, Range, RangeList, Sections,
     };
@@ -540,7 +622,7 @@ pub fn elf_x86_64_with_dwarf(fixture: DwarfFixture) -> Vec<u8> {
             symbols.push(obj.add_symbol(write::Symbol {
                 name: symbol.name.as_bytes().to_vec(),
                 value: offset,
-                size: 0,
+                size: declared.get(symbols.len()).copied().unwrap_or(0),
                 kind: SymbolKind::Text,
                 scope: SymbolScope::Linkage,
                 weak: false,

@@ -108,28 +108,39 @@ empty for a file with no table read). `SymbolData::estimate_size` derives a symb
 *next* address in the symbol list, **clipped to the section's own bytes**, since that list is
 numbers out of the file and one wild `st_value` in it would otherwise cost the symbol *above* it its
 listing rather than only itself. Declared sizes are frequently 0 in ELF/COFF, which is why the
-derivation exists at all; the declared size is kept separately and only displayed.
-`SymbolData::extent` is the answer that is actually used, and has two answers in order. First, **the
-end the unwind table states**, where an entry covers the address, whatever named the symbol. That is
-the image's own statement, to its loader, of the very bytes the unwinder covers, so neither the
-estimate nor its cap bounds it and the debug info is not asked. Only the next symbol clamps it,
-because a listing is one stretch per symbol decoded as that symbol's extent, and an extent reaching
-past the next label would draw its rows twice; every entry's begin being a symbol, that is also what
-stops a parent at the chained entry of its cold part. **Else the smaller** of the extent the debug
-info declares (a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc`, or a PDB procedure's length)
-and the estimate. The estimate over-reaches into padding, but the declared extent describes the
-*function*, so a second symbol inside one function (an alias, an assembler label, a split cold part)
-would otherwise swallow the next function. The derivation is capped at `MAX_DERIVED_SIZE` (1 MiB).
-That is not a claim about how long a function can be, but the point past which it is certainly
-describing something else: a stripped PE's export table is sparse, so nine of the LLVM DLL's exports
-derived megabytes and one derived 3.7 MB, which was 772 302 instructions decoded *per render*. The
-unwind table is the fix for that. Where there is one (an x86-64 PE, an ELF with an `.eh_frame`)
-every entry's begin is a symbol and every covered symbol's end is stated, so the cap reaches only a
-symbol no entry covers (a leaf without unwind info on a PE, hand-written assembly, a mutated table)
-and everything on an image without one, an ARM64 PE or a Mach-O, where it stays. Measured, release:
-none of the LLVM DLL's 73 793 extents reaches the cap now; the extent pass over all of them is 4.6
-ms, where `rustc_driver.dll`'s 234 070 take 756 ms because the 15 636 no entry covers each go to the
-PDB.
+derivation exists at all. `SymbolData::extent` is the answer that is actually used, and has three
+answers in order. First, **the end the unwind table states**, where an entry covers the address,
+whatever named the symbol. That is the image's own statement, to its loader, of the very bytes the
+unwinder covers, so neither the estimate nor its cap bounds it and the debug info is not asked. Only
+the next symbol clamps it, because a listing is one stretch per symbol decoded as that symbol's
+extent, and an extent reaching past the next label would draw its rows twice; every entry's begin
+being a symbol, that is also what stops a parent at the chained entry of its cold part. Then, **the
+size the file declares for the symbol**, clamped the same way. Only an ELF `st_size` counts as one:
+it is the ABI's own statement of how many bytes the symbol is, every mainstream toolchain fills it
+in, and on the `.so` above it equals the FDE's length for all 172 169 functions the `.eh_frame`
+covers. No other format's nonzero size means that. A COFF function symbol's is the `TotalSize` of an
+auxiliary function-definition record, written for COFF's line-number data rather than to measure
+code; XCOFF's is a csect's length, and one csect can hold several functions; Mach-O states no size
+at all. A size that is *wrong* rather than 0 would be taken as fact, so the trusted set is an
+allowlist of one and a format joins it on evidence. The clamp catches an over-reaching declaration —
+hand-written assembly with a `.size` past the next label — while one that is too small stands, as an
+unwind entry's stated end and a `DW_AT_high_pc` already do. What this is for is the ELF with a
+symbol table and no `.eh_frame`, built `-fno-asynchronous-unwind-tables`: every function of it used
+to cost a DIE walk for an answer its symbol table had already stated. **Else the smaller** of the
+extent the debug info declares (a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc`, or a PDB
+procedure's length) and the estimate. The estimate over-reaches into padding, but the debug info's
+extent describes the *function*, so a second symbol inside one function (an alias, an assembler
+label, a split cold part) would otherwise swallow the next function. The derivation is capped at
+`MAX_DERIVED_SIZE` (1 MiB). That is not a claim about how long a function can be, but the point past
+which it is certainly describing something else: a stripped PE's export table is sparse, so nine of
+the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which was 772 302 instructions
+decoded *per render*. The unwind table is the fix for that. Where there is one (an x86-64 PE, an ELF
+with an `.eh_frame`) every entry's begin is a symbol and every covered symbol's end is stated, so
+the cap reaches only a symbol no entry covers (a leaf without unwind info on a PE, hand-written
+assembly, a mutated table) and, on an image without one, everything that declares no size either —
+an ARM64 PE or a Mach-O, where it stays. Measured, release: none of the LLVM DLL's 73 793 extents
+reaches the cap now; the extent pass over all of them is 4.6 ms, where `rustc_driver.dll`'s 234 070
+take 756 ms because the 15 636 no entry covers each go to the PDB.
 
 **Names are demangled in one batch per object, on stacks sized for them** (`demangle.rs`). A mangled
 name is bytes out of a string table, and it is the *file* that chooses how deep the demangler

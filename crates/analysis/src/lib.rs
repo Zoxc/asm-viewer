@@ -378,12 +378,22 @@ impl SymbolData {
         next.checked_sub(self.address)
     }
 
+    /// A length the file states, bounded by the next symbol. A listing is one stretch per
+    /// symbol and decodes each as its symbol's extent, so a length reaching past the next
+    /// label would draw those rows twice. A zero derivation is no derivation: a symbol
+    /// placed exactly at the section's end has nothing to bound it with.
+    fn clamped(&self, stated: u64) -> u64 {
+        match self.derived().filter(|&size| size != 0) {
+            Some(derived) => stated.min(derived),
+            None => stated,
+        }
+    }
+
     /// The end the file's own unwind table states for the function this symbol is in
     /// ([`Section::unwind`]), as bytes from the symbol's address, or [`None`] where no entry
-    /// covers it. Clamped to the next symbol: a listing is one stretch per symbol and
-    /// decodes each as its symbol's extent, so an extent reaching past the next label would
-    /// draw those rows twice — and every entry's own begin is a symbol, which is what stops
-    /// a parent at the chained entry of its cold part.
+    /// covers it. Clamped to the next symbol ([`clamped`](Self::clamped)) — and every
+    /// entry's own begin is a symbol, which is what stops a parent at the chained entry of
+    /// its cold part.
     fn unwind_extent(&self) -> Option<u64> {
         let section = self.section.as_ref()?;
         // The last range starting at or before the address: with the starts sorted and
@@ -396,20 +406,46 @@ impl SymbolData {
         if !range.contains(&self.address) {
             return None;
         }
-        let stated = range.end - self.address;
-        Some(match self.derived().filter(|&size| size != 0) {
-            Some(derived) => stated.min(derived),
-            None => stated,
-        })
+        Some(self.clamped(range.end - self.address))
     }
 
-    /// How many bytes of code this symbol is. Two answers, in order.
+    /// The size the file declares for this symbol ([`size`](Self::size)) where that
+    /// declaration is a function's length in bytes, [`clamped`](Self::clamped); [`None`]
+    /// where it declares none or the format's size field is something else.
+    ///
+    /// **ELF only, and that is an allowlist a format joins on evidence.** An ELF `st_size`
+    /// is the ABI's own statement of how many bytes the symbol is, and every mainstream
+    /// toolchain fills it in: on `librustc_driver.so` it equals the FDE's length for every
+    /// one of the 172 169 functions the `.eh_frame` covers. No other format's nonzero size
+    /// means that. A COFF function symbol's is the `TotalSize` of an auxiliary
+    /// function-definition record, written for COFF's line-number data rather than to
+    /// measure code; XCOFF's is a csect's length, and one csect can hold several functions;
+    /// Mach-O states no size at all. A declaration that is *wrong* rather than 0 would be
+    /// taken as fact here, which is why only the field with the measurement behind it is
+    /// read.
+    ///
+    /// The clamp catches an over-reaching one — hand-written assembly with a `.size` past
+    /// the next label. One that is too small is taken as it stands, as an unwind entry's
+    /// stated end and a `DW_AT_high_pc` already are.
+    fn declared_extent(&self, object: &Object) -> Option<u64> {
+        if object.format != BinaryFormat::Elf || self.size == 0 {
+            return None;
+        }
+        Some(self.clamped(self.size))
+    }
+
+    /// How many bytes of code this symbol is. Three answers, in order.
     ///
     /// **The end the file's own unwind table states**, where an entry covers the address
     /// ([`unwind_extent`](Self::unwind_extent)): the image's statement, to its loader, of
     /// the very bytes the unwinder covers, so neither the estimate nor its cap bounds it —
     /// only the next symbol does, for the listing's sake — and the debug info is not asked.
     /// On an x86-64 PE or an ELF with an `.eh_frame` that is nearly every function.
+    ///
+    /// **Then the size the file declares**, where the format makes that a function's length
+    /// ([`declared_extent`](Self::declared_extent)): the symbol table's own answer, which
+    /// spares the debug info a walk that would only agree with it. On an ELF built without
+    /// unwind tables that is every function its symbol table sizes.
     ///
     /// **Else the smaller** of the extent the debug info declares for the function (DWARF's
     /// `DW_AT_low_pc`/`DW_AT_high_pc`, a PDB procedure's length) and
@@ -423,6 +459,9 @@ impl SymbolData {
     pub fn extent(&self, object: &Object) -> Option<u64> {
         if let Some(stated) = self.unwind_extent() {
             return Some(stated);
+        }
+        if let Some(declared) = self.declared_extent(object) {
+            return Some(declared);
         }
         let estimate = self.estimate_size().filter(|&size| size != 0);
         match (self.debug_extent(object), estimate) {
@@ -537,8 +576,8 @@ struct DeclaredCode {
     address: u64,
     /// What the declaration itself said: a dynamic symbol's size, a PDB procedure's length,
     /// an unwind entry's stated end less its begin, and 0 for an export, the entry point and
-    /// a PDB public. Kept for display only; the extent used comes from
-    /// [`SymbolData::extent`].
+    /// a PDB public. The extent used comes from [`SymbolData::extent`], which reads this
+    /// only where the format makes it a function's length ([`SymbolData::declared_extent`]).
     size: u64,
     /// The code section containing `address` — an export table and an entry point name an
     /// address and nothing else.

@@ -145,11 +145,12 @@ fn a_declaration_carries_no_size_so_the_extent_comes_from_the_next_one() {
     // The last one runs to the end of the section's bytes.
     assert_eq!(named(&object, "<entry point>").estimate_size(), Some(3));
 
-    // An ELF `.dynsym` does carry one, and it is kept for display without displacing the
-    // derived extent.
+    // An ELF `.dynsym` does carry one, and there it is a size to trust: the extent is the
+    // declaration rather than the derivation, which here agree.
     let elf = parse(&elf_shared_object(stripped(Some(7))));
     assert_eq!(named(&elf, "first").size, 4);
     assert_eq!(named(&elf, "first").estimate_size(), Some(4));
+    assert_eq!(named(&elf, "first").extent(&elf), Some(4));
 }
 
 #[test]
