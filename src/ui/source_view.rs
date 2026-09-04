@@ -200,7 +200,7 @@ impl Component for SourceRow {
             .zip(try_consume_context::<Following>())
             .zip(try_consume_context::<LspJobs>())
             .map(|((talking, follow), jobs)| (talking.0, follow.0, jobs));
-        let dock = use_consume::<ContentDock>().0;
+        let dock = use_consume::<SidebarDock>().0;
         let index = self.index;
 
         // The position this row is, and so the one its menu asks about. Lines are

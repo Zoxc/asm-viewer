@@ -1,9 +1,9 @@
 //! The documents that are open, and the handle each one is known by.
 //!
-//! The dock holds a [`DocId`] rather than a [`crate::project::Document`] because freya's
-//! `DockingModel::TabId` is `Copy + PartialEq + Hash + 'static` and a `Document` is none
-//! of those. This is a side table, not the list of open documents: the order is the dock
-//! panel's own `tabs` vec. An entry exists here exactly while a tab holds its id.
+//! A tab holds a [`DocId`] rather than a [`crate::project::Document`] because a tab is
+//! `Copy` -- a list's key, a menu row's capture -- and a `Document` is not. This is a side
+//! table, not the list of open documents: the order is the strip's own
+//! ([`crate::tabs::Strip`]). An entry exists here exactly while a tab holds its id.
 //!
 //! What a tab stands for is a **trail** and not one document: every place the tab has
 //! shown, with a cursor on the one it shows now ([`History`]). Back and Forward walk the
@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use crate::history::{History, Stop};
 use crate::project::Document;
 
-/// The handle a dock tab holds in place of the document it shows. A newtype so it cannot
-/// be confused with the panel ids the dock also numbers from zero.
+/// The handle a tab holds in place of the document it shows. A newtype so it cannot be
+/// confused with the panel ids the sidebar's dock numbers from zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DocId(u32);
 
@@ -40,9 +40,9 @@ pub struct Docs {
 impl Docs {
     /// Take an id for a tab showing `document` alone, and remember it under that id.
     ///
-    /// **Ids are never reused**: freya keys a tab's header element by its id, and a drag
-    /// carries one, so a reused id would land a closed document's header state — or a
-    /// drag begun before it was closed — on whichever document took its number.
+    /// **Ids are never reused**: a chip is keyed by its tab, so a reused id would land a
+    /// closed document's hover, tooltip and open menu on whichever document took its
+    /// number.
     pub fn open(&mut self, stop: impl Into<Stop>) -> DocId {
         let mut trail = History::default();
         trail.push(stop.into());

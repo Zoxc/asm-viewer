@@ -1108,7 +1108,7 @@ pub(crate) fn use_land(
         // leave the door that made it planting nothing at all.
         let waiting = asked.as_ref().is_some_and(|asked| {
             !names_this
-                && active_document(&open.dock.peek(), &open.docs.peek()).as_ref()
+                && active_document(&open.strip.peek(), &open.docs.peek()).as_ref()
                     == Some(&asked.tab)
         });
         if asked.is_some() && !waiting {

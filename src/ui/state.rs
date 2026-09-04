@@ -1,7 +1,7 @@
 //! The app's root state: every context provided once at the root of `app()` and read with
 //! `use_consume` wherever it is wanted.
 //!
-//! Two of the names are **derivations and not states**: `Active` is a `Memo` over the dock
+//! Two of the names are **derivations and not states**: `Active` is a `Memo` over the strip
 //! and the document table, and `Symbols` a `Memo` over `Objects`.
 
 use super::*;
@@ -19,80 +19,63 @@ pub(crate) struct Loading(pub(crate) State<Loads>);
 
 /// The active tab and the document it shows, shared through context.
 ///
-/// **A derivation and not a state**: the document panel's active tab, read through
-/// [`Docs`] -- see [`active_tab`]. `None` means both "nothing is open" and "the tab on
-/// top is a view", and deliberately does not distinguish them. The id travels with the
-/// document because the two are read together: the driven line and the viewing positions
-/// are kept per tab *and* entry, and a document paired with an id read a beat apart would
-/// be another tab's for that beat, which the worker would answer with a re-ask.
+/// **A derivation and not a state**: the strip's active tab, read through [`Docs`] -- see
+/// [`active_tab`]. `None` means both "nothing is open" and "the tab on screen is a page",
+/// and deliberately does not distinguish them. The id travels with the document because
+/// the two are read together: the driven line and the viewing positions are kept per tab
+/// *and* entry, and a document paired with an id read a beat apart would be another tab's
+/// for that beat, which the worker would answer with a re-ask.
 ///
-/// A [`Memo`] because the dock notifies on every layout change, and a drag that changed no
-/// document must wake nothing. **It is therefore a beat behind**, which is right for
+/// A [`Memo`] because the strip is written by more than the opening of a document -- a
+/// page raised, a tab moved along the bar, a page closed -- and none of those changes what
+/// any pane is drawing. **It is therefore a beat behind**, which is right for
 /// anything that renders and wrong for anything that must be true inside one event
 /// handler -- so the functions holding the invariants call [`active_tab`] on the states
 /// directly instead of reading this.
 #[derive(Clone, Copy)]
 pub(crate) struct Active(pub(crate) Memo<Option<Entry>>);
 
-/// What is open: the panel the reader's document tabs are in, and the table saying what
-/// each of those tabs stands for.
+/// What is open: the strip of tabs the reader arranged, and the table saying what each
+/// document tab stands for.
 ///
-/// The panel's `tabs` vec *is* the list of open tabs, in the reader's own order;
-/// [`Docs`] holds no order, only the trail behind each dock tab id. Membership is the one
-/// thing the two share, and `open_document`/`close_tab`/`close_binary` keep it true: a
-/// tab and its trail are made together and closed together.
+/// The strip's tabs *are* the list of open tabs, in the reader's own order; [`Docs`] holds
+/// no order, only the trail behind each document tab's id. Membership is the one thing the
+/// two share, and `open_document`/`close_tab`/`close_binary` keep it true: a tab and its
+/// trail are made together and closed together.
 #[derive(Clone, Copy)]
 pub(crate) struct Open {
-    pub(crate) dock: State<DockArea>,
+    pub(crate) strip: State<Strip>,
     pub(crate) docs: State<Docs>,
 }
 
-/// Every open tab's document, in the order the reader's tabs are in. Views are skipped:
-/// they are tabs in the same panel but they are not documents. What the tests ask of the
+/// Every open tab's document, in the order the reader's tabs are in. Pages are skipped:
+/// they are tabs in the same bar but they are not documents. What the tests ask of the
 /// strip; the app itself asks for the ids ([`open_ids`]), a tab being a trail and not
 /// what it shows.
 #[cfg(test)]
-pub(crate) fn open_documents(dock: &DockArea, docs: &Docs) -> Vec<Document> {
-    let Some(panel) = dock.document_panel() else {
-        return Vec::new();
-    };
-    panel
-        .tabs
-        .iter()
-        .filter_map(|tab| match tab {
-            Tab::Document(id) => docs.get(*id).cloned(),
-            Tab::View(_) => None,
-        })
+pub(crate) fn open_documents(strip: &Strip, docs: &Docs) -> Vec<Document> {
+    strip
+        .documents()
+        .filter_map(|id| docs.get(id).cloned())
         .collect()
 }
 
 /// Every open document tab's id, in the order the reader's tabs are in.
-pub(crate) fn open_ids(dock: &DockArea) -> Vec<DocId> {
-    let Some(panel) = dock.document_panel() else {
-        return Vec::new();
-    };
-    panel
-        .tabs
-        .iter()
-        .filter_map(|tab| match tab {
-            Tab::Document(id) => Some(*id),
-            Tab::View(_) => None,
-        })
-        .collect()
+pub(crate) fn open_ids(strip: &Strip) -> Vec<DocId> {
+    strip.documents().collect()
 }
 
-/// The active tab and what it shows: the document panel's active tab, when that tab is a
-/// document.
-pub(crate) fn active_tab(dock: &DockArea, docs: &Docs) -> Option<Entry> {
-    match dock.document_panel()?.active_tab_id? {
+/// The active tab and what it shows: the tab on screen, when that tab is a document.
+pub(crate) fn active_tab(strip: &Strip, docs: &Docs) -> Option<Entry> {
+    match strip.active()? {
         Tab::Document(id) => docs.current(id).cloned().map(|stop| (id, stop)),
-        Tab::View(_) => None,
+        Tab::Page(_) => None,
     }
 }
 
 /// The active document alone.
-pub(crate) fn active_document(dock: &DockArea, docs: &Docs) -> Option<Document> {
-    active_tab(dock, docs).map(|(_, stop)| stop.document)
+pub(crate) fn active_document(strip: &Strip, docs: &Docs) -> Option<Document> {
+    active_tab(strip, docs).map(|(_, stop)| stop.document)
 }
 
 impl Open {
@@ -105,8 +88,8 @@ impl Open {
     /// The active tab and the place on its trail it is at, as of now. The document is
     /// what most callers want ([`Open::active`]); this is for the few that key by place.
     pub(crate) fn active_stop(&self) -> Option<Entry> {
-        let (dock, docs) = (self.dock.peek(), self.docs.peek());
-        active_tab(&dock, &docs)
+        let (strip, docs) = (self.strip.peek(), self.docs.peek());
+        active_tab(&strip, &docs)
     }
 
     /// The active tab as of now, with the document it shows. `peek`, for the same reason.
@@ -122,19 +105,24 @@ impl Open {
     /// Every open tab's document as of now, in tab order. `peek`, for the same reason.
     #[cfg(test)]
     pub(crate) fn documents(&self) -> Vec<Document> {
-        let (dock, docs) = (self.dock.peek(), self.docs.peek());
-        open_documents(&dock, &docs)
+        let (strip, docs) = (self.strip.peek(), self.docs.peek());
+        open_documents(&strip, &docs)
     }
 
     /// Every open document tab's id as of now, in tab order.
     pub(crate) fn ids(&self) -> Vec<DocId> {
-        open_ids(&self.dock.peek())
+        open_ids(&self.strip.peek())
     }
 }
 
-/// The content area's dock.
+/// The strip of open tabs.
 #[derive(Clone, Copy)]
-pub(crate) struct ContentDock(pub(crate) State<DockArea>);
+pub(crate) struct OpenTabs(pub(crate) State<Strip>);
+
+/// The sidebar's dock, so a panel can be brought to the front from anywhere -- the
+/// Search box's chord, a Locations question asked in a code pane.
+#[derive(Clone, Copy)]
+pub(crate) struct SidebarDock(pub(crate) State<DockArea>);
 
 /// How wide the **leading** side of a document is, as a percentage -- the side the tab is
 /// driven from, which `DocumentBody` draws on the left in both kinds of tab. Kept by place
@@ -164,9 +152,9 @@ pub(crate) struct Splits(pub(crate) State<ResizableContext>);
 #[derive(Clone, Copy)]
 pub(crate) struct AsmAt(pub(crate) State<Positions<Entry>>);
 
-/// The documents the dock's tabs are handles into, and nothing about their order. See
-/// [`Docs`]: it exists because a dock tab id must be `Copy + Hash` and a [`Document`] is
-/// neither.
+/// The documents the strip's tabs are handles into, and nothing about their order. See
+/// [`Docs`]: it exists because a tab must be `Copy` -- a list's key, a menu row's capture
+/// -- and a [`Document`] is not.
 #[derive(Clone, Copy)]
 pub(crate) struct OpenDocs(pub(crate) State<Docs>);
 
@@ -360,7 +348,7 @@ impl EditedFont {
 }
 
 /// The settings, shared through context. A root context and not state inside the settings
-/// view, which is a dockable tab that may not be mounted. The page edits this;
+/// page, which is a tab that may not be open at all. The page edits this;
 /// `use_settings_with` is what notices.
 #[derive(Clone, Copy)]
 pub(crate) struct Prefs(pub(crate) State<EditedSettings>);
@@ -384,7 +372,7 @@ pub(crate) struct ProjectStates {
     /// including the ones that have produced nothing yet and so are not in `objects` to be
     /// closed one by one.
     pub(crate) loading: State<Loads>,
-    /// The document panel and the id table: what is open, and in what order.
+    /// The strip and the id table: what is open, and in what order.
     pub(crate) open: Open,
     pub(crate) asm_at: State<Positions<Entry>>,
     pub(crate) src_at: State<Positions<Entry>>,
@@ -402,10 +390,10 @@ pub(crate) struct ProjectStates {
     pub(crate) build: State<Builds>,
 }
 
-/// What is open, as a component sees it: the document panel and the id table together.
+/// What is open, as a component sees it: the strip and the id table together.
 pub(crate) fn use_open() -> Open {
     Open {
-        dock: use_consume::<ContentDock>().0,
+        strip: use_consume::<OpenTabs>().0,
         docs: use_consume::<OpenDocs>().0,
     }
 }

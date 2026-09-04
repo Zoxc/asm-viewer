@@ -1,7 +1,7 @@
-# The UI: freya, state, documents and the dock
+# The UI: freya, state, documents and the tabs
 
 The shape of the UI: what freya 0.4 is and is not, the root contexts, what a document is, how the
-dock holds one, what each tab remembers, and how a binary is opened. The worker, the two panes, the
+strip of tabs holds one, what each tab remembers, and how a binary is opened. The worker, the two panes, the
 sidebar, the appearance and the scratchpad each have a note of their own beside this one.
 
 ## The UI is a directory
@@ -102,22 +102,24 @@ the mapping runs. Each tab has one glyph that tells the two apart. One strip rat
 kind is what lets the history record a visited file and the session keep the strip's interleaved
 order.
 
-**`Active` is a derivation, not a state.** What is open is `Open { dock, docs }`: the content area's
-dock, whose **document panel**'s `tabs` vec *is* the list of open tabs in the reader's own order,
-and `Docs`, the table holding the **trail** behind each tab's `DocId`, every place the tab has
-shown, oldest first, with a cursor on the one it shows now (`History`, one per tab). A tab is a
+**`Active` is a derivation, not a state.** What is open is `Open { strip, docs }`: the `Strip`
+(`src/tabs.rs`), whose `tabs` vec *is* the list of open tabs in the reader's own order and which
+holds the tab on screen beside it, and `Docs`, the table holding the **trail** behind each document
+tab's `DocId`, every place the tab has shown, oldest first, with a cursor on the one it shows now
+(`History`, one per tab). A tab is a
 trail and not a document: a link followed inside it pushes onto the trail, Back and Forward move its
 cursor, and what the tab shows is `Docs::get`, the entry under the cursor. There is no second list.
-The active tab is the panel's active tab read through the table, which is the whole of `active_tab`,
-and `open_ids` is the same walk for the list. `Docs` holds no order at all; membership is the one
+The active tab is the strip's own, read through the table, which is the whole of `active_tab`, and
+`open_ids` is the strip's documents in order. `Docs` holds no order at all; membership is the one
 thing the two share, and it is an invariant the closers keep and a test asserts: a tab and its trail
 are made together and closed together. One tab may be the **temporal** one (`Docs::temporal`), the
 preview a sidebar row opens its place in and the next row reuses. It is a tab like any other with
 one flag on it, told apart by its name being italic.
 
-`Active` is a `Memo` over the two, because the dock notifies on every layout change and a reader
-dragging a split must not re-render every pane that draws a document. `Memo` writes with
-`set_if_modified`, so a drag that changed no document wakes nothing. It yields the **id and the
+`Active` is a `Memo` over the two, because the strip is written by more than the opening of a
+document -- a page brought to the front, a tab moved along the bar -- and none of those changes what
+any pane is drawing. `Memo` writes with `set_if_modified`, so a write that changed no document wakes
+nothing. It yields the **id and the
 document as one pair** (`Entry`), out of one read of both states: the driven line and the viewing
 positions are kept per tab *and* place, and an id read a beat apart from the document would pair
 another tab's for that beat, which the worker would answer with a re-ask. It is therefore **a beat
@@ -129,15 +131,16 @@ place that may have just been closed or dropped off its trail, and a memo could 
 it there during exactly that run.
 
 `Active` being `None` means two things and deliberately does not distinguish them: nothing is open,
-or **the tab on top of the document panel is a view**. Making Settings the active tab therefore
+or **the tab on screen is a page**. Making Settings the tab on screen therefore
 means there is no active document. The analysis clears, `session.toml` writes `active = None`, and a
-restart with a view on top restores every tab and shows none of them. That is the price of the
+restart with a page on screen restores every tab and shows none of them. That is the price of the
 derivation, and it was taken over the alternative, which is remembering the last document that was
-active there: memory rather than a reading of the dock, and the second source of truth back again.
+active: memory rather than a reading of the strip, and the second source of truth back again.
 
-The invariants (the active tab is one of the open tabs, or `None`; a tab and its trail are made and
-closed together) are held by six functions and nothing else: `open_document`, `raise`, `navigate`,
-`close_tab`, `close_others`, `close_binary`. **Every** site that would *open* a document calls
+The first invariant -- the tab on screen is one of the open ones, or `None` -- is `Strip`'s own and
+cannot be broken from the UI, every change to what is open going through one of its methods. The
+second -- a tab and its trail are made and closed together -- is held by `open_document`, `raise`,
+`raise_tab`, `navigate`, `close_tab`, `close_others` and `close_binary`, and nothing else. **Every** site that would *open* a document calls
 `open_document` with a `Reach`, which is what the click that opened it says and nothing about the
 state can. **`InPlace`** is from inside the tab on screen (a relocation link, the companion header),
 pushed onto that tab's trail so the place left is one Back away. **`NewTab`** is beside the tab on
@@ -154,16 +157,15 @@ menu, the neighbour a close lands on, a restored session) and records nothing. P
 none of them: freya's own header wrapper sets the panel's active tab, which *is* the change.
 `Selection` itself has **no "nothing" variant**: having none open is an absent one, which is the
 only spelling that stays honest once a selection is something a tab can hold. A new tab goes in
-**after the tab on screen** (`show_document`, through freya's `insert_tab`), the way a browser opens
-a link, and at the end when a view is on top.
+**beside the tab on screen** (`Strip::show`), the way a browser opens a link, whatever kind that tab
+is: a page has no reserved place at the left of the bar, being a tab like any other.
 
 **Layout** is a toolbar over a `ResizableContainer`: a `PanelSize::px(300.)` sidebar and a
 `PanelSize::percent(100.)` content pane, mixing the two sizing modes deliberately so the sidebar
 keeps a fixed width and the content takes the rest, with freya's 4px `ResizableHandle` between them.
 `ResizableContainer` renders itself `.expanded()`, so it needs a parent already sized;
 `Size::flex(..)` only works under a parent with `.content(Content::Flex)`. The content panel holds
-the `DockingArea` and nothing else: the open documents are tabs *in* it, so the bar over them is the
-document panel's own tab bar rather than a strip of the app's.
+`ContentArea` and nothing else: the app's own bar, and under it the tab on screen.
 
 The toolbar itself holds three controls: Open at its left edge and the two history chevrons at its
 right, held apart by a `Size::flex(1.0)` gap under `Content::Flex`. The gap is measured out of what
@@ -174,8 +176,8 @@ step would be a second set of rules about tabs, selection and recording, and bot
 of the tab on screen** and no other. **It reads `Active` and the table rather than peeking them**,
 which is the whole of how the pair stays current: a switch of tab, a push onto any trail, a close
 that drops entries and every move of a cursor, the one the button itself just made included, repaint
-both. It reads `Active` and not the dock, or the pair would repaint on every drag of a split, which
-is the whole reason `Active` is a memo. A button with nothing in its direction is **dimmed rather
+both. It reads `Active` and not the strip, or the pair would repaint whenever a tab moved along the
+bar, which is the whole reason `Active` is a memo. A button with nothing in its direction is **dimmed rather
 than hidden**, the first disabled drawing in this app: hiding it would slide the other one under the
 pointer, and a reader who has been nowhere yet would never learn the pair is there. Disabled is the
 whole of the drawing (no hover wash, no press handler, and the chevron in
@@ -186,56 +188,42 @@ Headless, the runner can be asked whether a button washes under the pointer and 
 box, and not what colour the chevron came out: an `SvgViewer` rasterises its colour into an image
 that is not in the element tree.
 
-Inside each panel is a `DockingArea` over a `DockArea` model. A `Tab` is two-kinded,
-`Tab::View(View)` for one of the nine views and `Tab::Document(DocId)` for an open document, because
-`DockingModel::TabId` is `Copy + PartialEq + Hash` and a `Document` is none of the three. Adding or
-removing a view needs no migration: the dock layout is not persisted, so a removed view is a
-compile-time deletion, an added one starts where its default layout puts it, and there is no saved
-tab that can name one. Both areas use `Tab` as the payload and `use_drag` keeps one `DockDrag<Tab>`
-at the root. The outer split stays a `ResizableContainer` because docking cannot express a literal
-300px. A drag carries only the tab, so the area receiving a drop evicts it from the other through a
-wired-up `other: Option<State<DockArea>>`. A view is a **persistent pane**, not a slot the selection
-drives: each is a unit `Component` that consumes context and renders off the state it is about, so a
-selection change re-renders only the panes that read it and never the root.
+The sidebar is a `DockingArea` over a `DockArea` model whose `DockingModel::TabId` is a `Panel`, one
+of the seven, so **a document cannot be named there at all** and every rule about where one may go
+is a rule the type states. A panel is a **persistent pane**, not a slot the selection drives: each
+is a unit `Component` that consumes context and renders off the state it is about, so a selection
+change re-renders only the panes that read it and never the root. Adding or removing a panel needs
+no migration: the sidebar's layout is not persisted, so a removed one is a compile-time deletion and
+an added one starts where the default layout puts it. `Panel` is imported by name as well as through
+the glob (`src/ui.rs`), freya's prelude having a `Panel` of its own. The outer split stays a
+`ResizableContainer` because docking cannot express a literal 300px.
 
-**One panel is designated, and the reason is the opening rather than the placeholder.** A click in
-the symbol list opens a document, and that document has to land *somewhere*; a dock has many panels
-and freya has no notion of "the panel documents belong to", so `DockArea::documents` names one.
-Three rules follow. `on_drop` refuses a document into any other panel (one visible document is what
-lets `Analysis` and `Marked` each hold one answer for the window) and refuses a `DocId` the table no
-longer knows, which is a drag that outlived its document and is the whole payoff of **ids never
-being reused**. A **view**, by contrast, may go anywhere, that panel included: Project, Settings and
-the Scratchpad start tabbed in it, to the left of the documents, where they are always visible. And
-`tidy` exempts it from the folding sweep, so closing the last document cannot fold the content area
-away.
+`tidy` is freya's `close_empty_panels` **written out rather than called**, because that sweep can
+leave a tree with no panel at all where this keeps one: an area that loses its last panel keeps an
+empty group, so the sidebar stays on screen as somewhere to drop a panel back into. Two behaviours
+of freya's are kept: a split left with one child collapses into it, and a lone panel at the root is
+never removed.
 
-`tidy` is freya's `close_empty_panels` **written out rather than called**, because that sweep
-retains every non-empty child with no exemption and has to be replaced rather than followed; a panel
-re-created after it would come back somewhere else in the tree. Two behaviours of freya's are kept:
-a split left with one child collapses into it, and a lone panel at the root is never removed.
-Likewise a close never goes through `DockNode::remove_tab_except`, which sets a panel's active tab
-to `tabs.first()`; landing on the **neighbour** is a rule of this app, so `close_tab` removes the
-tab by hand and chooses with `tabs::landing`.
+**The content area is the app's own**, `ContentArea` over `Strip` (`src/ui/strip.rs`): a bar of
+chips over the tab on screen, and nothing that can be folded, split or dragged out of. What the dock
+used to buy -- one answer to "which document is active", and a strip that closing the last document
+cannot fold away -- the strip states outright, where the dock needed a designated panel, a
+`tidy` exemption and an `on_drop` that refused a document anywhere else. `Tab` is two-kinded,
+`Tab::Document(DocId)` and `Tab::Page(Page)` for Project, Settings and the Scratchpad, because a tab
+is `Copy` -- a list's key, a menu row's capture -- and a `Document` is not. A close never walks the
+bar through intermediate states: `Strip::close` takes the predicate, works the landing out with
+`tabs::landing` before anything is removed, and leaves the tab on screen alone when it survives.
 
-**Open documents *are* dock tabs.** Two objections to that are answered by the designated panel:
-there is one answer to "which document is active", that panel's active tab, and closing the last
-document folds nothing away, the panel being exempt from `tidy`. The third stands and is the price:
-the layout and the list of open documents are no longer separable, and the arrangement survives a
-close because a rule says so rather than because the shape makes it impossible to break. What it
-buys is that a reader arranges their documents the way they already arrange the views, and that
-every later feature has one kind of tab to change instead of two.
-
-A document's header is `chip`, the same element the content area's own strip drew, hover state and ×
-included. **Nothing in it activates the tab**: freya wraps a header in a `DropZone` around a
-`rect().on_press(set_active)` around a `DragZone`, so pressing it makes it the panel's active tab
-and therefore the active document. That is also why the × must `stop_propagation`, or a close would
-first switch to the tab it is closing. And it is why the header's own press handler, which promotes
-the temporal tab on a **double press** (`EventsCombos::pressed`, freya's own count of 500 ms and 5
-px, which nothing else on the header asks), must not: the first press still has to reach the
-wrapper. The temporal tab is told from one that stays by its name being **italic** (`font_slant`)
-and by nothing else, the header reading the flag out of the table beside the document. The × is
-drawn for documents only. The views are furniture, one of a kind, with no way back once closed,
-where a document is always reachable again from the symbol list or the History panel.
+A tab's header is `chip`, hover state and × included, wrapped in a `TabHeader` that owns the hover
+and is keyed by its tab. **The chip activates its own tab**, freya's docking having been what did
+that before -- it wraps a header in a `DropZone` around a `rect().on_press(set_active)` around a
+`DragZone` -- so the press handler calls `raise_tab` and then asks whether it was a **double press**
+(`EventsCombos::pressed`, freya's own count of 500 ms and 5 px), which promotes the temporal tab.
+The × still has to `stop_propagation`, now so the press does not reach the chip under it and switch
+to the tab being closed. The temporal tab is told from one that stays by its name being **italic**
+(`font_slant`) and by nothing else, the chip reading the flag out of the table beside the document.
+The × is drawn for documents only for now; the pages have no way back until the menu that reopens
+them is written.
 
 **The × is a control of its own**, `TabClose`, and a component rather than another line of `chip`
 for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the `use_state`
@@ -253,18 +241,15 @@ not by the tab going out. It closes the tab itself rather than taking a handler,
 `PartialEq` where a closure is not: the `DocId` is the prop and the five states a close needs come
 from the contexts, the same ones the header reads a step above it.
 
-A right-click on a document's header opens a menu of three items. **Close other tabs** is
-`close_others`: the tab it was opened on stays, every other *document* in the panel goes, and a view
-sharing the panel is left where it is. A view is not a document, and the × it has no place for is
-the same argument. It is its own function rather than `close_tab` in a loop, because each of those
-would work out a landing of its own and walk the panel through every intermediate state, where the
-landing here is known before anything is removed: the kept tab, and only when the tab on screen is
-one of the ones closing. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the
+A right-click on a document's chip opens a menu of three items. **Close other tabs** is
+`close_others`: the tab it was opened on stays, every other *document* goes, and a page is left
+where it is. It is its own function rather than `close_tab` in a loop, because each of those would
+work out a landing of its own and walk the bar through every intermediate state. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the
 sidebar rows and the instruction rows use (`agents/Sidebar.md`), for the tab's own document. The
 first row is left out when nothing else is open, rather than drawn as a row that would do nothing,
-and the header asks the panel for that at the **press**: whether a tab has company is not something
-a header draws, so subscribing to the panel for it would re-render every tab whenever any one of
-them opened.
+and the chip asks the strip for that at the **press**: whether a tab has company is not something a
+chip draws, so subscribing to the strip for it would re-render every tab whenever any one of them
+opened.
 
 **Show in file manager** is the third, the same `reveal_item` a Files row's menu ends with
 (`agents/Sidebar.md`), on `Document::file`: the binary for the two assembly-driven kinds and the
@@ -292,9 +277,8 @@ at -- a file's folder, and a folder itself. **When nothing answers the reader ge
 pressed something, and an item that does nothing at all leaves them wondering whether the app
 heard.
 
-The document panel's tab bar is the horizontally scrolling one the strip used to be (`chip_strip`),
-because documents are opened by the dozen; a view panel's stays a plain row, nine views always
-fitting. Two things bite there. freya appends one child more than there are tabs, a
+The bar scrolls horizontally, because documents are opened by the dozen; a sidebar group's bar is a
+plain row, seven panels always fitting. Two things bite there. freya appends one child more than there are tabs, a
 `rect().expanded()` drop zone for "past the last tab", and `expanded()` is meaningless inside a
 horizontal scroll view, so it is given a width of its own. And a tab's name is elided **by character
 count in Rust**, where every other truncation is a width: a `maximum_width` anywhere inside one
@@ -331,7 +315,7 @@ something a reader can search for.
 **A document's two sides live inside its tab.** `Tab::Document` renders the two panes in a
 `ResizableContainer`, not a nested `DockingArea`, which is a great deal of machinery for a two-way
 split. The cost is real and was taken deliberately: **the Source pane is no longer independently
-dockable**, since it is inside a document rather than beside one. Each pane takes its `Document` as
+arrangeable**, since it is inside a document rather than beside one. Each pane takes its `Document` as
 a prop rather than reading `Active`, which is both synchronous and honest: only the active tab's
 content is mounted, so a pane is only ever built for the tab it belongs to.
 
@@ -362,24 +346,22 @@ construction, since `apply_resize` speaks positions too: panel 0 is the leading 
 so a drag means the same thing either way round.
 
 **A document is a place in a binary or a file; everything else is a view.** Decide nothing about
-this again. The document panel holds `Document`s and never anything else, and that is what lets five
+this again. A document tab stands for a `Document` and never anything else, and that is what lets five
 separate things work without a case each: the Assembly *and* Source panes both render "the active
 tab", the record of visits holds it, `SavedDocument::from_document`/`::resolve` write it down and
 find it again after a restart, `close_binary` knows which tabs a closing file takes with it, and
 `entry_text` knows what to call it. A project view, the settings page and a scratchpad's editor are
 none of that: they resolve against no object, they are no file on disk the panes could open, there
-is one of each rather than many, and neither pane could draw one. So they are **dockable views**, a
-`Tab`, which is the mechanism the app already has for "a pane with its own state that the reader can
-put where they like", and which the three sidebar lists were already instances of. A `Document`
-variant for a view was the alternative. It buys a tab in a strip nothing else would put a second
+is one of each rather than many, and neither pane could draw one. So they are **pages**, the other
+arm of `Tab`: a tab like a document's, drawn from state that lives at the root rather than in it. A
+`Document` variant for a page was the alternative. It buys a tab in a strip nothing else would put a second
 entry in, at the price of five answers nobody wants: what `resolve` does with it after a restart,
 what `Document::in_file` says when a binary closes, what the panes draw for it, what the history
-means by a "place" that is not one, and what the session file spells it as. `Document::Code` is not
+means by a "place" that is not one, and what a saved document spells it as. `Document::Code` is not
 that: an object's code *is* a place in a binary, the whole of it, and every one of the five has an
 answer that is the object's own, which is why it is a document and not a mode of the object's tab.
-Persistence follows from the same sentence: a `Tab` is layout, and the dock layout is deliberately
-not persisted, so a view is **explicitly excluded** from the saved tabs and `SavedDocument` needs no
-answer for it. What a scratchpad *builds* needs no rule at all: the artifact goes through
+Persistence follows from the same sentence: a page is not a document, so it is **excluded** from the
+saved documents and `SavedDocument` needs no answer for it. What a scratchpad *builds* needs no rule at all: the artifact goes through
 `open_files` like any other binary, and its functions are ordinary tabs.
 
 **Each place on each tab's trail remembers where each of its sides was left.** A pane has one

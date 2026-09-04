@@ -138,9 +138,9 @@ impl Component for EntryRow {
 /// unfolded is a view of a list, never part of the session, and a project switch resets it
 /// by changing the directory it is over.
 #[derive(PartialEq)]
-pub(crate) struct FilesTab;
+pub(crate) struct FilesPanel;
 
-impl Component for FilesTab {
+impl Component for FilesPanel {
     fn render(&self) -> impl IntoElement {
         let proj = use_consume::<Proj>().0;
         // Read, not peeked: a keystroke in the Project view's directory box is a change

@@ -138,11 +138,13 @@ command.
   and a column in UTF-16 units, a row's text is pieces, and what each row draws and copies.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
-- `src/docs.rs` — `Docs`, the table mapping a dock tab's `DocId` to the trail behind it: every
+- `src/docs.rs` — `Docs`, the table mapping a document tab's `DocId` to the trail behind it: every
   place the tab has shown with a cursor on the one it shows, and which tab is the temporal one.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.
-- `src/tabs.rs` — `landing`, the rule a close obeys; `Positions`, where each tab was left;
-  `Driven`, which line a source-driven tab's assembly side follows and which symbol was chosen.
+- `src/tabs.rs` — `Strip`, the open tabs in the reader's order and which is on screen, and what
+  a tab is: a document, or one of the pages; `landing`, the rule a close obeys; `Positions`,
+  where each tab was left; `Driven`, which line a source-driven tab's assembly side follows and
+  which symbol was chosen.
 - `src/history.rs` — one tab's back/forward trail.
 - `src/visits.rs` — everywhere the reader has been, across every tab: what the History panel
   lists.
@@ -203,7 +205,9 @@ command.
   and the lines of that file the gutter marks as having code.
 - `src/ui/split.rs` — one document drawn: which side leads, and which panes a tab has, with
   the control on the leading pane's bar that puts the other away.
-- `src/ui/dock.rs` — the dock, its two-kinded tab, and the document panel's own tab bar.
+- `src/ui/dock.rs` — the sidebar's dock: what a panel is, and the groups it can be arranged in.
+- `src/ui/strip.rs` — the app's own tab bar: the chips, the × on one, the list of every open
+  tab, and the body under it all.
 - `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers,
   and what the language server has to say for itself.
 - `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.
@@ -213,9 +217,10 @@ command.
 - `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
   it takes from that: what lets the code panes scroll sideways with their wash whole.
 
-Eleven `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+Twelve `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
 `project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`,
-`rescued_view`, `language`, `linking`); the rest is in `agents/UI.md`.
+`rescued_view`, `language`, `linking`, `strip`); `Panel` is imported by name beside the glob,
+freya's prelude having one of its own. The rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's
 tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at

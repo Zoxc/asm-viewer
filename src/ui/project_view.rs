@@ -740,8 +740,8 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
             {
                 // The dock and the table rather than `Active`, which is a memo and so a
                 // beat behind.
-                let (dock, docs) = (open.dock.read(), open.docs.read());
-                let tabs: Vec<(DocId, &History, bool)> = open_ids(&dock)
+                let (strip, docs) = (open.strip.read(), open.docs.read());
+                let tabs: Vec<(DocId, &History, bool)> = open_ids(&strip)
                     .into_iter()
                     .filter_map(|id| {
                         docs.trail(id)
@@ -755,7 +755,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                     &src_at.read(),
                     &code_at.read(),
                     &driven.read(),
-                    active_document(&dock, &docs).as_ref(),
+                    active_document(&strip, &docs).as_ref(),
                     &visits.read(),
                     &build.read().previous,
                 )
@@ -863,7 +863,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         // The record first, so the opening below finds the active place already at its
         // top and records nothing over it.
         visits.set(restored_visits);
-        let (mut dock, mut docs) = (open.dock, open.docs);
+        let (mut strip, mut docs) = (open.strip, open.docs);
         for tab in restored_tabs {
             // The trail whole, in a statement of its own so the guard is gone before
             // the maps are written.
@@ -900,8 +900,9 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
                     }
                 }
             }
-            // Reopening a tab is not visiting it.
-            dock.write().show_document(Tab::Document(id));
+            // Reopening a tab is not visiting it. Put at the end and not beside the tab
+            // on screen: the saved order is stated outright rather than reproduced.
+            strip.write().push(Tab::Document(id));
         }
         // The document the app lands on is a place it went: the tab showing it is
         // raised, or -- degraded to its object, say -- it opens in a tab of its own.

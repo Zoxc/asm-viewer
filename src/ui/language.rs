@@ -63,7 +63,7 @@ pub(crate) struct Language {
     /// `None` until the read that follows the project has answered.
     ///
     /// Read through the worker and held here rather than in the Project view: the view is
-    /// a dock tab and an inactive tab is unmounted, while the control in the top bar
+    /// a tab, unmounted while it is not the one on screen, where the control in the top bar
     /// starts a server from wherever the reader is. One read, at the root, answers both.
     settings: Option<Result<lsp::Settings, lsp::Unreadable>>,
     /// Which server the answers arriving are about, counted up by every start and every

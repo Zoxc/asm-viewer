@@ -59,7 +59,7 @@ pub(crate) use crate::scratchpad::{
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 pub(crate) use crate::source::{self, SourceFile};
-pub(crate) use crate::tabs::{self, Driven, Positions, Spot};
+pub(crate) use crate::tabs::{Driven, Page, Positions, Spot, Strip, Tab};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
@@ -76,6 +76,9 @@ pub(crate) use building::*;
 mod code_row;
 pub(crate) use code_row::*;
 mod dock;
+// `Panel` by name as well as through the glob: freya's prelude has a `Panel` of its own,
+// and an explicit import is what settles which one the app means.
+pub(crate) use dock::Panel;
 pub(crate) use dock::*;
 mod documents;
 pub(crate) use documents::*;
@@ -129,6 +132,8 @@ mod split;
 pub(crate) use split::*;
 mod state;
 pub(crate) use state::*;
+mod strip;
+pub(crate) use strip::*;
 mod symbol_bar;
 pub(crate) use symbol_bar::*;
 mod width;
@@ -141,8 +146,8 @@ pub(crate) use width::*;
 /// **It reads `Active` and the table rather than peeking them**, and that is the whole of
 /// how the pair stays current: a switch of tab, a push onto any trail, a close that drops
 /// entries, and every move of a cursor -- the one this button itself just made included
-/// -- repaints both. `Active` and not the dock: reading the dock would repaint the pair on
-/// every drag of a split, which is why `Active` is a memo at all.
+/// -- repaints both. `Active` and not the strip: reading the strip would repaint the pair
+/// whenever a tab moved along the bar, which is why `Active` is a memo at all.
 ///
 /// A button with nothing in its direction is **dimmed rather than hidden**. Hiding it would
 /// move the button beside it under the pointer, and a reader who has not been anywhere yet
@@ -322,44 +327,29 @@ pub fn app() -> impl IntoElement {
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;
     let docs = use_provide_context(|| OpenDocs(State::create(Docs::default()))).0;
-    let sidebar_dock = use_state(|| {
-        DockArea::column(vec![
-            vec![
-                Tab::View(View::Objects),
-                Tab::View(View::Files),
-                Tab::View(View::Search),
-            ],
-            vec![Tab::View(View::Symbols)],
-            vec![
-                Tab::View(View::History),
-                Tab::View(View::Bookmarks),
-                Tab::View(View::Locations),
-            ],
-        ])
-    });
-    let content_dock = use_state(|| {
-        DockArea::row(vec![vec![
-            Tab::View(View::Project),
-            Tab::View(View::Settings),
-            Tab::View(View::Scratchpad),
-        ]])
-        .with_documents(DOCUMENT_PANEL)
-    });
-    use_hook(move || {
-        let (mut sidebar_dock, mut content_dock) = (sidebar_dock, content_dock);
-        sidebar_dock.write().other = Some(content_dock);
-        content_dock.write().other = Some(sidebar_dock);
-        sidebar_dock.write().docs = Some(docs);
-        content_dock.write().docs = Some(docs);
-    });
-    let content_dock = use_provide_context(move || ContentDock(content_dock)).0;
-    let open = Open {
-        dock: content_dock,
-        docs,
-    };
+    let sidebar_dock = use_provide_context(|| {
+        SidebarDock(State::create(DockArea::column(vec![
+            vec![Panel::Objects, Panel::Files, Panel::Search],
+            vec![Panel::Symbols],
+            vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+        ])))
+    })
+    .0;
+    let strip = use_provide_context(|| {
+        OpenTabs(State::create({
+            let mut strip = Strip::default();
+            for page in Page::ALL {
+                strip.push(Tab::Page(page));
+            }
+            strip.raise(Tab::Page(Page::Project));
+            strip
+        }))
+    })
+    .0;
+    let open = Open { strip, docs };
     let active = use_provide_context(move || {
         Active(Memo::create(move || {
-            active_tab(&content_dock.read(), &docs.read())
+            active_tab(&strip.read(), &docs.read())
         }))
     })
     .0;
@@ -395,7 +385,7 @@ pub fn app() -> impl IntoElement {
     // At the root, not in the overlay: the list of a project's files is kept between
     // opens, and the walk that fills it outlives the overlay being closed.
     let finder = use_provide_context(|| Finding(State::create(Finder::default()))).0;
-    // At the root, not in the Project view: an inactive dock tab is unmounted, and a build
+    // At the root, not in the Project tab: a tab that is not on screen is unmounted, and a build
     // that survives the reader looking away cannot live there.
     let build = use_provide_context(|| Building(State::create(Builds::default()))).0;
     let states = ProjectStates {
@@ -464,7 +454,7 @@ pub fn app() -> impl IntoElement {
     // has to go on after the overlay it was started from is closed.
     use_finder_with(finder, |root, emit| crate::walk::walk_files(root, emit));
 
-    // At the root rather than in the view: an inactive dock tab is unmounted, and neither
+    // At the root rather than in the tab: a tab off screen is unmounted, and neither
     // a buffer being typed into nor a program that was started can live there. The buffers
     // start empty and a pad gets its own when its source arrives.
     let pad = use_provide_context(|| Pad(State::create(Pads::default()))).0;
@@ -486,22 +476,20 @@ pub fn app() -> impl IntoElement {
     use_follow(follow, open, visits, marked, landing, plant, driven);
     use_linking(language, linked, jobs);
 
-    // Docking cannot express a fixed pixel width, which is why the outer split is a
-    // `ResizableContainer` and not a `DockingArea`: a fixed 300px sidebar beside the one
-    // proportional panel, which therefore takes whatever is left.
+    // A fixed 300px sidebar beside the one proportional panel, which therefore takes
+    // whatever is left. Docking cannot express a literal 300px, which is why this split is
+    // a `ResizableContainer` and not another `DockingArea`.
     let split = ResizableContainer::new()
         .direction(Direction::Horizontal)
         .panel(
             ResizablePanel::new(PanelSize::px(300.0))
                 .min_size(120.0)
-                .child(docking_area(sidebar_dock, docs)),
+                .child(docking_area(sidebar_dock)),
         )
         .panel(
             ResizablePanel::new(PanelSize::percent(100.0))
                 .min_size(10.0)
-                // `DockingArea` renders itself `.expanded()`, so it needs a parent that
-                // has been given the height.
-                .child(docking_area(content_dock, docs)),
+                .child(ContentArea),
         );
 
     rect()
@@ -535,7 +523,7 @@ pub fn app() -> impl IntoElement {
                 searched,
                 finder,
                 proj,
-                content_dock,
+                sidebar_dock,
                 &e.key,
                 e.modifiers,
             )

@@ -221,7 +221,7 @@ failure to start is already said.
 The read is the LSP worker's (`LspJob::ReadSettings`, `BuildJob::Read`'s shape): reading a
 file blocks and nothing is read on the UI thread, and what it answers is what a start has
 to carry. It happens in the effect that follows the project, at the **root**, and not in
-the Project view: that view is a dock tab and an inactive tab is unmounted, while the
+the Project tab: that tab is unmounted while it is not the one on screen, where the
 control in the top bar is pressed from wherever the reader is. One read answers both, and
 it happens whether or not a server is ever started, since the view lists what it found
 either way. The settings travel in the `Start` job the way `program` and `directory` do --

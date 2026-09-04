@@ -6,9 +6,9 @@
 //! project's directory has a single writer — the debug-lines edit cannot land inside the
 //! build that is reading the same manifest.
 //!
-//! The state is a root context and not the Project view's own, because an inactive dock
-//! tab is unmounted: a build has to survive the reader looking at something else while it
-//! runs.
+//! The state is a root context and not the Project tab's own, because a tab that is not on
+//! screen is unmounted: a build has to survive the reader looking at something else while
+//! it runs.
 
 use super::*;
 
@@ -224,7 +224,7 @@ pub(crate) fn use_building_with(
         BuildJobs { jobs: requests }
     });
 
-    // A context, because the button that asks is inside a dockable view that is handed
+    // A context, because the button that asks is inside a tab that is handed
     // nothing; returned as well, so a test can ask directly.
     use_provide_context(|| jobs.clone())
 }

@@ -1,7 +1,7 @@
 //! The Search panel: the project's directory searched for a pattern, the hits as they
 //! arrive, and the rows they are drawn as.
 //!
-//! `LocationsTab`'s shape over `src/search.rs`'s walk: a question the reader asks, one
+//! `LocationsPanel`'s shape over `src/search.rs`'s walk: a question the reader asks, one
 //! answer that stands until the next question replaces it, and a `match` over the state
 //! that decides in one place whether the pane says nothing was searched for, that a search
 //! is running, that it found nothing, or draws the rows.
@@ -64,7 +64,7 @@ pub(crate) fn start_search(
         hits: SearchHits::default(),
         focus: false,
     });
-    raise_view(dock, View::Search);
+    raise_panel(dock, Panel::Search);
 }
 
 /// Put the caret in the Search panel's box, raising the panel first. What Ctrl+Shift+F
@@ -75,7 +75,7 @@ pub(crate) fn start_search(
 /// has been drawn. The panel's own effect spends the flag once it has one.
 pub(crate) fn reach_search(mut searched: State<Searched>, dock: State<DockArea>) {
     searched.write().focus = true;
-    raise_view(dock, View::Search);
+    raise_panel(dock, Panel::Search);
 }
 
 /// Run the searches the reader asks for, on a thread of the app's own, and take the hits
@@ -359,12 +359,12 @@ fn open_hit(
 
 /// The Search view: a box over every hit the last search found.
 #[derive(PartialEq)]
-pub(crate) struct SearchTab;
+pub(crate) struct SearchPanel;
 
-impl Component for SearchTab {
+impl Component for SearchPanel {
     fn render(&self) -> impl IntoElement {
         let searched = use_consume::<Searching>().0;
-        let dock = use_consume::<ContentDock>().0;
+        let dock = use_consume::<SidebarDock>().0;
         let proj = use_consume::<Proj>().0;
         // The box is the panel's own and not the session's, as a filter is; it starts as
         // whatever was last searched for, so a panel dragged between areas or reached

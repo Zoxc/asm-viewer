@@ -1,11 +1,11 @@
 //! Opening a document, closing a tab, and moving between them.
 //!
-//! Two invariants are held here and nowhere else: "the active tab is one of the open
-//! tabs, or `None`", and "a tab and its trail are made together and closed together".
-//! [`open_document`], [`raise`], [`navigate`], [`close_tab`], [`close_others`] and
-//! [`close_binary`] are the six functions that change what is open or what a tab shows,
-//! and every path that opens a document -- [`land`] included -- goes through
-//! [`open_document`].
+//! One invariant is held here and nowhere else: a tab and its trail are made together and
+//! closed together. (The other, that the tab on screen is one of the open ones, is
+//! [`Strip`]'s own and cannot be broken from here.) [`open_document`], [`raise`],
+//! [`raise_tab`], [`navigate`], [`close_tab`], [`close_others`] and [`close_binary`] are
+//! what change what is open or what a tab shows, and every path that opens a document --
+//! [`land`] included -- goes through [`open_document`].
 
 use super::*;
 
@@ -33,8 +33,8 @@ pub(crate) enum Reach {
 /// Open `target` the way `reach` says, make the tab it lands in the active one, and
 /// record the visit. The one path by which a document is ever opened.
 ///
-/// The tab the document landed in, or `None` when there is no document panel to land
-/// in. Every read of the states is bound before any write to them.
+/// The tab the document landed in. Every read of the states is bound before any write to
+/// them.
 pub(crate) fn open_document(
     open: Open,
     visits: State<Visits>,
@@ -56,7 +56,10 @@ pub(crate) fn open_stop(
     stop: Stop,
     reach: Reach,
 ) -> Option<DocId> {
-    let Open { mut dock, mut docs } = open;
+    let Open {
+        mut strip,
+        mut docs,
+    } = open;
     let target = stop.document.clone();
 
     // Recorded whatever else happens, and only when it changes the record: `State::write`
@@ -109,7 +112,7 @@ pub(crate) fn open_stop(
                 return Some(id);
             }
             let id = docs.write().open(stop);
-            dock.write().show_document(Tab::Document(id));
+            strip.write().show(Tab::Document(id));
             Some(id)
         }
         Reach::Preview => {
@@ -136,7 +139,7 @@ pub(crate) fn open_stop(
                         docs.mark_temporal(id);
                         id
                     };
-                    dock.write().show_document(Tab::Document(id));
+                    strip.write().show(Tab::Document(id));
                     Some(id)
                 }
             }
@@ -145,25 +148,25 @@ pub(crate) fn open_stop(
 }
 
 /// Make the open tab `id` the active one. The reader moved between places already
-/// open -- a tab in the strip's menu, the neighbour a close lands on, a restored session
+/// open -- a tab in the bar's menu, the neighbour a close lands on, a restored session
 /// -- so nothing is recorded and no trail moves. A no-op for a closed id.
 pub(crate) fn raise(open: Open, id: DocId) {
-    let mut dock = open.dock;
-    let tab = Tab::Document(id);
-    // Asked before it is written: `State::write` notifies whether or not the value
-    // changes, so re-raising the tab already on top must not reach for it.
-    let (held, settled) = {
-        let dock = dock.peek();
-        match dock.document_panel() {
-            Some(panel) => (
-                panel.tabs.contains(&tab),
-                panel.active_tab_id == Some(tab) && panel.tabs.contains(&tab),
-            ),
-            None => (false, false),
-        }
+    raise_tab(open, Tab::Document(id));
+}
+
+/// The same for any tab, a page included: what pressing a chip does, and what the bar's
+/// own menu does with the row that was picked.
+///
+/// Asked before it is written: `State::write` notifies whether or not the value changes,
+/// so re-raising the tab already on screen must not reach for it.
+pub(crate) fn raise_tab(open: Open, tab: Tab) {
+    let mut strip = open.strip;
+    let settled = {
+        let strip = strip.peek();
+        !strip.contains(tab) || strip.active() == Some(tab)
     };
-    if held && !settled {
-        dock.write().show_document(tab);
+    if !settled {
+        strip.write().raise(tab);
     }
 }
 
@@ -184,41 +187,19 @@ pub(crate) fn close_tab(
     mut marks_at: State<Positions<Entry, Kept>>,
     id: DocId,
 ) {
-    let Open { mut dock, mut docs } = open;
+    let Open {
+        mut strip,
+        mut docs,
+    } = open;
     let tab = Tab::Document(id);
 
-    // Worked out before anything is removed, which is what `tabs::landing` wants, and in
-    // a scope of its own so no read guard is alive when the writes below start.
-    let (held, was_showing, next) = {
-        let dock = dock.peek();
-        let Some(panel) = dock.document_panel() else {
-            return;
-        };
-        (
-            panel.tabs.contains(&tab),
-            panel.active_tab_id == Some(tab),
-            tabs::landing(&panel.tabs, panel.active_tab_id.as_ref(), |open| {
-                *open == tab
-            }),
-        )
-    };
-    if !held {
+    // The close and the landing in one write, `Strip` holding that rule; nothing else is
+    // owed here but letting go of what the tab kept. Nothing removed is a tab that was
+    // not open -- a menu left open while its tab closed -- and the trail and the
+    // positions below belong to whatever holds the id now.
+    let closed = strip.write().close(|open| *open == tab);
+    if closed.is_empty() {
         return;
-    }
-
-    {
-        // Removed by hand and never through freya's `remove_tab_except`, which sets the
-        // panel's active tab to `tabs.first()` when it takes the active one out. Landing
-        // on the *neighbour* (`tabs::landing`) is this app's rule, and the write is the
-        // whole of the landing: a tab landed on is already open, so there is nothing to
-        // open and nothing to record.
-        let mut dock = dock.write();
-        if let Some(panel) = dock.document_panel_mut() {
-            panel.tabs.retain(|open| *open != tab);
-            if was_showing {
-                panel.active_tab_id = next;
-            }
-        }
     }
     docs.write().close(id);
     let kept = |(tab, _): &Entry| *tab != id;
@@ -229,19 +210,18 @@ pub(crate) fn close_tab(
     driven.write().forget_tab(id);
 }
 
-/// Close every document tab except `keep`, leaving the views in the panel alone and
-/// landing on the kept tab when the one on screen is among those closing.
+/// Close every document tab except `keep`, landing on the kept tab when the one on screen
+/// is among those closing.
 ///
 /// The unit is the **tab** and not the binary, so this is [`close_tab`] many times over
 /// rather than [`close_binary`] with another filter: what each of them lets go of is the
 /// same -- the tab, its trail, everything kept by its entries -- and for the same reason,
 /// an [`Entry`] key holding the `Arc<Object>` it points into. Done in one pass rather
 /// than by calling [`close_tab`] in a loop: each of those would work out a landing of its
-/// own and walk the panel through every intermediate state, and the landing here is known
-/// from the start.
+/// own and walk the bar through every intermediate state.
 ///
-/// A view that shares the document panel is not a document and never closes; it also
-/// keeps the screen when it is the tab on top, since nothing it is showing is going away.
+/// A page is not a document and stays open; it also keeps the screen when it is the tab on
+/// screen, since nothing it is showing is going away.
 pub(crate) fn close_others(
     open: Open,
     mut asm_at: State<Positions<Entry>>,
@@ -251,48 +231,30 @@ pub(crate) fn close_others(
     mut marks_at: State<Positions<Entry, Kept>>,
     keep: DocId,
 ) {
-    let Open { mut dock, mut docs } = open;
+    let Open {
+        mut strip,
+        mut docs,
+    } = open;
     let kept = Tab::Document(keep);
 
-    // Which tabs go and whether the one on screen is among them, worked out before
-    // anything is removed and in a scope of its own, so no read guard is alive when the
-    // writes below start.
-    let (closing, was_showing) = {
-        let dock = dock.peek();
-        let Some(panel) = dock.document_panel() else {
-            return;
-        };
-        // A tab that is not in the panel any more keeps its neighbours: this is the menu
-        // of a tab that was closed while the menu was open.
-        if !panel.tabs.contains(&kept) {
+    // Which tabs go, worked out before anything is removed and in a scope of its own, so
+    // no read guard is alive when the writes below start. A tab that is not in the bar any
+    // more keeps its neighbours: this is the menu of a tab that was closed while the menu
+    // was open.
+    let closing: Vec<DocId> = {
+        let strip = strip.peek();
+        if !strip.contains(kept) {
             return;
         }
-        let closing: Vec<DocId> = panel
-            .tabs
-            .iter()
-            .filter_map(|tab| match tab {
-                Tab::Document(id) if *id != keep => Some(*id),
-                _ => None,
-            })
-            .collect();
-        let was_showing = matches!(panel.active_tab_id, Some(Tab::Document(id)) if id != keep);
-        (closing, was_showing)
+        strip.documents().filter(|id| *id != keep).collect()
     };
     if closing.is_empty() {
         return;
     }
 
-    {
-        let mut dock = dock.write();
-        if let Some(panel) = dock.document_panel_mut() {
-            panel
-                .tabs
-                .retain(|tab| !matches!(tab, Tab::Document(id) if closing.contains(id)));
-            if was_showing {
-                panel.active_tab_id = Some(kept);
-            }
-        }
-    }
+    strip
+        .write()
+        .close(|tab| matches!(tab, Tab::Document(id) if closing.contains(id)));
     {
         let mut docs = docs.write();
         for id in &closing {
@@ -335,52 +297,33 @@ pub(crate) fn close_binary(
     mut visits: State<Visits>,
     path: &Path,
 ) {
-    let Open { mut dock, mut docs } = open;
+    let Open {
+        mut strip,
+        mut docs,
+    } = open;
     // Every guard below is taken out of its own statement or its own scope, so none of
     // them is still alive when the next write is reached.
-    let showing = open.active();
 
-    // Which tabs go, and what is left to be on, both worked out before anything is
-    // removed. A view is never in a file, so this walk leaves them alone.
-    let (closing, next) = {
-        let dock_ref = dock.peek();
-        let docs_ref = docs.peek();
-        let Some(panel) = dock_ref.document_panel() else {
-            return;
-        };
-        let in_file = |tab: &Tab| match tab {
-            Tab::Document(id) => docs_ref
-                .get(*id)
-                .is_some_and(|document| document.in_file(path)),
-            Tab::View(_) => false,
-        };
-        let closing: Vec<DocId> = panel
-            .tabs
-            .iter()
-            .filter_map(|tab| match tab {
-                Tab::Document(id) if in_file(tab) => Some(*id),
-                _ => None,
+    // Which tabs go, worked out before anything is removed. A page is never in a file, so
+    // this walk leaves them alone -- and a page on screen when a binary closes keeps the
+    // screen, nothing it is showing having gone anywhere.
+    let closing: Vec<DocId> = {
+        let (strip_ref, docs_ref) = (strip.peek(), docs.peek());
+        strip_ref
+            .documents()
+            .filter(|id| {
+                docs_ref
+                    .get(*id)
+                    .is_some_and(|document| document.in_file(path))
             })
-            .collect();
-        let next = tabs::landing(&panel.tabs, panel.active_tab_id.as_ref(), in_file);
-        (closing, next)
+            .collect()
     };
 
-    let was_showing = showing
-        .as_ref()
-        .is_some_and(|showing| showing.in_file(path));
-    {
-        // The write is the whole of the landing, as in `close_tab`.
-        let mut dock = dock.write();
-        if let Some(panel) = dock.document_panel_mut() {
-            panel
-                .tabs
-                .retain(|tab| !matches!(tab, Tab::Document(id) if closing.contains(id)));
-            if was_showing {
-                panel.active_tab_id = next;
-            }
-        }
-    }
+    // Every tab into the file, and only then everything the file was holding up: the
+    // strip may have none of it, and the objects still go.
+    strip
+        .write()
+        .close(|tab| matches!(tab, Tab::Document(id) if closing.contains(id)));
     {
         let mut docs = docs.write();
         for id in &closing {

@@ -225,7 +225,7 @@ second one: an element keeps one handler per event name, so a second `on_global_
 replace the first and take the modifier tracking -- and with it Ctrl-click and Shift-click -- away
 silently. It is a *global* handler, so it answers from wherever the keyboard is, including nowhere;
 what could still swallow it is the filter boxes' `prevent_default`, so they decline this chord as
-they decline Ctrl+F. The chord cannot focus the box itself, an inactive dock tab being unmounted:
+they decline Ctrl+F. The chord cannot focus the box itself, a panel that is not on top being unmounted:
 it raises the panel and leaves a flag the panel's effect spends once it has a node to focus, the
 `Landing` pattern.
 
@@ -275,7 +275,7 @@ the next write will say.
 several other things a reader could mean by "build". The manifest found is **named** in the
 section: what cargo is run over is otherwise a rule the reader has to know. Four decisions.
 
-**The state is a root context, not the view's.** An inactive dock tab is unmounted, so a build held
+**The state is a root context, not the tab's.** A tab that is not on screen is unmounted, so a build held
 in `ProjectTab` would be lost the moment the reader looked at something else while it ran. `Builds`
 is therefore provided at the root beside `Pad`, and it is in `ProjectStates`, because what one
 project built says nothing about the next: a switch clears it, or the first build over there would

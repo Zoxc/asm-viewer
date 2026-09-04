@@ -838,7 +838,7 @@ impl Component for InstructionRow {
         // Consumed here, in the render, because the menu handler may not run a hook.
         let marked = use_consume::<Marked>().0;
         let located = use_consume::<Locations>().0;
-        let dock = use_consume::<ContentDock>().0;
+        let dock = use_consume::<SidebarDock>().0;
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let landing = use_consume::<Land>().0;

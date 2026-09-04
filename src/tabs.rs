@@ -1,14 +1,150 @@
-//! The three rules that go with a strip of open tabs, and no strip.
+//! The strip of open tabs and the three rules that go with it.
 //!
-//! [`landing`] is the rule a close obeys, [`Positions`] is where each tab was left, and
-//! [`Driven`] is which source line a source-driven tab's assembly side follows. All three
-//! are framework-free, so they are unit-tested without mounting a UI.
+//! [`Strip`] is what is open and which of it is on screen, [`landing`] the rule a close
+//! obeys, [`Positions`] where each tab was left, and [`Driven`] which source line a
+//! source-driven tab's assembly side follows. All of it is framework-free, so it is
+//! unit-tested without mounting a UI.
 
 use std::path::Path;
 
 use analysis::Symbol;
 
 use crate::docs::{DocId, Entry};
+
+/// One of the app's own pages: a tab that is not a document.
+///
+/// Three of them, one of a kind, each drawn from state that lives at the root of the app
+/// rather than in the tab -- so closing one loses nothing, and it comes back as it was.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Page {
+    Project,
+    Settings,
+    Scratchpad,
+}
+
+impl Page {
+    /// Every page, in the order a menu lists them.
+    pub const ALL: [Page; 3] = [Page::Project, Page::Settings, Page::Scratchpad];
+
+    /// What the tab is called.
+    pub fn title(self) -> &'static str {
+        match self {
+            Page::Project => "Project",
+            Page::Settings => "Settings",
+            Page::Scratchpad => "Scratchpad",
+        }
+    }
+}
+
+/// One tab in the strip: an open document, or one of the app's pages.
+///
+/// A document is carried as the [`DocId`] [`crate::docs::Docs`] knows it by, because a tab
+/// is `Copy` -- it is a drag's payload, a list's key and a menu row's capture -- and a
+/// document is not.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Tab {
+    Document(DocId),
+    Page(Page),
+}
+
+/// The bar of open tabs: their order, which is the reader's own, and which one is on
+/// screen.
+///
+/// There is no second list: what is open *is* this vec, and [`crate::docs::Docs`] holds
+/// the trail behind each document tab and no order at all. Every rule about the bar is
+/// here, so the UI above it has none of its own: a tab opens beside the tab on screen,
+/// a close lands on the neighbour ([`landing`]), and a move is a move.
+#[derive(Default)]
+pub struct Strip {
+    tabs: Vec<Tab>,
+    active: Option<Tab>,
+}
+
+impl Strip {
+    /// The tabs, in the order they are drawn in.
+    pub fn tabs(&self) -> &[Tab] {
+        &self.tabs
+    }
+
+    /// The tab on screen, or `None` when nothing is open.
+    pub fn active(&self) -> Option<Tab> {
+        self.active
+    }
+
+    /// Whether `tab` is one of the open ones.
+    pub fn contains(&self, tab: Tab) -> bool {
+        self.tabs.contains(&tab)
+    }
+
+    /// Every open document tab's id, in the order the tabs are in.
+    pub fn documents(&self) -> impl Iterator<Item = DocId> + '_ {
+        self.tabs.iter().filter_map(|tab| match tab {
+            Tab::Document(id) => Some(*id),
+            Tab::Page(_) => None,
+        })
+    }
+
+    /// Put `tab` at the end and show it: what a restore does, stating the saved order
+    /// outright rather than reproducing it a tab at a time.
+    pub fn push(&mut self, tab: Tab) {
+        if !self.contains(tab) {
+            self.tabs.push(tab);
+        }
+        self.active = Some(tab);
+    }
+
+    /// Show `tab`, opening it **beside the tab on screen** when it is not open yet -- the
+    /// way a browser opens a link, so a place opened out of a function sits next to the
+    /// function.
+    pub fn show(&mut self, tab: Tab) {
+        if !self.contains(tab) {
+            let after = self
+                .active
+                .and_then(|active| self.tabs.iter().position(|open| *open == active));
+            match after {
+                Some(index) => self.tabs.insert(index + 1, tab),
+                None => self.tabs.push(tab),
+            }
+        }
+        self.active = Some(tab);
+    }
+
+    /// Make an open tab the one on screen, answering whether it was open at all. Nothing
+    /// is written for a tab that is already showing: a write notifies whether or not it
+    /// changed anything, and re-raising the tab on top must wake nothing.
+    pub fn raise(&mut self, tab: Tab) -> bool {
+        if !self.contains(tab) {
+            return false;
+        }
+        if self.active != Some(tab) {
+            self.active = Some(tab);
+        }
+        true
+    }
+
+    /// Close every tab `closing` answers true for, landing on the neighbour when the tab
+    /// on screen was one of them. Answers what it removed, in the order the tabs were in.
+    ///
+    /// The landing is worked out before anything is removed, which is what [`landing`]
+    /// asks of its caller, and the tab on screen is left alone when it survives.
+    pub fn close(&mut self, closing: impl Fn(&Tab) -> bool) -> Vec<Tab> {
+        let closed: Vec<Tab> = self
+            .tabs
+            .iter()
+            .copied()
+            .filter(|tab| closing(tab))
+            .collect();
+        if closed.is_empty() {
+            return closed;
+        }
+        let showing = self.active.is_some_and(|active| closing(&active));
+        if showing {
+            self.active = landing(&self.tabs, self.active.as_ref(), &closing);
+        }
+        self.tabs.retain(|tab| !closing(tab));
+        closed
+    }
+}
 
 /// The tab to show in place of `showing` once every tab `closing` answers true for is
 /// gone: the one that moves into its place, else the last survivor, else `None`.

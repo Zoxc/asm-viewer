@@ -408,9 +408,9 @@ impl Component for HistoryRow {
 }
 
 #[derive(PartialEq)]
-pub(crate) struct ObjectsTab;
+pub(crate) struct ObjectsPanel;
 
-impl Component for ObjectsTab {
+impl Component for ObjectsPanel {
     fn render(&self) -> impl IntoElement {
         let objects = use_consume::<Objects>().0;
         let loading = use_consume::<Loading>().0;
@@ -500,9 +500,9 @@ impl Component for ObjectsTab {
 }
 
 #[derive(PartialEq)]
-pub(crate) struct SymbolsTab;
+pub(crate) struct SymbolsPanel;
 
-impl Component for SymbolsTab {
+impl Component for SymbolsPanel {
     fn render(&self) -> impl IntoElement {
         let symbols = use_consume::<Symbols>().0;
         let filter = use_state(Filter::default);
@@ -552,9 +552,9 @@ impl Component for SymbolsTab {
 }
 
 #[derive(PartialEq)]
-pub(crate) struct HistoryTab;
+pub(crate) struct HistoryPanel;
 
-impl Component for HistoryTab {
+impl Component for HistoryPanel {
     fn render(&self) -> impl IntoElement {
         let visits = use_consume::<Visited>().0;
         // The place the tab on screen shows is the row marked, the way the Symbols list

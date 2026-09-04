@@ -189,7 +189,7 @@ written until something is typed into it. That `Open` is queued *behind* the del
 read the directory the delete is about to remove.
 
 **That panel is a fixed width** (`PAD_LIST_WIDTH`) and not a `ResizableContainer`, unlike the two
-splits in this app a reader can drag. A dock tab that is not the active one in its panel is
+splits in this app a reader can drag. A tab that is not the one on screen is
 unmounted, and a `ResizablePanel` forgets its size on unmount, so a draggable width here would need
 a number kept at the root the way `SplitRatio` is, for something nobody has asked to drag. Its rows
 are a plain `ScrollView`, the History list's shape rather than the symbol list's, there being a

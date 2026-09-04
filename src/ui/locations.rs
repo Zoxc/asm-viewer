@@ -314,9 +314,9 @@ impl Found {
 /// Asking the question already answered asks again: the objects may have changed since,
 /// and the answer is about the objects that were open when it was asked. Dropping the
 /// stale answer is what makes the effect send the question, there being no `pending` to
-/// set. The panel is looked for in `dock` and then in the area beside it, since a view
-/// may be dragged into either; brought to the front on its own and never on an answer
-/// landing, so a reader who moved on meanwhile is not pulled back.
+/// set. The panel is brought to the top of whichever group of the sidebar holds it, since
+/// it may have been dragged into any of them -- and only when the question is asked, never
+/// when the answer lands, so a reader who moved on meanwhile is not pulled back.
 pub(crate) fn find_locations(
     mut located: State<Located>,
     dock: State<DockArea>,
@@ -331,7 +331,7 @@ pub(crate) fn find_locations(
     next.subject = subject;
     located.set(next);
 
-    raise_view(dock, View::Locations);
+    raise_panel(dock, Panel::Locations);
 }
 
 /// Ask where the name at `column` of `at` is used, and bring the panel to the front.
@@ -423,7 +423,7 @@ fn find_places(
     next.subject = None;
     located.set(next);
 
-    raise_view(dock, View::Locations);
+    raise_panel(dock, Panel::Locations);
 }
 
 /// The menu a source row or an instruction row opens on a right-click: the line's
@@ -469,7 +469,7 @@ fn spell(at: &LinePos) -> String {
 
 /// The Locations view: what was asked about, over every symbol it answered with.
 ///
-/// `HistoryTab`'s shape with `SymbolsTab`'s list: a filter over a `VirtualScrollView`,
+/// `HistoryPanel`'s shape with `SymbolsPanel`'s list: a filter over a `VirtualScrollView`,
 /// through the same `Filtered` memo, because one line answers with thousands. What the
 /// pane says is decided in one `match` off [`Located`]'s two fields, so "nothing asked",
 /// "being looked for", "found nothing" and the rows cannot disagree about which they are.
@@ -481,9 +481,9 @@ fn spell(at: &LinePos) -> String {
 /// the worker's `pending` and `slow` flips too, which the rows' data compares equal
 /// across, so nothing below re-renders for them.
 #[derive(PartialEq)]
-pub(crate) struct LocationsTab;
+pub(crate) struct LocationsPanel;
 
-impl Component for LocationsTab {
+impl Component for LocationsPanel {
     fn render(&self) -> impl IntoElement {
         let located = use_consume::<Locations>().0;
         let filter = use_state(Filter::default);

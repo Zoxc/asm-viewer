@@ -166,9 +166,9 @@ pub(crate) fn bookmark_menu(
 /// The Bookmarks list: every bookmark of the project, in the order the reader added them,
 /// filtered on the whole name the way the History list is.
 #[derive(PartialEq)]
-pub(crate) struct BookmarksTab;
+pub(crate) struct BookmarksPanel;
 
-impl Component for BookmarksTab {
+impl Component for BookmarksPanel {
     fn render(&self) -> impl IntoElement {
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;

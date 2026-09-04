@@ -99,8 +99,7 @@ while `asked` and `found` disagree. And **a closed binary takes its locations wi
 hold thousands of them. Its one stated limit is the other direction. The answer is about the objects
 that were open when it was asked, so a file opened afterwards is not searched until the line is
 asked again; asking for the same line does that, by dropping the stale answer. Asking also brings
-the Locations view to the top of whichever panel holds it, looked for through the content dock and
-then the area beside it. That happens on the ask and never on the answer, so a reader who moved on
+the Locations panel to the top of whichever group of the sidebar holds it. That happens on the ask and never on the answer, so a reader who moved on
 is not pulled back. **What a row does depends on where the line was asked from**
 (`Located::subject`). Asked from the file a source-driven tab is about (its own rows, or the
 assembly side that listing belongs to), a row is *chosen for that tab*: the tab stays where it is,

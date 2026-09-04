@@ -13,6 +13,96 @@ fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_string()).collect()
 }
 
+/// A strip of document tabs, ids taken in the order given so a test can name them, with
+/// the table they came out of for a test that opens one more.
+fn strip(count: u32) -> (Strip, Vec<Tab>, Docs) {
+    let mut docs = Docs::default();
+    let tabs: Vec<Tab> = (0..count)
+        .map(|nth| {
+            let file: Arc<str> = Arc::from(format!("{nth}.rs").as_str());
+            Tab::Document(docs.open(Document::Source(file)))
+        })
+        .collect();
+    let mut strip = Strip::default();
+    for tab in &tabs {
+        strip.push(*tab);
+    }
+    (strip, tabs, docs)
+}
+
+#[test]
+fn a_new_tab_opens_beside_the_tab_on_screen() {
+    let (mut strip, tabs, _docs) = strip(3);
+    let page = Tab::Page(Page::Settings);
+    strip.raise(tabs[0]);
+    strip.show(page);
+    assert_eq!(strip.tabs(), [tabs[0], page, tabs[1], tabs[2]]);
+    assert_eq!(strip.active(), Some(page));
+}
+
+/// A page is a tab like any other, so a document opened over one lands beside it and not
+/// at the end of the bar.
+#[test]
+fn a_tab_opened_over_a_page_lands_beside_it() {
+    let (mut strip, tabs, mut docs) = strip(2);
+    let page = Tab::Page(Page::Project);
+    strip.show(page);
+    let opened = Tab::Document(docs.open(Document::Source(Arc::from("opened.rs"))));
+    strip.show(opened);
+    assert_eq!(strip.tabs(), [tabs[0], tabs[1], page, opened]);
+}
+
+/// Showing a tab that is already open is a raise and never a second copy of it.
+#[test]
+fn showing_an_open_tab_only_raises_it() {
+    let (mut strip, tabs, _docs) = strip(3);
+    strip.show(tabs[0]);
+    assert_eq!(strip.tabs(), tabs);
+    assert_eq!(strip.active(), Some(tabs[0]));
+    assert!(!strip.raise(Tab::Page(Page::Settings)), "a tab not open");
+    assert_eq!(strip.active(), Some(tabs[0]));
+}
+
+#[test]
+fn closing_the_tab_on_screen_lands_on_its_neighbour() {
+    let (mut strip, tabs, _docs) = strip(3);
+    strip.raise(tabs[1]);
+    assert_eq!(strip.close(|tab| *tab == tabs[1]), [tabs[1]]);
+    assert_eq!(strip.tabs(), [tabs[0], tabs[2]]);
+    assert_eq!(strip.active(), Some(tabs[2]));
+}
+
+/// The tab on screen is left where it is when it is not one of the ones closing: the
+/// write would notify whether or not it changed anything.
+#[test]
+fn closing_around_the_tab_on_screen_leaves_it_showing() {
+    let (mut strip, tabs, _docs) = strip(3);
+    strip.raise(tabs[1]);
+    assert_eq!(strip.close(|tab| *tab != tabs[1]), [tabs[0], tabs[2]]);
+    assert_eq!(strip.tabs(), [tabs[1]]);
+    assert_eq!(strip.active(), Some(tabs[1]));
+}
+
+/// Nothing matched is answered as nothing removed, which is what lets a caller tell it
+/// from "nothing is left" and leave a live tab's positions alone.
+#[test]
+fn closing_nothing_removes_nothing() {
+    let (mut strip, tabs, _docs) = strip(2);
+    assert!(strip
+        .close(|tab| *tab == Tab::Page(Page::Project))
+        .is_empty());
+    assert_eq!(strip.tabs(), tabs);
+    assert_eq!(strip.active(), Some(tabs[1]));
+}
+
+#[test]
+fn closing_the_last_tab_shows_nothing() {
+    let (mut strip, tabs, _docs) = strip(1);
+    assert_eq!(strip.close(|_| true), tabs);
+    assert!(strip.tabs().is_empty());
+    assert_eq!(strip.active(), None);
+}
+
 /// `landing` is asked *before* anything is removed, so each of these passes the whole
 /// list and the predicate that is about to thin it.
 fn shut(items: &[&str], showing: &str, closing: &[&str]) -> Option<String> {

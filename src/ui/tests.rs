@@ -309,14 +309,10 @@ fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
     assert!(owed_reveal(marked, Pane::Assembly).is_none());
 }
 
-fn area(groups: Vec<Vec<Tab>>) -> DockArea {
-    DockArea::row(groups).with_documents(DOCUMENT_PANEL)
-}
-
-fn panels(area: &DockArea) -> Vec<PanelId> {
-    fn walk(node: &DockNode<Tab, PanelId>, into: &mut Vec<PanelId>) {
+fn groups(area: &DockArea) -> Vec<PanelId> {
+    fn walk(node: &DockNode<Panel, PanelId>, into: &mut Vec<PanelId>) {
         match node {
-            DockNode::Panel(panel) => into.push(panel.panel_id),
+            DockNode::Panel(group) => into.push(group.panel_id),
             DockNode::Split { children, .. } => children.iter().for_each(|child| walk(child, into)),
         }
     }
@@ -325,67 +321,22 @@ fn panels(area: &DockArea) -> Vec<PanelId> {
     found
 }
 
-/// The whole reason the panel is designated: freya's own sweep retains every non-empty
-/// child with no exemption, so the panel documents live in would fold away the moment the
-/// reader closed the last one.
+/// A group the reader has dragged everything out of folds away, which is what keeps the
+/// sidebar from filling up with the ghosts of groups.
 #[test]
-fn the_document_panel_survives_being_emptied() {
-    let mut dock = area(vec![vec![], vec![Tab::View(View::Settings)]]);
+fn an_emptied_group_folds_away() {
+    let mut dock = DockArea::column(vec![vec![Panel::Objects], vec![]]);
     dock.tidy();
-    assert_eq!(panels(&dock), [DOCUMENT_PANEL, 1]);
+    assert_eq!(groups(&dock), [0]);
 }
 
-/// A view panel is not spared: emptying one folds it away, which is what keeps the
-/// layout from filling up with the ghosts of panels the reader dragged out of.
+/// The last group standing is kept even when it is empty, so the sidebar stays on screen
+/// as somewhere to drop a panel back into.
 #[test]
-fn an_emptied_view_panel_folds_away() {
-    let mut dock = area(vec![vec![Tab::View(View::Project)], vec![]]);
+fn the_last_group_is_kept_when_it_empties() {
+    let mut dock = DockArea::column(vec![vec![], vec![]]);
     dock.tidy();
-    assert_eq!(panels(&dock), [DOCUMENT_PANEL]);
-}
-
-/// A document goes in the document panel and nowhere else. The drop is refused rather
-/// than redirected, so the drag springs back to where it started.
-#[test]
-fn a_document_may_only_be_dropped_into_the_document_panel() {
-    let mut dock = area(vec![vec![], vec![Tab::View(View::Settings)]]);
-    let tab = Tab::Document(Docs::default().open(Document::Source(Arc::from("a.rs"))));
-
-    assert!(!dock.accepts(tab, &DropTarget::Center(1)));
-    assert!(!dock.accepts(
-        tab,
-        &DropTarget::Tab {
-            panel_id: 1,
-            position: 0
-        }
-    ));
-    // A split always makes a new panel, which is never the designated one.
-    assert!(!dock.accepts(
-        tab,
-        &DropTarget::Split {
-            panel_id: DOCUMENT_PANEL,
-            side: Side::Right
-        }
-    ));
-    assert!(dock.accepts(tab, &DropTarget::Center(DOCUMENT_PANEL)));
-    assert!(!dock.on_drop(tab, DropTarget::Center(1)));
-}
-
-/// And a view goes anywhere, the document panel included -- which is what keeps
-/// Project, Settings and the Scratchpad tabbed beside the documents.
-#[test]
-fn a_view_may_be_dropped_anywhere() {
-    let dock = area(vec![vec![], vec![Tab::View(View::Settings)]]);
-    let tab = Tab::View(View::Project);
-    assert!(dock.accepts(tab, &DropTarget::Center(DOCUMENT_PANEL)));
-    assert!(dock.accepts(tab, &DropTarget::Center(1)));
-    assert!(dock.accepts(
-        tab,
-        &DropTarget::Split {
-            panel_id: 1,
-            side: Side::Right
-        }
-    ));
+    assert_eq!(groups(&dock).len(), 1);
 }
 
 /// Nothing on screen: what a project switch does is to the states. A runner all the same,
@@ -406,18 +357,25 @@ macro_rules! project_states {
         // The two states that are what is open, and the derivation over them, in the same
         // order `app()` uses. `Active` is provided but not returned: it is not one of the
         // project's states, it is a reading of two of them.
-        let dock = $runner
-            .provide_root_context(|| {
-                ContentDock(State::create(
-                    DockArea::row(vec![vec![]]).with_documents(DOCUMENT_PANEL),
-                ))
-            })
+        let strip = $runner
+            .provide_root_context(|| OpenTabs(State::create(Strip::default())))
             .0;
+        // The sidebar as `app()` builds it: a panel that brings another to the front
+        // reaches for this, so a harness mounting one needs it provided.
+        $runner.provide_root_context(|| {
+            SidebarDock(State::create(DockArea::column(vec![
+                vec![Panel::Objects, Panel::Files, Panel::Search],
+                vec![Panel::Symbols],
+                vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+            ])))
+        });
         let docs = $runner
             .provide_root_context(|| OpenDocs(State::create(Docs::default())))
             .0;
         $runner.provide_root_context(move || {
-            Active(Memo::create(move || active_tab(&dock.read(), &docs.read())))
+            Active(Memo::create(move || {
+                active_tab(&strip.read(), &docs.read())
+            }))
         });
         // Provided but not returned, like `Active`: nothing here asserts on it, and the
         // Assembly pane's bar reads it wherever a harness mounts one.
@@ -443,7 +401,7 @@ macro_rules! project_states {
             loading: $runner
                 .provide_root_context(|| Loading(State::create(Loads::default())))
                 .0,
-            open: Open { dock, docs },
+            open: Open { strip, docs },
             asm_at: $runner
                 .provide_root_context(|| AsmAt(State::create(Positions::default())))
                 .0,
@@ -630,7 +588,7 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
 
 /// The History panel and nothing else, over the project's states.
 fn history_harness() -> impl IntoElement {
-    rect().expanded().child(HistoryTab)
+    rect().expanded().child(HistoryPanel)
 }
 
 /// A row is named after the function and not after the whole of what the demangler said.
@@ -684,7 +642,7 @@ fn menu_harness() -> impl IntoElement {
         .horizontal()
         .content(Content::Flex)
         .child(rect().width(Size::flex(1.0)).height(Size::px(25.0)))
-        .child(DocumentMenuButton)
+        .child(TabListButton)
 }
 
 /// And it stays hanging from that edge when the list grows underneath it. `MenuContainer`
@@ -697,21 +655,17 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
         TestingRunner::new(menu_harness, (600., 300.).into(), project_states!(), 1.);
     test.sync_and_update();
 
-    // The app's panel always holds the three views, so the button is there before any
-    // document is.
+    // A page is a tab, so the button is there before any document is.
     {
-        let mut dock = states.open.dock;
-        let mut dock = dock.write();
-        let panel = dock.document_panel_mut().expect("the document panel");
-        panel.tabs.push(Tab::View(View::Project));
-        panel.active_tab_id = Some(Tab::View(View::Project));
+        let mut strip = states.open.strip;
+        strip.write().push(Tab::Page(Page::Project));
     }
     test.sync_and_update();
 
     let button = test
         .find(|node, _| {
             let area = node.layout().area;
-            (area.width() == DOCUMENT_MENU_WIDTH).then_some(area)
+            (area.width() == TAB_LIST_WIDTH).then_some(area)
         })
         .expect("the button is in the bar");
     let button_right = button.origin.x + button.width();
@@ -749,7 +703,7 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
         .map(|area| area.width())
         .fold(0.0_f32, f32::max);
     assert!(
-        width > DOCUMENT_MENU_WIDTH * 4.0,
+        width > TAB_LIST_WIDTH * 4.0,
         "the menu did not grow to hold the new row"
     );
     assert_eq!(
@@ -789,7 +743,7 @@ fn the_tab_menu_hangs_from_the_buttons_right_edge() {
     let button = test
         .find(|node, _| {
             let area = node.layout().area;
-            (area.width() == DOCUMENT_MENU_WIDTH).then_some(area)
+            (area.width() == TAB_LIST_WIDTH).then_some(area)
         })
         .expect("the button is in the bar");
     let button_right = button.origin.x + button.width();
@@ -859,7 +813,7 @@ fn the_document_menu_opens_and_closes() {
     let button = test
         .find(|node, _| {
             let area = node.layout().area;
-            (area.width() == DOCUMENT_MENU_WIDTH).then_some(area)
+            (area.width() == TAB_LIST_WIDTH).then_some(area)
         })
         .expect("the button is in the bar");
     let at = ((button.origin.x + 10.0) as f64, 10.0);
@@ -1030,17 +984,63 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
     );
 }
 
+/// Every open tab's chip, drawn as the bar draws them: what a press on one has to answer
+/// for now that the bar is the app's own. freya's docking wrapped a header in a
+/// `rect().on_press(set_active)` and the chip did nothing; here the chip is the whole of
+/// it.
+fn chips_harness() -> impl IntoElement {
+    let open = use_open();
+    let (tabs, active) = {
+        let strip = open.strip.read();
+        (strip.tabs().to_vec(), strip.active())
+    };
+
+    rect().expanded().horizontal().children(
+        tabs.into_iter()
+            .map(|tab| {
+                TabHeader {
+                    tab,
+                    active: Some(tab) == active,
+                    key: DiffKey::None,
+                }
+                .key(tab)
+                .into_element()
+            })
+            .collect::<Vec<Element>>(),
+    )
+}
+
+/// **The chip activates its own tab.** Nothing wraps it any more, so a press that reaches
+/// the chip and stops there would leave the bar drawing tabs that cannot be switched to.
+#[test]
+fn pressing_a_chip_shows_its_tab() {
+    let (mut test, states) =
+        TestingRunner::new(chips_harness, (400., 100.).into(), project_states!(), 1.);
+    let documents = [
+        Document::Source(Arc::from("/src/one.rs")),
+        Document::Source(Arc::from("/src/two.rs")),
+    ];
+    for document in &documents {
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    }
+    test.sync_and_update();
+    assert!(states.open.active() == Some(documents[1].clone()));
+
+    let at = centre_of(&test, "one.rs");
+    press_at(&mut test, at);
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(documents[0].clone()),
+        "a press on a chip did not show its tab"
+    );
+}
+
 /// The × on a document's tab, mounted on its own: how big a target it is and what the
 /// pointer does to it are questions about the control rather than about the strip around
-/// it. It takes its document the way a header does, from the panel's first document tab.
+/// it. It takes its document the way a chip does, from the strip's first document tab.
 fn close_harness() -> impl IntoElement {
     let open = use_open();
-    let id = open.dock.read().document_panel().and_then(|panel| {
-        panel.tabs.iter().find_map(|tab| match tab {
-            Tab::Document(id) => Some(*id),
-            Tab::View(_) => None,
-        })
-    });
+    let id = open.strip.read().documents().next();
 
     rect()
         .expanded()
@@ -1125,14 +1125,11 @@ fn a_press_beside_the_glyph_still_closes_the_tab() {
         0,
         "a press in the × missed the glyph and did nothing"
     );
-    let documents = states
-        .open
-        .dock
-        .peek()
-        .document_panel()
-        .map(|panel| panel.tabs.len())
-        .unwrap_or_default();
-    assert_eq!(documents, 0, "the tab outlived the document it stood for");
+    assert_eq!(
+        states.open.strip.peek().tabs().len(),
+        0,
+        "the tab outlived the document it stood for"
+    );
 }
 
 /// The × lights under the pointer in a wash of its own, and puts itself back when the
@@ -1297,16 +1294,15 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
     let mut objects = states.objects;
     objects.write().push(object);
 
+    // A page in the bar, which this must not close: it is not a document, and nothing it
+    // is showing is going away. Opened first, so the last document is still the tab on
+    // screen when the close is asked for.
+    {
+        let mut strip = states.open.strip;
+        strip.write().push(Tab::Page(Page::Settings));
+    }
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
-    }
-    // A view dragged into the document panel, which the dock allows and this must not
-    // close: the × it has no place for is the whole of the argument.
-    {
-        let mut dock = states.open.dock;
-        let mut dock = dock.write();
-        let panel = dock.document_panel_mut().expect("the document panel");
-        panel.tabs.push(Tab::View(View::History));
     }
     let mut asm_at = states.asm_at;
     let entries: Vec<Entry> = documents
@@ -1353,13 +1349,8 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         "a closed tab's position was kept, and with it the binary it points into"
     );
     assert!(
-        states
-            .open
-            .dock
-            .peek()
-            .document_panel()
-            .is_some_and(|panel| panel.tabs.contains(&Tab::View(View::History))),
-        "a view in the document panel was closed with the documents"
+        states.open.strip.peek().contains(Tab::Page(Page::Settings)),
+        "a page in the bar was closed with the documents"
     );
 }
 
@@ -1500,7 +1491,7 @@ fn load_harness() -> impl IntoElement {
         spawn(async move { take_load(objects, loading, id, events).await });
     });
 
-    rect().expanded().child(ObjectsTab)
+    rect().expanded().child(ObjectsPanel)
 }
 
 /// `n` objects that all came out of one path, which is what an archive's members look like
@@ -1683,7 +1674,7 @@ fn leaving_a_project_while_a_file_is_read_drops_what_was_still_coming() {
 /// The Objects tree and nothing else, at whatever width the window is. A pane's width is
 /// all a row of it knows about the split, so the window is the split here.
 fn objects_harness() -> impl IntoElement {
-    rect().expanded().child(ObjectsTab)
+    rect().expanded().child(ObjectsPanel)
 }
 
 /// Where the archive row's name and its member count were laid out, in a pane `width`
@@ -2798,7 +2789,7 @@ fn locations_harness() -> impl IntoElement {
         active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
 
-    rect().expanded().child(LocationsTab)
+    rect().expanded().child(LocationsPanel)
 }
 
 /// The contexts [`locations_harness`] reads beside the project's.
@@ -5190,15 +5181,10 @@ fn a_source_row_inside_a_function_offers_its_instances() {
     );
 }
 
-/// The sidebar's dock, which `app()` keeps as a local state and a test has to provide
-/// somewhere.
-#[derive(Clone, Copy)]
-struct SidebarDock(State<DockArea>);
-
 /// Asking for a line's locations is one write and one dock change: the question reaches
-/// the worker and is answered, and the Locations view is brought to the top of whichever
-/// panel holds it -- the sidebar's here, behind History -- looked for through the content
-/// dock the row can reach. Asking for the line already answered asks again.
+/// the worker and is answered, and the Locations panel is brought to the top of whichever
+/// group holds it -- here it is behind History. Asking for the line already answered asks
+/// again.
 #[test]
 fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     let symbols = fixture_symbols();
@@ -5211,35 +5197,23 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
 
     let (
         mut test,
-        (
-            (_asking, _analysis, _seen, objects, _history, located, _reading, _window),
-            content,
-            sidebar,
-        ),
+        ((_asking, _analysis, _seen, objects, _history, located, _reading, _window), sidebar),
     ) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
         |runner| {
             let states = analysis_states!(runner, answer);
-            // The two areas as `app()` wires them, the content one knowing the
-            // sidebar. The content dock holds no view at all, so the search has to
-            // cross over.
+            // The sidebar as `app()` builds it, with Locations behind History in one
+            // group.
             let sidebar = runner
                 .provide_root_context(|| {
                     SidebarDock(State::create(DockArea::column(vec![vec![
-                        Tab::View(View::History),
-                        Tab::View(View::Locations),
+                        Panel::History,
+                        Panel::Locations,
                     ]])))
                 })
                 .0;
-            let content = runner
-                .provide_root_context(|| {
-                    let mut area = DockArea::row(vec![vec![]]).with_documents(DOCUMENT_PANEL);
-                    area.other = Some(sidebar);
-                    ContentDock(State::create(area))
-                })
-                .0;
-            (states, content, sidebar)
+            (states, sidebar)
         },
         1.,
     );
@@ -5249,13 +5223,13 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
 
     let on_top = |dock: State<DockArea>| {
         let dock = dock.peek();
-        let (panel, _) = dock.tree.find_tab(&Tab::View(View::Locations))?;
-        dock.tree.panel(&panel)?.active_tab_id
+        let (group, _) = dock.tree.find_tab(&Panel::Locations)?;
+        dock.tree.panel(&group)?.active_tab_id
     };
-    assert!(on_top(sidebar) == Some(Tab::View(View::History)));
+    assert!(on_top(sidebar) == Some(Panel::History));
 
-    find_locations(located, content, Query::line(at.clone()), None);
-    assert!(on_top(sidebar) == Some(Tab::View(View::Locations)));
+    find_locations(located, sidebar, Query::line(at.clone()), None);
+    assert!(on_top(sidebar) == Some(Panel::Locations));
     assert!(located.peek().pending() == Some(&Query::line(at.clone())));
     pump(&mut test, || located.peek().found.is_some());
     let found = located.peek().found.clone().expect("answered");
@@ -5282,7 +5256,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
         1,
         "an answer re-asked itself when an object was opened"
     );
-    find_locations(located, content, Query::line(at.clone()), None);
+    find_locations(located, sidebar, Query::line(at.clone()), None);
     assert!(located.peek().pending() == Some(&Query::line(at.clone())));
     pump(&mut test, || {
         located
@@ -6913,17 +6887,17 @@ fn the_gutter_puts_its_strokes_on_whole_device_pixels() {
     }
 }
 
-/// A document's two panes as the dock mounts them: the same [`DocumentBody`] `tab_content`
-/// builds, over whichever document is active. The dock itself is left out -- the strip has
-/// no vote in which pane is which -- but the two states the split is held in are not, being
+/// A document's two panes as the strip mounts them: the same [`DocumentBody`] the content
+/// area builds, over whichever document is active. The bar itself is left out -- it has no
+/// vote in which pane is which -- but the two states the split is held in are not, being
 /// what the panels are sized from.
 fn panes_harness() -> impl IntoElement {
     let open = use_open();
     // Read and not peeked: this is the harness's whole subscription to a tab being
     // activated, and `Active` is a memo and a beat behind.
     let id = {
-        let (dock, docs) = (open.dock.read(), open.docs.read());
-        active_document(&dock, &docs).and_then(|document| docs.showing(&document))
+        let (strip, docs) = (open.strip.read(), open.docs.read());
+        active_document(&strip, &docs).and_then(|document| docs.showing(&document))
     };
 
     rect()
@@ -12170,8 +12144,8 @@ fn doors_harness() -> impl IntoElement {
     use_reading_of(active, objects, reading, window);
 
     let entry = {
-        let (dock, docs) = (open.dock.read(), open.docs.read());
-        active_document(&dock, &docs)
+        let (strip, docs) = (open.strip.read(), open.docs.read());
+        active_document(&strip, &docs)
             .and_then(|document| Some((docs.showing(&document)?, document)))
     };
     rect()
@@ -12724,7 +12698,7 @@ fn bookmarks_harness() -> impl IntoElement {
     rect()
         .expanded()
         .child(ContextMenuViewer::new())
-        .child(BookmarksTab)
+        .child(BookmarksPanel)
 }
 
 /// A bookmark of `symbol`, the way a gesture on a live document would make one.
@@ -12856,7 +12830,7 @@ fn symbols_harness() -> impl IntoElement {
     rect()
         .expanded()
         .child(ContextMenuViewer::new())
-        .child(SymbolsTab)
+        .child(SymbolsPanel)
 }
 
 /// The History list, the same way.
@@ -12864,7 +12838,7 @@ fn history_menu_harness() -> impl IntoElement {
     rect()
         .expanded()
         .child(ContextMenuViewer::new())
-        .child(HistoryTab)
+        .child(HistoryPanel)
 }
 
 /// The project's states plus the `Symbols` memo, built over the objects the way `app()`
@@ -12980,23 +12954,18 @@ fn a_history_row_bookmarks_its_place_from_its_menu() {
     );
 }
 
-/// A document's own header with the context-menu viewer a right-click on it needs. It
-/// takes its document the way `close_harness` does, from the panel's first document tab.
+/// A document's own chip with the context-menu viewer a right-click on it needs. It
+/// takes its document the way `close_harness` does, from the strip's first document tab.
 fn header_menu_harness() -> impl IntoElement {
     let open = use_open();
-    let id = open.dock.read().document_panel().and_then(|panel| {
-        panel.tabs.iter().find_map(|tab| match tab {
-            Tab::Document(id) => Some(*id),
-            Tab::View(_) => None,
-        })
-    });
+    let id = open.strip.read().documents().next();
 
     rect()
         .expanded()
         .child(ContextMenuViewer::new())
         .maybe_child(id.map(|id| {
-            DocumentHeader {
-                id,
+            TabHeader {
+                tab: Tab::Document(id),
                 active: true,
                 key: DiffKey::None,
             }
@@ -13097,7 +13066,7 @@ fn files_harness() -> impl IntoElement {
     rect()
         .expanded()
         .child(ContextMenuViewer::new())
-        .child(FilesTab)
+        .child(FilesPanel)
 }
 
 /// A project directory of this test's own, named after the line that asked for it, and
@@ -14695,18 +14664,26 @@ fn a_new_tab_opens_beside_the_one_on_screen() {
         "the new tab did not open beside the one on screen"
     );
 
-    // A view on top: nothing to open beside, so the end.
+    // A page on screen is a tab like any other, so the tab opened over it lands beside it
+    // and not at the end of the bar. The page goes in beside the tab on screen, which
+    // leaves a document after it to tell the two landings apart.
     {
-        let mut dock = states.open.dock;
-        let mut dock = dock.write();
-        let panel = dock.document_panel_mut().expect("the document panel");
-        panel.tabs.insert(0, Tab::View(View::History));
-        panel.active_tab_id = Some(Tab::View(View::History));
+        let mut strip = states.open.strip;
+        strip.write().show(Tab::Page(Page::Settings));
     }
     let source = Document::Source(Arc::from("/src/main.rs"));
     open_document(states.open, states.visits, source.clone(), Reach::Preview);
     test.sync_and_update();
-    assert!(states.open.documents().last() == Some(&source));
+    assert!(
+        states.open.documents()
+            == [
+                documents[0].clone(),
+                documents[2].clone(),
+                source.clone(),
+                documents[1].clone()
+            ],
+        "a tab opened over a page did not land beside it"
+    );
 }
 
 /// What makes a temporal tab stay: Ctrl on the place it shows, or navigating in place
@@ -15537,7 +15514,7 @@ fn search_harness() -> impl IntoElement {
         active, open, marked, landing, plant, driven, marks_at, code_rows,
     );
 
-    rect().expanded().child(SearchTab)
+    rect().expanded().child(SearchPanel)
 }
 
 /// The panel over `work`, with the project's directory set: a real directory of this
@@ -15545,13 +15522,14 @@ fn search_harness() -> impl IntoElement {
 fn search_over(
     line: u32,
     work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync + 'static,
-) -> (TestingRunner, ProjectStates, PathBuf) {
-    let (test, states, directory, _, _, _) = search_and_modifiers(line, work);
-    (test, states, directory)
+) -> (TestingRunner, ProjectStates, PathBuf, State<DockArea>) {
+    let (test, states, directory, _, _, _, dock) = search_and_modifiers(line, work);
+    (test, states, directory, dock)
 }
 
 /// The same, and the four states `ModifierKeys` is made of: a test cannot create a
 /// `State` outside the runner's own context, so they are made where the rest are.
+#[allow(clippy::type_complexity)]
 fn search_and_modifiers(
     line: u32,
     work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync + 'static,
@@ -15562,6 +15540,7 @@ fn search_and_modifiers(
     Modifiers5,
     State<Marks>,
     State<Finder>,
+    State<DockArea>,
 ) {
     let directory = run_directory(line).join("searched");
     let _ = std::fs::remove_dir_all(&directory);
@@ -15597,14 +15576,23 @@ fn search_and_modifiers(
             let finder = runner
                 .provide_root_context(|| Finding(State::create(Finder::default())))
                 .0;
-            (project_states!(runner), held, marked, finder)
+            let states = project_states!(runner);
+            // The same context again, so this test holds the handle the panel reads.
+            let dock = runner
+                .provide_root_context(|| {
+                    SidebarDock(State::create(DockArea::column(vec![vec![Panel::Search]])))
+                })
+                .0;
+            (states, held, marked, finder, dock)
         },
         1.,
     );
     let mut proj = states.0.proj;
     proj.write().directory = directory.to_string_lossy().into_owned();
     settle(&mut test);
-    (test, states.0, directory, states.1, states.2, states.3)
+    (
+        test, states.0, directory, states.1, states.2, states.3, states.4,
+    )
 }
 
 /// The five states `ModifierKeys` is made of, created where freya's context is: a test
@@ -15620,6 +15608,7 @@ struct Modifiers5(
 
 /// The panel over a walk that answers nothing, and the modifier states the root's one key
 /// handler writes beside the chord.
+#[allow(clippy::type_complexity)]
 fn search_with_modifiers(
     line: u32,
 ) -> (
@@ -15630,10 +15619,12 @@ fn search_with_modifiers(
     State<bool>,
     State<bool>,
     State<Finder>,
+    State<DockArea>,
 ) {
-    let (test, states, directory, held, _, finder) = search_and_modifiers(line, |_query, _emit| {});
+    let (test, states, directory, held, _, finder, dock) =
+        search_and_modifiers(line, |_query, _emit| {});
     let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
-    (test, states, directory, keys, held.0, held.1, finder)
+    (test, states, directory, keys, held.0, held.1, finder, dock)
 }
 
 /// One hit, spelled as the walk spells one.
@@ -15648,10 +15639,10 @@ fn hit_at(path: &Path, line: u32, text: &str) -> Hit {
 }
 
 /// Ask for `pattern`, the way Enter in the box asks.
-fn ask_for(states: &ProjectStates, directory: &Path, pattern: &str) {
+fn ask_for(states: &ProjectStates, dock: State<DockArea>, directory: &Path, pattern: &str) {
     start_search(
         states.searched,
-        states.open.dock,
+        dock,
         SearchQuery {
             root: directory.to_path_buf(),
             filter: Filter {
@@ -15669,14 +15660,14 @@ fn hits_arrive_under_their_file_and_fold() {
     let first = PathBuf::from("/project/one.rs");
     let second = PathBuf::from("/project/two.rs");
     let (one, two) = (first.clone(), second.clone());
-    let (mut test, states, directory) = search_over(line!(), move |_query, emit| {
+    let (mut test, states, directory, dock) = search_over(line!(), move |_query, emit| {
         let _ = emit(SearchEvent::Hit(hit_at(&one, 3, "first hit")));
         let _ = emit(SearchEvent::Hit(hit_at(&one, 9, "second hit")));
         let _ = emit(SearchEvent::Hit(hit_at(&two, 1, "third hit")));
         let _ = emit(SearchEvent::Finished);
     });
 
-    ask_for(&states, &directory, "hit");
+    ask_for(&states, dock, &directory, "hit");
     let searched = states.searched;
     pump(&mut test, || !searched.peek().running);
 
@@ -15709,7 +15700,7 @@ fn a_hit_from_a_replaced_search_is_dropped() {
     let (gate, held) = std::sync::mpsc::channel::<()>();
     let held = Arc::new(std::sync::Mutex::new(held));
     let file = PathBuf::from("/project/one.rs");
-    let (mut test, states, directory) = search_over(line!(), move |query, emit| {
+    let (mut test, states, directory, dock) = search_over(line!(), move |query, emit| {
         if query.filter.pattern == "slow" {
             let _ = emit(SearchEvent::Hit(hit_at(&file, 1, "early answer")));
             // Held until the test has asked for something else.
@@ -15723,11 +15714,11 @@ fn a_hit_from_a_replaced_search_is_dropped() {
     });
 
     let searched = states.searched;
-    ask_for(&states, &directory, "slow");
+    ask_for(&states, dock, &directory, "slow");
     pump(&mut test, || searched.peek().hits.counts().0 == 1);
     assert!(labels(&test).iter().any(|label| label == "early answer"));
 
-    ask_for(&states, &directory, "other");
+    ask_for(&states, dock, &directory, "other");
     pump(&mut test, || !searched.peek().running);
     assert!(labels(&test).iter().any(|label| label == "other answer"));
 
@@ -15758,7 +15749,7 @@ fn a_hit_from_a_replaced_search_is_dropped() {
 /// at, and a file the source pane would refuse opens nothing.
 #[test]
 fn pressing_a_hit_opens_its_file_on_the_line() {
-    let (mut test, states, directory, _, marked, _) =
+    let (mut test, states, directory, _, marked, _, _) =
         search_and_modifiers(line!(), |_query, _emit| {});
     let path = directory.join("x.c");
     std::fs::write(&path, "int x;\nint y;\nint z;\n").expect("writing the source");
@@ -15816,7 +15807,7 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
 #[test]
 fn enter_in_the_box_asks_for_what_is_in_it() {
     let file = PathBuf::from("/project/one.rs");
-    let (mut test, states, directory) = search_over(line!(), move |query, emit| {
+    let (mut test, states, directory, _dock) = search_over(line!(), move |query, emit| {
         let _ = emit(SearchEvent::Hit(hit_at(
             &file,
             1,
@@ -15855,9 +15846,9 @@ fn enter_in_the_box_asks_for_what_is_in_it() {
 fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
     // A runner, because every `State` here belongs to freya's own context, and the panel
     // is what spends what the chord asks for.
-    let (mut test, states, directory, keys, shift, ctrl, finder) = search_with_modifiers(line!());
+    let (mut test, states, directory, keys, shift, ctrl, finder, dock) =
+        search_with_modifiers(line!());
     let searched = states.searched;
-    let dock = states.open.dock;
     let proj = states.proj;
 
     let chord = |key: Key, modifiers: Modifiers| {
@@ -17934,6 +17925,7 @@ fn finder_over(
     State<Finder>,
     ModifierKeys,
     PathBuf,
+    State<DockArea>,
 ) {
     let directory = run_directory(line).join("found");
     let _ = std::fs::remove_dir_all(&directory);
@@ -17961,16 +17953,25 @@ fn finder_over(
                     State::create(false),
                 )
             });
-            (project_states!(runner), finder, held)
+            let states = project_states!(runner);
+            // The same context again, so the chord is pressed with the handle the
+            // sidebar reads: the root answers Ctrl+P and Ctrl+Shift+F in the one
+            // handler, and the second of them reaches for the dock.
+            let dock = runner
+                .provide_root_context(|| {
+                    SidebarDock(State::create(DockArea::column(vec![vec![Panel::Search]])))
+                })
+                .0;
+            (states, finder, held, dock)
         },
         1.,
     );
-    let (states, finder, held) = states;
+    let (states, finder, held, dock) = states;
     let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
     let mut proj = states.proj;
     proj.write().directory = directory.to_string_lossy().into_owned();
     settle(&mut test);
-    (test, states, finder, keys, directory)
+    (test, states, finder, keys, directory, dock)
 }
 
 /// A file as the walk reports one, under `root`.
@@ -18008,13 +18009,18 @@ fn finder_rows(test: &TestingRunner) -> Vec<String> {
 
 /// Ctrl+P through the root's one key handler, which is where it is answered: not through
 /// the focused node, since the chord works from wherever the keyboard is.
-fn press_finder_chord(states: &ProjectStates, finder: State<Finder>, keys: ModifierKeys) {
+fn press_finder_chord(
+    states: &ProjectStates,
+    finder: State<Finder>,
+    keys: ModifierKeys,
+    dock: State<DockArea>,
+) {
     root_key_down(
         keys,
         states.searched,
         finder,
         states.proj,
-        states.open.dock,
+        dock,
         &Key::Character("p".into()),
         Modifiers::CONTROL,
     );
@@ -18024,18 +18030,19 @@ fn press_finder_chord(states: &ProjectStates, finder: State<Finder>, keys: Modif
 /// the box then picks out. Fails on a finder that draws its list before it is opened.
 #[test]
 fn the_chord_opens_the_finder_over_the_project_files() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
-        let _ = emit(walked_file(root, "notes/Goals.md"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+            let _ = emit(walked_file(root, "notes/Goals.md"));
+            let _ = emit(WalkEvent::Finished);
+        });
 
     assert!(
         finder_rows(&test).is_empty(),
         "the finder is drawn before it is opened"
     );
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     test.write_text("s");
     settle(&mut test);
@@ -18057,12 +18064,13 @@ fn the_chord_opens_the_finder_over_the_project_files() {
 /// empty.
 #[test]
 fn an_empty_box_lists_the_files_opened_most_recently() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "walked.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "walked.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     assert!(
         labels(&test)
@@ -18081,7 +18089,7 @@ fn an_empty_box_lists_the_files_opened_most_recently() {
             Reach::Preview,
         );
     }
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     settle(&mut test);
 
     let rows = finder_rows(&test);
@@ -18097,13 +18105,14 @@ fn an_empty_box_lists_the_files_opened_most_recently() {
 /// path is written in: a column of names all starting `src/ui/` says nothing.
 #[test]
 fn a_row_is_the_name_and_then_the_directories_above_it() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
-        let _ = emit(walked_file(root, "top.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+            let _ = emit(walked_file(root, "top.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     test.write_text("s");
     settle(&mut test);
@@ -18121,14 +18130,15 @@ fn a_row_is_the_name_and_then_the_directories_above_it() {
 /// match is first. Fails on a finder that filters by anything but the fuzzy match.
 #[test]
 fn typing_narrows_the_list_to_the_characters_in_order() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
-        let _ = emit(walked_file(root, "src/ui/source_view.rs"));
-        let _ = emit(walked_file(root, "notes/Goals.md"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+            let _ = emit(walked_file(root, "src/ui/source_view.rs"));
+            let _ = emit(walked_file(root, "notes/Goals.md"));
+            let _ = emit(WalkEvent::Finished);
+        });
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     test.write_text("srcuivw");
     settle(&mut test);
@@ -18150,18 +18160,19 @@ fn typing_narrows_the_list_to_the_characters_in_order() {
 /// tab, or a new one with Ctrl held. And the finder closes behind it.
 #[test]
 fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "first.rs"));
-        let _ = emit(walked_file(root, "second.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "first.rs"));
+            let _ = emit(walked_file(root, "second.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
     // The files have to be there: a file the source pane would refuse opens nothing.
     for name in ["first.rs", "second.rs"] {
         std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
     }
     let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     // Typed, so the list is the walk's and not the places visited. Which of the two rows
     // is first is the matcher's business and pinned in its own tests; this reads it.
@@ -18182,7 +18193,7 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
     );
 
     // The row under it, in a tab of its own.
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     test.write_text("rs");
     settle(&mut test);
@@ -18207,12 +18218,13 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
 /// Escape closes it, and keeps nothing of what was typed.
 #[test]
 fn escape_closes_the_finder_and_keeps_nothing_typed() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "first.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "first.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     test.write_text("first");
     settle(&mut test);
@@ -18223,7 +18235,7 @@ fn escape_closes_the_finder_and_keeps_nothing_typed() {
     assert!(!finder.peek().open);
     assert!(finder_rows(&test).is_empty(), "the overlay is gone");
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     settle(&mut test);
     assert_eq!(finder.peek().typed, "", "the box is empty each time");
     let _ = std::fs::remove_dir_all(&directory);
@@ -18235,17 +18247,18 @@ fn escape_closes_the_finder_and_keeps_nothing_typed() {
 fn the_second_open_shows_the_files_the_first_walk_found() {
     let held = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let gate = held.clone();
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        // The second walk says nothing at all, so anything drawn after it is the list the
-        // first one left.
-        if gate.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
-        }
-        let _ = emit(walked_file(root, "kept.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            // The second walk says nothing at all, so anything drawn after it is the list the
+            // first one left.
+            if gate.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let _ = emit(walked_file(root, "kept.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     test.write_text("kept");
     settle(&mut test);
@@ -18255,7 +18268,7 @@ fn the_second_open_shows_the_files_the_first_walk_found() {
     settle(&mut test);
     held.store(true, std::sync::atomic::Ordering::SeqCst);
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     settle(&mut test);
     test.write_text("kept");
     settle(&mut test);
@@ -18330,11 +18343,12 @@ fn the_finder_chord_is_declined_by_the_scratchpad_editor() {
 /// panel's width, so it ran off the right-hand edge of the window.
 #[test]
 fn the_box_fills_the_panel_with_air_around_it() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "kept.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
-    press_finder_chord(&states, finder, keys);
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "kept.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
 
     let drawn = label_area(&test, "Find a file").expect("the box is drawn");
@@ -18357,11 +18371,12 @@ fn the_box_fills_the_panel_with_air_around_it() {
 /// what says a rect with no background is still there to be pressed.
 #[test]
 fn a_press_outside_the_panel_closes_the_finder() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "kept.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
-    press_finder_chord(&states, finder, keys);
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "kept.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     assert!(finder.peek().open);
 
@@ -18371,7 +18386,7 @@ fn a_press_outside_the_panel_closes_the_finder() {
     assert!(!finder.peek().open, "the press outside did not close it");
 
     // And a press inside it does not: the panel stops it reaching the rect behind.
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     settle(&mut test);
     let drawn = label_area(&test, "Find a file").expect("the box is drawn");
     press_at(
@@ -18388,10 +18403,11 @@ fn a_press_outside_the_panel_closes_the_finder() {
 /// box does not list it however recently it was read.
 #[test]
 fn a_file_outside_the_project_is_not_listed() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "own.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "own.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
 
     for path in [
         directory.join("own.rs"),
@@ -18404,7 +18420,7 @@ fn a_file_outside_the_project_is_not_listed() {
             Reach::Preview,
         );
     }
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
 
     assert_eq!(
@@ -18418,13 +18434,14 @@ fn a_file_outside_the_project_is_not_listed() {
 /// Pressing a row opens its file, as Enter on it does.
 #[test]
 fn pressing_a_row_opens_its_file() {
-    let (mut test, states, finder, keys, directory) = finder_over(line!(), move |root, emit| {
-        let _ = emit(walked_file(root, "kept.rs"));
-        let _ = emit(WalkEvent::Finished);
-    });
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "kept.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
     std::fs::write(directory.join("kept.rs"), "fn one() {}\n").expect("writing the file");
 
-    press_finder_chord(&states, finder, keys);
+    press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     test.write_text("kept");
     settle(&mut test);
