@@ -27,6 +27,9 @@ pub(crate) struct Follow {
 struct Asked {
     run: u64,
     at: Lookup,
+    /// Which question was put, which only matters for what an answer naming the line it
+    /// was asked on means. See [`Follow::answer`].
+    want: Wanted,
     reach: Reach,
 }
 
@@ -36,13 +39,32 @@ impl Follow {
     ///
     /// An answer for another run, or for a question already answered, is an answer to
     /// nobody. A name the server places nowhere clears the question and opens nothing:
-    /// the click was a question and never a promise.
+    /// the click was a question and never a promise. So does a **declaration** placed on
+    /// the line the question was asked on, which is somewhere the reader already is.
     pub(crate) fn answer(&mut self, run: u64, places: &[lsp::Place]) -> bool {
         let Some(asked) = self.asked.as_ref().filter(|asked| asked.run == run) else {
             return false;
         };
         let reach = asked.reach;
-        self.arrived = places.first().map(|place| (place.clone(), reach));
+        // A **declaration** naming the line it was asked on is nowhere to go. A trait's
+        // own method declaration is the case: it is a link, since nothing the server says
+        // of it tells it from the `impl` item that has the trait to go to, and asking
+        // where it is declared then answers with itself. Opening it would put a step on
+        // the trail that goes nowhere and a Back that undoes nothing.
+        //
+        // Only a declaration. A *definition* in the file already shown is an ordinary
+        // door -- the same file is a different path through `land` and not a different
+        // outcome -- and one that lands on the line it was asked from is a name defined
+        // where it is used, which is a place like any other.
+        let nowhere = |place: &&lsp::Place| {
+            asked.want == Wanted::Declaration
+                && place.file == asked.at.file
+                && place.line == asked.at.line.saturating_add(1)
+        };
+        self.arrived = places
+            .first()
+            .filter(|place| !nowhere(place))
+            .map(|place| (place.clone(), reach));
         self.asked = None;
         true
     }
@@ -84,7 +106,12 @@ pub(crate) fn follow_name(
     // Bound before the write, the read above being of another state.
     let held = follow.peek().clone();
     follow.set(Follow {
-        asked: Some(Asked { run, at, reach }),
+        asked: Some(Asked {
+            run,
+            at,
+            want,
+            reach,
+        }),
         ..held
     });
 }

@@ -4637,6 +4637,72 @@ fn a_question_on_its_way_is_not_asked_again() {
     assert!(linked.pending(1).is_some());
 }
 
+/// A **declaration** the server places on the line it was asked about opens nothing. A
+/// trait's own method declaration is the case that makes this real: nothing the server
+/// says tells it from a trait `impl`'s item, so it is a link, and asking where it is
+/// declared answers with itself.
+///
+/// A *definition* naming that line is a different matter and still opens -- a name defined
+/// where it is used is a place like any other
+/// (`a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too`).
+#[test]
+fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
+    let (file, _directory) = calling_file("itself");
+    // Classified as a trait `impl`'s item, so the press asks where it is *declared*.
+    let legend = lsp::Legend::of(&["function"], &["declaration", "trait"]);
+    let in_an_impl = links::Links::of(
+        &legend,
+        &[lsp::Token {
+            line: 2,
+            columns: 12..18,
+            kind: 0,
+            modifiers: 0b11,
+        }],
+    );
+    // The answer names the very line the question was asked on: row 2 of the file, which
+    // is where `helper` is.
+    let itself = lsp::Place {
+        file: PathBuf::from(&*file),
+        line: 2,
+        columns: 12..18,
+    };
+    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
+                run,
+                want,
+                reply: Ok(Reply::Defined(vec![itself.clone()])),
+            }),
+            _ => None,
+        },
+        file.clone(),
+        in_an_impl
+    );
+    let mut language = language;
+    let calling = Document::Source(file.clone());
+    open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let tab = states.open.active_tab().expect("a tab").0;
+    let before = stops_of(&states, tab).len();
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    for _ in 0..8 {
+        settle(&mut test);
+    }
+
+    assert!(
+        location.marked.peek().source.is_none(),
+        "an answer naming the line it was asked about picked a line out"
+    );
+    assert_eq!(
+        stops_of(&states, tab).len(),
+        before,
+        "it put a step on the trail that goes nowhere"
+    );
+}
+
 /// The spans each drawn paragraph is made of, in the order they are drawn.
 fn drawn_spans(test: &TestingRunner) -> Vec<Vec<String>> {
     use freya::elements::paragraph::ParagraphElement;
