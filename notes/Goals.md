@@ -76,13 +76,6 @@ leaves this list when it is. That is a move made on request, like everything els
   key handlers are per pane on purpose (`agents/Panes.md`); this is the rule that decides
   which of them answers, not a global handler.
 
-- [ ] Drop the `<` `>` around a symbol's label in the unified view. A stretch's label is
-  drawn `<name>:` (`src/ui/section_view.rs`, in the rows and in what is copied), objdump's
-  spelling, and the brackets say nothing the colon and the row's own colour do not; a demangled
-  Rust or C++ name is full of angle brackets of its own, so a pair more around it reads as
-  part of the name. Two things to keep straight: the two made-up names the app itself puts in
-  angle brackets, `<entry point>` and `<function 0x…>`, must still read as made up once the
-  label's own pair is gone, and the headless tests find labels by their drawn text.
 - [ ] Show the current symbol as a breadcrumb in the unified view. The bar over the pane names
   the object for a code tab, and nothing on screen says which function the rows under the
   pointer, or at the top of the pane, belong to once its label has scrolled off — a reader
@@ -91,6 +84,24 @@ leaves this list when it is. That is a move made on request, like everything els
   that symbol beside the object, object › symbol, and pressing it would be the "Open as symbol"
   door in one more place. Whether it follows the top row or the pointer is the one decision:
   the top row is stable and the pointer lights nothing.
+- [ ] Space before a label in the unified view. A function's last instruction and the next
+  function's label are one row apart, so a long listing reads as one column of text with names
+  dropped into it and nothing says where a function ends -- objdump's blank line before a label
+  is what is missing. It wants a row of its own rather than padding: every row of a
+  `VirtualScrollView` is the height it was given, and a taller label row misaligns the scroll
+  (`agents/UI.md`); the block separator, `Row::Separator`, is the precedent. What it has to
+  keep is that every row has an address and every address a row (`src/section.rs`): the spacer
+  takes the label's, and `row_for` still has to land on the label. A section header wants the
+  same space, and a stretch with two names at one address wants one spacer and not two.
+- [ ] Following a link in the unified view should stay in it. A symbol named in an operand is
+  followed in place, which in an object's code tab swaps the whole listing for that one
+  symbol's (`src/ui/assembly.rs`, `Reach::InPlace` for a link inside a tab); a reader who
+  pressed a call wanted the code it goes to, not to leave the view they were reading it in. A
+  plain press there should move the listing to the target's rows, and Ctrl+press should open
+  the symbol's own tab, which is what Ctrl already means on a label in that view. The one
+  decision is whether the move joins the tab's history: a branch target inside a symbol
+  scrolls and adds nothing, but a call to another function is a place a reader will want Back
+  from.
 - [ ] Navigate to an address in the unified view: type one and the listing goes to the row
   at that address, in the object whose code is on screen. Today the only way to a place in the
   section view is a label, a symbol's "Show in unified view" or the kept place a tab came back
@@ -229,6 +240,19 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Startup
 
+- [ ] Capture panic backtraces and store them. Nothing installs a panic hook, so a panic on a
+  worker thread kills that thread with a line on stderr nobody sees -- the window stays up and
+  the pane that thread feeds waits forever -- and one on the UI thread takes the window down,
+  leaving nothing to read afterwards. A hook set at startup should capture the backtrace itself
+  (`Backtrace::force_capture`, so it does not depend on `RUST_BACKTRACE` being set in the
+  environment the app was launched from), with the message, the thread and the location, and
+  write each panic as a file under the directory everything is stored in: `rescue.rs` mirrors a
+  file it moves aside there already, and its window is how the reader is told. It runs on a
+  panicking thread, so what it does has to be small and must not panic itself. The one
+  complication is `analysis`'s two `catch_unwind`s: a demangler panicking on a name out of a
+  file is caught on purpose, and a hook fires before the catch, so those must not fill the
+  store. Undecided: how many are kept, and whether one is shown in the app or only left on
+  disk. It costs a release build enough symbols for a backtrace to name anything.
 
 ## Fonts and settings
 

@@ -8326,7 +8326,7 @@ fn a_code_tab_draws_its_labels_and_empty_rows_before_a_byte_is_decoded() {
     settle(&mut test);
 
     let drawn = labels(&test);
-    for text in ["section .text", "<add>:", "<twice>:", "<sum_to>:"] {
+    for text in ["section .text", "add:", "twice:", "sum_to:"] {
         assert!(
             drawn.contains(&text.to_string()),
             "{text} is not drawn: {drawn:?}"
@@ -8349,7 +8349,7 @@ fn a_code_tab_draws_its_labels_and_empty_rows_before_a_byte_is_decoded() {
         .filter(|&row| matches!(rows.row(row), Some(Row::Label { .. })))
         .collect();
     let top = label_area(&test, "section .text").expect("the header is drawn");
-    let bottom = label_area(&test, "<sum_to>:").expect("sum_to is labelled");
+    let bottom = label_area(&test, "sum_to:").expect("sum_to is labelled");
     assert_eq!(
         bottom.origin.y - top.origin.y,
         label_rows[2] as f32 * code_row_height(),
@@ -8398,7 +8398,7 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
         "the place is written down as the reader scrolls"
     );
 
-    let before = label_area(&test, "<sum_to>:").expect("sum_to is labelled");
+    let before = label_area(&test, "sum_to:").expect("sum_to is labelled");
 
     // `add` decodes, above the viewport: its guess becomes its instruction rows, and every
     // row below it moves in the listing -- but not on screen.
@@ -8411,7 +8411,7 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     sections.set(decoded);
     settle(&mut test);
     settle(&mut test);
-    let after = label_area(&test, "<sum_to>:").expect("sum_to is still labelled");
+    let after = label_area(&test, "sum_to:").expect("sum_to is still labelled");
     assert_eq!(
         after.origin.y, before.origin.y,
         "the row under the reader moved"
@@ -8445,7 +8445,7 @@ fn a_code_tab_comes_back_to_the_address_it_was_left_at() {
     settle(&mut test);
 
     assert_eq!(address_labels(&test)[0], "0000000000000014 ");
-    assert!(labels(&test).contains(&"<twice>:".to_string()));
+    assert!(labels(&test).contains(&"twice:".to_string()));
 }
 
 /// What the view asks for is the stretches within a buffer of screens of the viewport
@@ -8594,8 +8594,8 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     settle(&mut test);
 
     // The caret on `twice`'s label, at its start.
-    let label = centre_of(&test, "<twice>:");
-    let at = label_area(&test, "<twice>:").unwrap();
+    let label = centre_of(&test, "twice:");
+    let at = label_area(&test, "twice:").unwrap();
     test.move_cursor(left_of(&at));
     test.press_cursor(left_of(&at));
     test.release_cursor(left_of(&at));
@@ -8635,7 +8635,7 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     settle(&mut test);
     let rows = rows_of(&decoded);
     let now = (0..rows.len())
-        .find(|&row| row_line(&rows, &decoded, row) == "0000000000000014 <twice>:")
+        .find(|&row| row_line(&rows, &decoded, row) == "0000000000000014 twice:")
         .expect("the label has a row");
     assert_ne!(
         now, was,
@@ -8769,7 +8769,7 @@ fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
         .map(|row| row_line(&rows, &reading, row))
         .collect();
     assert_eq!(lines[0], "section .text");
-    assert_eq!(lines[1], "0000000000000000 <add>:");
+    assert_eq!(lines[1], "0000000000000000 add:");
     let add = fixture_symbols()
         .into_iter()
         .find(|symbol| symbol.data.name == "add")
@@ -8779,7 +8779,7 @@ fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
     // `twice` is not decoded: its label, then blank lines.
     let twice = lines
         .iter()
-        .position(|line| line == "0000000000000014 <twice>:")
+        .position(|line| line == "0000000000000014 twice:")
         .expect("twice is labelled");
     assert_eq!(lines[twice + 1], "");
 }
@@ -8867,7 +8867,7 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     settle(&mut test);
 
     // A plain press is a plain press: the tab stays.
-    let label = centre_of(&test, "<twice>:");
+    let label = centre_of(&test, "twice:");
     press_at(&mut test, label);
     settle(&mut test);
     assert!(states.open.active() == Some(code.clone()));
@@ -9212,7 +9212,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     let guess = guessed.row_for(target).expect("the target has a row");
     assert!(matches!(guessed.row(guess), Some(Row::Empty { .. })));
     assert!(
-        !labels(&test).iter().any(|text| text == "<f>:"),
+        !labels(&test).iter().any(|text| text == "f:"),
         "the view did not move: {:?}",
         labels(&test)
     );
@@ -12378,7 +12378,7 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
     settle(&mut test);
 
     // The caret on `twice`'s label, at its start.
-    let at = label_area(&test, "<twice>:").expect("the label is drawn");
+    let at = label_area(&test, "twice:").expect("the label is drawn");
     test.move_cursor(left_of(&at));
     test.press_cursor(left_of(&at));
     test.release_cursor(left_of(&at));
@@ -12425,7 +12425,7 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
     let guessed = reading_of(&object, &[]);
     let rows = rows_of(&guessed);
     let now = (0..rows.len())
-        .find(|&row| row_line(&rows, &guessed, row) == "0000000000000014 <twice>:")
+        .find(|&row| row_line(&rows, &guessed, row) == "0000000000000014 twice:")
         .expect("the label has a row");
     assert_ne!(now, was, "the guess for add was exact, proving nothing");
     sections.set(guessed);

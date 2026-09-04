@@ -47,3 +47,6 @@ and not in place of it: every code section in the object's own layout, a label w
 symbol starts, and the bytes no symbol claims shown as bytes, never decoded. Rows are decoded
 in windows around the reader; until a stretch is decoded its rows are estimated from its
 bytes. The place the tab keeps is an address.
+
+A label is the symbol's name and a colon. A name the app made up keeps its angle
+brackets, `<entry point>:`.

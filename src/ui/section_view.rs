@@ -153,7 +153,7 @@ pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
             let name = label_of(rows, stretch, index)
                 .map(|symbol| symbol.display().to_owned())
                 .unwrap_or_default();
-            format!("{address:016X} <{name}>:")
+            format!("{address:016X} {name}:")
         }
         Some(Row::Instruction { stretch, index }) => reading
             .held
@@ -184,7 +184,7 @@ pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
             .map(|placed| Line::text(format!("section {}", placed.listing.section().name)))
             .unwrap_or_default(),
         Some(Row::Label { stretch, index }) => label_of(rows, stretch, index)
-            .map(|symbol| Line::text(format!("<{}>:", symbol.display())))
+            .map(|symbol| Line::text(format!("{}:", symbol.display())))
             .unwrap_or_default(),
         Some(Row::Instruction { stretch, index }) => reading
             .held
@@ -739,7 +739,7 @@ fn build_row(
             let symbol = label_of(rows, stretch, index);
             let name = symbol
                 .as_ref()
-                .map(|symbol| format!("<{}>:", symbol.display()))
+                .map(|symbol| format!("{}:", symbol.display()))
                 .unwrap_or_default();
             text(
                 Some(address),
