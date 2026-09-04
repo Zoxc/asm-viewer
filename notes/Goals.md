@@ -76,6 +76,33 @@ leaves this list when it is. That is a move made on request, like everything els
   key handlers are per pane on purpose (`agents/Panes.md`); this is the rule that decides
   which of them answers, not a global handler.
 
+- [ ] Let Alt hold off a click's navigation, so a link can be swept over. Every door in a
+  code row acts on a plain press now -- a symbol named in an operand, a bare address in the
+  unified view -- which leaves no way to put the pointer down on one and drag: the release
+  follows the link. Alt held should make a press mean nothing but the start of a selection,
+  wherever a press is a door. The root already keeps Ctrl and Shift for exactly this kind of
+  question (`ModifierKeys`, watched as `Ctrl` and `Shift` beside each other), and Alt would
+  be the third; a Caps Lock the desktop has made into a modifier is the reason they are
+  learnt from their first release rather than from an event's mask
+  (`notes/upstream/freya.md`).
+- [ ] Let a symbol link be selectable. A link is an inline child of the row's one paragraph
+  and one unit to the text engine, so a sweep *across* a row already copies it whole
+  (`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol`); what is missing is a sweep
+  that starts on one, since the link acts on the release and the gesture ends as a
+  navigation instead of a selection. The two ways out are the item above -- a modifier that
+  says "not a door this time" -- and a press that declines to be a door when the pointer
+  moved between the down and the up, which is what a browser does and needs no modifier at
+  all. Which of them, or both, is the decision; the second wants the sweep's own state to
+  say whether anything was picked out (`agents/Panes.md`, `src/ui/marks.rs`).
+- [ ] Following a call or jump should put the caret on what it goes to. A symbol named in
+  an operand opens that symbol's tab and lands nowhere in particular -- at the top, or
+  wherever the tab was left -- where the two doors beside it both land exactly: the bare
+  address a call with no symbol goes to, and "Show in unified view", which pass an address
+  and let the pane plant a caret on the row at or below it (`show_in_code`, `open_as_symbol`,
+  `Planting`). A relocation names a symbol and no offset into it (`Relocated::target`), so
+  the place to land is the target's first instruction; a call into the middle of a function
+  has no symbol and is the bare-address door already. Also update `notes/specs/Assembly
+  View.md`, whose Operands section says only that clicking a link opens that symbol.
 - [ ] Show the current symbol as a breadcrumb in the unified view. The bar over the pane names
   the object for a code tab, and nothing on screen says which function the rows under the
   pointer, or at the top of the pane, belong to once its label has scrolled off — a reader
