@@ -422,6 +422,7 @@ pub fn app() -> impl IntoElement {
 
     let analysis = use_provide_context(|| Analysis(State::create(Analyzed::default()))).0;
     let located = use_provide_context(|| Locations(State::create(Located::default()))).0;
+    let coded = use_provide_context(|| Coding(State::create(Coded::default()))).0;
     let reading = use_provide_context(|| Sections(State::create(Reading::default()))).0;
     let window = use_provide_context(|| Window(State::create(None))).0;
     use_reading_of(active, objects, reading, window);
@@ -429,7 +430,7 @@ pub fn app() -> impl IntoElement {
     // changes when a line in it is clicked, which changes no document.
     let asked = Asked { active, driven };
     use_analysis_with(
-        asked, objects, visits, analysis, located, reading, window, answer,
+        asked, objects, visits, analysis, located, coded, reading, window, answer,
     );
     // After the analysis: the file the Source pane draws is what the analysis says it is.
     use_clear_marks(active, asked, analysis, marked);

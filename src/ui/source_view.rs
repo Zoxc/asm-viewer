@@ -6,8 +6,19 @@
 //! shown. Only the symbol's **own** file is ever drawn, never the rest of
 //! `LineInfo::files`. The rows are the app's own and not freya's `CodeEditor`, which paints
 //! a background only for the cursor's row and keeps its scroll state private.
+//!
+//! Each row's gutter marks whether anything open has code from that line ([`Coded`]), so
+//! a reader can tell what was compiled from what produced nothing without picking a line
+//! out, and before they have picked one out at all.
 
 use super::*;
+
+/// Across the gutter's mark, before the grid rounds it to whole device pixels.
+const MARK_SIZE: f32 = 5.0;
+
+/// How much of the gutter the mark and the air around it take, which every row gives up
+/// whether it is marked or not.
+const MARK_COLUMN: f32 = 9.0;
 
 /// What the source rows are built from: the file's text and highlighting, which file it is
 /// -- a row picked out is a line of a file, and a line number is not a place on its own --
@@ -21,6 +32,9 @@ struct SourceData {
     file: Arc<str>,
     /// The lines of this file the assembly pane's run was compiled from: its pair here.
     pairs: Arc<HashSet<u32>>,
+    /// The lines of this file the listing beside it has instructions for at all: what the
+    /// gutter marks.
+    compiled: Arc<HashSet<u32>>,
     /// The run of rows picked out here, or `None` when there is none.
     rows: Option<RowSelection>,
     /// The characters picked out here, for each row to draw its part of.
@@ -45,6 +59,7 @@ impl PartialEq for SourceData {
             // By contents: the set is rebuilt whenever a run in either pane changes, and
             // most of those leave it as it was.
             && self.pairs == other.pairs
+            && self.compiled == other.compiled
             && self.rows == other.rows
             && self.chars == other.chars
             && self.drives == other.drives
@@ -62,6 +77,9 @@ struct SourceRow {
     /// Whether an instruction of the assembly pane's picked-out run was compiled from
     /// this line, and if so which of its edges end the run of such lines.
     paired: Option<Edges>,
+    /// Whether the listing beside this pane has an instruction from this line: what the
+    /// mark in the gutter says.
+    compiled: bool,
     /// The wash of its pane's selection, told to it by the list for the reason
     /// `InstructionRow`'s is.
     wash: Wash,
@@ -81,6 +99,7 @@ impl PartialEq for SourceRow {
             && Arc::ptr_eq(&self.file, &other.file)
             && self.index == other.index
             && self.paired == other.paired
+            && self.compiled == other.compiled
             && self.wash == other.wash
             && self.chars == other.chars
             && self.drives == other.drives
@@ -197,6 +216,24 @@ impl Component for SourceRow {
             .max_lines(1)
             .into_element();
 
+        // The mark, at the head of the gutter: a dot beside the line, centred in a column
+        // every row gives up whether it is marked or not, so the numbers beside it sit in
+        // the same place either way. Rounded to whole device pixels like the gutter's own
+        // strokes, a dot half a pixel across being a smear.
+        let dot = pixel_grid().span(0.0, MARK_SIZE).thick;
+        let mark = rect()
+            .width(Size::px(MARK_COLUMN))
+            .height(Size::px(code_row_height()))
+            .center()
+            .child(
+                rect()
+                    .width(Size::px(dot))
+                    .height(Size::px(dot))
+                    .corner_radius(dot / 2.0)
+                    .maybe(self.compiled, |el| el.background(palette().compiled_fg)),
+            )
+            .into_element();
+
         // The same gesture as the assembly pane's, from the same chrome. The run is a
         // run of this file.
         code_row(
@@ -210,7 +247,7 @@ impl Component for SourceRow {
                 listing: self.listing,
                 measured: true,
             },
-            vec![number],
+            vec![mark, number],
             Some(text),
             Some(menu),
         )
@@ -283,6 +320,28 @@ impl Component for SourceList {
             &analysis.read(),
             code_rows.read().as_deref(),
         ));
+        // The gutter's marks: which lines of this file produced code at all, whether
+        // anything is picked out and whether or not a listing is up. Asking is the
+        // effect below; this reads whatever has been answered.
+        let coded = use_consume::<Coding>().0;
+        let compiled = coded
+            .read()
+            .lines_in(&self.file)
+            .cloned()
+            .unwrap_or_default();
+        // Asking for them: the file this pane is drawing, written where the worker's
+        // effect will see it. On the *file* as its dependency and not on every render,
+        // and written only when it changed, so a pane redrawn for any of the dozen other
+        // reasons does not wake the worker.
+        use_side_effect_with_deps(&self.file, {
+            let mut coded = coded;
+            move |file: &Arc<str>| {
+                let wanted = coded.peek().wanted.clone();
+                if wanted.as_deref() != Some(&**file) {
+                    coded.write().wanted = Some(file.clone());
+                }
+            }
+        });
         let a11y = use_a11y();
 
         let controller = use_scroll_controller(ScrollConfig::default);
@@ -414,6 +473,7 @@ impl Component for SourceList {
                                 source: self.source.clone(),
                                 file: self.file.clone(),
                                 pairs,
+                                compiled,
                                 rows,
                                 chars,
                                 // A source-driven tab's subject is the file its own
@@ -430,6 +490,7 @@ impl Component for SourceList {
                                     file: data.file.clone(),
                                     index: i,
                                     paired: paired_at(i).then(|| Edges::of(i, paired_at)),
+                                    compiled: data.compiled.contains(&(i as u32 + 1)),
                                     wash: wash_of(data.chars, i),
                                     chars: RowChars::of(data.chars, i),
                                     drives: data.drives,
@@ -550,6 +611,66 @@ fn paired_lines(
         .filter(|at| at.file == *file)
         .map(|at| at.line)
         .collect()
+}
+
+/// The gutter's marks, shared through context: the Source pane writes the file it is
+/// showing and the analysis worker writes the lines back.
+#[derive(Clone, Copy)]
+pub(crate) struct Coding(pub(crate) State<Coded>);
+
+/// The lines of one source file the open objects have code for: what the gutter marks,
+/// and the answer to a [`Question::Marks`] the pane asks by writing the file it is
+/// showing into [`Coded::wanted`].
+///
+/// **Every line that produced code, not the drawn symbol's own.** A source-driven tab has
+/// no drawn symbol until a line is clicked, so a mark bounded by one would be a gutter
+/// that stayed bare until the reader guessed where to click -- which is the thing the
+/// mark exists to save them. So it says the file's own fact: this line produced code, in
+/// something. Which symbol is the pair's question and the Locations panel's.
+///
+/// There is no `pending` field, for [`Located`]'s reason: a file is being looked for
+/// exactly while it is wanted and the answer is not about it.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct Coded {
+    /// The file the Source pane is showing, written by it. One file, because one is
+    /// drawn; a pane that moves to another asks again.
+    pub(crate) wanted: Option<Arc<str>>,
+    /// The file the lines below are of, and the lines. An empty set is an answer.
+    pub(crate) found: Option<(Arc<str>, Arc<HashSet<u32>>)>,
+    /// The objects the answer was worked out over, by pointer, which is what identity is
+    /// here. Held as addresses and not as `Arc`s: a set of line numbers has nothing in it
+    /// to sweep for a binary that has since closed, so the way this stays true is to be
+    /// asked again when what is open changes -- and a state keeping the objects alive to
+    /// notice that would be the state stopping them from closing.
+    pub(crate) over: Vec<usize>,
+}
+
+/// The objects `open` are, by pointer, in their own order.
+pub(crate) fn object_ids(open: &[Arc<Object>]) -> Vec<usize> {
+    open.iter()
+        .map(|object| Arc::as_ptr(object).addr())
+        .collect()
+}
+
+impl Coded {
+    /// The file a question is owed for: one is wanted, and the answer is about another
+    /// file or was worked out over other objects than `open`.
+    pub(crate) fn pending(&self, open: &[Arc<Object>]) -> Option<&Arc<str>> {
+        let wanted = self.wanted.as_ref()?;
+        match &self.found {
+            Some((file, _)) if file == wanted && self.over == object_ids(open) => None,
+            _ => Some(wanted),
+        }
+    }
+
+    /// The lines of `file` that have code, and nothing where the answer is about another
+    /// file -- which is what a pane draws in the beat between moving and being answered.
+    fn lines_in(&self, file: &str) -> Option<&Arc<HashSet<u32>>> {
+        match &self.found {
+            Some((of, lines)) if &**of == file => Some(lines),
+            _ => None,
+        }
+    }
 }
 
 /// The row the Source pane opens a tab it has never shown at: the line the symbol itself

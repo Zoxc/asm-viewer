@@ -83,6 +83,24 @@ checksum comes from. No hash, or a match, says nothing, and DWARF as read carrie
 another file with that name. That is the path-mapping goal's, and the hash is what will pick among
 its candidates.
 
+**The source gutter marks the lines that produced code.** A dot at the head of each row's gutter, in
+`compiled_fg`, a faint purple of its own so the one thing in the gutter that is not a number does
+not read as one; the column it sits in is given up by every row, marked or not, so the numbers
+beside it do not shift.
+
+**The file's own fact, and not the drawn symbol's**, which is the thing to know about it. Bounding
+the set by the symbol on the other side was the first design and it failed the case the mark exists
+for: a source-driven tab has no drawn symbol until a line in it is clicked, so the gutter stayed
+bare until the reader guessed where to click, and after the click it marked that one function's
+lines and left the rest of the file's bare. So the question is asked of the file — every line any
+open object has code from (`Object::lines_from_source`, `Question::Marks`, `agents/Worker.md`) — and
+the mark says *this line produced code, in something*. Which symbol is the pair's question and the
+Locations panel's. The answer is filed under the file it is about (`Coded`), so a pane that has just
+moved draws no marks rather than the last file's, and it is dropped and asked again when the open
+objects change — which a load finishing also is, and which is what marks a gutter drawn before its
+binary had been read. An object's whole code is marked like anything else now: the answer is the
+file's and does not depend on which window the reader has scrolled the listing to.
+
 **The Assembly pane has a bar naming what it is drawing**, in both spellings: the demangled name
 over the mangled original, `src/ui/symbol_bar.rs`. It names **the drawn symbol and never the
 selected one**, worked out from the same `Analyzed::showing` the listing under it is built from: the

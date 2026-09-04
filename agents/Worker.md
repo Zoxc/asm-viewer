@@ -113,6 +113,21 @@ for any choice. **The row lit in the panel is the symbol drawn** (`Analysis`), n
 document. For a source-driven tab the active document is a file, and the lit row is the one thing on
 screen that says which instance its assembly side is on.
 
+**A fourth kind is the Source gutter's marks** (`Question::Marks`, answered into `Coded` in
+`ui/source_view.rs`). The question is a file and the answer is the lines of it any open object has
+code from — `Object::lines_from_source`, which reads the same `SourceIndex` a locate does and hands
+back bare line numbers rather than symbols. It is a whole file at a time and not a query per row,
+and the Source pane asks it by writing the file it is drawing into `Coded::wanted`, the way the
+section view asks for a window by writing it into `Window`: a view cannot reach the request channel,
+so a state it writes and an effect here reads is how a pane asks. Worked **last** of the four, being
+the answer whose absence costs the reader least while they wait. It is judged on landing by the
+file the pane is showing *now*, the listing's comparison rule once more. What keeps it true is
+different from the locate's, though: a set of line numbers has nothing in it to sweep for a binary
+that has closed, and a state holding the objects to notice would be the state stopping them from
+closing — so `Coded` records which objects the answer was worked out over, by pointer
+(`object_ids`), and the effect asks again whenever those differ from what is open. A load finishing
+is such a difference, which is what puts marks in a gutter drawn before its binary had been read.
+
 **`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at
 its head.** The head is the load-bearing part: nothing is recorded between two clicks in one
 function, so without it reading down the lines of a generic function would walk across its

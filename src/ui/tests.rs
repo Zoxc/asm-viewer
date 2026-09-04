@@ -1750,6 +1750,7 @@ fn analysis_harness() -> impl IntoElement {
     let work = use_consume::<Work>().0;
     let mut seen = use_consume::<Seen>().0;
     let located = use_consume::<Locations>().0;
+    let coded = use_consume::<Coding>().0;
     let reading = use_consume::<Sections>().0;
     let window = use_consume::<Window>().0;
 
@@ -1759,6 +1760,7 @@ fn analysis_harness() -> impl IntoElement {
         history,
         analysis,
         located,
+        coded,
         reading,
         window,
         move |question| work(question),
@@ -1803,9 +1805,12 @@ macro_rules! analysis_states {
             $runner
                 .provide_root_context(|| Visited(State::create(Visits::default())))
                 .0,
-            $runner
-                .provide_root_context(|| Locations(State::create(Located::default())))
-                .0,
+            {
+                $runner.provide_root_context(|| Coding(State::create(Coded::default())));
+                $runner
+                    .provide_root_context(|| Locations(State::create(Located::default())))
+                    .0
+            },
             $runner
                 .provide_root_context(|| Sections(State::create(Reading::default())))
                 .0,
@@ -2193,6 +2198,7 @@ fn the_queue_keeps_the_newest_question_of_each_kind() {
                 Question::Resolve { .. } => "resolve",
                 Question::Locate { .. } => "locate",
                 Question::Code(_) => "code",
+                Question::Marks { .. } => "marks",
             })
             .collect()
     };
@@ -2237,6 +2243,28 @@ fn the_queue_keeps_the_newest_question_of_each_kind() {
         panic!("the window kind went missing");
     };
     assert_eq!(kept.window, [1], "the older window won");
+
+    // The gutter's marks are a fourth kind, worked last and cancelling none of the rest:
+    // a file the reader has left is the one answer nothing is waiting on.
+    let marks = |file: &str| Question::Marks {
+        file: Arc::from(file),
+        objects: Vec::new(),
+    };
+    let drained = newest(
+        marks("a.c"),
+        vec![
+            locate(),
+            code(vec![2]),
+            Question::Study(symbols[0].clone()),
+            marks("b.c"),
+        ]
+        .into_iter(),
+    );
+    assert_eq!(kinds(&drained), ["study", "code", "locate", "marks"]);
+    let Question::Marks { file, .. } = &drained[3] else {
+        panic!("the marks kind went missing");
+    };
+    assert_eq!(&**file, "b.c", "the older marks question won");
 }
 
 /// A window lands in the reading it was asked for: the skeleton with the first answer,
@@ -2752,6 +2780,7 @@ macro_rules! location_states {
         let plant = $runner
             .provide_root_context(|| Plant(State::create(None)))
             .0;
+        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
         let located = $runner
             .provide_root_context(|| Locations(State::create(Located::default())))
             .0;
@@ -3590,6 +3619,7 @@ fn a_source_row_inside_a_function_offers_its_instances() {
                 runner.provide_root_context(|| CodeRows(State::create(None)));
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Subject(file.clone()));
+                runner.provide_root_context(|| Coding(State::create(Coded::default())));
                 let located = runner
                     .provide_root_context(|| Locations(State::create(Located::default())))
                     .0;
@@ -4051,6 +4081,7 @@ macro_rules! listing_states {
             .0;
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
+        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
         $runner.provide_root_context(|| CodeRows(State::create(None)));
         $runner.provide_root_context(|| {
             Analysis(State::create(Analyzed {
@@ -4391,6 +4422,7 @@ fn source_file_harness(
                 runner.provide_root_context(|| CodeRows(State::create(None)));
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Locations(State::create(Located::default())));
+                runner.provide_root_context(|| Coding(State::create(Coded::default())));
                 let showing = runner
                     .provide_root_context(|| Showing(State::create(file.clone())))
                     .0;
@@ -6101,6 +6133,18 @@ fn every_foreground_is_legible_on_its_own_surface() {
         assert!(
             rule < line,
             "{theme} block_rule: {rule:.2} vs branch_fg {line:.2}"
+        );
+
+        // The source gutter's mark is a drawing as well, and one read as a column rather
+        // than a dot at a time: a floor of its own, and quieter than the line number it
+        // stands beside, which is read one at a time and has to stay the louder of the
+        // two.
+        let mark = contrast(palette.compiled_fg, palette.pane_bg);
+        let number = contrast(palette.address_fg, palette.pane_bg);
+        assert!(mark >= 2.0, "{theme} compiled_fg: {mark:.2}");
+        assert!(
+            mark < number,
+            "{theme} compiled_fg: {mark:.2} vs address_fg {number:.2}"
         );
     }
 }
@@ -8351,6 +8395,200 @@ fn a_picked_out_instruction_lights_its_line() {
     );
 }
 
+/// The Source pane's gutter marks every line of the file that produced code, and nothing
+/// else: a reader scanning it can tell those from the lines that produced none without
+/// picking anything out. The set is the file's own, answered for the whole file, so it is
+/// **not** bounded by whatever symbol is drawn and an answer about another file marks
+/// nothing here.
+#[test]
+fn the_gutter_marks_the_lines_that_have_code() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("marks.c");
+    let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
+    std::fs::write(&path, text).expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+
+    // The companion the pane draws, and nothing about which of its lines have code: the
+    // marks come from the answer written below and not from this.
+    let mut studied = Studied::new(sum_to.clone());
+    studied.lines.file = Some(file.clone());
+    studied.lines.line = Some(5);
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let document = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let (mut test, (states, coded)) = TestingRunner::new(
+        source_pane_harness,
+        (500., 600.).into(),
+        |runner| {
+            runner.provide_root_context(|| Mounted(State::create(true)));
+            let (states, _marked, _landing) = listing_states!(runner, shown);
+            // After the macro, which provides one of its own: a root context is
+            // overwritten by whoever writes it last, so this is the one the pane reads.
+            let coded = runner
+                .provide_root_context(|| Coding(State::create(Coded::default())))
+                .0;
+            (states, coded)
+        },
+        1.,
+    );
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    settle(&mut test);
+    settle(&mut test);
+
+    let answer = |lines: [u32; 2], of: &Arc<str>| Coded {
+        wanted: Some(file.clone()),
+        found: Some((of.clone(), Arc::new(HashSet::from(lines)))),
+        over: Vec::new(),
+    };
+
+    let mut coded = coded;
+    coded.set(answer([5, 6], &file));
+    settle(&mut test);
+
+    let drawn: Vec<u32> = labels(&test)
+        .into_iter()
+        .filter_map(|text| {
+            text.strip_suffix('\u{a0}')
+                .and_then(|number| number.parse().ok())
+        })
+        .collect();
+    assert!(
+        drawn.contains(&9),
+        "line 9 is not on screen, so an unmarked one proves nothing: {drawn:?}"
+    );
+    assert_eq!(
+        marked_lines(&test),
+        vec![5, 6],
+        "the gutter marks lines nothing has code for, or misses lines something has"
+    );
+
+    // An answer about another file is not this file's: the pane draws no marks rather
+    // than another file's, which is what it shows in the beat after moving.
+    coded.set(answer([5, 6], &Arc::from("elsewhere.c")));
+    settle(&mut test);
+    assert!(
+        marked_lines(&test).is_empty(),
+        "another file's answer marked this one: {:?}",
+        marked_lines(&test)
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The bug the file-wide answer exists for: a **source-driven** tab has no drawn symbol
+/// until a line is clicked in it, so a mark bounded by one left the gutter bare until the
+/// reader guessed where to click. The marks are there on arrival, and the pane asks for
+/// the file it is showing without being clicked.
+///
+/// `panes_harness` and not `source_pane_harness`, which works its document out of the
+/// analysis and so cannot be given a tab that has none.
+#[test]
+fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("driven.c");
+    let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
+    std::fs::write(&path, text).expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    let (mut test, (states, coded)) = TestingRunner::new(
+        panes_harness,
+        (600., 400.).into(),
+        |runner| {
+            let (states, _marked, _landing) = listing_states!(runner, shown);
+            // No listing at all, which is what a source-driven tab has before a line in
+            // it has been clicked. Provided after the macro, which fills one in.
+            runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
+            let coded = runner
+                .provide_root_context(|| Coding(State::create(Coded::default())))
+                .0;
+            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
+            runner.provide_root_context(|| {
+                Splits(State::create(ResizableContext {
+                    direction: Direction::Horizontal,
+                    ..Default::default()
+                }))
+            });
+            (states, coded)
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // A file the reader opened, with nothing clicked in it.
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    settle(&mut test);
+
+    // The pane asked, which is what reaches the worker.
+    assert_eq!(
+        coded.read().wanted.as_deref(),
+        Some(&*file),
+        "the pane never asked which of its lines have code"
+    );
+
+    let mut coded = coded;
+    coded.set(Coded {
+        wanted: Some(file.clone()),
+        found: Some((file.clone(), Arc::new(HashSet::from([3, 4])))),
+        over: Vec::new(),
+    });
+    settle(&mut test);
+    assert_eq!(
+        marked_lines(&test),
+        vec![3, 4],
+        "a source-driven tab was left unmarked with nothing clicked in it"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Which line numbers are drawn beside a gutter mark: the number the mark shares a row
+/// with, which is the two of them being level. Compared by their middles rather than by
+/// one containing the other, the mark being a dot a fraction of the row's height.
+fn marked_lines(test: &TestingRunner) -> Vec<u32> {
+    let marks: Vec<Area> = test.find_many(|node, element| {
+        (element.style().background == Fill::Color(palette().compiled_fg))
+            .then_some(node.layout().area)
+    });
+    let mut lines: Vec<u32> = labels_with_areas(test)
+        .into_iter()
+        .filter(|(_, area)| {
+            let middle = area.origin.y + area.height() / 2.0;
+            marks.iter().any(|mark| {
+                let mark_middle = mark.origin.y + mark.height() / 2.0;
+                (mark_middle - middle).abs() < code_row_height() / 2.0
+            })
+        })
+        .filter_map(|(text, _)| {
+            text.strip_suffix('\u{a0}')
+                .and_then(|number| number.parse().ok())
+        })
+        .collect();
+    lines.sort_unstable();
+    lines
+}
+
 /// Every label on screen with the area it was laid out in.
 fn labels_with_areas(test: &TestingRunner) -> Vec<(String, Area)> {
     use freya::elements::label::LabelElement;
@@ -8509,6 +8747,7 @@ macro_rules! code_states {
             .0;
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
+        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
         $runner.provide_root_context(|| CodeRows(State::create(None)));
         $runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
         let reading = $runner
@@ -10068,6 +10307,7 @@ macro_rules! door_states {
             .0;
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
+        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
         $runner.provide_root_context(|| CodeRows(State::create(None)));
         let analysis = $runner
             .provide_root_context(|| Analysis(State::create(Analyzed::default())))

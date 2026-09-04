@@ -136,6 +136,33 @@ fn an_inclusive_range_asks_the_same_question_as_the_half_open_one() {
     assert!(object.symbols_from_lines(MAIN, 11..=10).is_empty());
 }
 
+/// The whole file at once: which lines produced code, and not what they produced. Every
+/// line a symbol query answers for and no others, each said once however many symbols hold
+/// it.
+#[test]
+fn a_file_names_every_line_it_has_code_for_and_says_each_once() {
+    let object = parse(&shared_line());
+
+    // 10 is in both symbols and is one entry; 11 is `first`'s and 42 is `other.c`'s.
+    assert_eq!(object.lines_from_source(MAIN), [10, 11]);
+    assert_eq!(object.lines_from_source(OTHER), [42]);
+
+    // The same answer the other direction gives, line by line, over the whole file.
+    for line in 0..20 {
+        assert_eq!(
+            object.lines_from_source(MAIN).contains(&line),
+            !object.symbols_at_line(MAIN, line).is_empty(),
+            "line {line}"
+        );
+    }
+
+    // A file this object does not name, and one with no DWARF at all.
+    assert!(object.lines_from_source("/src/absent.c").is_empty());
+    assert!(object.lines_from_source("main.c").is_empty());
+    let without = parse(&common::caller_and_target());
+    assert!(without.lines_from_source(MAIN).is_empty());
+}
+
 #[test]
 fn nothing_is_invented_for_a_line_a_file_or_an_object_that_says_nothing() {
     let object = parse(&shared_line());

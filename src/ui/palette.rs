@@ -81,6 +81,12 @@ pub(crate) struct Palette {
     /// The caret itself: a one-pixel stroke, the text colour faded so it marks a place
     /// without reading as a character of the line.
     pub(crate) caret_fg: Color,
+    /// The mark in the source gutter beside a line the drawn symbol has instructions for.
+    /// A drawing and not text, so it is held to a floor of its own and required to stay
+    /// quieter than the line number beside it: a column of dots read at a glance, where
+    /// the number is read one at a time. A purple of its own, faint, so that the one
+    /// thing in the gutter that is not a number does not read as one.
+    pub(crate) compiled_fg: Color,
 
     // The code colours. Which syntactic category takes which is [`Palette::syntax`] on
     // the source side and `kind_color` on the assembly side. Not every one of them is
@@ -154,6 +160,7 @@ impl Palette {
         text_select_bg: Color::from_argb(44, 40, 70, 130),
         cursor_row_bg: Color::from_argb(20, 40, 70, 130),
         caret_fg: Color::from_argb(150, 0, 0, 0),
+        compiled_fg: Color::from_rgb(176, 158, 206),
 
         address_fg: Color::from_rgb(118, 141, 169),
         keyword_fg: Color::from_rgb(116, 94, 147),
@@ -205,6 +212,7 @@ impl Palette {
         text_select_bg: Color::from_argb(100, 160, 175, 200),
         cursor_row_bg: Color::from_argb(45, 160, 175, 200),
         caret_fg: Color::from_argb(160, 232, 232, 232),
+        compiled_fg: Color::from_rgb(104, 92, 134),
 
         address_fg: Color::from_rgb(132, 156, 186),
         keyword_fg: Color::from_rgb(178, 150, 214),

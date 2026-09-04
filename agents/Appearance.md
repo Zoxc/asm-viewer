@@ -25,38 +25,40 @@ moved it). None of them answers to the pointer (`agents/Panes.md`). `pair_edge`,
 along a run of paired rows, is held a step past the pair's wash. The × is required to move the tab
 it sits on further than the tab's own hover moves the bar: it is the one wash here that has to be
 told apart from *another highlight* rather than from a plain surface, since the pointer on the ×
-lights the tab under it too. Two colours are drawings rather than text and are held inside the
+lights the tab under it too. Three colours are drawings rather than text and are held inside the
 contrast test to floors of their own instead of to the 3.0. The gutter's branch line must not vanish
 into the pane and must be lit louder than it is at rest. `block_rule`, the hairline starting a basic
 block, must read against the pane and stay *quieter* than that branch line, since it runs the whole
-width of the listing where the stroke beside it is a few pixels long. The code colours are named for
-what they mean, not for the pane they came from, and `Palette::syntax` maps `freya-code-editor`'s
-~33 capture fields onto them. Beware `resolve_capture_color`: it treats a capture whose colour
-equals `text` as unmapped and walks *up* the dotted name, so giving a child field the text colour
-while its parent holds another silently paints the child in the parent's colour. That depends on
-which fields *share* a value, so a second palette can break it by landing two colours on each other,
-and `captures_do_not_walk_up` asserts it for both. `attribute` and `type` once shared `keyword_fg`,
-and `function` and `function.method` shared `name_fg`, the plain text colour, so a Rust file was in
-two colours and a call site was the colour of everything around it. Each has an entry of its own.
-`attribute_fg` is a plain grey that recedes, `#[derive(..)]` being scaffolding around the code
-rather than code. `type_fg` is a dim red, so `struct Foo` reads as a keyword introducing a name and
-not as two halves of one word. `function_fg` is a blue with none of the address column's greyness.
-Each was written light-first and turned through the background for dark like every other pair.
-`function.macro` has one too: by the trap above, a child left on the text colour is painted in its
-parent's, so leaving it alone would have made it `function_fg` silently instead of saying so. **The
-assembly side keeps its five colours**, a decision and not an omission: none of the three has
-anything to name over there. `SpanKind` is a mnemonic, a prefix, a register, a number, an address
-and glue. A listing holds no attribute, no type, and no call site that is not already a relocation
-target, which is as often data as it is a function, is the one name in a row of registers, and has
-`name_fg`/`name_hover_fg` and an underline to be told apart by. The split was for a *file* in two
-colours; a listing never had that problem, and repainting the mnemonic to keep the two sides from
-sharing would cost them the one vocabulary they are read in. So the three are source-only, and the
-contrast test holds them on `pane_bg` alone beside the strings and the comments. `attribute_fg` is
-additionally required to land *quieter* than the keyword it left, the punctuation beside it and the
-plain text: a relationship rather than a value, since receding is the whole of what it is for. This
-is deliberately **not** freya's own theming: `ColorsSheet` names none of these roles, and the source
-pane's colours cannot be read from the element tree at all, being baked into a `SyntaxBlocks` when a
-file is *loaded*.
+width of the listing where the stroke beside it is a few pixels long. `compiled_fg`, the dot in the
+source gutter beside a line the drawn symbol has code for, must read against the pane and stay
+quieter than the line number it stands beside: it is a column read at a glance, where the number is
+read one at a time. The code colours are named for what they mean, not for the pane they came from,
+and `Palette::syntax` maps `freya-code-editor`'s ~33 capture fields onto them. Beware
+`resolve_capture_color`: it treats a capture whose colour equals `text` as unmapped and walks *up*
+the dotted name, so giving a child field the text colour while its parent holds another silently
+paints the child in the parent's colour. That depends on which fields *share* a value, so a second
+palette can break it by landing two colours on each other, and `captures_do_not_walk_up` asserts it
+for both. `attribute` and `type` once shared `keyword_fg`, and `function` and `function.method`
+shared `name_fg`, the plain text colour, so a Rust file was in two colours and a call site was the
+colour of everything around it. Each has an entry of its own. `attribute_fg` is a plain grey that
+recedes, `#[derive(..)]` being scaffolding around the code rather than code. `type_fg` is a dim red,
+so `struct Foo` reads as a keyword introducing a name and not as two halves of one word.
+`function_fg` is a blue with none of the address column's greyness. Each was written light-first and
+turned through the background for dark like every other pair. `function.macro` has one too: by the
+trap above, a child left on the text colour is painted in its parent's, so leaving it alone would
+have made it `function_fg` silently instead of saying so. **The assembly side keeps its five
+colours**, a decision and not an omission: none of the three has anything to name over there.
+`SpanKind` is a mnemonic, a prefix, a register, a number, an address and glue. A listing holds no
+attribute, no type, and no call site that is not already a relocation target, which is as often data
+as it is a function, is the one name in a row of registers, and has `name_fg`/`name_hover_fg` and an
+underline to be told apart by. The split was for a *file* in two colours; a listing never had that
+problem, and repainting the mnemonic to keep the two sides from sharing would cost them the one
+vocabulary they are read in. So the three are source-only, and the contrast test holds them on
+`pane_bg` alone beside the strings and the comments. `attribute_fg` is additionally required to land
+*quieter* than the keyword it left, the punctuation beside it and the plain text: a relationship
+rather than a value, since receding is the whole of what it is for. This is deliberately **not**
+freya's own theming: `ColorsSheet` names none of these roles, and the source pane's colours cannot
+be read from the element tree at all, being baked into a `SyntaxBlocks` when a file is *loaded*.
 
 **A disabled control is derived rather than a field.** `dimmed(color, surface)` is the colour the
 control has when it is live, faded into the ground it sits on at `DISABLED_ALPHA` through the same

@@ -1,12 +1,13 @@
 //! The analysis worker `use_analysis` owns, the questions it is asked, the `Studied` it
 //! hands over, and the `Analyzed` the panes draw out of while it works.
 //!
-//! Three kinds of job go to the one worker: a **listing** -- the symbol the panes draw,
+//! Four kinds of job go to the one worker: a **listing** -- the symbol the panes draw,
 //! named outright or resolved from a source line -- a **window** of an object's code for
-//! the section view, and a **locate**, every symbol a line or a function was compiled
-//! into, for the Locations panel. They supersede separately: the queue is drained to the
-//! newest of *each*, since a reader who asked for a line's locations and then clicked a
-//! symbol wants both answers.
+//! the section view, a **locate**, every symbol a line or a function was compiled into,
+//! for the Locations panel, and **marks**, the lines of one file that produced code at
+//! all, for the Source pane's gutter. They supersede separately: the queue is drained to
+//! the newest of *each*, since a reader who asked for a line's locations and then clicked
+//! a symbol wants both answers.
 
 use super::*;
 
@@ -88,14 +89,21 @@ pub(crate) enum Question {
     /// A window of an object's code for the section view: the first [`CHUNK`] of the
     /// stretches it names, decoded.
     Code(CodeAsk),
+    /// Every line of `file` the open objects have code from, for the Source pane's
+    /// gutter marks.
+    Marks {
+        file: Arc<str>,
+        objects: Vec<Arc<Object>>,
+    },
 }
 
-/// The three kinds of job, which supersede separately.
+/// The four kinds of job, which supersede separately.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Listing,
     Code,
     Locate,
+    Marks,
 }
 
 impl Question {
@@ -104,13 +112,15 @@ impl Question {
             Question::Study(_) | Question::Resolve { .. } => Kind::Listing,
             Question::Code(_) => Kind::Code,
             Question::Locate { .. } => Kind::Locate,
+            Question::Marks { .. } => Kind::Marks,
         }
     }
 }
 
 /// The newest question of each kind out of `first` and whatever is `queued` behind it,
 /// in the order they are worked: the listing first, since it is what is on screen, then
-/// the window, then the locate.
+/// the window, then the locate, and the gutter's marks last -- the one whose absence
+/// costs the reader least while they wait.
 ///
 /// What the reader clicked past is dropped here, without being started. Per kind and not
 /// overall, because a locate is not a newer version of the listing question -- drained to
@@ -121,14 +131,21 @@ pub(crate) fn newest(first: Question, queued: impl Iterator<Item = Question>) ->
     let mut listing = None;
     let mut code = None;
     let mut locate = None;
+    let mut marks = None;
     for question in std::iter::once(first).chain(queued) {
         match question.kind() {
             Kind::Listing => listing = Some(question),
             Kind::Code => code = Some(question),
             Kind::Locate => locate = Some(question),
+            Kind::Marks => marks = Some(question),
         }
     }
-    listing.into_iter().chain(code).chain(locate).collect()
+    listing
+        .into_iter()
+        .chain(code)
+        .chain(locate)
+        .chain(marks)
+        .collect()
 }
 
 /// What the worker sends back: the question, and what it came to.
@@ -138,6 +155,13 @@ pub(crate) enum Answer {
     Listing { ask: Ask, studied: Option<Studied> },
     /// The symbols `query` was compiled into, over the objects the question carried.
     Located { query: Query, symbols: Vec<Symbol> },
+    /// The lines of `file` the objects the question carried have code from, and which
+    /// objects those were.
+    Marked {
+        file: Arc<str>,
+        lines: Arc<HashSet<u32>>,
+        over: Vec<usize>,
+    },
     /// The skeleton -- the ask's own, or built for it -- and the stretches decoded, by
     /// flat index: the first [`CHUNK`] the ask named that the listing has.
     Code {
@@ -212,6 +236,16 @@ pub(crate) fn answer(question: Question) -> Answer {
         Question::Locate { query, objects } => Answer::Located {
             symbols: compiled::compiled_from(&objects, &query.at.file, query.lines()),
             query,
+        },
+        Question::Marks { file, objects } => Answer::Marked {
+            lines: Arc::new(
+                objects
+                    .iter()
+                    .flat_map(|object| object.lines_from_source(&file))
+                    .collect(),
+            ),
+            over: object_ids(&objects),
+            file,
         },
     }
 }
@@ -558,6 +592,7 @@ pub(crate) fn use_analysis_with(
     visits: State<Visits>,
     mut analysis: State<Analyzed>,
     mut located: State<Located>,
+    mut coded: State<Coded>,
     mut reading: State<Reading>,
     window: State<Option<CodeAsk>>,
     work: impl Fn(Question) -> Answer + Send + 'static,
@@ -611,6 +646,21 @@ pub(crate) fn use_analysis_with(
                         if next.take(&ask, code, decoded) {
                             reading.set(next);
                         }
+                        continue;
+                    }
+                    Answer::Marked { file, lines, over } => {
+                        // The same rule as the locate's, against the file the pane is
+                        // showing now: a reader who moved on while the index built is
+                        // not given the file they left. No per-object sweep, the answer
+                        // being lines and not symbols -- a binary closed since is the
+                        // effect that clears this and asks again.
+                        if coded.peek().wanted.as_ref() != Some(&file) {
+                            continue;
+                        }
+                        let mut next = coded.peek().clone();
+                        next.found = Some((file, lines));
+                        next.over = over;
+                        coded.set(next);
                         continue;
                     }
                     Answer::Located { query, symbols } => {
@@ -701,6 +751,7 @@ pub(crate) fn use_analysis_with(
     });
 
     let requests_for_locate = requests.clone();
+    let requests_for_marks = requests.clone();
     use_side_effect(move || {
         // Reading subscribes this to the question; the state it writes is `peek`ed, so it
         // cannot wake itself.
@@ -798,6 +849,26 @@ pub(crate) fn use_analysis_with(
         let _ = requests_for_locate.try_send(Question::Locate {
             query,
             objects: objects.peek().clone(),
+        });
+    });
+
+    // The gutter marks' question, asked for whichever file the Source pane last said it
+    // was showing. The objects are **read** and not peeked, unlike the locate's: an
+    // answer here is a set of bare line numbers with nothing in it to sweep for a closed
+    // binary, so the way it stays true is to drop it and ask again whenever the open
+    // objects change -- which a load finishing also is, and which is what puts marks in
+    // a gutter that was drawn before its binary had been read.
+    use_side_effect(move || {
+        let open = objects.read().clone();
+        // Read and not peeked: the pane writing the file it moved to is the other half
+        // of what wakes this. Bound before the send, the guard being a read.
+        let pending = coded.read().pending(&open).cloned();
+        let Some(file) = pending else {
+            return;
+        };
+        let _ = requests_for_marks.try_send(Question::Marks {
+            file,
+            objects: open,
         });
     });
 

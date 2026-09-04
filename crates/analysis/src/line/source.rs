@@ -251,4 +251,32 @@ impl Object {
         symbols.sort_by(|a, b| a.address.cmp(&b.address).then_with(|| a.name.cmp(&b.name)));
         symbols
     }
+
+    /// Every line of `file` this object has code compiled from, ascending and without
+    /// repeats.
+    ///
+    /// The whole file in one answer, where [`symbols_from_lines`](Self::symbols_from_lines)
+    /// is a range and names what it found: the Source pane marks its gutter from this and
+    /// wants the set once per file rather than a question per row. It says which lines
+    /// produced code and not what they produced, so an unmarked line is one no open object
+    /// compiled anything from.
+    ///
+    /// Empty for [`symbols_from_lines`]'s reasons, and worker-thread work for its reason
+    /// too: the first call against an object builds the index.
+    pub fn lines_from_source(&self, file: &str) -> Vec<u32> {
+        let Some(debug) = self.debug_info() else {
+            return Vec::new();
+        };
+        let index = debug.index.get_or_init(|| SourceIndex::build(self, debug));
+
+        // The entries are sorted by line, so the repeats a line with several symbols
+        // makes are adjacent and `dedup` is the whole of it.
+        let mut lines: Vec<u32> = index
+            .lookup(file, 0, u32::MAX)
+            .iter()
+            .map(|(line, _)| *line)
+            .collect();
+        lines.dedup();
+        lines
+    }
 }

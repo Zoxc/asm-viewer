@@ -181,7 +181,8 @@ command.
   shared width, wash and pointer handlers, and the one paragraph a row's text is.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
-- `src/ui/source_view.rs` — the source side of one, the bar over it, and which file it is showing.
+- `src/ui/source_view.rs` — the source side of one, the bar over it, which file it is showing,
+  and the lines of that file the gutter marks as having code.
 - `src/ui/dock.rs` — the dock, its two-kinded tab, the document panel's own tab bar, and which
   panes a tab has, with the control on either pane's bar that says.
 - `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers,
