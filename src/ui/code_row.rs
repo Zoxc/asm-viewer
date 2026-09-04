@@ -69,9 +69,9 @@ pub(crate) struct Text {
     /// file's own, which is what lets a press on one say where it was in the terms
     /// everything else speaks (`src/chars.rs`).
     ///
-    /// Each one is exactly one of `head`'s spans, so lighting a link changes a span's
-    /// style and never where the spans are cut -- a boundary that moved with the pointer
-    /// would re-shape the row and widen the listing for good.
+    /// `head` is cut at their edges before it is drawn ([`cut_at`]), so lighting a link
+    /// changes a span's style and never where the spans are cut -- a boundary that moved
+    /// with the pointer would re-shape the row and widen the listing for good.
     pub(crate) links: Vec<Range<usize>>,
     /// What a press on one of them does, given its columns. Built per row, as the menu
     /// is.
@@ -405,7 +405,13 @@ pub(crate) fn code_row(
                 laid.set_if_modified(true);
             })
             .vertical_align(VerticalAlign::Center)
-            .spans_iter(light(text.head, lit.and_then(|lit| links.get(lit))).into_iter())
+            .spans_iter(
+                light(
+                    cut_at(text.head, &links),
+                    lit.and_then(|lit| links.get(lit)),
+                )
+                .into_iter(),
+            )
             .maybe_child(inline)
             .spans_iter(text.tail.into_iter());
         (paragraph, selected, caret)
@@ -543,13 +549,98 @@ pub(crate) fn code_row(
         })
 }
 
+/// `head` cut so that every run in `links` is exactly one span of it, splitting a span
+/// that holds more than one and leaving the rest alone.
+///
+/// Where a row's links came from its own colour runs this changes nothing: a name is one
+/// capture and the columns were taken from it. They stop coming from there once a
+/// language server says which names are links (`src/links.rs`), and its spans are its own,
+/// so this is what keeps [`light`]'s one job -- change a span's style -- from silently
+/// doing nothing to a link that straddles a boundary.
+///
+/// **The cut is the same on every render**, never only under the pointer. A span split in
+/// two measures a shade wider than the same characters in one, skia shaping each
+/// separately, and the widest row a listing has drawn only ever grows (`src/ui/width.rs`):
+/// a cut that came and went with the pointer would widen the listing for good.
+///
+/// Columns are UTF-16 units, and a boundary inside a character is not one: a split there
+/// would cut a `char` in half, so the span is left whole.
+pub(crate) fn cut_at(head: Vec<Span<'static>>, links: &[Range<usize>]) -> Vec<Span<'static>> {
+    if links.is_empty() {
+        return head;
+    }
+    let mut cut = Vec::with_capacity(head.len());
+    let mut column = 0;
+    for span in head {
+        let units = span.text.encode_utf16().count();
+        let (from, to) = (column, column + units);
+        column = to;
+        // Where inside this span a link begins or ends, in the order they are drawn.
+        let mut edges: Vec<usize> = links
+            .iter()
+            .flat_map(|link| [link.start, link.end])
+            .filter(|edge| *edge > from && *edge < to)
+            .map(|edge| edge - from)
+            .collect();
+        if edges.is_empty() {
+            cut.push(span);
+            continue;
+        }
+        edges.sort_unstable();
+        edges.dedup();
+        let mut at = 0;
+        for edge in edges.into_iter().chain(std::iter::once(units)) {
+            let Some(piece) = utf16_slice(&span.text, at..edge) else {
+                continue;
+            };
+            at = edge;
+            cut.push(Span {
+                text: std::borrow::Cow::Owned(piece),
+                text_style_data: span.text_style_data.clone(),
+            });
+        }
+        // A cut that fell inside a character leaves nothing of the span, so it is kept
+        // whole rather than lost.
+        if at == 0 {
+            cut.push(span);
+        }
+    }
+    cut
+}
+
+/// `text` between two UTF-16 offsets, and `None` where either falls inside a character.
+fn utf16_slice(text: &str, units: Range<usize>) -> Option<String> {
+    let (mut from, mut to) = (None, None);
+    let mut seen = 0;
+    for (at, character) in text.char_indices() {
+        if seen == units.start {
+            from = Some(at);
+        }
+        if seen == units.end {
+            to = Some(at);
+        }
+        seen += character.len_utf16();
+    }
+    if seen == units.start {
+        from = Some(text.len());
+    }
+    if seen == units.end {
+        to = Some(text.len());
+    }
+    let (from, to) = (from?, to?);
+    (from < to).then(|| text[from..to].to_owned())
+}
+
 /// `head` with the run at `columns` drawn as a link under the pointer, and unchanged
 /// where nothing is.
 ///
-/// A link is exactly one of these spans -- a name is one colour run and the run is what
-/// the columns were taken from ([`links_in`]) -- so this changes a span's **style** and
-/// never where the spans are cut. A boundary that moved with the pointer would re-shape
-/// the row, and the widest row a listing has drawn only ever grows.
+/// Every span the link covers is drawn as one, and no span is ever cut here: [`cut_at`]
+/// has already made sure none straddles a link's edge, so each is wholly inside the run
+/// or wholly outside it. A boundary that moved with the pointer would re-shape the row,
+/// and the widest row a listing has drawn only ever grows.
+///
+/// More than one span where a link crosses a colour boundary, which a name the server
+/// placed may do and a name taken from a colour run never could.
 ///
 /// The colour is the underline's too: freya's spans carry a decoration and no colour for
 /// it, and skia draws one in the text's own. Which is what is wanted -- one colour says
@@ -564,7 +655,7 @@ fn light(head: Vec<Span<'static>>, columns: Option<&Range<usize>>) -> Vec<Span<'
             let units = span.text.encode_utf16().count();
             let at = column;
             column += units;
-            match at == columns.start && column == columns.end {
+            match at >= columns.start && column <= columns.end && at < column {
                 true => span
                     .color(palette().name_hover_fg)
                     .text_decoration(TextDecoration::Underline),

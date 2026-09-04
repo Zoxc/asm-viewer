@@ -3106,6 +3106,90 @@ fn settle(test: &mut TestingRunner) {
 /// method's or a macro's; what says it is being *called* is that the row does not begin a
 /// function the file's own parse found and the name does not follow the `fn` keyword --
 /// which is what covers a trait's method, declared with no body and so in no such list.
+/// The spans a row draws, as a test reads them: the text of each, in order.
+fn texts_of(spans: &[Span<'static>]) -> Vec<String> {
+    spans.iter().map(|span| span.text.to_string()).collect()
+}
+
+/// One span per piece of text, all in one style.
+fn spans_of(pieces: &[&str]) -> Vec<Span<'static>> {
+    pieces
+        .iter()
+        .map(|text| Span::new(text.to_string()))
+        .collect()
+}
+
+/// A link taken from a colour run is that whole run, so there is nothing to cut: the
+/// spans come back as they went in. This is every link the app drew before a language
+/// server said which names are links.
+#[test]
+fn a_link_that_is_a_whole_span_leaves_the_spans_alone() {
+    let head = spans_of(&["let n = ", "helper", "(1);"]);
+    let cut = cut_at(head, &[8..14]);
+
+    assert_eq!(texts_of(&cut), vec!["let n = ", "helper", "(1);"]);
+}
+
+/// A link the server placed need not be a colour run, and a span holding one is cut into
+/// the link and what was around it -- so the link is a span of its own to light, and the
+/// cut is the same whether or not the pointer is anywhere near it.
+#[test]
+fn a_link_inside_a_span_cuts_it_into_the_link_and_the_rest() {
+    let head = spans_of(&["w.count + 1"]);
+    let cut = cut_at(head, &[2..7]);
+
+    assert_eq!(texts_of(&cut), vec!["w.", "count", " + 1"]);
+}
+
+/// Two links in one span are both cut out, in the order they are drawn.
+#[test]
+fn two_links_in_one_span_are_both_cut_out() {
+    let head = spans_of(&["a.one().two()"]);
+    let cut = cut_at(head, &[2..5, 8..11]);
+
+    assert_eq!(texts_of(&cut), vec!["a.", "one", "().", "two", "()"]);
+}
+
+/// A link may cross a colour boundary, which is why `light` draws every span the run
+/// covers rather than one: the cut leaves the pieces whole and adds no boundary of its
+/// own inside the link.
+#[test]
+fn a_link_across_two_spans_cuts_only_at_its_own_edges() {
+    let head = spans_of(&["x = Vec", "::new()"]);
+    let cut = cut_at(head, &[4..12]);
+
+    assert_eq!(texts_of(&cut), vec!["x = ", "Vec", "::new", "()"]);
+}
+
+/// The columns are UTF-16 units, so a character outside the basic plane is two of them
+/// and the boundaries inside a span are not every number. A cut that would fall between
+/// the halves of one is not made -- a `char` is never sliced down the middle -- and the
+/// cuts around it still are.
+#[test]
+fn a_cut_inside_a_character_is_not_made() {
+    // `\u{1f600}` is two UTF-16 units, so this span is 1 + 2 + 1 = 4 units wide and the
+    // only boundaries in it are 1 and 3.
+    let head = spans_of(&["a\u{1f600}b"]);
+
+    // A run beginning between its halves is cut where it ends, and not where it begins.
+    assert_eq!(
+        texts_of(&cut_at(head.clone(), &[2..3])),
+        vec!["a\u{1f600}", "b"]
+    );
+    // A run on the character's own edges is cut on both.
+    assert_eq!(
+        texts_of(&cut_at(head.clone(), &[1..3])),
+        vec!["a", "\u{1f600}", "b"]
+    );
+    // Whatever is cut, the row still draws the text it was given.
+    for links in [vec![2..3], vec![1..3], vec![0..2], vec![2..4]] {
+        assert_eq!(
+            texts_of(&cut_at(head.clone(), &links)).concat(),
+            "a\u{1f600}b"
+        );
+    }
+}
+
 #[test]
 fn only_calls_in_the_source_are_links() {
     let directory =
