@@ -310,22 +310,65 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     });
 }
 
-/// Register `a11y` as one of the boxes the keyboard can be in inside the tab on screen,
-/// for as long as this scope is mounted. See [`Keyboard`].
+/// Every box the keyboard can be in inside the tab on screen, and whether something has
+/// asked for it to go there.
 ///
-/// A registration and not a flag written when the box takes the focus: focus is **lost**
-/// without an event -- something else asks for it -- so what is asked of the platform has
-/// to be asked at the moment the answer is drawn.
+/// The boxes are a **registration** and not a flag written when one takes the focus: focus
+/// is *lost* without an event -- something else asks for it -- so what is asked of the
+/// platform has to be asked at the moment the answer is drawn.
+#[derive(Default)]
+pub(crate) struct Keys {
+    boxes: Vec<AccessibilityId>,
+    /// Set by a press on a chip and spent by [`use_keyboard_asked`], which is where a box
+    /// exists to be focused: the tab pressed may only have mounted its panes in the render
+    /// the press caused.
+    wanted: bool,
+}
+
+impl Keys {
+    /// The box a tab takes the keyboard into: the first registered, which is the pane the
+    /// tab is driven from -- `DocumentBody` mounts the leading side first.
+    fn first(&self) -> Option<AccessibilityId> {
+        self.boxes.first().copied()
+    }
+}
+
+/// Register `a11y` as one of the boxes the keyboard can be in inside the tab on screen,
+/// for as long as this scope is mounted. See [`Keys`].
 pub(crate) fn use_tab_keyboard(a11y: AccessibilityId) {
-    let mut boxes = use_consume::<Keyboard>().0;
-    use_hook(move || boxes.write().push(a11y));
+    let mut keyboard = use_consume::<Keyboard>().0;
+    use_hook(move || keyboard.write().boxes.push(a11y));
     use_drop(move || {
-        boxes.write().retain(|open| *open != a11y);
+        keyboard.write().boxes.retain(|open| *open != a11y);
     });
 }
 
 /// Whether the keyboard is inside the tab on screen. Asking is what subscribes the caller
 /// to the focus moving, `AccessibilityId::is_focused` reading the platform's own state.
-pub(crate) fn keyboard_in_tab(boxes: State<Vec<AccessibilityId>>) -> bool {
-    boxes.read().iter().any(|a11y| a11y.is_focused())
+pub(crate) fn keyboard_in_tab(keyboard: State<Keys>) -> bool {
+    keyboard.read().boxes.iter().any(|a11y| a11y.is_focused())
+}
+
+/// Ask for the keyboard to go into the tab on screen: what pressing a chip does, so that
+/// reading follows the tab the reader just chose.
+pub(crate) fn ask_for_keyboard(mut keyboard: State<Keys>) {
+    keyboard.write().wanted = true;
+}
+
+/// Spend that ask, once the tab it was made for has mounted what it has. In an effect and
+/// not in the press, because the press is what mounts the panes: the box to focus does not
+/// exist until the render it caused has run.
+pub(crate) fn use_keyboard_asked(mut keyboard: State<Keys>) {
+    use_side_effect(move || {
+        let asked = keyboard.read().wanted;
+        if !asked {
+            return;
+        }
+        // Bound in a statement of its own, so no read guard is alive at the write below.
+        let box_to_focus = keyboard.peek().first();
+        keyboard.write().wanted = false;
+        if let Some(a11y) = box_to_focus {
+            a11y.request_focus();
+        }
+    });
 }

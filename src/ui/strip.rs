@@ -53,6 +53,19 @@ fn chip(
     } else {
         Color::TRANSPARENT
     };
+    // And a tab that is not the one on screen writes its name a step back, so the bar says
+    // which tab is being read in the text as well as in the ground under it. A step and not
+    // a fade: these are names the reader reads their way along.
+    let name = match active {
+        true => palette().text_fg,
+        false => faded(
+            palette().text_fg,
+            match hovering() {
+                true => palette().toggle_hover_bg,
+                false => palette().header_bg,
+            },
+        ),
+    };
 
     // Where a tab being dragged would land: the leading edge of the chip under the
     // pointer, in the same purple the tab on screen is marked with.
@@ -88,8 +101,10 @@ fn chip(
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .height(Size::px(list_row_height()))
-            .padding(Gaps::new_symmetric(0.0, 8.0))
+            .height(Size::px(tab_row_height()))
+            // Air to the left of the icon and next to none to the right: what sits at that
+            // end is the ×, which is a target of its own and carries its own.
+            .padding(Gaps::new(0.0, 2.0, 0.0, 8.0))
             .spacing(6.0)
             .background(background)
             .border(right_hairline())
@@ -106,8 +121,9 @@ fn chip(
             .child(
                 label()
                     .text(elide(&text))
+                    .color(name)
                     .max_lines(1)
-                    .maybe(temporal, |name| name.font_slant(FontSlant::Italic)),
+                    .maybe(temporal, |chip| chip.font_slant(FontSlant::Italic)),
             )
             .maybe_child(close),
     )
@@ -209,7 +225,7 @@ impl Component for TabListButton {
             "Open tabs".to_owned(),
             rect()
                 .width(Size::px(TAB_LIST_WIDTH))
-                .height(Size::px(list_row_height()))
+                .height(Size::px(tab_row_height()))
                 .main_align(Alignment::Center)
                 .cross_align(Alignment::Center)
                 .background(if showing() || hovering() {
@@ -233,13 +249,13 @@ impl Component for TabListButton {
 
         rect()
             .width(Size::px(TAB_LIST_WIDTH))
-            .height(Size::px(list_row_height()))
+            .height(Size::px(tab_row_height()))
             .child(button)
             .maybe_child(showing().then(|| {
                 rect()
                     // Under the bar and aligned to its right-hand edge, so the list opens
                     // leftward into the window instead of off the side of it.
-                    .position(Position::new_absolute().top(list_row_height()))
+                    .position(Position::new_absolute().top(tab_row_height()))
                     .child(
                         tabs_menu(open, &tabs, active, showing)
                             .on_close(move |_| showing.set(false))
@@ -284,11 +300,20 @@ fn tabs_menu(open: Open, tabs: &[Tab], active: Option<Tab>, mut close: State<boo
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
+                            .width(Size::fill())
+                            // Wide enough that the × is out at the row's own end rather
+                            // than against the name, and every row's sits under the one
+                            // above it: a menu is otherwise as wide as its longest name,
+                            // which for a strip of short ones is barely wider than the ×.
+                            .min_width(Size::px(TAB_LIST_ROW_WIDTH))
+                            // The name is given what the × and the icon leave.
+                            .content(Content::Flex)
                             .spacing(6.0)
                             .child(icon)
                             // `max_lines(1)`, or a name longer than the menu is wide wraps
                             // and the row grows to hold it.
-                            .child(label().text(title).max_lines(1)),
+                            .child(label().text(title).max_lines(1).width(Size::flex(1.0)))
+                            .child(TabClose { tab }),
                     ),
             )
         })
@@ -432,6 +457,10 @@ fn pages_menu(open: Open, is_open: &[bool], mut close: State<bool>) -> Menu {
 /// How wide [`TabListButton`] is.
 pub(crate) const TAB_LIST_WIDTH: f32 = 26.0;
 
+/// How wide a row of the list it opens is, at the least. A floor and not a width: a name
+/// longer than this still has the room it needs, the menu growing to its longest row.
+const TAB_LIST_ROW_WIDTH: f32 = 220.0;
+
 /// One tab's chip, with the hover state a chip cannot hold for itself.
 #[derive(Clone)]
 pub(crate) struct TabHeader {
@@ -461,12 +490,12 @@ impl Component for TabHeader {
         // Consumed here, in the render, for the menu: its handler may not run a hook.
         let states = use_project_states();
         let open = states.open;
-        let boxes = use_consume::<Keyboard>().0;
+        let keyboard = use_consume::<Keyboard>().0;
         let tab = self.tab;
         // Asked only of the chip that is showing, which is the only one that draws the
         // mark: asking is a subscription to the focus moving, and every chip taking one
         // would re-render the whole bar whenever it did.
-        let typing = self.active && keyboard_in_tab(boxes);
+        let typing = self.active && keyboard_in_tab(keyboard);
 
         let Tab::Document(id) = tab else {
             let Tab::Page(page) = tab else {
@@ -482,7 +511,10 @@ impl Component for TabHeader {
                 false,
                 hovering,
                 Some(TabClose { tab }.into_element()),
-                move |_| raise_tab(open, tab),
+                move |_| {
+                    raise_tab(open, tab);
+                    ask_for_keyboard(keyboard);
+                },
                 move |e: Event<PressEventData>| {
                     let others = open.strip.peek().tabs().iter().any(|other| *other != tab);
                     ContextMenu::open_from_event(&e, tab_menu(states, tab, others, None));
@@ -516,6 +548,9 @@ impl Component for TabHeader {
             Some(TabClose { tab }.into_element()),
             move |e: Event<PressEventData>| {
                 raise_tab(open, tab);
+                // The reader is going to read in it, so the keyboard goes there too: what
+                // it lands on is the pane the tab is driven from (`use_keyboard_asked`).
+                ask_for_keyboard(keyboard);
                 // A double press on a temporal tab's chip makes it a tab that stays.
                 // freya counts the presses (500 ms, 5 px), and nothing else on the chip
                 // asks it, so the count is this handler's own.
@@ -569,6 +604,23 @@ const PAST_LAST_TAB: f32 = 24.0;
 /// last chip is the one that appends. A drop anywhere else changes nothing: `DragZone`
 /// clears the payload on the release wherever it lands, and nothing but these zones acts on
 /// one.
+/// The bar over the tab on screen: the chips, what a drag along them does, and the
+/// scrolling that keeps the tab being read reachable.
+///
+/// **The strip scrolls itself, without a `ScrollView`.** It is one row, and what it needs is
+/// an offset: the wheel over it moves that offset sideways, opening a tab or going to one
+/// brings its chip into view ([`use_reveal`]), and a drag held near either end scrolls the
+/// strip under the pointer. freya's own scroll view answers none of the three well -- a
+/// controller handed to it from outside only reaches it when something else happens to
+/// re-render it, its wheel means the vertical axis, and it stops answering the wheel at all
+/// while a drag is under way (`notes/upstream/freya.md`) -- and a row of chips needs no
+/// scrollbar, no keyboard scrolling and no drag-to-scroll to make up for.
+///
+/// Where the chips are is **measured** and not worked out, a chip being as wide as its name.
+/// The measurements are peeked and never read, so a layout wakes nothing on its own; what
+/// wakes the reveal is `shape`, which counts up when a chip changes *width* -- a tab opened,
+/// closed or moved -- and not when one merely slides along, which is the strip being
+/// scrolled.
 #[derive(PartialEq)]
 pub(crate) struct TabBar;
 
@@ -579,11 +631,24 @@ impl Component for TabBar {
         // second is what makes the first mean something, a zone the pointer left last time
         // never having been told the drag ended (`DragZone` clears the payload itself).
         let landing = use_state(|| None);
-        // Whether anything is being dragged is what makes the landing mean something: a
-        // mark left where the pointer last was would otherwise outlive the drag, no zone
-        // being told that a drag was abandoned (`DragZone` clears the payload itself).
         let drag = use_drag::<Tab>();
         let over = drag.read().is_some().then(|| landing()).flatten();
+
+        let places = use_state(Vec::<(Tab, f32, f32)>::new);
+        let viewport = use_state(|| None::<(f32, f32)>);
+        let content = use_state(|| 0.0f32);
+        let mut shape = use_state(|| 0u64);
+        let laid_out = shape();
+        let bar = Bar {
+            places,
+            viewport,
+            content,
+            // Read here as well as written: the row of chips is drawn at this offset, so
+            // the bar has to be woken when it changes.
+            offset: use_state(|| 0.0f32),
+        };
+        use_reveal(strip, bar, laid_out);
+
         let (tabs, active) = {
             let strip = strip.read();
             (strip.tabs().to_vec(), strip.active())
@@ -591,91 +656,211 @@ impl Component for TabBar {
         // The table read once, here, for the copies that follow the cursor: a hook may not
         // run in the loop that builds the chips.
         let docs = use_consume::<OpenDocs>().0;
-        bar(strip, drag, landing, &docs.read(), &tabs, active, over)
+        let chips: Vec<Element> = tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let tab = *tab;
+                // Keyed by the tab, so a tab that moves takes its hover, its tooltip and
+                // its open menu with it instead of leaving them on whatever took its place.
+                let header = TabHeader {
+                    tab,
+                    active: Some(tab) == active,
+                    landing: over == Some(index),
+                    key: DiffKey::None,
+                }
+                .key(tab);
+                let mut places = places;
+                drop_zone(
+                    strip,
+                    drag,
+                    landing,
+                    index,
+                    rect()
+                        .on_sized(move |e: Event<SizedEventData>| {
+                            let at = (e.area.min_x(), e.area.max_x());
+                            let held = places
+                                .peek()
+                                .iter()
+                                .find(|(open, ..)| *open == tab)
+                                .map(|(_, min, max)| (*min, *max));
+                            if held == Some(at) {
+                                return;
+                            }
+                            // A chip that changed *width* is the bar taking a new shape --
+                            // a tab opened, closed or moved. One that only slid along is
+                            // the strip being scrolled, which owes the reveal nothing.
+                            let widened = held.is_none_or(|(min, max)| max - min != at.1 - at.0);
+                            let mut open = places.write();
+                            open.retain(|(open, ..)| *open != tab);
+                            open.push((tab, at.0, at.1));
+                            drop(open);
+                            if widened {
+                                shape.set(laid_out + 1);
+                            }
+                        })
+                        .child(
+                            DragZone::new(tab, header.into_element())
+                                .drag_element(dragged(tab, &docs.read())),
+                        )
+                        .into_element(),
+                )
+            })
+            .collect();
+
+        let mut viewport = viewport;
+        let mut content = content;
+        rect()
+            .width(Size::fill())
+            .height(Size::px(tab_row_height()))
+            .horizontal()
+            // The button takes its own width and the tabs are given the rest, which torin
+            // only works out for a `flex` child of a `Content::Flex` parent.
+            .content(Content::Flex)
+            .background(palette().header_bg)
+            .border(bottom_hairline())
+            // A drag held near either end scrolls the strip towards it. On the global move
+            // because the pointer is over a chip, not over the strip's own box, for the
+            // whole of the gesture.
+            .on_global_pointer_move(move |e: Event<PointerEventData>| {
+                if drag.peek().is_none() {
+                    return;
+                }
+                let Some((left, right)) = *viewport.peek() else {
+                    return;
+                };
+                let at = e.global_location().x as f32;
+                if at < left + DRAG_EDGE {
+                    scroll_by(bar, DRAG_STEP);
+                } else if at > right - DRAG_EDGE {
+                    scroll_by(bar, -DRAG_STEP);
+                }
+            })
+            .child(
+                rect()
+                    .width(Size::flex(1.0))
+                    .height(Size::fill())
+                    // What is past the strip's own edge is not drawn, this being what makes
+                    // the offset below a scroll rather than a row hanging out of the window.
+                    .overflow(Overflow::Clip)
+                    // Where the strip is cut off, which is what a chip is measured against.
+                    .on_sized(move |e: Event<SizedEventData>| {
+                        let at = Some((e.area.min_x(), e.area.max_x()));
+                        if *viewport.peek() != at {
+                            viewport.set(at);
+                            shape.set(laid_out + 1);
+                        }
+                    })
+                    // The wheel over the strip is the strip's own axis: a bar has no second
+                    // one to scroll, and a reader turning the wheel over it means "further
+                    // along".
+                    .on_wheel(move |e: Event<WheelEventData>| {
+                        let by = match e.delta_y.abs() > e.delta_x.abs() {
+                            true => e.delta_y,
+                            false => e.delta_x,
+                        };
+                        scroll_by(bar, by as f32);
+                    })
+                    .child(
+                        rect()
+                            .horizontal()
+                            .height(Size::fill())
+                            // How wide the chips are altogether, which is what says how far
+                            // the strip may be scrolled.
+                            .on_sized(move |e: Event<SizedEventData>| {
+                                let width = e.area.width();
+                                if *content.peek() != width {
+                                    content.set(width);
+                                }
+                            })
+                            // The scroll itself: the row slides under the box above.
+                            .offset_x(*bar.offset.read())
+                            .children(chips)
+                            .child(
+                                // The ground past the last chip, and the drop that appends.
+                                drop_zone(
+                                    strip,
+                                    drag,
+                                    landing,
+                                    tabs.len(),
+                                    rect()
+                                        .width(Size::px(PAST_LAST_TAB))
+                                        .height(Size::fill())
+                                        .into_element(),
+                                ),
+                            )
+                            .into_element(),
+                    ),
+            )
+            .child(TabListButton)
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn bar(
-    strip: State<Strip>,
-    drag: State<Option<Tab>>,
-    landing: State<Option<usize>>,
-    docs: &Docs,
-    tabs: &[Tab],
-    active: Option<Tab>,
-    over: Option<usize>,
-) -> Element {
-    let chips: Vec<Element> = tabs
-        .iter()
-        .enumerate()
-        .map(|(index, tab)| {
-            let tab = *tab;
-            // Keyed by the tab, so a tab that moves takes its hover, its tooltip and its
-            // open menu with it instead of leaving them on whatever took its place.
-            let header = TabHeader {
-                tab,
-                active: Some(tab) == active,
-                landing: over == Some(index),
-                key: DiffKey::None,
-            }
-            .key(tab);
-            drop_zone(
-                strip,
-                drag,
-                landing,
-                index,
-                DragZone::new(tab, header.into_element())
-                    .drag_element(dragged(tab, docs))
-                    .into_element(),
-            )
-        })
-        .collect();
-
-    rect()
-        .width(Size::fill())
-        .height(Size::px(list_row_height()))
-        .horizontal()
-        // The button takes its own width and the tabs are given the rest, which torin
-        // only works out for a `flex` child of a `Content::Flex` parent.
-        .content(Content::Flex)
-        .background(palette().header_bg)
-        .border(bottom_hairline())
-        .child(
-            ScrollView::new()
-                .width(Size::flex(1.0))
-                .direction(Direction::Horizontal)
-                .show_scrollbar(false)
-                // The chips sit in a box of their own, whose width is `Inner`. A child of
-                // the scroll view's own `fill` content box is measured against the space
-                // *left* in it, so chips past the edge would get no width and draw as a
-                // bare ×. Inside an `Inner` box each is measured from its own content and
-                // the overflow is what there is to scroll. (A tab's name is elided by
-                // character count for the same reason: a `maximum_width` anywhere in one
-                // makes it shrinkable again.)
-                .child(
-                    rect()
-                        .horizontal()
-                        .height(Size::fill())
-                        .children(chips)
-                        .child(
-                            // The ground past the last chip, and the drop that appends.
-                            drop_zone(
-                                strip,
-                                drag,
-                                landing,
-                                tabs.len(),
-                                rect()
-                                    .width(Size::px(PAST_LAST_TAB))
-                                    .height(Size::fill())
-                                    .into_element(),
-                            ),
-                        )
-                        .into_element(),
-                ),
-        )
-        .child(TabListButton)
-        .into_element()
+/// What the bar has been measured as, and how far along it is: passed about as one thing
+/// because nothing that scrolls can do without all of it.
+#[derive(Clone, Copy)]
+struct Bar {
+    /// Every chip's two sides, in the window's own x.
+    places: State<Vec<(Tab, f32, f32)>>,
+    /// The two sides of the strip: what a chip has to be inside to be in view.
+    viewport: State<Option<(f32, f32)>>,
+    /// How wide the chips are altogether.
+    content: State<f32>,
+    /// How far the row of chips is slid to the left, which is never positive.
+    offset: State<f32>,
 }
+
+/// Bring the tab on screen into view when it changes, and when the bar takes a new shape --
+/// a tab opened, closed or moved -- which is what makes an opening reveal the tab it
+/// opened.
+///
+/// **Not on every layout**, which would take the strip back off the reader the moment they
+/// scrolled it to look at something else.
+fn use_reveal(strip: State<Strip>, bar: Bar, laid_out: u64) {
+    let active = strip.read().active();
+    use_side_effect_with_deps(
+        &(active, laid_out),
+        move |(active, _): &(Option<Tab>, u64)| {
+            let Some(active) = *active else {
+                return;
+            };
+            let Some((_, min, max)) = bar
+                .places
+                .peek()
+                .iter()
+                .find(|(tab, ..)| *tab == active)
+                .copied()
+            else {
+                return;
+            };
+            let Some((left, right)) = *bar.viewport.peek() else {
+                return;
+            };
+            if min < left {
+                scroll_by(bar, left - min);
+            } else if max > right {
+                scroll_by(bar, right - max);
+            }
+        },
+    );
+}
+
+/// Move the strip `delta` pixels, positive being towards its start, and never past either
+/// end: the first chip does not leave the left edge, and the last does not leave the right.
+fn scroll_by(bar: Bar, delta: f32) {
+    let Some((left, right)) = *bar.viewport.peek() else {
+        return;
+    };
+    let floor = -(*bar.content.peek() - (right - left)).max(0.0);
+    let want = (*bar.offset.peek() + delta).clamp(floor, 0.0);
+    let mut offset = bar.offset;
+    offset.set_if_modified(want);
+}
+
+/// How near either end of the strip a drag has to be held for it to scroll, and how far it
+/// goes per move of the pointer.
+const DRAG_EDGE: f32 = 24.0;
+const DRAG_STEP: f32 = 12.0;
 
 /// One place a dragged tab may be dropped: `position` in the bar, which is where the chip
 /// there is now. The mark is drawn by the chip and the drop is answered here, so a chip
@@ -711,10 +896,10 @@ fn drop_zone(
 fn dragged(tab: Tab, docs: &Docs) -> Element {
     rect()
         .interactive(false)
-        .height(Size::px(list_row_height()))
+        .height(Size::px(tab_row_height()))
         .horizontal()
         .cross_align(Alignment::Center)
-        .padding(Gaps::new_symmetric(0.0, 8.0))
+        .padding(Gaps::new(0.0, 2.0, 0.0, 8.0))
         .spacing(6.0)
         .background(palette().selected_bg)
         .border(right_hairline())

@@ -115,13 +115,15 @@ impl Open {
     }
 }
 
-/// Every box inside the tab on screen the keyboard can be in: the two code panes, the
-/// listing of an object's code, the scratchpad's editor. Each registers itself while it is
-/// mounted ([`use_tab_keyboard`]), and only the tab on screen is mounted, so what this
-/// answers is "the keyboard is in the tab and not in the sidebar" -- which is what the mark
-/// over the tab on screen says.
+/// Every box inside the tab on screen the keyboard can be in -- the two code panes, the
+/// listing of an object's code, the scratchpad's editor -- and whether a press on a chip
+/// has asked for it to go there.
+///
+/// Each box registers itself while it is mounted ([`use_tab_keyboard`]), and only the tab
+/// on screen is mounted, so what this answers is "the keyboard is in the tab and not in the
+/// sidebar" -- which is what the mark over the tab on screen says.
 #[derive(Clone, Copy)]
-pub(crate) struct Keyboard(pub(crate) State<Vec<AccessibilityId>>);
+pub(crate) struct Keyboard(pub(crate) State<Keys>);
 
 /// The strip of open tabs.
 #[derive(Clone, Copy)]

@@ -383,6 +383,13 @@ pub(crate) fn blend(top: Color, bottom: Color) -> Color {
     )
 }
 
+/// How much of a tab's name survives the fade when its tab is not the one on screen.
+///
+/// Far more than [`DISABLED_ALPHA`]: a tab off screen is one the reader reads their way
+/// along, where a disabled control is one they are being told not to press. It is a step
+/// back and not a fade out.
+const IDLE_ALPHA: u8 = 150;
+
 /// How much of a disabled control's own colour survives the fade into the surface behind
 /// it. One number for both palettes, since what it produces is a composite of two values
 /// that are already carried over between them.
@@ -395,6 +402,16 @@ const DISABLED_ALPHA: u8 = 100;
 /// colour the control uses when it works, in both themes, with no second value per theme
 /// to keep in step with the first -- and `blend` is already the rule for "this colour over
 /// that ground", so the dimmed state is that rule applied to a foreground.
+/// `color` a step back into `surface`: what a tab that is not the one on screen writes its
+/// name in. Derived, as [`dimmed`] is, so it follows the text colour of both palettes with
+/// no second value to keep in step.
+pub(crate) fn faded(color: Color, surface: Color) -> Color {
+    blend(
+        Color::from_argb(IDLE_ALPHA, color.r(), color.g(), color.b()),
+        surface,
+    )
+}
+
 pub(crate) fn dimmed(color: Color, surface: Color) -> Color {
     blend(
         Color::from_argb(DISABLED_ALPHA, color.r(), color.g(), color.b()),

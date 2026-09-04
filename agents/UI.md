@@ -220,7 +220,11 @@ that before -- it wraps a header in a `DropZone` around a `rect().on_press(set_a
 `DragZone` -- so the press handler calls `raise_tab` and then asks whether it was a **double press**
 (`EventsCombos::pressed`, freya's own count of 500 ms and 5 px), which promotes the temporal tab.
 The × still has to `stop_propagation`, now so the press does not reach the chip under it and switch
-to the tab being closed. The temporal tab is told from one that stays by its name being **italic**
+to the tab being closed -- and the same `TabClose` ends every row of the tab list, where the press it
+must not reach is the row's own. A press on a chip also **takes the keyboard into the tab**
+(`ask_for_keyboard`), so what the reader chose is what the arrow keys and Ctrl+C are about; the ask
+is spent by an effect at the root rather than by the press, because the box to focus is a pane the
+press has only just mounted. The temporal tab is told from one that stays by its name being **italic**
 (`font_slant`) and by nothing else, the chip reading the flag out of the table beside the document.
 Every tab has a ×, pages included, because there is a way back to one now: the **menu at the top
 left of the window** (`PagesButton`), which is the whole of it. It lists all three and marks the
@@ -315,8 +319,26 @@ at -- a file's folder, and a folder itself. **When nothing answers the reader ge
 pressed something, and an item that does nothing at all leaves them wondering whether the app
 heard.
 
-The bar scrolls horizontally, because documents are opened by the dozen; a sidebar group's bar is a
-plain row, seven panels always fitting. Two things bite there. freya appends one child more than there are tabs, a
+**The bar scrolls itself, without a `ScrollView`**, because documents are opened by the dozen and a
+row of chips needs no scrollbar, no keyboard scrolling and no drag-to-scroll to make up for what it
+would cost. What it needs is an offset: the chips sit in a row inside a clipped box, `offset_x` is
+where that row has been slid to, and three things move it. The **wheel** over the strip, whichever
+axis it comes on -- a bar has no second one, and freya's own view reads a plain wheel as vertical.
+**The tab on screen**, brought into view when it changes and when the bar takes a new shape
+(`use_reveal`). And a **drag held near either end**, which is the only way to reach the far end while
+carrying a tab.
+
+Three things about that are worth keeping. Where the chips are is **measured** (`on_sized` per chip,
+per strip, per row) and not worked out, a chip being as wide as its name. Those measurements are
+**peeked and never read**, so a layout wakes nothing by itself; what wakes the reveal is a count that
+goes up when a chip changes *width* -- a tab opened, closed or moved -- and not when one merely
+slides along, which is the strip being scrolled, so a reader who scrolled away to look at another tab
+is not dragged back. And freya's `ScrollController` was tried first and given up: handed to a view
+from outside it only arrives when something else happens to re-render that view, and reading its
+position from an effect is a loop, since a write notifies every reader and the callback it reads
+through counts as one (`notes/upstream/freya.md`).
+
+A sidebar group's bar is a plain row, seven panels always fitting. Two things bite there. freya appends one child more than there are tabs, a
 `rect().expanded()` drop zone for "past the last tab", and `expanded()` is meaningless inside a
 horizontal scroll view, so it is given a width of its own. And a tab's name is elided **by character
 count in Rust**, where every other truncation is a width: a `maximum_width` anywhere inside one

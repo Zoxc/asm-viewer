@@ -14,7 +14,10 @@ each was judged by what it *comes out as*. Two tests hold that. The first is a c
 every foreground on the surface it is really drawn on: 3.0, not WCAG's 4.5, because the light
 palette's address column and its comments are meant to recede and sit between 3 and 3.5. It includes
 the × on a tab, whose surface is its own wash composited over whichever of two grounds the tab
-is on. The second is a visible-step floor for every wash over the row under it. A code row's four
+is on, and the name of a tab that is not the one on screen: `faded`, which is `dimmed`'s rule at a
+much higher alpha (185 against 100), because a tab off screen is a name the reader reads their way
+along where a disabled control is one they are told not to press. It is held to WCAG's own 4.5 and
+required to be quieter than the name of the tab that is on screen. The second is a visible-step floor for every wash over the row under it. A code row's four
 washes are the pair's green (`pair_bg`, the other pane's selection mapped here); the selection's
 blue-grey (`text_select_bg`: the characters a sweep selected, drawn by the row under its text, held
 to the floor over the pane and over a paired row's green alike); that colour faded for the caret's

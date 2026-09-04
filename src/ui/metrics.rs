@@ -22,6 +22,14 @@ pub(crate) fn list_row_height() -> f32 {
     row_height_for(fonts().ui.size())
 }
 
+/// Height of a chip in the tab bar: a list row and a little more.
+///
+/// Taller than the lists it shares a font with, because the bar is the one strip the
+/// reader aims at all day -- and because a chip carries a × the pointer has to find.
+pub(crate) fn tab_row_height() -> f32 {
+    list_row_height() + 10.0
+}
+
 /// Height of a row drawn in the **fixed-width** font -- the instruction and source rows,
 /// the editor's own lines, a run's output -- and the `item_size` of the views over those.
 /// Two heights and not one because no row mixes the two fonts. This is also the height

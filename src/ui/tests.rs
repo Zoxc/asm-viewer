@@ -382,7 +382,7 @@ macro_rules! project_states {
         $runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
         // Likewise: every pane registers its focusable box here, and every chip asks it
         // whether the keyboard is in the tab.
-        $runner.provide_root_context(|| Keyboard(State::create(Vec::new())));
+        $runner.provide_root_context(|| Keyboard(State::create(Keys::default())));
         // Likewise: both panes' bars read it, and `DocumentBody` asks it which panes
         // there are.
         $runner.provide_root_context(|| Follows(State::create(HashMap::new())));
@@ -695,7 +695,7 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
 
     let popup: Vec<_> = test.find_many(|node, _| {
         let area = node.layout().area;
-        (area.origin.y == list_row_height()).then_some(area)
+        (area.origin.y == tab_row_height()).then_some(area)
     });
     let left = popup
         .iter()
@@ -762,7 +762,7 @@ fn the_tab_menu_hangs_from_the_buttons_right_edge() {
     // the container as it was actually placed, corrections included.
     let popup: Vec<_> = test.find_many(|node, _| {
         let area = node.layout().area;
-        (area.origin.y == list_row_height()).then_some(area)
+        (area.origin.y == tab_row_height()).then_some(area)
     });
     assert!(!popup.is_empty(), "the press did not open the menu");
 
@@ -987,10 +987,157 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
     );
 }
 
+/// Pressing a chip puts the keyboard in the tab as well as showing it, so what the reader
+/// chose is what the arrow keys and Ctrl+C are about. The mark over the chip is how it
+/// says so.
+#[test]
+fn pressing_a_chip_takes_the_keyboard_into_the_tab() {
+    let (mut test, states) =
+        TestingRunner::new(marker_harness, (400., 200.).into(), project_states!(), 1.);
+    for name in ["/src/one.rs", "/src/two.rs"] {
+        let document = Document::Source(Arc::from(name));
+        open_document(states.open, states.visits, document, Reach::NewTab);
+    }
+    test.sync_and_update();
+
+    let marks = |test: &TestingRunner| -> Vec<Color> {
+        test.find_many(|_node, element| {
+            element
+                .style()
+                .borders
+                .iter()
+                .find(|border| border.width.top == TAB_MARKER)
+                .map(|border| border.fill)
+        })
+    };
+    assert_eq!(
+        marks(&test),
+        [dimmed(palette().icon_fg, palette().pane_bg)],
+        "the keyboard is elsewhere before anything is pressed"
+    );
+
+    let chip = centre_of(&test, "one.rs");
+    press_at(&mut test, chip);
+    settle(&mut test);
+    assert!(states.open.active() == Some(Document::Source(Arc::from("/src/one.rs"))));
+    assert_eq!(
+        marks(&test),
+        [palette().compiled_fg],
+        "a press on a chip left the keyboard where it was"
+    );
+}
+
+/// The list at the right of the bar closes a tab as well as going to one: a reader working
+/// through a dozen of them is in the one place that names them all.
+#[test]
+fn the_tab_list_closes_a_tab_from_its_own_row() {
+    let (mut test, states) =
+        TestingRunner::new(menu_harness, (600., 300.).into(), project_states!(), 1.);
+    let documents: Vec<Document> = ["/src/one.rs", "/src/two.rs"]
+        .into_iter()
+        .map(|name| Document::Source(Arc::from(name)))
+        .collect();
+    for document in &documents {
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    }
+    settle(&mut test);
+
+    let button = test
+        .find(|node, _| {
+            let area = node.layout().area;
+            (area.width() == TAB_LIST_WIDTH).then_some(area)
+        })
+        .expect("the button is in the bar");
+    let at = ((button.origin.x + 10.0) as f64, 10.0);
+    press_at(&mut test, at);
+    settle(&mut test);
+
+    // The × of the row naming the first tab: the closes are the only targets of their own
+    // size, and this is the one beside that row's name.
+    let name = label_area(&test, "one.rs").expect("the row for the first tab");
+    let close = test
+        .find_many(|node, _| {
+            let area = node.layout().area;
+            let centre = area.origin.y + area.height() / 2.0;
+            (area.width() == close_target()
+                && area.height() == close_target()
+                && centre >= name.origin.y
+                && centre <= name.max_y())
+            .then_some(area)
+        })
+        .into_iter()
+        .next()
+        .expect("the × on that row");
+    press_at(
+        &mut test,
+        (
+            (close.origin.x + close.width() / 2.0) as f64,
+            (close.origin.y + close.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+
+    assert!(
+        states.open.documents() == documents[1..],
+        "the × in the list closed the wrong tab, or none"
+    );
+}
+
 /// The bar itself, which is what a drag along it is about. Mounted without the body under
 /// it: what a tab draws has no say in where its chip sits.
 fn bar_harness() -> impl IntoElement {
     rect().expanded().child(TabBar)
+}
+
+/// The bar scrolls, and the tab on screen is brought into view: a strip of a dozen tabs is
+/// wider than the window, and going to one whose chip is off the end has to show it.
+#[test]
+fn the_bar_scrolls_and_the_tab_on_screen_is_brought_into_view() {
+    let (mut test, states) =
+        TestingRunner::new(bar_harness, (240., 100.).into(), project_states!(), 1.);
+    let documents: Vec<Document> = (0..8)
+        .map(|nth| Document::Source(Arc::from(format!("/src/file{nth}.rs").as_str())))
+        .collect();
+    for document in &documents {
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    }
+    settle(&mut test);
+
+    // The last tab opened is the one on screen, and it was brought into view: the bar is
+    // wider than the window, so the chips before it are off the left.
+    let shown = label_area(&test, "file7.rs").expect("the chip of the tab on screen");
+    assert!(
+        shown.origin.x >= 0.0 && shown.max_x() <= 240.0,
+        "the tab that opened was not brought into view: {shown:?}"
+    );
+    let first = label_area(&test, "file0.rs")
+        .expect("the first chip")
+        .origin
+        .x;
+    assert!(first < 0.0, "the strip did not scroll: {first}");
+
+    // The wheel over the strip scrolls it sideways: a bar has no second axis, and the
+    // reader turning the wheel over it means "further along".
+    test.scroll((100.0, 10.0), (0.0, 200.0));
+    settle(&mut test);
+    let wheeled = label_area(&test, "file0.rs")
+        .expect("the first chip")
+        .origin
+        .x;
+    assert!(
+        wheeled > first,
+        "the wheel did not scroll the strip: {first} -> {wheeled}"
+    );
+
+    // And going to a tab whose chip is off the end brings that one into view.
+    let first_tab = states.open.ids().first().copied().expect("the first tab");
+    raise_tab(states.open, Tab::Document(first_tab));
+    settle(&mut test);
+    let shown = label_area(&test, "file0.rs").expect("the chip of the tab on screen");
+    assert!(
+        shown.origin.x >= 0.0 && shown.max_x() <= 240.0,
+        "the tab gone to was not brought into view: {shown:?}"
+    );
 }
 
 /// A tab is dragged along the bar to move it, and the chip a drop would land on says so
@@ -1060,6 +1207,9 @@ fn a_tab_is_dragged_along_the_bar_to_move_it() {
 fn marker_harness() -> impl IntoElement {
     let a11y = use_a11y();
     use_tab_keyboard(a11y);
+    // What `app()` calls at the root: the press on a chip asks for the keyboard, and this
+    // is what spends the ask once the tab has mounted what it has.
+    use_keyboard_asked(use_consume::<Keyboard>().0);
 
     rect()
         .expanded()
@@ -7755,6 +7905,26 @@ fn contrast(a: Color, b: Color) -> f32 {
 /// Every foreground is legible on the surface it is actually drawn on, in both palettes.
 /// The floor is 3.0 and not WCAG AA's 4.5: two of the light palette's own colours sit
 /// between 3 and 3.5, both of which are *meant* to recede.
+/// A tab that is not the one on screen writes its name a step back, and a step is all it
+/// is: still comfortably legible on the bar -- these are names read at a glance, not a
+/// control the reader is being told not to press -- and quieter than the name of the tab
+/// that is. A relationship and not a value, as the attribute colour below is.
+#[test]
+fn a_tab_off_screen_is_quieter_and_still_legible() {
+    for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
+        let idle = contrast(faded(palette.text_fg, palette.header_bg), palette.header_bg);
+        let shown = contrast(palette.text_fg, palette.header_bg);
+        assert!(
+            idle >= 4.5,
+            "{theme} a tab off screen on the bar: {idle:.2}"
+        );
+        assert!(
+            idle < shown,
+            "{theme} a tab off screen is no quieter than the one on screen: {idle:.2} of {shown:.2}"
+        );
+    }
+}
+
 #[test]
 fn every_foreground_is_legible_on_its_own_surface() {
     for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {

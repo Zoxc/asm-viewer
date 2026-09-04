@@ -191,13 +191,20 @@ overlay layer, the press outside and the Escape key that `Popup` would have give
 (`ui/finder.rs`); `RescuedPopup`, which is content to be centred, still uses `Popup`. An
 alignment on the background would do it.
 
-**A wheel that still reaches a scroll view while a drag is under way.** A `ScrollView` scrolls
-to the wheel as usual until a `DragZone` has a payload, and then stops answering it until the
-drop; measured headlessly on the tab bar, where the same wheel moves the chips by 400px with no
-drag and by nothing at all with one. So the far end of a bar wider than the window cannot be
-dragged to: the reader scrolls the two tabs into view first and drags between them. **Cost:** the
-limit stands, and an edge that scrolls while a drag hovers it is the thing to write if it starts
-to bite.
+**A `ScrollController` a view is handed from outside only reaches it by luck, and reading one
+from an effect is a loop.** `ScrollController::new` keeps the position in states of its own and
+hands out a `Callback` to read it (`use_scroll_controller.rs:150-170`); a read through that
+callback subscribes nobody the view can be woken by, so `scroll_to_x` from another component
+moves nothing until that view re-renders for some other reason -- and `scroll_to` (the only call
+that pokes the notifier the view *does* read) can say no more than "the start" or "the end".
+Meanwhile a write notifies every reader, and the callback's own `scroll.read()` counts as one, so
+an effect that both reads the position and scrolls is woken by its own scroll for ever; the app hit
+it as a hang, not as a wrong number. A third: the same view stops answering the wheel entirely
+while a `DragZone` has a payload, measured headlessly as the same wheel moving the chips 400px
+with no drag and not at all with one. **Cost:** the tab bar scrolls itself -- a clipped box, a row
+at an `offset_x`, and the wheel, the reveal and the drag's edge all writing that one number
+(`src/ui/strip.rs`). A code pane still uses a controller, where the pane re-renders on the same
+change that scrolls it.
 
 **A pointer release nothing can cancel.** There is no `on_global_pointer_up`; a release is
 `on_global_pointer_press`, which any handler's `prevent_default` on the way cancels, and
