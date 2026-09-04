@@ -258,15 +258,25 @@ pub(crate) struct RowArrows {
 }
 
 /// The clickable name of a relocation target, in place of the meaningless numeric operand.
+///
+/// Where the listing is the object's own code, the target's rows are rows of this very
+/// listing, so a plain press moves to them and the reader goes on reading where they
+/// were; Ctrl opens the symbol alone, in a tab of its own as Ctrl does everywhere. In a
+/// symbol's own listing there is nowhere to move to and a plain press follows the link
+/// in place, the way a browser follows one.
 #[derive(Clone)]
 struct RelocationLabel {
     object: Arc<Object>,
     target: Arc<SymbolData>,
+    /// Whether the listing this row is in is the object's code and not one symbol's.
+    code_tab: bool,
 }
 
 impl PartialEq for RelocationLabel {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.object, &other.object) && Arc::ptr_eq(&self.target, &other.target)
+        Arc::ptr_eq(&self.object, &other.object)
+            && Arc::ptr_eq(&self.target, &other.target)
+            && self.code_tab == other.code_tab
     }
 }
 
@@ -276,11 +286,25 @@ impl Component for RelocationLabel {
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let ctrl = use_consume::<Ctrl>().0;
+        let marked = use_consume::<Marked>().0;
+        let landing = use_consume::<Land>().0;
+        let plant = use_consume::<Plant>().0;
+        let code_at = use_consume::<CodeAt>().0;
         let symbol = Symbol {
             object: self.object.clone(),
             data: self.target.clone(),
         };
         let text = self.target.display().to_owned();
+        let code_tab = self.code_tab;
+        let object = self.object.clone();
+        // Where the target is drawn in the object's own listing: its address plus where
+        // the layout put its section, which is the one address space that listing draws.
+        let placed = self.target.address.wrapping_add(
+            self.target
+                .section
+                .as_ref()
+                .map_or(0, |section| section.bias),
+        );
 
         rect()
             .maybe(hovering(), |rect| {
@@ -303,6 +327,24 @@ impl Component for RelocationLabel {
                 // Or the press bubbles into the row, which would pin the line the
                 // instruction being left came from.
                 e.stop_propagation();
+
+                // In the unified view the target is further down this same listing:
+                // moved to, which is a scroll and a caret and neither a tab nor a visit,
+                // since `land` plants an address in the tab that is already showing it.
+                if code_tab && !*ctrl.peek() {
+                    show_in_code(
+                        open,
+                        visits,
+                        marked,
+                        landing,
+                        plant,
+                        code_at,
+                        object.clone(),
+                        placed,
+                        None,
+                    );
+                    return;
+                }
 
                 // A link inside the tab: followed in place, the way a browser follows
                 // one, so the function left is one Back away -- or, with Ctrl, in a tab
@@ -331,7 +373,9 @@ impl Component for RelocationLabel {
 /// door into the object's code, in the unified view at that address, that opens with
 /// **Ctrl** as a label's does in that view (`TextRow`) and is the plain number without it,
 /// a press on which picks the row out like a press on any of the row's text. Lit as a
-/// link only while Ctrl is held, which is when a press is one.
+/// link only while Ctrl is held, which is when a press is one -- except in the unified
+/// view, where the address is a row of this listing and a plain press moves to it, as
+/// one on a named target does.
 ///
 /// A tab of its own, as `show_in_code` opens one from the instruction's menu, landing on
 /// the row at or below the address (`section::Rows::row_for`): a call into the middle of
@@ -345,6 +389,8 @@ struct TargetLabel {
     object: Arc<Object>,
     /// Where the instruction goes, placed: in the object's one address space.
     address: u64,
+    /// Whether the listing this row is in is the object's code and not one symbol's.
+    code_tab: bool,
 }
 
 impl PartialEq for TargetLabel {
@@ -352,6 +398,7 @@ impl PartialEq for TargetLabel {
         self.text == other.text
             && Arc::ptr_eq(&self.object, &other.object)
             && self.address == other.address
+            && self.code_tab == other.code_tab
     }
 }
 
@@ -368,9 +415,11 @@ impl Component for TargetLabel {
         let object = self.object.clone();
         let address = self.address;
         let text = self.text.clone();
-        // A link while Ctrl is held: the cue is the name's colour and the box a relocation
-        // link wears, since that is the door it is.
-        let link = hovering() && ctrl();
+        let code_tab = self.code_tab;
+        // A link while Ctrl is held, and always in the listing the address is a row of:
+        // the cue is the name's colour and the box a relocation link wears, since that
+        // is the door it is.
+        let link = hovering() && (ctrl() || code_tab);
 
         rect()
             .maybe(link, |rect| {
@@ -391,8 +440,10 @@ impl Component for TargetLabel {
             .on_pointer_out(move |_| hovering.set_if_modified(false))
             .on_press(move |e: Event<PressEventData>| {
                 // A plain press is a plain press: it goes on into the row, which
-                // `pointer_down` has already picked out, and opens nothing.
-                if !*ctrl.peek() {
+                // `pointer_down` has already picked out, and opens nothing -- except in
+                // the unified view, where the row it goes to is one of this listing's
+                // and moving to it is what the press is for.
+                if !code_tab && !*ctrl.peek() {
                     return;
                 }
                 // Or the press bubbles into the row, which would pin the line the
@@ -830,6 +881,7 @@ impl Component for InstructionRow {
                 RelocationLabel {
                     object: self.data.object.clone(),
                     target: target.clone(),
+                    code_tab: self.data.code_tab,
                 }
                 .into_element()
             }),
@@ -863,6 +915,7 @@ impl Component for InstructionRow {
                         text: text.clone(),
                         object: self.data.object.clone(),
                         address: self.data.placed(target),
+                        code_tab: self.data.code_tab,
                     }
                     .into_element()
                 })
@@ -872,6 +925,7 @@ impl Component for InstructionRow {
                 RelocationLabel {
                     object: self.data.object.clone(),
                     target: target.clone(),
+                    code_tab: self.data.code_tab,
                 }
                 .into_element()
             }),
@@ -1099,10 +1153,12 @@ impl Component for InstructionList {
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll this pane owes a run, which wins over it.
         let docs = use_consume::<OpenDocs>().0;
-        let entry = (self.tab, asked_of(&self.asked));
+        // The question this listing answers is one place and never a place *inside*
+        // one, so the stop it is filed under carries no address.
+        let entry = (self.tab, Stop::whole(asked_of(&self.asked)));
         use_kept_position(
             use_consume::<AsmAt>().0,
-            move |(tab, document): &Entry| docs.peek().contains(*tab, document),
+            move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),
             {
                 let data = data.clone();
                 move |controller: &mut ScrollController| {
@@ -1150,9 +1206,10 @@ impl Component for InstructionList {
         use_side_effect_with_deps(&entry, {
             let data = data.clone();
             let mut plant = plant;
-            move |(_, document): &Entry| {
+            move |(_, stop): &Entry| {
                 let planting = plant.read().clone();
-                let Some(planting) = planting.filter(|planting| planting.tab == *document) else {
+                let Some(planting) = planting.filter(|planting| planting.tab == stop.document)
+                else {
                     return;
                 };
                 plant.set(None);

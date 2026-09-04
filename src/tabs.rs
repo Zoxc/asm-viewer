@@ -122,9 +122,9 @@ pub struct Spot {
 /// [`row`](Positions::row) clamps a saved row against the listing that is there *now*,
 /// which is a rows-only answer and would have to grow a meaningless one for lines.
 ///
-/// Keyed by an [`Entry`] -- a tab and one of the documents on its trail -- as the
-/// positions are, so a file reached twice along one trail is driven from one line and two
-/// tabs on one file are driven from two. The value is a line and not the symbol it
+/// Keyed by an [`Entry`] -- a tab and one of the places on its trail -- as the positions
+/// are, so a file reached twice along one trail is driven from one line, a file being one
+/// place, and two tabs on one file are driven from two. The value is a line and not the symbol it
 /// resolves to, so the line holds no `Arc<Object>`: a driven line survives its binary being
 /// closed, and the next ask simply answers out of whatever is still open. Lines are
 /// 1-based, as DWARF's are.

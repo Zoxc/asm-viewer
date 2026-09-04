@@ -23,6 +23,11 @@ A call or jump target that names no symbol keeps its address. Ctrl+click on it o
 object's code in a new tab at that address, on the row at or below it, with the caret there;
 "Show in unified view" and "Open as symbol" put the caret on their instruction the same way.
 
+In an object's code, clicking a link opens nothing: the listing goes to the target's row and
+selects it. An address that names no symbol moves the same way. Back returns to the
+instruction that was followed, with the rows and selection it was left with. Ctrl+click on a
+name still opens that symbol in a new tab.
+
 ## Undecodable architectures
 
 An architecture with no disassembler is named in the pane instead of a listing: "No

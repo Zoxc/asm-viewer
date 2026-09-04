@@ -21,6 +21,7 @@ it would go; one with nowhere to go is dimmed, not hidden.
 Where a click opens depends on where it was made.
 
 - Inside a tab (a relocation link, the companion header): the same tab. Back returns.
+- Inside an object's code: the same tab, at the target. Back returns there too.
 - With Ctrl, or from a menu: a new tab next to the current one.
 - Outside a tab (a sidebar item): the temporal tab, below.
 - A tab already showing the place is activated instead.

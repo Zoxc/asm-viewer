@@ -50,7 +50,7 @@ pub(crate) fn asked_of(ask: &Ask) -> Document {
 /// document, and for a source-driven tab nothing has been clicked in yet.
 pub(crate) fn ask(active: Option<&Entry>, driven: &Driven) -> Option<Ask> {
     let entry = active?;
-    match &entry.1 {
+    match &entry.1.document {
         Document::Assembly(Selection::Symbol(symbol)) => Some(Ask::Symbol(symbol.clone())),
         Document::Assembly(Selection::Object(_)) | Document::Code(_) => None,
         Document::Source(file) => driven.line(entry).map(|line| Ask::Source {

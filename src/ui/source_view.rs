@@ -225,9 +225,10 @@ impl Component for SourceRow {
                 // and no more, and a click in the assembly pane never comes here at
                 // all, so there is no way for the listing to re-drive itself.
                 if let Some(tab) = tab {
-                    driven
-                        .write()
-                        .remember((tab, Document::Source(at.file.clone())), at.line);
+                    driven.write().remember(
+                        (tab, Stop::whole(Document::Source(at.file.clone()))),
+                        at.line,
+                    );
                 }
             })
         })
@@ -293,10 +294,11 @@ impl Component for SourceList {
         let length = self.source.0.lines;
         // The tab's entry and not the file: see `SourceList::document`.
         let docs = use_consume::<OpenDocs>().0;
-        let entry = (self.tab, self.document.clone());
+        // A file is one place, so the stop it is filed under carries no address.
+        let entry = (self.tab, Stop::whole(self.document.clone()));
         use_kept_position(
             use_consume::<SrcAt>().0,
-            move |(tab, document): &Entry| docs.peek().contains(*tab, document),
+            move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),
             {
                 let file = self.file.clone();
                 let document = self.document.clone();

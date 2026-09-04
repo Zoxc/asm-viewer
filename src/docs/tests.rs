@@ -12,7 +12,7 @@ fn an_opened_document_comes_back_by_its_id() {
     assert!(docs.get(id) == Some(&file("/src/main.rs")));
     assert_eq!(docs.showing(&file("/src/main.rs")), Some(id));
     assert_eq!(docs.showing(&file("/src/other.rs")), None);
-    assert!(docs.contains(id, &file("/src/main.rs")));
+    assert!(docs.contains(id, &Stop::whole(file("/src/main.rs"))));
 }
 
 #[test]
@@ -23,7 +23,7 @@ fn a_closed_id_stands_for_nothing() {
     assert!(docs.get(id).is_none());
     assert!(docs.trail(id).is_none());
     assert_eq!(docs.showing(&file("/src/main.rs")), None);
-    assert!(!docs.contains(id, &file("/src/main.rs")));
+    assert!(!docs.contains(id, &Stop::whole(file("/src/main.rs"))));
     assert_eq!(docs.len(), 0);
 }
 
@@ -55,13 +55,13 @@ fn a_tab_shows_the_current_entry_of_its_trail() {
     docs.trail_mut(id).expect("open").push(file("b.rs"));
     assert!(docs.get(id) == Some(&file("b.rs")));
     assert_eq!(docs.showing(&file("a.rs")), None);
-    assert!(docs.contains(id, &file("a.rs")));
-    assert!(docs.contains(id, &file("b.rs")));
+    assert!(docs.contains(id, &Stop::whole(file("a.rs"))));
+    assert!(docs.contains(id, &Stop::whole(file("b.rs"))));
 
     docs.trail_mut(id).expect("open").back();
     assert!(docs.get(id) == Some(&file("a.rs")));
     assert_eq!(docs.showing(&file("a.rs")), Some(id));
-    assert!(docs.contains(id, &file("b.rs")));
+    assert!(docs.contains(id, &Stop::whole(file("b.rs"))));
 }
 
 /// Two tabs can show one place. Which one answers must not depend on the order a
@@ -149,7 +149,7 @@ fn retaining_entries_thins_every_trail_and_carries_the_cursors() {
     docs.retain_entries(|document| *document != file("gone.rs"));
 
     let trail = docs.trail(id).expect("open");
-    assert!(trail.entries() == [file("a.rs"), file("b.rs")]);
-    assert!(trail.current() == Some(&file("b.rs")));
-    assert!(!docs.contains(id, &file("gone.rs")));
+    assert!(trail.entries() == [Stop::whole(file("a.rs")), Stop::whole(file("b.rs"))]);
+    assert!(trail.current().map(|stop| &stop.document) == Some(&file("b.rs")));
+    assert!(!docs.contains(id, &Stop::whole(file("gone.rs"))));
 }

@@ -84,15 +84,6 @@ leaves this list when it is. That is a move made on request, like everything els
   that symbol beside the object, object › symbol, and pressing it would be the "Open as symbol"
   door in one more place. Whether it follows the top row or the pointer is the one decision:
   the top row is stable and the pointer lights nothing.
-- [ ] Following a link in the unified view should stay in it. A symbol named in an operand is
-  followed in place, which in an object's code tab swaps the whole listing for that one
-  symbol's (`src/ui/assembly.rs`, `Reach::InPlace` for a link inside a tab); a reader who
-  pressed a call wanted the code it goes to, not to leave the view they were reading it in. A
-  plain press there should move the listing to the target's rows, and Ctrl+press should open
-  the symbol's own tab, which is what Ctrl already means on a label in that view. The one
-  decision is whether the move joins the tab's history: a branch target inside a symbol
-  scrolls and adds nothing, but a call to another function is a place a reader will want Back
-  from.
 - [ ] Navigate to an address in the unified view: type one and the listing goes to the row
   at that address, in the object whose code is on screen. Today the only way to a place in the
   section view is a label, a symbol's "Show in unified view" or the kept place a tab came back

@@ -430,7 +430,7 @@ impl Component for LocationRow {
                     });
                     match subject {
                         Some((id, file)) => {
-                            let entry = (id, Document::Source(file));
+                            let entry = (id, Stop::whole(Document::Source(file)));
                             {
                                 let mut driven = driven;
                                 let mut driven = driven.write();

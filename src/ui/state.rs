@@ -85,27 +85,33 @@ pub(crate) fn open_ids(dock: &DockArea) -> Vec<DocId> {
 /// document.
 pub(crate) fn active_tab(dock: &DockArea, docs: &Docs) -> Option<Entry> {
     match dock.document_panel()?.active_tab_id? {
-        Tab::Document(id) => docs.get(id).cloned().map(|document| (id, document)),
+        Tab::Document(id) => docs.current(id).cloned().map(|stop| (id, stop)),
         Tab::View(_) => None,
     }
 }
 
 /// The active document alone.
 pub(crate) fn active_document(dock: &DockArea, docs: &Docs) -> Option<Document> {
-    active_tab(dock, docs).map(|(_, document)| document)
+    active_tab(dock, docs).map(|(_, stop)| stop.document)
 }
 
 impl Open {
     /// The active document as of *now*, for the event handlers that cannot wait a beat
     /// for [`Active`] to catch up. `peek`, so asking subscribes nothing.
     pub(crate) fn active(&self) -> Option<Document> {
-        self.active_tab().map(|(_, document)| document)
+        self.active_stop().map(|(_, stop)| stop.document)
     }
 
-    /// The active tab as of now, with what it shows. `peek`, for the same reason.
-    pub(crate) fn active_tab(&self) -> Option<Entry> {
+    /// The active tab and the place on its trail it is at, as of now. The document is
+    /// what most callers want ([`Open::active`]); this is for the few that key by place.
+    pub(crate) fn active_stop(&self) -> Option<Entry> {
         let (dock, docs) = (self.dock.peek(), self.docs.peek());
         active_tab(&dock, &docs)
+    }
+
+    /// The active tab as of now, with the document it shows. `peek`, for the same reason.
+    pub(crate) fn active_tab(&self) -> Option<(DocId, Document)> {
+        self.active_stop().map(|(id, stop)| (id, stop.document))
     }
 
     /// The active tab's id as of now, a document or not.
@@ -150,9 +156,11 @@ pub(crate) struct Splits(pub(crate) State<ResizableContext>);
 /// Which row each place on each open tab's trail had its **assembly** side left on. At
 /// the root rather than in the pane, which reuses one scroll controller for every symbol
 /// and so would leave a newly opened function at the offset the old one was at. Keyed by
-/// [`Entry`] -- the tab and the document -- so going back along a trail comes back to the
-/// row that was left, and an entry means "this place on this tab" for exactly as long as
-/// the tab is open and the place is on its trail.
+/// [`Entry`] -- the tab and the place -- so going back along a trail comes back to the row
+/// that was left, and an entry means "this place on this tab" for exactly as long as the
+/// tab is open and the place is on its trail. A place and not a document: two addresses
+/// in one object's code are two of them, which is what makes a step inside that listing
+/// come back to the row it was left at as any other step does.
 #[derive(Clone, Copy)]
 pub(crate) struct AsmAt(pub(crate) State<Positions<Entry>>);
 

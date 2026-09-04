@@ -39,7 +39,7 @@ pub(crate) use crate::files::{shows_as_source, FileRow, FileRows, FileTree, Fold
 pub(crate) use crate::filter::{Filter, Matcher, Rank};
 pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::functions::{self, Function};
-pub(crate) use crate::history::History;
+pub(crate) use crate::history::{History, Stop};
 pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
@@ -167,7 +167,7 @@ impl Component for NavButton {
                 .as_ref()
                 .and_then(|(id, _)| docs.trail(*id))
                 .and_then(|trail| nav.destination(trail))
-                .map(entry_text)
+                .map(stop_text)
         };
         let live = destination.is_some();
         let tooltip = match &destination {

@@ -29,7 +29,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::bookmarks::Bookmark;
 use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
-use crate::history::History;
+use crate::history::{History, Stop};
 use crate::rescue;
 use crate::tabs::{Driven, Positions, Spot};
 use crate::visits::Visits;
@@ -768,14 +768,14 @@ impl Session {
                     entries: trail
                         .entries()
                         .iter()
-                        .map(|document| {
-                            let entry = (*id, document.clone());
+                        .map(|stop| {
+                            let entry = (*id, stop.clone());
                             SavedEntry {
                                 asm_row: asm_rows.at(&entry).unwrap_or(0),
                                 src_row: src_rows.at(&entry).unwrap_or(0),
                                 line: driven.line(&entry),
                                 asm_address: places.at(&entry).map(|spot| spot.address),
-                                document: SavedDocument::from_document(document),
+                                document: SavedDocument::from_document(&stop.document),
                             }
                         })
                         .collect(),
@@ -832,9 +832,12 @@ impl Session {
                     })
                     .collect();
                 let trail = History::rebuilt(
-                    resolved
-                        .iter()
-                        .map(|entry| entry.as_ref().map(|entry| entry.document.clone())),
+                    resolved.iter().map(|entry| {
+                        entry.as_ref().map(|entry| Stop {
+                            document: entry.document.clone(),
+                            address: entry.address,
+                        })
+                    }),
                     saved.cursor,
                 );
                 trail.current()?;

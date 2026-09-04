@@ -912,7 +912,10 @@ fn tab_bar(ctx: TabBarContext<PanelId>, area: State<DockArea>) -> Element {
 /// `use_kept_position` is for. Navigating in place is not a switch of tab: this reads the
 /// table, so a push onto the trail re-renders it and the panes are handed the new
 /// document as a prop, keeping their controllers -- and the same hook files the row of
-/// the place left under that place's own entry before putting the arriving one back.
+/// the place left under that place's own entry before putting the arriving one back. A
+/// step between two places in *one* object's code is not even a switch of document, and
+/// the same hook answers it for the same reason: what a position is kept under is the
+/// place and not the document (`Entry`).
 #[derive(Clone, PartialEq)]
 pub(crate) struct DocumentBody {
     pub(crate) id: DocId,

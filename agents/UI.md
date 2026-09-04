@@ -355,9 +355,13 @@ answer for it. What a scratchpad *builds* needs no rule at all: the artifact goe
 **Each place on each tab's trail remembers where each of its sides was left.** A pane has one
 `ScrollController` and shows one tab at a time, so left alone it hands the tab arriving whatever
 offset the one leaving had. `AsmAt`/`SrcAt` are two root `Positions` maps beside `Open`, **both
-keyed by an `Entry`**, the tab's `DocId` and a `Document` on its trail. So an entry means "this side
-of this place on this tab" for exactly as long as the tab is open and the place is on its trail, and
-going Back comes back to the rows that were left. `use_kept_position` is the whole of the behaviour,
+keyed by an `Entry`**, the tab's `DocId` and a `Stop` on its trail -- a document, plus the address
+it was reached at where that document is an object's code. So an entry means "this side of this
+place on this tab" for exactly as long as the tab is open and the place is on its trail, and going
+Back comes back to the rows that were left. **A place and not a document** is what makes following
+a link inside the unified view a step Back returns from: the two addresses are two entries, and a
+step between them is a switch to every pane, which is the whole of the behaviour -- there is no
+second mechanism for moving the view inside one listing. `use_kept_position` is the whole of the behaviour,
 called once by `InstructionList` and once by `SourceList`, each handed its tab's id as a prop from
 `DocumentBody`. Which place a listing's row is filed under is `asked_of` the question that listing
 answers, never the place the app is showing: while the worker catches up the pane is drawing the one

@@ -5,6 +5,7 @@ use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, Sy
 use super::*;
 use crate::bookmarks::Bookmark;
 use crate::docs::Docs;
+use crate::history::Stop;
 
 /// A bare `Object` with the given text symbols — only the fields the mapping reads.
 fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
@@ -96,7 +97,7 @@ fn session_of(
             .iter()
             .position(|tab| tab == document)
             .expect("a row of an open tab");
-        (ids[index], document.clone())
+        (ids[index], Stop::whole(document.clone()))
     };
     let (mut asm_rows, mut src_rows, mut spots, mut driven) = (
         Positions::default(),
@@ -448,13 +449,13 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
     // Every position the cursor can be in, including one the reader walked back to.
     for back in 0..3 {
         let trail = trail(&objects, back);
-        let current = trail.current().expect("a current entry").clone();
+        let current = trail.current().expect("a current entry").document.clone();
         let mut docs = Docs::default();
         let id = docs.open_trail(trail.clone(), false).expect("a trail");
         let (mut asm, mut src) = (Positions::default(), Positions::default());
         for (index, place) in places(&objects).iter().enumerate() {
-            asm.remember((id, place.clone()), 10 + index);
-            src.remember((id, place.clone()), 20 + index);
+            asm.remember((id, Stop::whole(place.clone())), 10 + index);
+            src.remember((id, Stop::whole(place.clone())), 20 + index);
         }
         let session = Session::from_state(
             &objects,
@@ -474,7 +475,7 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
         let restored = session.resolve_tabs(&objects);
         assert_eq!(restored.len(), 1);
         assert!(restored[0].trail == trail);
-        assert!(restored[0].trail.current() == Some(&current));
+        assert!(restored[0].trail.current().map(|stop| &stop.document) == Some(&current));
         for (index, entry) in restored[0].entries.iter().enumerate() {
             assert!(entry.document == places(&objects)[index]);
             assert_eq!(entry.asm_row, 10 + index);
@@ -523,8 +524,14 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
     let restored = session.resolve_tabs(&objects);
     assert_eq!(restored.len(), 1);
     assert!(restored[0].temporal);
-    assert!(restored[0].trail.entries() == [tab(&objects[0]), tab(&objects[1])]);
-    assert!(restored[0].trail.current() == Some(&tab(&objects[0])));
+    let entries: Vec<Document> = restored[0]
+        .trail
+        .entries()
+        .iter()
+        .map(|stop| stop.document.clone())
+        .collect();
+    assert!(entries == [tab(&objects[0]), tab(&objects[1])]);
+    assert!(restored[0].trail.current().map(|stop| &stop.document) == Some(&tab(&objects[0])));
     assert!(restored[0].trail.can_forward());
     let rows: Vec<usize> = restored[0]
         .entries
@@ -1931,6 +1938,68 @@ fn a_code_tabs_address_is_written_before_its_document() {
     let restored = session.resolve_tabs(&objects);
     assert!(restored[0].entries[0].document == code);
     assert_eq!(restored[0].entries[0].address, Some(0x30));
+}
+
+/// A tab that followed a link inside an object's code has that listing on its trail
+/// twice, at two addresses, and both come back: the trail is places and not documents, so
+/// the two do not collapse into one on the way out or on the way back.
+///
+/// A place comes back named by the address it was *left* at, which is the one thing saved
+/// for it -- so the place a tab opened at and then scrolled away from comes back as that
+/// scrolled address rather than as the whole listing. Nothing reads a place's address for
+/// anything but telling one place from another and landing on it, which both hold.
+#[test]
+fn a_trail_through_one_listing_comes_back_with_both_places() {
+    let objects = objects();
+    let code = Document::Code(objects[1].clone());
+    let (first, second) = (Stop::whole(code.clone()), Stop::at(code.clone(), 0x40));
+
+    let mut docs = Docs::default();
+    let id = docs.open(first.clone());
+    docs.trail_mut(id).expect("open").push(second.clone());
+    let mut spots = Positions::default();
+    spots.remember(
+        (id, first.clone()),
+        Spot {
+            address: 0x10,
+            rows: 3,
+        },
+    );
+    spots.remember(
+        (id, second.clone()),
+        Spot {
+            address: 0x40,
+            rows: 0,
+        },
+    );
+
+    let session = Session::from_state(
+        &objects,
+        &[(id, docs.trail(id).expect("open"), false)],
+        &Positions::default(),
+        &Positions::default(),
+        &spots,
+        &Driven::default(),
+        Some(&code),
+        &Visits::default(),
+        &[],
+    );
+    assert_eq!(session.tabs[0].entries.len(), 2, "the places collapsed");
+    let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
+
+    let restored = session.resolve_tabs(&objects);
+    assert!(
+        restored[0].trail.entries() == [Stop::at(code.clone(), 0x10), Stop::at(code.clone(), 0x40)],
+        "the trail came back as one place"
+    );
+    // Each place with the row it was left at: the first where the reader had scrolled to,
+    // the second where the jump landed.
+    let addresses: Vec<Option<u64>> = restored[0]
+        .entries
+        .iter()
+        .map(|entry| entry.address)
+        .collect();
+    assert_eq!(addresses, [Some(0x10), Some(0x40)]);
 }
 
 /// An address is a claim about a layout: a rebuilt binary takes it with the rows and

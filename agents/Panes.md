@@ -256,7 +256,18 @@ rows are rebuilt under a view that was at the map's place as well as the old row
 map's place is re-applied and not the derived one, so a target in a stretch the worker had not
 reached lands on its own instruction once the stretch is decoded, not on the row its guess was
 nearest (`agents/UI.md`). A plain press on the number is a press on the row's text; the label lights
-as a link, and the row shows the hand over it (`Text::door`), only while Ctrl is held. Both doors
+as a link, and the row shows the hand over it (`Text::door`), only while Ctrl is held. **In the
+unified view a link does not leave it.** The rows a target is in are rows of the listing already,
+so a plain press on a name or on a bare address is `show_in_code` at the target's placed address,
+which `documents::land` turns into a plant in the tab that is already showing that document: a
+scroll and a caret, and no tab opened. It **is** pushed onto that tab's trail, as a `Stop` naming
+the address, so Back comes back to the instruction that was followed -- the place left keeps its own
+rows and runs, being an entry of its own (`agents/UI.md`) -- and it is not recorded as a *visit*,
+the History panel listing documents and a move inside one being no new document to have been at.
+Ctrl keeps its own meaning over a name -- the symbol alone, in a tab of its own -- and the bare
+address lights as a link in that listing whether or not Ctrl is held, since there a plain press is
+the door. Following a link in a symbol's own listing is unchanged: there is nowhere to move to, so
+it replaces what the tab shows and the function left is one Back away. Both doors
 into the object's code, this one and the menu's, take `AsmData::placed`, the section's bias added to
 the row's own address: the bias the *listing* draws is nothing in a symbol's own tab, and the code
 tab's rows are placed. Undefined imports and relocations against a section symbol stay plain text;

@@ -540,10 +540,19 @@ impl Component for SectionList {
         } else {
             None
         };
-        let entry = (self.tab, self.document.clone());
+        // The place on the trail this listing is showing, which is what its position and
+        // its runs are kept under: two stops in one object's code are two places, and
+        // stepping between them is what Back does inside a listing. Read and not peeked,
+        // so a step re-renders this pane and the hook sees the switch.
+        let stop = docs
+            .read()
+            .current(self.tab)
+            .cloned()
+            .unwrap_or_else(|| Stop::whole(self.document.clone()));
+        let entry = (self.tab, stop);
         use_kept_place(
             code_at,
-            move |(tab, document): &Entry| docs.peek().contains(*tab, document),
+            move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),
             // The scroll this pane owes: to the source pane's run, the row of the first
             // instruction compiled from one of its lines, in whichever held stretch has
             // one. Left owed while none does -- the stretch may not be decoded yet, and
@@ -1033,7 +1042,7 @@ fn use_kept_place(
             // goes with the row into the places kept below, exactly.
             let mut planted: Option<(usize, Spot)> = None;
             let planting = plant.read().clone();
-            if let Some(planting) = planting.filter(|planting| planting.tab == tab.1) {
+            if let Some(planting) = planting.filter(|planting| planting.tab == tab.1.document) {
                 plant.set(None);
                 if let Some(row) = built.body_row_for(planting.address) {
                     let file = match built.row(row) {
@@ -1209,6 +1218,20 @@ pub(crate) fn show_in_code(
     at: Option<LinePos>,
 ) {
     let code = Document::Code(object);
+    let stop = Stop::at(code.clone(), address);
+    // Moving inside the listing the reader is already in: `land` plants the address and
+    // opens nothing, so the push is the only record that they were somewhere else in it a
+    // moment ago. The place left keeps its own rows and runs, being an entry of its own,
+    // so Back comes back to the instruction that was followed and not to where the jump
+    // landed.
+    if open.active().as_ref() == Some(&code) {
+        if let Some(id) = open.active_id() {
+            let mut docs = open.docs;
+            if let Some(trail) = docs.write().trail_mut(id) {
+                trail.push(stop.clone());
+            }
+        }
+    }
     let id = land(
         open,
         visits,
@@ -1226,7 +1249,7 @@ pub(crate) fn show_in_code(
     if let Some(id) = id {
         places
             .write()
-            .remember((id, code), Spot { address, rows: 0 });
+            .remember((id, stop), Spot { address, rows: 0 });
     }
 }
 

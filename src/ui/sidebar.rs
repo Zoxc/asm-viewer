@@ -436,9 +436,13 @@ impl Component for ObjectsTab {
         // `VirtualScrollView` has to be `PartialEq` and an `Object` is not, while pointer
         // identity compares as a number.
         let selected = match &*use_consume::<Active>().0.read() {
-            Some((_, Document::Assembly(Selection::Object(object)) | Document::Code(object))) => {
-                Some(Arc::as_ptr(object).addr())
-            }
+            Some((
+                _,
+                Stop {
+                    document: Document::Assembly(Selection::Object(object)) | Document::Code(object),
+                    ..
+                },
+            )) => Some(Arc::as_ptr(object).addr()),
             _ => None,
         };
         let length = tree.len();
@@ -509,7 +513,13 @@ impl Component for SymbolsTab {
             use_memo(move || Filtered::new(symbols.read().clone(), &filter.read().matcher()));
         let filtered = filtered.read().clone();
         let selected = match &*use_consume::<Active>().0.read() {
-            Some((_, Document::Assembly(Selection::Symbol(symbol)))) => Some(symbol.clone()),
+            Some((
+                _,
+                Stop {
+                    document: Document::Assembly(Selection::Symbol(symbol)),
+                    ..
+                },
+            )) => Some(symbol.clone()),
             _ => None,
         };
         let length = filtered.len();
@@ -553,7 +563,7 @@ impl Component for HistoryTab {
             .0
             .read()
             .clone()
-            .map(|(_, document)| document);
+            .map(|(_, stop)| stop.document);
         let filter = use_state(Filter::default);
         // A session's record is a couple of hundred places at most, so it is filtered
         // where the rows are built rather than through a memo.

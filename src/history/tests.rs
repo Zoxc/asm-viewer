@@ -5,9 +5,14 @@ use analysis::{Architecture, BinaryFormat, Object, ObjectData};
 use super::*;
 use crate::project::Selection;
 
-/// A distinct document: two calls with the same `name` still produce different `Arc`s, and
-/// so entries that do not compare equal.
-fn selection(name: &str) -> Document {
+/// A distinct stop: two calls with the same `name` still produce different `Arc`s, and so
+/// entries that do not compare equal.
+fn selection(name: &str) -> Stop {
+    Stop::whole(document(name))
+}
+
+/// The document inside one of those.
+fn document(name: &str) -> Document {
     Document::Assembly(Selection::Object(Arc::new(Object {
         path: PathBuf::from("/tmp/lib.a"),
         name: name.to_owned(),
@@ -101,7 +106,7 @@ fn the_entries_are_kept_oldest_first_whatever_the_cursor_does() {
 }
 
 /// The entries newest first.
-fn newest_first(history: &History) -> Vec<Document> {
+fn newest_first(history: &History) -> Vec<Stop> {
     history.entries().iter().rev().cloned().collect()
 }
 
@@ -206,8 +211,8 @@ fn a_restored_cursor_follows_the_entry_it_was_on() {
 
 /// `count` distinct selections, oldest first, pushed onto a fresh history — the caller
 /// keeps them to say which ones the cap should have dropped.
-fn filled(count: usize) -> (History, Vec<Document>) {
-    let entries: Vec<Document> = (0..count).map(|i| selection(&format!("e{i}"))).collect();
+fn filled(count: usize) -> (History, Vec<Stop>) {
+    let entries: Vec<Stop> = (0..count).map(|i| selection(&format!("e{i}"))).collect();
     let mut history = History::default();
     for entry in &entries {
         history.push(entry.clone());
@@ -251,7 +256,7 @@ fn pushing_past_the_cap_after_going_back_truncates_first() {
     for _ in 0..5 {
         history.back();
     }
-    let fresh: Vec<Document> = (0..10).map(|i| selection(&format!("n{i}"))).collect();
+    let fresh: Vec<Stop> = (0..10).map(|i| selection(&format!("n{i}"))).collect();
     history.push(fresh[0].clone());
     assert!(history.entries().len() == MAX_ENTRIES - 4);
     assert!(!history.can_forward());
@@ -275,7 +280,7 @@ fn pushing_past_the_cap_after_going_back_truncates_first() {
 #[test]
 fn restoring_keeps_the_newest_entries_and_carries_the_cursor() {
     let over = MAX_ENTRIES + 50;
-    let entries: Vec<Document> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
+    let entries: Vec<Stop> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
 
     // A cursor near the newest entry: its entry survives the trim and comes down with it.
     let cursor = over - 10;
@@ -307,8 +312,8 @@ fn restoring_collapses_duplicates_before_capping() {
     // Twice the cap saved, ten under the cap distinct: the collapse runs first, so all
     // of them fit. Capping first would have thrown away half of them.
     let distinct = MAX_ENTRIES - 10;
-    let unique: Vec<Document> = (0..distinct).map(|i| selection(&format!("e{i}"))).collect();
-    let saved: Vec<Document> = unique.iter().flat_map(|e| [e.clone(), e.clone()]).collect();
+    let unique: Vec<Stop> = (0..distinct).map(|i| selection(&format!("e{i}"))).collect();
+    let saved: Vec<Stop> = unique.iter().flat_map(|e| [e.clone(), e.clone()]).collect();
 
     let history = History::restored(saved, 2 * distinct - 1);
     assert!(history.entries().len() == distinct);
@@ -338,6 +343,39 @@ fn retaining_drops_what_it_rejects_and_leaves_the_cursor_where_it_was() {
     assert!(history.current() == Some(&c));
     assert!(history.back() == Some(a));
     assert!(!history.can_back());
+}
+
+/// Two places in one document are two entries, which is the whole of what a stop is for:
+/// following a link inside an object's code is a place to come back to, where opening the
+/// same listing twice is not.
+#[test]
+fn two_places_in_one_document_are_two_entries() {
+    let code = document("code");
+    let mut history = History::default();
+    history.push(Stop::whole(code.clone()));
+    history.push(Stop::at(code.clone(), 0x10));
+    history.push(Stop::at(code.clone(), 0x40));
+
+    assert_eq!(history.entries().len(), 3);
+    assert!(history.current() == Some(&Stop::at(code.clone(), 0x40)));
+    assert!(history.back() == Some(Stop::at(code.clone(), 0x10)));
+    assert!(history.back() == Some(Stop::whole(code.clone())));
+    assert!(!history.can_back());
+
+    // And a place still behind the cursor is bumped to the end rather than doubled, as a
+    // revisited document is: going back to 0x10 the long way leaves one entry for it.
+    history.forward();
+    history.forward();
+    history.push(Stop::at(code.clone(), 0x10));
+    assert!(
+        history.entries()
+            == [
+                Stop::whole(code.clone()),
+                Stop::at(code.clone(), 0x40),
+                Stop::at(code, 0x10)
+            ],
+        "the place was recorded twice"
+    );
 }
 
 /// The entry the cursor was on is one of the dropped ones, so it falls back to the nearest

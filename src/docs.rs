@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use crate::history::History;
+use crate::history::{History, Stop};
 use crate::project::Document;
 
 /// The handle a dock tab holds in place of the document it shows. A newtype so it cannot
@@ -21,11 +21,12 @@ use crate::project::Document;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DocId(u32);
 
-/// One place on one tab's trail: the tab, and a document it has shown. What a tab's
-/// viewing positions and driven line are kept by, so going back restores the rows the
-/// reader left on both sides. A trail holds no two equal documents, so the pair names one
-/// entry.
-pub type Entry = (DocId, Document);
+/// One place on one tab's trail: the tab, and a [`Stop`] it has been at. What a tab's
+/// viewing positions, its runs and its driven line are kept by, so going back restores
+/// what the reader left on both sides. A trail holds no two equal stops, so the pair
+/// names one entry -- and two places in one object's code are two of them, which is what
+/// makes stepping between them restore each one's own scroll and selection.
+pub type Entry = (DocId, Stop);
 
 /// Every open tab's trail, by the id the tab is known by, and which tab is the temporal
 /// one.
@@ -42,9 +43,9 @@ impl Docs {
     /// **Ids are never reused**: freya keys a tab's header element by its id, and a drag
     /// carries one, so a reused id would land a closed document's header state — or a
     /// drag begun before it was closed — on whichever document took its number.
-    pub fn open(&mut self, document: Document) -> DocId {
+    pub fn open(&mut self, stop: impl Into<Stop>) -> DocId {
         let mut trail = History::default();
-        trail.push(document);
+        trail.push(stop.into());
         self.open_trail(trail, false)
             .expect("a trail of one entry has a current entry")
     }
@@ -75,6 +76,12 @@ impl Docs {
     /// The document `id` shows now -- the entry under its trail's cursor -- or `None` for
     /// a closed tab or an id from a drag that outlived its document.
     pub fn get(&self, id: DocId) -> Option<&Document> {
+        Some(&self.current(id)?.document)
+    }
+
+    /// The place `id` is at now: the stop under its trail's cursor, which is what its
+    /// panes keep their positions under.
+    pub fn current(&self, id: DocId) -> Option<&Stop> {
         self.open.get(&id)?.current()
     }
 
@@ -95,18 +102,18 @@ impl Docs {
     pub fn showing(&self, document: &Document) -> Option<DocId> {
         self.open
             .iter()
-            .filter(|(_, trail)| trail.current() == Some(document))
+            .filter(|(_, trail)| trail.current().map(|stop| &stop.document) == Some(document))
             .map(|(id, _)| *id)
             .min()
     }
 
-    /// Whether `document` is anywhere on the trail of `id` -- what a pane asks before
-    /// writing a viewing position down, so a row of a listing that has just been closed
-    /// is not put straight back.
-    pub fn contains(&self, id: DocId, document: &Document) -> bool {
+    /// Whether `stop` is anywhere on the trail of `id` -- what a pane asks before writing
+    /// a viewing position down, so a row of a listing that has just been closed is not put
+    /// straight back.
+    pub fn contains(&self, id: DocId, stop: &Stop) -> bool {
         self.open
             .get(&id)
-            .is_some_and(|trail| trail.entries().contains(document))
+            .is_some_and(|trail| trail.entries().contains(stop))
     }
 
     /// The temporal tab, while there is one.

@@ -178,7 +178,7 @@ pub(crate) fn use_reading_of(
     mut window: State<Option<CodeAsk>>,
 ) {
     use_side_effect(move || {
-        let active = active.read().clone().map(|(_, document)| document);
+        let active = active.read().clone().map(|(_, stop)| stop.document);
         let open = objects.read();
         let wanted = match active {
             Some(Document::Code(object)) if open.iter().any(|o| Arc::ptr_eq(o, &object)) => {

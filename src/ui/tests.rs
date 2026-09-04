@@ -465,6 +465,24 @@ macro_rules! project_states {
     }};
 }
 
+/// The documents on the trail behind `id`, oldest first: what a test asserts a trail by,
+/// a stop's own address being the business of the tests that walk one inside a listing.
+fn trail_of(states: &ProjectStates, id: DocId) -> Vec<Document> {
+    states
+        .open
+        .docs
+        .peek()
+        .trail(id)
+        .map(|trail| {
+            trail
+                .entries()
+                .iter()
+                .map(|stop| stop.document.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The tab showing `document`, for the tests that speak of tabs by what they show.
 fn tab_showing(states: &ProjectStates, document: &Document) -> Option<DocId> {
     states.open.docs.peek().showing(document)
@@ -474,7 +492,16 @@ fn tab_showing(states: &ProjectStates, document: &Document) -> Option<DocId> {
 fn entry_of(states: &ProjectStates, document: &Document) -> Entry {
     (
         tab_showing(states, document).expect("the document is open"),
-        document.clone(),
+        Stop::whole(document.clone()),
+    )
+}
+
+/// The entry of a place *inside* an object's code: the tab showing it, and the stop at
+/// `address`, which is what two places in one listing are told apart by.
+fn code_entry_of(states: &ProjectStates, document: &Document, address: u64) -> Entry {
+    (
+        tab_showing(states, document).expect("the document is open"),
+        Stop::at(document.clone(), address),
     )
 }
 
@@ -3832,7 +3859,7 @@ fn what_a_tab_asks_follows_its_kind_and_its_driven_line() {
     // Two tabs, so a line can be seen to belong to one entry and not to a file.
     let mut docs = Docs::default();
     let (first, second) = (docs.open(tab.clone()), docs.open(tab.clone()));
-    let on = |id: DocId, document: Document| (id, document);
+    let on = |id: DocId, document: Document| (id, Stop::whole(document));
 
     assert!(ask(None, &driven).is_none(), "nothing open asks nothing");
     assert!(
@@ -8952,7 +8979,10 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
     let code = Document::Code(object.clone());
     assert!(states.open.active() == Some(code.clone()));
     assert_eq!(
-        states.code_at.peek().at(&entry_of(&states, &code)),
+        states
+            .code_at
+            .peek()
+            .at(&code_entry_of(&states, &code, first)),
         Some(Spot {
             address: first,
             rows: 0
@@ -9141,7 +9171,10 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target_with_ctrl() {
         "the symbol's tab was replaced rather than kept beside"
     );
     assert_eq!(
-        states.code_at.peek().at(&entry_of(&states, &code)),
+        states
+            .code_at
+            .peek()
+            .at(&code_entry_of(&states, &code, target)),
         Some(Spot {
             address: target,
             rows: 0
@@ -9151,6 +9184,101 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target_with_ctrl() {
     let landed = landing.peek().clone().expect("the target is left to land");
     assert!(landed.at.is_none(), "a line was left to land");
     assert_eq!(landed.address, Some(target));
+}
+
+/// A symbol named in an operand of the unified view is a place further down that same
+/// listing: a plain press moves to it -- the caret on its first row, the place written
+/// down, no tab opened and nothing recorded -- and Ctrl still opens the symbol alone in a
+/// tab of its own, as Ctrl does everywhere.
+#[test]
+fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let rows = rows_of(&reading);
+    let (mut test, (states, marked, _sections, _window, _landing, ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let mut ctrl = ctrl;
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    settle(&mut test);
+    let add = object
+        .symbols_sorted
+        .iter()
+        .find(|data| data.name == "add")
+        .expect("the fixture holds add")
+        .clone();
+    let visited = states.visits.peek().entries().len();
+
+    // The operand naming `add`, which `sum_to` calls: the label row over it reads
+    // `add:` and is a different string.
+    // The link is a `label()` of its own; the `add` mnemonic further up is a span of a
+    // row's paragraph, which is why this asks for labels alone.
+    let (_, area) = labels_with_areas(&test)
+        .into_iter()
+        .find(|(text, _)| text == "add")
+        .expect("the link is drawn");
+    let link = (
+        (area.origin.x + area.width() / 2.0) as f64,
+        (area.origin.y + area.height() / 2.0) as f64,
+    );
+    press_at(&mut test, link);
+    settle(&mut test);
+    settle(&mut test);
+    let symbol = Document::Assembly(Selection::Symbol(Symbol {
+        object: object.clone(),
+        data: add.clone(),
+    }));
+    assert!(
+        states.open.active() == Some(code.clone()),
+        "the listing was left"
+    );
+    assert!(
+        tab_showing(&states, &symbol).is_none(),
+        "a tab opened for the symbol"
+    );
+    assert_eq!(
+        states.visits.peek().entries().len(),
+        visited,
+        "moving inside the listing was recorded as a visit"
+    );
+
+    // The caret is on the target's first row, and the place kept is its address.
+    let landed = rows.body_row_for(add.address).expect("add has a row");
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the caret was not planted");
+    assert_eq!(picked.rows.rows(), landed..=landed);
+    assert_eq!(
+        states
+            .code_at
+            .peek()
+            .at(&code_entry_of(&states, &code, add.address)),
+        Some(Spot {
+            address: add.address,
+            rows: 0
+        })
+    );
+
+    // With Ctrl held it is the other door: the symbol alone, beside the listing.
+    ctrl.set(true);
+    settle(&mut test);
+    press_at(&mut test, link);
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(symbol.clone()),
+        "Ctrl did not open the symbol"
+    );
+    assert!(
+        tab_showing(&states, &code).is_some(),
+        "the listing was replaced rather than kept beside"
+    );
 }
 
 /// One function is told from the next by a rule, the way one basic block is told from the
@@ -9182,6 +9310,197 @@ fn a_rule_is_drawn_over_every_symbol_in_the_unified_view() {
         });
         assert_eq!(above, over, "{name}");
     }
+}
+
+/// A place inside an object's code is named by the symbol at that address, so the
+/// chevrons say which function a step goes to rather than the object's name twice over.
+#[test]
+fn a_place_in_a_listing_is_named_by_the_symbol_there() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let code = Document::Code(object.clone());
+    let twice = object
+        .symbols_sorted
+        .iter()
+        .find(|data| data.name == "twice")
+        .expect("the fixture holds twice")
+        .clone();
+
+    // A stop's address is the one the listing draws: the symbol's own plus where the
+    // layout put its section.
+    let placed = twice
+        .address
+        .wrapping_add(twice.section.as_ref().map_or(0, |section| section.bias));
+
+    assert_eq!(stop_text(&Stop::whole(code.clone())), object.name);
+    assert_eq!(stop_text(&Stop::at(code.clone(), placed)), "twice");
+    // A place no symbol starts at is the object again: a call to a function lands on its
+    // first byte and is named, and an address into the middle of one has no name to give.
+    assert_eq!(stop_text(&Stop::at(code.clone(), placed + 1)), object.name);
+    assert_eq!(stop_text(&Stop::at(code, u64::MAX)), object.name);
+}
+
+/// Following a link inside an object's code is a place on the tab's trail, so Back comes
+/// back to the instruction that was followed and not to where the jump landed. The two
+/// places are two entries, each keeping its own row -- which is the whole of why the
+/// positions are kept per place and not per document.
+#[test]
+fn back_returns_to_the_place_a_link_was_followed_from() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let rows = rows_of(&reading);
+    let decoded = reading_of(&object, &[0, 1, 2]);
+    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 10.0 * code_row_height()).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let code = Document::Code(object.clone());
+    let id = open_document(states.open, states.visits, code.clone(), Reach::NewTab)
+        .expect("a document panel");
+    settle(&mut test);
+    let add = object
+        .symbols_sorted
+        .iter()
+        .find(|data| data.name == "add")
+        .expect("the fixture holds add")
+        .clone();
+
+    // Scroll to the call itself, which is the place being left: the row of `sum_to`'s
+    // one instruction carrying a relocation.
+    let call = (0..rows.len())
+        .find(|&row| row_line(&rows, &decoded, row).contains("call"))
+        .expect("sum_to calls add");
+    test.scroll(
+        (300., 150.),
+        (
+            0.,
+            -(call.saturating_sub(2) as f64) * code_row_height() as f64,
+        ),
+    );
+    settle(&mut test);
+    let left = states
+        .code_at
+        .peek()
+        .at(&entry_of(&states, &code))
+        .expect("the place the reader is at is written down");
+    let shown = address_labels(&test);
+    assert!(!shown.is_empty(), "the pane is drawing nothing");
+
+    // Follow the call.
+    let (_, area) = labels_with_areas(&test)
+        .into_iter()
+        .find(|(text, _)| text == "add")
+        .expect("the link is drawn");
+    press_at(
+        &mut test,
+        (
+            (area.origin.x + area.width() / 2.0) as f64,
+            (area.origin.y + area.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+    settle(&mut test);
+    let trail: Vec<Stop> = states
+        .open
+        .docs
+        .peek()
+        .trail(id)
+        .expect("open")
+        .entries()
+        .to_vec();
+    assert!(
+        trail
+            == [
+                Stop::whole(code.clone()),
+                Stop::at(code.clone(), add.address)
+            ],
+        "the place followed is not on the trail"
+    );
+    assert_ne!(
+        address_labels(&test),
+        shown,
+        "the press did not move the listing to the target"
+    );
+
+    // Back: the tab is on the place it was, with the rows it was left at.
+    navigate(states.open, Nav::Back);
+    settle(&mut test);
+    settle(&mut test);
+    assert!(
+        states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::whole(code.clone())),
+        "the step did not go back"
+    );
+    assert_eq!(
+        states.code_at.peek().at(&entry_of(&states, &code)),
+        Some(left),
+        "the place left was not kept under its own entry"
+    );
+    assert_eq!(
+        address_labels(&test),
+        shown,
+        "Back did not come back to the rows the place was left at"
+    );
+    // And the place jumped to keeps its own row, for Forward to come back to.
+    assert_eq!(
+        states
+            .code_at
+            .peek()
+            .at(&code_entry_of(&states, &code, add.address)),
+        Some(Spot {
+            address: add.address,
+            rows: 0
+        })
+    );
+}
+
+/// A call target no symbol names is a place in the unified view as much as a named one
+/// is: a plain press on the bare address moves the listing there, where in a symbol's own
+/// listing the same press picks the row out and it takes Ctrl to open the door.
+#[test]
+fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
+    let (object, target) = calling_into_the_middle();
+    let f = Symbol {
+        object: object.clone(),
+        data: object.symbols_sorted[0].clone(),
+    };
+    let operand = call_operand(&f);
+    let reading = reading_of(&object, &[0]);
+    let (mut test, (states, marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 6.0 * code_row_height()).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    let door = centre_of(&test, &operand);
+    press_at(&mut test, door);
+    settle(&mut test);
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(code.clone()),
+        "the listing was left"
+    );
+    assert_eq!(
+        states
+            .code_at
+            .peek()
+            .at(&code_entry_of(&states, &code, target)),
+        Some(Spot {
+            address: target,
+            rows: 0
+        }),
+        "the listing did not move to the target"
+    );
+    assert!(
+        marked.peek().assembly.is_some(),
+        "the caret was not planted on the target's row"
+    );
 }
 
 /// The code opened at a call's target lands on the row **at or below** the address: on
@@ -9235,7 +9554,10 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
         "the tab changed"
     );
     assert_eq!(
-        states.code_at.peek().at(&entry_of(&states, &code)),
+        states
+            .code_at
+            .peek()
+            .at(&code_entry_of(&states, &code, target)),
         Some(Spot {
             address: target,
             rows: 0
@@ -11680,7 +12002,9 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     )
     .expect("a document panel");
     let mut asm_at = states.asm_at;
-    asm_at.write().remember((id, documents[0].clone()), 12);
+    asm_at
+        .write()
+        .remember((id, Stop::whole(documents[0].clone())), 12);
     for document in &documents[1..] {
         let landed = open_document(states.open, states.visits, document.clone(), Reach::InPlace);
         assert_eq!(landed, Some(id), "a link opened a tab of its own");
@@ -11688,11 +12012,14 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     test.sync_and_update();
 
     assert!(states.open.documents() == [documents[2].clone()]);
-    assert!(states.open.docs.peek().trail(id).map(History::entries) == Some(&documents[..]));
+    assert!(trail_of(&states, id) == documents);
     assert_eq!(cursor_of(&states), Some(2));
     assert!(states.visits.peek().entries() == documents);
     assert_eq!(
-        states.asm_at.peek().at(&(id, documents[0].clone())),
+        states
+            .asm_at
+            .peek()
+            .at(&(id, Stop::whole(documents[0].clone()))),
         Some(12),
         "the row of the place left was forgotten"
     );
@@ -11704,14 +12031,17 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
         documents[2].clone(),
         Reach::InPlace,
     );
-    assert!(states.open.docs.peek().trail(id).map(History::entries) == Some(&documents[..]));
+    assert!(trail_of(&states, id) == documents);
 
     navigate(states.open, Nav::Back);
     navigate(states.open, Nav::Back);
     test.sync_and_update();
     assert!(states.open.active() == Some(documents[0].clone()));
     assert_eq!(
-        states.asm_at.peek().at(&(id, documents[0].clone())),
+        states
+            .asm_at
+            .peek()
+            .at(&(id, Stop::whole(documents[0].clone()))),
         Some(12)
     );
     navigate(states.open, Nav::Forward);
@@ -11767,7 +12097,7 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
     );
     assert_eq!(again, Some(preview), "a second row opened a second tab");
     assert_eq!(states.open.documents().len(), 2);
-    assert!(states.open.docs.peek().trail(preview).map(History::entries) == Some(&documents[1..]));
+    assert!(trail_of(&states, preview) == documents[1..]);
 
     // A place a tab already shows: that tab, the temporal one left as it is.
     let raised = open_document(
@@ -11787,7 +12117,7 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
     );
     assert_eq!(raised, Some(preview));
     assert!(
-        states.open.docs.peek().trail(preview).map(History::entries) == Some(&documents[1..]),
+        trail_of(&states, preview) == documents[1..],
         "raising the temporal tab pushed onto it"
     );
 
@@ -11966,8 +12296,12 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
     open_document(states.open, states.visits, source.clone(), Reach::InPlace);
     open_document(states.open, states.visits, other.clone(), Reach::NewTab);
     let mut asm_at = states.asm_at;
-    asm_at.write().remember((survivor, symbol.clone()), 12);
-    asm_at.write().remember((survivor, source.clone()), 3);
+    asm_at
+        .write()
+        .remember((survivor, Stop::whole(symbol.clone())), 12);
+    asm_at
+        .write()
+        .remember((survivor, Stop::whole(source.clone())), 3);
     test.sync_and_update();
     assert_eq!(states.open.documents().len(), 2);
 
@@ -11987,22 +12321,20 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
 
     assert!(states.open.documents() == [source.clone()]);
     assert!(states.open.active() == Some(source.clone()));
-    assert!(
-        states
-            .open
-            .docs
-            .peek()
-            .trail(survivor)
-            .map(History::entries)
-            == Some(&[source.clone()][..])
-    );
+    assert!(trail_of(&states, survivor) == [source.clone()]);
     assert_eq!(
-        states.asm_at.peek().at(&(survivor, symbol.clone())),
+        states
+            .asm_at
+            .peek()
+            .at(&(survivor, Stop::whole(symbol.clone()))),
         None,
         "a position into the closed file was kept, and with it the file's bytes"
     );
     assert_eq!(
-        states.asm_at.peek().at(&(survivor, source.clone())),
+        states
+            .asm_at
+            .peek()
+            .at(&(survivor, Stop::whole(source.clone()))),
         Some(3)
     );
     assert!(states.visits.peek().entries() == [source]);
@@ -12163,7 +12495,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
     let kept = states
         .marks_at
         .peek()
-        .at(&(id, sum_to.clone()))
+        .at(&(id, Stop::whole(sum_to.clone())))
         .expect("the runs of the place left were not kept");
     assert!(kept.marks.assembly.as_ref().map(|p| p.rows) == Some(assembly.rows));
     assert!(kept.marks.source.as_ref().map(|p| p.rows) == Some(source.rows));
@@ -12231,7 +12563,11 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
     open_document(states.open, states.visits, add, Reach::InPlace);
     settle(&mut test);
     settle(&mut test);
-    assert!(states.marks_at.peek().at(&(id, sum_to.clone())).is_some());
+    assert!(states
+        .marks_at
+        .peek()
+        .at(&(id, Stop::whole(sum_to.clone())))
+        .is_some());
 
     // Back to the place through a row outside the panes, on a line of its own.
     let at = LinePos {
@@ -12305,11 +12641,13 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
     let mut marks_at = states.marks_at;
     marks_at
         .write()
-        .remember((survivor, symbol.clone()), kept(1));
+        .remember((survivor, Stop::whole(symbol.clone())), kept(1));
     marks_at
         .write()
-        .remember((survivor, source.clone()), kept(2));
-    marks_at.write().remember((closing, other.clone()), kept(3));
+        .remember((survivor, Stop::whole(source.clone())), kept(2));
+    marks_at
+        .write()
+        .remember((closing, Stop::whole(other.clone())), kept(3));
     test.sync_and_update();
 
     close_tab(
@@ -12323,10 +12661,20 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
     );
     test.sync_and_update();
     assert!(
-        states.marks_at.peek().at(&(closing, other)).is_none(),
+        states
+            .marks_at
+            .peek()
+            .at(&(closing, Stop::whole(other)))
+            .is_none(),
         "the closed tab's runs were kept, and with them the binary they point into"
     );
-    assert!(states.marks_at.peek().at(&(survivor, symbol.clone())) == Some(kept(1)));
+    assert!(
+        states
+            .marks_at
+            .peek()
+            .at(&(survivor, Stop::whole(symbol.clone())))
+            == Some(kept(1))
+    );
 
     close_binary(
         states.objects,
@@ -12343,10 +12691,14 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
     test.sync_and_update();
     assert!(states.open.documents() == [source.clone()]);
     assert!(
-        states.marks_at.peek().at(&(survivor, symbol)).is_none(),
+        states
+            .marks_at
+            .peek()
+            .at(&(survivor, Stop::whole(symbol)))
+            .is_none(),
         "the runs of an entry the closing binary took off the trail were kept"
     );
-    assert!(states.marks_at.peek().at(&(survivor, source)) == Some(kept(2)));
+    assert!(states.marks_at.peek().at(&(survivor, Stop::whole(source))) == Some(kept(2)));
 }
 
 /// The unified view's pane as the app mounts it, under the root effects a switch goes

@@ -6,6 +6,7 @@ use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData};
 
 use super::*;
 use crate::docs::Docs;
+use crate::history::Stop;
 use crate::project::Document;
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -165,7 +166,7 @@ fn source_on(nth: u32, file: &str) -> Entry {
     for _ in 0..nth {
         id = docs.open(document.clone());
     }
-    (id, document)
+    (id, Stop::whole(document))
 }
 
 /// The same, on the first tab.
@@ -218,7 +219,7 @@ fn a_closing_binary_forgets_the_lines_of_the_entries_it_takes() {
     let mut driven = Driven::default();
     driven.remember(source("main.rs"), 42);
     driven.remember(source_on(1, "lib.rs"), 7);
-    driven.forgetting(|(_, document)| *document != Document::Source("main.rs".into()));
+    driven.forgetting(|(_, stop)| stop.document != Document::Source("main.rs".into()));
     assert_eq!(driven.line(&source("main.rs")), None);
     assert_eq!(driven.line(&source_on(1, "lib.rs")), Some(7));
 }

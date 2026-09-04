@@ -949,7 +949,7 @@ pub(crate) fn use_clear_marks(
         // it last was rather than answered to directly, since reading the analysis
         // subscribes this to writes -- a request, the slow flag -- that change no listing.
         let active = active.read().clone();
-        let document = active.as_ref().map(|(_, document)| document);
+        let document = active.as_ref().map(|(_, stop)| &stop.document);
         let file =
             source_side(document, &analysis.read(), &marked.read()).map(|side| side.file().clone());
         // Cloned out of the borrow before the `borrow_mut`.
@@ -1051,7 +1051,7 @@ pub(crate) fn use_land(
         // value changes. A place left with nothing picked out and nothing kept gets no
         // entry: it comes back as a place never seen does, and a restored session walks
         // through every tab it reopens.
-        let left = leaving.filter(|(tab, document)| docs.peek().contains(*tab, document));
+        let left = leaving.filter(|(tab, stop)| docs.peek().contains(*tab, stop));
         if let Some(entry) = left {
             let was = marks_at.peek().at(&entry);
             let kept = Kept {
@@ -1068,8 +1068,9 @@ pub(crate) fn use_land(
         if asked.is_some() {
             landing.set(None);
         }
-        let landed = asked
-            .filter(|landing| Some(&landing.tab) == active.as_ref().map(|(_, document)| document));
+        let landed = asked.filter(|landing| {
+            Some(&landing.tab) == active.as_ref().map(|(_, stop)| &stop.document)
+        });
         // The caret the arriving listing is to plant, or none: a planting left by the
         // last arrival is spent by this one whether or not it named it.
         let planting = landed.as_ref().and_then(|landing| {
@@ -1094,18 +1095,22 @@ pub(crate) fn use_land(
             (None, Some(kept)) => {
                 marks.source = kept.marks.source.clone();
                 marks.assembly = match &active {
-                    Some((_, Document::Code(object))) => {
-                        code_rows.peek().as_ref().and_then(|built| {
-                            if !built.reading.is_about(object) {
-                                return None;
-                            }
-                            if kept.generation == Some(built.reading.generation) {
-                                kept.marks.assembly.clone()
-                            } else {
-                                kept.carry(|spot| row_of(built, spot))
-                            }
-                        })
-                    }
+                    Some((
+                        _,
+                        Stop {
+                            document: Document::Code(object),
+                            ..
+                        },
+                    )) => code_rows.peek().as_ref().and_then(|built| {
+                        if !built.reading.is_about(object) {
+                            return None;
+                        }
+                        if kept.generation == Some(built.reading.generation) {
+                            kept.marks.assembly.clone()
+                        } else {
+                            kept.carry(|spot| row_of(built, spot))
+                        }
+                    }),
                     _ => kept.marks.assembly.clone(),
                 };
             }
@@ -1113,7 +1118,15 @@ pub(crate) fn use_land(
         }
         if marks.source.is_none() {
             marks.source = match &active {
-                Some(entry @ (_, Document::Source(file))) => driven
+                Some(
+                    entry @ (
+                        _,
+                        Stop {
+                            document: Document::Source(file),
+                            ..
+                        },
+                    ),
+                ) => driven
                     .peek()
                     .line(entry)
                     .map(|line| line_pick(file.clone(), line, None, Owed::default())),

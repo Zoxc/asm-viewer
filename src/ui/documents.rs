@@ -37,11 +37,27 @@ pub(crate) enum Reach {
 /// in. Every read of the states is bound before any write to them.
 pub(crate) fn open_document(
     open: Open,
-    mut visits: State<Visits>,
+    visits: State<Visits>,
     target: Document,
     reach: Reach,
 ) -> Option<DocId> {
+    open_stop(open, visits, Stop::whole(target), reach)
+}
+
+/// The same for a place inside a document: what a door into an object's code at an
+/// address opens, so the trail holds the place and not just the listing (`land`).
+///
+/// A stop and not a document is what goes on the trail; everything else here -- the
+/// visit, which tab is preferred, the temporal tab -- is about the document, since a
+/// move inside one is not a new place to have been.
+pub(crate) fn open_stop(
+    open: Open,
+    mut visits: State<Visits>,
+    stop: Stop,
+    reach: Reach,
+) -> Option<DocId> {
     let Open { mut dock, mut docs } = open;
+    let target = stop.document.clone();
 
     // Recorded whatever else happens, and only when it changes the record: `State::write`
     // notifies whether or not the value changes, and re-opening the place at the top must
@@ -66,7 +82,7 @@ pub(crate) fn open_document(
             if current != target {
                 let mut docs = docs.write();
                 if let Some(trail) = docs.trail_mut(id) {
-                    trail.push(target);
+                    trail.push(stop);
                 }
                 docs.promote(id);
             }
@@ -80,7 +96,7 @@ pub(crate) fn open_document(
                 raise(open, id);
                 return Some(id);
             }
-            let id = docs.write().open(target);
+            let id = docs.write().open(stop);
             dock.write().show_document(Tab::Document(id));
             Some(id)
         }
@@ -94,7 +110,7 @@ pub(crate) fn open_document(
                     {
                         let mut docs = docs.write();
                         if let Some(trail) = docs.trail_mut(id) {
-                            trail.push(target);
+                            trail.push(stop);
                         }
                     }
                     raise(open, id);
@@ -103,7 +119,7 @@ pub(crate) fn open_document(
                 None => {
                     let id = {
                         let mut docs = docs.write();
-                        let id = docs.open(target);
+                        let id = docs.open(stop);
                         docs.mark_temporal(id);
                         id
                     };
@@ -364,7 +380,7 @@ pub(crate) fn close_binary(
 
     // Nothing kept by an entry can outlive the entry: not the closed tabs', and not the
     // ones a surviving trail just lost, which hold the file's bytes just the same.
-    let kept = |(tab, document): &Entry| !closing.contains(tab) && !document.in_file(path);
+    let kept = |(tab, stop): &Entry| !closing.contains(tab) && !stop.document.in_file(path);
     asm_at.write().forgetting(kept);
     src_at.write().forgetting(kept);
     code_at.write().forgetting(kept);
@@ -423,8 +439,15 @@ pub(crate) fn land(
     }
 
     let tab = landing.tab.clone();
+    // A door into an object's code at an address opens *that place*, so the trail holds
+    // it and a later Back comes back to it. Every other landing's address is a caret in
+    // the one place its document is.
+    let stop = match (&tab, landing.address) {
+        (Document::Code(_), Some(address)) => Stop::at(tab.clone(), address),
+        _ => Stop::whole(tab.clone()),
+    };
     land.set(Some(landing));
-    open_document(open, visits, tab, reach)
+    open_stop(open, visits, stop, reach)
 }
 
 /// Raise the open tab `id` on `at`: what a Locations row does for the source-driven tab
@@ -640,6 +663,21 @@ pub(crate) async fn take_load(
     }
 }
 
+/// What a stop on a trail is called: the document's own name, except for a place inside
+/// an object's code, which is named by the symbol **starting** at that address -- so
+/// stepping back through a listing says which function each step goes to and not the
+/// object's name three times over. A place no symbol starts at, which is what a call into
+/// the middle of a function makes, has no name to give and is the object's.
+pub(crate) fn stop_text(stop: &Stop) -> String {
+    match (&stop.document, stop.address) {
+        (Document::Code(object), Some(address)) => match object.symbol_at(address) {
+            Some(symbol) => short_name(symbol.display()),
+            None => entry_text(&stop.document),
+        },
+        (document, _) => entry_text(document),
+    }
+}
+
 /// What a document is called where it is named in a list. A source file's *name* only and
 /// a symbol's `module::fn_name` only ([`short_name`]); the whole of either is in
 /// [`entry_tooltip`].
@@ -765,7 +803,7 @@ impl Nav {
     /// move. What the toolbar's two buttons name in their tooltips, and the one place the
     /// answer is worked out, so a button that is live and a step that does something
     /// cannot disagree.
-    pub(crate) fn destination(self, trail: &History) -> Option<&Document> {
+    pub(crate) fn destination(self, trail: &History) -> Option<&Stop> {
         let cursor = trail.cursor()?;
         let index = match self {
             Self::Back => cursor.checked_sub(1)?,
@@ -775,7 +813,7 @@ impl Nav {
     }
 
     /// Move the cursor and hand back the entry it landed on.
-    fn step(self, trail: &mut History) -> Option<Document> {
+    fn step(self, trail: &mut History) -> Option<Stop> {
         match self {
             Self::Back => trail.back(),
             Self::Forward => trail.forward(),
@@ -787,6 +825,11 @@ impl Nav {
 /// already on top, so what it shows is the whole of what changes: nothing is opened,
 /// nothing is recorded, and a temporal tab stays temporal -- walking a trail is not
 /// going somewhere new in it.
+///
+/// A step *inside* one document -- between two places in an object's code -- moves the
+/// view like any other: the stop is half of the key the panes keep their position, their
+/// runs and their driven line under, so the step is a switch to them and their own hooks
+/// put back what that place was left with.
 pub(crate) fn navigate(open: Open, nav: Nav) {
     let mut docs = open.docs;
     let Some(id) = open.active_id() else {
