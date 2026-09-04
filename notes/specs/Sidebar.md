@@ -54,19 +54,26 @@ Where a function encloses a source line, its context menu also has "N instances 
 the same list for the whole function, an inlined caller included. Clicking one chooses the
 symbol a source-driven tab shows.
 
-### Uses of a name
+### References to a name
 
-A name's context menu has "Find uses of `foo`", which asks the language server where the name
-is used. It is there whether the name is called there or defined there, and only while a
-server runs. The heading is the name, and the uses are grouped under the file each is in, the
-files by path and the uses by line. A file row says how many uses it holds and folds them away
-when pressed; under it each use is its line number and the line, with the name marked in it,
-as a Search match is. A long line is cut. Where the name is defined is not listed; clicking a
-link goes there. Clicking a use opens the file on that line with the name selected, the assembly
-side following it as it does a clicked line; Ctrl+click opens it in a new tab.
+A name's context menu has "Find references to `foo`", which asks the language server where the
+name is used. It is there whether the name is used there or defined there, and only while a
+server runs. The heading is the name, and the references are grouped under the file each is
+in, the files by path and the references by line. A file row says how many it holds and folds
+them away when pressed; under it each reference is its line number and the line, with the name
+marked in it, as a Search match is. A long line is cut. Where the name is defined is not
+listed; clicking a link goes there. Clicking a reference opens the file on that line with the
+name selected, the assembly side following it as it does a clicked line; Ctrl+click opens it
+in a new tab.
 
 A name the server answers nothing for says so, as does one asked while it is still reading the
 project; asking again once it has finished answers.
+
+### Implementations of a name
+
+A name's context menu also has "Find implementations", which asks the server what implements
+the name. The answer is listed as the references are, and clicking one opens it the same way.
+A name nothing implements says so.
 
 ## Files panel
 

@@ -26,19 +26,23 @@ within the symbol.
 
 ## Following a name
 
-While a language server is running, the name in a call to a function, method or macro is a
-link. A name where one is defined is not. Under the pointer a link is underlined and lit, and
-the pointer becomes a hand. With no server there are no links.
+While a language server is running, every name it can place is a link: a call, a type or a
+trait, a field, a variant, a module, a local. A name where one is defined is not, nor a
+built-in type, which it places nowhere. An item in a trait `impl` is the exception: it links
+to the trait's own declaration. Under the pointer a link is underlined and lit, and the
+pointer becomes a hand. With no server there are no links.
 
 Clicking one asks the server where the name is defined and goes to the file and line it
 names. The source pane lands on that line and the assembly side follows it, as it does a
 clicked line. The tab shows that file, so one that was assembly-driven becomes source-driven.
 Back returns. Ctrl+click opens the definition in a new tab.
 
-Clicking a link does not select its line. A name the server cannot place does nothing.
+Clicking a link does not select its line. One that answers nothing, or answers its own line,
+does nothing.
 
-A name's context menu — a link, or the name where it is defined — has "Find uses of `foo`",
-which lists the name's uses in the Locations panel.
+A name's context menu — a link, or the name where it is defined — has three questions for the
+server. "Go to definition" does what clicking a link does. "Find references to `foo`" and
+"Find implementations" answer in the Locations panel. A question with no answer says so.
 
 ## Selection
 
