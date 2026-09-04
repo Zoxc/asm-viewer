@@ -65,6 +65,15 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Navigation
 
+- [ ] A door into the source shows no in-between state. Following a name puts the pane on the
+  row it landed on, but the passes before that are still visible: the file is drawn where it
+  was, or at the top, and the move comes after. Two rounds have taken out what was avoidable
+  -- the reveal held from the pane's mount, the run planted a memo behind the switch, a
+  landing spent on somebody else's arrival -- and what is left is the gap every listing has,
+  since a pane's offset is decided in an effect and the render that first draws a document
+  draws it unscrolled. Removing it means a listing deciding its own offset as it renders,
+  which is a change to how everything here scrolls rather than to the doors, so the decision
+  is what a `VirtualScrollView` can be told before its first layout.
 - [ ] A file search dialog on Ctrl+P: type part of a path and open the file it names, the
   way an editor's quick-open does.
 - [ ] Hold a question the server answered with nothing, and ask it again once the server is
