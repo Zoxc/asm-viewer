@@ -422,6 +422,8 @@ macro_rules! project_states {
         $runner.provide_root_context(|| Follows(State::create(HashMap::new())));
         // Likewise: every row and link asks it whether a press opens a tab of its own.
         $runner.provide_root_context(|| Ctrl(State::create(false)));
+        // And whether it is a door at all: Alt held says it is not.
+        $runner.provide_root_context(|| Alt(State::create(false)));
         // Likewise: a recent project's row hands it to the switch, which is one of the two
         // places a file can be moved aside.
         $runner.provide_root_context(|| Rescued(State::create(Vec::new())));
@@ -11164,7 +11166,8 @@ fn a_caps_lock_that_acts_as_ctrl_is_learnt_from_its_release() {
             let held = runner
                 .provide_root_context(|| ControlHeld(State::create(false)))
                 .0;
-            (ModifierKeys::new(shift, ctrl, caps, held), ctrl)
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (ModifierKeys::new(shift, ctrl, alt, caps, held), ctrl)
         },
         1.,
     );
@@ -12233,6 +12236,105 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
                 _ => false,
             }),
         "the link did not open its symbol"
+    );
+}
+
+/// Alt held makes a press on a link the start of a selection and nothing else. Every
+/// door in a code row acts on a plain press, which leaves no way to put the pointer down
+/// on one and sweep: the release follows the link. Alt is what says "not a door this
+/// time", and the selection the row's own `pointer_down` began is what stands.
+#[test]
+fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
+    let shown = shown_sum_to();
+    let assembly = shown.studied.assembly.clone().expect("sum_to decodes");
+    let lanes = shown.studied.lanes.clone();
+    let (index, instruction) = assembly
+        .instructions
+        .iter()
+        .enumerate()
+        .find(|(_, instruction)| instruction.relocation.is_some())
+        .expect("sum_to calls add");
+    let target = instruction.relocation.clone().expect("a target");
+    let row = lanes.row_of(index);
+
+    let (mut test, (states, marked, _landing, alt)) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        |runner| {
+            let (states, marked, landing) = listing_states!(runner, shown);
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, marked, landing, alt)
+        },
+        1.,
+    );
+    let mut alt = alt;
+    alt.set(true);
+    settle(&mut test);
+    let link = label_area(&test, target.display()).expect("the link is drawn");
+
+    // The whole gesture, down on the link and up on it: without Alt this is what opens
+    // the symbol (`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol`).
+    test.move_cursor(left_of(&link));
+    test.press_cursor(left_of(&link));
+    test.move_cursor(right_of(&link));
+    test.release_cursor(right_of(&link));
+    settle(&mut test);
+
+    assert!(
+        states.open.active().is_none(),
+        "the link opened its symbol with Alt held"
+    );
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the press picked the row out");
+    assert_eq!(picked.rows.rows(), row..=row);
+    let (from, to) = picked.chars.ends();
+    assert!(
+        from.row == row && to.row == row && to.col > from.col,
+        "the sweep over the link selected nothing: {from:?} {to:?}"
+    );
+}
+
+/// And the door the unified view has of its own -- a Ctrl-press on a symbol's label row,
+/// which is a press on the row and not on anything inside it -- is shut by Alt the same
+/// way.
+#[test]
+fn alt_held_shuts_the_unified_views_own_door() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let (mut test, (states, _marked, _sections, _window, _landing, ctrl, alt)) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| {
+            let (states, marked, sections, window, landing, ctrl) = code_states!(runner, reading);
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, marked, sections, window, landing, ctrl, alt)
+        },
+        1.,
+    );
+    let (mut ctrl, mut alt) = (ctrl, alt);
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    ctrl.set(true);
+    alt.set(true);
+    settle(&mut test);
+    let label = label_area(&test, "sum_to:").expect("sum_to is labelled");
+    press_at(
+        &mut test,
+        (
+            (label.origin.x + label.width() / 2.0) as f64,
+            (label.origin.y + label.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(code),
+        "the label opened the symbol's tab with Alt held"
     );
 }
 
@@ -13941,7 +14043,7 @@ fn search_and_modifiers(
     TestingRunner,
     ProjectStates,
     PathBuf,
-    Modifiers4,
+    Modifiers5,
     State<Marks>,
 ) {
     let directory = run_directory(line).join("searched");
@@ -13962,7 +14064,8 @@ fn search_and_modifiers(
             runner.provide_root_context(|| Plant(State::create(None)));
             runner.provide_root_context(|| CodeRows(State::create(None)));
             let held = runner.provide_root_context(|| {
-                Modifiers4(
+                Modifiers5(
+                    State::create(false),
                     State::create(false),
                     State::create(false),
                     State::create(false),
@@ -13982,10 +14085,16 @@ fn search_and_modifiers(
     (test, states.0, directory, states.1, states.2)
 }
 
-/// The four states `ModifierKeys` is made of, created where freya's context is: a test
+/// The five states `ModifierKeys` is made of, created where freya's context is: a test
 /// cannot make a `State` of its own outside the runner.
 #[derive(Clone, Copy)]
-struct Modifiers4(State<bool>, State<bool>, State<bool>, State<bool>);
+struct Modifiers5(
+    State<bool>,
+    State<bool>,
+    State<bool>,
+    State<bool>,
+    State<bool>,
+);
 
 /// The panel over a walk that answers nothing, and the modifier states the root's one key
 /// handler writes beside the chord.
@@ -14000,7 +14109,7 @@ fn search_with_modifiers(
     State<bool>,
 ) {
     let (test, states, directory, held, _) = search_and_modifiers(line, |_query, _emit| {});
-    let keys = ModifierKeys::new(held.0, held.1, held.2, held.3);
+    let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
     (test, states, directory, keys, held.0, held.1)
 }
 

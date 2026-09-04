@@ -313,6 +313,7 @@ impl KeyExt for TextRow {
 impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
         let ctrl = use_consume::<Ctrl>().0;
+        let alt = use_consume::<Alt>().0;
         let mut hovering = use_state(|| false);
         let open = use_open();
         let visits = use_consume::<Visited>().0;
@@ -398,7 +399,9 @@ impl Component for TextRow {
         .on_pointer_out(move |_| hovering.set_if_modified(false))
         .maybe(opens.is_some(), move |el| {
             el.on_press(move |_| {
-                if !*ctrl.peek() {
+                // Alt says a press on a link is not a door this time, so the selection
+                // the row's own `pointer_down` began stands.
+                if !*ctrl.peek() || *alt.peek() {
                     return;
                 }
                 // A tab of its own, as Ctrl opens one everywhere.

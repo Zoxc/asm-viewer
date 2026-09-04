@@ -198,7 +198,13 @@ pub(crate) struct Shift(pub(crate) State<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct Ctrl(pub(crate) State<bool>);
 
-/// The two modifiers as the root's global key handlers keep them, and what it takes to keep
+/// Whether Alt is held, tracked as the other two are. It is what says a press on a link is
+/// not a door this time: every door in a code row acts on a plain press, which leaves no way
+/// to put the pointer down on one and sweep, the release following the link instead.
+#[derive(Clone, Copy)]
+pub(crate) struct Alt(pub(crate) State<bool>);
+
+/// The three modifiers as the root's global key handlers keep them, and what it takes to keep
 /// them right.
 ///
 /// A key event carries the key's own name and the modifier mask **as it was before the
@@ -217,6 +223,7 @@ pub(crate) struct Ctrl(pub(crate) State<bool>);
 pub(crate) struct ModifierKeys {
     shift: State<bool>,
     ctrl: State<bool>,
+    alt: State<bool>,
     /// Whether this keyboard's Caps Lock has shown itself to be a Ctrl.
     caps_is_ctrl: State<bool>,
     /// Whether a key *named* Control is down, which is what tells a Caps Lock released
@@ -228,12 +235,14 @@ impl ModifierKeys {
     pub(crate) fn new(
         shift: State<bool>,
         ctrl: State<bool>,
+        alt: State<bool>,
         caps_is_ctrl: State<bool>,
         control_held: State<bool>,
     ) -> Self {
         Self {
             shift,
             ctrl,
+            alt,
             caps_is_ctrl,
             control_held,
         }
@@ -251,6 +260,11 @@ impl ModifierKeys {
         let caps = *key == Key::Named(NamedKey::CapsLock) && *self.caps_is_ctrl.peek();
         self.ctrl
             .set_if_modified(control || caps || modifiers.contains(Modifiers::CONTROL));
+        // Alt is read by its own name and its own bit alone: no desktop makes another key
+        // into it the way Caps Lock is made into Ctrl.
+        self.alt.set_if_modified(
+            *key == Key::Named(NamedKey::Alt) || modifiers.contains(Modifiers::ALT),
+        );
     }
 
     /// A key came up: `key` under `modifiers`, the mask as it was before it.
@@ -272,6 +286,9 @@ impl ModifierKeys {
         let caps_is_ctrl = learnt || *self.caps_is_ctrl.peek();
         self.ctrl.set_if_modified(
             !control && !(caps && caps_is_ctrl) && modifiers.contains(Modifiers::CONTROL),
+        );
+        self.alt.set_if_modified(
+            *key != Key::Named(NamedKey::Alt) && modifiers.contains(Modifiers::ALT),
         );
     }
 }

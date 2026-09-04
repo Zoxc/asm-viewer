@@ -289,10 +289,10 @@ raises the tab with the line left as a landing, a move and not a visit, the tab 
 **Two doors join the two views** and both go through the same functions. A **Ctrl**-press on a label
 in an object's code opens the symbol's own tab, a `NewTab` as Ctrl opens one everywhere; a plain
 press selects the row like any other, since a label is a row of the listing first, though a label's
-row is a row of no file. Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift`,
-both kept by `ModifierKeys`), a freya pointer event carrying no modifiers, and the label lights as a
-link only while it is held. A Caps Lock the desktop has made into Ctrl names itself Caps Lock in
-every event, so it is learnt from its first release (`ModifierKeys`' doc,
+row is a row of no file. Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift`
+and `Alt`, all three kept by `ModifierKeys`), a freya pointer event carrying no modifiers, and the
+label lights as a link only while it is held. A Caps Lock the desktop has made into Ctrl names
+itself Caps Lock in every event, so it is learnt from its first release (`ModifierKeys`' doc,
 `notes/upstream/freya.md`). **The third door is the address an instruction goes to when nothing
 names it**: a call into the middle of a function, a call to a function a stripped image has no
 symbol for, a jump out of the symbol in a listing with no row for it (`Instruction::target`,
@@ -342,6 +342,20 @@ end with "Bookmark symbol", the symbol the row is code of, which in the code lis
 stretch's own, through the same `bookmark_item` the sidebar rows and a tab's header use
 (`agents/Sidebar.md`), worded for a row that is an instruction and not the symbol. With it the menu
 always has something to offer, so a row opens one whether or not it has a line or a door.
+
+**Alt held says a press is not a door this time.** Every door in a code row acts on a plain press,
+which left no way to put the pointer down on one and sweep: the release followed the link and the
+gesture ended as a navigation. So each door -- the three inline labels and the code listing's label
+row, which is a press on the row itself -- returns from its press while `Alt` is held, and returns
+*without* stopping it, so the press means what a press on the row's own text means. Nothing else is
+needed: the selection is already made by then. A row's `pointer_down` runs `mark_press` before any
+of them, an inline link being one unit of the row's text (`src/chars.rs`), so the caret is already
+on the link's own column with the sweep begun -- which is why the guard is in the press and never
+in `pointer_down`, where it would destroy the very selection Alt is there to leave. Alt is read by
+its own name and its own bit alone, having no Caps Lock to be made out of; right Alt on a European
+layout is `AltGraph` and is not it. The door's box stays lit while Alt is held, the pointer being
+over a link either way: a read of `Alt` in every label would re-render the listing on a modifier
+held for other reasons.
 
 **A door that names an instruction puts the caret on it, and does so when the listing is drawn and
 not when the document arrives.** A line is a row of a file, which has the same rows every time, so

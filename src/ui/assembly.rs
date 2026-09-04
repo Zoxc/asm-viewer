@@ -286,6 +286,7 @@ impl Component for RelocationLabel {
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let ctrl = use_consume::<Ctrl>().0;
+        let alt = use_consume::<Alt>().0;
         let marked = use_consume::<Marked>().0;
         let landing = use_consume::<Land>().0;
         let plant = use_consume::<Plant>().0;
@@ -324,6 +325,11 @@ impl Component for RelocationLabel {
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
             .on_press(move |e: Event<PressEventData>| {
+                // Alt says this press is not a door: it is left to the row, whose
+                // `pointer_down` has already begun a selection over the link.
+                if *alt.peek() {
+                    return;
+                }
                 // Or the press bubbles into the row, which would pin the line the
                 // instruction being left came from.
                 e.stop_propagation();
@@ -406,6 +412,7 @@ impl Component for TargetLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let ctrl = use_consume::<Ctrl>().0;
+        let alt = use_consume::<Alt>().0;
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let marked = use_consume::<Marked>().0;
@@ -442,8 +449,10 @@ impl Component for TargetLabel {
                 // A plain press is a plain press: it goes on into the row, which
                 // `pointer_down` has already picked out, and opens nothing -- except in
                 // the unified view, where the row it goes to is one of this listing's
-                // and moving to it is what the press is for.
-                if !code_tab && !*ctrl.peek() {
+                // and moving to it is what the press is for. Alt says the same of every
+                // press: not a door this time, so the selection begun over the link
+                // stands.
+                if (!code_tab && !*ctrl.peek()) || *alt.peek() {
                     return;
                 }
                 // Or the press bubbles into the row, which would pin the line the
@@ -499,6 +508,7 @@ struct BranchLabel {
 impl Component for BranchLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
+        let alt = use_consume::<Alt>().0;
         let marked = use_consume::<Marked>().0;
         let text = self.text.clone();
         let to = self.to;
@@ -524,6 +534,11 @@ impl Component for BranchLabel {
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
             .on_press(move |e: Event<PressEventData>| {
+                // Alt says this press is not a door: left to the row, which is already
+                // sweeping a selection out over the link.
+                if *alt.peek() {
+                    return;
+                }
                 // Or the press bubbles into the row, which would keep the row *this*
                 // instruction is picked out, where the reader asked for the one it
                 // jumps to.

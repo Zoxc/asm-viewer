@@ -369,9 +369,10 @@ pub fn app() -> impl IntoElement {
     let code_rows = use_provide_context(|| CodeRows(State::create(None))).0;
     let shift = use_provide_context(|| Shift(State::create(false))).0;
     let ctrl = use_provide_context(|| Ctrl(State::create(false))).0;
+    let alt = use_provide_context(|| Alt(State::create(false))).0;
     let caps_is_ctrl = use_state(|| false);
     let control_held = use_state(|| false);
-    let keys = ModifierKeys::new(shift, ctrl, caps_is_ctrl, control_held);
+    let keys = ModifierKeys::new(shift, ctrl, alt, caps_is_ctrl, control_held);
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
     let searched = use_provide_context(|| Searching(State::create(Searched::default()))).0;
     // At the root, not in the Project view: an inactive dock tab is unmounted, and a build
