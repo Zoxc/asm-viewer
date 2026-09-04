@@ -25,9 +25,19 @@
 /// difference between a function and the closure inside it, and a tab that dropped it
 /// would name a symbol that is not the one it shows. Only the innermost is kept.
 ///
+/// A name the app made up rather than read from a file comes back whole. Those are one
+/// angle-bracket group and nothing else -- `<entry point>`, `<function 0x140001000>` --
+/// so there is no path in one and no function name at its end. The shape is the whole
+/// test: a real name opening with `<` is a `<Type as Trait>` qualifier, whose `::` puts
+/// the group's end before the name's.
+///
 /// Never empty: a name nothing can be made of comes back as it went in.
 pub fn short_name(name: &str) -> String {
     let name = name.trim();
+    if is_made_up(name) {
+        return name.to_owned();
+    }
+
     let mut segments = split_path(name);
 
     // rustc's legacy mangling ends the path with the symbol's own hash. `{:#}` on
@@ -66,6 +76,12 @@ pub fn short_name(name: &str) -> String {
     } else {
         short
     }
+}
+
+/// Whether a name is one of the app's own: a single angle-bracket group, closed, with
+/// nothing on either side of it. See [`short_name`].
+fn is_made_up(name: &str) -> bool {
+    name.starts_with('<') && name.ends_with('>') && skip_group(name, 0) == name.len()
 }
 
 /// What one path segment turns out to say.

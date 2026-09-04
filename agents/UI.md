@@ -282,6 +282,14 @@ The one thing kept beyond two segments is the closure a symbol *is* (`render::{c
 `render`), and only the innermost of them. The character elision above is still there and still the
 last word, for the names that are long anyway.
 
+**A name the app made up is not a path and is left whole.** `<entry point>` read as a path is a
+`<Type as Trait>` qualifier, which left a tab saying `point`, and `<function 0x140001000>` one
+saying `0x140001000`. What is tested is the shape rather than those names: one angle-bracket
+group, closed, with nothing on either side of it. A real name opening with `<` is a qualifier, and
+the `::` of what it qualifies puts the group's end before the name's, so the two cannot be
+confused; and a made-up name added later (the scratchpad's `<pad-3>`, `agents/Scratchpad.md`) is
+covered without being named here.
+
 It is real parsing and not a `rsplit("::")`: `::` appears inside generic arguments, `operator<<`
 writes an angle bracket that opens no group, `fn(*mut c_void) -> *mut T` writes one that closes
 none, and an `extern "C"` puts a quoted run in the middle of a type. So it is a scanner,

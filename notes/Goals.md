@@ -69,16 +69,12 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Assembly viewer
 
-- [ ] Fix the `<entry point>` tab name: the shortening in `naming.rs` reads a name as a
-  demangled path with generic arguments, and the angle brackets the app itself puts around
-  its two made-up names — `<entry point>`, and `<function 0x…>` for a function only an
-  unwind entry declares — are not that. A tab for either should say the name as it is.
-- [ ] Ctrl+C copies whatever is selected, wherever it is: the run of rows in either pane
-  today, the characters once the goal above lands, and the other places text is picked out
-  -- a filter box, the scratchpad's editor, its diagnostics and its output -- so the one
-  binding has one meaning and never comes back with a page of disassembly for a word picked
-  out somewhere else. The key handlers are per pane on purpose (`agents/Panes.md`); this is
-  the rule that decides which of them answers, not a global handler.
+- [ ] Ctrl+C copies whatever is selected, wherever it is: the run of rows or characters
+  either pane holds today, and the other places text is picked out -- a filter box, the
+  scratchpad's editor, its diagnostics and its output -- so the one binding has one meaning
+  and never comes back with a page of disassembly for a word picked out somewhere else. The
+  key handlers are per pane on purpose (`agents/Panes.md`); this is the rule that decides
+  which of them answers, not a global handler.
 
 - [ ] Drop the `<` `>` around a symbol's label in the unified view. A stretch's label is
   drawn `<name>:` (`src/ui/section_view.rs`, in the rows and in what is copied), objdump's

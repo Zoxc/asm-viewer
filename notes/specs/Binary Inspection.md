@@ -1,7 +1,8 @@
 # Binary Inspection
 
 Only declared text symbols are disassembled. Nothing is scanned for code. In a linked image,
-the entry point and the exported functions are symbols too, one symbol per address.
+the entry point and the exported functions are symbols too, one symbol per address. An entry
+point nothing else names is called `<entry point>`.
 The functions a linked image's unwind table states, an x86-64 PE's `.pdata` or an ELF's
 `.eh_frame`, are symbols too; one nothing else names is called `<function 0x…>` by its
 address, with the stated length as its size. A relocatable object's `.eh_frame` is not read.

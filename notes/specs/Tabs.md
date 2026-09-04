@@ -54,5 +54,8 @@ arguments however deeply nested (`<Vec<T> as IntoIterator>::into_iter` becomes
 `operator<<` is a name. The innermost closure is kept as a third part. A name that cannot be
 shortened is shown as it is.
 
+A name the app made up is shown as it is too. Those are written whole in angle brackets,
+`<entry point>` and `<function 0x…>`; no name out of a file is.
+
 History items use the same name. The tooltip shows the whole name and the History filter matches
 it. A name still long is cut at 40 characters.

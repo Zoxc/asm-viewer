@@ -253,3 +253,32 @@ fn a_name_that_makes_no_sense_is_answered_rather_than_panicked_on() {
         assert!(!short_name(name).is_empty() || name.trim().is_empty());
     }
 }
+
+/// The names the app makes up for code a file declares without naming are drawn as they
+/// are: there is no path in one to cut down, and reading it as a `<Type as Trait>`
+/// qualifier left a tab saying `point`.
+#[test]
+fn a_name_the_app_made_up_is_left_alone() {
+    assert_eq!(short_name("<entry point>"), "<entry point>");
+    assert_eq!(
+        short_name("<function 0x140001000>"),
+        "<function 0x140001000>"
+    );
+    assert_eq!(
+        short_name("<fragment 0x140001000>"),
+        "<fragment 0x140001000>"
+    );
+
+    // The shape is what is tested, not those three: a group with nothing after it
+    // qualifies nothing, whatever is written inside it.
+    assert_eq!(
+        short_name("<alloc::vec::Vec<T, A> as core::iter::IntoIterator>"),
+        "<alloc::vec::Vec<T, A> as core::iter::IntoIterator>"
+    );
+
+    // And a qualifier is still a qualifier: what it qualifies is outside its group.
+    assert_eq!(
+        short_name("<alloc::vec::Vec<T, A> as core::iter::IntoIterator>::into_iter"),
+        "Vec::into_iter"
+    );
+}
