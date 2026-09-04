@@ -134,7 +134,7 @@ extent and the object it came from; for an object the format, the symbol count a
 fact is a `field_row` cut to one line for the reason the names are.
 
 **The leading pane's bar carries the control that puts the following pane away** (`PaneToggle`, in
-`src/ui/dock.rs` beside the `DocumentBody` that mounts the panes), and only that bar: it names the
+`src/ui/split.rs` beside the `DocumentBody` that mounts the panes), and only that bar: it names the
 following pane, which is always the right-hand half of the split, so the control sits on the half
 that is always up and the half it hides carries none of its own. A second copy on the following
 bar would be the same button on screen twice, and a press on it would take its own door away.

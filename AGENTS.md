@@ -201,8 +201,9 @@ command.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
 - `src/ui/source_view.rs` — the source side of one, the bar over it, which file it is showing,
   and the lines of that file the gutter marks as having code.
-- `src/ui/dock.rs` — the dock, its two-kinded tab, the document panel's own tab bar, and which
-  panes a tab has, with the control on either pane's bar that says.
+- `src/ui/split.rs` — one document drawn: which side leads, and which panes a tab has, with
+  the control on the leading pane's bar that puts the other away.
+- `src/ui/dock.rs` — the dock, its two-kinded tab, and the document panel's own tab bar.
 - `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers,
   and what the language server has to say for itself.
 - `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.

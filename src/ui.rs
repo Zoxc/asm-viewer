@@ -125,6 +125,8 @@ mod sidebar;
 pub(crate) use sidebar::*;
 mod source_view;
 pub(crate) use source_view::*;
+mod split;
+pub(crate) use split::*;
 mod state;
 pub(crate) use state::*;
 mod symbol_bar;
