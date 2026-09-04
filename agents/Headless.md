@@ -208,6 +208,11 @@ test.release_cursor(target);
 for _ in 0..4 { test.sync_and_update(); }
 ```
 
+The app's own bar is dragged the same way (`a_tab_is_dragged_along_the_bar_to_move_it`), the
+drop zones there being the chips themselves; what a drop would land on is read off the chip's
+`Border`, since `element.style()` is in the matcher's hands and a colour is not otherwise
+observable.
+
 The passes between the two moves are not padding. `DockingArea`'s overlay, the centre zone and the
 four edge zones, is rendered only while `use_drag` holds a payload (`docking.rs:560-641`), so it
 does not exist to be measured until a pass has run after the threshold was crossed. The overlay is

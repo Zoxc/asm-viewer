@@ -36,6 +36,7 @@ fn chip(
     tooltip: String,
     active: bool,
     typing: bool,
+    landing: bool,
     temporal: bool,
     mut hovering: State<bool>,
     close: Option<Element>,
@@ -52,6 +53,19 @@ fn chip(
     } else {
         Color::TRANSPARENT
     };
+
+    // Where a tab being dragged would land: the leading edge of the chip under the
+    // pointer, in the same purple the tab on screen is marked with.
+    let mark = landing.then(|| {
+        Border::new()
+            .fill(palette().compiled_fg)
+            .width(BorderWidth {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: TAB_MARKER,
+            })
+    });
 
     // Painted and not laid out, so the mark takes no room from the name: a border is drawn
     // inside the box it is on.
@@ -80,6 +94,7 @@ fn chip(
             .background(background)
             .border(right_hairline())
             .border(marker)
+            .border(mark)
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
             // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
@@ -423,12 +438,14 @@ pub(crate) struct TabHeader {
     pub(crate) tab: Tab,
     /// Whether this is the tab on screen.
     pub(crate) active: bool,
+    /// Whether a tab being dragged would land here.
+    pub(crate) landing: bool,
     pub(crate) key: DiffKey,
 }
 
 impl PartialEq for TabHeader {
     fn eq(&self, other: &Self) -> bool {
-        self.tab == other.tab && self.active == other.active
+        self.tab == other.tab && self.active == other.active && self.landing == other.landing
     }
 }
 
@@ -461,6 +478,7 @@ impl Component for TabHeader {
                 page.title().to_owned(),
                 self.active,
                 typing,
+                self.landing,
                 false,
                 hovering,
                 Some(TabClose { tab }.into_element()),
@@ -492,6 +510,7 @@ impl Component for TabHeader {
             entry_tooltip(&document),
             self.active,
             typing,
+            self.landing,
             temporal,
             hovering,
             Some(TabClose { tab }.into_element()),
@@ -543,19 +562,72 @@ const PAST_LAST_TAB: f32 = 24.0;
 /// The bar: a horizontally scrolling row of chips, since these are opened by the dozen,
 /// with [`TabListButton`] pinned beside it. The scrollbar is off -- it would eat a third
 /// of a one-row bar, and the wheel and a drag still move it.
-fn tab_bar(tabs: &[Tab], active: Option<Tab>) -> Element {
+///
+/// **A chip can be dragged along the bar to move it**, which is the one thing here freya
+/// is asked for: each chip is a `DropZone` around a `DragZone`, the pattern its own docking
+/// uses, and a drop on a chip puts the dragged tab where that chip is. The zone past the
+/// last chip is the one that appends. A drop anywhere else changes nothing: `DragZone`
+/// clears the payload on the release wherever it lands, and nothing but these zones acts on
+/// one.
+#[derive(PartialEq)]
+pub(crate) struct TabBar;
+
+impl Component for TabBar {
+    fn render(&self) -> impl IntoElement {
+        let strip = use_consume::<OpenTabs>().0;
+        // Where a drop would land, and whether anything is being dragged at all: the
+        // second is what makes the first mean something, a zone the pointer left last time
+        // never having been told the drag ended (`DragZone` clears the payload itself).
+        let landing = use_state(|| None);
+        // Whether anything is being dragged is what makes the landing mean something: a
+        // mark left where the pointer last was would otherwise outlive the drag, no zone
+        // being told that a drag was abandoned (`DragZone` clears the payload itself).
+        let drag = use_drag::<Tab>();
+        let over = drag.read().is_some().then(|| landing()).flatten();
+        let (tabs, active) = {
+            let strip = strip.read();
+            (strip.tabs().to_vec(), strip.active())
+        };
+        // The table read once, here, for the copies that follow the cursor: a hook may not
+        // run in the loop that builds the chips.
+        let docs = use_consume::<OpenDocs>().0;
+        bar(strip, drag, landing, &docs.read(), &tabs, active, over)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bar(
+    strip: State<Strip>,
+    drag: State<Option<Tab>>,
+    landing: State<Option<usize>>,
+    docs: &Docs,
+    tabs: &[Tab],
+    active: Option<Tab>,
+    over: Option<usize>,
+) -> Element {
     let chips: Vec<Element> = tabs
         .iter()
-        .map(|tab| {
-            TabHeader {
-                tab: *tab,
-                active: Some(*tab) == active,
-                key: DiffKey::None,
-            }
+        .enumerate()
+        .map(|(index, tab)| {
+            let tab = *tab;
             // Keyed by the tab, so a tab that moves takes its hover, its tooltip and its
             // open menu with it instead of leaving them on whatever took its place.
-            .key(*tab)
-            .into_element()
+            let header = TabHeader {
+                tab,
+                active: Some(tab) == active,
+                landing: over == Some(index),
+                key: DiffKey::None,
+            }
+            .key(tab);
+            drop_zone(
+                strip,
+                drag,
+                landing,
+                index,
+                DragZone::new(tab, header.into_element())
+                    .drag_element(dragged(tab, docs))
+                    .into_element(),
+            )
         })
         .collect();
 
@@ -586,15 +658,69 @@ fn tab_bar(tabs: &[Tab], active: Option<Tab>) -> Element {
                         .height(Size::fill())
                         .children(chips)
                         .child(
-                            rect()
-                                .width(Size::px(PAST_LAST_TAB))
-                                .height(Size::fill())
-                                .into_element(),
+                            // The ground past the last chip, and the drop that appends.
+                            drop_zone(
+                                strip,
+                                drag,
+                                landing,
+                                tabs.len(),
+                                rect()
+                                    .width(Size::px(PAST_LAST_TAB))
+                                    .height(Size::fill())
+                                    .into_element(),
+                            ),
                         )
                         .into_element(),
                 ),
         )
         .child(TabListButton)
+        .into_element()
+}
+
+/// One place a dragged tab may be dropped: `position` in the bar, which is where the chip
+/// there is now. The mark is drawn by the chip and the drop is answered here, so a chip
+/// that is dragged away takes its own zone with it.
+///
+/// **Where the mark goes follows the pointer** (`on_pointer_move`) and not the zone it
+/// entered: an enter fires once, on the crossing, and the crossing that matters here is
+/// measured in the same breath as the render that starts the drag -- a zone entered before
+/// the payload existed declines it, and nothing fires again until the pointer leaves and
+/// comes back. A move, asked while a drag is under way, cannot miss it.
+fn drop_zone(
+    strip: State<Strip>,
+    drag: State<Option<Tab>>,
+    landing: State<Option<usize>>,
+    position: usize,
+    children: Element,
+) -> Element {
+    let mut strip = strip;
+    let mut landing = landing;
+    rect()
+        .on_pointer_move(move |_| {
+            if drag.peek().is_some() {
+                landing.set_if_modified(Some(position));
+            }
+        })
+        .child(DropZone::new(children, move |tab: Tab| {
+            strip.write().move_to(tab, position);
+        }))
+        .into_element()
+}
+
+/// The copy of a chip that follows the cursor while it is being dragged.
+fn dragged(tab: Tab, docs: &Docs) -> Element {
+    rect()
+        .interactive(false)
+        .height(Size::px(list_row_height()))
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .padding(Gaps::new_symmetric(0.0, 8.0))
+        .spacing(6.0)
+        .background(palette().selected_bg)
+        .border(right_hairline())
+        .overflow(Overflow::Clip)
+        .child(tab_icon(tab, docs))
+        .child(label().text(elide(&tab_title(tab, docs))).max_lines(1))
         .into_element()
 }
 
@@ -606,12 +732,9 @@ pub(crate) struct ContentArea;
 impl Component for ContentArea {
     fn render(&self) -> impl IntoElement {
         let strip = use_consume::<OpenTabs>().0;
-        // The bar and what is under it out of one read, which is also what subscribes this
-        // to every change of the strip.
-        let (tabs, active) = {
-            let strip = strip.read();
-            (strip.tabs().to_vec(), strip.active())
-        };
+        // Only what is on screen, which is what this draws: the bar reads the rest of the
+        // strip for itself, so a tab opening or moving does not rebuild the body.
+        let active = strip.read().active();
 
         let body = match active {
             Some(Tab::Document(id)) => DocumentBody { id }.into_element(),
@@ -622,7 +745,7 @@ impl Component for ContentArea {
         rect()
             .expanded()
             .content(Content::Flex)
-            .child(tab_bar(&tabs, active))
+            .child(TabBar)
             .child(
                 rect()
                     .width(Size::fill())

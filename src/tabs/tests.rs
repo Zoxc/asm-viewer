@@ -115,6 +115,25 @@ fn closing_the_last_tab_shows_nothing() {
     assert_eq!(strip.active(), None);
 }
 
+#[test]
+fn a_tab_moves_to_where_the_tab_it_was_dropped_on_is() {
+    let (mut strip, tabs, _docs) = strip(4);
+    strip.move_to(tabs[3], 1);
+    assert_eq!(strip.tabs(), [tabs[0], tabs[3], tabs[1], tabs[2]]);
+    strip.move_to(tabs[3], 4);
+    assert_eq!(strip.tabs(), [tabs[0], tabs[1], tabs[2], tabs[3]]);
+    assert_eq!(strip.active(), Some(tabs[3]), "a move is not an opening");
+}
+
+/// A chip dragged while its document is closed under it carries an id that stands for
+/// nothing, and a drop of one must not put it back.
+#[test]
+fn moving_a_tab_the_strip_does_not_hold_puts_nothing_there() {
+    let (mut strip, tabs, _docs) = strip(2);
+    strip.move_to(Tab::Page(Page::Scratchpad), 0);
+    assert_eq!(strip.tabs(), tabs);
+}
+
 /// `landing` is asked *before* anything is removed, so each of these passes the whole
 /// list and the predicate that is about to thin it.
 fn shut(items: &[&str], showing: &str, closing: &[&str]) -> Option<String> {

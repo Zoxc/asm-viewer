@@ -141,6 +141,25 @@ impl Strip {
         true
     }
 
+    /// Move `tab` so that it sits where the tab now at `position` does, which is what a
+    /// drop on that tab's chip means. Past the end is the end, and the tab on screen does
+    /// not change: a tab dragged is not a tab opened.
+    ///
+    /// **A tab the strip does not hold is not put there.** A chip dragged while its
+    /// document is closed under it carries an id that stands for nothing, and inserting it
+    /// would raise a closed document from the dead.
+    pub fn move_to(&mut self, tab: Tab, position: usize) {
+        let Some(from) = self.tabs.iter().position(|open| *open == tab) else {
+            return;
+        };
+        self.tabs.remove(from);
+        let to = match position > from {
+            true => position - 1,
+            false => position,
+        };
+        self.tabs.insert(to.min(self.tabs.len()), tab);
+    }
+
     /// Close every tab `closing` answers true for, landing on the neighbour when the tab
     /// on screen was one of them. Answers what it removed, in the order the tabs were in.
     ///

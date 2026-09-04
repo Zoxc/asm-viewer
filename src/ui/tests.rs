@@ -987,6 +987,74 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
     );
 }
 
+/// The bar itself, which is what a drag along it is about. Mounted without the body under
+/// it: what a tab draws has no say in where its chip sits.
+fn bar_harness() -> impl IntoElement {
+    rect().expanded().child(TabBar)
+}
+
+/// A tab is dragged along the bar to move it, and the chip a drop would land on says so
+/// while the pointer is over it. The recipe is `agents/Headless.md`'s: the passes between
+/// the moves are what let the drop zones be measured after the drag has begun.
+#[test]
+fn a_tab_is_dragged_along_the_bar_to_move_it() {
+    let (mut test, states) =
+        TestingRunner::new(bar_harness, (600., 100.).into(), project_states!(), 1.);
+    let documents: Vec<Document> = ["/src/one.rs", "/src/two.rs", "/src/three.rs"]
+        .into_iter()
+        .map(|name| Document::Source(Arc::from(name)))
+        .collect();
+    for document in &documents {
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    }
+    settle(&mut test);
+    assert!(states.open.documents() == documents);
+
+    let marked = |test: &TestingRunner| -> usize {
+        test.find_many(|_node, element| {
+            element
+                .style()
+                .borders
+                .iter()
+                .find(|border| border.width.left == TAB_MARKER)
+                .map(|_| ())
+        })
+        .len()
+    };
+    assert_eq!(marked(&test), 0, "a mark with no drag under way");
+
+    let (from, onto) = (centre_of(&test, "three.rs"), centre_of(&test, "one.rs"));
+    test.move_cursor(from);
+    test.sync_and_update();
+    test.press_cursor(from);
+    // Past the 4px threshold, which is what turns the press into a drag.
+    test.move_cursor((from.0 - 10.0, from.1));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    test.move_cursor(onto);
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    assert_eq!(marked(&test), 1, "no mark where the drop would land");
+
+    test.release_cursor(onto);
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    settle(&mut test);
+    assert!(
+        states.open.documents()
+            == [
+                documents[2].clone(),
+                documents[0].clone(),
+                documents[1].clone()
+            ],
+        "the tab did not move to where it was dropped"
+    );
+    assert_eq!(marked(&test), 0, "the mark outlived the drag");
+}
+
 /// The chips over a box the keyboard can be in, which is what a code pane is: pressing it
 /// puts the keyboard inside the tab, and nothing else here can take it.
 fn marker_harness() -> impl IntoElement {
@@ -1205,6 +1273,7 @@ fn chips_harness() -> impl IntoElement {
                 TabHeader {
                     tab,
                     active: Some(tab) == active,
+                    landing: false,
                     key: DiffKey::None,
                 }
                 .key(tab)
@@ -13174,6 +13243,7 @@ fn header_menu_harness() -> impl IntoElement {
             TabHeader {
                 tab: Tab::Document(id),
                 active: true,
+                landing: false,
                 key: DiffKey::None,
             }
             .into_element()

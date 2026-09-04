@@ -242,6 +242,24 @@ an event: something else asks for it and nothing tells the loser. `Accessibility
 reads the platform's own state, so asking is what subscribes the chip to the focus moving -- and
 only the chip that is showing asks, or every chip would re-render whenever the keyboard moved.
 
+**A chip is dragged along the bar to move it**, which is the one thing the bar asks freya for: each
+chip is a `DropZone<Tab>` around a `DragZone<Tab>`, the pattern freya's own docking uses, and a drop
+on a chip is `Strip::move_to` to that chip's place, with a zone of its own past the last chip for
+the drop that appends. `move_to` copies freya's `insert_tab` index handling -- remove first, then
+decrement the target when the tab came from before it -- and departs from it twice: it does not
+touch the tab on screen, a tab dragged not being a tab opened, and it **refuses a tab the strip does
+not hold**, where freya's inserts one, which would raise from the dead a document closed while its
+chip was being dragged. Where a drop would land is a two-pixel rule down the chip's leading edge, in
+the same purple; the position is a state the bar holds and each zone writes **from
+`on_pointer_move`** and not from `on_drag_over`, which is an *enter*: the crossing that matters is
+measured in the same breath as the render that arms the drag, a zone entered before the payload
+existed declines it, and nothing fires again until the pointer leaves and comes back. The mark is
+read **only while `use_drag` holds a payload**, because an abandoned drag clears that payload
+without telling any zone it left. A drag released anywhere else changes nothing.
+One limit, upstream's: a `ScrollView` stops answering the wheel while a drag is under way
+(`notes/upstream/freya.md`), so a bar wider than the window is scrolled before the drag and not
+during it.
+
 **The × is a control of its own**, `TabClose`, and a component rather than another line of `chip`
 for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the `use_state`
 with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper. That is why the × reaches

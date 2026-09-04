@@ -191,6 +191,14 @@ overlay layer, the press outside and the Escape key that `Popup` would have give
 (`ui/finder.rs`); `RescuedPopup`, which is content to be centred, still uses `Popup`. An
 alignment on the background would do it.
 
+**A wheel that still reaches a scroll view while a drag is under way.** A `ScrollView` scrolls
+to the wheel as usual until a `DragZone` has a payload, and then stops answering it until the
+drop; measured headlessly on the tab bar, where the same wheel moves the chips by 400px with no
+drag and by nothing at all with one. So the far end of a bar wider than the window cannot be
+dragged to: the reader scrolls the two tabs into view first and drags between them. **Cost:** the
+limit stands, and an edge that scrolls while a drag hovers it is the thing to write if it starts
+to bite.
+
 **A pointer release nothing can cancel.** There is no `on_global_pointer_up`; a release is
 `on_global_pointer_press`, which any handler's `prevent_default` on the way cancels, and
 freya's own scrollbar thumb does (above). The app ends a sweep on the capture-phase press
