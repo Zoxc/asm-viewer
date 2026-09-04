@@ -4949,7 +4949,7 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
         state
             .found
             .as_ref()
-            .and_then(Found::references)
+            .and_then(Found::places)
             .map(references::References::count),
         Some(0),
         "a refusal is not an empty answer"

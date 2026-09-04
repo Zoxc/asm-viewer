@@ -213,18 +213,18 @@ impl Located {
         };
         self.found = Some(Found {
             of,
-            what: What::References(found),
+            what: What::Places(found),
         });
         true
     }
 
-    /// Fold the file at `path` in a references answer, or unfold it. Whether anything changed.
+    /// Fold the file at `path` in a list of places, or unfold it. Whether anything changed.
     pub(crate) fn fold(&mut self, path: &Path) -> bool {
         let Some(found) = self.found.as_mut() else {
             return false;
         };
         match &mut found.what {
-            What::References(references) => references.toggle(path),
+            What::Places(places) => places.toggle(path),
             What::Symbols(_) => false,
         }
     }
@@ -247,8 +247,10 @@ pub(crate) enum What {
     /// [`SymbolList`] and not a `Vec`, so handing it to the rows is a pointer compare
     /// rather than a walk of thousands.
     Symbols(SymbolList),
-    /// Every reference to the name, under the file each is in.
-    References(references::References),
+    /// The places one of the server's two list questions answered with, under the file
+    /// each is in. Both are the same shape, and the panel draws one at a time, so which
+    /// question it was is the `Query`'s to say and not this.
+    Places(references::References),
 }
 
 impl Found {
@@ -259,18 +261,18 @@ impl Found {
         }
     }
 
-    /// The symbols it answered with, and `None` where it was a question about references.
+    /// The symbols it answered with, and `None` where it was a question for the server.
     pub(crate) fn symbols(&self) -> Option<&SymbolList> {
         match &self.what {
             What::Symbols(symbols) => Some(symbols),
-            What::References(_) => None,
+            What::Places(_) => None,
         }
     }
 
-    /// The references it answered with, and `None` where it was a question about symbols.
-    pub(crate) fn references(&self) -> Option<&references::References> {
+    /// The places it answered with, and `None` where it was a question about symbols.
+    pub(crate) fn places(&self) -> Option<&references::References> {
         match &self.what {
-            What::References(references) => Some(references),
+            What::Places(places) => Some(places),
             What::Symbols(_) => None,
         }
     }
@@ -502,7 +504,7 @@ impl Component for LocationsTab {
         // under and a fresh one every render would redraw every row.
         let used = use_memo(move || {
             let state = located.read();
-            let found = state.found.as_ref().and_then(Found::references);
+            let found = state.found.as_ref().and_then(Found::places);
             found
                 .map(|found| found.rows_matching(&filter.read().matcher()))
                 .unwrap_or_default()
@@ -524,13 +526,13 @@ impl Component for LocationsTab {
                 query.spell()
             )),
             (Some(query), None, Some(found))
-                if found.references().is_some_and(|found| found.count() == 0) =>
+                if found.places().is_some_and(|found| found.count() == 0) =>
             {
                 placeholder(format!("No {} {}", query.words().1, query.spell()))
             }
-            (Some(query), None, Some(found)) if found.references().is_some() => {
+            (Some(query), None, Some(found)) if found.places().is_some() => {
                 let heading =
-                    query.heading(found.references().map_or(0, references::References::count));
+                    query.heading(found.places().map_or(0, references::References::count));
                 let length = used.len();
                 rect()
                     .expanded()
