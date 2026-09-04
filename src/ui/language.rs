@@ -68,7 +68,7 @@ pub(crate) struct Language {
     settings: Option<Result<lsp::Settings, lsp::Unreadable>>,
     /// Which server the answers arriving are about, counted up by every start and every
     /// stop.
-    run: u64,
+    pub(crate) run: u64,
     /// What ends the running server. `None` unless one is running.
     server: Option<lsp::Handle>,
 }
@@ -89,6 +89,13 @@ impl Language {
     /// Whether pressing the control stops it rather than starting it.
     pub(crate) fn started(&self) -> bool {
         matches!(self.state, Lsp::Starting | Lsp::Running)
+    }
+
+    /// Whether it is there to be asked a question about a whole file: running, and done
+    /// reading the project. A question put before that would hold the one conversation
+    /// until it was answered, with every click queued behind it (`src/ui/linking.rs`).
+    pub(crate) fn ready(&self) -> bool {
+        matches!(self.state, Lsp::Running) && !self.working
     }
 
     /// Whether something is going on: starting one, or a server reading the project.
@@ -170,6 +177,11 @@ pub(crate) struct Lookup {
 pub(crate) enum Wanted {
     /// Where the name is defined, which `ui::follow` opens.
     Definition,
+    /// Where it is **declared**, which `ui::follow` opens as well. A different question of
+    /// the server with the same answer and the same door, asked for an item in a trait
+    /// `impl`, whose definition is itself and whose declaration is the trait's
+    /// (`src/links.rs`).
+    Declaration,
     /// What implements it, which the Locations panel lists.
     Implementations,
     /// Everywhere it is used, which the Locations panel lists.
@@ -180,8 +192,10 @@ impl Wanted {
     /// Whether the answer is a place to go to rather than a list to draw, which is what
     /// `worth_doing` buckets by: the panel's two questions supersede each other because
     /// the panel draws one of them at a time, and neither takes back a followed name.
+    /// A definition and a declaration are one kind for the same reason -- only ever one
+    /// of the two is asked of a name, and both open the same door.
     pub(crate) fn followed(self) -> bool {
-        matches!(self, Wanted::Definition)
+        matches!(self, Wanted::Definition | Wanted::Declaration)
     }
 }
 
@@ -203,8 +217,12 @@ pub(crate) enum LspJob {
     /// here rather than on the UI thread; it is this worker's and not the build worker's
     /// because what it answers is what a start has to carry.
     ReadSettings { directory: PathBuf },
-    /// What is at a place: which of the three questions is in `want`.
+    /// What is at a place: which of the four questions is in `want`.
     Ask { run: u64, at: Lookup, want: Wanted },
+    /// What every name in one file is, which is a question about the file and not about
+    /// a place in it. The file travels as the `Arc<str>` a document is named by, since
+    /// that is what the answer has to be matched against.
+    Tokens { run: u64, file: Arc<str> },
     /// Let go of the server: it has been stopped already, and this is what reaps it.
     Stop,
 }
@@ -221,6 +239,13 @@ pub(crate) enum LspAnswer {
         run: u64,
         want: Wanted,
         reply: Result<Reply, lsp::Failure>,
+    },
+    /// What every name in one file is, and which file. Its own answer and not a `Reply`,
+    /// since it is the one question about a file rather than about a place in one.
+    Linked {
+        run: u64,
+        file: Arc<str>,
+        links: Result<links::Links, lsp::Failure>,
     },
     /// What the project's own settings file said. Named by the directory it was read in
     /// and not by a run: it is about a project and not about a process.
@@ -285,6 +310,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 let talk = talking.as_mut()?;
                 let places = match want {
                     Wanted::Definition => talk.definition(&at.file, at.line, at.column),
+                    Wanted::Declaration => talk.declaration(&at.file, at.line, at.column),
                     Wanted::Implementations => talk.implementations(&at.file, at.line, at.column),
                     Wanted::References => talk.references(&at.file, at.line, at.column),
                 };
@@ -297,7 +323,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 // reading is what the panel draws and a file read is what this thread is
                 // for.
                 let reply = places.map(|places| match want {
-                    Wanted::Definition => Reply::Defined(places),
+                    Wanted::Definition | Wanted::Declaration => Reply::Defined(places),
                     Wanted::Implementations | Wanted::References => {
                         Reply::Referenced(references::References::of(&places, |path| {
                             std::fs::read_to_string(path).ok()
@@ -305,6 +331,20 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                     }
                 });
                 Some(LspAnswer::Answered { run, want, reply })
+            }
+            LspJob::Tokens { run, file } => {
+                let talk = talking.as_mut()?;
+                // Classified here rather than on the UI thread: it is a walk of every
+                // name in the file, and this is the thread that may take its time. Done
+                // while the conversation is still in hand, the legend being its.
+                let links = talk
+                    .semantic_tokens(Path::new(&*file))
+                    .map(|tokens| links::Links::of(talk.legend(), &tokens));
+                // A conversation that ended is a server that is gone, as above.
+                if matches!(links, Err(lsp::Failure::Broken(_))) {
+                    *talking = None;
+                }
+                Some(LspAnswer::Linked { run, file, links })
             }
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
                 settings: lsp::settings_in(&directory),
@@ -340,6 +380,9 @@ pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -
     };
     let (following, listing) = (asked(true), asked(false));
     let read = last(&|job| matches!(job, LspJob::ReadSettings { .. }));
+    // One pane shows one file, so a question about another is a question about what the
+    // reader has already left.
+    let linking = last(&|job| matches!(job, LspJob::Tokens { .. }));
     jobs.into_iter()
         .enumerate()
         .filter(|(at, job)| match job {
@@ -348,6 +391,7 @@ pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -
                 false => Some(*at) == listing,
             },
             LspJob::ReadSettings { .. } => Some(*at) == read,
+            LspJob::Tokens { .. } => Some(*at) == linking,
             LspJob::Start { .. } | LspJob::Stop => true,
         })
         .map(|(_, job)| job)
@@ -364,7 +408,7 @@ pub(crate) struct LspJobs {
 }
 
 impl LspJobs {
-    fn send(&self, job: LspJob) {
+    pub(crate) fn send(&self, job: LspJob) {
         // A full queue is impossible (it is unbounded) and a closed one is the app going
         // down, so there is nothing here to tell anybody about.
         let _ = self.jobs.try_send(job);
@@ -380,6 +424,7 @@ pub(crate) fn use_language_with(
     mut language: State<Language>,
     mut follow: State<Follow>,
     mut located: State<Located>,
+    mut linked: State<Linked>,
     mut proj: State<OpenProject>,
     work: impl Fn(LspJob) -> Option<LspAnswer> + Send + 'static,
 ) -> LspJobs {
@@ -454,6 +499,42 @@ pub(crate) fn use_language_with(
                             ..held
                         });
                     }
+                    LspAnswer::Linked { run, file, links } => {
+                        let held = language.peek().clone();
+                        if held.run != run {
+                            continue;
+                        }
+                        // Nothing found and a server that refused both leave the pane
+                        // with no links, which is what it draws with no server either:
+                        // there is nothing to say about a name nobody classified.
+                        let why = match links {
+                            Ok(links) => {
+                                let mut waiting = linked.peek().clone();
+                                if waiting.answer(run, file, links) {
+                                    linked.set(waiting);
+                                }
+                                continue;
+                            }
+                            Err(failure @ lsp::Failure::Refused { .. }) => {
+                                log::warn!("the language server refused a question: {failure}");
+                                let mut waiting = linked.peek().clone();
+                                if waiting.answer(run, file, links::Links::default()) {
+                                    linked.set(waiting);
+                                }
+                                continue;
+                            }
+                            Err(failure) => failure,
+                        };
+                        let held = language.peek().clone();
+                        language.set(Language {
+                            state: Lsp::Failed(why.to_string()),
+                            working: false,
+                            asking: held.asking,
+                            settings: held.settings,
+                            run,
+                            server: None,
+                        });
+                    }
                     LspAnswer::Answered { run, want, reply } => {
                         let held = language.peek().clone();
                         if held.run != run {
@@ -463,7 +544,7 @@ pub(crate) fn use_language_with(
                         // and gives up on it where there is none. Bound before the write,
                         // as ever.
                         let mut take = |reply: Option<Reply>| match want {
-                            Wanted::Definition => {
+                            Wanted::Definition | Wanted::Declaration => {
                                 let places = match &reply {
                                     Some(Reply::Defined(places)) => places.as_slice(),
                                     _ => &[],

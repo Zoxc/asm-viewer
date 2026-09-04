@@ -128,6 +128,8 @@ command.
   what it is told, and the process a stop kills.
 - `src/references.rs` — the places a language server answered a question with, under the
   file each is in and with the text of the line each is on: what the Locations panel draws.
+- `src/links.rs` — which names in a source file are links, out of what a language server
+  calls them: the rule, and which of two questions following one asks.
 - `src/process.rs` — the process group a child is started in, so a stop reaches what it
   started; a scratchpad's run and the language server both have one.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
@@ -164,6 +166,9 @@ command.
   where each side of a tab was left.
 - `src/ui/follow.rs` — following a name in the source to what it names: the question put to
   the language server, and the place its answer opens.
+- `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what
+  it has asked the server, what came back, and why the asking waits until the server is
+  ready.
 - `src/ui/marks.rs` — the run of rows selected in each pane, the pair it lights on the other
   side, the scroll it owes, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file parsed when loaded, its spans and its functions, and the
@@ -207,9 +212,9 @@ command.
 - `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
   it takes from that: what lets the code panes scroll sideways with their wash whole.
 
-Ten `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+Eleven `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
 `project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`,
-`rescued_view`, `language`); the rest is in `agents/UI.md`.
+`rescued_view`, `language`, `linking`); the rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's
 tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at

@@ -3096,6 +3096,23 @@ fn label_area(test: &TestingRunner, text: &str) -> Option<Area> {
 
 /// A few passes, since the rows sit behind a memo over the answer: the memo is
 /// recomputed by a task woken on the write, a pass later than the write itself.
+/// A server that is running and has answered what the file's names are.
+///
+/// Setting the state is not enough on its own any more: a link is drawn because the
+/// server said the name is one, and saying so is a question sent to the worker and an
+/// answer coming back, which is two turns of the loop and not one.
+fn serving(test: &mut TestingRunner, language: &mut State<Language>) {
+    language.write().state = Lsp::Running;
+    // The worker is a real thread, so the answer arrives in its own time and not in this
+    // one's: polling the executor without giving it any cannot see an answer that has not
+    // been sent yet. A millisecond a turn, twenty turns, and the whole suite still runs
+    // in seconds.
+    for _ in 0..20 {
+        settle(test);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 fn settle(test: &mut TestingRunner) {
     for _ in 0..4 {
         test.sync_and_update();
@@ -3188,75 +3205,6 @@ fn a_cut_inside_a_character_is_not_made() {
             "a\u{1f600}b"
         );
     }
-}
-
-#[test]
-fn only_calls_in_the_source_are_links() {
-    let directory =
-        std::env::temp_dir().join(format!("assembly-viewer-links-test-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
-    let path = directory.join("calls.rs");
-    let text = "\
-fn helper(n: u32) -> u32 {
-    n
-}
-
-trait Greets {
-    fn greet(&self);
-    fn twice(&self) -> u32 { helper(2) }
-}
-
-pub async fn spun<T: Into<u32>>(t: T) -> u32 { helper(t.into()) }
-
-fn main() {
-    let n = helper(1);
-    println!(\"helper {n}\");
-    // helper again
-    let mut v = Vec::new();
-    v.push(n);
-}
-";
-    std::fs::write(&path, text).expect("writing the source file");
-    let source = source_text(&path).expect("the file is read");
-
-    // What each row's links spell, so a range that slipped is a name that is wrong and
-    // not a number.
-    let named = |index: usize| -> Vec<String> {
-        let line = text.lines().nth(index).expect("a row of the file");
-        let units: Vec<u16> = line.encode_utf16().collect();
-        links_in(&source, index)
-            .iter()
-            .map(|link| {
-                String::from_utf16_lossy(
-                    &units[link.columns.start..link.columns.end.min(units.len())],
-                )
-            })
-            .collect()
-    };
-
-    assert!(named(0).is_empty(), "the definition's own name is a link");
-    assert!(
-        named(5).is_empty(),
-        "a trait method's declaration is a link"
-    );
-    // The declaration's own name is passed over and the row goes on: a body written on
-    // the `fn` line calls from there, which is how a trait's default method is written.
-    assert_eq!(
-        named(6),
-        vec!["helper"],
-        "a call beside a declaration is not a link"
-    );
-    assert_eq!(
-        named(9),
-        vec!["helper", "into"],
-        "a call beside a declaration with keywords and a bound before it is not a link"
-    );
-    assert!(named(11).is_empty(), "the definition's own name is a link");
-    assert_eq!(named(12), vec!["helper"], "a call is not a link");
-    assert_eq!(named(13), vec!["println!"], "a macro is not a link");
-    assert!(named(14).is_empty(), "a name in a comment is a link");
-    assert_eq!(named(15), vec!["new"], "an associated call is not a link");
-    assert_eq!(named(16), vec!["push"], "a method call is not a link");
 }
 
 /// Two lines of one file reached one after the other are two places on the tab's trail,
@@ -4158,8 +4106,12 @@ fn linking_harness() -> impl IntoElement {
     let language = use_consume::<Talking>().0;
     let follow = use_consume::<Following>().0;
     let located = use_consume::<Locations>().0;
+    let linked = use_consume::<Linking>().0;
     let work = use_consume::<ServerWorking>().0;
-    use_language_with(language, follow, located, states.proj, move |job| work(job));
+    let jobs = use_language_with(language, follow, located, linked, states.proj, move |job| {
+        work(job)
+    });
+    use_linking(language, linked, jobs);
 
     let open = use_open();
     let marked = use_consume::<Marked>().0;
@@ -4187,21 +4139,61 @@ fn linking_harness() -> impl IntoElement {
         })
 }
 
+/// The names a server would classify in [`calling_file`]'s text, which is
+/// `fn main() {` and `    let n = helper(1);`.
+///
+/// The pane draws a link because the server said the name is one, so a test about links
+/// has to say so: `helper` is a call, `main` is where a function is defined, and `n` is
+/// where a local is bound. Only the first is a link; the other two are names the menu is
+/// still offered on.
+fn calling_links() -> links::Links {
+    let legend = lsp::Legend::of(&["function", "variable"], &["declaration"]);
+    let token = |line: u32, columns: Range<u32>, kind: u32, modifiers: u32| lsp::Token {
+        line,
+        columns,
+        kind,
+        modifiers,
+    };
+    links::Links::of(
+        &legend,
+        &[
+            token(1, 3..7, 0, 0b1),
+            token(2, 8..9, 1, 0b1),
+            token(2, 12..18, 0, 0),
+        ],
+    )
+}
+
 /// Mount [`linking_harness`] over `file`, with a worker that records every job and
 /// answers from `answer`.
+///
+/// The question about a file's names is answered for it, with [`calling_links`]: every
+/// test here is over the one file, and none of them is about what a server calls a name.
 macro_rules! mount_linking {
-    ($answer:expr, $file:expr) => {{
+    ($answer:expr, $file:expr) => {
+        mount_linking!($answer, $file, calling_links())
+    };
+    ($answer:expr, $file:expr, $links:expr) => {{
         let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
         let answer = $answer;
+        let links: links::Links = $links;
         let work = move |job: LspJob| {
             let recorded = match &job {
                 LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
-                LspJob::Ask { at, .. } => AskedOfServer::Ask(at.clone()),
+                LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
+                LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
                 LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
                 LspJob::Stop => AskedOfServer::Stop,
             };
             let _ = asked.send_blocking(recorded);
-            answer(job)
+            match &job {
+                LspJob::Tokens { run, file } => Some(LspAnswer::Linked {
+                    run: *run,
+                    file: file.clone(),
+                    links: Ok(links.clone()),
+                }),
+                _ => answer(job),
+            }
         };
         let file: Arc<str> = $file;
         let (mut test, (states, language, location, driven)) = TestingRunner::new(
@@ -4215,6 +4207,7 @@ macro_rules! mount_linking {
                     .provide_root_context(|| Talking(State::create(Language::default())))
                     .0;
                 runner.provide_root_context(|| Following(State::create(Follow::default())));
+                runner.provide_root_context(|| Linking(State::create(Linked::default())));
                 runner.provide_root_context(move || Subject(file.clone()));
                 // Which line each tab's assembly side follows: what the answer writes.
                 let driven = runner
@@ -4252,12 +4245,12 @@ fn word_point(test: &TestingRunner, word: &str) -> (f64, f64) {
 fn next_ask(
     test: &mut TestingRunner,
     asks: &async_channel::Receiver<AskedOfServer>,
-) -> Option<Lookup> {
+) -> Option<(Lookup, Wanted)> {
     // The press writes; the worker is handed its job a pass later.
     settle(test);
     while let Some(job) = next_job(asks) {
-        if let AskedOfServer::Ask(at) = job {
-            return Some(at);
+        if let AskedOfServer::Ask(at, want) = job {
+            return Some((at, want));
         }
     }
     None
@@ -4308,8 +4301,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     let calling = Document::Source(file.clone());
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
     settle(&mut test);
-    language.write().state = Lsp::Running;
-    settle(&mut test);
+    serving(&mut test, &mut language);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -4391,8 +4383,7 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
         Reach::NewTab,
     );
     settle(&mut test);
-    language.write().state = Lsp::Running;
-    settle(&mut test);
+    serving(&mut test, &mut language);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -4451,8 +4442,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
         Reach::NewTab,
     );
     settle(&mut test);
-    language.write().state = Lsp::Running;
-    settle(&mut test);
+    serving(&mut test, &mut language);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -4489,8 +4479,7 @@ fn a_right_click_on_a_link_offers_the_names_references() {
         Reach::NewTab,
     );
     settle(&mut test);
-    language.write().state = Lsp::Running;
-    settle(&mut test);
+    serving(&mut test, &mut language);
 
     // Off the link, on the row's own gutter: the line's locations and nothing about a
     // name.
@@ -4532,8 +4521,163 @@ fn a_right_click_on_a_link_offers_the_names_references() {
     assert_eq!(*column, 12);
 
     // And the server was asked, at the same place, in the units the protocol takes.
-    let asked_of = next_ask(&mut test, &asks).expect("the server was asked");
+    let (asked_of, _) = next_ask(&mut test, &asks).expect("the server was asked");
     assert_eq!((asked_of.line, asked_of.column), (1, 12));
+}
+
+/// A name where one is **defined** is not a link, and the server saying so is the whole
+/// of how the app knows: `main` here is a `function` carrying `declaration`. Pressing it
+/// asks nobody anything and picks the line out, as a press on plain text does.
+///
+/// This is what replaced guessing from the `fn` keyword in front of a name.
+#[test]
+fn a_name_where_one_is_defined_is_not_a_link() {
+    let (file, _directory) = calling_file("defined");
+    let (mut test, states, language, location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    // `main` on `fn main() {`, which `calling_links` marks as a declaration.
+    let defined = word_point(&test, "main");
+    press_at(&mut test, defined);
+    settle(&mut test);
+
+    assert!(
+        next_ask(&mut test, &asks).is_none(),
+        "a definition's own name asked the server where it is"
+    );
+    assert!(
+        location.marked.peek().source.is_some(),
+        "a press on it did not pick its line out, as a press on text does"
+    );
+}
+
+/// Some links, so a test can tell an answer from an empty one.
+fn a_link() -> links::Links {
+    links::Links::of(
+        &lsp::Legend::of(&["function"], &[]),
+        &[lsp::Token {
+            line: 1,
+            columns: 0..4,
+            kind: 0,
+            modifiers: 0,
+        }],
+    )
+}
+
+/// **A refused question answers empty, and it must not land on top of the names that
+/// came back.**
+///
+/// The server says how far through the project it has got over and over, and every word
+/// of it is a reason to look again; a second question going out while the first was in
+/// flight came back refused, and wrote nothing over something. What stops it is holding
+/// the question that is on its way, as `Follow` and `Located` both do.
+#[test]
+fn an_answer_to_a_question_nobody_asked_is_not_taken() {
+    let file: Arc<str> = Arc::from("/p/src/main.rs");
+    let mut linked = Linked::default();
+    linked.wanted = Some(file.clone());
+
+    assert!(linked.asking(1, file.clone()), "the question went out");
+    assert!(linked.answer(1, file.clone(), a_link()), "and was answered");
+    assert_eq!(
+        linked.links_in(&file).map(links::Links::is_empty),
+        Some(false)
+    );
+
+    // The same question again, refused and so empty. Nobody is waiting for it.
+    assert!(
+        !linked.answer(1, file.clone(), links::Links::default()),
+        "an answer arriving twice was taken twice"
+    );
+    assert_eq!(
+        linked.links_in(&file).map(links::Links::is_empty),
+        Some(false),
+        "an empty answer wrote over the names that came back"
+    );
+}
+
+/// A question already on its way is not asked again, which is what keeps there being one
+/// answer to take.
+#[test]
+fn a_question_on_its_way_is_not_asked_again() {
+    let file: Arc<str> = Arc::from("/p/src/main.rs");
+    let mut linked = Linked::default();
+    linked.wanted = Some(file.clone());
+
+    assert_eq!(
+        linked.pending(1),
+        Some(&file),
+        "nothing asked, nothing held"
+    );
+    linked.asking(1, file.clone());
+    assert_eq!(linked.pending(1), None, "the question went out twice");
+
+    // A server that has been restarted is a different question: what is in flight is the
+    // old one's, and its answer will be an answer to nobody.
+    assert_eq!(linked.pending(2), Some(&file));
+
+    linked.answer(1, file.clone(), a_link());
+    assert_eq!(
+        linked.pending(1),
+        None,
+        "an answered question was asked again"
+    );
+
+    // And the pane moving to another file is a question of its own.
+    linked.wanted = Some(Arc::from("/p/src/other.rs"));
+    assert!(linked.pending(1).is_some());
+}
+
+/// An item in a trait `impl` is the one name that asks the **other** question: its
+/// definition is itself, and the trait is where a reader following it wants to go. The
+/// server says which by putting `declaration` and `trait` on it together.
+#[test]
+fn an_item_in_a_trait_impl_asks_the_server_for_its_declaration() {
+    let (file, _directory) = calling_file("impls");
+    // The same file, with `helper` classified as a trait `impl`'s method rather than a
+    // call: the text is not what decides this, the server is.
+    let legend = lsp::Legend::of(&["function"], &["declaration", "trait"]);
+    let in_an_impl = links::Links::of(
+        &legend,
+        &[lsp::Token {
+            line: 2,
+            columns: 12..18,
+            kind: 0,
+            modifiers: 0b11,
+        }],
+    );
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone(), in_an_impl);
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    settle(&mut test);
+
+    let (asked, want) = next_ask(&mut test, &asks).expect("the press asked the server");
+    assert_eq!((asked.line, asked.column), (1, 12));
+    assert_eq!(
+        want,
+        Wanted::Declaration,
+        "a trait impl's item asked where it is defined, which is itself"
+    );
 }
 
 /// The three questions a click cannot ask are all on the name, and "Find implementations"
@@ -4552,8 +4696,7 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
         Reach::NewTab,
     );
     settle(&mut test);
-    language.write().state = Lsp::Running;
-    settle(&mut test);
+    serving(&mut test, &mut language);
 
     let call = word_point(&test, "helper");
     right_click(&mut test, call);
@@ -4580,7 +4723,7 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
     assert_eq!(name, "helper");
     assert_eq!(*column, 12);
 
-    let asked_of = next_ask(&mut test, &asks).expect("the server was asked");
+    let (asked_of, _) = next_ask(&mut test, &asks).expect("the server was asked");
     assert_eq!((asked_of.line, asked_of.column), (1, 12));
 }
 
@@ -4599,8 +4742,7 @@ fn a_right_click_on_a_definitions_own_name_offers_its_references() {
         Reach::NewTab,
     );
     settle(&mut test);
-    language.write().state = Lsp::Running;
-    settle(&mut test);
+    serving(&mut test, &mut language);
 
     let defined = word_point(&test, "main");
     right_click(&mut test, defined);
@@ -4652,8 +4794,7 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
         Reach::NewTab,
     );
     settle(&mut test);
-    language.write().state = Lsp::Running;
-    settle(&mut test);
+    serving(&mut test, &mut language);
 
     let call = word_point(&test, "helper");
     right_click(&mut test, call);
@@ -4723,14 +4864,13 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
     settle(&mut test);
     // A server there to be asked: nothing is a link without one. Written after the
     // project has settled, since a project arriving is what stops a server.
-    language.write().state = Lsp::Running;
-    settle(&mut test);
+    serving(&mut test, &mut language);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
     settle(&mut test);
 
-    let asked = next_ask(&mut test, &asks).expect("the press asked the server");
+    let (asked, want) = next_ask(&mut test, &asks).expect("the press asked the server");
     assert_eq!(
         asked,
         Lookup {
@@ -4741,6 +4881,9 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
             column: 12,
         }
     );
+    // An ordinary name asks where it is defined. The other question is for an item in a
+    // trait `impl`, whose definition is itself.
+    assert_eq!(want, Wanted::Definition);
     assert!(
         location.marked.peek().source.is_none(),
         "the press picked a line out"
@@ -4765,7 +4908,7 @@ fn a_press_on_a_call_with_no_server_picks_the_line_out() {
     settle(&mut test);
     assert!(
         std::iter::from_fn(|| asks.try_recv().ok())
-            .all(|asked| !matches!(asked, AskedOfServer::Ask(_))),
+            .all(|asked| !matches!(asked, AskedOfServer::Ask(..))),
         "a question was asked with no server"
     );
     assert!(
@@ -15667,11 +15810,13 @@ fn project_view_harness() -> Element {
     // bar's does; and the project's own settings are really read, so the view lists what
     // that read answered and a file on disk is what it is being asked about.
     let follow = use_provide_root_context(|| Following(State::create(Follow::default()))).0;
+    let linked = use_provide_root_context(|| Linking(State::create(Linked::default()))).0;
     let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
     use_language_with(
         language,
         follow,
         located,
+        linked,
         states.proj,
         |job: LspJob| match job {
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
@@ -16118,7 +16263,8 @@ struct ServerAsking(State<Option<LspJobs>>);
 #[derive(Debug, PartialEq, Eq)]
 enum AskedOfServer {
     Start(PathBuf),
-    Ask(Lookup),
+    Ask(Lookup, Wanted),
+    Tokens(Arc<str>),
     Read(PathBuf),
     Stop,
 }
@@ -16131,7 +16277,10 @@ fn server_harness() -> Element {
 
     let follow = use_consume::<Following>().0;
     let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
-    let jobs = use_language_with(language, follow, located, states.proj, move |job| work(job));
+    let linked = use_provide_root_context(|| Linking(State::create(Linked::default()))).0;
+    let jobs = use_language_with(language, follow, located, linked, states.proj, move |job| {
+        work(job)
+    });
     use_hook(move || asking.set(Some(jobs)));
     // The prompt is at the app's root, under the bar the control is in; here it is beside
     // it, which is the same thing to everything that reaches it.
@@ -16157,7 +16306,8 @@ macro_rules! mount_server {
         let work = move |job: LspJob| {
             let recorded = match &job {
                 LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
-                LspJob::Ask { at, .. } => AskedOfServer::Ask(at.clone()),
+                LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
+                LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
                 LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
                 LspJob::Stop => AskedOfServer::Stop,
             };
@@ -16180,6 +16330,7 @@ macro_rules! mount_server {
                     .provide_root_context(|| ServerAsking(State::create(None)))
                     .0;
                 runner.provide_root_context(|| Following(State::create(Follow::default())));
+                runner.provide_root_context(|| Linking(State::create(Linked::default())));
                 (states, language, asking)
             },
             1.,
@@ -16819,7 +16970,10 @@ fn a_question_asked_while_it_is_starting_waits_for_it() {
         next_job(&asks),
         Some(AskedOfServer::Start(PathBuf::from("/p")))
     );
-    assert_eq!(next_job(&asks), Some(AskedOfServer::Ask(at)));
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Ask(at, Wanted::Definition))
+    );
 }
 
 /// A start carries what the project's own settings file said, laid over what this app asks
@@ -16907,6 +17061,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
             .map(|job| match job {
                 LspJob::Start { .. } => "start".to_owned(),
                 LspJob::Ask { at, .. } => format!("ask {}", at.line),
+                LspJob::Tokens { file, .. } => format!("tokens {file}"),
                 LspJob::ReadSettings { directory } => format!("read {}", directory.display()),
                 LspJob::Stop => "stop".to_owned(),
             })

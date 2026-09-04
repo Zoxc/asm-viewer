@@ -1,10 +1,11 @@
-//! The language server: rust-analyzer started over the project's directory and asked three
-//! questions of one shape -- where the thing under a source position is defined, what
-//! implements it, and where it is used.
+//! The language server: rust-analyzer started over the project's directory and asked four
+//! questions of one shape -- where the thing under a source position is defined, where it
+//! is declared, what implements it, and where it is used -- and one of another: what every
+//! name in a file **is**, which is what says which of them are links at all.
 //!
-//! Hand-rolled over `serde_json` rather than a protocol crate. What is spoken here is six
-//! messages wide -- the handshake's two, those three, and a reply to whatever the server
-//! asks of us -- and a crate for it would bring a type for every request in the
+//! Hand-rolled over `serde_json` rather than a protocol crate. What is spoken here is
+//! eight messages wide -- the handshake's two, those five, and a reply to whatever the
+//! server asks of us -- and a crate for it would bring a type for every request in the
 //! specification and an async runtime's worth of machinery to drive them (`AGENTS.md`'s
 //! pinning rules; `serde_json` is already in the tree and the manifest already blesses it
 //! for a protocol rather than a file).
@@ -123,6 +124,71 @@ pub struct Place {
     /// The columns of the name on `line`. Empty where the answer's range spans lines: a
     /// name does not, and an empty run selects nothing.
     pub columns: Range<u32>,
+}
+
+/// The names a server gives the semantic token types and modifiers it will send, in the
+/// order their indices count from.
+///
+/// **Read off the handshake and never assumed.** The order is the server's own -- for
+/// rust-analyzer it is the order an enum happens to be written in -- so an index means
+/// nothing without the list it was sent with, and a version that adds a type renumbers
+/// everything after it. Asking by name is also what makes a server that sends fewer types
+/// than another simply say less rather than say something wrong.
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct Legend {
+    types: Vec<String>,
+    modifiers: Vec<String>,
+}
+
+impl Legend {
+    /// What the server calls `token`'s type, and `None` for an index it never declared.
+    pub fn kind<'a>(&'a self, token: &Token) -> Option<&'a str> {
+        self.types.get(token.kind as usize).map(String::as_str)
+    }
+
+    /// Whether the server said `modifier` of `token`. A modifier it never declared is one
+    /// it cannot have said.
+    pub fn says(&self, token: &Token, modifier: &str) -> bool {
+        let Some(at) = self.modifiers.iter().position(|name| name == modifier) else {
+            return false;
+        };
+        // The bitset is 32 bits wide on the wire, so a legend longer than that has
+        // modifiers no answer can carry.
+        u32::try_from(at).is_ok_and(|at| at < 32 && token.modifiers & (1 << at) != 0)
+    }
+
+    /// Whether the server declared any of this at all: an empty legend is a server that
+    /// answers no semantic tokens, and every question about one is nothing found.
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
+    }
+
+    /// A legend as a test spells one, the real ones coming off a handshake.
+    #[cfg(test)]
+    pub fn of(types: &[&str], modifiers: &[&str]) -> Legend {
+        let owned = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect();
+        Legend {
+            types: owned(types),
+            modifiers: owned(modifiers),
+        }
+    }
+}
+
+/// One name the server classified, as [`Legend`] spells out: where it is, and the type
+/// and modifier indices it was sent under.
+///
+/// The indices are kept rather than the names: a file is thousands of these, the names are
+/// a few dozen, and what asks about one has the legend to hand.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Token {
+    /// 1-based, as a [`Place`]'s line is and for its reason.
+    pub line: u32,
+    /// The columns of the name on `line`, in UTF-16 units.
+    pub columns: Range<u32>,
+    /// Which of the legend's types, by index.
+    pub kind: u32,
+    /// Which of its modifiers, one bit each, by index.
+    pub modifiers: u32,
 }
 
 /// A started server: the conversation, and the process it is with.
@@ -250,6 +316,16 @@ impl Server {
         self.talk.definition(file, line, column)
     }
 
+    /// Where what is at `line` and `column` of `file` is declared, in the same units.
+    pub fn declaration(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<Place>, Failure> {
+        self.talk.declaration(file, line, column)
+    }
+
     /// What implements what is at `line` and `column` of `file`, in the same units.
     pub fn implementations(
         &mut self,
@@ -258,6 +334,16 @@ impl Server {
         column: u32,
     ) -> Result<Vec<Place>, Failure> {
         self.talk.implementations(file, line, column)
+    }
+
+    /// Every name in `file`, as the server classifies them.
+    pub fn semantic_tokens(&mut self, file: &Path) -> Result<Vec<Token>, Failure> {
+        self.talk.semantic_tokens(file)
+    }
+
+    /// What it said it would spell those with.
+    pub fn legend(&self) -> &Legend {
+        self.talk.legend()
     }
 
     /// Every use of what is at `line` and `column` of `file`, in the same units.
@@ -414,6 +500,9 @@ pub struct Talk<W> {
     answers: std::sync::mpsc::Receiver<Result<Value, Failure>>,
     /// The id of the last request. Ids are this side's alone and only have to be distinct.
     id: i64,
+    /// What the server said it would spell its semantic tokens with, from the handshake.
+    /// Empty until then, and empty for a server that answers none.
+    legend: Legend,
 }
 
 impl<W: Write + Send + 'static> Talk<W> {
@@ -427,7 +516,12 @@ impl<W: Write + Send + 'static> Talk<W> {
         let to = Arc::new(Mutex::new(Some(to)));
         let (answered, answers) = std::sync::mpsc::channel();
         read_from(from, to.clone(), answered, told);
-        Talk { to, answers, id: 0 }
+        Talk {
+            to,
+            answers,
+            id: 0,
+            legend: Legend::default(),
+        }
     }
 
     /// The handshake: `initialize`, then the `initialized` notification, which the
@@ -445,6 +539,12 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// nothing about why. It costs the `window/workDoneProgress/create` requests the
     /// reader answers.
     ///
+    /// Semantic tokens are **not** declared either, though they are asked for: rust-analyzer
+    /// offers them and sends its whole legend to a client that says nothing, which was
+    /// measured against a real one before this was written. What the reply says it will
+    /// send is kept ([`legend_of`]), since the indices in an answer mean nothing without
+    /// it.
+    ///
     /// The options are the caller's: [`wanted`] with whatever the project's own
     /// `.vscode/settings.json` said laid over it ([`settings_from`]).
     pub fn initialize(&mut self, directory: &Path, options: &Value) -> Result<(), Failure> {
@@ -453,7 +553,7 @@ impl<W: Write + Send + 'static> Talk<W> {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        self.request(
+        let said = self.request(
             "initialize",
             json!({
                 "processId": std::process::id(),
@@ -464,6 +564,7 @@ impl<W: Write + Send + 'static> Talk<W> {
                 "initializationOptions": options,
             }),
         )?;
+        self.legend = legend_of(&said);
         self.notify("initialized", json!({}))
     }
 
@@ -481,6 +582,22 @@ impl<W: Write + Send + 'static> Talk<W> {
         column: u32,
     ) -> Result<Vec<Place>, Failure> {
         self.places_at("textDocument/definition", asked_at(file, line, column))
+    }
+
+    /// Where what is at `line` and `column` of `file` is **declared**, in the same units.
+    ///
+    /// A different question from [`Talk::definition`] and not a fallback for it: an item
+    /// in a trait `impl` is defined where it is written and declared in the trait, and a
+    /// call to a trait method is defined in the `impl` that runs and declared in the trait
+    /// as well. So the two disagree wherever a trait is involved, and which of them a name
+    /// asks is `src/links.rs`'s to say.
+    pub fn declaration(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<Place>, Failure> {
+        self.places_at("textDocument/declaration", asked_at(file, line, column))
     }
 
     /// What implements what is at `line` and `column` of `file`, in the same units.
@@ -506,6 +623,36 @@ impl<W: Write + Send + 'static> Talk<W> {
         let mut params = asked_at(file, line, column);
         params["context"] = json!({ "includeDeclaration": false });
         self.places_at("textDocument/references", params)
+    }
+
+    /// Every name in `file`, as the server classifies them.
+    ///
+    /// One request for the whole file rather than one per name: it is the only way to be
+    /// told what a name **is** without asking about each in turn, and asking about each
+    /// would be a round trip per name down a conversation that holds one question at a
+    /// time. The file is not opened first, for [`Talk::definition`]'s reason.
+    ///
+    /// A server that declared no legend is one that answers none of this, and is not
+    /// asked.
+    pub fn semantic_tokens(&mut self, file: &Path) -> Result<Vec<Token>, Failure> {
+        if self.legend.is_empty() {
+            return Ok(Vec::new());
+        }
+        let params = json!({ "textDocument": { "uri": uri_of(file) } });
+        match self.request("textDocument/semanticTokens/full", params) {
+            Ok(value) => Ok(tokens(&value)),
+            // The same "ask again" the questions about a place get, and for the same
+            // reason. A file the server has not read yet refuses with a code that is not
+            // one of these, which arrives as nothing found and is asked again when it
+            // says it has finished reading (`src/ui/language.rs`).
+            Err(Failure::Refused { code, .. }) if NOT_NOW.contains(&code) => Ok(Vec::new()),
+            Err(failure) => Err(failure),
+        }
+    }
+
+    /// What the server said it would spell its semantic tokens with.
+    pub fn legend(&self) -> &Legend {
+        &self.legend
     }
 
     /// The half every question about a place shares: the places an answer names, and the
@@ -1110,6 +1257,79 @@ fn asked_at(file: &Path, line: u32, column: u32) -> Value {
         "textDocument": { "uri": uri_of(file) },
         "position": { "line": line, "character": column },
     })
+}
+
+/// What the handshake's reply said it would spell semantic tokens with, and an empty
+/// legend where it offered none.
+///
+/// Both lists are taken as they came and in the order they came: an index in an answer is
+/// a position in these.
+fn legend_of(said: &Value) -> Legend {
+    let names = |of: &str| -> Vec<String> {
+        said.get("capabilities")
+            .and_then(|value| value.get("semanticTokensProvider"))
+            .and_then(|value| value.get("legend"))
+            .and_then(|value| value.get(of))
+            .and_then(Value::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .map(|name| name.as_str().unwrap_or_default().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Legend {
+        types: names("tokenTypes"),
+        modifiers: names("tokenModifiers"),
+    }
+}
+
+/// The tokens an answer holds, out of the flat array of numbers it sends them as.
+///
+/// Five numbers each, and **every one relative to the token before it**: the lines since
+/// the last, the columns since the last where that is zero and from the start of the line
+/// where it is not, the length, the type, and the modifiers as a bitset. The first token
+/// counts from line zero, column zero.
+///
+/// A length that is not a multiple of five is a message this cannot read the end of, so
+/// what it could read is kept and the rest dropped; that and a number too big for a `u32`
+/// are the only ways an answer here is not an answer, and neither is worth a word to the
+/// reader (`AGENTS.md`: never panic on any file input, and a server's answer is one).
+fn tokens(answer: &Value) -> Vec<Token> {
+    let Some(data) = answer
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| answer.as_array())
+    else {
+        return Vec::new();
+    };
+    let mut tokens = Vec::with_capacity(data.len() / 5);
+    let (mut line, mut column) = (0u32, 0u32);
+    for five in data.chunks_exact(5) {
+        let read = |at: usize| -> Option<u32> { u32::try_from(five.get(at)?.as_u64()?).ok() };
+        let (Some(down), Some(along), Some(length), Some(kind), Some(modifiers)) =
+            (read(0), read(1), read(2), read(3), read(4))
+        else {
+            break;
+        };
+        line = line.saturating_add(down);
+        // A token on the same line as the one before it carries on from where that one
+        // started; one on a later line counts from the start of its own.
+        column = match down {
+            0 => column.saturating_add(along),
+            _ => along,
+        };
+        tokens.push(Token {
+            // The protocol counts lines from zero and everything else here counts from
+            // one, as `places` converts them.
+            line: line.saturating_add(1),
+            columns: column..column.saturating_add(length),
+            kind,
+            modifiers,
+        });
+    }
+    tokens
 }
 
 /// The places an answer names, whichever of the shapes it came in.

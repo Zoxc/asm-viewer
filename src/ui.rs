@@ -41,6 +41,7 @@ pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::functions::{self, Function};
 pub(crate) use crate::history::{History, Stop};
 pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
+pub(crate) use crate::links;
 pub(crate) use crate::lsp;
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
@@ -92,6 +93,8 @@ mod highlight;
 pub(crate) use highlight::*;
 mod language;
 pub(crate) use language::*;
+mod linking;
+pub(crate) use linking::*;
 mod locations;
 pub(crate) use locations::*;
 mod marks;
@@ -473,9 +476,13 @@ pub fn app() -> impl IntoElement {
     // stop.
     let language = use_provide_context(|| Talking(State::create(Language::default()))).0;
     let follow = use_provide_context(|| Following(State::create(Follow::default()))).0;
-    use_language_with(language, follow, located, proj, language_work());
+    // Which of a source file's names are links, which is the server's to say and so is
+    // held beside the questions about a place rather than worked out in the pane.
+    let linked = use_provide_context(|| Linking(State::create(Linked::default()))).0;
+    let jobs = use_language_with(language, follow, located, linked, proj, language_work());
     // What a name followed in the source opens, which the answer above fills in.
     use_follow(follow, open, visits, marked, landing, plant, driven);
+    use_linking(language, linked, jobs);
 
     // Docking cannot express a fixed pixel width, which is why the outer split is a
     // `ResizableContainer` and not a `DockingArea`: a fixed 300px sidebar beside the one

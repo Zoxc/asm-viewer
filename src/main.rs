@@ -10,6 +10,7 @@ mod functions;
 mod fuzzy;
 mod history;
 mod lanes;
+mod links;
 mod lsp;
 mod naming;
 mod panics;

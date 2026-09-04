@@ -69,19 +69,27 @@ the app answers questions about its UI with tests.
 
 ## The protocol, hand-rolled
 
-Five messages: `initialize`, `initialized`, `textDocument/definition`,
-`textDocument/references`, and a reply to whatever the server asks of us. A protocol crate
-would bring a type per request in the specification and a runtime to drive them, for those
-five. `cargo tree -d` is unchanged by this step: `serde_json` was already in the tree, and
-the manifest comment on it already covers a protocol rather than a file.
+Eight messages: `initialize`, `initialized`, the four questions about a place --
+`textDocument/definition`, `textDocument/declaration`, `textDocument/implementation`,
+`textDocument/references` -- one about a whole file, `textDocument/semanticTokens/full`,
+and a reply to whatever the server asks of us. A protocol crate would bring a type per
+request in the specification and a runtime to drive them, for those eight. `cargo tree -d`
+is unchanged by this step: `serde_json` was already in the tree, and the manifest comment
+on it already covers a protocol rather than a file.
 
 **One request is in flight at a time**, so there is no table of outstanding ids: a request
-waits for an answer carrying the id it asked under. The two questions are one shape -- a
-place in, places out -- so they share the asking and the reading of an answer, and what
-tells one from the other is a `Wanted` the job carries and the answer names. That is the
-whole of what a second consumer needs: `ui::follow` takes the definitions and the Locations
-panel the references, neither can take the other's, and the queue keeps the last question **of
-each kind** rather than the last question.
+waits for an answer carrying the id it asked under. The four questions about a place are
+one shape -- a place in, places out -- so they share the asking and the reading of an
+answer, and what tells one from the other is a `Wanted` the job carries and the answer
+names.
+
+**A kind is a consumer and not a question**, which is what `worth_doing` supersedes by:
+`ui::follow` takes a definition or a declaration, the Locations panel draws implementations
+or references, and the source pane holds one file's links. A reader asking one of the
+panel's two has taken back the other, since the panel shows one at a time; neither takes
+back a name being followed. The match over `LspJob` there is exhaustive on purpose -- the
+`_ => true` it used to end with would let a question added later queue behind every one of
+its own kind in silence.
 
 **A reader thread owns the server's output.** It began without one -- a request read frames
 until its own answer came back -- and that was enough right up to the moment the app needed
@@ -108,8 +116,11 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   watcher -- is opt-in through a capability, so declaring none of those leaves a
   conversation this app only ever speaks first in. Nothing is said about positions or about
   definitions either: UTF-16 and plain locations are the defaults, both are what is wanted,
-  and naming them would only be a chance to name them wrongly. The one thing asked for is
-  progress, since it is the only account of a server that is still reading the project. A
+  and naming them would only be a chance to name them wrongly. Semantic tokens are not
+  declared either, though they are asked for: rust-analyzer offers them and sends its whole
+  legend to a client that says nothing, which was watched against a real one. The one thing
+  asked for is progress, since it is the only account of a server that is still reading the
+  project -- and, since links wait on that account, the only reason they ever appear. A
   server that asks something anyway is answered -- an empty configuration, nothing for a
   progress token, and "not a method this client has" for the rest -- because a server
   waiting on a reply is a conversation that stops.
@@ -338,6 +349,43 @@ columns are for. Their start travels as the `Landing`'s `columns`, an empty run,
 its match with (`agents/Sidebar.md`). A name defined in the file the tab already shows takes
 the other path through `land`, which marks the line itself and leaves no landing; what keeps
 the column there is in `agents/Panes.md`, under the doors.
+
+**Which names are links is the server's to say, and it is asked once per file.**
+`textDocument/semanticTokens/full` classifies every name in a file at once -- one request,
+about ten milliseconds warm against a file of a thousand lines -- where asking about each
+name in turn would be a round trip apiece down a conversation that holds one question at a
+time. The answer is a flat array of numbers, five per token and every one a delta from the
+token before, decoded in `lsp::tokens`; what the indices in it *mean* is the legend the
+handshake's reply carried, which is why `Talk::initialize` keeps that reply instead of
+dropping it. **Never read an index without the legend**: the order is the server's own and
+a new version renumbers it.
+
+The rule turning that vocabulary into links is `src/links.rs`, framework-free and tested on
+its own. Two things in it were measured against a real rust-analyzer rather than reasoned
+out, and both are easy to get backwards: `defaultLibrary` marks a name from **std**, which
+has a definition like anything else, so excluding it would kill every link into std -- the
+marker of a built-in type is `builtinType`; and there is no `definition` modifier at all,
+rust-analyzer folding its own into the standard `declaration`. A name the rule keeps but
+cannot follow -- where one is defined -- is kept all the same, since the row's menu is
+offered there too.
+
+An item in a trait `impl` is the one name that asks a different question. Its *definition*
+is itself, so `textDocument/definition` on it goes nowhere the reader is not already; its
+*declaration* is the trait's. `declaration` and `trait` together say so, and that is the
+only thing `Wanted::Declaration` is for. The two genuinely disagree elsewhere, which is why
+neither can replace the other: a **call** to a trait method is defined in the `impl` that
+runs and declared in the trait, and a reader following it wants the code that runs.
+
+**The question is only put to a server that has finished reading the project**
+(`Language::ready`, `src/ui/linking.rs`). Not for tidiness: a request holds the one
+conversation until it is answered and there is no timeout on it, so a whole-file question
+put to a server that is still indexing would park the worker and every click queued behind
+it. Waiting also answers what the beat before looks like -- no links, because nothing has
+said there are any -- and the effect asks again when the server says it is done, so a file
+opened during indexing gets its links without the reader doing anything. This is why
+nothing reads `started()` any more: a pane that lit links as soon as a server *started*
+drew them through the minute it spends reading the project, and every one was a click that
+did nothing.
 
 A **references** answer goes to the Locations panel instead (`agents/Sidebar.md`), and is
 asked for from the same place a definition is: the row's file and the pressed column, at the

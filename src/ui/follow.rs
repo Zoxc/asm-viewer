@@ -61,8 +61,12 @@ impl Follow {
 #[derive(Clone, Copy)]
 pub(crate) struct Following(pub(crate) State<Follow>);
 
-/// Ask where the name at `at` is defined, to be opened `reach` says when the answer
-/// comes. The one writer of [`Follow::asked`].
+/// Ask where the name at `at` is, to be opened `reach` says when the answer comes. The
+/// one writer of [`Follow::asked`].
+///
+/// `want` is which question: a definition for nearly every name, and a declaration for an
+/// item in a trait `impl`, whose definition is itself (`src/links.rs`). Both answers open
+/// the same door, which is why both arrive here.
 ///
 /// With no server there is nobody to ask and nothing is remembered: a question is not
 /// what starts one, that being the control the reader presses.
@@ -71,9 +75,10 @@ pub(crate) fn follow_name(
     mut follow: State<Follow>,
     jobs: &LspJobs,
     at: Lookup,
+    want: Wanted,
     reach: Reach,
 ) {
-    let Some(run) = ask_where(language, jobs, at.clone(), Wanted::Definition) else {
+    let Some(run) = ask_where(language, jobs, at.clone(), want) else {
         return;
     };
     // Bound before the write, the read above being of another state.

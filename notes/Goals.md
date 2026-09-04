@@ -79,10 +79,12 @@ leaves this list when it is. That is a move made on request, like everything els
   which is the same answer as a name it cannot place (`notes/upstream/rust-analyzer.md`), so a
   click in the first seconds does nothing and says nothing. The decisions are what makes a
   question worth holding -- one asked before the server has ever answered anything, rather
-  than every empty answer, or the app would re-ask names that genuinely are not there -- what
-  says the server is ready, since the app declares no progress capability and reads only what
-  it is told, and how long a held question stays worth answering, a reader having moved on by
-  then. Not a retry loop: the one question already held (`ui::follow`) is the shape.
+  than every empty answer, or the app would re-ask names that genuinely are not there -- and
+  how long a held question stays worth answering, a reader having moved on by then. What
+  says the server is ready is settled: it declares `workDoneProgress` and `Language::ready`
+  is the answer, which is already what the question about a file's links waits for
+  (`src/ui/linking.rs`). Not a retry loop: the one question already held (`ui::follow`) is
+  the shape.
 - [ ] Say in a bar along the bottom that the app is waiting on the language server, and let any
   movement call the wait off. Following a call is a question with two workers behind it and no
   sign that anything is happening, so a slow answer is indistinguishable from a dead click; and

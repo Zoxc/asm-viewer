@@ -319,6 +319,169 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
     );
 }
 
+/// The five numbers a token is sent as, and each of them relative to the token before.
+#[test]
+fn the_tokens_of_an_answer_are_read_out_of_its_deltas() {
+    let read = tokens(&json!({
+        "data": [
+            // Line 0, column 5, four wide, type 1, no modifiers.
+            0, 5, 4, 1, 0,
+            // Same line: the column carries on from the last one's start, so 5 + 3 = 8.
+            0, 3, 2, 7, 0b101,
+            // Two lines down: the column counts from the start of its own line again.
+            2, 4, 6, 2, 0,
+        ],
+    }));
+
+    assert_eq!(
+        read,
+        vec![
+            // Lines count from one here, where the protocol counts from zero.
+            Token {
+                line: 1,
+                columns: 5..9,
+                kind: 1,
+                modifiers: 0
+            },
+            Token {
+                line: 1,
+                columns: 8..10,
+                kind: 7,
+                modifiers: 0b101
+            },
+            Token {
+                line: 3,
+                columns: 4..10,
+                kind: 2,
+                modifiers: 0
+            },
+        ]
+    );
+}
+
+/// Every way an answer is not one. None of them is worth a word to the reader, and none
+/// of them may panic: a server's answer is file input like any other (`AGENTS.md`).
+#[test]
+fn an_answer_that_is_not_five_numbers_a_token_is_read_as_far_as_it_goes() {
+    // A length that is not a multiple of five: what can be read is kept.
+    let ragged = tokens(&json!({ "data": [0, 1, 2, 3, 4, 0, 1] }));
+    assert_eq!(ragged.len(), 1);
+
+    // Nothing at all, in each of the shapes nothing comes in.
+    assert_eq!(tokens(&json!({ "data": [] })), Vec::new());
+    assert_eq!(tokens(&json!({})), Vec::new());
+    assert_eq!(tokens(&Value::Null), Vec::new());
+    assert_eq!(tokens(&json!("not an answer")), Vec::new());
+
+    // A number no `u32` holds ends the reading rather than wrapping into a column.
+    let huge = tokens(&json!({ "data": [0, 0, 1, 0, 0, 0, 99999999999u64, 1, 0, 0] }));
+    assert_eq!(huge.len(), 1);
+
+    // Lines that would count past the end saturate instead of wrapping around.
+    let far = tokens(&json!({ "data": [4294967295u32, 0, 1, 0, 0] }));
+    assert_eq!(far.len(), 1);
+    assert_eq!(far[0].line, u32::MAX);
+}
+
+/// The legend is read off the handshake, and an index means nothing without it.
+#[test]
+fn the_handshake_keeps_what_the_server_will_spell_its_tokens_with() {
+    let (_said, legend, _notes) = against(
+        |fake, message| {
+            if message.get("method").and_then(Value::as_str) == Some("initialize") {
+                fake.say(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"].clone(),
+                    "result": { "capabilities": { "semanticTokensProvider": { "legend": {
+                        "tokenTypes": ["comment", "method", "builtinType"],
+                        "tokenModifiers": ["declaration", "trait"],
+                    } } } },
+                }));
+            }
+        },
+        |talk| {
+            talk.initialize(Path::new("/p"), &wanted())
+                .expect("a handshake");
+            talk.legend().clone()
+        },
+    );
+
+    let method = Token {
+        line: 1,
+        columns: 0..4,
+        kind: 1,
+        modifiers: 0b10,
+    };
+    assert_eq!(legend.kind(&method), Some("method"));
+    assert!(legend.says(&method, "trait"));
+    assert!(!legend.says(&method, "declaration"));
+    // A type it never declared, which a server of another version may still send.
+    assert_eq!(legend.kind(&Token { kind: 9, ..method }), None);
+}
+
+/// A server that offers no semantic tokens leaves an empty legend, and is never asked.
+#[test]
+fn a_server_that_offers_no_tokens_is_not_asked_for_any() {
+    let (said, found, _notes) = against(
+        |fake, message| {
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": { "capabilities": {} },
+            }));
+        },
+        |talk| {
+            talk.initialize(Path::new("/p"), &wanted())
+                .expect("a handshake");
+            assert!(talk.legend().is_empty());
+            talk.semantic_tokens(Path::new("/p/src/main.rs"))
+                .expect("an answer")
+        },
+    );
+
+    assert_eq!(found, Vec::new());
+    // The handshake's two messages and nothing else: the question was never put.
+    let methods: Vec<&str> = said
+        .iter()
+        .map(|message| message["method"].as_str().expect("a method"))
+        .collect();
+    assert_eq!(methods, ["initialize", "initialized"]);
+}
+
+/// The question names the file and no position: it is about all of it.
+#[test]
+fn the_tokens_of_a_file_are_asked_for_by_name() {
+    let (said, found, _notes) = against(
+        |fake, message| {
+            let answer = match message["method"] == json!("initialize") {
+                true => json!({ "capabilities": { "semanticTokensProvider": { "legend": {
+                    "tokenTypes": ["method"], "tokenModifiers": [],
+                } } } }),
+                false => json!({ "data": [0, 2, 6, 0, 0] }),
+            };
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": answer,
+            }));
+        },
+        |talk| {
+            talk.initialize(Path::new("/p"), &wanted())
+                .expect("a handshake");
+            talk.semantic_tokens(Path::new("/p/src/main.rs"))
+                .expect("an answer")
+        },
+    );
+
+    assert_eq!(said[2]["method"], json!("textDocument/semanticTokens/full"));
+    assert_eq!(
+        said[2]["params"],
+        json!({ "textDocument": { "uri": "file:///p/src/main.rs" } })
+    );
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].columns, 2..8);
+}
+
 #[test]
 fn implementations_are_asked_for_where_the_reader_pointed() {
     let (said, found, _notes) = against(
