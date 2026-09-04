@@ -331,48 +331,80 @@ impl Component for SourceRow {
             let at = at.clone();
             let subject = self.drives.map(|tab| (tab, self.file.clone()));
             let source = self.source.clone();
-            // Whom to ask where a name is used, where this row's names are links at all.
-            // A row drawing none is a row over no server, and a question nobody could
-            // answer is not offered.
-            let asking = self
-                .linking
-                .then(|| following.clone())
-                .flatten()
-                .map(|(language, _, jobs)| (language, jobs));
+            // Whom to ask about a name, where this row's names are links at all. A row
+            // drawing none is a row over no server, and a question nobody could answer is
+            // not offered.
+            let asking = self.linking.then(|| following.clone()).flatten();
             move |e: Event<PressEventData>, column| {
                 let function = functions::enclosing(&source.0.functions, at.line).cloned();
-                // The name the press was on, which the question is about. Looked for
-                // on the press and not per render, as the function is.
-                let references = column
+                // The name the press was on, which the three questions are about. Looked
+                // for on the press and not per render, as the function is.
+                let named = column
                     .and_then(|column| name_at(&source, index, column))
                     .zip(asking.clone())
-                    .map(|(link, (language, jobs))| {
-                        let at = at.clone();
-                        let name = link.name.clone();
-                        MenuButton::new()
-                            .on_press(move |_| {
-                                find_references(
-                                    located,
-                                    dock,
-                                    language,
-                                    &jobs,
-                                    at.clone(),
-                                    name.clone(),
-                                    link.columns.start as u32,
-                                )
-                            })
-                            .child(format!("Find references to {}", link.name))
-                    });
+                    .map(|(link, (language, follow, jobs))| {
+                        let column = link.columns.start as u32;
+                        fn asked_at(at: &LinePos, column: u32) -> Lookup {
+                            Lookup {
+                                file: PathBuf::from(&*at.file),
+                                // The protocol counts lines from zero, where a `LinePos`
+                                // is 1-based; the column is already what it takes.
+                                line: at.line.saturating_sub(1),
+                                column,
+                            }
+                        }
+                        let definition = {
+                            let (at, jobs) = (at.clone(), jobs.clone());
+                            MenuButton::new()
+                                .on_press(move |_| {
+                                    follow_name(
+                                        language,
+                                        follow,
+                                        &jobs,
+                                        asked_at(&at, column),
+                                        Reach::InPlace,
+                                    )
+                                })
+                                .child("Go to definition")
+                        };
+                        let references = {
+                            let (at, jobs, name) = (at.clone(), jobs.clone(), link.name.clone());
+                            MenuButton::new()
+                                .on_press(move |_| {
+                                    find_references(
+                                        located,
+                                        dock,
+                                        language,
+                                        &jobs,
+                                        at.clone(),
+                                        name.clone(),
+                                        column,
+                                    )
+                                })
+                                .child(format!("Find references to {}", link.name))
+                        };
+                        let implementations = {
+                            let (at, name) = (at.clone(), link.name.clone());
+                            MenuButton::new()
+                                .on_press(move |_| {
+                                    find_implementations(
+                                        located,
+                                        dock,
+                                        language,
+                                        &jobs,
+                                        at.clone(),
+                                        name.clone(),
+                                        column,
+                                    )
+                                })
+                                .child("Find implementations")
+                        };
+                        vec![definition, references, implementations]
+                    })
+                    .unwrap_or_default();
                 ContextMenu::open_from_event(
                     &e,
-                    locate_menu(
-                        located,
-                        dock,
-                        at.clone(),
-                        subject.clone(),
-                        function,
-                        references,
-                    ),
+                    locate_menu(located, dock, at.clone(), subject.clone(), function, named),
                 );
             }
         });

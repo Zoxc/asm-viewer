@@ -320,6 +320,46 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
 }
 
 #[test]
+fn implementations_are_asked_for_where_the_reader_pointed() {
+    let (said, found, _notes) = against(
+        |fake, message| {
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": [
+                    {
+                        "uri": "file:///p/src/one.rs",
+                        "range": { "start": { "line": 1, "character": 5 },
+                                   "end": { "line": 1, "character": 9 } },
+                    },
+                    {
+                        "uri": "file:///p/src/two.rs",
+                        "range": { "start": { "line": 2, "character": 5 },
+                                   "end": { "line": 2, "character": 9 } },
+                    },
+                ],
+            }));
+        },
+        |talk| {
+            talk.implementations(Path::new("/p/src/main.rs"), 4, 11)
+                .expect("an answer")
+        },
+    );
+
+    assert_eq!(said[0]["method"], json!("textDocument/implementation"));
+    assert_eq!(
+        said[0]["params"]["position"],
+        json!({ "line": 4, "character": 11 })
+    );
+    // Every place the answer named, in the order it named them: what implements a trait
+    // is a list, where a definition is one place.
+    assert_eq!(
+        found.iter().map(|place| place.line).collect::<Vec<u32>>(),
+        vec![2, 3]
+    );
+}
+
+#[test]
 fn references_are_asked_for_where_the_reader_pointed_and_leave_the_definition_out() {
     let (said, found, _notes) = against(
         |fake, message| {

@@ -1,17 +1,18 @@
-//! The language server: rust-analyzer started over the project's directory and asked, so
-//! far, two questions of one shape -- where the thing under a source position is defined,
-//! and where it is used.
+//! The language server: rust-analyzer started over the project's directory and asked three
+//! questions of one shape -- where the thing under a source position is defined, what
+//! implements it, and where it is used.
 //!
-//! Hand-rolled over `serde_json` rather than a protocol crate. What is spoken here is four
-//! messages wide, and a crate for it would bring a type for every request in the
+//! Hand-rolled over `serde_json` rather than a protocol crate. What is spoken here is six
+//! messages wide -- the handshake's two, those three, and a reply to whatever the server
+//! asks of us -- and a crate for it would bring a type for every request in the
 //! specification and an async runtime's worth of machinery to drive them (`AGENTS.md`'s
 //! pinning rules; `serde_json` is already in the tree and the manifest already blesses it
 //! for a protocol rather than a file).
 //!
 //! **One request is in flight at a time**, so there is no table of outstanding ids: a
 //! request writes its message and waits for the answer to that id. Two callers wanting
-//! answers at once is what would end that, so which of the two questions an answer is to
-//! is the caller's to keep (`src/ui/language.rs`).
+//! answers at once is what would end that, so which question an answer is to is the
+//! caller's to keep (`src/ui/language.rs`).
 //!
 //! What the server says when nothing was asked is the other half. A reader thread owns the
 //! server's output: an answer goes to whoever is waiting for it, a request is replied to,
@@ -249,6 +250,16 @@ impl Server {
         self.talk.definition(file, line, column)
     }
 
+    /// What implements what is at `line` and `column` of `file`, in the same units.
+    pub fn implementations(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<Place>, Failure> {
+        self.talk.implementations(file, line, column)
+    }
+
     /// Every use of what is at `line` and `column` of `file`, in the same units.
     pub fn references(
         &mut self,
@@ -387,7 +398,7 @@ pub fn stop_all() {
     }
 }
 
-/// The conversation itself: what is written to the server, what is read back, and the four
+/// The conversation itself: what is written to the server, what is read back, and the
 /// messages this app knows how to say.
 ///
 /// Generic over the two streams so it can be held against a fake server over a pipe, which
@@ -472,6 +483,16 @@ impl<W: Write + Send + 'static> Talk<W> {
         self.places_at("textDocument/definition", asked_at(file, line, column))
     }
 
+    /// What implements what is at `line` and `column` of `file`, in the same units.
+    pub fn implementations(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<Place>, Failure> {
+        self.places_at("textDocument/implementation", asked_at(file, line, column))
+    }
+
     /// Every use of what is at `line` and `column` of `file`, in the same units.
     ///
     /// Where it is **defined** is not one: a reader who is looking at the name has that
@@ -487,8 +508,8 @@ impl<W: Write + Send + 'static> Talk<W> {
         self.places_at("textDocument/references", params)
     }
 
-    /// The half the two questions share: the places an answer names, and the codes that
-    /// are not an answer at all.
+    /// The half every question about a place shares: the places an answer names, and the
+    /// codes that are not an answer at all.
     fn places_at(&mut self, method: &str, params: Value) -> Result<Vec<Place>, Failure> {
         match self.request(method, params) {
             Ok(value) => Ok(places(&value)),
@@ -1083,7 +1104,7 @@ fn reply(id: Value, answer: Result<Value, Value>) -> Value {
     }
 }
 
-/// The position a question is about, as both questions send it.
+/// The position a question is about, as every question about one sends it.
 fn asked_at(file: &Path, line: u32, column: u32) -> Value {
     json!({
         "textDocument": { "uri": uri_of(file) },

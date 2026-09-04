@@ -1005,7 +1005,9 @@ impl Component for InstructionRow {
             // a name a server could be asked about.
             move |e: Event<PressEventData>, _| {
                 let menu = match &at {
-                    Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None, None),
+                    Some(at) => {
+                        locate_menu(located, dock, at.clone(), subject.clone(), None, Vec::new())
+                    }
                     None => Menu::new(),
                 };
                 let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {

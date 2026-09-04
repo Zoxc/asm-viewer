@@ -2942,10 +2942,7 @@ fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)])
     };
     // Grouped as the worker groups it, reading each file's text off the disk.
     let found = references::References::of(&places, |path| std::fs::read_to_string(path).ok());
-    assert!(
-        located.answer_references(7, found),
-        "the answer was not taken"
-    );
+    assert!(located.answer_places(7, found), "the answer was not taken");
     located
 }
 
@@ -3072,7 +3069,7 @@ fn a_references_question_that_answers_nothing_says_there_are_none() {
         ..Located::default()
     };
     assert!(
-        !asking.answer_references(8, references::References::default()),
+        !asking.answer_places(8, references::References::default()),
         "an answer from another server"
     );
     assert!(asking.pending().is_some());
@@ -4444,7 +4441,7 @@ fn a_right_click_on_a_link_offers_the_names_references() {
     let asked = location.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 2, "the question is about the wrong line");
     let Scope::References { name, column, .. } = &asked.scope else {
-        panic!("the question is not about a name's uses");
+        panic!("the question is not about a name's references");
     };
     assert_eq!(name, "helper");
     // Where `helper` begins on `    let n = helper(1);`.
@@ -4455,8 +4452,56 @@ fn a_right_click_on_a_link_offers_the_names_references() {
     assert_eq!((asked_of.line, asked_of.column), (1, 12));
 }
 
-/// The name where a function is **defined** offers its uses too, though it is no link:
-/// where a name is defined is where a reader asks what uses it.
+/// The three questions a click cannot ask are all on the name, and "Find implementations"
+/// is the panel's second: it holds a question of its own kind and asks the server at the
+/// place the reader pointed.
+#[test]
+fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
+    let (file, _directory) = calling_file("asks3");
+    let (mut test, states, language, location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    language.write().state = Lsp::Running;
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let drawn = labels(&test);
+    for offered in [
+        "Go to definition",
+        "Find references to helper",
+        "Find implementations",
+    ] {
+        assert!(drawn.contains(&offered.to_owned()), "{offered}: {drawn:?}");
+    }
+
+    let entry = centre_of(&test, "Find implementations");
+    press_at(&mut test, entry);
+    settle(&mut test);
+
+    // Its own kind of question, and not the references one under another name: the two
+    // supersede each other in the panel, which is why they are told apart at all.
+    let asked = location.located.peek().asked.clone().expect("a question");
+    assert_eq!(asked.at.line, 2, "the question is about the wrong line");
+    let Scope::Implementations { name, column, .. } = &asked.scope else {
+        panic!("the question is not about what implements a name");
+    };
+    assert_eq!(name, "helper");
+    assert_eq!(*column, 12);
+
+    let asked_of = next_ask(&mut test, &asks).expect("the server was asked");
+    assert_eq!((asked_of.line, asked_of.column), (1, 12));
+}
+
+/// The name where a function is **defined** offers its references too, though it is no
+/// link: where a name is defined is where a reader asks what refers to it.
 #[test]
 fn a_right_click_on_a_definitions_own_name_offers_its_references() {
     let (file, _directory) = calling_file("defuses");
@@ -4488,7 +4533,7 @@ fn a_right_click_on_a_definitions_own_name_offers_its_references() {
     let asked = location.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 1);
     let Scope::References { name, column, .. } = &asked.scope else {
-        panic!("the question is not about a name's uses");
+        panic!("the question is not about a name's references");
     };
     assert_eq!(name, "main");
     // Where `main` begins on `fn main() {`.

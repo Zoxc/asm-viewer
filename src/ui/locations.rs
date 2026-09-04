@@ -60,6 +60,9 @@ pub(crate) enum Scope {
     /// takes, and `run` is the server run it was asked in: an answer from a server
     /// started since is not an answer to this question.
     References { name: String, column: u32, run: u64 },
+    /// What implements the name at [`Query::at`], as the language server answers it, with
+    /// `column` and `run` meaning what they mean above.
+    Implementations { name: String, column: u32, run: u64 },
 }
 
 impl Query {
@@ -91,13 +94,42 @@ impl Query {
         }
     }
 
+    /// The question about what implements `name`, asked the same way.
+    pub(crate) fn implementations(at: LinePos, name: String, column: u32, run: u64) -> Query {
+        Query {
+            at,
+            scope: Scope::Implementations { name, column, run },
+        }
+    }
+
+    /// The server run this was asked in, and `None` where it is not a question for a
+    /// server at all. What an answer is matched against, so that neither the run nor the
+    /// question has to be named twice.
+    pub(crate) fn run(&self) -> Option<u64> {
+        match &self.scope {
+            Scope::Line | Scope::Function { .. } => None,
+            Scope::References { run, .. } | Scope::Implementations { run, .. } => Some(*run),
+        }
+    }
+
+    /// What the rows are, singular and plural: the one place the wording of a question
+    /// lives, so the heading, the wait and the empty answer cannot drift apart.
+    fn words(&self) -> (&'static str, &'static str) {
+        match self.scope {
+            Scope::Line => ("location for", "locations for"),
+            Scope::Function { .. } => ("instance of", "instances of"),
+            Scope::References { .. } => ("reference to", "references to"),
+            Scope::Implementations { .. } => ("implementation of", "implementations of"),
+        }
+    }
+
     /// The lines the symbols are wanted for, and `None` where symbols are not what is
     /// wanted: a question about references is the language server's and never the worker's.
     pub(crate) fn symbols_wanted(&self) -> Option<RangeInclusive<u32>> {
         match &self.scope {
             Scope::Line => Some(self.at.line..=self.at.line),
             Scope::Function { lines, .. } => Some(lines.clone()),
-            Scope::References { .. } => None,
+            Scope::References { .. } | Scope::Implementations { .. } => None,
         }
     }
 
@@ -105,7 +137,9 @@ impl Query {
     fn spell(&self) -> String {
         match &self.scope {
             Scope::Line => spell(&self.at),
-            Scope::Function { name, .. } | Scope::References { name, .. } => name.clone(),
+            Scope::Function { name, .. }
+            | Scope::References { name, .. }
+            | Scope::Implementations { name, .. } => name.clone(),
         }
     }
 
@@ -118,17 +152,15 @@ impl Query {
                 format!("{}:{}\u{2013}{}", self.at.file, lines.start(), lines.end())
             }
             // Where it was asked about, which is the one thing a name alone does not say.
-            Scope::References { .. } => format!("{}:{}", self.at.file, self.at.line),
+            Scope::References { .. } | Scope::Implementations { .. } => {
+                format!("{}:{}", self.at.file, self.at.line)
+            }
         }
     }
 
     /// The heading over `count` rows: what they are, and what they are of.
     fn heading(&self, count: usize) -> String {
-        let (one, many) = match self.scope {
-            Scope::Line => ("location for", "locations for"),
-            Scope::Function { .. } => ("instance of", "instances of"),
-            Scope::References { .. } => ("reference to", "references to"),
-        };
+        let (one, many) = self.words();
         format!(
             "{count} {} {}",
             if count == 1 { one } else { many },
@@ -163,18 +195,19 @@ impl Located {
         (found != Some(asked)).then_some(asked)
     }
 
-    /// Take `found` as the answer to the references question this is waiting for, `run` being
-    /// the server run it came back under. Whether anything changed, so the caller writes
-    /// only then.
+    /// Take `found` as the answer to the question this is waiting for, `run` being the
+    /// server run it came back under. Whether anything changed, so the caller writes only
+    /// then.
+    ///
+    /// Which question it was is not asked: only a question for a server has a run at all
+    /// (`Query::run`), and there is one of those pending at a time.
     ///
     /// An answer under a run this did not ask in is an answer to nobody, and so is one to
     /// a question already answered. **Every way of not answering is an empty answer**: a
     /// server that refused the question or stopped answering it leaves a question that
     /// would otherwise be looked for for ever.
-    pub(crate) fn answer_references(&mut self, run: u64, found: references::References) -> bool {
-        let asked = self.pending().filter(
-            |query| matches!(&query.scope, Scope::References { run: asked, .. } if *asked == run),
-        );
+    pub(crate) fn answer_places(&mut self, run: u64, found: references::References) -> bool {
+        let asked = self.pending().filter(|query| query.run() == Some(run));
         let Some(of) = asked.cloned() else {
             return false;
         };
@@ -300,12 +333,60 @@ pub(crate) fn find_locations(
 }
 
 /// Ask where the name at `column` of `at` is used, and bring the panel to the front.
+pub(crate) fn find_references(
+    located: State<Located>,
+    dock: State<DockArea>,
+    language: State<Language>,
+    jobs: &LspJobs,
+    at: LinePos,
+    name: String,
+    column: u32,
+) {
+    find_places(
+        located,
+        dock,
+        language,
+        jobs,
+        at,
+        name,
+        column,
+        Wanted::References,
+        Query::references,
+    );
+}
+
+/// Ask what implements the name at `column` of `at`, and bring the panel to the front.
+pub(crate) fn find_implementations(
+    located: State<Located>,
+    dock: State<DockArea>,
+    language: State<Language>,
+    jobs: &LspJobs,
+    at: LinePos,
+    name: String,
+    column: u32,
+) {
+    find_places(
+        located,
+        dock,
+        language,
+        jobs,
+        at,
+        name,
+        column,
+        Wanted::Implementations,
+        Query::implementations,
+    );
+}
+
+/// The half the panel's two questions for the server share: ask it, hold the question,
+/// and raise the panel.
 ///
 /// The question is the server's, so it is sent here rather than from the effect that
 /// sends the worker's: what it is asked in is a server run, and there is nothing to ask
 /// with no server -- a question is not what starts one, that being the control the reader
 /// presses (`follow_name`'s rule).
-pub(crate) fn find_references(
+#[allow(clippy::too_many_arguments)]
+fn find_places(
     mut located: State<Located>,
     dock: State<DockArea>,
     language: State<Language>,
@@ -313,6 +394,8 @@ pub(crate) fn find_references(
     at: LinePos,
     name: String,
     column: u32,
+    want: Wanted,
+    query: fn(LinePos, String, u32, u64) -> Query,
 ) {
     let lookup = Lookup {
         file: PathBuf::from(&*at.file),
@@ -321,10 +404,10 @@ pub(crate) fn find_references(
         line: at.line.saturating_sub(1),
         column,
     };
-    let Some(run) = ask_where(language, jobs, lookup, Wanted::References) else {
+    let Some(run) = ask_where(language, jobs, lookup, want) else {
         return;
     };
-    let query = Query::references(at, name, column, run);
+    let query = query(at, name, column, run);
 
     // Asking again drops the answer that stands, which is what makes this question
     // pending; `find_locations`' rule, and here it cannot even be the same question,
@@ -334,7 +417,7 @@ pub(crate) fn find_references(
         next.found = None;
     }
     next.asked = Some(query);
-    // A use is a place in a file: no row of this answer chooses a symbol for a tab.
+    // These answers are places in files: no row of one chooses a symbol for a tab.
     next.subject = None;
     located.set(next);
 
@@ -343,17 +426,17 @@ pub(crate) fn find_references(
 
 /// The menu a source row or an instruction row opens on a right-click: the line's
 /// locations, -- for a source row inside a function -- the function's instances, and
-/// `references` where the press was on a name a server can be asked about, the things a row is
-/// asked for that a click does not do. Built per press, as `close_menu` is, closing over
-/// the row's line; the states come in as arguments because this is called from an event
-/// handler, where no hook may run.
+/// and `named` where the press was on a name a server can be asked about, the things a
+/// row is asked for that a click does not do. Built per press, as `close_menu` is, closing
+/// over the row's line; the states come in as arguments because this is called from an
+/// event handler, where no hook may run.
 pub(crate) fn locate_menu(
     located: State<Located>,
     dock: State<DockArea>,
     at: LinePos,
     subject: Option<(DocId, Arc<str>)>,
     function: Option<Function>,
-    references: Option<MenuButton>,
+    named: Vec<MenuButton>,
 ) -> Menu {
     let line = Query::line(at.clone());
     let instances = function.map(|function| {
@@ -364,10 +447,10 @@ pub(crate) fn locate_menu(
             .child(format!("Find instances of {}", function.name))
     });
 
-    // The name's references first, where the press was on one: it is about what is under the
-    // pointer, where the two below are about the line it is on.
+    // The name's questions first, where the press was on one: they are about what is
+    // under the pointer, where the two below are about the line it is on.
     Menu::new()
-        .maybe_child(references)
+        .children(named.into_iter().map(MenuButton::into_element))
         .child(
             MenuButton::new()
                 .on_press(move |_| find_locations(located, dock, line.clone(), subject.clone()))
@@ -435,28 +518,15 @@ impl Component for LocationsTab {
 
         let body: Element = match (&state.asked, state.pending(), &state.found) {
             (None, _, _) => placeholder("Nothing looked for yet"),
-            (
-                Some(Query {
-                    scope: Scope::Line, ..
-                }),
-                Some(query),
-                _,
-            ) => placeholder(format!("Finding locations for {}\u{2026}", query.spell())),
-            (
-                Some(Query {
-                    scope: Scope::References { .. },
-                    ..
-                }),
-                Some(query),
-                _,
-            ) => placeholder(format!("Finding references to {}\u{2026}", query.spell())),
-            (Some(_), Some(query), _) => {
-                placeholder(format!("Finding instances of {}\u{2026}", query.spell()))
-            }
+            (Some(_), Some(query), _) => placeholder(format!(
+                "Finding {} {}\u{2026}",
+                query.words().1,
+                query.spell()
+            )),
             (Some(query), None, Some(found))
                 if found.references().is_some_and(|found| found.count() == 0) =>
             {
-                placeholder(format!("No references to {}", query.spell()))
+                placeholder(format!("No {} {}", query.words().1, query.spell()))
             }
             (Some(query), None, Some(found)) if found.references().is_some() => {
                 let heading =
