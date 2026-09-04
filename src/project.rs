@@ -31,7 +31,7 @@ use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
 use crate::history::{History, Stop};
 use crate::rescue;
-use crate::tabs::{Driven, Positions, Spot};
+use crate::tabs::{Driven, Page, Positions, Spot};
 use crate::visits::Visits;
 
 /// The one directory everything this app stores lives under: the projects, the recent
@@ -326,6 +326,11 @@ pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
 /// [`Project`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
+    /// The page that was on screen, where one was. A plain value, so it comes before
+    /// every table below; `active` beside it is a document, and the two cannot both be
+    /// set, the tab on screen being one tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_page: Option<String>,
     /// What the last build produced, so a build after a restart still replaces it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cargo: Option<SessionCargo>,
@@ -353,18 +358,47 @@ pub struct Session {
     pub history: SavedHistory,
 }
 
-/// One of the open tabs: its trail, oldest place first, with the cursor on the place it
-/// showed, and whether it was the temporal tab.
+/// One tab as the app holds it, on its way into a [`SavedTab`]: the bar's order is the
+/// order of these, and a document's trail is borrowed rather than cloned.
+pub enum SavingTab<'a> {
+    Page(Page),
+    Document {
+        id: DocId,
+        trail: &'a History,
+        temporal: bool,
+    },
+}
+
+/// What was on screen when the session was written. Three answers and not an
+/// `Option<&Document>`: a page is on screen, a document is, or nothing is.
+#[derive(Clone, Copy)]
+pub enum OnScreen<'a> {
+    Nothing,
+    Page(Page),
+    Document(&'a Document),
+}
+
+/// One of the open tabs: a page, or a document's trail, oldest place first, with the
+/// cursor on the place it showed and whether it was the temporal tab.
 ///
 /// The whole trail and not the current place alone, so that Back works across a
 /// restart: reopening after a rebuild is this app's daily loop, and a trail lost on every
 /// restart would be worth little. The entries travel *with* the tab rather than in lists
 /// beside [`Session::tabs`], because [`Session::resolve_tabs`] drops the entries and the
 /// tabs that no longer resolve, which would shift every later row of a parallel array
-/// onto the wrong tab. Field order is load-bearing: `temporal` and `cursor` are plain
-/// values and `entries` is written as an array of tables.
+/// onto the wrong tab. Field order is load-bearing: `page`, `temporal` and `cursor` are
+/// plain values and `entries` is written as an array of tables.
+///
+/// A row with a `page` is a page tab and has no trail; every other field is what a
+/// document tab is made of. The name is written as a **string** and not as a serde enum
+/// because an unknown variant is a parse error, and a session that will not parse is
+/// moved aside whole (`rescue`): a name this build does not have costs one tab, where an
+/// error would cost every tab, every trail and the record of visits.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedTab {
+    /// Which page this tab is, and absent for a document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
     /// Whether this was the temporal tab, the preview a sidebar row opens in.
     #[serde(default)]
     pub temporal: bool,
@@ -412,14 +446,19 @@ pub struct SavedEntry {
     pub document: SavedDocument,
 }
 
-/// A saved tab with something left on its trail: what [`Session::resolve_tabs`] hands
-/// back. The trail is live, its cursor carried past the entries that no longer resolve;
-/// `entries` holds the rows of every place still on it, in the trail's own order.
+/// One tab a restore opens: a page, or a document with something left on its trail. What
+/// [`Session::resolve_tabs`] hands back, in the order the bar was in.
+///
+/// A document's trail is live, its cursor carried past the entries that no longer
+/// resolve; `entries` holds the rows of every place still on it, in the trail's own order.
 #[derive(Clone, PartialEq)]
-pub struct RestoredTab {
-    pub temporal: bool,
-    pub trail: History,
-    pub entries: Vec<RestoredEntry>,
+pub enum RestoredTab {
+    Page(Page),
+    Document {
+        temporal: bool,
+        trail: History,
+        entries: Vec<RestoredEntry>,
+    },
 }
 
 /// One place of a restored tab that still points somewhere, with the rows its two sides
@@ -762,6 +801,7 @@ impl Session {
     /// The empty session, as a `const fn` so [`Saves`] can be a `static`.
     pub const fn new() -> Session {
         Session {
+            active_page: None,
             cargo: None,
             digests: BTreeMap::new(),
             active: None,
@@ -778,14 +818,15 @@ impl Session {
     /// of it for the other file. `tabs` is each open tab in strip order: its id, its
     /// trail, and whether it is the temporal one. A side that was never scrolled has no
     /// entry in its [`Positions`] at all and is written out as row `0`.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_state(
         objects: &[Arc<Object>],
-        tabs: &[(DocId, &History, bool)],
+        tabs: &[SavingTab<'_>],
         asm_rows: &Positions<Entry>,
         src_rows: &Positions<Entry>,
         places: &Positions<Entry, Spot>,
         driven: &Driven,
-        active: Option<&Document>,
+        shown: OnScreen<'_>,
         visits: &Visits,
         artifacts: &[PathBuf],
     ) -> Session {
@@ -799,33 +840,53 @@ impl Session {
                 .or_insert_with(|| object.data.digest().to_string());
         }
         Session {
+            active_page: match shown {
+                OnScreen::Page(page) => Some(page.stored().to_owned()),
+                OnScreen::Document(_) | OnScreen::Nothing => None,
+            },
             // Absent rather than empty, so a project nothing was ever built in writes no
             // section at all.
             cargo: (!artifacts.is_empty()).then(|| SessionCargo {
                 artifacts: artifacts.to_vec(),
             }),
             digests,
-            active: active.map(SavedDocument::from_document),
+            active: match shown {
+                OnScreen::Document(document) => Some(SavedDocument::from_document(document)),
+                OnScreen::Page(_) | OnScreen::Nothing => None,
+            },
             tabs: tabs
                 .iter()
-                .map(|(id, trail, temporal)| SavedTab {
-                    temporal: *temporal,
-                    cursor: trail.cursor().unwrap_or(0),
-                    entries: trail
-                        .entries()
-                        .iter()
-                        .map(|stop| {
-                            let entry = (*id, stop.clone());
-                            SavedEntry {
-                                asm_row: asm_rows.at(&entry).unwrap_or(0),
-                                src_row: src_rows.at(&entry).unwrap_or(0),
-                                line: driven.line(&entry),
-                                asm_address: places.at(&entry).map(|spot| spot.address),
-                                src_line: stop.line,
-                                document: SavedDocument::from_document(&stop.document),
-                            }
-                        })
-                        .collect(),
+                .map(|tab| match tab {
+                    SavingTab::Page(page) => SavedTab {
+                        page: Some(page.stored().to_owned()),
+                        temporal: false,
+                        cursor: 0,
+                        entries: Vec::new(),
+                    },
+                    SavingTab::Document {
+                        id,
+                        trail,
+                        temporal,
+                    } => SavedTab {
+                        page: None,
+                        temporal: *temporal,
+                        cursor: trail.cursor().unwrap_or(0),
+                        entries: trail
+                            .entries()
+                            .iter()
+                            .map(|stop| {
+                                let entry = (*id, stop.clone());
+                                SavedEntry {
+                                    asm_row: asm_rows.at(&entry).unwrap_or(0),
+                                    src_row: src_rows.at(&entry).unwrap_or(0),
+                                    line: driven.line(&entry),
+                                    asm_address: places.at(&entry).map(|spot| spot.address),
+                                    src_line: stop.line,
+                                    document: SavedDocument::from_document(&stop.document),
+                                }
+                            })
+                            .collect(),
+                    },
                 })
                 .collect(),
             history: SavedHistory::from_visits(visits),
@@ -840,6 +901,20 @@ impl Session {
         saved.resolve_or_degrade(objects, &Rebuilt::of(self, objects))
     }
 
+    /// The page that was on screen, where one was and this build still has it.
+    pub fn shown_page(&self) -> Option<Page> {
+        Page::from_stored(self.active_page.as_deref()?)
+    }
+
+    /// The saved pages with the place each had in the bar. A page resolves against no
+    /// object, so these are what a restore can put back before any binary has been read
+    /// -- and all it has to put back for a project with no binaries at all.
+    pub fn pages(&self) -> impl Iterator<Item = (usize, Page)> + '_ {
+        self.tabs.iter().enumerate().filter_map(|(position, tab)| {
+            Some((position, Page::from_stored(tab.page.as_deref()?)?))
+        })
+    }
+
     /// The saved tabs as live trails, in strip order, each place with the rows its two
     /// sides were left at. A place that no longer resolves is **dropped** from its trail
     /// rather than degraded, the cursor carried the way [`History::rebuilt`] carries it
@@ -851,6 +926,11 @@ impl Session {
         self.tabs
             .iter()
             .filter_map(|saved| {
+                // A page resolves against nothing, and one this build does not have is
+                // dropped as a place that no longer resolves is.
+                if let Some(page) = &saved.page {
+                    return Some(RestoredTab::Page(Page::from_stored(page)?));
+                }
                 let resolved: Vec<Option<RestoredEntry>> = saved
                     .entries
                     .iter()
@@ -893,7 +973,7 @@ impl Session {
                 // The rows of what survived, in the trail's order; `rebuilt` keeps the
                 // survivors in the order they were given, so the two agree.
                 let entries = resolved.into_iter().flatten().collect();
-                Some(RestoredTab {
+                Some(RestoredTab::Document {
                     temporal: saved.temporal,
                     trail,
                     entries,

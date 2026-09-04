@@ -117,9 +117,13 @@ fn session_of(
     for (document, line) in driven_from {
         driven.remember(entry(document), *line);
     }
-    let trails: Vec<(DocId, &History, bool)> = ids
+    let trails: Vec<SavingTab<'_>> = ids
         .iter()
-        .map(|id| (*id, docs.trail(*id).expect("open"), false))
+        .map(|id| SavingTab::Document {
+            id: *id,
+            trail: docs.trail(*id).expect("open"),
+            temporal: false,
+        })
         .collect();
     Session::from_state(
         objects,
@@ -128,10 +132,25 @@ fn session_of(
         &src_rows,
         &spots,
         &driven,
-        active,
+        match active {
+            Some(document) => OnScreen::Document(document),
+            None => OnScreen::Nothing,
+        },
         visits,
         &[],
     )
+}
+
+/// The document arm of a restored tab: what every test but the pages' is about.
+fn as_document(tab: &RestoredTab) -> (bool, &History, &[RestoredEntry]) {
+    match tab {
+        RestoredTab::Document {
+            temporal,
+            trail,
+            entries,
+        } => (*temporal, trail, entries),
+        RestoredTab::Page(page) => panic!("a page tab where a document was wanted: {page:?}"),
+    }
 }
 
 /// What [`Session::resolve`] answers, as the selection inside it.
@@ -459,12 +478,16 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
         }
         let session = Session::from_state(
             &objects,
-            &[(id, docs.trail(id).expect("open"), false)],
+            &[SavingTab::Document {
+                id,
+                trail: docs.trail(id).expect("open"),
+                temporal: false,
+            }],
             &asm,
             &src,
             &Positions::default(),
             &Driven::default(),
-            Some(&current),
+            OnScreen::Document(&current),
             &Visits::default(),
             &[],
         );
@@ -474,9 +497,15 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
 
         let restored = session.resolve_tabs(&objects);
         assert_eq!(restored.len(), 1);
-        assert!(restored[0].trail == trail);
-        assert!(restored[0].trail.current().map(|stop| &stop.document) == Some(&current));
-        for (index, entry) in restored[0].entries.iter().enumerate() {
+        assert!(*as_document(&restored[0]).1 == trail);
+        assert!(
+            as_document(&restored[0])
+                .1
+                .current()
+                .map(|stop| &stop.document)
+                == Some(&current)
+        );
+        for (index, entry) in as_document(&restored[0]).2.iter().enumerate() {
             assert!(entry.document == places(&objects)[index]);
             assert_eq!(entry.asm_row, 10 + index);
             assert_eq!(entry.src_row, 20 + index);
@@ -503,6 +532,7 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
         tabs: vec![
             // On the gone symbol, between two survivors: lands on the older one.
             SavedTab {
+                page: None,
                 temporal: true,
                 cursor: 1,
                 entries: vec![
@@ -513,6 +543,7 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
             },
             // Nothing survives: no tab.
             SavedTab {
+                page: None,
                 temporal: false,
                 cursor: 0,
                 entries: vec![saved_entry(gone, 6), saved_entry(saved_object("c.o"), 7)],
@@ -523,18 +554,24 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
 
     let restored = session.resolve_tabs(&objects);
     assert_eq!(restored.len(), 1);
-    assert!(restored[0].temporal);
-    let entries: Vec<Document> = restored[0]
-        .trail
+    assert!(as_document(&restored[0]).0);
+    let entries: Vec<Document> = as_document(&restored[0])
+        .1
         .entries()
         .iter()
         .map(|stop| stop.document.clone())
         .collect();
     assert!(entries == [tab(&objects[0]), tab(&objects[1])]);
-    assert!(restored[0].trail.current().map(|stop| &stop.document) == Some(&tab(&objects[0])));
-    assert!(restored[0].trail.can_forward());
-    let rows: Vec<usize> = restored[0]
-        .entries
+    assert!(
+        as_document(&restored[0])
+            .1
+            .current()
+            .map(|stop| &stop.document)
+            == Some(&tab(&objects[0]))
+    );
+    assert!(as_document(&restored[0]).1.can_forward());
+    let rows: Vec<usize> = as_document(&restored[0])
+        .2
         .iter()
         .map(|entry| entry.asm_row)
         .collect();
@@ -623,9 +660,20 @@ fn saved_entry(document: SavedDocument, asm_row: usize) -> SavedEntry {
 /// A saved tab that stays, with `entry` alone on its trail.
 fn saved_one(entry: SavedEntry) -> SavedTab {
     SavedTab {
+        page: None,
         temporal: false,
         cursor: 0,
         entries: vec![entry],
+    }
+}
+
+/// A saved page tab, which has no trail at all.
+fn saved_page(page: Page) -> SavedTab {
+    SavedTab {
+        page: Some(page.stored().to_owned()),
+        temporal: false,
+        cursor: 0,
+        entries: Vec::new(),
     }
 }
 
@@ -651,7 +699,7 @@ fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
 fn restored(document: &Document, asm_row: usize, src_row: usize) -> RestoredTab {
     let mut trail = History::default();
     trail.push(document.clone());
-    RestoredTab {
+    RestoredTab::Document {
         temporal: false,
         trail,
         entries: vec![RestoredEntry {
@@ -777,9 +825,9 @@ fn the_rows_come_back_against_the_tabs_they_belong_to() {
     let (mut asm, mut src): (Positions<Document>, Positions<Document>) =
         (Positions::default(), Positions::default());
     for tab in session.resolve_tabs(&objects) {
-        for entry in tab.entries {
+        for entry in as_document(&tab).2 {
             asm.remember(entry.document.clone(), entry.asm_row);
-            src.remember(entry.document, entry.src_row);
+            src.remember(entry.document.clone(), entry.src_row);
         }
     }
     assert_eq!(asm.at(&tabs[0]), Some(12));
@@ -922,13 +970,113 @@ fn the_line_a_source_tab_was_driven_from_comes_back() {
 
     let mut lines: Vec<(Document, Option<u32>)> = Vec::new();
     for tab in session.resolve_tabs(&objects) {
-        for entry in tab.entries {
-            lines.push((entry.document, entry.line));
+        for entry in as_document(&tab).2 {
+            lines.push((entry.document.clone(), entry.line));
         }
     }
     // Only the tab that was driven. An assembly-driven tab is never one.
     assert!(lines == [(tabs[0].clone(), Some(42)), (tabs[1].clone(), None)]);
-    assert_eq!(session.resolve_tabs(&objects)[0].entries[0].asm_row, 7);
+    assert_eq!(
+        as_document(&session.resolve_tabs(&objects)[0]).2[0].asm_row,
+        7
+    );
+}
+
+/// The bar goes out in its own order, pages and documents alike, and comes back in it:
+/// a page is a tab with a name and no trail, and it resolves against no object at all.
+#[test]
+fn the_bar_saves_its_pages_where_they_stand() {
+    let objects = objects();
+    let documents = [tab(&objects[0]), file_tab("/src/main.rs")];
+    let mut docs = Docs::default();
+    let ids: Vec<DocId> = documents
+        .iter()
+        .map(|document| docs.open(document.clone()))
+        .collect();
+    let saving = vec![
+        SavingTab::Page(Page::Project),
+        SavingTab::Document {
+            id: ids[0],
+            trail: docs.trail(ids[0]).expect("open"),
+            temporal: false,
+        },
+        SavingTab::Page(Page::Settings),
+        SavingTab::Document {
+            id: ids[1],
+            trail: docs.trail(ids[1]).expect("open"),
+            temporal: false,
+        },
+    ];
+    let session = Session::from_state(
+        &objects,
+        &saving,
+        &Positions::default(),
+        &Positions::default(),
+        &Positions::default(),
+        &Driven::default(),
+        OnScreen::Page(Page::Settings),
+        &Visits::default(),
+        &[],
+    );
+
+    // The page on screen is written instead of an active document, never beside one.
+    assert_eq!(session.active_page.as_deref(), Some("settings"));
+    assert!(session.active.is_none());
+    assert_eq!(
+        session.pages().collect::<Vec<(usize, Page)>>(),
+        [(0, Page::Project), (2, Page::Settings)]
+    );
+
+    // Through the file and back, in the order the bar was in.
+    let text = round_trip(&session);
+    let page = text.find("page = ").expect("a page tab");
+    let entries = text.find("[[tabs.entries]]").expect("a document tab");
+    assert!(
+        page < entries,
+        "the page name after an entries table\n{text}"
+    );
+    let session: Session = toml::from_str(&text).expect("reading back");
+    let restored = session.resolve_tabs(&objects);
+    let names: Vec<Option<Page>> = restored
+        .iter()
+        .map(|tab| match tab {
+            RestoredTab::Page(page) => Some(*page),
+            RestoredTab::Document { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [Some(Page::Project), None, Some(Page::Settings), None]
+    );
+    assert_eq!(session.shown_page(), Some(Page::Settings));
+}
+
+/// A page this build does not have is dropped, as a place that no longer resolves is,
+/// and every other tab comes back. It is a string in the file for exactly this reason: a
+/// serde enum would fail the parse and cost the reader the whole session.
+#[test]
+fn a_page_this_build_does_not_have_is_dropped() {
+    let objects = objects();
+    let session = Session {
+        active_page: Some("terminal".to_owned()),
+        tabs: vec![
+            SavedTab {
+                page: Some("terminal".to_owned()),
+                temporal: false,
+                cursor: 0,
+                entries: Vec::new(),
+            },
+            saved_page(Page::Settings),
+            saved_tab("a.o", 3),
+        ],
+        ..Session::new()
+    };
+
+    let restored = session.resolve_tabs(&objects);
+    assert_eq!(restored.len(), 2);
+    assert!(matches!(restored[0], RestoredTab::Page(Page::Settings)));
+    assert_eq!(as_document(&restored[1]).2[0].asm_row, 3);
+    assert_eq!(session.shown_page(), None);
 }
 
 /// The digest of the objects the fixtures are built from, as it is written down.
@@ -993,7 +1141,10 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
             }))
     );
     assert_eq!(session.resolve_tabs(&objects).len(), 1);
-    assert_eq!(session.resolve_tabs(&objects)[0].entries[0].asm_row, 42);
+    assert_eq!(
+        as_document(&session.resolve_tabs(&objects)[0]).2[0].asm_row,
+        42
+    );
 
     // The same name at an address it is not at, which this file does not explain.
     let moved = saved_against(
@@ -1103,7 +1254,10 @@ fn a_digest_for_a_binary_that_is_not_open_says_nothing() {
         .digests
         .insert(PathBuf::from("/tmp/some.dll"), digest_of(b"whatever"));
 
-    assert_eq!(session.resolve_tabs(&objects)[0].entries[0].asm_row, 42);
+    assert_eq!(
+        as_document(&session.resolve_tabs(&objects)[0]).2[0].asm_row,
+        42
+    );
 }
 
 /// The digests are a TOML *table* holding hex strings, a `u64` digest not fitting TOML's
@@ -1962,12 +2116,16 @@ fn a_source_places_line_is_written_before_its_document_and_comes_back() {
     let id = docs.open_trail(trail.clone(), false).expect("a trail");
     let session = Session::from_state(
         &objects,
-        &[(id, docs.trail(id).expect("open"), false)],
+        &[SavingTab::Document {
+            id,
+            trail: docs.trail(id).expect("open"),
+            temporal: false,
+        }],
         &Positions::default(),
         &Positions::default(),
         &Positions::default(),
         &Driven::default(),
-        None,
+        OnScreen::Nothing,
         &Visits::default(),
         &[],
     );
@@ -1980,7 +2138,10 @@ fn a_source_places_line_is_written_before_its_document_and_comes_back() {
 
     let back: Session = toml::from_str(&text).expect("parses back");
     let restored = back.resolve_tabs(&objects);
-    assert!(restored[0].trail == trail, "the lines did not come back");
+    assert!(
+        *as_document(&restored[0]).1 == trail,
+        "the lines did not come back"
+    );
 }
 
 /// The address a code tab was left at is written before its document, as the rows are:
@@ -2021,8 +2182,8 @@ fn a_code_tabs_address_is_written_before_its_document() {
 
     // And it comes back as the tab's address, the rows past it being a nicety.
     let restored = session.resolve_tabs(&objects);
-    assert!(restored[0].entries[0].document == code);
-    assert_eq!(restored[0].entries[0].address, Some(0x30));
+    assert!(as_document(&restored[0]).2[0].document == code);
+    assert_eq!(as_document(&restored[0]).2[0].address, Some(0x30));
 }
 
 /// A tab that followed a link inside an object's code has that listing on its trail
@@ -2060,12 +2221,16 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
 
     let session = Session::from_state(
         &objects,
-        &[(id, docs.trail(id).expect("open"), false)],
+        &[SavingTab::Document {
+            id,
+            trail: docs.trail(id).expect("open"),
+            temporal: false,
+        }],
         &Positions::default(),
         &Positions::default(),
         &spots,
         &Driven::default(),
-        Some(&code),
+        OnScreen::Document(&code),
         &Visits::default(),
         &[],
     );
@@ -2074,13 +2239,14 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
 
     let restored = session.resolve_tabs(&objects);
     assert!(
-        restored[0].trail.entries() == [Stop::at(code.clone(), 0x10), Stop::at(code.clone(), 0x40)],
+        as_document(&restored[0]).1.entries()
+            == [Stop::at(code.clone(), 0x10), Stop::at(code.clone(), 0x40)],
         "the trail came back as one place"
     );
     // Each place with the row it was left at: the first where the reader had scrolled to,
     // the second where the jump landed.
-    let addresses: Vec<Option<u64>> = restored[0]
-        .entries
+    let addresses: Vec<Option<u64>> = as_document(&restored[0])
+        .2
         .iter()
         .map(|entry| entry.address)
         .collect();
@@ -2115,8 +2281,8 @@ fn a_rebuilt_binary_takes_the_saved_address_with_it() {
     ];
     let restored = session.resolve_tabs(&rebuilt);
     assert_eq!(restored.len(), 1);
-    assert!(restored[0].entries[0].document == Document::Code(rebuilt[1].clone()));
-    assert_eq!(restored[0].entries[0].address, None);
+    assert!(as_document(&restored[0]).2[0].document == Document::Code(rebuilt[1].clone()));
+    assert_eq!(as_document(&restored[0]).2[0].address, None);
 }
 
 /// Only a code tab has an address to save; a symbol's tab keeps its row.
@@ -2399,7 +2565,7 @@ fn the_session_records_what_the_last_build_produced() {
         &Positions::default(),
         &Positions::default(),
         &Driven::default(),
-        None,
+        OnScreen::Nothing,
         &Visits::default(),
         &built,
     );

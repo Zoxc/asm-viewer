@@ -984,6 +984,31 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
     );
 }
 
+/// A page resolves against no object, so a session that saved one puts it back **without
+/// waiting for a binary** -- and a project with no binaries at all still opens on the page
+/// the reader left it on. Written as the file spells it, so this pins the format as well
+/// as the restore.
+#[test]
+fn a_saved_page_comes_back_with_no_binaries() {
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let session: Session = toml::from_str(
+        "active_page = \"settings\"\n\n[[tabs]]\npage = \"project\"\n\n[[tabs]]\npage = \"settings\"\n",
+    )
+    .expect("a session naming two pages");
+
+    restore_project(states, Project::default(), session);
+    test.sync_and_update();
+
+    let strip = states.open.strip.peek();
+    assert_eq!(
+        strip.tabs(),
+        [Tab::Page(Page::Project), Tab::Page(Page::Settings)],
+        "the pages did not come back"
+    );
+    assert_eq!(strip.active(), Some(Tab::Page(Page::Settings)));
+}
+
 /// Every open tab's chip, drawn as the bar draws them: what a press on one has to answer
 /// for now that the bar is the app's own. freya's docking wrapped a header in a
 /// `rect().on_press(set_active)` and the chip did nothing; here the chip is the whole of

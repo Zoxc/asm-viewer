@@ -741,13 +741,28 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                 // The dock and the table rather than `Active`, which is a memo and so a
                 // beat behind.
                 let (strip, docs) = (open.strip.read(), open.docs.read());
-                let tabs: Vec<(DocId, &History, bool)> = open_ids(&strip)
-                    .into_iter()
-                    .filter_map(|id| {
-                        docs.trail(id)
-                            .map(|trail| (id, trail, docs.temporal() == Some(id)))
+                // The bar in its own order, pages and documents alike. A document whose
+                // trail has gone is not a tab the session can name, and is left out.
+                let tabs: Vec<SavingTab<'_>> = strip
+                    .tabs()
+                    .iter()
+                    .filter_map(|tab| match tab {
+                        Tab::Page(page) => Some(SavingTab::Page(*page)),
+                        Tab::Document(id) => docs.trail(*id).map(|trail| SavingTab::Document {
+                            id: *id,
+                            trail,
+                            temporal: docs.temporal() == Some(*id),
+                        }),
                     })
                     .collect();
+                // What was on screen: a page, a document, or neither. Bound before the
+                // borrow below it, the document being read out of the two states.
+                let shown_document = active_document(&strip, &docs);
+                let shown = match (strip.active(), &shown_document) {
+                    (Some(Tab::Page(page)), _) => OnScreen::Page(page),
+                    (_, Some(document)) => OnScreen::Document(document),
+                    _ => OnScreen::Nothing,
+                };
                 Session::from_state(
                     &objects,
                     &tabs,
@@ -755,7 +770,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                     &src_at.read(),
                     &code_at.read(),
                     &driven.read(),
-                    active_document(&strip, &docs).as_ref(),
+                    shown,
                     &visits.read(),
                     &build.read().previous,
                 )
@@ -801,14 +816,18 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates) {
 /// two things that do a restore -- the app starting and a switch -- so the second cannot
 /// drift from the first. Every step degrades silently.
 ///
-/// Two orderings are load-bearing. **Tabs before the active document**: `open_document`
-/// opens what it cannot find, so restoring the active one first would leave its tab out
-/// of place in the strip. **The rows go into the `Positions` maps before each tab is
-/// shown**: a pane puts its view back when it notices the tab it is showing has changed,
-/// so a row arriving after the tab is on screen arrives after the only moment anything
-/// looks at it. A tab's trail is opened whole and its rows go in per entry, so Back
-/// after a restart comes back to the rows that were left.
-fn restore_project(states: ProjectStates, project: Project, session: Session) {
+/// The **pages go back first and synchronously**: one resolves against no object, so a
+/// session whose only tab was Settings has nothing to wait for, and a project with no
+/// binaries at all still comes back as the reader left it.
+///
+/// Two orderings are load-bearing among the documents. **Tabs before the active
+/// document**: `open_document` opens what it cannot find, so restoring the active one
+/// first would leave its tab out of place in the bar. **The rows go into the `Positions`
+/// maps before each tab is shown**: a pane puts its view back when it notices the tab it
+/// is showing has changed, so a row arriving after the tab is on screen arrives after the
+/// only moment anything looks at it. A tab's trail is opened whole and its rows go in per
+/// entry, so Back after a restart comes back to the rows that were left.
+pub(crate) fn restore_project(states: ProjectStates, project: Project, session: Session) {
     // What the last build produced, which the next build replaces. Set before the early
     // return below: a project whose binaries are all gone still knows what it built.
     let mut build = states.build;
@@ -831,6 +850,19 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         visits,
         ..
     } = states;
+
+    // The pages, at the places they had in the bar, and the one that was on screen.
+    // Before the two returns below, both of which are about binaries.
+    {
+        let mut strip = open.strip;
+        let mut strip = strip.write();
+        for (position, page) in session.pages() {
+            strip.insert(Tab::Page(page), position);
+        }
+        if let Some(page) = session.shown_page() {
+            strip.raise(Tab::Page(page));
+        }
+    }
 
     if project.binaries.is_empty() {
         return;
@@ -864,10 +896,25 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
         // top and records nothing over it.
         visits.set(restored_visits);
         let (mut strip, mut docs) = (open.strip, open.docs);
+        // Where in the bar the next tab goes. Counted over what survived rather than read
+        // off the saved list, so the tabs that resolved keep their order around the pages
+        // already put back.
+        let mut position = 0;
         for tab in restored_tabs {
+            let RestoredTab::Document {
+                temporal,
+                trail,
+                entries,
+            } = tab
+            else {
+                // A page is in the bar already, put there before the load; what it owes
+                // the count is its place.
+                position += 1;
+                continue;
+            };
             // The trail whole, in a statement of its own so the guard is gone before
             // the maps are written.
-            let id = docs.write().open_trail(tab.trail, tab.temporal);
+            let id = docs.write().open_trail(trail, temporal);
             let Some(id) = id else {
                 continue;
             };
@@ -878,7 +925,7 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
             {
                 let (mut asm, mut src, mut from) = (asm_at.write(), src_at.write(), driven.write());
                 let mut places = code_at.write();
-                for entry in tab.entries {
+                for entry in entries {
                     // The place itself, address and line and all: two stops in one
                     // object's code, or in one file, are two keys, as they were when
                     // they were saved.
@@ -900,9 +947,10 @@ fn restore_project(states: ProjectStates, project: Project, session: Session) {
                     }
                 }
             }
-            // Reopening a tab is not visiting it. Put at the end and not beside the tab
-            // on screen: the saved order is stated outright rather than reproduced.
-            strip.write().push(Tab::Document(id));
+            // Reopening a tab is not visiting it. Put at the place it had rather than
+            // beside the tab on screen: the saved order is stated outright.
+            strip.write().insert(Tab::Document(id), position);
+            position += 1;
         }
         // The document the app lands on is a place it went: the tab showing it is
         // raised, or -- degraded to its object, say -- it opens in a tab of its own.
@@ -950,6 +998,13 @@ pub(crate) fn clear_project(states: ProjectStates) {
     let remaining = open.ids();
     for id in remaining {
         close_tab(open, asm_at, src_at, code_at, driven, marks_at, id);
+    }
+
+    // The pages go with the documents: which of them is open is this project's session,
+    // and the project being opened puts its own back.
+    {
+        let mut strip = open.strip;
+        strip.write().close(|tab| matches!(tab, Tab::Page(_)));
     }
 
     // And the record outright, which neither walk above does.

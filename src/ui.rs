@@ -46,7 +46,8 @@ pub(crate) use crate::lsp;
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::project::{
-    self, Cargo, Details, Document, Project, ProjectId, Recent, SavedDocument, Selection, Session,
+    self, Cargo, Details, Document, OnScreen, Project, ProjectId, Recent, RestoredTab,
+    SavedDocument, SavingTab, Selection, Session,
 };
 pub(crate) use crate::references::{self, ReferenceRow, ReferenceRows};
 pub(crate) use crate::rescue;

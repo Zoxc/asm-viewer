@@ -30,6 +30,18 @@ fn strip(count: u32) -> (Strip, Vec<Tab>, Docs) {
     (strip, tabs, docs)
 }
 
+/// A session is written with the stored name and not the title, so the two are pinned
+/// apart: every page round-trips, and a name this build does not have is dropped rather
+/// than guessed at.
+#[test]
+fn a_page_round_trips_through_the_name_a_session_holds() {
+    for page in Page::ALL {
+        assert_eq!(Page::from_stored(page.stored()), Some(page));
+    }
+    assert_eq!(Page::from_stored("Settings"), None);
+    assert_eq!(Page::from_stored("terminal"), None);
+}
+
 #[test]
 fn a_new_tab_opens_beside_the_tab_on_screen() {
     let (mut strip, tabs, _docs) = strip(3);

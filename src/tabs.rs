@@ -15,6 +15,9 @@ use crate::docs::{DocId, Entry};
 ///
 /// Three of them, one of a kind, each drawn from state that lives at the root of the app
 /// rather than in the tab -- so closing one loses nothing, and it comes back as it was.
+///
+/// [`Page::stored`] and not [`Page::title`] is what a session is written with: the title is
+/// what the reader sees, and a title reworded as prose would empty every saved bar.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Page {
     Project,
@@ -33,6 +36,21 @@ impl Page {
             Page::Settings => "Settings",
             Page::Scratchpad => "Scratchpad",
         }
+    }
+
+    /// What a session names it. See the type.
+    pub fn stored(self) -> &'static str {
+        match self {
+            Page::Project => "project",
+            Page::Settings => "settings",
+            Page::Scratchpad => "scratchpad",
+        }
+    }
+
+    /// The page a session named, or `None` for a name this build does not have -- a file
+    /// a build with one more page wrote, which drops that tab and keeps the rest.
+    pub fn from_stored(stored: &str) -> Option<Page> {
+        Page::ALL.into_iter().find(|page| page.stored() == stored)
     }
 }
 
@@ -84,11 +102,17 @@ impl Strip {
         })
     }
 
-    /// Put `tab` at the end and show it: what a restore does, stating the saved order
-    /// outright rather than reproducing it a tab at a time.
+    /// Put `tab` at the end and show it.
     pub fn push(&mut self, tab: Tab) {
+        self.insert(tab, self.tabs.len());
+    }
+
+    /// Put `tab` at `position`, or at the end when that is past it, and show it: what a
+    /// restore does, stating the saved order outright rather than reproducing it a tab at
+    /// a time. A tab already open only comes to the front.
+    pub fn insert(&mut self, tab: Tab, position: usize) {
         if !self.contains(tab) {
-            self.tabs.push(tab);
+            self.tabs.insert(position.min(self.tabs.len()), tab);
         }
         self.active = Some(tab);
     }
