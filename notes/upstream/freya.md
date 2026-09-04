@@ -163,9 +163,9 @@ skia's source, so the app pins it with a test
 
 **A tooltip that does not arm under a held button.** `TooltipContainer` arms its timer on
 `pointer_over` and disarms on `pointer_out` and on nothing else (`tooltip.rs:204-216`), so
-a pointer dragging a selection up past the companion header or the symbol bar arms and
-shows their tooltips. The app makes the two `interactive(false)` while a sweep is under
-way (`sweeping`, `ui/marks.rs`), so they are not hit at all.
+a pointer dragging a selection up past either pane's bar arms and shows the tooltips of
+what it passed. The app makes them `interactive(false)` while a sweep is under way
+(`sweeping`, `ui/marks.rs`), so they are not hit at all.
 
 **A key event is emitted only for a focused node that listens for it.** A keyboard event
 becomes one potential event, on the focused node, and `measure_emmitable_events` keeps it only

@@ -105,7 +105,8 @@ command.
   and which language server each is read with.
 - `src/rescue.rs` — a stored file that will not parse, moved aside before a write replaces it.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
-- `src/source.rs` — source files read off disk and cached by path, failures included.
+- `src/source.rs` — source files read off disk and cached by path, failures included; and
+  `Language`, the one list of extensions the app knows, which says what compiles.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
@@ -180,8 +181,9 @@ command.
   shared width, wash and pointer handlers, and the one paragraph a row's text is.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
-- `src/ui/source_view.rs` — the source side of one, and which file it is showing.
-- `src/ui/dock.rs` — the dock, its two-kinded tab, and the document panel's own tab bar.
+- `src/ui/source_view.rs` — the source side of one, the bar over it, and which file it is showing.
+- `src/ui/dock.rs` — the dock, its two-kinded tab, the document panel's own tab bar, and which
+  panes a tab has, with the control on either pane's bar that says.
 - `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers,
   and what the language server has to say for itself.
 - `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.

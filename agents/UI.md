@@ -311,8 +311,11 @@ content is mounted, so a pane is only ever built for the tab it belongs to.
 
 **Which pane comes first is the document's kind**: the side a tab is driven from leads, so
 `AssemblyPane` is on the left in an assembly-driven tab and `SourcePane` is on the left in a
-source-driven one. `DocumentBody` is the only thing that knows this. The panes themselves are handed
-no side and read none, so the swap is the order of two `.panel(..)` calls and nothing else.
+source-driven one -- and a tab whose following pane has been put away, by the toggle on either bar
+or by its file having no assembly side to show, is the leading pane alone, with no container and no
+handle (`following`, `agents/Panes.md`). `DocumentBody` is the only thing that knows this. The
+panes themselves are handed no side and read none, so the swap is the order of two `.panel(..)`
+calls and nothing else.
 Everything the two panes share is keyed by pane *identity* and not by position (`Pane`, `Owed`,
 `Marks`, `AsmAt`/`SrcAt`), which is why swapping them moves no selected run, no pair, no owed scroll
 and no kept row. The panes are two different component types, so a swap unmounts and remounts both;

@@ -4,7 +4,9 @@
 //! Two rows -- the demangled name over the mangled original -- because the only other
 //! place a symbol is named is its tab, which is cut to `CHIP_NAME_CHARS` by `short_name`,
 //! and the mangled spelling appeared nowhere at all. Under a disclosure triangle is the
-//! rest of what is known about it, which is what the Info pane used to answer.
+//! rest of what is known about it, which is what the Info pane used to answer. At the end
+//! of the bar, where this pane is the one the tab is driven from, is [`PaneToggle`]; the
+//! Source pane's own bar carries it under the same rule.
 
 use super::*;
 
@@ -171,6 +173,9 @@ pub(crate) struct SymbolBar {
     /// The tab this bar is in, which is what its open-or-shut is filed under -- the tab
     /// and not the place on its trail, so the section stays open along the trail.
     pub(crate) tab: DocId,
+    /// Whether this pane is the one the tab is driven from, which is the only pane whose
+    /// bar carries [`PaneToggle`].
+    pub(crate) leading: bool,
 }
 
 impl Component for SymbolBar {
@@ -262,5 +267,9 @@ impl Component for SymbolBar {
                         false => Vec::new(),
                     }),
             )
+            // Only where this side leads, and outside the names rather than inside them,
+            // so a press on it is a press on the toggle and never a copy of the name it
+            // sits beside.
+            .maybe(self.leading, |bar| bar.child(PaneToggle { tab: self.tab }))
     }
 }

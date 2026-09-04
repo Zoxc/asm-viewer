@@ -417,6 +417,9 @@ macro_rules! project_states {
         // Provided but not returned, like `Active`: nothing here asserts on it, and the
         // Assembly pane's bar reads it wherever a harness mounts one.
         $runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
+        // Likewise: both panes' bars read it, and `DocumentBody` asks it which panes
+        // there are.
+        $runner.provide_root_context(|| Follows(State::create(HashMap::new())));
         // Likewise: every row and link asks it whether a press opens a tab of its own.
         $runner.provide_root_context(|| Ctrl(State::create(false)));
         // Likewise: a recent project's row hands it to the switch, which is one of the two
@@ -5491,6 +5494,232 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
         src < boundary && boundary < asm,
         "a source-driven tab drew its source at {src} and its listing at {asm}"
     );
+}
+
+/// A tab on a file nothing compiles opens as the source pane alone, where a tab on source
+/// a compiler reads keeps its assembly side. Headless because what is asserted is whether
+/// the second pane was mounted at all, which only the laid-out tree can say: the analysis
+/// is the same listing in both, so a pane that is there draws it.
+#[test]
+fn a_file_in_no_compiled_language_opens_without_an_assembly_side() {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+
+    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+        panes_harness,
+        (600., 300.).into(),
+        |runner| {
+            let states = listing_states!(runner, shown);
+            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
+            runner.provide_root_context(|| {
+                Splits(State::create(ResizableContext {
+                    direction: Direction::Horizontal,
+                    ..Default::default()
+                }))
+            });
+            states
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // The assembly side draws one 16-digit address per row, so whether any was laid out
+    // is whether that pane is there.
+    let addresses = |test: &TestingRunner| {
+        test.find_many(|node, _element| {
+            (node.element().as_ref() as &dyn Any)
+                .downcast_ref::<LabelElement>()
+                .map(|label| label.text.to_string())
+                .filter(|text| text.trim_end().len() == 16)
+        })
+        .len()
+    };
+    let went = |file: &str| {
+        open_document(
+            states.open,
+            states.visits,
+            Document::Source(Arc::from(file)),
+            Reach::NewTab,
+        )
+    };
+
+    // A language named as compiled, one named as not, and one the app cannot place --
+    // which is answered the same as a configuration file, an assembly side being offered
+    // only where the extension says the file becomes machine code.
+    for (file, assembly) in [
+        ("/nowhere/main.rs", true),
+        ("/nowhere/Cargo.toml", false),
+        ("/nowhere/notes.md", false),
+    ] {
+        went(file);
+        settle(&mut test);
+        assert!(
+            (addresses(&test) > 0) == assembly,
+            "{file} was drawn with {} assembly rows",
+            addresses(&test)
+        );
+        // And the source side is up either way, so what differs is the pane beside it.
+        assert!(label_area(&test, &format!("Source file not found: {file}")).is_some());
+    }
+}
+
+/// The toggle on the leading pane's bar puts the pane the tab is not driven from away and
+/// brings it back, the following pane's own bar carries none, and what the reader said
+/// holds for that tab alone. Headless because what is asserted is whether the second pane
+/// was mounted at all, and where the control that mounts it was laid out.
+#[test]
+fn the_leading_bar_puts_the_following_pane_away() {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+
+    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+        panes_harness,
+        (600., 300.).into(),
+        |runner| {
+            let states = listing_states!(runner, shown);
+            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
+            runner.provide_root_context(|| {
+                Splits(State::create(ResizableContext {
+                    direction: Direction::Horizontal,
+                    ..Default::default()
+                }))
+            });
+            states
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // The assembly side draws one 16-digit address per row, so whether any was laid out
+    // is whether that pane is there.
+    let assembly = |test: &TestingRunner| {
+        !test
+            .find_many(|node, _element| {
+                (node.element().as_ref() as &dyn Any)
+                    .downcast_ref::<LabelElement>()
+                    .map(|label| label.text.to_string())
+                    .filter(|text| text.trim_end().len() == 16)
+            })
+            .is_empty()
+    };
+    // Where each bar's toggle is: the one square of `toggle_size()` a pane's bar draws,
+    // in the order the panes are in. Every wrapper around it takes the same box, so the
+    // points are deduplicated by where they are.
+    let toggles = |test: &TestingRunner| {
+        let mut at: Vec<(f32, f32)> = test.find_many(|node, _element| {
+            let area = node.layout().area;
+            let square = area.width() == toggle_size() && area.height() == toggle_size();
+            square.then(|| {
+                (
+                    area.origin.x + area.width() / 2.0,
+                    area.origin.y + area.height() / 2.0,
+                )
+            })
+        });
+        at.sort_by(|a, b| a.0.total_cmp(&b.0));
+        at.dedup();
+        at
+    };
+    let went = |file: &str| {
+        open_document(
+            states.open,
+            states.visits,
+            Document::Source(Arc::from(file)),
+            Reach::NewTab,
+        )
+    };
+    let press = |test: &mut TestingRunner, at: (f32, f32)| {
+        test.click_cursor((at.0 as f64, at.1 as f64));
+        settle(test);
+    };
+
+    went("/nowhere/main.rs");
+    settle(&mut test);
+    assert!(assembly(&test), "a `.rs` file opens with its assembly side");
+
+    // One toggle with both panes up, not two. That it survives the press is what says it
+    // was the leading bar's: a toggle on the assembly side would go away with the pane.
+    let one = toggles(&test);
+    assert_eq!(one.len(), 1, "only one bar carries a toggle: {one:?}");
+
+    press(&mut test, one[0]);
+    assert!(
+        !assembly(&test),
+        "the leading bar's toggle put nothing away"
+    );
+    let alone = toggles(&test);
+    assert_eq!(alone.len(), 1, "the leading bar kept its toggle: {alone:?}");
+
+    press(&mut test, alone[0]);
+    assert!(assembly(&test), "the same toggle did not bring it back");
+
+    // Left in a state the file alone would not open in, for the next two switches.
+    let again = toggles(&test)[0];
+    press(&mut test, again);
+    assert!(!assembly(&test), "the toggle stopped answering");
+
+    // A second tab opens as its own file says, and the first is still as it was left.
+    went("/nowhere/other.rs");
+    settle(&mut test);
+    assert!(
+        assembly(&test),
+        "the answer followed the reader to another tab"
+    );
+    went("/nowhere/main.rs");
+    settle(&mut test);
+    assert!(!assembly(&test), "the tab did not come back as it was left");
+
+    // The mirror: an assembly-driven tab leads with its listing, so the toggle is the
+    // symbol bar's and what it puts away is the source side.
+    open_document(
+        states.open,
+        states.visits,
+        Document::Assembly(Selection::Symbol(sum_to.clone())),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    let source_up = |test: &TestingRunner| {
+        label_area(test, "Source file not found: /fixture/line_fixture.c").is_some()
+    };
+    assert!(
+        source_up(&test),
+        "an assembly-driven tab opens with its source side"
+    );
+    let led = toggles(&test);
+    assert_eq!(
+        led.len(),
+        1,
+        "only one bar carries a toggle here either: {led:?}"
+    );
+
+    press(&mut test, led[0]);
+    assert!(
+        !source_up(&test),
+        "the symbol bar's toggle put nothing away"
+    );
+    assert!(
+        assembly(&test),
+        "it put the listing away instead of the source"
+    );
+    assert_eq!(toggles(&test).len(), 1, "the leading bar kept its toggle");
 }
 
 /// A source file the debug info recorded a checksum for is compared with the file the pane
@@ -10917,6 +11146,24 @@ fn toml_and_json_files_are_highlighted() {
 
     highlighted().clear();
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A language named for what it compiles to, with no grammar behind it, opens with an
+/// assembly side and renders plain. The two questions are separate on purpose: naming a
+/// language costs an arm, a grammar costs a dependency.
+#[test]
+fn a_compiled_language_with_no_grammar_is_still_compiled() {
+    for named in ["shader.zig", "server.go", "start.S", "view.mm", "kernel.cu"] {
+        let path = Path::new(named);
+        assert!(source::compiled(path), "{named} has no assembly side");
+        assert!(language(path).is_none(), "{named} claimed a grammar");
+    }
+    // And the three the app does colour still have theirs.
+    for named in ["main.rs", "sum.c", "sum.hpp"] {
+        let path = Path::new(named);
+        assert!(source::compiled(path), "{named}");
+        assert!(language(path).is_some(), "{named} lost its grammar");
+    }
 }
 
 /// Every paragraph on screen, top to bottom: its box, its text -- the spans joined, an

@@ -5,6 +5,9 @@
 //! [`None`], and the pane draws a placeholder. The misses are cached too: a pane asks on
 //! every render, and caching only the successes would make a path that is not on this
 //! machine the expensive case.
+//!
+//! [`Language`] is here too: the one list of extensions the app knows, which the
+//! highlighter and the panes both ask.
 
 use analysis::{SourceDigests, SourceHash};
 use std::{
@@ -18,6 +21,124 @@ use std::{
 /// guess at what source looks like: a debug-info string that happens to name a disk image
 /// must not be loaded to find that out.
 pub const MAX_SIZE: u64 = 16 * 1024 * 1024;
+
+/// The language a file is written in, going by its extension: which grammar colours it,
+/// and whether a compiler turns it into machine code.
+///
+/// **The one extension list.** `.h` is C and not C++, a header the C grammar misparses
+/// being coloured oddly rather than dropped.
+///
+/// Most of these have no grammar here and are never coloured. Naming them is still worth
+/// the lines: a grammar costs a dependency and a parser generator's worth of generated C
+/// in the binary (`notes/Goals.md`), where knowing that a `.zig` becomes machine code
+/// costs one arm and is what decides whether a tab opens with an assembly side. So the
+/// list is generous about languages and stays narrow about grammars, and a language that
+/// grows one later changes an arm rather than joining the enum.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Language {
+    Rust,
+    C,
+    Cpp,
+    ObjC,
+    Assembly,
+    Go,
+    Zig,
+    D,
+    Swift,
+    Nim,
+    Odin,
+    Fortran,
+    Ada,
+    Pascal,
+    Haskell,
+    OCaml,
+    Crystal,
+    Cuda,
+    Toml,
+    Json,
+}
+
+impl Language {
+    /// The language of the file at `path`, or [`None`] for an extension this does not
+    /// know, which is not the same as saying the file is not source.
+    ///
+    /// The extension is read as it is written. `.s` and `.S` are both assembly and are
+    /// both named, but nothing is lower-cased on the way in: `.C` is C++ to a Unix
+    /// compiler and a Windows C file to everyone else, so a fold would have to pick one
+    /// and would be wrong half the time.
+    pub fn of(path: &Path) -> Option<Language> {
+        Some(match path.extension()?.to_str()? {
+            "rs" => Language::Rust,
+            "c" | "h" => Language::C,
+            "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hxx" | "hh" | "inl" | "ipp" | "tcc" => {
+                Language::Cpp
+            }
+            // `.m` is Objective-C here and not MATLAB: what reaches this app is a file a
+            // debugger or a Mach-O's line info named, and MATLAB compiles to nothing a
+            // symbol table lists.
+            "m" | "mm" => Language::ObjC,
+            "s" | "S" | "asm" => Language::Assembly,
+            "go" => Language::Go,
+            "zig" => Language::Zig,
+            "d" => Language::D,
+            "swift" => Language::Swift,
+            "nim" => Language::Nim,
+            "odin" => Language::Odin,
+            "f" | "for" | "f90" | "f95" | "f03" | "f08" => Language::Fortran,
+            "adb" | "ads" => Language::Ada,
+            "pas" | "pp" => Language::Pascal,
+            "hs" => Language::Haskell,
+            "ml" => Language::OCaml,
+            "cr" => Language::Crystal,
+            "cu" | "cuh" => Language::Cuda,
+            // The two configuration languages a project directory is full of, for the
+            // tabs the Files view opens: nothing is compiled from them, but `Cargo.toml`
+            // is read.
+            "toml" => Language::Toml,
+            "json" => Language::Json,
+            _ => return None,
+        })
+    }
+
+    /// Whether a compiler turns this language into machine code, so a file in it has
+    /// assembly to show beside it.
+    ///
+    /// Assembly counts: it is assembled rather than compiled, and a binary is as much
+    /// built from it either way. Haskell and OCaml count for their native back ends,
+    /// which is what puts them in a symbol table at all.
+    pub fn compiled(self) -> bool {
+        match self {
+            Language::Rust
+            | Language::C
+            | Language::Cpp
+            | Language::ObjC
+            | Language::Assembly
+            | Language::Go
+            | Language::Zig
+            | Language::D
+            | Language::Swift
+            | Language::Nim
+            | Language::Odin
+            | Language::Fortran
+            | Language::Ada
+            | Language::Pascal
+            | Language::Haskell
+            | Language::OCaml
+            | Language::Crystal
+            | Language::Cuda => true,
+            Language::Toml | Language::Json => false,
+        }
+    }
+}
+
+/// Whether the file at `path` is in a compiled language.
+///
+/// An extension [`Language::of`] does not know is not one. Only a language named here is
+/// known to become machine code, so a tab opens with an assembly side where the file is
+/// one this app can say that of, and with the source alone otherwise.
+pub fn compiled(path: &Path) -> bool {
+    Language::of(path).is_some_and(Language::compiled)
+}
 
 /// One source file: where it came from, and what it says. Splitting it into lines is the
 /// UI's syntax highlighter's job, which works in whole files and hands its own line breaks

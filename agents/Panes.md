@@ -13,6 +13,19 @@ than by where the pane sits. The split's one remembered width is the exception a
 on purpose (`agents/UI.md`): the handle stays where the reader left it across a switch of kind
 rather than jumping across the window.
 
+**Which panes a tab has is the reader's to say, and the file's until they do.** A source-driven tab on
+a file in no compiled language *opens* as the Source pane alone: a `Cargo.toml` or a `.json` is read,
+never disassembled, so the second pane would be an empty half of the window with a handle to drag it
+wider. The question is `source::compiled`, off the same extension list the grammars come from, and an
+extension it does not know is answered no: the assembly side is offered for the languages the app can
+say become machine code, and a file it cannot place opens as source until the reader asks for one.
+That is only what a tab opens with: the toggle on the leading bar puts the following
+pane away and brings it back, and what it says is kept per tab in `Follows`, which `following` reads
+before it asks the file. A tab left with one pane has no handle, so the app's one split width is
+untouched and comes back as the reader left it when a tab that has two is next up. `Follows` is a
+`bool` per tab and not a set, because there is no one default to be absent from, and it is not saved:
+a view of a tab, like the symbol bar's section.
+
 **The Source pane draws the active tab's source side**, and `source_side` is the one place either
 pane decides which file that is, so the pane and the effect that drops its selected rows cannot
 disagree about which listing is up. A **subject** is a source-driven tab's own file. A **companion**
@@ -47,13 +60,14 @@ always did: an object with no line info, a prologue DWARF places on no line, a s
 (whose subject is a **file** the reader opened, and files open at the top), and a companion that is
 not the symbol's own file, the last being a landing's doing, which comes with a reveal of its own.
 
-A companion has a **header naming its file**, which a subject does not: the strip already names a
-subject, and nothing else in the window would name a companion now that the Source pane has no strip
-of its own. Pressing that header opens the file as a source-driven tab, as pressing a source file's
-row in the Files view does (`agents/Sidebar.md`); until the source search lands those are the two
-doors into one. The **assembly** side of a source-driven tab draws the symbol the tab's driven line
-was compiled into, which is an ordinary `Analyzed::showing` like any other tab's; before a line has
-been clicked in it there is no question, so it says so.
+**The Source pane has a bar naming the file it is showing**, a subject and a companion alike: a
+tab's chip has room for the last part of a path and nothing else in the window says which file is
+up. Pressing a **companion's** name opens that file as a source-driven tab, as pressing a source
+file's row in the Files view does (`agents/Sidebar.md`); until the source search lands those are the
+two doors into one. A **subject** is that tab already, so its name is a name and nothing to press.
+The **assembly** side of a source-driven tab draws the symbol the tab's driven line was compiled
+into, which is an ordinary `Analyzed::showing` like any other tab's; before a line has been clicked
+in it there is no question, so it says so.
 
 **The Source pane checks the file it opened against the checksum the debug info recorded**, where it
 recorded one. A PDB carries a hash per source file (MD5 unless the producer was told otherwise;
@@ -101,6 +115,17 @@ copy. What it opens is the rest of what is known: for a symbol its section, addr
 extent and the object it came from; for an object the format, the symbol count and the path. Each
 fact is a `field_row` cut to one line for the reason the names are.
 
+**The leading pane's bar carries the control that puts the following pane away** (`PaneToggle`, in
+`src/ui/dock.rs` beside the `DocumentBody` that mounts the panes), and only that bar: it names the
+following pane, which is always the right-hand half of the split, so the control sits on the half
+that is always up and the half it hides carries none of its own. A second copy on the following
+bar would be the same button on screen twice, and a press on it would take its own door away.
+It takes the tab's id and reads the document out of `Docs` rather than being handed
+one -- what it writes is filed under the tab anyway, and a `Document` prop would hold an `Arc<Object>`
+in a control every open tab draws. The toggle rides on a bar, so a pane drawn without one has none:
+an assembly side the worker has not answered for yet draws no bar, and the control arrives with the
+listing.
+
 **Open or shut is the tab's and not the pane's**, which is `Expanded` at the root: both panes are
 mounted afresh for every document, so a `use_state` here would shut the section every time the
 reader looked at another tab, and a setting that undoes itself looks like a bug. It is keyed by
@@ -136,8 +161,17 @@ does have is its tree-sitter pipeline, public on its own: `SyntaxHighlighter` + 
 `EditorSyntaxTheme` turn a `Rope` into one list of `(Color, TextNode)` spans per line. The theme is
 the app's own (`Palette::syntax`), and the grammars are ours: Rust, C and C++, and the TOML and JSON
 a project directory is full of, which the Files view opens and which get no function pass, a
-configuration file defining none. An unknown extension degrades to one plain span per line. A file
-is parsed when loaded and cached in a `static` in `ui/highlight.rs`, since parsing is stateful
+configuration file defining none. Which extension is which language is `source::Language`, the one
+list, so the grammar, the function pass and the pane split cannot disagree about what a file is; it
+sits in `source.rs` and not in the UI because the split asks it too, and it answers `.h` with C, a
+header the C grammar misparses being coloured oddly rather than dropped. **It names far more
+languages than it colours**, because the two cost different things: a grammar is a dependency and a
+parser generator's worth of generated C, where knowing a `.zig` or a `.f90` becomes machine code is
+one arm and is what the pane split turns on. So Go, Zig, D, Swift, Objective-C, assembly and the
+rest are named, `language()` answers `None` for them, and they render plain -- as does an extension
+the list does not name at all, one plain span per line either way. That match is exhaustive on
+purpose: a language added to the enum is one the grammar question has to be answered for. A file is parsed when loaded and cached in a `static` in
+`ui/highlight.rs`, since parsing is stateful
 across lines and so cannot be per row. It is parsed **twice**: `SyntaxHighlighter` keeps its tree
 private, and the function spans the source row's menu needs (`src/functions.rs`, "the function this
 line is inside") are read off a second parse with the same grammar for C and C++, and for Rust off a

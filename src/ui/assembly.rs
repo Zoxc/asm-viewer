@@ -1478,10 +1478,15 @@ impl Component for AssemblyPane {
             // only works out for a `flex` child of a `Content::Flex` parent.
             .content(Content::Flex)
             .background(palette().asm_pane_bg)
-            .maybe_child(
-                self.named(&analysis)
-                    .map(|named| SymbolBar { named, tab }.into_element()),
-            )
+            .maybe_child(self.named(&analysis).map(|named| {
+                SymbolBar {
+                    named,
+                    tab,
+                    // This pane leads in every tab but a source-driven one.
+                    leading: !matches!(self.document, Document::Source(_)),
+                }
+                .into_element()
+            }))
             .child(
                 rect()
                     .width(Size::fill())

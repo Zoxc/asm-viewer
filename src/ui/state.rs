@@ -196,6 +196,20 @@ pub(crate) struct SrcAt(pub(crate) State<Positions<Entry>>);
 #[derive(Clone, Copy)]
 pub(crate) struct Expanded(pub(crate) State<HashSet<DocId>>);
 
+/// What the reader has said about each tab's following pane -- the one it is not driven
+/// from: `true` where they brought it back, `false` where they put it away. A tab with
+/// nothing here has said nothing, and opens as its document says ([`following`]).
+///
+/// A `bool` per tab and not the set [`Expanded`] is, because there is no one default to
+/// be absent from: a source-driven tab on a `Cargo.toml` opens with its assembly side
+/// away and every other tab opens with both panes.
+///
+/// Keyed by [`DocId`] alone and never saved, for [`Expanded`]'s reasons: an id is
+/// `Copy + Hash`, holds no `Arc<Object>` and is never handed out twice, so a closed tab
+/// leaves a byte behind that no other tab can be given, and this is a view of a tab.
+#[derive(Clone, Copy)]
+pub(crate) struct Follows(pub(crate) State<HashMap<DocId, bool>>);
+
 /// Which source line each source-driven tab's assembly side is driven from, shared
 /// through context. Beside [`AsmAt`]/[`SrcAt`] because it is the same kind of thing: a
 /// fact about a tab, made by a click in it and forgotten with it.

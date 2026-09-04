@@ -26,8 +26,9 @@ leaves this list when it is. That is a move made on request, like everything els
   hovering each. `AsmData::position` is already the question per row; what is missing is a mark
   in the row for a `Some`, in the same colour as the source gutter's, and a decision about
   where in an instruction row it goes, the gutter there being the branch arrows' already.
-- [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain;
-  each language is a `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and
+- [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain, the
+  many `source::Language` now names for the pane split's sake included; each language is a
+  `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and
   deferred *per language* rather than as a whole: a grammar is a parser generator's worth of
   generated C compiled into the binary, so wiring a list of them up front pays for parsers for
   languages nobody here is reading, while adding the one language a reader turns out to want is
@@ -154,6 +155,34 @@ leaves this list when it is. That is a move made on request, like everything els
   would take to move it.
 - [ ] Make the line-number gutter gray, in the scratchpad's editor and in the Source pane alike,
   so the numbers read as a margin beside the code and not as a column of it.
+- [ ] Give the Assembly pane one background, with a listing on it or without. The pane paints
+  `asm_pane_bg` — a shade off the interface white, which is what marks it out as the side the
+  code is read on — and two of the four answers it can give instead of a listing paint over it:
+  `placeholder` fills `pane_bg`, so a symbol the worker had nothing to say about and an
+  architecture no backend claims both draw a lighter rectangle where the code would be, and the
+  pane changes colour as the reader moves between tabs. The other two are already right, one by
+  saying `asm_pane_bg` again and one by drawing no background at all and letting the pane's own
+  through — which is the fix: the colour is the pane's, and nothing inside it needs to name one.
+  `placeholder` is shared with the panels that are on `pane_bg` correctly (Files, Search,
+  Bookmarks, Locations, an empty dock panel), so what has to change is the caller and not the
+  helper.
+- [ ] One ground and one selection for every panel. Four of them sit on `symbol_pane_bg`, a
+  cream a shade off the interface white — Symbols, History, Bookmarks, Locations — where
+  Objects, the tab beside the first two, and Files, Search, Project, Settings and the
+  scratchpad sit on `pane_bg`. Nothing decides which, and the split does not hold even across
+  the three tabs of one sidebar. Take the tint off: every panel on `pane_bg`, and
+  `symbol_pane_bg` out of the palette. The hovers go with it, there being two of those as
+  well — `object_hover_bg`, a light green, in the Objects, Files, Search, Project and
+  scratchpad lists, and `symbol_hover_bg`, the cream deepened, in the other four — where one
+  wash over one ground is what the panels want, and which of the two survives is the
+  decision. And a row that is picked out should be the colour a selection already is:
+  `text_select_bg`, what a sweep in the Source pane paints under the characters it took, in
+  place of `selected_bg`'s neutral grey, so being picked out says the same thing in a list as
+  in the code. `selected_bg` is the dock's drop target and dragged tab besides, which are not
+  selections and can keep it. Two things this has to hold on to: the palette tests put every
+  wash a visible step from the ground it sits on, and those grounds are what this moves; and
+  `text_select_bg` is translucent on purpose, so a row wash over `pane_bg` is not the colour
+  the same field draws over a code pane.
 
 ## Panels and tabs
 
@@ -187,11 +216,13 @@ leaves this list when it is. That is a move made on request, like everything els
   the row reporting its own overflow. Settling that is the goal; the rule once it is settled
   is one line per list, and the same question decides it for the tab bar, whose tabs elide
   too.
-- [ ] A bookmark control on the symbol bar, for the symbol being read, beside the two menus
-  above.
-- [ ] Only close the assembly view by default in a source-driven tab if its file is not in a
+- [x] Only close the assembly view by default in a source-driven tab if its file is not in a
   compiled language: a `Cargo.toml` or a `.json` opens with the source side alone, a `.rs` or
   `.c` with both, as now.
+- [x] A bar over the Source pane too, naming the file it is showing, and a control on both
+  bars that puts the pane the tab is not driven from away and brings it back. Only the
+  Assembly pane had a bar, so nothing but its own chip said which file a source-driven tab
+  was reading. What the control says is kept per tab and beats the file's own answer above.
 - [x] Make that search reachable and ranked. Ranked: under a filter the rows come back by how
   well they matched — a match at the start of the name, then one at the start of a word (the
   Word toggle's own `\b`), then one inside a word, the shorter name first among equals and the

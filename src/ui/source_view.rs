@@ -590,49 +590,80 @@ fn stale_banner() -> Element {
         .into()
 }
 
-/// The bar over the Source pane naming the file it is showing as a **companion** -- a
-/// subject gets none, being named by its own tab -- and opening that file as a
-/// source-driven tab when it is pressed, the one door into one that is not a Files row.
+/// The bar over the Source pane, naming the file the pane is showing and carrying the
+/// control that puts the pane beside it away.
 ///
-/// The states come in as arguments: this is called from inside a `match`, and a hook may
-/// only run unconditionally in a component's body.
-fn companion_header(
+/// **A companion's name is a door**: pressing it opens that file as a source-driven tab,
+/// as pressing a source file's row in the Files view does, and until the source search
+/// lands those are the two ways into one. A **subject** is that tab already, so its name
+/// is a name and nothing to press. Either way the bar says which file is up, which the
+/// tab's own chip only has room for the last part of.
+///
+/// The states come in as arguments because this is a function and not a component: a hook
+/// written here would be the pane's own.
+fn source_bar(
+    side: &SourceSide,
+    tab: DocId,
     open: Open,
     visits: State<Visits>,
     ctrl: State<bool>,
-    file: Arc<str>,
     sweeping: bool,
 ) -> Element {
-    let document = Document::Source(file.clone());
+    let file = side.file().clone();
+    let opens = matches!(side, SourceSide::Companion(_));
 
-    // Not hit while a sweep is under way: the pointer dragging a selection up past the
-    // header would otherwise arm its tooltip, and light it.
     rect()
         .width(Size::fill())
-        .interactive(!sweeping)
-        .child(row_tooltip(
-            file.to_string(),
+        .horizontal()
+        // The name takes what the toggle leaves, which torin only works out for a `flex`
+        // child of a `Content::Flex` parent.
+        .content(Content::Flex)
+        .padding(Gaps::new_symmetric(0.0, 8.0))
+        .background(palette().header_bg)
+        .border(bottom_hairline())
+        .child(
+            // A box of its own and not the name as the `flex` child directly: a flex child
+            // is measured from its content first, so a label placed there takes the width
+            // of the whole path and the ellipsis never happens.
             rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 8.0))
-                .spacing(6.0)
-                .background(palette().header_bg)
-                .border(bottom_hairline())
-                // A click inside the tab: in place, or a tab of its own with Ctrl.
-                .on_press(move |_| {
-                    let reach = if *ctrl.peek() {
-                        Reach::NewTab
-                    } else {
-                        Reach::InPlace
-                    };
-                    open_document(open, visits, document.clone(), reach);
-                })
-                .child(entry_icon(&Document::Source(file.clone())))
-                .child(label().text(file_name(&file)).max_lines(1)),
-        ))
+                .width(Size::flex(1.0))
+                .overflow(Overflow::Clip)
+                // Not hit while a sweep is under way: the pointer dragging a selection up
+                // past the bar would otherwise arm its tooltip, and light it.
+                .interactive(!sweeping)
+                .child(row_tooltip(
+                    file.to_string(),
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .width(Size::fill())
+                        .height(Size::px(list_row_height()))
+                        .spacing(6.0)
+                        // A click inside the tab: in place, or a tab of its own with Ctrl.
+                        .maybe(opens, |bar| {
+                            let document = Document::Source(file.clone());
+                            bar.on_press(move |_| {
+                                let reach = if *ctrl.peek() {
+                                    Reach::NewTab
+                                } else {
+                                    Reach::InPlace
+                                };
+                                open_document(open, visits, document.clone(), reach);
+                            })
+                        })
+                        .child(entry_icon(&Document::Source(file.clone())))
+                        .child(
+                            label()
+                                .text(file_name(&file))
+                                .width(Size::fill())
+                                .max_lines(1)
+                                .text_overflow(TextOverflow::Ellipsis),
+                        ),
+                )),
+        )
+        // Only where this side leads, and outside the name rather than inside it, so a
+        // press on it is a press on the toggle and never a door into the file.
+        .maybe(!opens, |bar| bar.child(PaneToggle { tab }))
         .into_element()
 }
 
@@ -732,12 +763,7 @@ impl Component for SourcePane {
             // only works out for a `flex` child of a `Content::Flex` parent.
             .content(Content::Flex)
             .background(palette().pane_bg)
-            .maybe_child(match &side {
-                SourceSide::Companion(file) => {
-                    Some(companion_header(open, visits, ctrl, file.clone(), sweeping))
-                }
-                SourceSide::Subject(_) => None,
-            })
+            .child(source_bar(&side, self.tab, open, visits, ctrl, sweeping))
             .maybe_child(stale.then(stale_banner))
             .child(
                 rect()
