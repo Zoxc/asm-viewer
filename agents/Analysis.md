@@ -288,10 +288,16 @@ sections in the image but a **second file**, so it is the one backend that touch
 `DebugInfo::load` tries DWARF first (a MinGW or clang PE can carry `.debug_*`) and a `.pdb` only for
 an object with none. **Finding it**: the debug directory's CodeView record, which `object` already
 reads (`pdb_info()`), names the `.pdb` by path, GUID and age. The path is the build machine's, so
-three candidates are tried in order: the recorded path where it is absolute, the recorded file name
-beside the binary, and the binary's own name with `.pdb` beside it. **Matching it**: GUID *and* age
-both, the GUID naming the build and the age the relink. An incremental relink keeps the GUID and
-bumps the age, and its `.pdb` then describes code the image no longer has, which is worse than none.
+three candidates are tried in order: the recorded file name beside the binary, the binary's own name
+with `.pdb` beside it, and last the recorded path itself where it is absolute. A **UNC or device
+path is never tried** (`\\host\share\x.pdb`, `\\?\C:\x.pdb`, anything beginning with two separators,
+judged as a string since a Windows linker wrote it whatever this is running on): the recorded path
+is bytes the binary chose, read at parse for every PE the reader opens, and opening a UNC path logs
+the machine in to `host` over SMB with the reader's credentials before a byte comes back. Every
+candidate is stat'd before it is opened, as `source.rs` does, so one naming a fifo does not block
+the parse thread until a writer appears. **Matching it**: GUID *and* age both, the GUID naming the
+build and the age the relink. An incremental relink keeps the GUID and bumps the age, and its `.pdb`
+then describes code the image no longer has, which is worse than none.
 The age compared is the DBI's, which the linker wrote; the info stream's own age is bumped by tools
 that rewrite a PDB afterwards (source indexing) and may legitimately exceed the image's.
 **Addresses**: a PDB states `section:offset`. Every one goes through the PDB's own `AddressMap` to

@@ -2,10 +2,12 @@
 //! debug directory and read with `pdb2`, the one module in the crate that knows that crate.
 //!
 //! A PDB is not embedded in the binary but a **second file**, so this backend is the only one
-//! that touches the filesystem: [`find`] tries the recorded path and the two places a `.pdb`
-//! is shipped beside its binary, and takes the first whose GUID and age are the image's — a
-//! stale `.pdb` being worse than none. The file stays open for the object's lifetime and is
-//! read a page at a time through [`BoundedFile`], never whole: a `rustc_driver` PDB is 268 MB.
+//! that touches the filesystem: [`find`] tries the two places a `.pdb` is shipped beside its
+//! binary and then the path the image records, and takes the first whose GUID and age are the
+//! image's — a stale `.pdb` being worse than none. The recorded path is the binary's own
+//! bytes, so it is taken as a name and never as a host to reach ([`candidates`]). The file
+//! stays open for the object's lifetime and is read a page at a time through [`BoundedFile`],
+//! never whole: a `rustc_driver` PDB is 268 MB.
 //!
 //! Addresses come out of a PDB as `section:offset` pairs. Every one goes through the PDB's
 //! own [`AddressMap`] to an RVA — which is also where an OMAP-rearranged image is undone — and
@@ -512,11 +514,8 @@ impl Pdb {
     }
 }
 
-/// Open the `.pdb` an image's CodeView record describes, trying in order: the recorded path
-/// itself where it is absolute; the recorded file name beside the binary (the build
-/// machine's directory is gone, the name is not); and the binary's own name with a `.pdb`
-/// extension beside it, which is how a `foo.dll` ships as `foo.dll` + `foo.pdb`. The first
-/// candidate that opens as a PDB and **matches** is taken.
+/// Open the `.pdb` an image's CodeView record describes, trying the paths [`candidates`]
+/// names in order. The first that opens as a PDB and **matches** is taken.
 ///
 /// Matching is the GUID and the age both: the GUID says which build, and the age which
 /// relink of it — an incremental relink keeps the GUID and bumps the age, and its `.pdb`
@@ -530,30 +529,7 @@ fn find(
     age: u32,
     binary: &Path,
 ) -> Option<(PDB<'static, BoundedFile>, DebugInformation<'static>)> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    let mut candidate = |path: PathBuf| {
-        if !candidates.contains(&path) {
-            candidates.push(path);
-        }
-    };
-
-    let recorded_path = Path::new(recorded);
-    if recorded_path.is_absolute() {
-        candidate(recorded_path.to_path_buf());
-    }
-    let beside = binary.parent().unwrap_or(Path::new(""));
-    // The recorded path is split on both separators: it was written by a Windows linker
-    // whatever this is running on.
-    if let Some(name) = recorded
-        .rsplit(['\\', '/'])
-        .next()
-        .filter(|name| !name.is_empty())
-    {
-        candidate(beside.join(name));
-    }
-    candidate(binary.with_extension("pdb"));
-
-    candidates.into_iter().find_map(|path| {
+    candidates(recorded, binary).into_iter().find_map(|path| {
         let file = BoundedFile::open(&path)?;
         let mut pdb = PDB::open(file).ok()?;
         let info = pdb.pdb_information().ok()?;
@@ -569,6 +545,51 @@ fn find(
         }
         Some((pdb, dbi))
     })
+}
+
+/// The paths the `.pdb` an image records is looked for at, in order: the recorded file name
+/// beside the binary (the build machine's directory is gone, the name is not); the binary's
+/// own name with a `.pdb` extension beside it, which is how a `foo.dll` ships as `foo.dll` +
+/// `foo.pdb`; and last the recorded path itself, where it is absolute and plain.
+///
+/// The recorded path is bytes out of the binary, so the **binary** chooses it, and every PE
+/// the reader opens is parsed with it. A path beginning with two separators is a UNC share,
+/// a device or a verbatim path (`\\host\share\x.pdb`, `\\.\pipe\x`); opening the first makes
+/// the machine log in to `host` over SMB, offering the reader's credentials, before a byte
+/// comes back. None is tried, on any platform — the string was written by a Windows linker
+/// whatever this is running on — and what is left is tried last, the two names beside the
+/// binary being the ones that name a file the reader already has.
+fn candidates(recorded: &str, binary: &Path) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut candidate = |path: PathBuf| {
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    };
+
+    let beside = binary.parent().unwrap_or(Path::new(""));
+    // The recorded path is split on both separators: it was written by a Windows linker
+    // whatever this is running on.
+    if let Some(name) = recorded
+        .rsplit(['\\', '/'])
+        .next()
+        .filter(|name| !name.is_empty())
+    {
+        candidate(beside.join(name));
+    }
+    candidate(binary.with_extension("pdb"));
+
+    let mut start = recorded.chars();
+    let unc_or_device = matches!(
+        (start.next(), start.next()),
+        (Some('\\' | '/'), Some('\\' | '/'))
+    );
+    let recorded_path = Path::new(recorded);
+    if !unc_or_device && recorded_path.is_absolute() {
+        candidate(recorded_path.to_path_buf());
+    }
+
+    candidates
 }
 
 /// A `.pdb` on disk, read a page at a time, with every read **bounded by the file's length
@@ -589,6 +610,13 @@ struct BoundedFile {
 
 impl BoundedFile {
     fn open(path: &Path) -> Option<BoundedFile> {
+        // Stat before opening, as `source.rs` does: a candidate can name a fifo, which
+        // `File::open` blocks on until a writer appears, and the thread that would block is
+        // the one parsing the object. Asked again of the open file, since a path can name
+        // something else by the time it is opened, and for the length.
+        if !std::fs::metadata(path).ok()?.is_file() {
+            return None;
+        }
         let file = File::open(path).ok()?;
         let metadata = file.metadata().ok()?;
         if !metadata.is_file() {

@@ -30,3 +30,36 @@ fn every_module_is_decoded_in_one_walk_of_the_module_list() {
     let modules = pdb.modules.lock().expect("no panic under the lock");
     assert!(modules.len() > 1, "{} modules", modules.len());
 }
+
+/// The path a binary records is a name, not a place to reach. On Windows a UNC path is
+/// absolute, and opening `\\host\share\x.pdb` logs the machine in to `host` over SMB before
+/// a byte comes back, so nothing outside the binary's own directory is tried for one.
+#[test]
+fn a_unc_path_a_binary_records_is_never_a_candidate() {
+    let binary = Path::new("/tmp/somewhere/foo.dll");
+    for recorded in [r"\\server\share\foo.pdb", "//server/share/foo.pdb"] {
+        let tried = candidates(recorded, binary);
+        assert_eq!(
+            tried,
+            [PathBuf::from("/tmp/somewhere/foo.pdb")],
+            "{recorded}"
+        );
+    }
+}
+
+/// A plain absolute path is still tried — a build directory that is still there holds the
+/// `.pdb` the binary was linked against — but after the two names beside the binary, which
+/// name a file the reader already has. Unix spelling: Windows's absolute path is `C:\...`.
+#[cfg(unix)]
+#[test]
+fn the_recorded_path_is_tried_after_the_names_beside_the_binary() {
+    let tried = candidates("/build/dir/bar.pdb", Path::new("/tmp/somewhere/foo.dll"));
+    assert_eq!(
+        tried,
+        [
+            PathBuf::from("/tmp/somewhere/bar.pdb"),
+            PathBuf::from("/tmp/somewhere/foo.pdb"),
+            PathBuf::from("/build/dir/bar.pdb"),
+        ]
+    );
+}
