@@ -687,6 +687,58 @@ fn a_program_that_never_exits_still_says_something_and_can_be_killed() {
     let _ = fs::remove_dir_all(&directory);
 }
 
+/// A reader thread that will not start still ends the run.
+///
+/// Under thread exhaustion -- a `ulimit -u` hit, or a runaway program in another pad, the
+/// very thing the group kill is for -- the spawn fails and the pipe goes with the closure
+/// that could not be started. Nothing will read that stream, so the count that says a run
+/// is over has to reach zero on this path instead: without it the process is never reaped,
+/// the one `Ended` is never said, and the pad reads "Running" for ever over a zombie.
+///
+/// The program never exits by itself, so nothing but this path can end it. Both cases: one
+/// reader refused, which leaves the other to reap, and both, which leaves the reap to
+/// `run_in`'s own thread.
+#[test]
+fn a_reader_that_will_not_start_still_ends_the_run() {
+    let directory = directory(line!());
+    let executable = program(
+        &directory,
+        "fn main() {\n\
+             \x20   loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n\
+             }\n",
+    );
+
+    for refused in [1, 2] {
+        // This thread's readers and no others: the runs the tests around this one have
+        // going were started on threads of their own.
+        REFUSED_READERS.with(|left| left.set(refused));
+
+        let (events, arrived) = std::sync::mpsc::channel();
+        let running = run_in(&executable, &directory, move |event| {
+            let _ = events.send(event);
+        })
+        .expect("it started");
+
+        assert_eq!(
+            REFUSED_READERS.with(|left| left.get()),
+            0,
+            "a run started fewer readers than it has pipes"
+        );
+        // Killed rather than left with a stream nobody is reading, so the status is the
+        // system's and not the program's.
+        assert!(matches!(
+            until_ended(&arrived).as_slice(),
+            [.., RunEvent::Ended(Ended::Exited(_))]
+        ));
+        // Said after the process was waited for, and the handle is off the list
+        // `stop_all` walks.
+        assert!(running.finished(), "the process was never reaped");
+        assert!(!listed(&running), "it stayed on the list after it ended");
+    }
+
+    let _ = fs::remove_dir_all(&directory);
+}
+
 /// The group is real, which is the half of "a stop kills the grandchildren too" that can be
 /// asserted: a run is started in a process group of its own, so the pgid the kernel reports
 /// for the child is the child's own pid and not this test binary's. That is what makes

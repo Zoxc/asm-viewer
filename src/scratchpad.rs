@@ -874,18 +874,14 @@ impl Running {
     /// find it, and a grandchild is worse still — nothing but the group ever knew its pid.
     ///
     /// Ends immediately if the run is already over, so a stop that races an exit cannot
-    /// name a pid the system has since given to somebody else. The child's own kill stays
-    /// under the same lock and after the group's: it is what a platform with no group, or
-    /// a job object the system refused, still gets.
+    /// name a pid the system has since given to somebody else.
     pub fn stop(&self) {
         self.0.stopped.store(true, Ordering::SeqCst);
         if self.0.over.load(Ordering::SeqCst) {
             return;
         }
 
-        let mut child = self.0.child.lock().unwrap_or_else(|held| held.into_inner());
-        self.0.group.kill();
-        let _ = child.kill();
+        self.0.kill();
     }
 
     /// Whether it has ended and been reaped.
@@ -907,6 +903,17 @@ struct Process {
 }
 
 impl Process {
+    /// End the program and everything it forked.
+    ///
+    /// The child's own kill stays under the same lock as the reap and after the group's:
+    /// it is what a platform with no group, or a job object the system refused, still
+    /// gets.
+    fn kill(&self) {
+        let mut child = self.child.lock().unwrap_or_else(|held| held.into_inner());
+        self.group.kill();
+        let _ = child.kill();
+    }
+
     /// Wait for the process to be gone, and say how it went.
     fn reap(&self) -> Ended {
         loop {
@@ -937,6 +944,9 @@ type Emit = Arc<Mutex<Box<dyn FnMut(RunEvent) + Send>>>;
 
 /// Read one of the process's pipes on a thread of its own, and let the last of the two to
 /// finish say the run is over.
+///
+/// A thread that will not start is a reader that has finished with nothing, and the run is
+/// killed rather than left with a stream nobody is reading.
 fn pipe_thread<R: Read + Send + 'static>(
     pipe: Option<R>,
     stream: Stream,
@@ -944,11 +954,9 @@ fn pipe_thread<R: Read + Send + 'static>(
     unfinished: &Arc<AtomicUsize>,
     process: &Arc<Process>,
 ) {
-    let (emit, unfinished, process) = (emit.clone(), unfinished.clone(), process.clone());
-    // Named, so that a panic on it says which thread died (`crate::panics`).
-    let started = thread::Builder::new()
-        .name("a scratchpad's output reader".to_owned())
-        .spawn(move || {
+    let started = spawn_reader({
+        let (emit, unfinished, process) = (emit.clone(), unfinished.clone(), process.clone());
+        move || {
             // A pipe that is not there is a pipe with nothing on it, which keeps the
             // two-must-finish count honest either way.
             if let Some(pipe) = pipe {
@@ -958,21 +966,59 @@ fn pipe_thread<R: Read + Send + 'static>(
                 });
             }
 
-            if unfinished.fetch_sub(1, Ordering::SeqCst) != 1 {
-                return;
-            }
-
-            let ended = process.reap();
-            {
-                let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
-                list.retain(|other| !Arc::ptr_eq(&other.0, &process));
-            }
-            let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
-            emit(RunEvent::Ended(ended));
-        });
+            reader_finished(&emit, &unfinished, &process);
+        }
+    });
     if let Err(error) = started {
         log::warn!("a scratchpad's output reader could not be started: {error}");
+        // The pipe went with the closure that could not be started, so nothing will read
+        // that stream and the program's own writes to it can only fail. End the run: the
+        // count has to reach zero however a reader ends, or the process is never reaped,
+        // the one `Ended` is never said, and the pad reads "Running" for ever over a
+        // zombie. The kill also bounds the reap below, which is this thread's when the
+        // other reader has already finished.
+        process.kill();
+        reader_finished(emit, unfinished, process);
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many reader threads a test wants refused. Thread-local, so a test refuses its
+    /// own readers and not those of the runs other tests have going in the same binary:
+    /// both are started on the thread that called [`run_in`].
+    static REFUSED_READERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Start a reader thread, named so that a panic on it says which thread died
+/// (`crate::panics`).
+fn spawn_reader(body: impl FnOnce() + Send + 'static) -> io::Result<thread::JoinHandle<()>> {
+    // A reader a test asked not to be started: the one path through [`pipe_thread`] no
+    // fixture can reach, a thread the system will not spawn.
+    #[cfg(test)]
+    if REFUSED_READERS.with(|left| left.replace(left.get().saturating_sub(1))) > 0 {
+        return Err(io::Error::new(io::ErrorKind::Other, "refused by a test"));
+    }
+
+    thread::Builder::new()
+        .name("a scratchpad's output reader".to_owned())
+        .spawn(body)
+}
+
+/// One reader is done with its pipe. The last of the two reaps the process, takes the run
+/// off the list [`stop_all`] walks, and says how it ended.
+fn reader_finished(emit: &Emit, unfinished: &AtomicUsize, process: &Arc<Process>) {
+    if unfinished.fetch_sub(1, Ordering::SeqCst) != 1 {
+        return;
+    }
+
+    let ended = process.reap();
+    {
+        let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
+        list.retain(|other| !Arc::ptr_eq(&other.0, process));
+    }
+    let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
+    emit(RunEvent::Ended(ended));
 }
 
 /// Split what a program writes into lines and hand each one over as it arrives, cut at

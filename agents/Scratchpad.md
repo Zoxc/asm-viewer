@@ -126,20 +126,19 @@ could ever find them: the grandchild's pid was never anywhere but inside the pro
 gone. `Group` is that one idea with two implementations and the same three moments: something before
 the spawn, something taking hold of what was spawned, and a kill. It lives in `src/process.rs`,
 having moved there when the language server needed the same thing for the same reason
-(`agents/Lsp.md`). On Unix it is
-`Command::process_group(0)`, std's own, so only the kill needs a crate, and
-`libc::kill(-pgid, SIGKILL)`, the group being the child's own pid and the negative guarded, since
-`-1` is every process this user may signal. On Windows it is a **kill-on-close job object**, created
-and assigned right after the spawn, and closing the app's only handle to it is the kill. The sliver
-between the spawn and the assignment is accepted rather than bought back with `CREATE_SUSPENDED` and
-a `ResumeThread`, for a window a scratchpad's program does not use, and a job the system refuses
-leaves the stop exactly what it was. The child's own kill stays, under the same lock and after the
-group's, as what a refused job or a third platform still gets. The **reap is untouched**, since the
-group changes who dies, not how the end is noticed, and every other way a run is stopped
-(`stop_all`, the rebuild, the next run, the window closing) goes through the same `stop` and
-inherits it. What is tested is the group being real: the pgid the kernel reports for a run is the
-run's own pid, and not the one it would have inherited. What is inside the group once the program
-starts forking is the same fact one step on, and is judged by hand.
+(`agents/Lsp.md`). On Unix it is `Command::process_group(0)`, std's own, so only the kill needs a
+crate, and `libc::kill(-pgid, SIGKILL)`, the group being the child's own pid and the negative
+guarded, since `-1` is every process this user may signal. On Windows it is a **kill-on-close job
+object**, created and assigned right after the spawn, and closing the app's only handle to it is the
+kill. The sliver between the spawn and the assignment is accepted rather than bought back with
+`CREATE_SUSPENDED` and a `ResumeThread`, for a window a scratchpad's program does not use, and a job
+the system refuses leaves the stop exactly what it was. The child's own kill stays, under the same
+lock and after the group's, as what a refused job or a third platform still gets. The **reap is
+untouched**, since the group changes who dies, not how the end is noticed, and every other way a run
+is stopped (`stop_all`, the rebuild, the next run, the window closing) goes through the same `stop`
+and inherits it. What is tested is the group being real: the pgid the kernel reports for a run is
+the run's own pid, and not the one it would have inherited. What is inside the group once the
+program starts forking is the same fact one step on, and is judged by hand.
 
 **Output is streamed, not collected**, which is the whole difference from `build_in`'s
 run-it-and-return-the-output shape: a program that prints and then loops for ever has said
@@ -149,13 +148,19 @@ line to a callback as it arrives; whichever finishes last reaps the process and 
 that hands its output to a grandchild outliving it shows as still running, which is the honest
 answer, since the output is still coming. The reap `try_wait`s on a poll rather than `wait`ing,
 because holding the `Child` is exactly what would make a stop wait for the process it is killing.
-**Three bounds, and each is a different failure.** `MAX_LINE` (4 KiB) cuts a line with no newline in
-it, so a program writing megabytes in one line is still *delivered* rather than accumulated.
-`MAX_OUTPUT_LINES` (5000) is what is kept, oldest first out, with `RunOutput::dropped` so the view
-can say the story is missing its beginning; it is a line cap and not a byte cap, because the view is
-a list of rows and a byte budget would make the row count depend on how long the lines happened to
-be. And the app's own `RUN_EVENTS`-bounded channel is backpressure that reaches the program itself:
-a full channel blocks the pipe thread, which fills the pipe, which blocks the writer.
+**A reader that will not start is a reader that has finished.** The count that says both pipes are
+at their end has to reach zero however a thread ends, or the process is never reaped, the one
+`Ended` is never said, and the pad reads "Running" for ever over a zombie. The pipe went with the
+closure that could not be spawned, so nothing would read that stream either: the run is killed
+rather than left half-read, which also bounds the reap when the failing side is the last one. A test
+refuses the spawn to reach that path, nothing else being able to. **Three bounds, and each is a
+different failure.** `MAX_LINE` (4 KiB) cuts a line with no newline in it, so a program writing
+megabytes in one line is still *delivered* rather than accumulated. `MAX_OUTPUT_LINES` (5000) is
+what is kept, oldest first out, with `RunOutput::dropped` so the view can say the story is missing
+its beginning; it is a line cap and not a byte cap, because the view is a list of rows and a byte
+budget would make the row count depend on how long the lines happened to be. And the app's own
+`RUN_EVENTS`-bounded channel is backpressure that reaches the program itself: a full channel blocks
+the pipe thread, which fills the pipe, which blocks the writer.
 
 
 ## The Scratchpad view
