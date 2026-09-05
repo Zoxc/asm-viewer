@@ -762,9 +762,8 @@ impl Component for SeparatorRow {
                 listing: self.listing,
                 measured: false,
             },
-            (width > 0)
-                .then(|| gutter(width, self.arrows).into_element())
-                .into_iter()
+            std::iter::once(code_mark(false))
+                .chain((width > 0).then(|| gutter(width, self.arrows).into_element()))
                 .collect(),
             None,
             None,
@@ -1060,13 +1059,13 @@ impl Component for InstructionRow {
             }
         });
 
-        // Before the text: the gutter -- nothing at all for a symbol that branches
-        // nowhere inside itself, which most do, since an empty column would still be a
-        // column -- and the address, which is gutter too: a press on it picks the row
-        // out and no characters.
-        let before = (width > 0)
-            .then(|| gutter(width, self.arrows).into_element())
-            .into_iter()
+        // Before the text: the mark, saying whether the debug info places this
+        // instruction anywhere at all; the gutter -- nothing at all for a symbol that
+        // branches nowhere inside itself, which most do, since an empty column would
+        // still be a column, and why the mark cannot sit inside it; and the address,
+        // which is gutter too: a press on it picks the row out and no characters.
+        let before = std::iter::once(code_mark(at.is_some()))
+            .chain((width > 0).then(|| gutter(width, self.arrows).into_element()))
             .chain([label()
                 .text(format!("{address:016X} "))
                 .min_width(Size::px(200.0))

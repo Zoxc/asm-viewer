@@ -365,9 +365,11 @@ impl Component for TextRow {
             on_link: None,
         };
 
-        // The gutter's width, so the address column starts where it does on an
-        // instruction row; then the address, gutter too.
+        // The mark's column and the gutter's width, so both the address column and the
+        // arrows start where they do on an instruction row; then the address, gutter
+        // too. A row that is nobody's line is never marked.
         let before = vec![
+            code_mark(false),
             rect()
                 .width(Size::px(gutter_width(lanes::MAX_LANES)))
                 .into_element(),
@@ -459,7 +461,8 @@ impl KeyExt for EmptyRow {
 impl Component for EmptyRow {
     fn render(&self) -> impl IntoElement {
         // Nothing to measure and nothing to press but the row: empty space is washed too,
-        // and swept across.
+        // and swept across. The mark's column all the same, so this row's rule and a
+        // separator's stay the distance apart they were.
         code_row(
             Chrome {
                 pane: Pane::Assembly,
@@ -471,7 +474,7 @@ impl Component for EmptyRow {
                 listing: self.listing,
                 measured: false,
             },
-            Vec::new(),
+            vec![code_mark(false)],
             None,
             None,
         )

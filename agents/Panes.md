@@ -101,6 +101,24 @@ objects change — which a load finishing also is, and which is what marks a gut
 binary had been read. An object's whole code is marked like anything else now: the answer is the
 file's and does not depend on which window the reader has scrolled the listing to.
 
+**The assembly gutter marks the instructions the debug info places somewhere**, the same dot in
+the same colour, at the row's left edge and so **left of the arrow gutter**. Left of it because the
+gutter is not drawn at all for a symbol that branches nowhere inside itself, which most do, so a
+mark placed after it would sit in a different column from symbol to symbol. `AsmData::position` is
+the question and was being asked per row already, for the row's file and its menu, so the mark
+costs nothing but the column.
+
+**The row's own fact, where the source side's is the file's.** A row is marked when the debug info
+names any line for it — the file the pane is showing or another — so an instruction inlined from
+elsewhere is marked and a prologue is not. The two marks therefore do not predict each other: a
+line marked on the source side can sit beside rows none of which are marked, its code being in a
+function the pane is not showing. Every other row of both listings gives the column up, marked or
+not — a separator, a label, a section header, the rule over a stretch, the bytes no symbol claims —
+or the addresses and the arrows stop lining up between row kinds. The rows an undecoded stretch is
+guessed to take draw nothing at all and so need nothing, and `EmptyRow` has neither gutter nor
+address but takes the column anyway, so its rule and a separator's stay the distance apart they
+were.
+
 **The Assembly pane has a bar naming what it is drawing**, in both spellings: the demangled name
 over the mangled original, `src/ui/symbol_bar.rs`. It names **the drawn symbol and never the
 selected one**, worked out from the same `Analyzed::showing` the listing under it is built from: the
@@ -490,7 +508,8 @@ drawn: a symbol's listing and a file have the same rows every time, a code run a
 no place any more is dropped rather than guessed, and every reader of a run already answers a row
 past the end with nothing.
 
-**The arrow gutter** draws every branch staying inside the symbol, with the layout in `src/lanes.rs`
+**The arrow gutter**, which the mark's column now precedes, draws every branch staying inside the
+symbol, with the layout in `src/lanes.rs`
 because a `VirtualScrollView` builds row *n* knowing nothing but *n*: a row has to be *told* which
 lines pass through it. `Lanes::new` is called on the worker, inside `Studied::new` and beside the
 disassembly it is derived from, so a lane layout can never arrive a beat after the rows it is drawn
@@ -706,7 +725,7 @@ companion file with it.
 **A sweep along a row's text selects characters**, beside the rows and not instead of them
 (`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `code_row`
 (`src/ui/code_row.rs`): the shared width, wash and handlers, with what comes before the text (the
-arrow gutter, the address, a line number) and the text itself handed in. The text is **one
+mark, the arrow gutter, the address, a line number) and the text itself handed in. The text is **one
 `paragraph()`**, with the relocation or branch link placed inside it as an inline child: freya
 reserves a placeholder sized from the child and moves the child's layout node to it, so the link
 keeps its hover, its cursor and its press, and to the text engine it is one unit of the row
@@ -720,8 +739,8 @@ exactly the two primitives a paragraph has anyway: the hit-test behind its `Para
 and the highlight paint (`highlights`, `text_select_bg`, `CursorMode::Expanded` so it fills the
 row). No `use_editable`, no rope of the listing: the editor's model wants one rope and a line per
 row, and an object's code is estimated rows that are counted afresh with every answer. **Gutter
-against text**: the arrow gutter, the address column, the line number, a separator and an empty row
-are gutter. A press there puts the caret at the row's start and makes the sweep go **by rows**
+against text**: the mark, the arrow gutter, the address column, the line number, a separator and an
+empty row are gutter. A press there puts the caret at the row's start and makes the sweep go **by rows**
 (`Picked::by_rows`, `CharSelection::by_rows`): whole ones from the anchor's row to the pointer's, as
 a sweep down an editor's line numbers goes, and back on the anchor's own row the caret the press
 left. A press on the text anchors the caret at the column, and the sweep moves both leads, the rows'

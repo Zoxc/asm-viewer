@@ -14,23 +14,6 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Source / assembly split view
 
-- [x] Mark, in the Source pane's line-number gutter, the lines that have assembly: a reader
-  scanning a file should be able to tell at a glance which lines produced code and which
-  produced nothing, without hovering each one. Done as the *file's* fact and not the drawn
-  symbol's, which is where the item started: a source-driven tab has no drawn symbol until a
-  line in it is clicked, so a set bounded by one left the gutter bare until the reader guessed
-  where to click. The answer is `Object::lines_from_source` over the open objects, on the
-  worker, in `compiled_fg`.
-- [ ] The same the other way: mark, in the Assembly pane, the instructions that have a source
-  line, so a reader can tell the rows the debug info places somewhere from the ones it places
-  nowhere — a prologue, padding, an inlined stretch from a file the pane is not showing — without
-  hovering each. `AsmData::position` is already the question per row, and the colour is now
-  `compiled_fg`, which the source gutter's mark left behind; what is missing is a mark in the
-  row for a `Some` and a decision about where in an instruction row it goes, the gutter there
-  being the branch arrows' already. Note that the two marks answer different questions: the
-  source side says the *file* has code from a line, over every open object, where this one
-  would say the row in front of the reader is placed somewhere. A line marked there can have
-  no marked row here, its code being in another function or another binary.
 - [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain, the
   many `source::Language` now names for the pane split's sake included; each language is a
   `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and

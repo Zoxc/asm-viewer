@@ -13,13 +13,6 @@
 
 use super::*;
 
-/// Across the gutter's mark, before the grid rounds it to whole device pixels.
-const MARK_SIZE: f32 = 5.0;
-
-/// How much of the gutter the mark and the air around it take, which every row gives up
-/// whether it is marked or not.
-const MARK_COLUMN: f32 = 9.0;
-
 /// What the source rows are built from: the file's text and highlighting, which file it is
 /// -- a row picked out is a line of a file, and a line number is not a place on its own --
 /// and which of its lines the assembly pane's picked-out run was compiled from.
@@ -391,23 +384,7 @@ impl Component for SourceRow {
             .max_lines(1)
             .into_element();
 
-        // The mark, at the head of the gutter: a dot beside the line, centred in a column
-        // every row gives up whether it is marked or not, so the numbers beside it sit in
-        // the same place either way. Rounded to whole device pixels like the gutter's own
-        // strokes, a dot half a pixel across being a smear.
-        let dot = pixel_grid().span(0.0, MARK_SIZE).thick;
-        let mark = rect()
-            .width(Size::px(MARK_COLUMN))
-            .height(Size::px(code_row_height()))
-            .center()
-            .child(
-                rect()
-                    .width(Size::px(dot))
-                    .height(Size::px(dot))
-                    .corner_radius(dot / 2.0)
-                    .maybe(self.compiled, |el| el.background(palette().compiled_fg)),
-            )
-            .into_element();
+        let mark = code_mark(self.compiled);
 
         // The same gesture as the assembly pane's, from the same chrome. The run is a
         // run of this file.

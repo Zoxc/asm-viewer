@@ -81,10 +81,13 @@ pub(crate) struct Palette {
     /// The caret itself: a one-pixel stroke, the text colour faded so it marks a place
     /// without reading as a character of the line.
     pub(crate) caret_fg: Color,
-    /// The mark in the source gutter beside a line the drawn symbol has instructions for.
+    /// The dot at a code row's left edge: a source line that produced code, and an
+    /// instruction the debug info places on a source line. Also the mark on the tab the
+    /// keyboard is in (`ui/strip.rs`), the one place it is not a dot.
+    ///
     /// A drawing and not text, so it is held to a floor of its own and required to stay
-    /// quieter than the line number beside it: a column of dots read at a glance, where
-    /// the number is read one at a time. A purple of its own, faint, so that the one
+    /// quieter than the number or address beside it: a column of dots read at a glance,
+    /// where those are read one at a time. A purple of its own, faint, so that the one
     /// thing in the gutter that is not a number does not read as one.
     pub(crate) compiled_fg: Color,
 

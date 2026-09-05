@@ -12806,8 +12806,11 @@ fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
 }
 
 /// Which line numbers are drawn beside a gutter mark: the number the mark shares a row
-/// with, which is the two of them being level. Compared by their middles rather than by
-/// one containing the other, the mark being a dot a fraction of the row's height.
+/// with, which is the two of them being level and the mark sitting in the column just
+/// left of the number. Level is compared by middles rather than by one containing the
+/// other, the mark being a dot a fraction of the row's height; and the column is asked
+/// about because the assembly pane marks its own rows in the same colour, and a listing
+/// beside this one has rows level with these.
 fn marked_lines(test: &TestingRunner) -> Vec<u32> {
     let marks: Vec<Area> = test.find_many(|node, element| {
         (element.style().background == Fill::Color(palette().compiled_fg))
@@ -12819,7 +12822,9 @@ fn marked_lines(test: &TestingRunner) -> Vec<u32> {
             let middle = area.origin.y + area.height() / 2.0;
             marks.iter().any(|mark| {
                 let mark_middle = mark.origin.y + mark.height() / 2.0;
+                let column = area.origin.x - mark.max_x();
                 (mark_middle - middle).abs() < code_row_height() / 2.0
+                    && (0.0..MARK_COLUMN).contains(&column)
             })
         })
         .filter_map(|(text, _)| {
@@ -12832,6 +12837,85 @@ fn marked_lines(test: &TestingRunner) -> Vec<u32> {
 }
 
 /// Every label on screen with the area it was laid out in.
+/// The assembly gutter marks the instructions the debug info places on a source line and
+/// leaves the rest bare, so a reader can tell code a line produced from a stretch placed
+/// nowhere without hovering each row.
+///
+/// Two symbols of one object, so the answer is the symbol's own and not the file's: the
+/// C++ half of this fixture was compiled without `/Z7`, and its one function is all the
+/// PDB does not describe. Whether a mark can differ from its neighbour inside one symbol
+/// is `LineInfo`'s question and no fixture here holds such a symbol.
+#[test]
+fn the_assembly_gutter_marks_the_instructions_with_a_source_line() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("crates/analysis/tests/fixtures/line_fixture_public.dll");
+    let objects = analysis::open_files(vec![path]);
+    let object = objects.first().expect("the fixture parses").clone();
+    let symbol = |name: &str| Symbol {
+        object: object.clone(),
+        data: object
+            .symbols_sorted
+            .iter()
+            .find(|data| data.name == name)
+            .unwrap_or_else(|| panic!("the fixture holds {name}"))
+            .clone(),
+    };
+
+    let drawn = |symbol: Symbol| -> Vec<(u64, bool)> {
+        let studied = Studied::new(symbol.clone());
+        let shown = Shown {
+            ask: Ask::Symbol(symbol),
+            studied,
+        };
+        let (mut test, _states) = TestingRunner::new(
+            listing_harness,
+            (500., 900.).into(),
+            |runner| listing_states!(runner, shown),
+            1.,
+        );
+        settle(&mut test);
+        marked_addresses(&test)
+    };
+
+    let placed = drawn(symbol("sum_to"));
+    assert!(!placed.is_empty(), "the listing drew no addresses");
+    assert!(
+        placed.iter().all(|(_, marked)| *marked),
+        "a row of a symbol the debug info places went unmarked: {placed:?}"
+    );
+
+    // The one function compiled without `/Z7`: the PDB places none of it.
+    let nowhere = drawn(symbol("?helper@@YAHXZ"));
+    assert!(!nowhere.is_empty(), "the listing drew no addresses");
+    assert!(
+        nowhere.iter().all(|(_, marked)| !*marked),
+        "a row the debug info places nowhere was marked: {nowhere:?}"
+    );
+}
+
+/// Which addresses the listing drew and whether each wears a gutter mark, paired by the
+/// row the two share as `marked_lines` pairs a mark with its line number. The column is
+/// not asked about here: the mark is left of the branch gutter and the address is right
+/// of it, so the two are not neighbours, and the harness is one pane.
+fn marked_addresses(test: &TestingRunner) -> Vec<(u64, bool)> {
+    let marks: Vec<Area> = test.find_many(|node, element| {
+        (element.style().background == Fill::Color(palette().compiled_fg))
+            .then_some(node.layout().area)
+    });
+    labels_with_areas(test)
+        .into_iter()
+        .filter_map(|(text, area)| {
+            let address = u64::from_str_radix(text.strip_suffix(' ')?, 16).ok()?;
+            let middle = area.origin.y + area.height() / 2.0;
+            let marked = marks.iter().any(|mark| {
+                let mark_middle = mark.origin.y + mark.height() / 2.0;
+                (mark_middle - middle).abs() < code_row_height() / 2.0
+            });
+            Some((address, marked))
+        })
+        .collect()
+}
+
 fn labels_with_areas(test: &TestingRunner) -> Vec<(String, Area)> {
     use freya::elements::label::LabelElement;
     use std::any::Any;

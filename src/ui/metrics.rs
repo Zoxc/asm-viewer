@@ -167,6 +167,14 @@ pub(crate) const SLOW_ANALYSIS: Duration = Duration::from_millis(180);
 /// *left*, so chips past the edge get no width and draw as a bare ×.
 pub(crate) const CHIP_NAME_CHARS: usize = 40;
 
+/// Across the dot a code row is marked with, before the grid rounds it to whole device
+/// pixels.
+pub(crate) const MARK_SIZE: f32 = 5.0;
+
+/// How much of a row the mark and the air around it take, which every row gives up
+/// whether it is marked or not.
+pub(crate) const MARK_COLUMN: f32 = 9.0;
+
 /// How far apart two branch lines running down the same rows are drawn.
 pub(crate) const LANE_WIDTH: f32 = 7.0;
 

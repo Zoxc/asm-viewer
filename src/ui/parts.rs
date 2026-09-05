@@ -292,3 +292,25 @@ pub(crate) fn reveal_item(path: PathBuf) -> MenuButton {
         .on_press(move |_| reveal::reveal(path.clone()))
         .child("Show in file manager")
 }
+
+/// The dot a code row is marked with, at its left edge: a source line that produced code,
+/// an instruction the debug info places on a source line.
+///
+/// The column is given up by every row, marked or not, so the numbers and addresses beside
+/// it sit in the same place either way. The dot is rounded to whole device pixels like the
+/// arrow gutter's strokes, one half a pixel across being a smear.
+pub(crate) fn code_mark(marked: bool) -> Element {
+    let dot = pixel_grid().span(0.0, MARK_SIZE).thick;
+    rect()
+        .width(Size::px(MARK_COLUMN))
+        .height(Size::px(code_row_height()))
+        .center()
+        .child(
+            rect()
+                .width(Size::px(dot))
+                .height(Size::px(dot))
+                .corner_radius(dot / 2.0)
+                .maybe(marked, |el| el.background(palette().compiled_fg)),
+        )
+        .into_element()
+}

@@ -24,6 +24,11 @@ no object holds code from leaves the listing as it is and lights nothing. A sour
 outlives its binary being closed. In an assembly-driven tab the source side only scrolls
 within the symbol.
 
+## Gutter marks
+
+A line that produced code, in any open object, is marked with a dot at its left edge. So is an
+instruction the debug info places on a source line, in any file.
+
 ## Following a name
 
 While a language server is running, every name it can place is a link: a call, a type or a
