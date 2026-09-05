@@ -233,10 +233,18 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     // The move this hook owes the view and has not made. An `Rc<RefCell>` for the same
     // reason as the tab above.
     let owing = use_hook(|| Rc::new(RefCell::new(None::<usize>)));
+    let answered = use_hook(|| Rc::new(RefCell::new(None::<Landing>)));
     // A landing on its way, whichever document it names. Asked through
     // `try_consume_context`, a pane mounted without the landing machinery having none on
     // its way.
     let landing = try_consume_context::<Land>().map(|land| land.0);
+    // The landing this pane has already gone to, held exactly as long as that landing is
+    // on its way. **The pane does not spend the landing** -- `use_land` does, a pass or
+    // more later -- so without this the reveal below is made again on every wake, and the
+    // scroll a reveal makes is a wake (`notes/upstream/freya.md`): a write per pass, for
+    // ever where the reveal cannot satisfy itself, which is any viewport too short to
+    // hold the row and its context rows. Where it can, the loop is invisible until the
+    // reader scrolls, and is then a pane that will not stay where they put it.
 
     // With deps and not a bare `use_side_effect`, whose callback is built in a `use_hook`
     // and would hold the first tab this pane ever showed.
@@ -299,6 +307,11 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
             // Read and not peeked: this subscribes the effect to the landing, which is what
             // wakes it on the pass the landing is spent.
             let coming = landing.and_then(|asked| asked.read().clone());
+            // Forgotten with the landing it is about, so the same door pressed twice is
+            // answered twice.
+            if coming.is_none() {
+                *answered.borrow_mut() = None;
+            }
             if let Some(row) = moving {
                 *owing.borrow_mut() = Some(row);
             }
@@ -316,7 +329,10 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
             // goes there as it draws the document and not two passes later, when `use_land`
             // has turned the same row into a run.
             if let Some(asking) = &coming {
-                if (asked.coming)(asking, &mut controller) {
+                // Bound to a `let` of its own: the borrow must be over before the write.
+                let gone = answered.borrow().as_ref() == Some(asking);
+                if !gone && (asked.coming)(asking, &mut controller) {
+                    *answered.borrow_mut() = Some(asking.clone());
                     *owing.borrow_mut() = None;
                     return;
                 }

@@ -8999,6 +8999,84 @@ fn gutter_lines(test: &TestingRunner) -> Vec<u32> {
     rows
 }
 
+/// A landing is gone to once and not on every wake. `use_land` spends the landing, not
+/// the pane, so an unspent one is seen again every time the effect runs -- and the scroll
+/// the reveal makes is itself a wake (`notes/upstream/freya.md`). Left unguarded that is a
+/// scroll written per pass for ever: a hang where the reveal cannot satisfy itself, and a
+/// pane that will not stay where the reader put it where it can.
+///
+/// The reader scrolling away is the visible half and the one asserted here, the hang being
+/// a test that never finishes rather than one that fails.
+#[test]
+fn a_landing_is_gone_to_once_and_does_not_drag_the_pane_back() {
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
+        "assembly-viewer-landing-once-test-{}",
+        std::process::id()
+    )));
+    let path = directory.join("long.c");
+    let text: String = (1..=60).map(|line| format!("int x{line};\n")).collect();
+    std::fs::write(&path, text).expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let at = LinePos {
+        file: file.clone(),
+        line: 40,
+    };
+    let mut studied = Studied::new(sum_to.clone());
+    studied.lines.file = Some(file.clone());
+    let shown = Shown {
+        ask: Ask::Source {
+            at: at.clone(),
+            chosen: None,
+        },
+        studied,
+    };
+    let (mut test, (states, landing)) = TestingRunner::new(
+        source_pane_harness,
+        (500., 400.).into(),
+        |runner| {
+            runner.provide_root_context(|| Mounted(State::create(true)));
+            let (states, _marked, landing) = listing_states!(runner, shown);
+            (states, landing)
+        },
+        1.,
+    );
+    let document = Document::Source(file.clone());
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    // A door's landing, left unspent: this harness runs no `use_land`, as the app does
+    // between the door and the pane taking the row.
+    let mut landing = landing;
+    landing.set(Some(Landing {
+        tab: document,
+        at: Some(at),
+        address: None,
+        columns: None,
+    }));
+    settle(&mut test);
+    let drawn = gutter_lines(&test);
+    assert!(
+        drawn.first().is_some_and(|first| *first > 1),
+        "the pane never went to the landing's line: {drawn:?}"
+    );
+
+    // The reader scrolls back to the top, and the landing is still sitting there.
+    test.scroll((250., 200.), (0., 4000.));
+    settle(&mut test);
+    settle(&mut test);
+    let drawn = gutter_lines(&test);
+    assert_eq!(
+        drawn.first(),
+        Some(&1),
+        "the landing dragged the pane off the row the reader scrolled to: {drawn:?}"
+    );
+}
+
 /// A tab opened for the first time puts its source side on the **symbol's own lines**,
 /// and not at the top of a file the symbol may be a hundred lines into. A row remembered
 /// for the tab still wins: this is the first open it answers and not every one.

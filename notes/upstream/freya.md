@@ -242,6 +242,18 @@ at an `offset_x`, and the wheel, the reveal and the drag's edge all writing that
 (`src/ui/strip.rs`). A code pane still uses a controller, where the pane re-renders on the same
 change that scrolls it.
 
+**Hit twice.** The second was the code panes, which the sentence above called safe: re-rendering on
+the change is not the same as being bounded by it. `use_kept_position` reads the scroll and reveals
+a landing's row, and the pane does not spend the landing -- `use_land` does, a pass or more later --
+so an unspent landing was revealed again on every wake, and each reveal was the wake. It only ends
+where the reveal can satisfy itself, which `reveal_row` cannot in a viewport too short to hold the
+row and its `CONTEXT_ROWS`: the source pane of a tab opened from a door froze the app at 100% of a
+core with one row drawn. Where the viewport is tall enough the same loop is silent, and shows only
+as a pane that will not stay where the reader scrolls it. **Cost:** the hook remembers the landing
+it has gone to, for as long as that landing is on its way (`src/ui/focus.rs`), pinned by
+`a_landing_is_gone_to_once_and_does_not_drag_the_pane_back`. Anything else here that both reads a
+scroll and writes one needs a bound of its own; re-rendering is not one.
+
 **A dock group's tab bar that handles its own overflow.** `DockingArea` hands the bar
 renderer the headers and their count and nothing else (`docking.rs:269-275`, `:548`), so a
 group narrower than its headers lays them out at their natural widths and past its own right
