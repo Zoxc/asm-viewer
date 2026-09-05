@@ -323,6 +323,10 @@ impl Component for FinderOverlay {
         let visits = use_consume::<Visited>().0;
         let states = use_project_states();
         let box_id = use_hook(AccessibilityId::new_unique);
+        // The list's own scroll. The arrows move a row the view knows nothing about, so
+        // without a controller to follow it the row goes under the panel's edge at the
+        // thirteenth press, and Enter opens a file the reader never saw named.
+        let list = use_scroll_controller(ScrollConfig::default);
 
         // Every hook first and the early return below them: the overlay is drawn for a
         // fraction of the run, and a hook it skipped would be a hook the next render has
@@ -363,7 +367,7 @@ impl Component for FinderOverlay {
                 .width(Size::fill())
                 .height(Size::px(rows.min(FINDER_ROWS) as f32 * list_row_height()))
                 .child(
-                    VirtualScrollView::new_with_data(
+                    VirtualScrollView::new_with_data_controlled(
                         (listed, at, finder),
                         |index, (listed, at, finder): &(Listed, usize, State<Finder>)| {
                             FoundRow {
@@ -376,6 +380,7 @@ impl Component for FinderOverlay {
                             .key(&index)
                             .into()
                         },
+                        list,
                     )
                     .length(rows)
                     .item_size(list_row_height()),
@@ -436,7 +441,7 @@ impl Component for FinderOverlay {
                             // declines them so that they arrive here at all.
                             .on_global_key_down(move |e: Event<KeyboardEventData>| {
                                 let ctrl = e.modifiers.contains(Modifiers::ctrl_or_meta());
-                                finder_key(finder, states, &e.key, ctrl);
+                                finder_key(finder, states, list, &e.key, ctrl);
                             })
                             .child(FinderBox {
                                 finder,
@@ -463,11 +468,17 @@ fn note(text: &str) -> Element {
 
 /// The keys the finder answers: the list moved through, a file opened, and the overlay
 /// closed. Every read is bound before any write.
-fn finder_key(finder: State<Finder>, states: ProjectStates, key: &Key, ctrl: bool) {
+fn finder_key(
+    finder: State<Finder>,
+    states: ProjectStates,
+    list: ScrollController,
+    key: &Key,
+    ctrl: bool,
+) {
     match key {
         Key::Named(NamedKey::Escape) => close_finder(finder),
-        Key::Named(NamedKey::ArrowDown) => moved(finder, states, 1),
-        Key::Named(NamedKey::ArrowUp) => moved(finder, states, -1),
+        Key::Named(NamedKey::ArrowDown) => followed(list, moved(finder, states, 1)),
+        Key::Named(NamedKey::ArrowUp) => followed(list, moved(finder, states, -1)),
         Key::Named(NamedKey::Enter) => {
             let opened = {
                 let state = finder.peek();
@@ -491,18 +502,35 @@ fn finder_key(finder: State<Finder>, states: ProjectStates, key: &Key, ctrl: boo
 /// held past the last row counted on above it, and every Up after that was spent coming
 /// back before the highlight moved at all. `listed` is the pass the memo makes per
 /// keystroke, made once more per press.
-fn moved(mut finder: State<Finder>, states: ProjectStates, by: isize) {
+///
+/// Hands back the row it moved to and how many there are, which is what the scroll
+/// follows.
+fn moved(mut finder: State<Finder>, states: ProjectStates, by: isize) -> (usize, usize) {
     // Bound before the write, so the read guard is gone by then.
-    let (at, typed, last) = {
+    let (at, typed, rows) = {
         let state = finder.peek();
-        let last = listed(&state, &states.visits.peek())
-            .len()
-            .saturating_sub(1);
-        (state.selected().min(last), state.typed.clone(), last)
+        let rows = listed(&state, &states.visits.peek()).len();
+        (
+            state.selected().min(rows.saturating_sub(1)),
+            state.typed.clone(),
+            rows,
+        )
     };
     let mut state = finder.write();
-    state.at = at.saturating_add_signed(by).min(last);
+    state.at = at.saturating_add_signed(by).min(rows.saturating_sub(1));
     state.at_for = typed;
+    (state.at, rows)
+}
+
+/// Scroll the list so the row the keyboard was moved to is one of the rows drawn: the
+/// panel is [`FINDER_ROWS`] tall and the arrows walk past that, and a row nobody can see
+/// is a file Enter opens unnamed.
+fn followed(mut list: ScrollController, (at, rows): (usize, usize)) {
+    if rows == 0 {
+        return;
+    }
+    let height = list_row_height();
+    reveal_caret(&mut list, rows.min(FINDER_ROWS) as f32 * height, height, at);
 }
 
 /// Open a file the finder listed: a source-driven tab, in the temporal one or a new one

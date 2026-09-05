@@ -107,14 +107,21 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
     controller.scroll_to_y(-(wanted as i32));
 }
 
-/// Bring the row the caret is on into view, and only when it is not: no context rows,
-/// unlike [`reveal_row`], since a key repeat that scrolled the view while the caret was
+/// Bring the row the keyboard is on into view, and only when it is not: no context rows,
+/// unlike [`reveal_row`], since a key repeat that scrolled the view while the row was
 /// still on screen would walk the rows away from under the reader; a row above the view
 /// comes to its top, one below to its bottom, as an editor's does.
-pub(crate) fn reveal_caret(controller: &mut ScrollController, viewport: f32, index: usize) {
+///
+/// The row height is the caller's, this being the one rule the finder's list follows as
+/// well as a code pane's, and the two are measured in different fonts.
+pub(crate) fn reveal_caret(
+    controller: &mut ScrollController,
+    viewport: f32,
+    height: f32,
+    index: usize,
+) {
     let (_, scrolled) = <(i32, i32)>::from(*controller);
     let top = -scrolled as f32;
-    let height = code_row_height();
     let row = index as f32 * height;
 
     if row < top {

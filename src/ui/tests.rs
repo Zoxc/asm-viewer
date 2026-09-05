@@ -19993,6 +19993,56 @@ fn down_stops_at_the_last_row_so_up_moves_at_once() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// The list follows the row the keyboard is on. The panel draws `FINDER_ROWS` rows and
+/// the arrows walk past that, so without a scroll the highlight went under the panel's
+/// edge and Enter opened a file the reader never saw named.
+#[test]
+fn the_list_scrolls_to_the_row_the_keyboard_is_on() {
+    let walked: Vec<String> = (0..20).map(|n| format!("f{n:02}.rs")).collect();
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            for name in &walked {
+                let _ = emit(walked_file(root, name));
+            }
+            let _ = emit(WalkEvent::Finished);
+        });
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("rs");
+    settle(&mut test);
+    let first = finder_rows(&test);
+    assert!(
+        first.len() <= FINDER_ROWS + 1,
+        "the panel drew the whole list: {first:?}"
+    );
+
+    // Past the last row the panel can hold.
+    for _ in 0..(FINDER_ROWS + 3) {
+        key_with(
+            &mut test,
+            Key::Named(NamedKey::ArrowDown),
+            Modifiers::empty(),
+        );
+        settle(&mut test);
+    }
+
+    let lit = finder_selected(&test).expect("the row the keyboard is on is drawn");
+    let drawn = finder_rows(&test);
+    assert!(
+        !first.contains(&lit),
+        "the list never scrolled: {lit} was drawn before the arrows"
+    );
+    // The panel holds `FINDER_ROWS`; the view builds one row past its foot, and that one
+    // is under the edge.
+    let place = drawn.iter().position(|row| *row == lit);
+    assert!(
+        place.is_some_and(|place| place < FINDER_ROWS),
+        "the row the keyboard is on is below the panel's edge: {drawn:?}"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// Escape closes it, and keeps nothing of what was typed.
 #[test]
 fn escape_closes_the_finder_and_keeps_nothing_typed() {

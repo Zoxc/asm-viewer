@@ -70,6 +70,12 @@ counting on past the last row left it above the list, and the reader who held Do
 Up per overshoot before the highlight moved at all. `moved` works the list out for itself, which
 is the pass the memo already makes per keystroke made once more per press.
 
+**The list follows that row.** The panel is `FINDER_ROWS` tall and the arrows walk past it, so the
+list is given a `ScrollController` and each move ends in `reveal_caret` -- the code panes' own
+rule, which takes the row height because a list row and a code row are measured in different
+fonts. Without it the highlight went under the panel's edge at the thirteenth press while Enter
+went on opening the row it was on: a file the reader never saw named.
+
 **Ranking is on the UI thread**, in a memo over the typed text and the walked files, as a sidebar
 list's own filter is. It is one pass over a string per file with no allocation for the paths that
 do not match. If a directory ever turns up where that shows, the ranking moves onto the worker

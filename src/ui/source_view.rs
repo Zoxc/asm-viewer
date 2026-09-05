@@ -658,7 +658,9 @@ impl Component for SourceList {
                 // copy: an indentation as the spaces the row draws it as.
                 move |index| source_line(&drawn, index),
                 // The caret's row, brought on screen after a key has moved it.
-                move |index| reveal_caret(&mut controller, *viewport.peek(), index),
+                move |index| {
+                    reveal_caret(&mut controller, *viewport.peek(), code_row_height(), index)
+                },
             )
         };
 

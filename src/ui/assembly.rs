@@ -1295,7 +1295,7 @@ impl Component for InstructionList {
                         .unwrap_or_default()
                 },
                 // The caret's row, brought on screen after a key has moved it.
-                move |row| reveal_caret(&mut controller, *viewport.peek(), row),
+                move |row| reveal_caret(&mut controller, *viewport.peek(), code_row_height(), row),
             )
         };
 
