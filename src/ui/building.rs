@@ -239,6 +239,14 @@ pub(crate) fn use_building_with(
 /// parse, the objects in hand describe bytes that are gone -- and takes those files' tabs,
 /// positions and visits with it, exactly as a scratchpad's rebuild does.
 fn finished(mut build: State<Builds>, states: ProjectStates, run: cargo::Run) {
+    // What the panes have read of the workspace is from before the reader edited it and
+    // pressed Build. Dropped whatever the build came to: a build that failed says the
+    // files have changed just as one that did not.
+    let directory = workspace(&states.proj.peek());
+    if let Some(directory) = directory {
+        forget_source_under(&directory);
+    }
+
     let produced: Vec<PathBuf> = match &run {
         cargo::Run::Built { artifacts, .. } => artifacts
             .iter()

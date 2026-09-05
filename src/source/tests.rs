@@ -78,6 +78,38 @@ fn a_missing_file_is_remembered_as_missing() {
     let _ = fs::remove_file(&path);
 }
 
+/// The other half of reading a file once: a build says the files under a directory have
+/// changed, and what was read of them goes -- the misses with the rest, a file the build
+/// generated having been missing when the pane first asked for it.
+#[test]
+fn forgetting_a_directory_re_reads_what_is_under_it() {
+    let directory = temp_path("built");
+    fs::create_dir_all(&directory).expect("the temp directory is writable");
+    let path = directory.join("main.rs");
+    fs::write(&path, b"fn main() {}\n").expect("a writable directory");
+    let generated = directory.join("generated.rs");
+    let outside = write("outside.rs", b"fn outside() {}\n");
+
+    assert!(load(&path).expect("a readable file").text() == "fn main() {}\n");
+    assert!(load(&generated).is_none());
+    let kept = load(&outside).expect("a readable file");
+
+    fs::write(&path, b"fn main() { one(); }\n").expect("a writable directory");
+    fs::write(&generated, b"fn generated() {}\n").expect("a writable directory");
+    forget_under(&directory);
+
+    assert!(load(&path).expect("a readable file").text() == "fn main() { one(); }\n");
+    assert!(load(&generated).is_some());
+    // And a file outside the root is untouched: the same `Arc`, never read again.
+    assert!(Arc::ptr_eq(
+        &kept,
+        &load(&outside).expect("the remembered file")
+    ));
+
+    let _ = fs::remove_dir_all(&directory);
+    let _ = fs::remove_file(&outside);
+}
+
 /// The digests are of the bytes as read, so a file answers the checksum the compiler took
 /// of it — the published vectors for `abc`, here — and not one taken of other bytes.
 #[test]

@@ -676,6 +676,7 @@ pub(crate) fn use_scratchpad_with(
                             };
 
                             let mut next = pad.peek().clone();
+                            let mut directory = None;
                             if let Some(state) = next.get_mut(&name) {
                                 state.building = false;
                                 state.built = Some(build);
@@ -686,8 +687,16 @@ pub(crate) fn use_scratchpad_with(
                                 ) {
                                     state.unsaved = None;
                                 }
+                                directory = state.scratchpad.directory();
                             }
                             pad.set(next);
+
+                            // The build wrote the package on its way, to the same
+                            // `src/main.rs` as last time, so what a pane has read of
+                            // this pad is the version before it.
+                            if let Some(directory) = directory {
+                                forget_source_under(&directory);
+                            }
 
                             // Whichever pad built it, the artifact is an ordinary binary
                             // and belongs to the app rather than to the pad on screen.

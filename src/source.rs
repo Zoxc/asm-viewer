@@ -207,6 +207,8 @@ fn cache() -> MutexGuard<'static, HashMap<PathBuf, Option<Arc<SourceFile>>>> {
 /// The contents of `path`, read on the first call and answered from memory afterwards.
 /// [`None`] means the file cannot be shown — missing, unreadable, not a file, or past
 /// [`MAX_SIZE`] — and is remembered as such.
+///
+/// Nothing here notices a file that changed on disk. [`forget_under`] is how it is told.
 pub fn load(path: &Path) -> Option<Arc<SourceFile>> {
     if let Some(cached) = cache().get(path) {
         return cached.clone();
@@ -218,6 +220,17 @@ pub fn load(path: &Path) -> Option<Arc<SourceFile>> {
     let file = SourceFile::read(path, MAX_SIZE).map(Arc::new);
 
     cache().entry(path.to_path_buf()).or_insert(file).clone()
+}
+
+/// Forget every file read from under `root`, misses included, so the next call reads them
+/// again.
+///
+/// Checking on the way in would be a `stat` per lookup, and a pane asks on every render.
+/// So a build is what calls this, a build being the app's one word that a directory's
+/// files have changed. The parsed copies above these go with them
+/// (`src/ui/highlight.rs`).
+pub fn forget_under(root: &Path) {
+    cache().retain(|path, _| !path.starts_with(root));
 }
 
 #[cfg(test)]

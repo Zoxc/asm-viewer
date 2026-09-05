@@ -202,6 +202,16 @@ a tree that would be most of the file again. Two things about `SyntaxBlocks` bit
 unwraps rather than answering `None`, and it holds one block per `Rope::len_lines()`, which counts a
 phantom line after a trailing newline (hence `Highlighted::lines`).
 
+**Neither that cache nor the text under it is ever checked against the disk**, both being keyed by
+path alone: a `stat` on the way in would be a `stat` per render, since the pane asks on every one.
+So a **build** forgets them. A finished build of the project's workspace or of a scratchpad drops
+every entry under the directory it built (`forget_source_under`, `ui/building.rs`, `ui/pad.rs`),
+whatever the build came to -- a build that failed is as much a sign the files have changed as one
+that did not, and a build is the only word the app gets that they have. Nothing else re-reads a
+file for the life of the process. Until this, a rebuilt scratchpad drew the text from before the
+build under the new build's line numbers, with the checksum row above saying the file differed from
+the one it was built from when it was exactly that file.
+
 **The two panes point at each other through their selected runs**, and through nothing the pointer
 does. `Marked` holds one run per pane (`Marks`, two `Picked`s, `ui/marks.rs`), and what a pane draws
 in green is the *pair*: the rows of it that are the same place as the other pane's run, the

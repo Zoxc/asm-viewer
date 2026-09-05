@@ -7917,6 +7917,40 @@ fn a_theme_switch_empties_the_highlighted_cache() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// Neither cache is checked against the disk, so a file rewritten under the app's nose is
+/// drawn as it was first read until something forgets it. Both maps go together: the
+/// parsed copy holds the text it was parsed from in a `Rope` of its own.
+#[test]
+fn forgetting_a_directory_re_reads_and_re_parses_its_files() {
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("main.rs");
+    std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
+
+    let drawn = |path: &Path| {
+        let text = source_text(path).expect("the file");
+        (text.0.rope.to_string(), text.0.functions.len())
+    };
+    assert_eq!(drawn(&path), ("fn one() {}\n".to_owned(), 1));
+
+    std::fs::write(&path, b"fn one() {}\nfn two() {}\n").expect("writing the source file");
+    assert_eq!(
+        drawn(&path),
+        ("fn one() {}\n".to_owned(), 1),
+        "the file was re-read with nothing having said it changed"
+    );
+
+    forget_source_under(&directory);
+    assert_eq!(
+        drawn(&path),
+        ("fn one() {}\nfn two() {}\n".to_owned(), 2),
+        "the text or the parse of it was left over from before"
+    );
+
+    forget_source_under(&directory);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// The windowing system changing its mind about the theme, *after* the window is open,
 /// repaints it. freya keeps `Platform::preferred_theme` from winit and re-sets it on the
 /// OS's `ThemeChanged` event, so setting it here is what that event does.
@@ -9739,6 +9773,59 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
         first,
         "a rebuild left the objects of the build before it in the list"
     );
+}
+
+/// A pad's package is written to the same `src/main.rs` on every build, so a build that
+/// forgot nothing would leave every pane on the artifact drawing the pad as it was two
+/// builds ago. The root a build forgets is the pad's own package directory.
+#[test]
+fn a_finished_pad_build_forgets_the_pad_package() {
+    // The entry that stands for the pad's source. A file of this test's own, filed under a
+    // name inside the package: the pad's directory is the reader's own, and a test writes
+    // nothing into it.
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("stand-in.rs");
+    std::fs::write(&path, b"fn main() {}\n").expect("writing the source file");
+    let stand_in = source_text(&path).expect("the file");
+
+    let (mut test, _states, pad, _text, asking, _asks) =
+        mount_scratchpad!(scratchpad_harness, |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+            // Rejected and not built: a build that the compiler refused wrote the package
+            // on its way just as one that succeeded did.
+            PadJob::Build(scratchpad) => PadAnswer::Built {
+                pad: scratchpad.id().clone(),
+                build: Build::Rejected {
+                    diagnostics: Vec::new(),
+                    message: "refused".to_owned(),
+                },
+            },
+            _ => unreachable!("this test only opens and builds"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    let package = pad
+        .peek()
+        .state()
+        .scratchpad
+        .directory()
+        .expect("a directory to keep pads in");
+    let source = package.join("src").join("main.rs");
+    highlighted().insert(source.clone(), stand_in.0.clone());
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_build(pad, &jobs);
+    pump(&mut test, || !pad.peek().state().building);
+
+    assert!(
+        !highlighted().contains_key(&source),
+        "the build left the pad's source as it was read before it"
+    );
+
+    forget_source_under(&directory);
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Taking a dependency row away does not take the pane with it: each box writes into
@@ -16711,6 +16798,48 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
         .peek()
         .iter()
         .any(|object| object.path == artifact));
+}
+
+/// A build is the app's one word that the files under the project's directory have
+/// changed, so a finished one drops what the panes read of them. Without it the pane draws
+/// the text from before the build under the new build's line numbers, and the checksum row
+/// says the file differs from the one that was built when it is exactly that file.
+#[test]
+fn a_finished_build_forgets_the_workspace_sources() {
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("main.rs");
+    std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
+
+    // Nothing is opened: what a build produced is another rule, tested above.
+    let (mut test, states, _language, asking, _asks) = mount_project!(|job: BuildJob| match job {
+        BuildJob::Build { .. } => BuildAnswer::Done(built(&[])),
+        _ => BuildAnswer::Read {
+            manifest: None,
+            debug_lines: true,
+        },
+    });
+
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    test.sync_and_update();
+
+    let drawn = || source_text(&path).expect("the file").0.rope.to_string();
+    assert_eq!(drawn(), "fn one() {}\n");
+    std::fs::write(&path, b"fn two() {}\n").expect("writing the source file");
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    start_build(states.build, &jobs, directory.clone(), Profile::Release);
+    pump(&mut test, || !states.build.peek().building);
+
+    assert_eq!(
+        drawn(),
+        "fn two() {}\n",
+        "the build left the pane reading the text from before it"
+    );
+
+    forget_source_under(&directory);
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The rule the session carries: a build replaces the artifacts of the build **before**

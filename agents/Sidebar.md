@@ -307,7 +307,9 @@ narrowed: a file the reader opened by hand is theirs even where a build has just
 path. So the set replaced is the *previous* build's list intersected with what is open, closed one
 by one and reopened in a single `open_binaries`, rather than a `reopen_binary` each, which would be
 one spawn and one load per artifact. That list is saved with the session, which is what makes the
-rule survive a restart (`agents/Persistence.md`).
+rule survive a restart (`agents/Persistence.md`). A finished build also forgets everything read of
+the sources under the project's directory, which nothing else in the app ever re-reads
+(`forget_source_under`, `agents/Panes.md`).
 
 The **debug-lines offer** is why the profile and the manifest are read together. Release is the
 default profile, since a reader inspecting a binary is usually asking what the optimiser did, and

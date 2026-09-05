@@ -135,6 +135,19 @@ pub(crate) fn highlighted() -> MutexGuard<'static, HashMap<PathBuf, Arc<Highligh
         .unwrap_or_else(|error| error.into_inner())
 }
 
+/// Forget every file under `root`, in both caches: what was parsed here, and the text it
+/// was parsed from. Neither can go without the other, a parsed copy holding the old text
+/// in a `Rope` of its own.
+///
+/// **A build calls this**, with the directory it built (`ui/building.rs`, `ui/pad.rs`).
+/// Both maps are keyed by path alone and neither is ever checked against the disk, so
+/// without it the first text read for a file is the text every later render draws --
+/// however often the file is rewritten, which a scratchpad's is on every build.
+pub(crate) fn forget_source_under(root: &Path) {
+    highlighted().retain(|path, _| !path.starts_with(root));
+    source::forget_under(root);
+}
+
 /// The file at `path`, read and highlighted, or `None` when it cannot be shown at all.
 pub(crate) fn source_text(path: &Path) -> Option<SourceText> {
     if let Some(cached) = highlighted().get(path) {
