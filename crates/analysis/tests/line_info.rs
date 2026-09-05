@@ -462,3 +462,48 @@ fn a_section_that_would_not_read_keeps_its_rows_off_another() {
     assert_eq!(info.rows()[0].range, 0..3);
     assert_eq!(info.rows()[1].range, 3..6);
 }
+
+/// An `addr2line` 0.21 defect, pinned rather than worked around
+/// (`notes/upstream/addr2line.md`): `LocationRangeUnitIter::new` maps every miss but a probe
+/// below the unit's first sequence to "past the last one", so a query starting in the gap
+/// between two sequences of a unit is answered with nothing — while the reverse index, which
+/// walks the unit from 0, sees the very rows the query cannot. Delete this test with the
+/// note, when the crate moves.
+#[test]
+fn a_query_starting_between_two_sequences_of_a_unit_is_answered_with_nothing() {
+    let data = common::elf_x86_64_two_sequences();
+    let object = parse(&data);
+
+    // The premise: `middle` begins in the gap after the first sequence and runs to the end
+    // of the second, whose one row is inside it and names it.
+    let middle = symbol(&object, "middle");
+    assert_eq!((middle.address, middle.extent(&object)), (6, Some(0x10)));
+    let named: Vec<String> = object
+        .symbols_at_line("/src/other.c", 42)
+        .iter()
+        .map(|symbol| symbol.name.clone())
+        .collect();
+    assert_eq!(named, ["middle"]);
+
+    // A query starting inside a sequence is answered, so the unit is reached and read.
+    let info = symbol(&object, "before")
+        .line_info(&object)
+        .expect("before has line info");
+    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+
+    // And a query from the start of the section is answered with both sequences, so the
+    // unit's range covers the gap and the second sequence is there to be found.
+    let section = middle.section.clone().expect("middle is in a section");
+    let whole = object
+        .line_info(&section, 0..0x16)
+        .expect("the section's own range has line info");
+    assert_eq!(
+        whole.files(),
+        [Arc::from("/src/main.c"), Arc::from("/src/other.c")]
+    );
+
+    assert!(
+        middle.line_info(&object).is_none(),
+        "0.21 answers this; the note is out of date"
+    );
+}

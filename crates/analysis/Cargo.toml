@@ -15,7 +15,11 @@ iced-x86 = "1.20.0"
 # here (see `src/line.rs`), not by `Context::new`, and names are demangled by
 # `symbolic-demangle` as they already were. `gimli` is named directly for `Dwarf::load`
 # and `EndianArcSlice`, at the same version `addr2line` asks for.
-addr2line = { version = "0.21", default-features = false, features = ["std"] }
+# What staying here costs is in `notes/upstream/addr2line.md`: 0.21 answers nothing for a
+# unit when the query starts in a gap between two of its sequences, which 0.24 fixed and
+# which wants `gimli` 0.31 — the move above, not a bump. The version is spelled out because
+# that note is written against this one.
+addr2line = { version = "0.21.0", default-features = false, features = ["std"] }
 gimli = { version = "0.28", default-features = false, features = ["read", "std", "endian-reader"] }
 # The file digest (`FileDigest`), and no new crate in the build: `object` already pulls
 # this exact version in through `ruzstd`, so naming it here compiles nothing extra.

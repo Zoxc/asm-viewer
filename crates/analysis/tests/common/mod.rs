@@ -1085,6 +1085,124 @@ impl gimli::write::Writer for RelocWriter {
     }
 }
 
+/// A relocatable object whose one compilation unit holds **two line-program sequences** with
+/// a gap between them, and a symbol that begins in that gap.
+///
+/// `.text` is 0x16 bytes. `before` is the first 6, which the first sequence covers
+/// (`main.c:10`); `middle` is the rest, and only its last 6 bytes are covered, by the second
+/// sequence (`other.c:42`). The unit declares the lot, `DW_AT_low_pc` 0 to `DW_AT_high_pc`
+/// 0x16, so a question about any of it reaches the unit. Both sequences begin at a relocated
+/// address, as a compiler writes them.
+///
+/// The shape a producer emitting one sequence per section per unit never makes, and the one
+/// `addr2line` 0.21 cannot answer: see `notes/upstream/addr2line.md`.
+pub fn elf_x86_64_two_sequences() -> Vec<u8> {
+    use gimli::write::{Address, AttributeValue, DwarfUnit, LineProgram, LineString, Sections};
+
+    const BEFORE: u64 = 6;
+    const MIDDLE: u64 = 0x10;
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let text = obj.section_id(write::StandardSection::Text);
+
+    let mut symbols = Vec::new();
+    for (name, length) in [("before", BEFORE), ("middle", MIDDLE)] {
+        let value = obj.append_section_data(text, &vec![0x90; length as usize], 1);
+        symbols.push(obj.add_symbol(write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(text),
+            flags: SymbolFlags::None,
+        }));
+    }
+
+    // Every address the DWARF states is written against `before`, the section's first
+    // symbol, the way a compiler relocates one.
+    let at = |addend: i64| Address::Symbol { symbol: 0, addend };
+
+    let encoding = gimli::Encoding {
+        format: gimli::Format::Dwarf32,
+        version: 4,
+        address_size: 8,
+    };
+    let mut dwarf = DwarfUnit::new(encoding);
+    let mut program = LineProgram::new(
+        encoding,
+        gimli::LineEncoding::default(),
+        LineString::String(b"/src".to_vec()),
+        LineString::String(b"main.c".to_vec()),
+        None,
+    );
+    let directory = program.default_directory();
+    let files = [
+        program.add_file(LineString::String(b"main.c".to_vec()), directory, None),
+        program.add_file(LineString::String(b"other.c".to_vec()), directory, None),
+    ];
+
+    for (start, length, file, line) in [(0, BEFORE, 0, 10), (0x10, BEFORE, 1, 42)] {
+        program.begin_sequence(Some(at(start)));
+        let row = program.row();
+        row.address_offset = 0;
+        row.file = files[file];
+        row.line = line;
+        program.generate_row();
+        program.end_sequence(length);
+    }
+    dwarf.unit.line_program = program;
+
+    let root = dwarf.unit.root();
+    let entry = dwarf.unit.get_mut(root);
+    entry.set(
+        gimli::DW_AT_comp_dir,
+        AttributeValue::String(b"/src".to_vec()),
+    );
+    entry.set(
+        gimli::DW_AT_name,
+        AttributeValue::String(b"main.c".to_vec()),
+    );
+    entry.set(gimli::DW_AT_low_pc, AttributeValue::Address(at(0)));
+    entry.set(gimli::DW_AT_high_pc, AttributeValue::Udata(BEFORE + MIDDLE));
+
+    let mut sections = Sections::new(RelocWriter::default());
+    dwarf.write(&mut sections).expect("writing the DWARF");
+
+    sections
+        .for_each(|id, writer| {
+            if writer.slice().is_empty() {
+                return Ok::<_, ()>(());
+            }
+            let section = obj.add_section(
+                Vec::new(),
+                id.name().as_bytes().to_vec(),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(section, writer.slice(), 1);
+
+            for relocation in &writer.relocations {
+                obj.add_relocation(
+                    section,
+                    write::Relocation {
+                        offset: relocation.offset,
+                        size: relocation.size * 8,
+                        kind: RelocationKind::Absolute,
+                        encoding: RelocationEncoding::Generic,
+                        symbol: symbols[relocation.symbol],
+                        addend: relocation.addend,
+                    },
+                )
+                .expect("adding a relocation to a debug section");
+            }
+            Ok(())
+        })
+        .expect("laying out the DWARF sections");
+
+    obj.write().expect("writing the fixture object")
+}
+
 /// `storer` = `mov dword ptr [rip+0x0], 7; ret`, relocated at offset 2 against a **data**
 /// symbol — which parsing drops, so the relocation is on the instruction and yet resolves
 /// to nothing navigable.
