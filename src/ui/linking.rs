@@ -14,7 +14,10 @@
 //!
 //! Nothing is memoized here: the worker's answer is held (`AGENTS.md`), and it is held
 //! against the server run it came back under, so a server that has been restarted is
-//! never answered for by the one before it.
+//! never answered for by the one before it. **A server that has stopped or failed leaves
+//! nothing drawn.** The names it classified are still the right names, but there is
+//! nobody left to answer a press on one, and a link that does nothing is what waiting for
+//! a ready server exists to prevent.
 
 use super::*;
 
@@ -108,6 +111,15 @@ impl Linked {
         true
     }
 
+    /// Forget the answer and the question both: with no server there is nothing either is
+    /// about. Whether anything changed, so the caller writes only then.
+    fn forget(&mut self) -> bool {
+        let held = self.found.is_some() || self.asked.is_some();
+        self.found = None;
+        self.asked = None;
+        held
+    }
+
     /// Drop a refusal, so the next turn of [`use_linking`] asks again. Whether anything
     /// changed, so the caller writes only then.
     ///
@@ -136,6 +148,18 @@ pub(crate) fn use_linking(language: State<Language>, linked: State<Linked>, jobs
         // until then, and gets them without the reader doing anything.
         let held = language.read().clone();
         if !held.ready() {
+            // A server that has stopped or failed has nothing left to answer for, so what
+            // it said goes with it: the rows are handed the links as data and would go on
+            // drawing every name as one a press follows. A server that is *working* keeps
+            // them -- they are still the right names while it reads more of the project --
+            // and so does one that is starting, which is the beat before its first answer.
+            if matches!(held.state, Lsp::Off | Lsp::Failed(_)) {
+                let mut waiting = linked.peek().clone();
+                if waiting.forget() {
+                    let mut linked = linked;
+                    linked.set(waiting);
+                }
+            }
             return;
         }
         let pending = linked.read().pending(held.run).cloned();

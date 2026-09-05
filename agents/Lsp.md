@@ -403,6 +403,13 @@ nothing reads `started()` any more: a pane that lit links as soon as a server *s
 drew them through the minute it spends reading the project, and every one was a click that
 did nothing.
 
+The rule the other way round: a server that has **stopped or failed** leaves nothing
+drawn. The rows are handed the links as data, so without this every name went on lighting
+after the reader stopped the server, after it died, and after they left for another
+project -- each a click that did nothing, which is the very thing the gate above is for.
+One that is *working* keeps its links: they are still the right names while it reads more
+of the project.
+
 A **references** answer goes to the Locations panel instead (`agents/Sidebar.md`), and is
 asked for from the same place a definition is: the row's file and the pressed column, at the
 right-click rather than the press. It comes back grouped and with each line's text, both

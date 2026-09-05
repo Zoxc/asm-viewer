@@ -5555,6 +5555,54 @@ fn a_question_on_its_way_is_not_asked_again() {
     assert!(linked.pending(1).is_some());
 }
 
+/// **What a stopped server said goes with it.** The names it classified are still the
+/// right names, but there is nobody left to answer a press on one: the rows are handed
+/// the links as data, so every one of them went on drawing as a link a click did nothing
+/// to. The same holds for a server that failed and for a project the reader has left.
+#[test]
+fn a_stopped_server_leaves_no_links_behind() {
+    let (file, _directory) = calling_file("stopped");
+    let (mut test, states, language, _location, _driven, asking, _asks) = mount_linking!(
+        classifying: || Ok(calling_links()),
+        |_job: LspJob| None,
+        file.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    // A link, as the menu on it says.
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find references to helper".to_owned()),
+        "{drawn:?}"
+    );
+    // Closed by pressing away from it, as a reader closes one.
+    press_at(&mut test, (600.0, 380.0));
+    settle(&mut test);
+
+    // The reader stops the server.
+    let jobs = asking.read().clone().expect("the worker");
+    stop_server(language, &jobs);
+    settle(&mut test);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let drawn = labels(&test);
+    assert!(
+        !drawn.iter().any(|text| text.starts_with("Find references")),
+        "a name stayed a link with no server to follow it: {drawn:?}"
+    );
+}
+
 /// The file the server was next asked to classify, waited for while the app runs: the
 /// question goes out from an effect, and what wakes that effect is a note the server's own
 /// channel carries.
