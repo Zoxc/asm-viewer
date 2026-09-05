@@ -415,6 +415,16 @@ catches, a stream directory's declared length allocated before a byte is read, a
 `section_data` answers a lying compressed size: `BoundedFile` weighs every declared slice and their
 total against the file's length first.
 
+The guard is not the whole answer to the first of those. Overflow checks are on in a test and a
+debug build and off in a release one, so where a debug build panics inside `addr2line` and answers
+"no line info", a release build wraps: the backwards row's length becomes huge and the rows after
+it come back lying below the query. So `line_info` clips a row to the query and drops one with
+nothing left *before* taking the bias off (`clipped`). Subtracting first made a row below the
+section's placement one that ran to the end of the address space, and `row_at` then answered with
+it across the rest of the function — a confident wrong source line where there should have been
+none. It is the one piece of the backend with a unit test of its own, no fixture being able to
+produce that row in a build with the checks on.
+
 **Disassembly** (`SymbolData::assembly`) goes through a seam: `disasm.rs` defines everything a
 caller sees and names no backend, and `disasm/x86.rs` is the only module in the crate that mentions
 `iced-x86`. **Which decoder is used is a property of the file, not of this crate**:

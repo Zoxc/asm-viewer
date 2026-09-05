@@ -133,15 +133,14 @@ impl Dwarf {
             let Some(end) = address.checked_add(length) else {
                 continue;
             };
-            // addr2line hands back the row *containing* the start of the query, which may
-            // begin before it, and clips nothing at the top either.
-            let start = address.max(query.start).wrapping_sub(bias);
-            let end = end.min(query.end).wrapping_sub(bias);
+            let Some(range) = clipped(address..end, &query, bias) else {
+                continue;
+            };
 
             // DWARF 5 can record a file's MD5 too, but `addr2line` 0.21 renders the name
             // without handing the entry back, so no hash travels with it for now.
             let file = location.file.map(|file| rows.file(file, None));
-            rows.push(start..end, file, location.line, location.column);
+            rows.push(range, file, location.line, location.column);
         }
 
         drop(context);
@@ -205,6 +204,25 @@ impl Dwarf {
             visit(address..end, file, line);
         }
     }
+}
+
+/// One row `addr2line` handed back, clipped to the query and moved back out of the biased
+/// space, or [`None`] when nothing of it is left inside the query.
+///
+/// **Both ends are clipped before the bias comes off.** `addr2line` 0.21 hands back the row
+/// containing the query's start, which may begin before it, clips nothing at the top, and
+/// checks nowhere that a row ends past the start at all: a line program that moves its
+/// address backwards — a second `DW_LNE_set_address` in one sequence, relocated differently
+/// or not relocated — has rows lying below where the section was placed. Subtracting the bias
+/// first turned such a row into one running to the end of the address space, which
+/// [`LineInfo::row_at`] then answered with for every address the real rows left uncovered.
+fn clipped(row: Range<u64>, query: &Range<u64>, bias: u64) -> Option<Range<u64>> {
+    let start = row.start.max(query.start);
+    let end = row.end.min(query.end);
+    if start >= end {
+        return None;
+    }
+    Some(start.checked_sub(bias)?..end.checked_sub(bias)?)
 }
 
 /// Every `DW_TAG_subprogram` in one unit that states where it begins and ends, as
@@ -506,3 +524,6 @@ fn write_uint(bytes: &mut [u8], endian: RunTimeEndian, value: u64) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests;
