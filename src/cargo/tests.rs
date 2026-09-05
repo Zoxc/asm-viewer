@@ -379,6 +379,84 @@ fn adding_debug_lines_to_a_profile_that_is_there_keeps_its_other_keys() {
     fs::remove_dir_all(&directory).ok();
 }
 
+/// cargo takes `[profile.*]` from the **workspace root** and ignores a member's own table,
+/// with a warning, so a project opened at a member is asked about the root's manifest and
+/// the offer to add lines edits that file. Reading the member's own would go on offering
+/// lines the root already asks for, and writing it would leave the view saying the lines are
+/// there while the build carries none.
+#[test]
+fn a_members_profiles_are_the_workspace_roots() {
+    let root = directory(line!());
+    let root_manifest = root.join("Cargo.toml");
+    fs::write(
+        &root_manifest,
+        "[workspace]\nmembers = [\"crates/*\"]\n\n[profile.release]\ndebug = 1\n",
+    )
+    .expect("the root manifest");
+
+    let member = root.join("crates").join("one");
+    fs::create_dir_all(&member).expect("the directory");
+    let own = member.join("Cargo.toml");
+    fs::write(&own, "[package]\nname = \"one\"\nversion = \"0.1.0\"\n").expect("a manifest");
+
+    assert_eq!(profile_manifest(&member), root_manifest);
+    // The root asks for debug information; the member's own file says nothing at all.
+    assert!(debug_lines(&member, Profile::Release));
+
+    // And the edit goes where the build reads, leaving the member's manifest as it was.
+    let before = fs::read_to_string(&own).expect("the file");
+    add_debug_lines(&member, Profile::Debug).expect("the write");
+
+    assert_eq!(fs::read_to_string(&own).expect("the file"), before);
+    let after = fs::read_to_string(&root_manifest).expect("the file");
+    assert!(after.contains("[profile.dev]"), "{after}");
+
+    fs::remove_dir_all(&root).ok();
+}
+
+/// Where the walk up stops. A manifest with a `[workspace]` table of its own **is** a root,
+/// which is what keeps a scratchpad reading its own profiles wherever the state directory
+/// turns out to be -- its generated manifest carries an empty one for exactly that reason.
+/// And a package that names its root outright is taken at its word, ancestor or not.
+#[test]
+fn a_package_that_is_its_own_workspace_stops_the_walk() {
+    let root = directory(line!());
+    fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("the root manifest");
+
+    let other = root.join("other");
+    fs::create_dir_all(&other).expect("the directory");
+    fs::write(
+        other.join("Cargo.toml"),
+        "[workspace]\n\n[profile.release]\ndebug = 1\n",
+    )
+    .expect("a manifest");
+
+    // Its own workspace, so the root above it is not asked and its silence is the answer.
+    let inner = root.join("inner");
+    fs::create_dir_all(&inner).expect("the directory");
+    fs::write(
+        inner.join("Cargo.toml"),
+        "[package]\nname = \"inner\"\n\n[workspace]\n",
+    )
+    .expect("a manifest");
+
+    assert_eq!(profile_manifest(&inner), inner.join("Cargo.toml"));
+    assert!(!debug_lines(&inner, Profile::Release));
+
+    // Named outright: the root the walk would have found says nothing, and this one does.
+    let named = root.join("named");
+    fs::create_dir_all(&named).expect("the directory");
+    fs::write(
+        named.join("Cargo.toml"),
+        "[package]\nname = \"named\"\nworkspace = \"../other\"\n",
+    )
+    .expect("a manifest");
+
+    assert!(debug_lines(&named, Profile::Release));
+
+    fs::remove_dir_all(&root).ok();
+}
+
 /// A directory with no manifest in it is a placeholder and not an error: nothing to build,
 /// nothing to say about its profiles, and a write that fails rather than making one.
 #[test]

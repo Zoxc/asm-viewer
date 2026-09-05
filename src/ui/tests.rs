@@ -17822,6 +17822,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
             BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                profiles: None,
                 debug_lines: true,
             },
         }
@@ -17899,6 +17900,7 @@ fn an_artifact_load_survives_the_view_being_left() {
             BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                profiles: None,
                 debug_lines: true,
             },
         }
@@ -17967,6 +17969,7 @@ fn a_finished_build_forgets_the_workspace_sources() {
         BuildJob::Build { .. } => BuildAnswer::Done(built(&[])),
         _ => BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: true,
         },
     });
@@ -18007,6 +18010,7 @@ fn a_build_replaces_what_the_build_before_it_produced() {
             BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                profiles: None,
                 debug_lines: true,
             },
         }
@@ -18069,6 +18073,7 @@ fn a_directory_with_no_manifest_builds_nothing() {
     let (mut test, states, _language, _asking, _asks) =
         mount_project!(|_: BuildJob| BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: false,
         });
 
@@ -18097,9 +18102,16 @@ fn a_directory_with_no_manifest_builds_nothing() {
 /// The offer, which is the whole reason the profile and the manifest are read together: a
 /// profile carrying no lines has no source side, and taking the offer is what makes the
 /// line go.
+///
+/// The file it edits is **named** when it is not the project's own manifest. cargo takes
+/// `[profile.*]` from the workspace root alone, so a project opened at a member is offered
+/// an edit to a file above it, and a write the reader was not told about is the one thing
+/// this offer must not be.
 #[test]
 fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
     let added = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // A member of the workspace at `/work`, whose manifest is where the profiles are.
+    let profiles = || Some(PathBuf::from("/work/Cargo.toml"));
     let answer = {
         let added = added.clone();
         move |job: BuildJob| match job {
@@ -18107,11 +18119,13 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
                 added.store(true, std::sync::atomic::Ordering::SeqCst);
                 BuildAnswer::Read {
                     manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                    profiles: profiles(),
                     debug_lines: true,
                 }
             }
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                profiles: profiles(),
                 debug_lines: added.load(std::sync::atomic::Ordering::SeqCst),
             },
         }
@@ -18128,6 +18142,11 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
             .iter()
             .any(|text| text == "Off, so there is no source side"),
         "{drawn:?}"
+    );
+    // The file about to be written, which is not the manifest named above it.
+    assert!(
+        drawn.iter().any(|text| text == "/work/Cargo.toml"),
+        "the pane does not say which manifest the offer edits: {drawn:?}"
     );
 
     let button = centre_of(&test, "Turn on");
@@ -18176,6 +18195,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     let (mut test, states, _language, _asking, _asks) =
         mount_project!(move |_: BuildJob| BuildAnswer::Read {
             manifest: Some(manifest.clone()),
+            profiles: None,
             debug_lines: true,
         });
 
@@ -18725,6 +18745,7 @@ fn the_project_view_says_how_the_language_server_went() {
     let (mut test, states, language, _asking, _asks) =
         mount_project!(|_: BuildJob| BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: false,
         });
 
@@ -18798,6 +18819,7 @@ fn the_project_view_lists_the_settings_the_project_gave_the_server() {
     let (mut test, states, language, _asking, _asks) =
         mount_project!(|_: BuildJob| BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: false,
         });
 
@@ -18835,6 +18857,7 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
     let (mut test, states, language, _asking, _asks) =
         mount_project!(|_: BuildJob| BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: false,
         });
 
@@ -18863,6 +18886,7 @@ fn the_project_names_the_language_server_it_is_read_with() {
     let (mut test, states, _language, _asking, _asks) =
         mount_project!(|_: BuildJob| BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: false,
         });
     let mut proj = states.proj;
@@ -18888,6 +18912,7 @@ fn the_project_views_button_starts_and_stops_the_language_server() {
     let (mut test, states, language, _asking, _asks) =
         mount_project!(|_: BuildJob| BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: false,
         });
     let mut proj = states.proj;
@@ -19373,6 +19398,7 @@ fn the_project_view_shows_the_agreement_and_takes_it_back() {
     let (mut test, states, language, _asking, _asks) =
         mount_project!(|_: BuildJob| BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: false,
         });
     let mut proj = states.proj;
@@ -19462,6 +19488,7 @@ fn the_project_views_button_asks_before_it_starts_too() {
     let (mut test, states, language, _asking, _asks) =
         mount_project!(|_: BuildJob| BuildAnswer::Read {
             manifest: None,
+            profiles: None,
             debug_lines: false,
         });
     let mut proj = states.proj;

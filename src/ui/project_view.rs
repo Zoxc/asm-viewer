@@ -506,6 +506,21 @@ impl Component for ProjectTab {
                                         .color(palette().address_fg)
                                         .max_lines(1),
                                 ))
+                                // Where its `[profile.*]` is read from, when that is not
+                                // the file above: cargo takes profiles from the workspace
+                                // root alone, so a member project is offered an edit to a
+                                // manifest it does not hold, and it is named rather than
+                                // written to behind the reader's back.
+                                .maybe_child(held.profiles.as_ref().map(|profiles| {
+                                    field_row(
+                                        "Profiles",
+                                        label()
+                                            .text(profiles.to_string_lossy().into_owned())
+                                            .color(palette().address_fg)
+                                            .max_lines(1),
+                                    )
+                                    .into_element()
+                                }))
                                 .child(field_row(
                                     "Profile",
                                     SegmentedButton::new().children(

@@ -284,13 +284,58 @@ pub fn manifest(directory: &Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// The manifest cargo takes `[profile.*]` from for a build in `directory`: the workspace
+/// root's, which is the directory's own only when it is not a member of one.
+///
+/// **cargo reads profiles from the root manifest and nowhere else.** A `[profile]` table in
+/// a member is ignored, with a warning, so the directory's own file answers about something
+/// the build pays no attention to: a root that already asks for debug information goes
+/// unseen and the offer to add it is made for ever, and taking that offer writes a table
+/// the build ignores while the view says the lines are there.
+///
+/// The rules are cargo's. A manifest with a `[workspace]` table **is** a root, which is what
+/// stops this at a package that is its own workspace — a scratchpad's, whose manifest
+/// carries an empty one for that reason. A member may name its root outright, with
+/// `[package] workspace`. Failing both it is the nearest ancestor whose manifest has a
+/// `[workspace]` table, and the directory's own when there is no such ancestor.
+///
+/// What is **not** checked is whether that root's `members` really cover this directory:
+/// cargo refuses to build a package its ancestor workspace does not claim, so there is no
+/// build there to ask about.
+pub fn profile_manifest(directory: &Path) -> PathBuf {
+    let own = directory.join(MANIFEST);
+    if let Some(manifest) = read_manifest(&own) {
+        if manifest.contains_key("workspace") {
+            return own;
+        }
+
+        let named = manifest
+            .get("package")
+            .and_then(|package| package.get("workspace"))
+            .and_then(toml::Value::as_str)
+            .map(|root| directory.join(root).join(MANIFEST));
+        if let Some(named) = named.filter(|named| named.is_file()) {
+            return named;
+        }
+    }
+
+    // Bounded by the path itself, which is what makes the walk up finite.
+    directory
+        .ancestors()
+        .skip(1)
+        .map(|ancestor| ancestor.join(MANIFEST))
+        .find(|manifest| read_manifest(manifest).is_some_and(|read| read.contains_key("workspace")))
+        .unwrap_or(own)
+}
+
 /// Whether a binary built with `profile` would carry the line information the source side
 /// is drawn from.
 ///
-/// A manifest that says nothing gets cargo's own default, which is *no* debug information
-/// under `release` — the reason the view offers to add it.
+/// The workspace root's manifest, since that is the only one cargo takes a profile from
+/// ([`profile_manifest`]). One that says nothing gets cargo's own default, which is *no*
+/// debug information under `release` — the reason the view offers to add it.
 pub fn debug_lines(directory: &Path, profile: Profile) -> bool {
-    let Some(value) = read_manifest(directory)
+    let Some(value) = read_manifest(&profile_manifest(directory))
         .as_ref()
         .and_then(|manifest| manifest.get("profile"))
         .and_then(|profiles| profiles.get(profile.name()))
@@ -310,12 +355,15 @@ pub fn debug_lines(directory: &Path, profile: Profile) -> bool {
     }
 }
 
-/// Ask `profile` for line tables, in the manifest in `directory`.
+/// Ask `profile` for line tables, in the manifest cargo would read them from.
+///
+/// The workspace root's and not the directory's own, or the edit would go into a file the
+/// build ignores ([`profile_manifest`]).
 ///
 /// `line-tables-only` and not `true`: the source side wants the line table and nothing
 /// else, and it is the cheapest debug information to build.
 pub fn add_debug_lines(directory: &Path, profile: Profile) -> Result<(), String> {
-    let path = directory.join(MANIFEST);
+    let path = profile_manifest(directory);
     let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let mut document = text
         .parse::<toml_edit::DocumentMut>()
@@ -346,13 +394,13 @@ pub fn add_debug_lines(directory: &Path, profile: Profile) -> Result<(), String>
 
 const MANIFEST: &str = "Cargo.toml";
 
-/// The manifest as a value, or `None` when there is none or it does not parse. Neither is
-/// an error here: what cargo makes of its own file is cargo's answer, said when a build is
-/// asked for.
-fn read_manifest(directory: &Path) -> Option<toml::Table> {
+/// The manifest at `path` as a value, or `None` when there is none or it does not parse.
+/// Neither is an error here: what cargo makes of its own file is cargo's answer, said when
+/// a build is asked for.
+fn read_manifest(path: &Path) -> Option<toml::Table> {
     // A `Table` and not a `Value`: `Value`'s own `FromStr` parses one TOML *value*, where
     // a manifest is a whole document.
-    let text = fs::read_to_string(directory.join(MANIFEST)).ok()?;
+    let text = fs::read_to_string(path).ok()?;
     toml::from_str::<toml::Table>(&text).ok()
 }
 

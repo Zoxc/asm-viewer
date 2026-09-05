@@ -22,8 +22,13 @@ pub(crate) struct Builds {
     /// The manifest the project's directory holds, which is what cargo would be run over.
     /// `None` is a placeholder and not an error.
     pub(crate) manifest: Option<PathBuf>,
+    /// The manifest the profile is read from and written to, when that is **not** the one
+    /// above: cargo takes `[profile.*]` from the workspace root alone, so a member's own
+    /// file is not where the offer below is taken. `None` when the two are the same, which
+    /// is what leaves the row out for a project that is its own workspace.
+    pub(crate) profiles: Option<PathBuf>,
     /// Whether the chosen profile carries the line information the source side is drawn
-    /// from, as the manifest has it now.
+    /// from, as that manifest has it now.
     pub(crate) debug_lines: bool,
     /// What the build before this one produced. **The set a build replaces**, which is why
     /// it is saved with the session: a binary the reader opened some other way is left
@@ -127,6 +132,7 @@ pub(crate) enum BuildJob {
 pub(crate) enum BuildAnswer {
     Read {
         manifest: Option<PathBuf>,
+        profiles: Option<PathBuf>,
         debug_lines: bool,
     },
     Done(cargo::Run),
@@ -155,9 +161,15 @@ pub(crate) fn build_work(job: BuildJob) -> BuildAnswer {
 }
 
 fn read(directory: &Path, profile: Profile) -> BuildAnswer {
+    let manifest = cargo::manifest(directory);
+    // Named only when it is not the file cargo is run over: a member's profiles are the
+    // workspace root's, and the reader is being offered an edit to that file and not to
+    // the one the row above names.
+    let profiles = cargo::profile_manifest(directory);
     BuildAnswer::Read {
-        manifest: cargo::manifest(directory),
         debug_lines: cargo::debug_lines(directory, profile),
+        profiles: (manifest.as_ref() != Some(&profiles)).then_some(profiles),
+        manifest,
     }
 }
 
@@ -209,10 +221,12 @@ pub(crate) fn use_building_with(
                 match answer {
                     BuildAnswer::Read {
                         manifest,
+                        profiles,
                         debug_lines,
                     } => {
                         let mut next = build.peek().clone();
                         next.manifest = manifest;
+                        next.profiles = profiles;
                         next.debug_lines = debug_lines;
                         build.set(next);
                     }

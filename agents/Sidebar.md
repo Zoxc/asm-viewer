@@ -333,6 +333,20 @@ writing `debug = "line-tables-only"` into that profile: exactly what the source 
 cheapest to build. The write is `toml_edit` and not `toml`, since it is the reader's own manifest
 and a round trip through a value would take every comment and blank line with it.
 
+**The manifest that is read and written is the workspace root's**, which is the project's own only
+when the project is not a member of a workspace. cargo takes `[profile.*]` from the root alone and
+ignores a member's own table, so asking the directory's manifest answers about a file the build pays
+no attention to: a root that already asks for debug information goes unseen and the offer is made
+for ever, and taking that offer writes a table cargo ignores while the view says the lines are
+there. `profile_manifest` is that rule -- a manifest with a `[workspace]` table is a root, a package
+may name its root outright, and failing both it is the nearest ancestor with one -- and it is a walk
+up the directories rather than `cargo locate-project`, so it costs no process and is a unit test
+over some files rather than over a toolchain. Whether the root's `members` really cover the
+directory is not checked: cargo refuses to build a package its ancestor workspace does not claim, so
+there is no build there to ask about. When that file is not the project's own, the view **names**
+it, beside the manifest cargo is run over: the offer edits a file outside the project, and a write
+the reader was not told about is the one thing it must not be.
+
 **A project switch is a close and a restore, through the same functions.** `switch_project` is
 `project::switch` (flush, re-point, remember), then `clear_project`, then `restore_project`.
 `clear_project` is a `close_binary` per path and then a `close_tab` for whatever is left, never a
