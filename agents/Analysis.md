@@ -101,14 +101,20 @@ so an archive costs its bytes once. It also carries the file's `FileDigest`: xxH
 file*, taken once in `ObjectData::whole_file` because the bytes are in hand there, and an archive
 member is cut from that same value, so 196 members cost one pass (32 ms against the 1.6 s the open
 takes on the 331 MB binary). Nothing in the crate reads it: it exists so a restore can tell the file
-it saved from one rebuilt underneath it. `Section` owns decompressed bytes, relocations keyed by
-address, a sorted list of its text symbols' addresses, and the ranges the file's unwind table states
-for its functions (`unwind`, sorted by start, each start once, ends clamped to the section's bytes;
-empty for a file with no table read). `SymbolData::estimate_size` derives a symbol's extent from the
-*next* address in the symbol list, **clipped to the section's own bytes**, since that list is
-numbers out of the file and one wild `st_value` in it would otherwise cost the symbol *above* it its
-listing rather than only itself. Declared sizes are frequently 0 in ELF/COFF, which is why the
-derivation exists at all. `SymbolData::extent` is the answer that is actually used, and has three
+it saved from one rebuilt underneath it. `Section` owns decompressed bytes, relocations keyed by the
+address the bytes they patch sit at, a sorted list of its text symbols' addresses, and the ranges
+the file's unwind table states for its functions (`unwind`, sorted by start, each start once, ends
+clamped to the section's bytes; empty for a file with no table read). That key is the parse's own
+doing: `object` hands back what the format states, an address in ELF and COFF but an offset from the
+start of the section in Mach-O, which lays its sections out one after another. So `parse_object`
+adds a Mach-O section's address as it builds the map, and `Code::relocation` can ask by address
+whatever the file is. The debug sections are relocated straight from `object`'s iterator
+(`line/dwarf.rs`'s `relocate`) and want the offset as it comes, since it indexes the bytes being
+patched. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in the symbol
+list, **clipped to the section's own bytes**, since that list is numbers out of the file and one
+wild `st_value` in it would otherwise cost the symbol *above* it its listing rather than only
+itself. Declared sizes are frequently 0 in ELF/COFF, which is why the derivation exists at all.
+`SymbolData::extent` is the answer that is actually used, and has three
 answers in order. First, **the end the unwind table states**, where an entry covers the address,
 whatever named the symbol. That is the image's own statement, to its loader, of the very bytes the
 unwinder covers, so neither the estimate nor its cap bounds it and the debug info is not asked. Only

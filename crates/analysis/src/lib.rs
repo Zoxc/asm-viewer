@@ -243,6 +243,9 @@ pub struct Section {
     pub data: Vec<u8>,
     pub address: u64,
 
+    /// The section's relocations by the address the bytes each patches sit at, which is
+    /// what a disassembly has to ask by. Not always what the file states: see
+    /// [`parse_object`].
     pub relocations: HashMap<u64, Relocation>,
 
     /// The addresses of this section's text symbols, sorted and **each once**: two symbols
@@ -755,12 +758,30 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
             // Where each code section goes, decided once here for the line info and the
             // code listing both.
             let biases = section_biases(&file);
+            let format = file.format();
             let mut sections: HashMap<SectionIndex, Section> = file
                 .sections()
                 .filter_map(|section| {
                     let name = String::from_utf8_lossy(section.name_bytes().ok()?).into_owned();
                     let data = section_data(&section)?;
-                    let relocations = section.relocations().collect();
+
+                    // Mach-O states a relocation's place as an offset from the start of
+                    // its section, and lays its sections out one after another, so that
+                    // offset is not the address for any section but the first. Every
+                    // lookup here is by address, so the conversion is done once, where
+                    // the map is built. ELF and COFF need none: a relocatable object's
+                    // sections are all at 0, and a linked ELF's `r_offset` is already an
+                    // address.
+                    let base = match format {
+                        BinaryFormat::MachO => section.address(),
+                        _ => 0,
+                    };
+                    let relocations = section
+                        .relocations()
+                        .filter_map(|(offset, relocation)| {
+                            Some((base.checked_add(offset)?, relocation))
+                        })
+                        .collect();
                     Some((
                         section.index(),
                         Section {
