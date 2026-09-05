@@ -16,10 +16,12 @@ pub mod disasm;
 pub mod guard;
 mod line;
 mod listing;
+mod made_up;
 mod unwind;
 
 use disasm::Code;
 use line::{DebugInfo, Procedure, Public};
+use made_up::MadeUp;
 use unwind::UnwindEntry;
 
 pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
@@ -595,9 +597,8 @@ fn zstd_data(data: &[u8], size: u64) -> Option<Vec<u8>> {
 struct Pending {
     index: SymbolIndex,
     name: String,
-    /// Whether the name is the file's own. Two are not: the entry point's
-    /// [`ENTRY_POINT_NAME`], and the [`function_name`] a symbol whose own name will not
-    /// read is listed under. No demangler has anything to say about either.
+    /// Whether the name is the file's own. One that is not is a [`MadeUp`] name, and no
+    /// demangler has anything to say about one of those.
     mangled: bool,
     section: Option<Arc<Section>>,
     address: u64,
@@ -610,8 +611,7 @@ struct DeclaredCode {
     name: String,
     /// Whether `name` is the file's own and goes through the demangling batch. The two
     /// declarations that carry no name — the entry point and an unwind entry, function or
-    /// fragment — are named in the `<…>` convention of [`ENTRY_POINT_NAME`], which no
-    /// demangler has anything to say about.
+    /// fragment — are [`MadeUp`] instead, which no demangler has anything to say about.
     mangled: bool,
     address: u64,
     /// What the declaration itself said: a dynamic symbol's size, a PDB procedure's length,
@@ -622,32 +622,6 @@ struct DeclaredCode {
     /// The code section containing `address` — an export table and an entry point name an
     /// address and nothing else.
     section: SectionIndex,
-}
-
-/// The name given to the entry point, one of the two declarations that carry none; the
-/// other, an unwind entry, is named by [`unwind_name`] in the same convention. The angle
-/// brackets are the point: no assembler, linker or mangling scheme produces them, so neither
-/// can collide with a name that was in the file.
-const ENTRY_POINT_NAME: &str = "<entry point>";
-
-/// The name given to a function the file offers no readable name for: `<function
-/// 0x140001000>`, its own address, since 20 000 of them in one Symbols list have to be told
-/// apart and found. Code only an unwind entry declares is called this, and so is a text
-/// symbol whose name will not read out of the string table.
-fn function_name(address: u64) -> String {
-    format!("<function {address:#x}>")
-}
-
-/// The name given to code only an unwind entry declares: [`function_name`], or
-/// `<fragment 0x140001000>` for a chained entry — a second range of some function's
-/// rather than a function.
-fn unwind_name(entry: &UnwindEntry) -> String {
-    let address = entry.range.start;
-    if entry.chained {
-        format!("<fragment {address:#x}>")
-    } else {
-        function_name(address)
-    }
 }
 
 /// The code a file declares outside its symbol table: its **entry point**, its **exports**,
@@ -694,7 +668,10 @@ fn declared_code(
         return declared;
     }
 
-    let mut take = |name: String, mangled: bool, address: u64, size: u64| {
+    // Takes the name and whether it is the file's own, which is what decides whether the
+    // name is offered to the demanglers. `MadeUp::unmangled` is that pair for the names
+    // that are ours.
+    let mut take = |(name, mangled): (String, bool), address: u64, size: u64| {
         let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
             return;
         };
@@ -721,8 +698,7 @@ fn declared_code(
             continue;
         }
         take(
-            String::from_utf8_lossy(name).into_owned(),
-            true,
+            (String::from_utf8_lossy(name).into_owned(), true),
             symbol.address(),
             symbol.size(),
         );
@@ -733,8 +709,7 @@ fn declared_code(
             continue;
         }
         take(
-            String::from_utf8_lossy(export.name()).into_owned(),
-            true,
+            (String::from_utf8_lossy(export.name()).into_owned(), true),
             export.address(),
             0,
         );
@@ -743,7 +718,7 @@ fn declared_code(
     // 0 is "this image has no entry point", which is how a DLL built without one states it.
     let entry = file.entry();
     if entry != 0 {
-        take(ENTRY_POINT_NAME.to_owned(), false, entry, 0);
+        take(MadeUp::EntryPoint.unmangled(), entry, 0);
     }
 
     // After the image's own names, so they win. The address is already in the image's space
@@ -751,22 +726,21 @@ fn declared_code(
     // image does not have code in. A procedure's name is the compiler's display name, which
     // no demangler claims and so comes through the batch as it is.
     for procedure in procedures {
-        take(procedure.name, true, procedure.address, procedure.len);
+        take((procedure.name, true), procedure.address, procedure.len);
     }
 
     // And the publics behind them: a name for whatever address is still unnamed, and no
     // length, as an export has none. A public in a data section — the flags are the
     // linker's to set, and the section lookup is the rule — is dropped the same way.
     for public in publics {
-        take(public.name, true, public.address, 0);
+        take((public.name, true), public.address, 0);
     }
 
     // Last of all, the unwind entries: an address and a length for whatever is still
     // unnamed, and no name at all.
     for entry in unwind {
         take(
-            unwind_name(entry),
-            false,
+            MadeUp::unwind(entry).unmangled(),
             entry.range.start,
             entry.range.end - entry.range.start,
         );
@@ -948,7 +922,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                             let address = symbol.address();
                             known
                                 .insert(address)
-                                .then(|| (function_name(address), false))?
+                                .then(|| MadeUp::Function(address).unmangled())?
                         }
                     };
 
