@@ -618,9 +618,10 @@ const PAST_LAST_TAB: f32 = 24.0;
 ///
 /// Where the chips are is **measured** and not worked out, a chip being as wide as its name.
 /// The measurements are peeked and never read, so a layout wakes nothing on its own; what
-/// wakes the reveal is `shape`, which counts up when a chip changes *width* -- a tab opened,
-/// closed or moved -- and not when one merely slides along, which is the strip being
-/// scrolled.
+/// wakes the reveal is `shape`, which counts up when a chip changes width or moves **along
+/// the row** -- a tab opened, closed or moved -- and not when the row slides under the
+/// window, which is the strip being scrolled. Each chip is therefore measured with the
+/// offset taken back off.
 #[derive(PartialEq)]
 pub(crate) struct TabBar;
 
@@ -678,26 +679,32 @@ impl Component for TabBar {
                     index,
                     rect()
                         .on_sized(move |e: Event<SizedEventData>| {
-                            let at = (e.area.min_x(), e.area.max_x());
+                            // Where the chip sits **along the row**: where it was laid out,
+                            // less how far the row is slid under the window.
+                            let slid = *bar.offset.peek();
+                            let at = (e.area.min_x() - slid, e.area.max_x() - slid);
                             let held = places
                                 .peek()
                                 .iter()
                                 .find(|(open, ..)| *open == tab)
                                 .map(|(_, min, max)| (*min, *max));
-                            if held == Some(at) {
+                            // A chip that moved along the row or changed width is the bar
+                            // taking a new shape -- a tab opened, closed or moved. The
+                            // strip being scrolled moves every chip in the window and none
+                            // along the row, and owes the reveal nothing. Under a pixel is
+                            // the subtraction above and not a move, each end being worked
+                            // out from whatever offset the row was drawn at.
+                            let shifted = held.is_none_or(|(min, max)| {
+                                (min - at.0).abs() >= 1.0 || (max - at.1).abs() >= 1.0
+                            });
+                            if !shifted {
                                 return;
                             }
-                            // A chip that changed *width* is the bar taking a new shape --
-                            // a tab opened, closed or moved. One that only slid along is
-                            // the strip being scrolled, which owes the reveal nothing.
-                            let widened = held.is_none_or(|(min, max)| max - min != at.1 - at.0);
                             let mut open = places.write();
                             open.retain(|(open, ..)| *open != tab);
                             open.push((tab, at.0, at.1));
                             drop(open);
-                            if widened {
-                                shape.set(laid_out + 1);
-                            }
+                            shape.set(laid_out + 1);
                         })
                         .child(
                             DragZone::new(tab, header.into_element())
@@ -771,6 +778,12 @@ impl Component for TabBar {
                                 let width = e.area.width();
                                 if *content.peek() != width {
                                     content.set(width);
+                                    // A bar that has lost a chip may now fit the window:
+                                    // a scroll of nothing puts the offset back inside the
+                                    // new floor, which `scroll_by` clamps against only as
+                                    // it moves. Otherwise a closed tab leaves empty ground
+                                    // past the last chip until something scrolls.
+                                    scroll_by(bar, 0.0);
                                 }
                             })
                             // The scroll itself: the row slides under the box above.
@@ -800,7 +813,8 @@ impl Component for TabBar {
 /// because nothing that scrolls can do without all of it.
 #[derive(Clone, Copy)]
 struct Bar {
-    /// Every chip's two sides, in the window's own x.
+    /// Every chip's two sides, along the row: where each was laid out, less the offset,
+    /// so that scrolling the strip moves none of them.
     places: State<Vec<(Tab, f32, f32)>>,
     /// The two sides of the strip: what a chip has to be inside to be in view.
     viewport: State<Option<(f32, f32)>>,
@@ -810,9 +824,10 @@ struct Bar {
     offset: State<f32>,
 }
 
-/// Bring the tab on screen into view when it changes, and when the bar takes a new shape --
-/// a tab opened, closed or moved -- which is what makes an opening reveal the tab it
-/// opened.
+/// Bring the tab on screen into view when it changes, and when the bar takes a new shape
+/// -- a tab opened, closed or moved -- which is what makes an opening reveal the tab it
+/// opened, and what brings the tab being read back after a chip to its left has gone or a
+/// chip has been dropped past it, either of which slides it out of sight.
 ///
 /// **Not on every layout**, which would take the strip back off the reader the moment they
 /// scrolled it to look at something else.
@@ -836,6 +851,9 @@ fn use_reveal(strip: State<Strip>, bar: Bar, laid_out: u64) {
             let Some((left, right)) = *bar.viewport.peek() else {
                 return;
             };
+            // The places are along the row; where the chip is in the window is that, slid.
+            let slid = *bar.offset.peek();
+            let (min, max) = (min + slid, max + slid);
             if min < left {
                 scroll_by(bar, left - min);
             } else if max > right {

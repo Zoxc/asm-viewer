@@ -331,9 +331,14 @@ carrying a tab.
 Three things about that are worth keeping. Where the chips are is **measured** (`on_sized` per chip,
 per strip, per row) and not worked out, a chip being as wide as its name. Those measurements are
 **peeked and never read**, so a layout wakes nothing by itself; what wakes the reveal is a count that
-goes up when a chip changes *width* -- a tab opened, closed or moved -- and not when one merely
-slides along, which is the strip being scrolled, so a reader who scrolled away to look at another tab
-is not dragged back. And freya's `ScrollController` was tried first and given up: handed to a view
+goes up when a chip changes width or place **along the row** -- a tab opened, closed or moved -- and
+not when the row slides under the window, which is the strip being scrolled, so a reader who
+scrolled away to look at another tab is not dragged back. Each chip is therefore measured with the
+offset taken back off: a close or a move changes no surviving chip's width, and the chip that goes
+is never measured again, so a count that went up on a width alone slept through both and left the
+reader reading a tab whose chip had slid off the bar. The row's own measurement puts a shorter bar back inside
+its end, `scroll_by` clamping only as it moves, so a closed tab no longer leaves empty ground past
+the last chip. And freya's `ScrollController` was tried first and given up: handed to a view
 from outside it only arrives when something else happens to re-render that view, and reading its
 position from an effect is a loop, since a write notifies every reader and the callback it reads
 through counts as one (`notes/upstream/freya.md`).

@@ -1230,6 +1230,76 @@ fn the_bar_scrolls_and_the_tab_on_screen_is_brought_into_view() {
     );
 }
 
+/// A close or a move that slides the chip on screen out brings it back, and a bar that
+/// has shrunk to fit the window is put back inside its own end.
+///
+/// Neither a close nor a move changes any surviving chip's width, and the chip that goes
+/// is never measured again, so a reveal woken by a *width* alone slept through both: the
+/// reader was left reading a tab whose chip had slid off the bar. What wakes it is a chip
+/// moving **along the row**, which the strip being scrolled never does.
+#[test]
+fn a_close_or_a_move_brings_the_tab_on_screen_back_into_view() {
+    let (mut test, states) =
+        TestingRunner::new(bar_harness, (240., 100.).into(), project_states!(), 1.);
+    let documents: Vec<Document> = (0..8)
+        .map(|nth| Document::Source(Arc::from(format!("/src/file{nth}.rs").as_str())))
+        .collect();
+    for document in &documents {
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    }
+    settle(&mut test);
+
+    let chip = |test: &TestingRunner, nth: usize| {
+        label_area(test, &format!("file{nth}.rs")).expect("the chip of an open tab")
+    };
+    let in_view = |area: &Area| area.origin.x >= 0.0 && area.max_x() <= 240.0;
+
+    // A tab off to the left, which going to it brings to the left edge. Closing a chip
+    // before it slides every chip after that one further left, past the edge.
+    raise_document(&states, &documents[2]);
+    settle(&mut test);
+    assert!(in_view(&chip(&test, 2)), "{:?}", chip(&test, 2));
+    close_document(&states, &documents[0]);
+    settle(&mut test);
+    let closed = chip(&test, 2);
+    assert!(
+        in_view(&closed),
+        "the close left the tab being read off the bar: {closed:?}"
+    );
+
+    // A tab off to the right, brought to the right edge. A chip dropped from beyond it in
+    // front of it slides it right, past that edge.
+    raise_document(&states, &documents[6]);
+    settle(&mut test);
+    assert!(in_view(&chip(&test, 6)), "{:?}", chip(&test, 6));
+    let dragged = tab_showing(&states, &documents[7]).expect("the last tab is open");
+    let mut strip = states.open.strip;
+    strip.write().move_to(Tab::Document(dragged), 0);
+    settle(&mut test);
+    let moved = chip(&test, 6);
+    assert!(
+        in_view(&moved),
+        "the move left the tab being read off the bar: {moved:?}"
+    );
+
+    // And a bar shrunk to fit: the tab on screen at the left edge and every tab after it
+    // closed leaves the chips reaching nowhere near the right edge, the offset being past
+    // the floor a shorter bar has. Nothing here is out of view, so the reveal is not what
+    // puts it back.
+    raise_document(&states, &documents[2]);
+    settle(&mut test);
+    let before = chip(&test, 2).origin.x;
+    for document in &documents[3..7] {
+        close_document(&states, document);
+    }
+    settle(&mut test);
+    let after = chip(&test, 2).origin.x;
+    assert!(
+        after > before,
+        "the shrunken bar was left scrolled past its own end: {before} to {after}"
+    );
+}
+
 /// A tab is dragged along the bar to move it, and the chip a drop would land on says so
 /// while the pointer is over it. The recipe is `agents/Headless.md`'s: the passes between
 /// the moves are what let the drop zones be measured after the drag has begun.
