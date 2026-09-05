@@ -703,7 +703,9 @@ pub(crate) fn use_scratchpad_with(
 
                             let mut next = pad.peek().clone();
                             let mut directory = None;
+                            let mut held = false;
                             if let Some(state) = next.get_mut(&name) {
+                                held = true;
                                 state.building = false;
                                 state.built = Some(build);
                                 // A build writes the package on its way.
@@ -725,9 +727,15 @@ pub(crate) fn use_scratchpad_with(
                             }
 
                             // Whichever pad built it, the artifact is an ordinary binary
-                            // and belongs to the app rather than to the pad on screen.
-                            if let Some(executable) = executable {
-                                reopen_binary(states, executable);
+                            // and belongs to the app rather than to the pad on screen --
+                            // but only if that pad is still held. A build the reader
+                            // deleted their way out of answers while the worker is
+                            // removing the directory it wrote into, so its artifact is
+                            // either about to go or already gone.
+                            if held {
+                                if let Some(executable) = executable {
+                                    reopen_binary(states, executable);
+                                }
                             }
                         }
                         PadAnswer::Started {

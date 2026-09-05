@@ -10257,6 +10257,77 @@ fn a_build_runs_once_and_replaces_what_the_last_one_opened() {
     );
 }
 
+/// A build that comes back for a pad the reader has deleted does not open what it made.
+///
+/// The delete is queued behind the build on the one worker, so the build finishes and its
+/// answer lands while the pad's directory, `target/` and all, is being removed. Either the
+/// app wins the race and lists a binary of a pad that no longer exists -- and saves its
+/// path, so the next launch tries to restore a file that is gone -- or the file has gone
+/// already and the reader is shown a load failure for something they asked to delete.
+#[test]
+fn a_build_answering_for_a_deleted_pad_opens_nothing() {
+    let artifact = fixture_artifact();
+    // Held until the pad has been deleted, which is what puts the build's answer after the
+    // delete without the test having to guess at the timing.
+    let (finish, waiting) = async_channel::bounded::<()>(1);
+    let (mut test, states, pad, text, asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => PadAnswer::Deleted(None),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(scratchpad) => {
+                let _ = waiting.recv_blocking();
+                PadAnswer::Built {
+                    pad: scratchpad.id().clone(),
+                    build: Build::Built {
+                        executable: fixture_artifact(),
+                        diagnostics: Vec::new(),
+                    },
+                }
+            }
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    let one = pad.peek().shown().clone();
+    while asks.try_recv().is_ok() {}
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_build(pad, &jobs);
+    // The job is recorded before it is answered, so this is the worker inside the build:
+    // whatever is queued now waits for it.
+    pump(&mut test, || !asks.is_empty());
+    assert_eq!(
+        asks.try_recv(),
+        Ok(Asked::Build(pad.peek().state().scratchpad.source.clone()))
+    );
+
+    request_delete_pad(pad, text, &jobs, one.clone());
+    finish.send_blocking(()).expect("the build is waiting");
+
+    // The pad behind it, read after the delete and so after the build: waiting for it here
+    // is waiting for the build's answer to have been dealt with.
+    pump(&mut test, || {
+        pad.peek().shown().as_str() == "two" && pad.peek().state().opened
+    });
+    settle(&mut test);
+
+    assert!(pad.peek().get(&one).is_none(), "the pad is still held");
+    assert!(
+        states.objects.peek().is_empty(),
+        "the deleted pad's artifact was opened"
+    );
+    assert!(
+        !states.loading.peek().is_loading(&artifact),
+        "the deleted pad's artifact is being read"
+    );
+}
+
 /// A pad's package is written to the same `src/main.rs` on every build, so a build that
 /// forgot nothing would leave every pane on the artifact drawing the pad as it was two
 /// builds ago. The root a build forgets is the pad's own package directory.
