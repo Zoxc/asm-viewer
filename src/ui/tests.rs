@@ -102,7 +102,7 @@ fn scrolling_harness() -> impl IntoElement {
         rows,
         // One listing throughout: nothing here is owed a reveal.
         0,
-        0,
+        None,
     );
 
     rect().expanded().child(
@@ -271,7 +271,7 @@ fn revealing_harness() -> impl IntoElement {
         &showing,
         rows,
         drawn,
-        0,
+        None,
     );
 
     rect().expanded().child(

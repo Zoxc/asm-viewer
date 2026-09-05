@@ -472,9 +472,11 @@ struct SourceList {
     /// two functions compiled from one file are two places, and keying by the file would
     /// have them share a position.
     document: Document,
-    /// The row this tab opens at the first time it is shown, from [`opening_row`]. A row
-    /// remembered for the tab wins over it -- see `use_kept_position`.
-    opening: usize,
+    /// The row this tab opens at the first time it is shown, from [`opening_row`], and
+    /// [`None`] for a tab with nothing better to open at than the top. The row itself and
+    /// never one backed off towards the top: the rows kept above it are the pane's to
+    /// add. A row remembered for the tab wins over it -- see `use_kept_position`.
+    opening: Option<usize>,
 }
 
 impl PartialEq for SourceList {
@@ -928,14 +930,9 @@ impl Coded {
 /// DWARF places on no line, and a companion that is not the symbol's own file -- the last
 /// being a landing's doing, which comes with a reveal of its own and would otherwise be
 /// sent to a line of the wrong file.
-fn opening_row(lines: &SymbolLines, file: &Arc<str>) -> usize {
-    let line = lines
-        .line
-        .filter(|_| lines.file.as_ref() == Some(file))
-        .unwrap_or(0);
-    (line as usize)
-        .saturating_sub(1)
-        .saturating_sub(CONTEXT_ROWS as usize)
+fn opening_row(lines: &SymbolLines, file: &Arc<str>) -> Option<usize> {
+    let line = lines.line.filter(|_| lines.file.as_ref() == Some(file))?;
+    (line as usize).checked_sub(1)
 }
 
 /// What the Source pane says over a file whose bytes are not the ones the debug info's
@@ -1083,7 +1080,7 @@ impl Component for SourcePane {
         // an assembly tab is a symbol, and the symbol's own lines are what asking for it
         // asked to see.
         let (document, opening) = match &side {
-            SourceSide::Subject(file) => (Document::Source(file.clone()), 0),
+            SourceSide::Subject(file) => (Document::Source(file.clone()), None),
             // In an object's code the companion is the file of the row the reader
             // pressed, and the tab opens on that row's line.
             SourceSide::Companion(_) if matches!(self.document, Document::Code(_)) => {
@@ -1096,10 +1093,10 @@ impl Component for SourcePane {
                             .into_iter()
                             .next()
                     })
-                    .map_or(0, |at| at.line as usize);
+                    .map(|at| at.line as usize);
                 (
                     self.document.clone(),
-                    line.saturating_sub(1).saturating_sub(CONTEXT_ROWS as usize),
+                    line.and_then(|line| line.checked_sub(1)),
                 )
             }
             // The *drawn* symbol's tab and not the active one: a row written down against

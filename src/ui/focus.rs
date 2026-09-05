@@ -165,17 +165,36 @@ pub(crate) fn reveal_caret(
 struct Asked {
     reveal: Box<dyn FnMut(&mut ScrollController) -> bool>,
     coming: Box<dyn FnMut(&Landing, &mut ScrollController) -> bool>,
-    opening: usize,
+    opening: Option<usize>,
+}
+
+/// What a run of [`use_kept_position`] owes the view.
+///
+/// The two are not the same ask and must not be served alike. A **place** is put back
+/// exactly: it is where the reader left the tab, and a margin added to it would be added
+/// again on every switch, walking the tab up the listing. An **open** is a request --
+/// *this is the row the tab is about* -- and the rows kept above it are part of showing
+/// it, which is this hook's to add and never the caller's to subtract before asking.
+///
+/// Both put a row at the top of the pane, which is what a first open wants and a reveal
+/// would not give: [`reveal_row`] leaves a row that is on screen already where it is, so
+/// a symbol ten lines into a file would open at the top of the file rather than on itself.
+#[derive(Clone, Copy)]
+enum Move {
+    Place(usize),
+    Open(usize),
 }
 
 /// Keep `controller` pointed at the row `tab` was last left at, and keep [`Positions`]
 /// told where it is now. `length` is what the pane holds *now*, which is what makes the
 /// answer a row of this listing rather than of the one it was saved from.
 ///
-/// `opening` is where a tab **nothing is remembered for** lands -- the Source pane's
-/// symbol's own lines, and `0`, the top, for a pane or a symbol with nothing better to
-/// say. A row remembered for the tab always wins over it: it is the first open this
-/// answers and not every one.
+/// `opening` is the row a tab **nothing is remembered for** opens at -- the Source pane's
+/// symbol's own line -- and [`None`] for a pane or a symbol with nothing better to say
+/// than the top. It is the row itself and never a row backed off towards the top: the
+/// rows kept above it are part of showing it, and applying them is this hook's, through
+/// [`reveal_row`]. A row remembered for the tab always wins over it: it is the first open
+/// this answers and not every one.
 ///
 /// Two things make it work, and both are about *when*:
 ///
@@ -229,7 +248,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     tab: &T,
     length: usize,
     listing: u64,
-    opening: usize,
+    opening: Option<usize>,
 ) {
     // Which tab the controller is scrolled for. An `Rc<RefCell>` and not a `State`:
     // nothing renders from it, and a state would cost the pane a render per switch.
@@ -243,7 +262,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
         Rc::new(RefCell::new(Asked {
             reveal: Box::new(|_| false),
             coming: Box::new(|_, _| false),
-            opening: 0,
+            opening: None,
         }))
     });
     *latest.borrow_mut() = Asked {
@@ -254,7 +273,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
 
     // The move this hook owes the view and has not made. An `Rc<RefCell>` for the same
     // reason as the tab above.
-    let owing = use_hook(|| Rc::new(RefCell::new(None::<usize>)));
+    let owing = use_hook(|| Rc::new(RefCell::new(None::<Move>)));
     let answered = use_hook(|| Rc::new(RefCell::new(None::<Landing>)));
     // A landing on its way, whichever document it names. Asked through
     // `try_consume_context`, a pane mounted without the landing machinery having none on
@@ -287,7 +306,10 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
             let back_to = positions.peek().row(tab, *length);
             // Clamped the way a remembered row is, and for the same reason: a symbol's line
             // is a hint out of debug info and the file under it may have been cut short since.
-            let opening = latest.borrow().opening.min(length.saturating_sub(1));
+            let opening = latest
+                .borrow()
+                .opening
+                .map(|row| row.min(length.saturating_sub(1)));
 
             // Whose row the offset above is, and where this run has to move the view to.
             let (owner, moving) = match (&holding, known) {
@@ -297,17 +319,24 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
                 // goes back to where it was, or to where a tab seen for the first time opens.
                 // A `0` moves here, where the first run below leaves one alone: the offset on
                 // screen is the tab being left, and the arriving one must not inherit it.
-                (Some(out), Some(_)) => (Some(out.clone()), Some(back_to)),
-                (Some(out), None) => (Some(out.clone()), Some(opening)),
+                (Some(out), Some(_)) => (Some(out.clone()), Some(Move::Place(back_to))),
+                (Some(out), None) => (
+                    Some(out.clone()),
+                    // The top where the arriving tab has no row of its own to open at:
+                    // a place and not a reveal, since what must not survive the switch
+                    // is the *outgoing* tab's offset, and a reveal of the top would
+                    // leave a small one where it can already see row 0.
+                    Some(opening.map_or(Move::Place(0), Move::Open)),
+                ),
                 // This pane's first run, on a tab it has a row for: a remount or a restored
                 // session. Nothing to write down, everything to put back.
-                (None, Some(_)) => (None, Some(back_to)),
+                (None, Some(_)) => (None, Some(Move::Place(back_to))),
                 // First run with nothing remembered -- which, both panes being mounted afresh
                 // for every document, is the ordinary first open of a tab. It moves only for
                 // a pane that has somewhere to open at: a `0` is left alone rather than
                 // scrolled to, since this runs a beat after the first render and setting the
                 // offset it already has would undo a wheel that got in.
-                (None, None) => (Some(tab.clone()), (opening != 0).then_some(opening)),
+                (None, None) => (Some(tab.clone()), opening.map(Move::Open)),
             };
 
             if let Some(owner) = owner {
@@ -365,7 +394,15 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
                 return;
             }
             drop(asked);
-            if let Some(row) = owing.borrow_mut().take() {
+            // The margin is taken here and not by the caller, which had to know how much
+            // of the listing above a row is part of showing it -- and could not say a row
+            // inside the margin at all, that coming out as 0 and reading as nothing to do.
+            let top = match owing.borrow_mut().take() {
+                Some(Move::Place(row)) => Some(row),
+                Some(Move::Open(row)) => Some(row.saturating_sub(CONTEXT_ROWS as usize)),
+                None => None,
+            };
+            if let Some(row) = top {
                 controller.scroll_to_y(-((row as f32 * code_row_height()) as i32));
             }
         },

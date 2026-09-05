@@ -1233,8 +1233,9 @@ impl Component for InstructionList {
             &entry,
             length,
             listing,
-            // The top: a listing *is* the symbol, so its first row is its own first line.
-            0,
+            // Nothing to open at: a listing *is* the symbol, so its first row is its own
+            // first line and the top is where it already is.
+            None,
         );
         // The caret a door left to be planted on an instruction of this listing, once the
         // listing is the document it names -- which is the drawn answer's document and
