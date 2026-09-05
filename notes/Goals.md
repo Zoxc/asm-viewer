@@ -108,6 +108,22 @@ leaves this list when it is. That is a move made on request, like everything els
   bottom today, so its ground, its height and what it does when it has nothing to say are the
   rest of it.
 
+- [ ] Show what the server says about the name under the pointer. `textDocument/hover` is the
+  one question the client does not ask, and it answers the "what is this" that following a name
+  cannot: a type, a signature, and the doc comment above it. Most of the parts are here. A row
+  already follows the pointer — `code_row.rs`'s `on_pointer_move` keeps the hover and knows
+  when it is over a link — and `marks::caret_col` turns the pointer's x into the column a
+  question takes, the same one `follow` asks a definition at. `places_at` is the wrong shape,
+  a hover answering contents and an optional range rather than a list of places, so this wants
+  a request of its own beside the four. The decisions are a hover's usual ones: how long the
+  pointer rests before anything is asked, a sweep along a line being a question per character
+  otherwise; what draws the answer, freya's `Tooltip` taking a plain string where a hover's
+  contents is markdown — and with code in it, which this app of all things should highlight;
+  and where the box goes for a name against the pane's edge. A loading server answers `null`
+  here as it does everywhere, so the held-question item above covers it. Worth wanting in the
+  Assembly pane too, over a resolved relocation's name, but a question is placed by file, line
+  and column and an assembly row is in no file — a second question rather than this one.
+
 ## Assembly viewer
 
 - [ ] Ctrl+C copies whatever is selected, wherever it is: the run of rows or characters
