@@ -336,9 +336,12 @@ not when the row slides under the window, which is the strip being scrolled, so 
 scrolled away to look at another tab is not dragged back. Each chip is therefore measured with the
 offset taken back off: a close or a move changes no surviving chip's width, and the chip that goes
 is never measured again, so a count that went up on a width alone slept through both and left the
-reader reading a tab whose chip had slid off the bar. The row's own measurement puts a shorter bar back inside
-its end, `scroll_by` clamping only as it moves, so a closed tab no longer leaves empty ground past
-the last chip. And freya's `ScrollController` was tried first and given up: handed to a view
+reader reading a tab whose chip had slid off the bar. Nothing measuring a chip that has gone is also
+why the list is **pruned**: an entry is dropped once its tab is no longer open, or the bar would
+hold a place per tab the session ever opened. The tab on screen is never one of those, so the
+reveal still finds what it looks for. The row's own measurement puts a shorter bar back inside its
+end, `scroll_by` clamping only as it moves, so a closed tab no longer leaves empty ground past the
+last chip. And freya's `ScrollController` was tried first and given up: handed to a view
 from outside it only arrives when something else happens to re-render that view, and reading its
 position from an effect is a loop, since a write notifies every reader and the callback it reads
 through counts as one (`notes/upstream/freya.md`).

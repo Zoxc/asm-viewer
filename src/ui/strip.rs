@@ -636,6 +636,10 @@ impl Component for TabBar {
         let over = drag.read().is_some().then(|| landing()).flatten();
 
         let places = use_state(Vec::<(Tab, f32, f32)>::new);
+        // The test that asks what the bar still holds a place for hands it the list to
+        // keep them in, there being no reading a component's own state from outside.
+        #[cfg(test)]
+        let places = try_consume_context::<Measured>().map_or(places, |measured| measured.0);
         let viewport = use_state(|| None::<(f32, f32)>);
         let content = use_state(|| 0.0f32);
         let mut shape = use_state(|| 0u64);
@@ -654,6 +658,17 @@ impl Component for TabBar {
             let strip = strip.read();
             (strip.tabs().to_vec(), strip.active())
         };
+        // A chip that has gone is never measured again, so its place would sit here for
+        // the rest of the session. It is dropped once its tab is no longer open, which
+        // costs the reveal nothing: the tab on screen is one of these.
+        use_side_effect_with_deps(&tabs, move |tabs: &Vec<Tab>| {
+            let mut places = places;
+            let closed = places.peek().iter().any(|(tab, ..)| !tabs.contains(tab));
+            if closed {
+                places.write().retain(|(tab, ..)| tabs.contains(tab));
+            }
+        });
+
         // The table read once, here, for the copies that follow the cursor: a hook may not
         // run in the loop that builds the chips.
         let docs = use_consume::<OpenDocs>().0;
@@ -809,12 +824,18 @@ impl Component for TabBar {
     }
 }
 
+/// The list a test hands the bar to measure its chips into, so that it can read them.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) struct Measured(pub(crate) State<Vec<(Tab, f32, f32)>>);
+
 /// What the bar has been measured as, and how far along it is: passed about as one thing
 /// because nothing that scrolls can do without all of it.
 #[derive(Clone, Copy)]
 struct Bar {
     /// Every chip's two sides, along the row: where each was laid out, less the offset,
-    /// so that scrolling the strip moves none of them.
+    /// so that scrolling the strip moves none of them. Only the open tabs: nothing
+    /// measures a chip that has gone, so its entry is dropped when its tab closes.
     places: State<Vec<(Tab, f32, f32)>>,
     /// The two sides of the strip: what a chip has to be inside to be in view.
     viewport: State<Option<(f32, f32)>>,

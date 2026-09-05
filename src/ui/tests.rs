@@ -1300,6 +1300,64 @@ fn a_close_or_a_move_brings_the_tab_on_screen_back_into_view() {
     );
 }
 
+/// The bar forgets where a chip was once its tab has closed. Each chip is measured into
+/// one list, and the chip that goes is never measured again, so an entry left there is one
+/// per tab the session ever opened. What still has a place has to be what is still open --
+/// including the tab on screen, which the reveal looks up here.
+#[test]
+fn the_bar_forgets_the_place_of_a_chip_whose_tab_has_closed() {
+    let (mut test, (states, measured)) = TestingRunner::new(
+        bar_harness,
+        (240., 100.).into(),
+        |runner: &mut _| {
+            let states = project_states!(runner);
+            let measured = runner.provide_root_context(|| Measured(State::create(Vec::new())));
+            (states, measured)
+        },
+        1.,
+    );
+    let documents: Vec<Document> = (0..6)
+        .map(|nth| Document::Source(Arc::from(format!("/src/file{nth}.rs").as_str())))
+        .collect();
+    for document in &documents {
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    }
+    settle(&mut test);
+
+    let held = || -> Vec<Tab> { measured.0.peek().iter().map(|(tab, ..)| *tab).collect() };
+    let open = || -> Vec<Tab> { states.open.ids().into_iter().map(Tab::Document).collect() };
+    let same = |held: &[Tab], open: &[Tab]| {
+        held.len() == open.len() && held.iter().all(|tab| open.contains(tab))
+    };
+    assert!(
+        same(&held(), &open()),
+        "every open chip is measured: {:?} against {:?}",
+        held(),
+        open()
+    );
+
+    // Two closed, one of them the tab on screen. What is left is what is open.
+    close_document(&states, &documents[1]);
+    close_document(&states, &documents[5]);
+    settle(&mut test);
+    assert_eq!(open().len(), 4, "{:?}", open());
+    assert!(
+        same(&held(), &open()),
+        "the bar kept the place of a closed chip: {:?} against {:?}",
+        held(),
+        open()
+    );
+
+    // And the tab on screen is still reachable through what is left: its chip is in view.
+    raise_document(&states, &documents[0]);
+    settle(&mut test);
+    let shown = label_area(&test, "file0.rs").expect("the chip of the tab on screen");
+    assert!(
+        shown.origin.x >= 0.0 && shown.max_x() <= 240.0,
+        "the reveal lost the tab being read: {shown:?}"
+    );
+}
+
 /// A tab is dragged along the bar to move it, and the chip a drop would land on says so
 /// while the pointer is over it. The recipe is `agents/Headless.md`'s: the passes between
 /// the moves are what let the drop zones be measured after the drag has begun.
