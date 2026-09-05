@@ -9329,6 +9329,52 @@ fn the_front_of_the_order_is_the_pad_that_opens() {
     assert!(asks.is_empty());
 }
 
+/// **A listing longer than the order file is drawn whole.** The listing is every pad there
+/// is -- the file's own ids, then every other directory that is a package -- and the panel
+/// is the only way to open one. Bounding the list the panel draws at what the file keeps
+/// would drop precisely the strays the listing went to the trouble of appending, and the
+/// pads past the fiftieth would have no row and no way back to them.
+#[test]
+fn a_listing_longer_than_the_order_file_is_drawn_whole() {
+    // One past the file's cap, so the last row is the one a bounded order would lose.
+    let listing: Vec<PadListing> = (0..=crate::scratchpad::MAX_PAD_RECENTS)
+        .map(|n| pad_listing(&format!("pad-{n}")))
+        .collect();
+    let last = listing.last().expect("a row").id.clone();
+    let listed = listing.clone();
+
+    let (mut test, _states, pad, _text, _asking, _asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(listed.clone()),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(pad_on_disk(scratchpad)),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    assert_eq!(
+        pad.peek().order.ids().len(),
+        listing.len(),
+        "the panel's list is shorter than the listing it was given"
+    );
+    assert!(
+        pad.peek().get(&last).is_some(),
+        "the last pad of the listing is not even held"
+    );
+    // And it has a row: a pad nobody has named is drawn by the app's own label for it.
+    assert!(
+        labels(&test).contains(&format!("<{}>", last.as_str())),
+        "the last pad of the listing has no row to open it from"
+    );
+}
+
 /// Switching pads writes the one being left **before** it opens the next, and does it
 /// through the worker: the jobs are one ordered queue, so a save that went after the open
 /// -- or that was left to the effect, which wakes only after the handler is over -- would

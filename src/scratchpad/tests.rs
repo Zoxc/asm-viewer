@@ -352,6 +352,40 @@ fn the_order_answers_whether_anything_moved() {
     assert_eq!(order.ids(), [id("one"), id("two")]);
 }
 
+/// The cap is the **file**'s and not the list's. The panel draws this order and the listing
+/// it is built from is every pad there is, so an order that dropped its own tail would
+/// leave the pads past the fiftieth with no row to open them from. What the file keeps is
+/// bounded all the same: an order is what falls off it, never a pad.
+#[test]
+fn the_order_keeps_every_pad_and_the_file_keeps_fifty() {
+    // One past the cap, so the last of them is what a bounded order would lose.
+    let listing: Vec<PadListing> = (0..=MAX_PAD_RECENTS)
+        .map(|n| row(&format!("pad-{n}"), ""))
+        .collect();
+    let mut order = PadOrder::of(&listing);
+    assert_eq!(order.ids().len(), listing.len());
+
+    // Showing one pad is not an occasion to drop another.
+    assert!(order.touch(&id("pad-9")));
+    assert_eq!(order.ids().len(), listing.len());
+    assert!(order.ids().contains(&id(&format!("pad-{MAX_PAD_RECENTS}"))));
+
+    let base = directory(line!());
+    let pads = base.join("scratchpads");
+    fs::create_dir_all(&pads).expect("the directory");
+    write_toml(&pads.join("recents.toml"), &order).expect("the order");
+    // An id with a directory, which is what `remember_in` asks of one before it writes.
+    fs::create_dir(pads.join("fresh")).expect("the directory");
+
+    remember_in(&base, &id("fresh"));
+
+    let written = PadOrder::load_from(&pads.join("recents.toml"));
+    assert_eq!(written.ids().len(), MAX_PAD_RECENTS);
+    assert_eq!(written.first(), Some(&id("fresh")));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// Every pad is reachable, which is the difference from the recent-projects list: that one
 /// is the projects a reader has *opened*, where this is the scratchpads there are. So an id
 /// the order has kept whose directory is not a package is dropped, and a package the order

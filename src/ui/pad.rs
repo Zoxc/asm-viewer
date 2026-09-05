@@ -607,11 +607,7 @@ pub(crate) fn use_scratchpad_with(
                             // about to open; anything else replaces it outright, that pad
                             // being a placeholder and not a pad that exists.
                             if !listing.is_empty() {
-                                let mut order = PadOrder::default();
-                                for listed in listing.iter().rev() {
-                                    order.touch(&listed.id);
-                                }
-                                next.order = order;
+                                next.order = PadOrder::of(&listing);
                                 for listed in &listing {
                                     next.hold(listed);
                                 }

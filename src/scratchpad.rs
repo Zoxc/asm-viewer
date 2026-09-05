@@ -52,9 +52,11 @@ const NEW_STEM: &str = "pad";
 /// The file beside the pads holding the order they were last shown in.
 const RECENTS_FILE: &str = "recents.toml";
 
-/// How many names [`PadOrder`] keeps. What is lost past this is an *order*, never a pad:
-/// [`pads_in`] lists a pad the order has forgotten just as it lists one made out of band.
-const MAX_PAD_RECENTS: usize = 50;
+/// How many names the order **file** keeps. What is lost past this is an *order*, never a
+/// pad: [`pads_in`] lists a pad the order has forgotten just as it lists one made out of
+/// band. It is the file's bound and not [`PadOrder`]'s, since the list a reader picks a pad
+/// from is that listing, and a pad the panel does not draw cannot be opened at all.
+pub const MAX_PAD_RECENTS: usize = 50;
 
 /// How much of one line of a program's output is kept before it is cut and continued on
 /// the next: a program writing megabytes with no newline in them is still *delivered*
@@ -512,16 +514,40 @@ impl PadOrder {
         self.scratchpads.first()
     }
 
+    /// The order a listing states, whole and in its own order.
+    ///
+    /// Not a `touch` per row: this is the order being replaced by what the disk says, where
+    /// a touch is what *using* a pad does to it. Nothing is dropped, either. The listing
+    /// names every pad there is, the ones the order forgot included, and this is the list
+    /// the panel draws — an id missing from it is a pad with no way back to it.
+    pub fn of(listing: &[PadListing]) -> PadOrder {
+        PadOrder {
+            scratchpads: listing.iter().map(|listed| listed.id.clone()).collect(),
+        }
+    }
+
     /// Put `id` at the front, and say whether that changed anything — which is what keeps a
     /// startup that reopens the pad already at the front from writing a file.
+    ///
+    /// Nothing falls off the end here: the cap is [`PadOrder::capped`]'s, applied to what
+    /// goes to disk, so a pad this order is holding for the panel is not dropped by
+    /// someone else being shown.
     pub fn touch(&mut self, id: &PadId) -> bool {
         if self.first() == Some(id) {
             return false;
         }
         self.scratchpads.retain(|other| other != id);
         self.scratchpads.insert(0, id.clone());
-        self.scratchpads.truncate(MAX_PAD_RECENTS);
         true
+    }
+
+    /// The front of the order, at most [`MAX_PAD_RECENTS`] of it: what is written out.
+    ///
+    /// The bound is the file's alone. What it drops is the tail of an order and never a
+    /// pad, [`pads_in`] appending every pad the file does not name.
+    fn capped(mut self) -> PadOrder {
+        self.scratchpads.truncate(MAX_PAD_RECENTS);
+        self
     }
 
     /// Drop `id`, for a pad that has just been deleted.
@@ -564,7 +590,7 @@ fn remember_in(base: &Path, id: &PadId) {
     if !order.touch(id) {
         return;
     }
-    if let Err(error) = write_toml(&path, &order) {
+    if let Err(error) = write_toml(&path, &order.capped()) {
         log::warn!("could not save {}: {error}", path.display());
     }
 }
