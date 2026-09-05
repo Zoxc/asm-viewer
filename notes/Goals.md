@@ -435,6 +435,31 @@ leaves this list when it is. That is a move made on request, like everything els
   code the way pressing an Objects row does. The decisions are whether the artifact's
   objects join the Objects list or are the pad's alone, and what happens to them and their
   tabs when the pad is rebuilt or closed.
+- [ ] Run a language server over a scratchpad's package, so a pad's editor gets what the Source
+  pane has: a name followed to what it names, its references, and what the server sees wrong
+  before a build does. Two things are in the way, both because the pad is the one place the app
+  writes. `Talk::definition` opens no file — "this app only ever shows what is on disk, so
+  telling it about one would put an overlay over the file that has to be taken back off again
+  and can only go stale" (`src/lsp.rs`) — and a pad's buffer is *not* on disk, its save being
+  queued behind the keystroke, so a server reading the package answers about the file as it was
+  last written. Either a pad's saves become what the server is told, or `textDocument/didOpen`
+  and `didChange` arrive here first, which is a client this app has so far not had to be. And
+  the pad's editor is freya's `CodeEditor`, not the Source pane's rows, where a link is an
+  element `code_row.rs` puts in the paragraph — nothing outside `CodeEditor` can put one in
+  its, the wall the deferred "scroll the editor to a pressed diagnostic" item is already behind.
+  The smaller half is which server: a project names the program it is read with
+  (`src/project.rs`) and there is one for the open project, where a pad is a package of the
+  app's own making under the app's data directory.
+- [ ] Show a scratchpad in the window on its own, with no panels. A pad is `Page::Scratchpad`,
+  one of the three pages beside Project and Settings, so it is drawn inside the same strip and
+  the same dock a binary is read in — and every panel there is about a binary, none about the
+  pad. Writing code is not reading one, and the pad wants the window. The decision is what "on
+  its own" means: a second window — the app opens one (`WindowConfig::new(ui::app)`,
+  `src/main.rs`), so what freya 0.4 does with more than one wants finding out first — or this
+  window with the dock put away while a pad is shown, which is cheaper and keeps one session,
+  one strip and one place to come back to. Then what the pad keeps around it: the pad list, the
+  build and run controls and the diagnostics are its own, but the assembly of what it built is
+  the unified view above, which does want a binary's panes.
 - [?] Use freya's tty for the scratchpad's output, in place of the list of coloured rows the
   run pane draws: a terminal would carry a program's own colours, cursor movement and
   progress bars, where the rows keep only which stream a line came from.
