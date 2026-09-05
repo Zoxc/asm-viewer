@@ -24,3 +24,24 @@ Not reported, and not fixed by moving: 0.36 through 0.39 compare the length afte
 reject a frame that disagreed, but still read the whole of it into the vector first, which is
 the allocation. Like 0.32, they also read one frame per section, which is what `zstd_data`
 does; a section written as several frames would decode short, and short is dropped.
+
+## Wanted
+
+**A Mach-O section kind read from the section's flags, and not from a list of names.**
+`MachOSectionInternal::parse` (`read/macho/section.rs:225`) matches on the segment and section
+name, and the one code section it knows is `__TEXT,__text`. Every other section of `__TEXT` --
+`__StaticInit`, `__textcoal_nt`, one a compiler names itself -- comes back
+`SectionKind::Unknown`, and a Mach-O symbol's kind is its section's
+(`read/macho/symbol.rs:315`), so a function in one of them is `SymbolKind::Unknown` too. The
+flags that say a section holds code are parsed but not read for this:
+`S_ATTR_PURE_INSTRUCTIONS` and `S_ATTR_SOME_INSTRUCTIONS` are in `macho.rs`, and the same
+function is marked `// TODO: we don't validate flags, should we?`.
+
+**What the app does instead**: nothing. `parse_object` keeps the sections whose kind is
+`SectionKind::Text` and the symbols whose kind is `SymbolKind::Text`
+(`crates/analysis/src/lib.rs`), so a function outside `__TEXT,__text` is not listed and none of
+its bytes are disassembled. Reading the flags here would mean this crate deciding what counts
+as code, for one format only, which is the job `SectionKind` does for the other two.
+
+Not reported, and not fixed by moving: 0.36 through 0.39 match the same list of names, name
+for name.
