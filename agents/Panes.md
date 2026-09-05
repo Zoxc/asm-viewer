@@ -279,7 +279,12 @@ split is not tidiness: in a source-driven tab the click that selects a line is t
 for the listing, so the run it wakes is still holding the previous one, in which no row matches; a
 single take would spend the request there and the listing that can answer it would arrive to nothing
 owed. A request nothing matches stays owed until the next click replaces it or the run is dropped
-with its listing. **And the ask is the run** for a source-driven tab: `use_land` plants the driven
+with its listing, and **what wakes the pane when the listing that matches arrives is that
+listing's key**: `use_kept_position` takes it as a dep beside the tab and the row count, the effect
+behind it running on a change of deps or on a write to a state it read and never because the pane
+rendered. Without it an answer of the same length at the same place -- a click on a second line of
+a source-driven tab, which is no navigation -- left the request owed until the next click or wheel
+moved the pane. **And the ask is the run** for a source-driven tab: `use_land` plants the driven
 line as the source pane's run whenever the tab arrives with none kept for it, with nothing owed, or
 coming back to one would show a listing with nothing lit and no reason given. None of this is a
 navigation: the selection does not change and nothing is pushed onto any trail. `open_document`

@@ -1221,6 +1221,7 @@ impl Component for InstructionList {
             controller,
             &entry,
             length,
+            listing,
             // The top: a listing *is* the symbol, so its first row is its own first line.
             0,
         );

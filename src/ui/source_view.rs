@@ -617,6 +617,7 @@ impl Component for SourceList {
             controller,
             &entry,
             length,
+            listing,
             self.opening,
         );
 

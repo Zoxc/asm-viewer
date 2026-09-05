@@ -57,6 +57,15 @@ struct KeptLength(State<usize>);
 /// is rather than believing what the map says about it.
 #[derive(Clone, Copy)]
 struct KeptTop(State<usize>);
+/// Which listing [`revealing_harness`] is drawing: the stand-in for a disassembly, whose
+/// key changes under a tab the pane goes on showing.
+#[derive(Clone, Copy)]
+struct KeptListing(State<u64>);
+
+/// The listing the pair in [`revealing_harness`] has a row in. A reveal owed while any
+/// other is drawn is left owed, as the assembly pane's is for a listing holding no row
+/// for the pair.
+const PAIRED_LISTING: u64 = 1;
 
 /// A scroll view wired the way both **code** panes are: one `ScrollController` reused across
 /// every tab the pane shows, `use_kept_position` between them, and [`code_row_height`] on
@@ -80,6 +89,8 @@ fn scrolling_harness() -> impl IntoElement {
         controller,
         &showing,
         rows,
+        // One listing throughout: nothing here is owed a reveal.
+        0,
         0,
     );
 
@@ -210,10 +221,12 @@ fn revealing_harness() -> impl IntoElement {
     let length = use_consume::<KeptLength>().0;
     let mut top = use_consume::<KeptTop>().0;
     let marked = use_consume::<Marked>().0;
+    let listing = use_consume::<KeptListing>().0;
 
     let controller = use_scroll_controller(ScrollConfig::default);
     let showing = tab.read().clone();
     let rows = *length.read();
+    let drawn = *listing.read();
     use_kept_position(
         at,
         move |tab: &String| open.peek().contains(tab),
@@ -221,7 +234,15 @@ fn revealing_harness() -> impl IntoElement {
             let row = match owed_reveal(marked, Pane::Assembly) {
                 None => return false,
                 Some(Owing::Own(rows)) => *rows.rows().start(),
-                Some(Owing::Pair(pair)) => *pair.rows.rows().start(),
+                // Only the listing the pair has a row in can pay it; every other leaves
+                // it owed, as the assembly pane's reveal does. Peeked, so the arrival of
+                // a listing is not itself what wakes the effect.
+                Some(Owing::Pair(pair)) => {
+                    if *listing.peek() != PAIRED_LISTING {
+                        return false;
+                    }
+                    *pair.rows.rows().start()
+                }
             };
             reveal_made(marked, Pane::Assembly);
             reveal_row(controller, 100.0, row);
@@ -232,6 +253,7 @@ fn revealing_harness() -> impl IntoElement {
         controller,
         &showing,
         rows,
+        drawn,
         0,
     );
 
@@ -266,6 +288,7 @@ fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
             runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
             runner.provide_root_context(|| KeptOpen(State::create(tabs)));
             runner.provide_root_context(|| KeptLength(State::create(100)));
+            runner.provide_root_context(|| KeptListing(State::create(PAIRED_LISTING)));
             (
                 runner
                     .provide_root_context(|| KeptTab(State::create("a".to_owned())))
@@ -305,6 +328,73 @@ fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
     assert!(
         (30..=40).contains(&landed),
         "the arriving tab was put at row {landed} rather than at the revealed row"
+    );
+    assert!(owed_reveal(marked, Pane::Assembly).is_none());
+}
+
+/// A listing arriving at the tab and the row count of the one it replaces pays the reveal
+/// it is owed. The effect behind the kept position runs when a dep differs or a state it
+/// read is written, never because the pane rendered, so the listing's own key has to be a
+/// dep: a click on a second line of a source-driven tab is not a navigation, and an answer
+/// of the same length -- two accessors, two monomorphisations of one generic -- would
+/// otherwise leave the pane at the offset it had.
+#[test]
+fn a_listing_of_the_same_length_pays_the_reveal_it_arrives_to() {
+    let (mut test, (top, marked, listing)) = TestingRunner::new(
+        revealing_harness,
+        (100., 100.).into(),
+        |runner| {
+            runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
+            runner.provide_root_context(|| KeptOpen(State::create(vec!["a".to_owned()])));
+            runner.provide_root_context(|| KeptLength(State::create(100)));
+            runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
+            (
+                runner.provide_root_context(|| KeptTop(State::create(0))).0,
+                runner
+                    .provide_root_context(|| Marked(State::create(Marks::default())))
+                    .0,
+                // A listing with no row for the pair: the reveal below cannot be paid
+                // out of it.
+                runner
+                    .provide_root_context(|| KeptListing(State::create(PAIRED_LISTING + 1)))
+                    .0,
+            )
+        },
+        1.,
+    );
+    let (mut marked, mut listing) = (marked, listing);
+    test.sync_and_update();
+
+    let top_row = |test: &mut TestingRunner| {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        test.move_cursor((50., 90.));
+        test.sync_and_update();
+        test.move_cursor((50., 5.));
+        test.sync_and_update();
+        *top.peek()
+    };
+
+    // The click: a run in the source pane with a row of it owed here. The listing on
+    // screen has none, so the request is left owed and nothing moves.
+    marked.set(Marks {
+        assembly: None,
+        source: Some(picked_row(40, "a.rs", Owed::by(Pane::Assembly))),
+    });
+    assert_eq!(
+        top_row(&mut test),
+        0,
+        "a listing with no row for it scrolled"
+    );
+    assert!(owed_reveal(marked, Pane::Assembly).is_some());
+
+    // The answer arrives: the same tab, the same rows, another listing.
+    listing.set(PAIRED_LISTING);
+    let landed = top_row(&mut test);
+    assert!(
+        (30..=40).contains(&landed),
+        "the listing that could pay the reveal left the pane at row {landed}"
     );
     assert!(owed_reveal(marked, Pane::Assembly).is_none());
 }

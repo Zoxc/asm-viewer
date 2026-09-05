@@ -178,6 +178,13 @@ struct Asked {
 /// a search hit shown in the temporal tab -- so a reveal held from the mount would go on
 /// measuring the row it owes against the file the pane drew then, refuse it, and leave
 /// the pane to fall back to the top.
+///
+/// `listing` is the key of what the pane is drawing (`Widest::key`), a dep and nothing
+/// else. The effect runs when a dep differs or a state it read is written, never because
+/// the pane rendered; without the key, an answer arriving at the same tab with the same
+/// row count -- two accessors, two monomorphisations of one generic -- leaves a reveal
+/// owed until the next click or wheel, when the point of leaving it owed is that the
+/// listing which can answer it finds it.
 pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     mut positions: State<Positions<T>>,
     is_open: impl Fn(&T) -> bool + 'static,
@@ -186,6 +193,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     mut controller: ScrollController,
     tab: &T,
     length: usize,
+    listing: u64,
     opening: usize,
 ) {
     // Which tab the controller is scrolled for. An `Rc<RefCell>` and not a `State`:
@@ -219,95 +227,98 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
 
     // With deps and not a bare `use_side_effect`, whose callback is built in a `use_hook`
     // and would hold the first tab this pane ever showed.
-    use_side_effect_with_deps(&(tab.clone(), length), move |(tab, length): &(T, usize)| {
-        // Subscribes this effect to the pane's scroll, so it comes before any return.
-        let (_, offset) = <(i32, i32)>::from(controller);
-        // The row at the top of the pane. `code_row_height` and not the list's, this
-        // being a code pane; rounded down, so a row half on screen is the row the reader
-        // is looking at.
-        let row = ((-offset).max(0) as f32 / code_row_height()) as usize;
+    use_side_effect_with_deps(
+        &(tab.clone(), length, listing),
+        move |(tab, length, _): &(T, usize, u64)| {
+            // Subscribes this effect to the pane's scroll, so it comes before any return.
+            let (_, offset) = <(i32, i32)>::from(controller);
+            // The row at the top of the pane. `code_row_height` and not the list's, this
+            // being a code pane; rounded down, so a row half on screen is the row the reader
+            // is looking at.
+            let row = ((-offset).max(0) as f32 / code_row_height()) as usize;
 
-        // Cloned out of the borrow rather than held across the `borrow_mut` below.
-        let holding = held.borrow().clone();
-        let switching = holding.as_ref() != Some(tab);
-        let known = positions.peek().at(tab);
-        let back_to = positions.peek().row(tab, *length);
-        // Clamped the way a remembered row is, and for the same reason: a symbol's line
-        // is a hint out of debug info and the file under it may have been cut short since.
-        let opening = latest.borrow().opening.min(length.saturating_sub(1));
+            // Cloned out of the borrow rather than held across the `borrow_mut` below.
+            let holding = held.borrow().clone();
+            let switching = holding.as_ref() != Some(tab);
+            let known = positions.peek().at(tab);
+            let back_to = positions.peek().row(tab, *length);
+            // Clamped the way a remembered row is, and for the same reason: a symbol's line
+            // is a hint out of debug info and the file under it may have been cut short since.
+            let opening = latest.borrow().opening.min(length.saturating_sub(1));
 
-        // Whose row the offset above is, and where this run has to move the view to.
-        let (owner, moving) = match (&holding, known) {
-            // Still showing the tab the controller is scrolled for: nothing moves.
-            (Some(held), _) if held == tab => (Some(tab.clone()), None),
-            // A switch: the offset belongs to the tab being left, and the one arriving
-            // goes back to where it was, or to where a tab seen for the first time opens.
-            // A `0` moves here, where the first run below leaves one alone: the offset on
-            // screen is the tab being left, and the arriving one must not inherit it.
-            (Some(out), Some(_)) => (Some(out.clone()), Some(back_to)),
-            (Some(out), None) => (Some(out.clone()), Some(opening)),
-            // This pane's first run, on a tab it has a row for: a remount or a restored
-            // session. Nothing to write down, everything to put back.
-            (None, Some(_)) => (None, Some(back_to)),
-            // First run with nothing remembered -- which, both panes being mounted afresh
-            // for every document, is the ordinary first open of a tab. It moves only for
-            // a pane that has somewhere to open at: a `0` is left alone rather than
-            // scrolled to, since this runs a beat after the first render and setting the
-            // offset it already has would undo a wheel that got in.
-            (None, None) => (Some(tab.clone()), (opening != 0).then_some(opening)),
-        };
+            // Whose row the offset above is, and where this run has to move the view to.
+            let (owner, moving) = match (&holding, known) {
+                // Still showing the tab the controller is scrolled for: nothing moves.
+                (Some(held), _) if held == tab => (Some(tab.clone()), None),
+                // A switch: the offset belongs to the tab being left, and the one arriving
+                // goes back to where it was, or to where a tab seen for the first time opens.
+                // A `0` moves here, where the first run below leaves one alone: the offset on
+                // screen is the tab being left, and the arriving one must not inherit it.
+                (Some(out), Some(_)) => (Some(out.clone()), Some(back_to)),
+                (Some(out), None) => (Some(out.clone()), Some(opening)),
+                // This pane's first run, on a tab it has a row for: a remount or a restored
+                // session. Nothing to write down, everything to put back.
+                (None, Some(_)) => (None, Some(back_to)),
+                // First run with nothing remembered -- which, both panes being mounted afresh
+                // for every document, is the ordinary first open of a tab. It moves only for
+                // a pane that has somewhere to open at: a `0` is left alone rather than
+                // scrolled to, since this runs a beat after the first render and setting the
+                // offset it already has would undo a wheel that got in.
+                (None, None) => (Some(tab.clone()), (opening != 0).then_some(opening)),
+            };
 
-        if let Some(owner) = owner {
-            // Only for a tab that is still open: the run after a close is still holding
-            // it, and writing its row down would put it straight back. **Asked of the
-            // states themselves, never of a `Memo` over them**, which can still be
-            // reporting a just-closed tab as open during exactly this run.
-            let still_open = is_open(&owner);
-            // And only when it has moved: `State::write` notifies whether or not the
-            // value changes, and this runs on every scroll event.
-            let at = positions.peek().at(&owner);
-            if still_open && at != Some(row) {
-                positions.write().remember(owner, row);
+            if let Some(owner) = owner {
+                // Only for a tab that is still open: the run after a close is still holding
+                // it, and writing its row down would put it straight back. **Asked of the
+                // states themselves, never of a `Memo` over them**, which can still be
+                // reporting a just-closed tab as open during exactly this run.
+                let still_open = is_open(&owner);
+                // And only when it has moved: `State::write` notifies whether or not the
+                // value changes, and this runs on every scroll event.
+                let at = positions.peek().at(&owner);
+                if still_open && at != Some(row) {
+                    positions.write().remember(owner, row);
+                }
             }
-        }
-        if switching {
-            *held.borrow_mut() = Some(tab.clone());
-        }
-        // Read and not peeked: this subscribes the effect to the landing, which is what
-        // wakes it on the pass the landing is spent.
-        let coming = landing.and_then(|asked| asked.read().clone());
-        if let Some(row) = moving {
-            *owing.borrow_mut() = Some(row);
-        }
+            if switching {
+                *held.borrow_mut() = Some(tab.clone());
+            }
+            // Read and not peeked: this subscribes the effect to the landing, which is what
+            // wakes it on the pass the landing is spent.
+            let coming = landing.and_then(|asked| asked.read().clone());
+            if let Some(row) = moving {
+                *owing.borrow_mut() = Some(row);
+            }
 
-        // The reveal first, and the kept row only when it made none: either scroll is a
-        // write this effect is subscribed to, so it wakes once more, finds the tab it is
-        // holding is the tab it is showing, and writes the row down.
-        let mut asked = latest.borrow_mut();
-        if (asked.reveal)(&mut controller) {
-            *owing.borrow_mut() = None;
-            return;
-        }
-        // Then the landing that has not been spent yet, which the pane takes when it
-        // names a row of what it is drawing. The row is where this pane is going, so it
-        // goes there as it draws the document and not two passes later, when `use_land`
-        // has turned the same row into a run.
-        if let Some(asking) = &coming {
-            if (asked.coming)(asking, &mut controller) {
+            // The reveal first, and the kept row only when it made none: either scroll is a
+            // write this effect is subscribed to, so it wakes once more, finds the tab it is
+            // holding is the tab it is showing, and writes the row down.
+            let mut asked = latest.borrow_mut();
+            if (asked.reveal)(&mut controller) {
                 *owing.borrow_mut() = None;
                 return;
             }
-            // Not this pane's row: the move is held rather than made, since the pass that
-            // spends the landing may still plant this pane a run -- a door that knew only
-            // an address leaves the other pane one -- and going to the opening row first
-            // would show the top of the listing on the way.
-            return;
-        }
-        drop(asked);
-        if let Some(row) = owing.borrow_mut().take() {
-            controller.scroll_to_y(-((row as f32 * code_row_height()) as i32));
-        }
-    });
+            // Then the landing that has not been spent yet, which the pane takes when it
+            // names a row of what it is drawing. The row is where this pane is going, so it
+            // goes there as it draws the document and not two passes later, when `use_land`
+            // has turned the same row into a run.
+            if let Some(asking) = &coming {
+                if (asked.coming)(asking, &mut controller) {
+                    *owing.borrow_mut() = None;
+                    return;
+                }
+                // Not this pane's row: the move is held rather than made, since the pass that
+                // spends the landing may still plant this pane a run -- a door that knew only
+                // an address leaves the other pane one -- and going to the opening row first
+                // would show the top of the listing on the way.
+                return;
+            }
+            drop(asked);
+            if let Some(row) = owing.borrow_mut().take() {
+                controller.scroll_to_y(-((row as f32 * code_row_height()) as i32));
+            }
+        },
+    );
 }
 
 /// Every box the keyboard can be in inside the tab on screen, and whether something has
