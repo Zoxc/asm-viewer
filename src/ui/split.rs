@@ -129,8 +129,12 @@ impl Component for PaneToggle {
 /// container and no handle: the app's one split width is untouched, so it comes back as
 /// the reader left it on the next tab that has two panes.
 ///
-/// Only the *active* tab's content is mounted, so this whole subtree -- both panes, both
-/// scroll controllers -- is built afresh on every switch of tab, which is what
+/// Only the *active* tab's content is mounted, but a switch of tab is **not** a remount:
+/// nothing here is keyed, so freya re-renders these same scopes with the new tab's props
+/// and every hook they hold lives on. Only a switch to a tab of another *kind* builds the
+/// subtree afresh, the element types at these paths having changed. So a hook that must
+/// follow the tab reads what it is handed rather than capturing it (`use_window`,
+/// `src/ui/section_view.rs`), and where a pane was left is kept outside it, which is what
 /// `use_kept_position` is for. Navigating in place is not a switch of tab: this reads the
 /// table, so a push onto the trail re-renders it and the panes are handed the new
 /// document as a prop, keeping their controllers -- and the same hook files the row of

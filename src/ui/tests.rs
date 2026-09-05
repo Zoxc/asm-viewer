@@ -13016,6 +13016,84 @@ fn a_unified_view_asks_for_its_skeleton_once_the_reading_is_its_own() {
     assert!(asked.code.is_none());
 }
 
+/// The Assembly pane over whichever code tab is active, mounted the way `ContentArea`
+/// mounts a document's body: unkeyed, so switching between two code tabs re-renders the
+/// one scope rather than remounting it.
+fn switched_code_harness() -> impl IntoElement {
+    let open = use_open();
+    let active = use_consume::<Active>().0;
+    let objects = use_consume::<Objects>().0;
+    let reading = use_consume::<Sections>().0;
+    let window = use_consume::<Window>().0;
+    use_reading_of(active, objects, reading, window);
+
+    let entry = {
+        let (strip, docs) = (open.strip.read(), open.docs.read());
+        active_document(&strip, &docs)
+            .and_then(|document| Some((docs.showing(&document)?, document)))
+    };
+    rect()
+        .expanded()
+        .maybe_child(entry.map(|(tab, document)| AssemblyPane { tab, document }.into_element()))
+}
+
+/// Switching from one object's code tab to another's asks for the second object's
+/// skeleton. The pane is not remounted by the switch -- freya re-renders a same-key
+/// component with new props and keeps its hooks -- so the effect working the window out
+/// cannot hold the object it was built over: it once did, found the reading about
+/// something else on every run after the switch, and the second tab drew an empty
+/// listing for as long as it was open.
+#[test]
+fn switching_between_two_objects_code_tabs_asks_for_the_second() {
+    let (_path, objects) = fixture_objects(2);
+    let (first, second) = (objects[0].clone(), objects[1].clone());
+    let (mut test, (states, _marked, sections, window, _landing, _ctrl)) = TestingRunner::new(
+        switched_code_harness,
+        (600., 300.).into(),
+        |runner| code_states!(runner, Reading::default()),
+        1.,
+    );
+    let mut open = states.objects;
+    open.write().extend([first.clone(), second.clone()]);
+    settle(&mut test);
+
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(first.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    settle(&mut test);
+    let asked = window
+        .peek()
+        .clone()
+        .expect("the first skeleton is asked for");
+    assert!(Arc::ptr_eq(&asked.object, &first));
+
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(second.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    settle(&mut test);
+    assert!(
+        sections.peek().is_about(&second),
+        "the reading did not follow the second tab"
+    );
+    let asked = window
+        .peek()
+        .clone()
+        .expect("the second skeleton is asked for");
+    assert!(
+        Arc::ptr_eq(&asked.object, &second),
+        "the window is still about the first object"
+    );
+    assert!(asked.code.is_none());
+}
+
 /// The rows are rebuilt a pass after an answer lands, and for that pass the pane can read
 /// a reading newer than the rows on screen. A stretch the answer let go of is still drawn
 /// from the old rows, and has to be drawn from what it was counted from: against the new

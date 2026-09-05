@@ -540,6 +540,19 @@ impl Component for SectionList {
         let rows = use_consume::<CodeRows>().0;
 
         let object = self.object.clone();
+        // The object as `use_window`'s effect reads it. That effect's closure is built on
+        // the first render and never again, and the strip moving between two objects'
+        // code tabs **re-renders this scope rather than remounting it**: freya keeps a
+        // same-key component's hooks and only replaces its props. An object captured in
+        // the closure would stay the first one, every run after the switch would find the
+        // reading about something else, and the second tab would draw an empty listing
+        // for as long as it was open. Written here by pointer identity, and read in the
+        // effect, which is what wakes it on another object.
+        let mut current = use_state(|| object.clone());
+        let moved = !Arc::ptr_eq(&current.peek(), &object);
+        if moved {
+            current.set(object.clone());
+        }
         let about = reading.is_about(&object);
         let generation = if about {
             Some(reading.generation)
@@ -587,14 +600,7 @@ impl Component for SectionList {
             &entry,
             generation,
         );
-        use_window(
-            reading_state,
-            window,
-            rows,
-            controller,
-            viewport,
-            object.clone(),
-        );
+        use_window(reading_state, window, rows, controller, viewport, current);
 
         // No skeleton yet means no rows, and a list of none: mounted all the same, see
         // `SectionRows::rows`.
@@ -1326,18 +1332,20 @@ fn use_window(
     rows: State<Option<Arc<Built>>>,
     controller: ScrollController,
     viewport: State<f32>,
-    object: Arc<Object>,
+    object: State<Arc<Object>>,
 ) {
     use_side_effect(move || {
-        // The four inputs a scroll, a resize, an answer or a change of reading brings.
-        // The reading is **read**, so the effect follows it: the pane mounts a beat
-        // before the reading becomes its own -- `Active` is a memo and `use_reading_of`
-        // runs off it -- and a run that found the reading about something else asked for
-        // nothing, and nothing woke it until the pane was resized. Reading it cannot loop:
-        // the one thing written here is the window, and only when it changed.
+        // The five inputs a scroll, a resize, an answer, a change of reading or another
+        // object brings. The reading is **read**, so the effect follows it: the pane
+        // mounts a beat before the reading becomes its own -- `Active` is a memo and
+        // `use_reading_of` runs off it -- and a run that found the reading about something
+        // else asked for nothing, and nothing woke it until the pane was resized. The
+        // object is read and never captured, for the reason in the pane. Reading them
+        // cannot loop: the one thing written here is the window, and only when it changed.
         let (_, offset) = <(i32, i32)>::from(controller);
         let viewport = *viewport.read();
         let rows = rows.read().clone();
+        let object = object.read().clone();
         let reading = reading.read();
         if !reading.is_about(&object) {
             return;

@@ -614,9 +614,13 @@ and for that pass the reading the pane can read is newer than the rows on screen
 answer let go of, drawn from the old rows against the new reading, found no bytes, and every one of
 its rows fell back to one key, which freya's diff panics on. The list draws from the pair and never
 from the two apart; a gap row is keyed by its own address besides. `use_window` reads the
-controller, the viewport, the rows **and the reading**. The pane mounts a beat before the reading is
-its own, `Active` being a memo, and a run that found the reading about something else must be woken
-when it catches up, or the tab stays empty until the pane is resized. It asks, through `Window`,
+controller, the viewport, the rows, the reading **and the pane's own object**. The pane mounts a
+beat before the reading is its own, `Active` being a memo, and a run that found the reading about
+something else must be woken when it catches up, or the tab stays empty until the pane is resized.
+The object is read from a state written by each render and never captured: a switch between two
+objects' code tabs re-renders this scope rather than remounting it (`src/ui/split.rs`), while the
+effect's closure is built once, so an effect holding the first object went on asking for nothing
+and the second tab drew an empty listing for as long as it was open. It asks, through `Window`,
 which the worker's sender reads, for the stretches within `BUFFER` (3) screens above and below the
 viewport that are not held, nearest the middle of the viewport first and at most `WINDOW` (64) of
 them. The worker answers a chunk, the rows change, the effect wakes on them and asks for the rest,
