@@ -285,7 +285,9 @@ UI has lost.
 
 A stop is also how a worker parked in a read is let go: the pipes close with the process,
 so the read ends instead of waiting on a server that will never answer. That is why the
-kill happens on the UI thread and the worker is only told afterwards.
+kill happens on the UI thread and the worker is only told afterwards -- and why the handle
+reaches the app at the spawn rather than at the handshake, the handshake being one of the
+reads a worker can be parked in.
 
 ## The worker and what an answer is about
 
@@ -301,10 +303,17 @@ Two things say which server an answer is about, and they are not the same thing:
 - The **run** counts starts and stops. `use_analysis` compares questions instead, but what
   an answer here is about is a process, which does not exist until the worker has started
   it. An answer whose run has moved is dropped.
-- The **handle** is what ends that process. A `Started` answer arriving for a dead run is
-  **stopped**, not dropped: that is the first moment anything in the app holds it, and a
-  handle dropped instead of stopped is a server nothing can ever find again (`pad.rs` has
-  the same rule for a run's process).
+- The **handle** is what ends that process. It arrives in `Spawned`, the moment the
+  process exists and **before** the handshake, since a stop while the server is starting
+  has nothing else to kill: a program that takes the pipe and answers nothing -- a wrapper
+  pointed at a daemon that is not there, a name that is no language server -- would
+  otherwise hold the worker in that read for the life of the app, with every later start
+  queued behind it and the control saying "starting" for ever. A `Spawned` or a `Started`
+  arriving for a dead run is **stopped**, not dropped: a handle dropped instead of stopped
+  is a server nothing can ever find again (`pad.rs` has the same rule for a run's
+  process). It is also what closes the race the other way -- a stop pressed before the
+  worker has even spawned finds nothing, and the `Spawned` that follows it is for a run
+  that has moved, so the kill happens there.
 
 Which **question** an answer is to is a third thing, and the run cannot stand in for it: a
 run lasts as long as the server, so two questions inside one is the ordinary case.

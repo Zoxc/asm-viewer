@@ -19274,6 +19274,60 @@ fn an_answer_for_a_server_that_was_stopped_is_dropped() {
     );
 }
 
+/// A stop pressed while the server is starting reaches the process all the same.
+///
+/// The case it is for: a program that takes the pipe and answers nothing -- a wrapper
+/// pointed at a daemon that is not there, or a name that is no language server at all.
+/// The worker is then inside a handshake that never returns, and what lets it out is the
+/// pipes closing, which is the kill. Waiting for the handshake to hand the handle over
+/// left the stop with nothing to press against and the worker parked for the life of the
+/// app.
+#[test]
+fn a_stop_while_it_is_starting_still_kills_the_process() {
+    let handle = lsp::Handle::to_nothing();
+    let (mut test, states, language, _asking, _asks) = mount_server!({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            // The process is there and the handshake is where the worker stays: no
+            // `Started` is ever sent, which is a program that reads and does not answer.
+            LspJob::Start { run, spawned, .. } => {
+                let _ = spawned.send_blocking(LspAnswer::Spawned {
+                    run,
+                    handle: handle.clone(),
+                });
+                None
+            }
+            _ => None,
+        }
+    });
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    // Until the app is holding it, which is what the press below has to reach.
+    for _ in 0..500 {
+        settle(&mut test);
+        let held = language.read().holding();
+        if held {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(language.read().state, Lsp::Starting);
+    assert!(
+        language.read().holding(),
+        "the app is not holding a process it started"
+    );
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+
+    assert_eq!(language.read().state, Lsp::Off);
+    assert!(
+        handle.finished(),
+        "a stop while it was starting killed nothing"
+    );
+}
+
 /// Leaving the project ends its server: it was started over that directory, and the next
 /// project is not what it read.
 #[test]
@@ -19749,6 +19803,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
                 program: "rust-analyzer".to_owned(),
                 settings: lsp::Settings::none(),
                 notes: async_channel::unbounded().0,
+                spawned: async_channel::unbounded().0,
             },
             LspJob::ReadSettings {
                 directory: PathBuf::from("/p"),

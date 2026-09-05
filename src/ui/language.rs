@@ -26,6 +26,10 @@
 //! Neither says which **question** an answer is to. A run lasts as long as the server, so
 //! two questions inside one is the ordinary case; the id [`ask_where`] mints is what an
 //! asker matches its own answer by.
+//!
+//! The handle arrives the moment the process does and not when the handshake is over: a
+//! program that reads its input and answers nothing would otherwise hold the worker in
+//! that read for the life of the app, with nothing for a stop to kill.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -75,7 +79,8 @@ pub(crate) struct Language {
     /// Which server the answers arriving are about, counted up by every start and every
     /// stop.
     pub(crate) run: u64,
-    /// What ends the running server. `None` unless one is running.
+    /// What ends the server. Held from the moment the worker says the process is there,
+    /// which is before the handshake: a stop while it is starting has to reach it too.
     server: Option<lsp::Handle>,
 }
 
@@ -102,6 +107,13 @@ impl Language {
     /// until it was answered, with every click queued behind it (`src/ui/linking.rs`).
     pub(crate) fn ready(&self) -> bool {
         matches!(self.state, Lsp::Running) && !self.working
+    }
+
+    /// Whether the app is holding what would end a server, which is a process that
+    /// exists. For the tests: nothing drawn asks it.
+    #[cfg(test)]
+    pub(crate) fn holding(&self) -> bool {
+        self.server.is_some()
     }
 
     /// Whether something is going on: starting one, or a server reading the project.
@@ -218,6 +230,9 @@ pub(crate) enum LspJob {
         /// thread may read no UI state, exactly as `program` and `directory` are.
         settings: lsp::Settings,
         notes: async_channel::Sender<(u64, lsp::Note)>,
+        /// Where [`LspAnswer::Spawned`] goes, which is the app's own answer channel. A
+        /// start is the one job with something to say before it is done.
+        spawned: async_channel::Sender<LspAnswer>,
     },
     /// Read the project's own `.vscode/settings.json`. A file read blocks, so it happens
     /// here rather than on the UI thread; it is this worker's and not the build worker's
@@ -243,6 +258,10 @@ pub(crate) enum LspJob {
 /// What came of it. Every answer names the run it is about, and one whose run has moved
 /// on is not the answer to any question anybody still has.
 pub(crate) enum LspAnswer {
+    /// The process exists. Sent from inside the `Start` job and before the handshake,
+    /// which is what puts the handle where a stop can reach it: until this the worker is
+    /// in a read that only the pipes closing ends, and the pipes close with the process.
+    Spawned { run: u64, handle: lsp::Handle },
     Started {
         run: u64,
         server: Result<lsp::Handle, lsp::Failure>,
@@ -297,6 +316,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 program,
                 settings,
                 notes,
+                spawned,
             } => {
                 // Whatever was there is dropped first, which kills it: two servers over
                 // one project would be twice the memory for one answer.
@@ -309,6 +329,14 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 };
                 let started =
                     lsp::start_in(&program, &directory, told).and_then(|(mut server, handle)| {
+                        // Before the handshake, which a program that reads its input and
+                        // answers nothing never returns from. What ends that read is the
+                        // pipes closing, so the app has to be holding the handle by then
+                        // or a stop has nothing to press against.
+                        let _ = spawned.send_blocking(LspAnswer::Spawned {
+                            run,
+                            handle: handle.clone(),
+                        });
                         server.initialize(&directory, settings.options())?;
                         Ok((server, handle))
                     });
@@ -425,6 +453,9 @@ pub(crate) struct LspJobs {
     /// Handed to each server started, so what it says while nothing was asked arrives
     /// under the run it was started in.
     notes: async_channel::Sender<(u64, lsp::Note)>,
+    /// The answers channel, handed to each start so the worker can say the process is
+    /// there before it has finished shaking hands with it.
+    spawned: async_channel::Sender<LspAnswer>,
     /// What the next question is numbered. One counter for every question put, so no two
     /// of them are ever asked under one id.
     asked: Arc<AtomicU64>,
@@ -460,6 +491,8 @@ pub(crate) fn use_language_with(
     let jobs = use_hook(move || {
         let (requests, jobs) = async_channel::unbounded::<LspJob>();
         let (answered, answers) = async_channel::unbounded::<LspAnswer>();
+        // The same channel, for the one answer a job sends before it is finished.
+        let spawning = answered.clone();
         // Bounded: a server that reports progress in a tight loop is one the app can fall
         // behind, and the reader thread waiting is the only backpressure there is.
         let (told, notes) = async_channel::bounded::<(u64, lsp::Note)>(64);
@@ -484,6 +517,22 @@ pub(crate) fn use_language_with(
         spawn(async move {
             while let Ok(answer) = answers.recv().await {
                 match answer {
+                    LspAnswer::Spawned { run, handle } => {
+                        // Bound before the write below, as ever.
+                        let held = language.peek().clone();
+                        if held.run != run {
+                            // Stopped while it was starting, which is what this answer is
+                            // for: the stop found nothing to kill, so the kill is here.
+                            // The worker is in the handshake and the pipes closing is
+                            // what lets it out.
+                            handle.stop();
+                            continue;
+                        }
+                        language.set(Language {
+                            server: Some(handle),
+                            ..held
+                        });
+                    }
                     LspAnswer::Started { run, server } => {
                         let held = language.peek().clone();
                         if held.run != run {
@@ -671,6 +720,7 @@ pub(crate) fn use_language_with(
         LspJobs {
             jobs: requests,
             notes: told,
+            spawned: spawning,
             asked: Arc::new(AtomicU64::new(0)),
         }
     });
@@ -796,6 +846,7 @@ fn run_server(mut language: State<Language>, jobs: &LspJobs, asking: Asking) {
         program: asking.program,
         settings,
         notes: jobs.notes.clone(),
+        spawned: jobs.spawned.clone(),
     });
 }
 
@@ -857,7 +908,10 @@ pub(crate) fn revoke_trust(
 ///
 /// The kill happens here and the worker is only told afterwards: a worker waiting on a
 /// server that will never answer is let go by the pipes closing, which is the kill and not
-/// the job.
+/// the job. A server that is still starting is killed the same way -- the handle is the
+/// worker's the moment the process exists ([`LspAnswer::Spawned`]) and not the handshake's
+/// -- and the `Stop` behind it reaches a worker that is out of the read rather than one
+/// parked in it for good.
 pub(crate) fn stop_server(mut language: State<Language>, jobs: &LspJobs) {
     let held = language.peek().clone();
     if matches!(held.state, Lsp::Off) && held.server.is_none() && held.asking.is_none() {
