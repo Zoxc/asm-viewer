@@ -14854,6 +14854,114 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
     assert!(drawn[1..].iter().all(|(_, _, h)| h.is_none()));
 }
 
+/// Which listing [`sweeping_harness`] is drawing, changed under it the way a link
+/// followed in place or a symbol previewed into the temporal tab changes a pane's.
+#[derive(Clone, Copy)]
+struct SweptListing(State<u64>);
+
+/// The list's sideways scroll, mirrored out for the test to read.
+#[derive(Clone, Copy)]
+struct SweptScroll(State<i32>);
+
+/// How wide the rows of either listing measure: wider than the pane by more than the
+/// sweep can scroll over in the ticks the test gives it, so the clamp is never what
+/// stops it.
+const SWEPT_WIDTH: f32 = 5_000.0;
+
+/// A code pane as far as a sweep past its edge is concerned: the box a sweep is measured
+/// against, a `Listing` for its rows and its handler to share, and a listing whose key
+/// the test changes without the pane being mounted again.
+fn sweeping_harness() -> impl IntoElement {
+    let marked = use_consume::<Marked>().0;
+    let mut scrolled = use_consume::<SweptScroll>().0;
+    let listing = *use_consume::<SweptListing>().0.read();
+
+    let widest = use_widest();
+    let controller = use_scroll_controller(ScrollConfig::default);
+    let nudge = use_nudge();
+    let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
+    let bounds = listing_ctx.bounds.clone();
+
+    // What a row of the arriving listing reports as it is first laid out.
+    use_side_effect_with_deps(&listing, move |listing: &u64| {
+        widest.note(*listing, SWEPT_WIDTH);
+    });
+    // Subscribed to the scroll by reading it, so every move the sweep makes is mirrored.
+    use_side_effect(move || {
+        let (x, _) = <(i32, i32)>::from(controller);
+        scrolled.set(x);
+    });
+
+    rect()
+        .expanded()
+        .on_sized(move |e: Event<SizedEventData>| bounds.set(e.area))
+        .on_global_pointer_move(use_sweep_beyond(
+            marked,
+            Pane::Assembly,
+            listing_ctx.clone(),
+            nudge,
+            4,
+            listing,
+        ))
+}
+
+/// A sweep held past the pane's right edge goes on scrolling right after the listing has
+/// changed under the pane. The key the extent is asked under is the render's and not the
+/// mount's: `Widest` answers nothing for a listing it does not hold, and a sweep that
+/// took the mount's key found no extent at all and put the pane back at its left edge on
+/// every tick.
+#[test]
+fn a_sweep_past_the_edge_scrolls_the_listing_the_pane_is_drawing_now() {
+    let (mut test, (marked, listing, scrolled)) = TestingRunner::new(
+        sweeping_harness,
+        (200., 200.).into(),
+        |runner| {
+            (
+                runner
+                    .provide_root_context(|| Marked(State::create(Marks::default())))
+                    .0,
+                runner
+                    .provide_root_context(|| SweptListing(State::create(1)))
+                    .0,
+                runner
+                    .provide_root_context(|| SweptScroll(State::create(0)))
+                    .0,
+            )
+        },
+        1.,
+    );
+    let mut listing = listing;
+    settle(&mut test);
+
+    // A sweep past the right edge of the listing the pane mounted on.
+    let sweep = |test: &mut TestingRunner| {
+        test.move_cursor((300., 100.));
+        test.poll_n(Duration::from_millis(20), 8);
+        *scrolled.peek()
+    };
+    mark_press(marked, false, Pane::Assembly, None, 0, None);
+    let first = sweep(&mut test);
+    assert!(
+        first < 0,
+        "the sweep scrolled to {first} on the first listing"
+    );
+    mark_release(marked);
+    settle(&mut test);
+
+    // Another listing under the same pane, and another sweep: it carries on from where
+    // the pane is rather than snapping back to nothing.
+    listing.set(2);
+    settle(&mut test);
+    mark_press(marked, false, Pane::Assembly, None, 0, None);
+    test.move_cursor((100., 100.));
+    let second = sweep(&mut test);
+    mark_release(marked);
+    assert!(
+        second < first,
+        "the sweep put the new listing at {second}, having left the old one at {first}"
+    );
+}
+
 /// A key under modifiers, which no `TestingRunner` method sends: `press_key` hardcodes
 /// none. Goes to the focused node, as every key does.
 fn key_with(test: &mut TestingRunner, key: Key, modifiers: Modifiers) {

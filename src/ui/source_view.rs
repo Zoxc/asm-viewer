@@ -625,7 +625,7 @@ impl Component for SourceList {
         let grid = pixel_grid();
         // The list as its rows and a sweep past its edge know it: its scroll, its box,
         // the paragraphs the rows lend it, and its widest row.
-        let listing_ctx = use_provide_context(|| Listing::new(controller, widest, listing));
+        let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
         let bounds = listing_ctx.bounds.clone();
         let on_key_down = {
             let source = self.source.clone();
@@ -683,6 +683,7 @@ impl Component for SourceList {
                         listing_ctx.clone(),
                         nudge,
                         length,
+                        listing,
                     ))
                     // On the grid: see `Nudge`.
                     .padding(nudge.padding())

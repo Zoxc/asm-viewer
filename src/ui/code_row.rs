@@ -119,14 +119,15 @@ impl RowChars {
 /// a row that draws the caret out of the pane's sight to bring it sideways into it -- the
 /// box and not the row's own `visible_area`, which freya reports unclipped, the whole row
 /// wide -- and the paragraphs its rows have lent it, for a sweep that has left the rows
-/// to ask a row where a column is. The widest row and its key are the sideways extent.
+/// to ask a row where a column is. The widest row is the sideways extent, asked under the
+/// key the list hands [`use_sweep_beyond`] every render: a key held here is made once and
+/// would go on naming the listing the list was mounted on.
 #[derive(Clone)]
 pub(crate) struct Listing {
     pub(crate) controller: ScrollController,
     pub(crate) bounds: Rc<Cell<Area>>,
     pub(crate) texts: Rc<RefCell<HashMap<usize, RowText>>>,
     pub(crate) widest: Widest,
-    pub(crate) key: u64,
 }
 
 /// A row's laid-out paragraph and where it starts, lent to the list by the row as it
@@ -141,13 +142,12 @@ pub(crate) struct RowText {
 
 impl Listing {
     /// A fresh list, with nothing lent yet.
-    pub(crate) fn new(controller: ScrollController, widest: Widest, key: u64) -> Self {
+    pub(crate) fn new(controller: ScrollController, widest: Widest) -> Self {
         Listing {
             controller,
             bounds: Rc::new(Cell::new(Area::zero())),
             texts: Rc::new(RefCell::new(HashMap::new())),
             widest,
-            key,
         }
     }
 
@@ -761,12 +761,20 @@ fn reach(listing: &Listing, nudge: Nudge, length: usize, at: CursorPoint) -> Opt
 /// writes and the task reads, since nothing arrives from a pointer that is not moving. A
 /// hook, for the cells to outlive the handler a render makes afresh; one task at a time,
 /// the flag says.
+///
+/// `length` and `key` are the listing's rows and its identity in [`Widest`], both this
+/// render's: neither is held in the [`Listing`], since a list handed another listing -- a
+/// link followed in place, a symbol previewed into the temporal tab, a companion file
+/// switching -- is not mounted again, and a key made at the mount would name a listing
+/// that is gone. `Widest` answers nothing for one it does not hold: a sideways extent of
+/// zero, and an autoscroll that pins the pane to its left edge.
 pub(crate) fn use_sweep_beyond(
     marked: State<Marks>,
     pane: Pane,
     listing: Listing,
     nudge: Nudge,
     length: usize,
+    key: u64,
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let last = use_hook(|| Rc::new(Cell::new(None::<CursorPoint>)));
     let running = use_hook(|| Rc::new(Cell::new(false)));
@@ -822,7 +830,7 @@ pub(crate) fn use_sweep_beyond(
                     }
                 }
                 if across != 0 {
-                    let extent = (listing.widest.extent(listing.key) - area.width()).max(0.0);
+                    let extent = (listing.widest.extent(key) - area.width()).max(0.0);
                     let target = (x + across * step).clamp(-(extent as i32), 0);
                     if target != x {
                         controller.scroll_to_x(target);
