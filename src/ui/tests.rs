@@ -10606,6 +10606,74 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
     );
 }
 
+/// **The pad's own file is its own file however the platform spells it.** cargo joins the
+/// target's source path with `Path::join` and rustc echoes back what it was handed, so on
+/// Windows every span in the pad says `src\main.rs`. Compared as a string that is nobody's
+/// file: every diagnostic would keep the plain label, no hover and no press, and the pane
+/// would look as if the compiler had pointed at a dependency for every error in the
+/// reader's own source.
+///
+/// Windows' spelling, run wherever this runs, which is what the rule being one function
+/// over the path rather than a `cfg` buys.
+#[test]
+fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
+    let (mut test, _states, pad, text, _asking, _asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened(scratchpad),
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    let mut pad = pad;
+    pad.write().state_mut().built = Some(Build::Built {
+        executable: fixture_artifact(),
+        diagnostics: vec![Diagnostic {
+            level: Level::Warning,
+            message: "unused variable: `x`".to_owned(),
+            rendered: "warning: unused variable: `x`\n".to_owned(),
+            span: Some(cargo::Span {
+                file: "src\\main.rs".to_owned(),
+                line: 3,
+                column: 5,
+            }),
+        }],
+    });
+    settle(&mut test);
+
+    // Drawn as cargo spelt it, and whole: cutting it to the file's own name is what a path
+    // outside the package gets.
+    let place = label_centre(&test, "src\\main.rs:3:5").expect("the span is drawn");
+
+    test.move_cursor(place);
+    settle(&mut test);
+    assert_eq!(
+        washed(&test),
+        1,
+        "the pad's own file was taken for a dependency's, so the place offers no press"
+    );
+
+    test.click_cursor(place);
+    settle(&mut test);
+
+    let shown = pad.peek().shown().clone();
+    let buffers = text.peek();
+    let editor = buffers.get(&shown);
+    assert_eq!(
+        (editor.cursor_row(), editor.cursor_col()),
+        (2, 4),
+        "the span was pressed and the cursor did not move to it"
+    );
+}
+
 /// A directory of this test's own, named after the line that asked for it.
 fn run_directory(line: u32) -> PathBuf {
     std::env::temp_dir().join(format!(

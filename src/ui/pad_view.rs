@@ -26,6 +26,18 @@ use std::cell::Cell;
 /// The file a scratchpad's source is, as cargo and rustc spell it.
 pub(crate) const SOURCE_FILE: &str = "src/main.rs";
 
+/// Whether the file a diagnostic names is the pad's own source.
+///
+/// **Either separator, on every platform.** cargo hands rustc the path it built with
+/// `Path::join` and rustc echoes it back as it was given, so on Windows the span says
+/// `src\main.rs` and a comparison against the string above makes every diagnostic in the
+/// pad's own file look like a dependency's. Nothing on Unix names a built file with a
+/// backslash in it, so accepting both costs nothing and leaves the rule one function a
+/// test can put Windows' spelling to wherever it runs.
+fn is_source_file(file: &str) -> bool {
+    file.split(['/', '\\']).eq(SOURCE_FILE.split('/'))
+}
+
 /// How wide the delete question is: a pad's name over the path its package is at, which is
 /// the longest thing it draws.
 const DELETE_WIDTH: f32 = 520.0;
@@ -91,7 +103,7 @@ impl Component for SpanTarget {
 /// file and this app opens no other for editing.
 fn pad_place(pad: &PadId, diagnostic: &Diagnostic) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
-    let own = span.file == SOURCE_FILE;
+    let own = is_source_file(&span.file);
     let text = diagnostic_place(span, own);
 
     Some(match own {
