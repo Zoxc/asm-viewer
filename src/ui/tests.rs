@@ -16129,9 +16129,17 @@ fn a_listings_rows_sit_on_whole_device_pixels_wherever_it_is_laid_out() {
 #[test]
 fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
     let shown = shown_sum_to();
+    // Every row on screen at once, so the listing has nothing to scroll over: a sweep
+    // held past an edge scrolls the view as well as reaching the run out, and a listing
+    // moving under the assertions is not what this is about.
+    let rows = {
+        let studied = &shown.studied;
+        let assembly = studied.assembly.as_ref().expect("sum_to has bytes");
+        studied.lanes.listing_rows(assembly.instructions.len())
+    };
     let (mut test, (_states, marked, _landing)) = TestingRunner::new(
         listing_harness,
-        (600., 300.).into(),
+        (600., 900.).into(),
         |runner| listing_states!(runner, shown),
         1.,
     );
@@ -16168,20 +16176,14 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
     let drawn = paragraphs(&test);
     assert!(spans(drawn[2].2, third.min_x(), third.max_x()), "{drawn:?}");
 
-    // Below the window: the last row on screen, cut or whole, to its end; and the rows
-    // swept with it.
-    test.move_cursor((300.0, 900.0));
+    // Below the window: the last row on screen, to its end, and the rows swept with it.
+    // Every row is on screen, so that is the listing's last.
+    test.move_cursor((300.0, 2000.0));
     settle(&mut test);
     let picked = marked.peek().assembly.clone().unwrap();
-    // The last row on screen may be one cut by the pane's edge that the virtual list
-    // has not built, so the lead is the last built row or the one under it.
-    let last_built = paragraphs(&test).len() - 1;
-    assert!(last_built > 2);
+    assert!(rows > 3, "a listing of {rows} rows proves nothing");
     let lead = picked.chars.lead();
-    assert!(
-        lead.row == last_built || lead.row == last_built + 1,
-        "{lead:?} against {last_built}"
-    );
+    assert_eq!(lead.row, rows - 1, "the sweep did not reach the last row");
     assert_eq!(picked.rows.rows(), 0..=lead.row);
 
     // Above the window: the first row on screen, at the column under the pointer's x --
