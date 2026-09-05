@@ -845,15 +845,30 @@ pub(crate) fn use_analysis_with(
         });
     });
 
-    // The locate question. The objects are **peeked** where the listing reads them: an
-    // answer stands until replaced, so a file opened afterwards is not searched until the
-    // line is asked again -- the panel says which objects it answered for by saying when.
-    // A file closed afterwards is the effect below.
+    // The locate question, as the finder's and the search's are asked: **a memo and not a
+    // read**. A fold of the panel's rows and a binary closed under an older answer are
+    // writes to this state too, and an effect reading the state would send the question
+    // again for each of them while the worker is still on it -- a second run of seconds of
+    // work, under the lock every listing question waits on. The memo recomputes for those
+    // writes and wakes nothing, the question being unchanged.
+    //
+    // A question about a name's uses is the language server's, asked where it was pressed
+    // and answered into the same panel; nothing here can answer it.
+    let locating = use_memo(move || {
+        located
+            .read()
+            .pending()
+            .filter(|query| query.symbols_wanted().is_some())
+            .cloned()
+    });
+
+    // The objects are **peeked** where the listing reads them: an answer stands until
+    // replaced, so a file opened afterwards is not searched until the line is asked again
+    // -- the panel says which objects it answered for by saying when. A file closed
+    // afterwards is the effect below.
     use_side_effect(move || {
-        let pending = located.read().pending().cloned();
-        // A question about a name's uses is the language server's, asked where it was
-        // pressed and answered into the same panel; nothing here can answer it.
-        let Some(query) = pending.filter(|query| query.symbols_wanted().is_some()) else {
+        // Reading the memo subscribes this to the question.
+        let Some(query) = locating.read().clone() else {
             return;
         };
         let _ = requests_for_locate.try_send(Question::Locate {

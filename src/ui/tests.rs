@@ -3357,6 +3357,91 @@ fn locations_for_a_line_no_longer_asked_about_are_dropped() {
     assert!(located.peek().pending().is_none());
 }
 
+/// A question already with the worker is not sent again by a write to `Located` that
+/// changes neither what was asked nor what was found -- a fold of the rows on screen, or
+/// the binary an older answer's symbols came from being closed. A locate is seconds of
+/// work under the lock every listing question waits on, and the second run answers what
+/// the first already had.
+#[test]
+fn a_locate_being_worked_is_not_sent_again_by_a_write_beside_it() {
+    let symbols = fixture_symbols();
+    let (first, second) = (
+        Query::line(a_line_of(&symbols[0])),
+        Query::line(a_line_of(&symbols[1])),
+    );
+    assert!(
+        first != second,
+        "the fixture's first two symbols share a line"
+    );
+
+    let (started, starts) = async_channel::unbounded::<Query>();
+    let (gate, gated) = async_channel::unbounded::<()>();
+    let work = move |question: Question| {
+        let Question::Locate { query, objects } = question else {
+            panic!("this test asks only about locations");
+        };
+        let _ = started.send_blocking(query.clone());
+        let _ = gated.recv_blocking();
+        answer(Question::Locate { query, objects })
+    };
+
+    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
+        TestingRunner::new(
+            analysis_harness,
+            (100., 100.).into(),
+            move |runner| analysis_states!(runner, work),
+            1.,
+        );
+    let (mut objects, mut located) = (objects, located);
+    objects.set(vec![symbols[0].object.clone()]);
+    let settle = |test: &mut TestingRunner| {
+        for _ in 0..8 {
+            test.sync_and_update();
+        }
+    };
+    settle(&mut test);
+
+    // An answer to start from, so the panel is holding symbols out of the open binary.
+    located.write().asked = Some(first.clone());
+    pump(&mut test, || !starts.is_empty());
+    assert!(starts.recv_blocking().expect("the worker started") == first);
+    gate.send_blocking(()).expect("the gate");
+    pump(&mut test, || located.peek().found.is_some());
+    assert!(!located
+        .peek()
+        .found
+        .as_ref()
+        .expect("answered")
+        .symbols()
+        .expect("symbols")
+        .0
+        .is_empty());
+
+    // The next question, held inside the worker.
+    located.write().asked = Some(second.clone());
+    pump(&mut test, || !starts.is_empty());
+    assert!(starts.recv_blocking().expect("the worker started") == second);
+
+    // And, while it is being worked, the write beside it: the binary the first answer's
+    // symbols came from is closed, which drops them and writes the state.
+    objects.set(Vec::new());
+    settle(&mut test);
+
+    gate.send_blocking(()).expect("the gate");
+    pump(&mut test, || {
+        located
+            .peek()
+            .found
+            .as_ref()
+            .is_some_and(|found| found.of == second)
+    });
+    settle(&mut test);
+    assert!(
+        starts.is_empty(),
+        "the question was sent to the worker again while it was being worked"
+    );
+}
+
 /// A locate queued behind a listing question cancels it in neither direction: both
 /// answers land. What the drain test above says of the function, said of the worker.
 #[test]

@@ -93,8 +93,13 @@ other way round. The listing is worked first, being what is on screen, then the 
 locate. A window the reader scrolled past is the one question here that *should* go; the next one
 asks for whatever of it still matters. The answer is kept only while its line is the one `asked`
 now, the listing's comparison rule again. There is no `pending` field: a line is pending exactly
-while `asked` and `found` disagree. And **a closed binary takes its locations with it**
-(`Found::retain_open`, in the effect reading `Objects` and when the answer lands). This is
+while `asked` and `found` disagree. The effect that sends it reads that pendency through a **memo**
+and not off the state, the shape the finder's walk and the search are asked in: a fold of the rows
+on screen and `retain_open` are writes to `Located` too, and an effect reading the state would send
+a question the worker already has again for each of them -- a second run of seconds of work, under
+the lock every listing question waits on, answering what the first was about to. And **a closed
+binary takes its locations with it** (`Found::retain_open`, in the effect reading `Objects` and
+when the answer lands). This is
 `Shown::still_open`'s rule in a second place: a `Symbol` holds the file's bytes and this list can
 hold thousands of them. Its one stated limit is the other direction. The answer is about the objects
 that were open when it was asked, so a file opened afterwards is not searched until the line is
