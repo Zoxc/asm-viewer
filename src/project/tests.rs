@@ -1994,6 +1994,23 @@ fn a_hand_edited_recent_that_is_not_an_id_is_refused() {
         .exists());
 }
 
+/// The variable that points this app's storage somewhere of its own, so a second copy does
+/// not write over the first's. Its parsing is what is tested here and not the reading of it:
+/// an environment is one per process and the tests run many at once, so setting one would be
+/// a test that broke whichever others happened to be looking.
+#[test]
+fn a_state_directory_can_be_given_and_an_empty_one_is_not_given() {
+    assert_eq!(
+        given_base(Some("/tmp/somewhere".into())),
+        Some(PathBuf::from("/tmp/somewhere"))
+    );
+    // Unset and empty are the same answer: a variable set to nothing is a script that
+    // meant to set it and did not, and taking it as a path would put a reader's projects
+    // in whatever directory the app was started from.
+    assert_eq!(given_base(Some("".into())), None);
+    assert_eq!(given_base(None), None);
+}
+
 fn id(text: &str) -> ProjectId {
     ProjectId::new(text).expect("an id")
 }

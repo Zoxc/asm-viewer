@@ -39,6 +39,18 @@ use crate::visits::Visits;
 /// The one directory everything this app stores lives under: the projects, the recent
 /// list, the settings and the scratchpads.
 const APP_DIR: &str = "assembly-viewer";
+
+/// The variable that says where all of that goes, in place of the desktop's own state
+/// directory.
+///
+/// It is there because **more than one copy of this app otherwise shares one directory**:
+/// two checkouts, or a build somebody is trying something in beside the window the reader
+/// actually uses. They do not merely take turns -- one writing a file the other's build
+/// cannot parse is one moving the reader's file aside as unreadable, since that is what
+/// every load on the way to a write does (`rescue`). Pointing a second copy somewhere of
+/// its own is the whole of the answer, and it is a variable rather than a flag because it
+/// has to reach every process the app starts.
+pub const STATE_VARIABLE: &str = "ASSEMBLY_VIEWER_STATE";
 const PROJECTS_DIR: &str = "projects";
 const PROJECT_FILE: &str = "project.toml";
 const SESSION_FILE: &str = "session.toml";
@@ -1098,7 +1110,29 @@ impl Session {
 
 /// The directory the app keeps everything in, or `None` on a system with no state or
 /// local data directory to put it in.
+/// Read on **every** call and not cached, so nothing anywhere has to be sequenced against
+/// the moment it is first asked for. It is an environment lookup, and the app asks at most
+/// once per save.
 pub fn base() -> Option<PathBuf> {
+    given_base(std::env::var_os(STATE_VARIABLE)).or_else(desktop_base)
+}
+
+/// The directory the variable names, or `None` where it names nothing.
+///
+/// **Unset and empty are one answer.** A variable set to nothing is what a script that
+/// meant to set it and did not looks like, and taking that as a path would put the reader's
+/// projects in whatever directory the app was started from.
+fn given_base(given: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let given = given?;
+    match given.is_empty() {
+        true => None,
+        false => Some(PathBuf::from(given)),
+    }
+}
+
+/// Where the desktop says an application's state goes, which is where this app keeps it
+/// when nobody has said otherwise.
+fn desktop_base() -> Option<PathBuf> {
     let base = dirs::state_dir().or_else(dirs::data_local_dir)?;
     Some(base.join(APP_DIR))
 }

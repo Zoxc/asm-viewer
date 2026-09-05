@@ -2,6 +2,20 @@
 
 Standing instructions from the user.
 
+- **Never run the app against the user's own storage.** `ASSEMBLY_VIEWER_STATE` names the
+  directory everything the app stores goes in -- the projects, the recent list, the settings,
+  the scratchpads and the panic logs -- and every run started from here must set it somewhere
+  throwaway:
+
+      ASSEMBLY_VIEWER_STATE=$(mktemp -d) cargo run
+
+  Without it a run reorders the reader's recent projects, opens and saves over whatever they
+  had open, and, where two checkouts disagree about a stored format, moves their files aside
+  as unreadable -- which is what every load on the way to a write does when it cannot parse
+  one. Two checkouts of this app sharing the desktop's own state directory have already
+  destroyed a `recents.toml` twice this way. It applies to anything that starts the app,
+  `cargo run --features devtools` included; the tests keep to directories of their own and
+  need nothing.
 - Committing. Whatever is uncommitted when you start stays uncommitted.
 - Run rustfmt over every file you modified, before committing it. Format **only those files**,
   with `rustfmt --edition 2021 <paths>`, and not the workspace: a bare `cargo fmt` reformats
@@ -38,6 +52,10 @@ resolved to clickable symbol names, beside the source it was compiled from. Rust
 workspace, [freya](https://freyaui.dev) 0.4 for the UI.
 
 ## Build
+
+Set `ASSEMBLY_VIEWER_STATE` on every run (the user rule above says why):
+`ASSEMBLY_VIEWER_STATE=$(mktemp -d) cargo run`. It replaces the desktop's own state
+directory, so the app keeps its projects, recents, settings and scratchpads there instead.
 
 `cargo run --features devtools` starts freya's devtools server alongside the app (`[::1]:7354`,
 opt-in so it never reaches a release build). The viewer is a separate `cargo install
