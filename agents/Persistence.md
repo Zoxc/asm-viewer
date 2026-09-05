@@ -201,10 +201,21 @@ disagreeing. A change to only the session marks it **pending**: a tab is express
 binaries rather than the other way round, costs one click to remake, and arrives on every
 navigation, since `open_document` pushes onto a trail or opens a tab on the way to each change of
 document. Nothing in `record` has to *say* which is which: which file a field lives in is what
-decides it, and the `Option<Session>` beside the `Project` it hands back is how it says which half
-it decided. `flush()` writes the pending session, on a 30s timer and from the window's close hook,
-which is the one exit hook freya 0.4 has (`WindowConfig::with_on_close`, a `Send` callback that
-cannot read any `State`, which is exactly why the policy is a static).
+decides it, and the `Option<Session>` beside the `Project` in the `Recorded` it hands back is how it
+says which half it decided. `flush()` writes the pending session, on a 30s timer and from the
+window's close hook, which is the one exit hook freya 0.4 has (`WindowConfig::with_on_close`, a
+`Send` callback that cannot read any `State`, which is exactly why the policy is a static).
+
+**A baseline is what the file holds, so it moves with the write and not with the decision to write
+it.** `record` and `owing` only hand back what to write; the caller moves the baselines afterwards,
+through `wrote_project` and `wrote_session` and only where `write_or_warn` answered that the file
+was written. A failure leaves the change for the next `record` to see again and the session pending
+for the next `flush`. Advancing first meant that a disk full for one tick left the app believing a
+file held a session that never reached it: nothing marked the session pending again, so the close
+hook's flush found nothing to do and the reader kept the one from before, for one warning in a log a
+windowed app never shows. Which baselines a `project.toml` write moves is the
+`binaries_changed` beside it -- the details and the bookmarks always, the binaries only when the
+change was to them, since any other write puts back the list the file already held.
 
 **Every baseline is the state the app boots into**, which is why two of them start empty and two do
 not. The binaries and the session are restored *asynchronously*: the app boots holding nothing and

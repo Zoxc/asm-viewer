@@ -237,6 +237,19 @@ pub struct Details {
     pub cargo: Option<Cargo>,
 }
 
+impl Details {
+    /// The half of a project that is what the user said.
+    fn of(project: &Project) -> Details {
+        Details {
+            name: project.name.clone(),
+            directory: project.directory.clone(),
+            language_server: project.language_server.clone(),
+            trusted: project.trusted,
+            cargo: project.cargo.clone(),
+        }
+    }
+}
+
 /// What the reader chose about building, in `project.toml`'s `[cargo]`.
 ///
 /// A table of its own, so it is **absent** until the reader has chosen something and has
@@ -1132,31 +1145,13 @@ impl Saves {
         self.pending.as_ref().unwrap_or(&self.session)
     }
 
-    fn project(&self, binaries: Vec<PathBuf>) -> Project {
-        Project {
-            name: self.given.name.clone(),
-            directory: self.given.directory.clone(),
-            language_server: self.given.language_server.clone(),
-            trusted: self.given.trusted,
-            binaries,
-            cargo: self.given.cargo.clone(),
-            bookmarks: self.bookmarks.clone(),
-        }
-    }
-
     /// Note that `id` is the project the app is now in, and set every baseline to the
     /// state the app will be in the instant afterwards. The two empty baselines are
     /// *assigned* rather than assumed because a project switched away from leaves its own
     /// binaries and pending session behind.
     fn opened(&mut self, id: ProjectId, project: &Project) {
         self.open = Some(id);
-        self.given = Details {
-            name: project.name.clone(),
-            directory: project.directory.clone(),
-            language_server: project.language_server.clone(),
-            trusted: project.trusted,
-            cargo: project.cargo.clone(),
-        };
+        self.given = Details::of(project);
         self.bookmarks = project.bookmarks.clone();
         self.binaries = Vec::new();
         self.listed = project.binaries.clone();
@@ -1166,7 +1161,7 @@ impl Saves {
 
     /// Take note of the state the app is now in. Hands back the `project.toml` to write
     /// now and the `session.toml` beside it where one is owed, or `None` when nothing
-    /// changed or the change can wait for a [`Saves::flush`].
+    /// changed or the change can wait for a flush.
     ///
     /// A **binaries** change goes to disk at once and carries whatever session was
     /// pending with it, which is what keeps `session.toml` from ever naming a tab into a
@@ -1182,6 +1177,12 @@ impl Saves {
     /// would otherwise go to disk over the good ones. Both baselines are left where they
     /// were for the record that follows the load, which is the one that sees the change.
     /// A binaries change the reader makes in that window waits for the same record.
+    ///
+    /// **No baseline moves here**, since a baseline is what the *file* holds and the file
+    /// has not been written yet. The caller moves them with [`Saves::wrote_project`] and
+    /// [`Saves::wrote_session`] once the write has landed, so a write that fails leaves
+    /// the change for the next record to see again. The pending session is not a baseline
+    /// and is set here as ever: it is what has not been written.
     fn record(
         &mut self,
         details: Details,
@@ -1189,7 +1190,7 @@ impl Saves {
         loading: bool,
         bookmarks: Vec<Bookmark>,
         session: Session,
-    ) -> Option<(Project, Option<Session>)> {
+    ) -> Option<Recorded> {
         let binaries_changed = !loading && self.binaries != binaries;
         let details_changed = self.given != details;
         let bookmarks_changed = self.bookmarks != bookmarks;
@@ -1201,37 +1202,82 @@ impl Saves {
             return None;
         }
 
-        self.given = details;
-        self.bookmarks = bookmarks;
-        // A write that is not about the binaries keeps the ones already in the file, and
-        // leaves both baselines where they were; see [`Saves::listed`].
-        let project = match binaries_changed {
-            true => {
-                self.binaries = binaries.clone();
-                self.listed = binaries.clone();
-                self.project(binaries)
-            }
-            false => self.project(self.listed.clone()),
+        // A write that is not about the binaries keeps the ones already in the file; see
+        // [`Saves::listed`].
+        let listed = match binaries_changed {
+            true => binaries,
+            false => self.listed.clone(),
+        };
+        let project = Project {
+            name: details.name,
+            directory: details.directory,
+            language_server: details.language_server,
+            trusted: details.trusted,
+            binaries: listed,
+            cargo: details.cargo,
+            bookmarks,
         };
 
         if binaries_changed {
-            self.session = session.clone();
-            self.pending = None;
-            return Some((project, Some(session)));
+            return Some(Recorded {
+                project,
+                binaries_changed,
+                session: Some(session),
+            });
         }
 
         if *self.latest() != session {
             self.pending = Some(session);
         }
-        Some((project, None))
+        Some(Recorded {
+            project,
+            binaries_changed,
+            session: None,
+        })
     }
 
-    /// Take whatever was recorded but not written, or `None` when the two already agree.
-    fn flush(&mut self) -> Option<Session> {
-        let session = self.pending.take()?;
-        self.session = session.clone();
-        Some(session)
+    /// Whatever was recorded but not written, or `None` when the two already agree. Left
+    /// pending until [`Saves::wrote_session`] says it reached the disk.
+    fn owing(&self) -> Option<Session> {
+        self.pending.clone()
     }
+
+    /// Note that `project` reached `project.toml`. The details, the bookmarks and the
+    /// binaries the file lists are what it says they are. The app's own list moves only
+    /// when the change was to the binaries: any other write put back the list the file
+    /// already held.
+    fn wrote_project(&mut self, project: &Project, binaries_changed: bool) {
+        self.given = Details::of(project);
+        self.bookmarks = project.bookmarks.clone();
+        self.listed = project.binaries.clone();
+        if binaries_changed {
+            self.binaries = project.binaries.clone();
+        }
+    }
+
+    /// Note that `session` reached `session.toml`: it is what the file holds, and nothing
+    /// is owed.
+    fn wrote_session(&mut self, session: Session) {
+        self.session = session;
+        self.pending = None;
+    }
+
+    /// The other answer: the write did not happen, so the session is owed again and the
+    /// next flush tries it rather than finding nothing to do.
+    fn owes_session(&mut self, session: Session) {
+        self.pending = Some(session);
+    }
+}
+
+/// What a [`Saves::record`] decided to write, and what it takes to note that it landed.
+struct Recorded {
+    /// The `project.toml` to write now.
+    project: Project,
+    /// The `session.toml` to write beside it, which only a binaries change carries.
+    session: Option<Session>,
+    /// Whether that change was to the binaries: the one baseline `project.toml`'s write
+    /// moves only sometimes.
+    binaries_changed: bool,
 }
 
 fn saves() -> MutexGuard<'static, Saves> {
@@ -1343,21 +1389,30 @@ pub fn record(
     session: Session,
 ) {
     // The write happens under the lock, so two writes can never reach the file out of
-    // the order they were decided in.
+    // the order they were decided in, and nothing can slip between a write and the
+    // baseline it moves.
     let mut saves = saves();
-    let Some((project, session)) = saves.record(details, binaries, loading, bookmarks, session)
-    else {
+    let Some(recorded) = saves.record(details, binaries, loading, bookmarks, session) else {
         return;
     };
     let Some(directory) = writing_into(&mut saves) else {
         log::warn!("no state directory to save the project in");
+        if let Some(session) = recorded.session {
+            saves.owes_session(session);
+        }
         return;
     };
-    write_or_warn(&directory.join(PROJECT_FILE), |path| {
-        write_toml(path, &project)
-    });
-    if let Some(session) = session {
-        write_or_warn(&directory.join(SESSION_FILE), |path| session.save_to(path));
+
+    if write_or_warn(&directory.join(PROJECT_FILE), |path| {
+        write_toml(path, &recorded.project)
+    }) {
+        saves.wrote_project(&recorded.project, recorded.binaries_changed);
+    }
+    if let Some(session) = recorded.session {
+        match write_or_warn(&directory.join(SESSION_FILE), |path| session.save_to(path)) {
+            true => saves.wrote_session(session),
+            false => saves.owes_session(session),
+        }
     }
 }
 
@@ -1365,14 +1420,16 @@ pub fn record(
 /// which is what makes it safe to call on a timer.
 pub fn flush() {
     let mut saves = saves();
-    let Some(session) = saves.flush() else {
+    let Some(session) = saves.owing() else {
         return;
     };
     let Some(directory) = writing_into(&mut saves) else {
         log::warn!("no state directory to save the session in");
         return;
     };
-    write_or_warn(&directory.join(SESSION_FILE), |path| session.save_to(path));
+    if write_or_warn(&directory.join(SESSION_FILE), |path| session.save_to(path)) {
+        saves.wrote_session(session);
+    }
 }
 
 /// The directory the two files go in, allocating a project for them if this is the first
@@ -1384,11 +1441,14 @@ fn writing_into(saves: &mut Saves) -> Option<PathBuf> {
 }
 
 /// Any IO failure is logged and swallowed: failing to persist is never worth interrupting
-/// the user for.
-fn write_or_warn(path: &Path, write: impl FnOnce(&Path) -> std::io::Result<()>) {
+/// the user for. Answers whether the file was written, which is what says whether the
+/// baseline behind it may move: a save recorded as done is a save nothing retries.
+fn write_or_warn(path: &Path, write: impl FnOnce(&Path) -> std::io::Result<()>) -> bool {
     if let Err(error) = write(path) {
         log::warn!("could not save {}: {error}", path.display());
+        return false;
     }
+    true
 }
 
 #[cfg(test)]

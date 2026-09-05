@@ -1328,6 +1328,25 @@ fn session_with(selection: Option<&str>) -> Session {
     }
 }
 
+/// The writes landing, which is what the caller does once `write_or_warn` has answered:
+/// the baselines move with the files and not before. Every test but the ones about a
+/// write that fails goes through this.
+fn landed(saves: &mut Saves, recorded: Option<Recorded>) -> Option<(Project, Option<Session>)> {
+    let recorded = recorded?;
+    saves.wrote_project(&recorded.project, recorded.binaries_changed);
+    if let Some(session) = recorded.session.clone() {
+        saves.wrote_session(session);
+    }
+    Some((recorded.project, recorded.session))
+}
+
+/// The same for the session a flush writes.
+fn flushed(saves: &mut Saves) -> Option<Session> {
+    let session = saves.owing()?;
+    saves.wrote_session(session.clone());
+    Some(session)
+}
+
 /// `record` with the details the project already has, so every test using this is asking
 /// about a change to the binaries or the session and nothing else. The rename tests spell
 /// theirs out.
@@ -1338,7 +1357,8 @@ fn recorded(
 ) -> Option<(Project, Option<Session>)> {
     let unchanged = saves.given.clone();
     let bookmarks = saves.bookmarks.clone();
-    saves.record(unchanged, binaries, false, bookmarks, session)
+    let decided = saves.record(unchanged, binaries, false, bookmarks, session);
+    landed(saves, decided)
 }
 
 fn written(
@@ -1358,7 +1378,8 @@ fn mid_load(
 ) -> Option<(Project, Option<Session>)> {
     let unchanged = saves.given.clone();
     let bookmarks = saves.bookmarks.clone();
-    saves.record(unchanged, paths(binaries), true, bookmarks, session)
+    let decided = saves.record(unchanged, paths(binaries), true, bookmarks, session);
+    landed(saves, decided)
 }
 
 #[test]
@@ -1367,7 +1388,7 @@ fn the_state_the_app_boots_into_is_never_written() {
     // The save observer's first run, before anything is restored. Nothing may come of
     // it: the files on disk are the good ones, and no project directory is allocated.
     assert_eq!(recorded(&mut saves, Vec::new(), Session::new()), None);
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), None);
 }
 
 #[test]
@@ -1391,7 +1412,7 @@ fn opening_a_binary_is_written_at_once() {
         ))
     );
     // And is not written a second time by the next flush.
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), None);
 }
 
 /// Closing one takes the same path opening one does: `binaries` is what `record` looks
@@ -1412,7 +1433,7 @@ fn closing_a_binary_is_written_at_once() {
         written.and_then(|(_, session)| session),
         Some(session_with(Some("a.o")))
     );
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), None);
 }
 
 /// The empty project is a project, and it has to reach the disk or the next run reopens
@@ -1424,7 +1445,7 @@ fn closing_the_only_binary_is_written_too() {
 
     let written = recorded(&mut saves, Vec::new(), Session::new());
     assert_eq!(written, Some((Project::default(), Some(Session::new()))));
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), None);
 }
 
 #[test]
@@ -1433,8 +1454,8 @@ fn a_selection_change_waits_for_the_flush() {
     written(&mut saves, &["/tmp/lib.a"], None);
 
     assert_eq!(written(&mut saves, &["/tmp/lib.a"], Some("a.o")), None);
-    assert_eq!(saves.flush(), Some(session_with(Some("a.o"))));
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), Some(session_with(Some("a.o"))));
+    assert_eq!(flushed(&mut saves), None);
 }
 
 #[test]
@@ -1447,12 +1468,12 @@ fn recording_the_same_project_again_changes_nothing() {
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
     assert_eq!(written(&mut saves, &["/tmp/lib.a"], Some("a.o")), None);
     // Still pending, and still exactly one write.
-    assert_eq!(saves.flush(), Some(session_with(Some("a.o"))));
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), Some(session_with(Some("a.o"))));
+    assert_eq!(flushed(&mut saves), None);
 
     // And once written, re-recording it is not a second write either.
     assert_eq!(written(&mut saves, &["/tmp/lib.a"], Some("a.o")), None);
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), None);
 }
 
 #[test]
@@ -1466,7 +1487,7 @@ fn opening_a_binary_carries_the_pending_change_with_it() {
         written.and_then(|(_, session)| session),
         Some(session_with(Some("a.o")))
     );
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), None);
 }
 
 /// A tab is pending and not an immediate write, and nothing in `record` says so: which
@@ -1482,8 +1503,8 @@ fn opening_a_tab_waits_for_the_flush() {
         recorded(&mut saves, paths(&["/tmp/lib.a"]), session.clone()),
         None
     );
-    assert_eq!(saves.flush(), Some(session));
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), Some(session));
+    assert_eq!(flushed(&mut saves), None);
 }
 
 /// The name and the directory survive a record that is not about them, the write carrying
@@ -1557,7 +1578,7 @@ fn a_binary_landing_mid_load_is_not_written() {
         mid_load(&mut saves, &["/tmp/vmlinux"], Session::new()),
         None
     );
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), None);
 
     // The second lands while the load is still in flight, so the baseline stays behind
     // it: the record after the load has to see a change even where nothing more arrived.
@@ -1592,15 +1613,14 @@ fn a_rename_mid_load_leaves_the_binaries_baseline_behind() {
         name: Some("kernel".into()),
         ..saves.given.clone()
     };
-    let (project, session) = saves
-        .record(
-            named,
-            paths(&["/tmp/lib.a", "/tmp/some.dll"]),
-            true,
-            Vec::new(),
-            Session::new(),
-        )
-        .expect("a write");
+    let decided = saves.record(
+        named,
+        paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+        true,
+        Vec::new(),
+        Session::new(),
+    );
+    let (project, session) = landed(&mut saves, decided).expect("a write");
     assert_eq!(project.name.as_deref(), Some("kernel"));
     assert_eq!(
         project.binaries,
@@ -1635,15 +1655,14 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
         trusted: false,
         cargo: None,
     };
-    let written = saves
-        .record(
-            named.clone(),
-            paths(&["/tmp/lib.a"]),
-            false,
-            Vec::new(),
-            session_with(Some("a.o")),
-        )
-        .expect("a write");
+    let decided = saves.record(
+        named.clone(),
+        paths(&["/tmp/lib.a"]),
+        false,
+        Vec::new(),
+        session_with(Some("a.o")),
+    );
+    let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(
         written.0,
         Project {
@@ -1658,19 +1677,17 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
     );
     // The session was not owed, and is still pending: the rename did not take it along.
     assert_eq!(written.1, None);
-    assert_eq!(saves.flush(), Some(session_with(Some("a.o"))));
+    assert_eq!(flushed(&mut saves), Some(session_with(Some("a.o"))));
 
     // And the same name recorded again is not a second write.
-    assert_eq!(
-        saves.record(
-            named,
-            paths(&["/tmp/lib.a"]),
-            false,
-            Vec::new(),
-            session_with(Some("a.o"))
-        ),
-        None
+    let decided = saves.record(
+        named,
+        paths(&["/tmp/lib.a"]),
+        false,
+        Vec::new(),
+        session_with(Some("a.o")),
     );
+    assert_eq!(landed(&mut saves, decided), None);
 }
 
 /// Clearing a name writes the key away rather than leaving the old one on disk.
@@ -1687,15 +1704,14 @@ fn clearing_a_name_is_a_change_too() {
         },
     );
 
-    let written = saves
-        .record(
-            Details::default(),
-            Vec::new(),
-            false,
-            Vec::new(),
-            Session::new(),
-        )
-        .expect("a write");
+    let decided = saves.record(
+        Details::default(),
+        Vec::new(),
+        false,
+        Vec::new(),
+        Session::new(),
+    );
+    let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(written.0.name, None);
     assert_eq!(written.1, None);
 }
@@ -1724,27 +1740,78 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
         trusted: false,
         cargo: None,
     };
-    let written = saves
-        .record(named, Vec::new(), true, Vec::new(), Session::new())
-        .expect("a write");
+    let decided = saves.record(named, Vec::new(), true, Vec::new(), Session::new());
+    let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(written.0.name.as_deref(), Some("kernel"));
     assert_eq!(written.0.binaries, loaded.binaries);
 
     // Once the parse lands the write *is* about the binaries, which is the one kind that
     // may replace the list.
-    let written = saves
-        .record(
-            saves.given.clone(),
-            paths(&["/tmp/vmlinux"]),
-            false,
-            Vec::new(),
-            Session::new(),
-        )
-        .expect("a write");
+    let decided = saves.record(
+        saves.given.clone(),
+        paths(&["/tmp/vmlinux"]),
+        false,
+        Vec::new(),
+        Session::new(),
+    );
+    let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(written.0.binaries, paths(&["/tmp/vmlinux"]));
     // Closing the last one is still a real change and still empties the file.
     let written = recorded(&mut saves, Vec::new(), Session::new()).expect("a write");
     assert_eq!(written.0.binaries, Vec::<PathBuf>::new());
+}
+
+/// A write that did not land leaves the change for the next record to see: a baseline is
+/// what the file holds, so it moves with the file and not with the decision to write it.
+/// Otherwise a full disk costs the reader their binaries and bookmarks until the next
+/// binaries change, with one warning in a log a windowed app never shows.
+#[test]
+fn a_write_that_failed_is_recorded_again() {
+    let mut saves = Saves::new();
+
+    // A binaries change, written at once -- and neither file reaches the disk, so
+    // nothing is noted as written and the session is owed.
+    let decided = saves.record(
+        saves.given.clone(),
+        paths(&["/tmp/lib.a"]),
+        false,
+        Vec::new(),
+        session_with(Some("a.o")),
+    );
+    let failed = decided.expect("a write");
+    assert_eq!(failed.project.binaries, paths(&["/tmp/lib.a"]));
+    saves.owes_session(failed.session.expect("the session went with it"));
+
+    // The next record is the same change over again, both halves of it.
+    let (project, session) = recorded(
+        &mut saves,
+        paths(&["/tmp/lib.a"]),
+        session_with(Some("a.o")),
+    )
+    .expect("the write again");
+    assert_eq!(project.binaries, paths(&["/tmp/lib.a"]));
+    assert_eq!(session, Some(session_with(Some("a.o"))));
+    // And now that it has landed, it is not written a third time.
+    assert_eq!(flushed(&mut saves), None);
+}
+
+/// The same for the session a flush writes. The tick that fails is the ordinary case, and
+/// the close hook's flush is the one that must not then find nothing to do.
+#[test]
+fn a_session_whose_write_failed_is_still_owed() {
+    let mut saves = Saves::new();
+    written(&mut saves, &["/tmp/lib.a"], None);
+    // A selection, pending as ever.
+    written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
+
+    // The 30 s tick, and the write fails.
+    let owed = saves.owing().expect("a session to write");
+    saves.owes_session(owed.clone());
+
+    // The window is closed, and the hook's flush still has it.
+    assert_eq!(saves.owing(), Some(owed));
+    assert_eq!(flushed(&mut saves), Some(session_with(Some("a.o"))));
+    assert_eq!(flushed(&mut saves), None);
 }
 
 /// Entering another project empties every baseline, the app being about to be emptied: a
@@ -1765,24 +1832,22 @@ fn entering_a_project_empties_every_baseline() {
 
     // The state a switch leaves the app in: nothing open, nothing selected, and the name
     // of the project just entered — every one of them the baseline.
-    assert_eq!(
-        saves.record(
-            Details {
-                name: entered.name.clone(),
-                directory: entered.directory.clone(),
-                language_server: None,
-                trusted: false,
-                cargo: None,
-            },
-            Vec::new(),
-            false,
-            Vec::new(),
-            Session::new()
-        ),
-        None
+    let decided = saves.record(
+        Details {
+            name: entered.name.clone(),
+            directory: entered.directory.clone(),
+            language_server: None,
+            trusted: false,
+            cargo: None,
+        },
+        Vec::new(),
+        false,
+        Vec::new(),
+        Session::new(),
     );
+    assert_eq!(landed(&mut saves, decided), None);
     // Nor is the old project's pending session waiting to be written into the new one.
-    assert_eq!(saves.flush(), None);
+    assert_eq!(flushed(&mut saves), None);
 }
 
 /// A directory of this test's own, named after the line that asked for it.
@@ -2568,15 +2633,14 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         name: "target".into(),
         document: saved_symbol("a.o", "target", 6),
     });
-    let (project, session) = saves
-        .record(
-            saves.given.clone(),
-            Vec::new(),
-            false,
-            added.clone(),
-            Session::new(),
-        )
-        .expect("a write");
+    let decided = saves.record(
+        saves.given.clone(),
+        Vec::new(),
+        false,
+        added.clone(),
+        Session::new(),
+    );
+    let (project, session) = landed(&mut saves, decided).expect("a write");
     assert!(session.is_none(), "the session went with it");
     assert_eq!(project.bookmarks, added);
     assert_eq!(
@@ -2585,15 +2649,14 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
     );
 
     // Removing them all is a change too, written as an absent key.
-    let (project, _) = saves
-        .record(
-            saves.given.clone(),
-            Vec::new(),
-            false,
-            Vec::new(),
-            Session::new(),
-        )
-        .expect("a write");
+    let decided = saves.record(
+        saves.given.clone(),
+        Vec::new(),
+        false,
+        Vec::new(),
+        Session::new(),
+    );
+    let (project, _) = landed(&mut saves, decided).expect("a write");
     assert!(project.bookmarks.is_empty());
 }
 
