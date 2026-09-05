@@ -108,6 +108,22 @@ impl CharSelection {
         )
     }
 
+    /// The run with every row put through `row_of`; `None` where any row has no answer.
+    /// Each end is mapped as itself, so the caret stays the end it was swept to.
+    pub fn mapped(self, row_of: impl Fn(usize) -> Option<usize>) -> Option<Self> {
+        let map = |caret: Caret| {
+            Some(Caret {
+                row: row_of(caret.row)?,
+                col: caret.col,
+            })
+        };
+        Some(CharSelection {
+            anchor: map(self.anchor)?,
+            lead: map(self.lead)?,
+            goal: self.goal,
+        })
+    }
+
     /// The run collapsed to its lead: what Escape makes of a selection.
     pub fn collapsed(self) -> Self {
         CharSelection::at(self.lead)

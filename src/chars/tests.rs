@@ -356,3 +356,24 @@ fn a_sweep_by_rows_takes_whole_rows_either_way() {
         CharSelection::at(Caret { row: 5, col: END })
     );
 }
+
+/// Mapping a run's rows keeps which end is the caret and keeps the goal column the
+/// vertical moves aim for, and answers `None` where a row has no row any more.
+#[test]
+fn a_mapped_run_keeps_its_lead_and_its_goal() {
+    let up = CharSelection::at(caret(3, 5)).extended(caret(1, 2));
+    let mapped = up.mapped(|row| Some(row + 1)).expect("every row answered");
+    assert_eq!(
+        mapped.lead(),
+        caret(2, 2),
+        "the lead came back at the bottom"
+    );
+    assert_eq!(mapped.ends(), (caret(2, 2), caret(4, 5)));
+    assert_eq!(up.mapped(|row| (row != 3).then_some(row)), None);
+
+    // The goal survives, so a move down through a short row still comes back to it.
+    let down = moved(CharSelection::at(caret(0, 10)), Motion::Down, false);
+    let mapped = down.mapped(|row| Some(row + 1)).expect("the row answered");
+    assert_eq!(mapped.lead(), caret(2, 3));
+    assert_eq!(moved(mapped, Motion::Down, false).lead(), caret(3, 4));
+}

@@ -12047,6 +12047,67 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     assert_eq!(picked.rows.rows(), now..=now);
 }
 
+/// A run carried across a recount keeps the caret at the end it was swept to. The carry
+/// used to rebuild the characters out of `ends()`, which answers the two ends in listing
+/// order and says nothing about which is the lead, so a selection swept upwards came back
+/// with its caret at the bottom -- while the row run beside it, mapped end for end, still
+/// said the top. Escape then collapsed to the wrong row and the next key moved from it.
+#[test]
+fn a_carried_run_keeps_the_caret_at_the_end_it_was_swept_to() {
+    // Pressed on row 40, swept up to row 20.
+    let swept = Picked {
+        rows: RowSelection {
+            anchor: 40,
+            lead: 20,
+            dragging: false,
+        },
+        chars: CharSelection::at(Caret { row: 40, col: 7 }).extended(Caret { row: 20, col: 3 }),
+        by_rows: false,
+        file: None,
+        owed: Owed::default(),
+    };
+    let kept = Kept {
+        marks: Marks {
+            assembly: Some(swept),
+            source: None,
+        },
+        spots: vec![
+            (
+                20,
+                Spot {
+                    address: 0x20,
+                    rows: 0,
+                },
+            ),
+            (
+                40,
+                Spot {
+                    address: 0x40,
+                    rows: 0,
+                },
+            ),
+        ],
+        generation: Some(0),
+    };
+
+    // The recount put each of those addresses one row further down.
+    let carried = kept
+        .carry(|spot| Some(spot.address as usize + 1))
+        .expect("both ends have a place and a row");
+    assert_eq!(carried.chars.lead(), Caret { row: 0x21, col: 3 });
+    assert_eq!(
+        carried.chars.ends(),
+        (Caret { row: 0x21, col: 3 }, Caret { row: 0x41, col: 7 })
+    );
+    assert_eq!(carried.rows.anchor, 0x41);
+    assert_eq!(carried.rows.lead, 0x21);
+
+    // An end with no row any more takes the run with it.
+    assert!(kept
+        .carry(|spot| (spot.address != 0x20).then_some(1))
+        .is_none());
+}
+
 /// A key moves the view only when the caret leaves it: no context rows, as a click's
 /// reveal keeps, since a key repeat that scrolled while the caret was still on screen
 /// would walk the rows away from under the reader. A caret stepping above the view

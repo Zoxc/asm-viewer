@@ -869,31 +869,17 @@ pub(crate) fn set_assembly(mut marked: State<Marks>, picked: Option<Picked>) {
 }
 
 /// `picked` with every row it holds put through `map`; `None` where any row has no
-/// answer. The columns stay: a row's text is the same text wherever its row is now.
+/// answer. The columns stay: a row's text is the same text wherever its row is now, and
+/// so does which end is the caret: a run swept upwards keeps its lead at the top.
 fn carried(picked: &Picked, map: impl Fn(usize) -> Option<usize>) -> Option<Picked> {
-    let (anchor, lead) = picked.chars.ends();
     let rows = RowSelection {
         anchor: map(picked.rows.anchor)?,
         lead: map(picked.rows.lead)?,
         ..picked.rows
     };
-    let chars = CharSelection::between(
-        Caret {
-            row: map(anchor.row)?,
-            col: anchor.col,
-        },
-        Caret {
-            row: map(lead.row)?,
-            col: lead.col,
-        },
-    );
     Some(Picked {
         rows,
-        chars: if picked.chars.is_empty() {
-            chars.collapsed()
-        } else {
-            chars
-        },
+        chars: picked.chars.mapped(&map)?,
         ..picked.clone()
     })
 }
