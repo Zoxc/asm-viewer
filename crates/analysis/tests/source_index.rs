@@ -132,8 +132,11 @@ fn an_inclusive_range_asks_the_same_question_as_the_half_open_one() {
         named(object.symbols_from_lines(MAIN, 11..=u32::MAX)),
         ["first"]
     );
-    // A range running backwards asks about nothing.
-    assert!(object.symbols_from_lines(MAIN, 11..=10).is_empty());
+    // A range running backwards asks about nothing. Backwards on purpose, so the lint
+    // against one written by mistake is off for the call.
+    #[allow(clippy::reversed_empty_ranges)]
+    let backwards = object.symbols_from_lines(MAIN, 11..=10);
+    assert!(backwards.is_empty());
 }
 
 /// The whole file at once: which lines produced code, and not what they produced. Every

@@ -195,7 +195,11 @@ fn a_run_of_rows_lights_the_branches_of_the_instructions_it_holds() {
     // And closes it: the instruction below is outside.
     assert_eq!(lanes.instructions_in(3..=5), Some(3..=4));
     assert_eq!(lanes.instructions_in(5..=5), None);
-    assert_eq!(lanes.instructions_in(4..=2), None);
+    // A run given the wrong way round holds nothing. Backwards on purpose, so the lint
+    // against one written by mistake is off for the call.
+    #[allow(clippy::reversed_empty_ranges)]
+    let backwards = lanes.instructions_in(4..=2);
+    assert_eq!(backwards, None);
 
     // The branch from 1 to 7 is lit by a run holding either end and by none between.
     assert_eq!(lanes.touching_any(0..=1), lanes.touching(1));
