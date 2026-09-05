@@ -343,6 +343,67 @@ pub fn elf_text_padded(
     obj.write().expect("writing the fixture object")
 }
 
+/// One section's header in a written 64-bit little-endian ELF, as `(offset of the header in
+/// the file, index of the section)`. Byte surgery, because `object`'s writer states no
+/// address for a relocatable object's sections and offers no way to ask for one.
+fn elf_section_header(data: &[u8], name: &str) -> (usize, u16) {
+    let half = |at: usize| u16::from_le_bytes(data[at..at + 2].try_into().unwrap()) as usize;
+    let word = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap()) as usize;
+    let addr = |at: usize| u64::from_le_bytes(data[at..at + 8].try_into().unwrap()) as usize;
+
+    // `e_shoff`, `e_shentsize`, `e_shnum` and `e_shstrndx` of the ELF header, then the
+    // section name table's own `sh_offset`.
+    let table = addr(0x28);
+    let entry = half(0x3a);
+    let count = half(0x3c);
+    let names = addr(table + half(0x3e) * entry + 0x18);
+
+    for index in 0..count {
+        let header = table + index * entry;
+        let start = names + word(header);
+        let end = start + data[start..].iter().position(|&byte| byte == 0).unwrap();
+        if &data[start..end] == name.as_bytes() {
+            return (header, index as u16);
+        }
+    }
+    panic!("no section named {name}");
+}
+
+/// Give one section of a written ELF an address of its own, moving every symbol defined in
+/// it to match: `st_value` in a relocatable object is an offset from the section's start.
+///
+/// The shape a Mach-O `.o` has naturally and `ld -r --section-start` produces — a
+/// relocatable object that states where a section goes — and the one the writers cannot
+/// build.
+pub fn elf_place_section(data: &mut [u8], name: &str, address: u64) {
+    let (header, index) = elf_section_header(data, name);
+    data[header + 0x10..header + 0x18].copy_from_slice(&address.to_le_bytes());
+
+    let (symtab, _) = elf_section_header(data, ".symtab");
+    let field = |at: usize| u64::from_le_bytes(data[at..at + 8].try_into().unwrap()) as usize;
+    let offset = field(symtab + 0x18);
+    let size = field(symtab + 0x20);
+    let entry = field(symtab + 0x38);
+
+    for symbol in (offset..offset + size).step_by(entry) {
+        // `st_shndx`, then `st_value`.
+        if u16::from_le_bytes(data[symbol + 6..symbol + 8].try_into().unwrap()) != index {
+            continue;
+        }
+        let value = u64::from_le_bytes(data[symbol + 8..symbol + 16].try_into().unwrap());
+        data[symbol + 8..symbol + 16].copy_from_slice(&(value + address).to_le_bytes());
+    }
+}
+
+/// Point one section's bytes off the end of a written ELF, so nothing can read them. The
+/// parse keeps no section whose bytes it could not read, which is what makes such a section
+/// one the line info has to place without being able to see it.
+pub fn elf_unreadable_section(data: &mut [u8], name: &str) {
+    let (header, _) = elf_section_header(data, name);
+    let past = data.len() as u64 + 0x1000;
+    data[header + 0x18..header + 0x20].copy_from_slice(&past.to_le_bytes());
+}
+
 /// An x86-64 **COFF** relocatable object whose `.text` holds `symbols` back to back, each an
 /// `IMAGE_SYM_CLASS_EXTERNAL` function whose auxiliary function-definition record declares
 /// the given `TotalSize` — the one nonzero size `object` reads out of a COFF symbol.

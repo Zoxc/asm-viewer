@@ -11,7 +11,7 @@
 //! question whichever backend answers it.
 
 use super::{LineInfo, RowCollector};
-use crate::{section_data, Section};
+use crate::{section_biases, section_data};
 use gimli::{EndianArcSlice, RunTimeEndian};
 use object::{
     Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget,
@@ -31,8 +31,8 @@ pub(super) struct Dwarf {
     context: Mutex<addr2line::Context<Reader>>,
 
     /// Where each code section was placed in the address space the context reads in: the
-    /// sections' own [`Section::bias`], see [`crate::section_biases`]. Empty for a linked
-    /// image, which needs none.
+    /// parse's own layout, [`crate::section_biases`]. Empty for a linked image, which needs
+    /// none.
     biases: HashMap<SectionIndex, u64>,
 
     /// Every compilation unit that has been asked about, and the extent of each
@@ -45,10 +45,12 @@ impl Dwarf {
     /// Build the context for one object file, or [`None`] when it has no DWARF. Never an
     /// error: corrupt debug info is simply "no line info".
     ///
-    /// `sections` are the object's own, for where the parse placed each of them
-    /// ([`Section::bias`]): the same layout the code listing reads, so a row's address and a
-    /// listing's agree by construction.
-    pub(super) fn load(file: &object::File<'_>, sections: &[Arc<Section>]) -> Option<Dwarf> {
+    /// The layout is [`crate::section_biases`], asked again here rather than read back off
+    /// the sections the parse kept: it is the rule that decides a section's place, so the
+    /// rows land where the code listing draws them by construction, and a text section whose
+    /// bytes would not read — one dropped from the parse — still moves the rows relocated
+    /// against it out of the way of the sections that were kept.
+    pub(super) fn load(file: &object::File<'_>) -> Option<Dwarf> {
         // The cheap test first, so an object with no DWARF costs one section-table scan.
         if !Dwarf::present(file) {
             return None;
@@ -60,11 +62,7 @@ impl Dwarf {
             RunTimeEndian::Big
         };
 
-        let biases: HashMap<SectionIndex, u64> = sections
-            .iter()
-            .filter(|section| section.bias != 0)
-            .map(|section| (section.index, section.bias))
-            .collect();
+        let biases = section_biases(file);
 
         // Only a relocatable object's debug sections are written before their addresses are.
         // A linked image holds what the linker resolved, and one linked with `--emit-relocs`

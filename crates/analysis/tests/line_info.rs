@@ -409,3 +409,56 @@ fn a_linked_images_retained_relocations_are_not_applied_again() {
         })
     );
 }
+
+/// A relocatable object may state where a section goes — a Mach-O `.o` always does — and
+/// state it above where the parse placed it. The bias was then the wrapped difference: the
+/// rows landed where they belonged and every query saturated past them, so the section's
+/// symbols had no line info and nothing about it looked wrong.
+#[test]
+fn a_section_stating_an_address_of_its_own_still_answers() {
+    let mut data = two_sections(UnitRanges::Relocated);
+    common::elf_place_section(&mut data, ".text.first", 0x1000);
+    let object = parse(&data);
+
+    // The premise: one section states an address above where the other's bytes put it.
+    let first = symbol(&object, "first");
+    let second = symbol(&object, "second");
+    assert_eq!((first.address, second.address), (0x1000, 0));
+
+    let info = first.line_info(&object).expect("first has line info");
+    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(info.rows().len(), 2);
+    assert_eq!(info.rows()[0].range, 0x1000..0x1003);
+    assert_eq!(info.rows()[1].range, 0x1003..0x1006);
+
+    let info = second.line_info(&object).expect("second has line info");
+    assert_eq!(info.files(), [Arc::from("/src/other.c")]);
+    assert_eq!(info.rows()[0].range, 0..2);
+}
+
+/// A text section whose bytes will not read is dropped by the parse, and the layout still
+/// has to place it: read back off the sections that were kept it had no place, its rows
+/// were relocated to 0, and the section sitting there answered its symbols with them.
+#[test]
+fn a_section_that_would_not_read_keeps_its_rows_off_another() {
+    let mut data = two_sections(UnitRanges::Relocated);
+    common::elf_unreadable_section(&mut data, ".text.second");
+    let object = parse(&data);
+
+    // The premise: the parse kept the one section and dropped the other.
+    let sections: Vec<&str> = object
+        .sections
+        .iter()
+        .filter(|section| section.code)
+        .map(|section| section.name.as_str())
+        .collect();
+    assert_eq!(sections, [".text.first"]);
+
+    let info = symbol(&object, "first")
+        .line_info(&object)
+        .expect("first has line info");
+    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(info.rows().len(), 2);
+    assert_eq!(info.rows()[0].range, 0..3);
+    assert_eq!(info.rows()[1].range, 3..6);
+}

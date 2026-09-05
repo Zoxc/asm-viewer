@@ -240,18 +240,24 @@ or debug info that says nothing about the range asked about. Four design points 
   programs pile up (52 229 of 54 109 rows overlapped, measured on the 196-member rlib). The parse
   does what a linker does: `section_biases` (`lib.rs`) gives each **text** section of a
   **relocatable** object a place of its own, recorded on the section as `Section::bias` beside
-  `Section::code`; `line/dwarf.rs` reads it from there, `relocate` adds the bias, and the query adds
-  it and subtracts it from every row returned. It is decided at parse and not in `line.rs` because
-  the listing of an object's whole code is laid out by the same rule, and one layout read twice
-  cannot disagree with itself. Both limits matter: a linked image holds real addresses literally and
-  must be left alone, and an absolute relocation in a debug section is often an offset into another
-  `.debug_*` section rather than an address. Hence `Object::line_info` takes a `&Section`: a bare
-  range is not a question the crate can answer. `relocate` itself runs for a relocatable object
-  only, for the same reason the bias does: a linked image's debug sections hold what the linker
-  resolved, and one linked with `--emit-relocs` keeps the relocations that resolved them, which
-  `object` attaches to their target section whatever the file kind. Applying one again adds the
-  symbol's address a second time wherever the addend sits in the bytes rather than in the
-  relocation (ELF `REL`, so i386 and ARM32), moving every address the debug info states.
+  `Section::code`; `relocate` adds the bias, and the query adds it and subtracts it from every row
+  returned. `line/dwarf.rs` asks `section_biases` again rather than reading the biases back off
+  the sections the parse kept: the rule is the layout, and a text section whose bytes would not
+  read is dropped from the parse but still has to be placed, or the rows relocated against it land
+  on 0 where the first section already sits. The layout starts above the highest address the file
+  states — a Mach-O `.o` states one per section — so nothing is moved *down* and a bias is never a
+  wrapped value: `relocate`'s wrapping add and a query's checked one mean the same thing. It is
+  decided at parse and not in `line.rs` because the listing of an object's whole code is laid out
+  by the same rule, and one layout read twice cannot disagree with itself. Both limits matter: a
+  linked image holds real addresses literally and must be left alone, and an absolute relocation
+  in a debug section is often an offset into another `.debug_*` section rather than an address.
+  Hence `Object::line_info` takes a `&Section`: a bare range is not a question the crate can
+  answer. `relocate` itself runs for a relocatable object only, for the same reason the bias does:
+  a linked image's debug sections hold what the linker resolved, and one linked with
+  `--emit-relocs` keeps the relocations that resolved them, which `object` attaches to their
+  target section whatever the file kind. Applying one again adds the symbol's address a second
+  time wherever the addend sits in the bytes rather than in the relocation (ELF `REL`, so i386 and
+  ARM32), moving every address the debug info states.
 
 The bias moves exactly what `relocate` moves (`line/dwarf.rs`), and a unit's declared ranges need
 not be among them. A line program's `DW_LNE_set_address` is always relocated in a relocatable

@@ -280,6 +280,10 @@ pub struct Section {
 /// place of its own: a bias, added to every address relocated against that section
 /// (`line::relocate`) and subtracted again from every row a query returns.
 ///
+/// **A bias is never a wrapped value.** The layout starts above the highest address the file
+/// states, so a section is placed at or above where the file put it: a query can add a bias
+/// with checked arithmetic and mean what `line::relocate`'s wrapping add means.
+///
 /// Two limits, both load-bearing:
 ///
 /// * **Relocatable objects only.** A linked image holds real addresses literally rather than
@@ -294,12 +298,20 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u
         return biases;
     }
 
-    let mut next: u64 = 0;
-    for section in file.sections() {
-        if section.kind() != SectionKind::Text {
-            continue;
-        }
+    let text = || {
+        file.sections()
+            .filter(|section| section.kind() == SectionKind::Text)
+    };
 
+    // Everything is placed at or above the highest address the file states, so a section is
+    // never moved *down* and a bias is never a wrapped subtraction. Nothing moves for the
+    // usual relocatable object, whose text sections all state 0; a Mach-O `.o` lays its
+    // sections out with addresses of their own and does state more.
+    let mut next: u64 = text().map(|section| section.address()).max().unwrap_or(0);
+
+    for section in text() {
+        // `next` starts at or above every text address and only grows, so this is the plain
+        // difference. `wrapping_sub` and not `-` so that a proof going wrong is not a panic.
         biases.insert(section.index(), next.wrapping_sub(section.address()));
 
         // Somewhere for the next section to go. A zero-length section still takes an address

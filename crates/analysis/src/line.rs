@@ -77,7 +77,7 @@ impl DebugInfo {
         let file = object::File::parse(object.data.bytes()).ok()?;
         // Debug sections in the object itself first — a MinGW or clang PE can carry DWARF
         // — and a `.pdb` beside it only for an object that has none.
-        let backend = match dwarf::Dwarf::load(&file, &object.sections) {
+        let backend = match dwarf::Dwarf::load(&file) {
             Some(dwarf) => Backend::Dwarf(dwarf),
             None => Backend::Pdb(pdb::Pdb::load(&file, &object.path)?),
         };
