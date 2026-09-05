@@ -3,8 +3,8 @@
 
 mod common;
 
-use analysis::{open_files, parse_object, FileDigest, ObjectData};
-use common::{archive, caller_and_target, Scratch};
+use analysis::{open_data_streaming, parse_object, FileDigest, ObjectData, Progress};
+use common::{archive, caller_and_target};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -98,10 +98,14 @@ fn every_object_out_of_one_archive_shares_one_digest() {
         ("second.o", &caller_and_target()),
     ]);
 
-    let scratch = Scratch::new("digest-test", line!());
-    let path = scratch.write("lib.a", &bytes);
-
-    let objects = open_files(vec![path.clone()]);
+    let path = PathBuf::from("lib.a");
+    let mut objects = Vec::new();
+    open_data_streaming(vec![(path.clone(), Arc::from(bytes.clone()))], |progress| {
+        if let Progress::Parsed(object) = progress {
+            objects.push(object);
+        }
+        std::ops::ControlFlow::Continue(())
+    });
 
     // Both members parsed; the archive itself is not an object file, so it adds none.
     assert_eq!(objects.len(), 2);

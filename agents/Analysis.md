@@ -23,7 +23,10 @@ is not parsed to the end into a value that will be dropped. Its one honest limit
 cannot say "skip the rest of *this* file but go on to the next", so a multi-file request in which
 one file is closed goes on parsing that file and drops the rest at the caller. `open_files` is that
 same callback closing over a `Vec`, for the tests and anything with nowhere to put objects one at a
-time. The digest stays **one pass per file**: `ObjectData::whole_file` is built once at the top of
+time. `open_data_streaming` is the same walk over files already in memory, each with the path it is
+to be called by: the reading is the only thing `open_files_streaming` does that it does not, which
+is why it has no `Finished`-for-an-unreadable-path case. It is what lets the ordering tests assert
+against archives the `object` writer built, with nothing on a disk. The digest stays **one pass per file**: `ObjectData::whole_file` is built once at the top of
 each path and every member is cut from it. That is the thing streaming must not quietly turn into
 196 hashes of the same 20 MB.
 

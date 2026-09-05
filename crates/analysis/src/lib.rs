@@ -1067,29 +1067,50 @@ pub fn open_files_streaming(
     mut emit: impl FnMut(Progress) -> ControlFlow<()>,
 ) {
     for path in paths {
-        if open_one_file(&path, &mut emit).is_break() {
+        let Ok(bytes) = fs::read(&path) else {
+            // Unreadable is still an end: whoever asked for this file is drawing it as
+            // pending until told otherwise.
+            if emit(Progress::Finished(path)).is_break() {
+                return;
+            }
+            continue;
+        };
+        if open_one_file(&path, Arc::from(bytes), &mut emit).is_break() {
             return;
         }
     }
 }
 
-/// One path's worth of [`open_files_streaming`], split out so `?` on the caller's answer
-/// reads as what it is: abandon this file.
+/// The same for files already in memory, each with the path it is to be called by:
+/// everything [`open_files_streaming`] does except the reading.
+///
+/// Bytes in hand cannot fail to be read, so this is that walk without its unreadable-path
+/// case. It is for a caller holding a file it has no reason to write out first — the
+/// tests, which build their archives with the `object` writer and would otherwise need a
+/// directory to put them in.
+pub fn open_data_streaming(
+    files: Vec<(PathBuf, Arc<[u8]>)>,
+    mut emit: impl FnMut(Progress) -> ControlFlow<()>,
+) {
+    for (path, bytes) in files {
+        if open_one_file(&path, bytes, &mut emit).is_break() {
+            return;
+        }
+    }
+}
+
+/// One file's worth of either, split out so `?` on the caller's answer reads as what it
+/// is: abandon this file.
 fn open_one_file(
     path: &Path,
+    bytes: Arc<[u8]>,
     emit: &mut impl FnMut(Progress) -> ControlFlow<()>,
 ) -> ControlFlow<()> {
-    let Ok(file) = fs::read(path) else {
-        // Unreadable is still an end: whoever asked for this file is drawing it as pending
-        // until told otherwise.
-        return emit(Progress::Finished(path.to_path_buf()));
-    };
-
     // One allocation per file, shared by every object parsed out of it and held for as long
     // as they live. Built here rather than where it is used at the bottom, because it is what
     // the members are cut from: the hash it takes is then one pass over the file however many
     // objects come out of it.
-    let file = ObjectData::whole_file(Arc::from(file));
+    let file = ObjectData::whole_file(bytes);
 
     if let Ok(archive) = ArchiveFile::parse(file.bytes()) {
         for member in archive.members() {

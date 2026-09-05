@@ -266,7 +266,9 @@ leak is per run rather than once.
 rename, a `create_new` collision, a file moved aside, directory order, an unreadable directory, a
 path that only reduces through `canonicalize`. Where the file is a fixture -- something for the
 Source pane to draw -- it is seeded into the cache instead, through `Seeded` (`src/source.rs`),
-which forgets what it seeded on `Drop` as `Temporary` removes what it wrote.
+which forgets what it seeded on `Drop` as `Temporary` removes what it wrote. `analysis` has the
+same seam a step lower: `open_data_streaming` is `open_files_streaming` with the reading already
+done, so a test hands over an archive the `object` writer built rather than a path it wrote it to.
 
 ## Design notes
 
