@@ -833,6 +833,124 @@ pub fn dwarf_fixture(subprograms: &[(usize, u64)]) -> Vec<u8> {
     })
 }
 
+/// A **linked** 32-bit x86 image that kept its debug sections' relocations, the shape
+/// `ld --emit-relocs` leaves. An i386 relocation is `REL`: the addend sits in the bytes being
+/// patched, where the linker has already written the address it resolved, so applying one
+/// again would add the symbol's address to it a second time.
+///
+/// One function, `only`, 0x10 bytes at 0x100 in `.text`, with one line-program row over its
+/// first byte and a `DW_AT_low_pc` to match. Both addresses are written as the linker left
+/// them: resolved in the bytes, with the relocation that resolved them still naming `only`.
+pub fn elf_i386_linked_with_relocations() -> Vec<u8> {
+    use gimli::write::{Address, AttributeValue, DwarfUnit, LineProgram, LineString, Sections};
+
+    // Where `only` sits in `.text`, and its address too: the section's own is 0.
+    const START: u64 = 0x100;
+    const LENGTH: u64 = 0x10;
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::I386, Endianness::Little);
+
+    let text = obj.section_id(write::StandardSection::Text);
+    obj.append_section_data(text, &[0x90; START as usize], 1);
+    let value = obj.append_section_data(text, &[0x90; LENGTH as usize], 1);
+    let only = obj.add_symbol(write::Symbol {
+        name: b"only".to_vec(),
+        value,
+        size: LENGTH,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+
+    let encoding = gimli::Encoding {
+        format: gimli::Format::Dwarf32,
+        version: 4,
+        address_size: 4,
+    };
+    let mut dwarf = DwarfUnit::new(encoding);
+    let mut program = LineProgram::new(
+        encoding,
+        gimli::LineEncoding::default(),
+        LineString::String(b"/src".to_vec()),
+        LineString::String(b"main.c".to_vec()),
+        None,
+    );
+    let directory = program.default_directory();
+    let file = program.add_file(LineString::String(b"main.c".to_vec()), directory, None);
+
+    // `Address::Symbol` is what [`RelocWriter`] records a relocation for; the zero it writes
+    // is overwritten below with the address the linker resolved.
+    let address = Address::Symbol {
+        symbol: 0,
+        addend: 0,
+    };
+    program.begin_sequence(Some(address));
+    let row = program.row();
+    row.address_offset = 0;
+    row.file = file;
+    row.line = 7;
+    program.generate_row();
+    program.end_sequence(LENGTH);
+    dwarf.unit.line_program = program;
+
+    let root = dwarf.unit.root();
+    let entry = dwarf.unit.get_mut(root);
+    entry.set(
+        gimli::DW_AT_comp_dir,
+        AttributeValue::String(b"/src".to_vec()),
+    );
+    entry.set(
+        gimli::DW_AT_name,
+        AttributeValue::String(b"main.c".to_vec()),
+    );
+    entry.set(gimli::DW_AT_low_pc, AttributeValue::Address(address));
+    entry.set(gimli::DW_AT_high_pc, AttributeValue::Udata(LENGTH));
+
+    let mut sections = Sections::new(RelocWriter::default());
+    dwarf.write(&mut sections).expect("writing the DWARF");
+
+    sections
+        .for_each(|id, writer| {
+            if writer.slice().is_empty() {
+                return Ok::<_, ()>(());
+            }
+            let section = obj.add_section(
+                Vec::new(),
+                id.name().as_bytes().to_vec(),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(section, writer.slice(), 1);
+
+            for relocation in &writer.relocations {
+                // An i386 relocation keeps its addend in the section, so `object` writes this
+                // one into the bytes and states none in the relocation itself — which is the
+                // linked image's shape: the resolved address in the section, the relocation
+                // beside it.
+                obj.add_relocation(
+                    section,
+                    write::Relocation {
+                        offset: relocation.offset,
+                        size: relocation.size * 8,
+                        kind: RelocationKind::Absolute,
+                        encoding: RelocationEncoding::Generic,
+                        symbol: only,
+                        addend: START as i64 + relocation.addend,
+                    },
+                )
+                .expect("adding a relocation to a debug section");
+            }
+            Ok(())
+        })
+        .expect("laying out the DWARF sections");
+
+    let mut data = obj.write().expect("writing the fixture object");
+    // `write::Object` writes `ET_REL` and nothing else; this file is linked.
+    data[16..18].copy_from_slice(&object::elf::ET_EXEC.to_le_bytes());
+    data
+}
+
 #[derive(Clone)]
 struct DebugRelocation {
     offset: u64,

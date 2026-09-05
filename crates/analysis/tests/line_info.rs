@@ -382,3 +382,30 @@ fn a_unit_whose_ranges_did_not_move_with_its_code_still_answers() {
         })
     );
 }
+
+/// A linked image holds the addresses its linker resolved, and one linked with
+/// `--emit-relocs` keeps the relocations that resolved them; `object` hands those over
+/// whatever the file kind. Applying one again added the symbol's address a second time
+/// wherever the addend sits in the bytes rather than in the relocation (ELF `REL`, so i386
+/// and ARM32), and the row landed past the function it describes: a silent "no line info"
+/// for every one of its instructions.
+#[test]
+fn a_linked_images_retained_relocations_are_not_applied_again() {
+    let data = common::elf_i386_linked_with_relocations();
+    let object = parse(&data);
+
+    let only = symbol(&object, "only");
+    let info = only.line_info(&object).expect("only has line info");
+
+    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(info.rows().len(), 1);
+    assert_eq!(info.rows()[0].range, 0x100..0x110);
+    assert_eq!(
+        info.location(0x100),
+        Some(analysis::Location {
+            file: Some("/src/main.c"),
+            line: Some(7),
+            column: None,
+        })
+    );
+}

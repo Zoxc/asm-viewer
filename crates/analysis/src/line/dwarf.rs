@@ -14,7 +14,8 @@ use super::{LineInfo, RowCollector};
 use crate::{section_data, Section};
 use gimli::{EndianArcSlice, RunTimeEndian};
 use object::{
-    Object as _, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, SectionIndex,
+    Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget,
+    SectionIndex,
 };
 use std::collections::HashMap;
 use std::ops::Range;
@@ -65,9 +66,17 @@ impl Dwarf {
             .map(|section| (section.index, section.bias))
             .collect();
 
-        let dwarf =
-            gimli::Dwarf::load::<_, ()>(|id| Ok(load_section(file, id, endian, &biases, &[])))
-                .ok()?;
+        // Only a relocatable object's debug sections are written before their addresses are.
+        // A linked image holds what the linker resolved, and one linked with `--emit-relocs`
+        // keeps the relocations that resolved it, which `object` hands over whatever the file
+        // kind. Applying one again adds the symbol's address a second time wherever the
+        // addend sits in the bytes rather than in the relocation (ELF `REL`).
+        let relocatable = file.kind() == ObjectKind::Relocatable;
+
+        let dwarf = gimli::Dwarf::load::<_, ()>(|id| {
+            Ok(load_section(file, id, endian, relocatable, &biases, &[]))
+        })
+        .ok()?;
 
         // Read once more, without the range lists that were left behind by the bias. Rare
         // enough — nothing in the tree emits the shape — that reading twice is cheaper than
@@ -76,8 +85,10 @@ impl Dwarf {
         let dwarf = if stale.is_empty() {
             dwarf
         } else {
-            gimli::Dwarf::load::<_, ()>(|id| Ok(load_section(file, id, endian, &biases, &stale)))
-                .ok()?
+            gimli::Dwarf::load::<_, ()>(|id| {
+                Ok(load_section(file, id, endian, relocatable, &biases, &stale))
+            })
+            .ok()?
         };
 
         Some(Dwarf {
@@ -356,12 +367,14 @@ fn stale_range_lists(
     stale
 }
 
-/// Read one DWARF section, decompressing and relocating it. A section that is missing or
-/// unreadable becomes an empty reader, which is what `gimli` expects for "not present".
+/// Read one DWARF section, decompressing it and, for a relocatable object, relocating it. A
+/// section that is missing or unreadable becomes an empty reader, which is what `gimli`
+/// expects for "not present".
 fn load_section(
     file: &object::File<'_>,
     id: gimli::SectionId,
     endian: RunTimeEndian,
+    relocatable: bool,
     biases: &HashMap<SectionIndex, u64>,
     stale: &[StaleRangeList],
 ) -> Reader {
@@ -371,7 +384,9 @@ fn load_section(
             // `section_data`'s guard: a header that lies about how much it decompresses to is
             // dropped, not believed.
             let mut data = section_data(&section)?;
-            relocate(&mut data, file, &section, endian, biases);
+            if relocatable {
+                relocate(&mut data, file, &section, endian, biases);
+            }
 
             // A stale list ([`stale_range_lists`]) is ended where it begins rather than
             // believed, and after the relocation pass so that nothing writes the addresses
@@ -393,7 +408,8 @@ fn load_section(
     EndianArcSlice::new(Arc::from(data), endian)
 }
 
-/// Apply a debug section's relocations to a copy of its bytes.
+/// Apply a debug section's relocations to a copy of its bytes. Called for a relocatable
+/// object only; see [`Dwarf::load`].
 ///
 /// In a relocatable object `DW_AT_low_pc` and `DW_LNE_set_address` are written as zero with a
 /// relocation against the function's symbol, so line info read without relocating maps every

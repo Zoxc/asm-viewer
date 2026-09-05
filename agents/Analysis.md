@@ -246,7 +246,12 @@ or debug info that says nothing about the range asked about. Four design points 
   cannot disagree with itself. Both limits matter: a linked image holds real addresses literally and
   must be left alone, and an absolute relocation in a debug section is often an offset into another
   `.debug_*` section rather than an address. Hence `Object::line_info` takes a `&Section`: a bare
-  range is not a question the crate can answer.
+  range is not a question the crate can answer. `relocate` itself runs for a relocatable object
+  only, for the same reason the bias does: a linked image's debug sections hold what the linker
+  resolved, and one linked with `--emit-relocs` keeps the relocations that resolved them, which
+  `object` attaches to their target section whatever the file kind. Applying one again adds the
+  symbol's address a second time wherever the addend sits in the bytes rather than in the
+  relocation (ELF `REL`, so i386 and ARM32), moving every address the debug info states.
 
 The bias moves exactly what `relocate` moves (`line/dwarf.rs`), and a unit's declared ranges need
 not be among them. A line program's `DW_LNE_set_address` is always relocated in a relocatable
