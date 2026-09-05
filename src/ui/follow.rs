@@ -265,8 +265,11 @@ pub(crate) fn open_source_place(
 /// whose separators are the URI's -- would open a second tab of the file the reader is
 /// already reading, splitting its trail, its positions and its driven line across the two.
 fn spelling(open: Open, path: &Path) -> Arc<str> {
-    // A filesystem call per open source tab, on the UI thread. There are a handful of
-    // them and this is a press, so it costs what following a link already costs.
+    // `path` is the same path every time round, so it is reduced once for the whole walk
+    // and not once per tab. What is left is one filesystem call per open source tab, on
+    // the UI thread. There are a handful of them and this is a press behind a round trip
+    // to the server, so it costs what following a link already costs.
+    let real = path.canonicalize().ok();
     let held = {
         let docs = open.docs.peek();
         open.ids()
@@ -275,18 +278,19 @@ fn spelling(open: Open, path: &Path) -> Arc<str> {
                 Some(Document::Source(file)) => Some(file.clone()),
                 _ => None,
             })
-            .find(|file| same_file(Path::new(&**file), path))
+            .find(|file| same_file(Path::new(&**file), real.as_deref(), path))
     };
     held.unwrap_or_else(|| Arc::from(path.to_string_lossy().as_ref()))
 }
 
-/// Whether two paths name one file: spelled alike, or reducing to one path. Two that
-/// cannot be reduced -- a file that is not there to be looked up -- are the same only
-/// when they are spelled alike.
-fn same_file(one: &Path, other: &Path) -> bool {
-    one == other
-        || matches!(
-            (one.canonicalize(), other.canonicalize()),
-            (Ok(one), Ok(other)) if one == other
-        )
+/// Whether `one` names the file `path` does, `real` being `path` reduced or [`None`] where
+/// it will not reduce -- a file that is not there to be looked up.
+///
+/// Spelled alike is the answer without asking. Otherwise both have to reduce to one path,
+/// so two that will not reduce are the same only when they are spelled alike.
+///
+/// The reduction of `path` is the caller's and not taken here: it is one path against
+/// every open tab, and taking it per tab is the same call over again.
+fn same_file(one: &Path, real: Option<&Path>, path: &Path) -> bool {
+    one == path || matches!((one.canonicalize(), real), (Ok(one), Some(real)) if one == real)
 }

@@ -5716,8 +5716,10 @@ fn a_question_on_its_way_is_not_asked_again() {
 /// text, so the two spell one file two ways. The tab the reader is in is the tab the
 /// definition opens in, whichever way the answer spells the file.
 ///
-/// A `./` in the path here, which `canonicalize` reduces as it reduces a `..` or a
-/// symlink. On Windows the case is every answer, whose separators are the URI's.
+/// A `./` in the path here, which `Path` drops as it compares -- the cheap half of the
+/// walk, and the half `same_file` answers without asking the filesystem. On Windows the
+/// case is every answer, whose separators are the URI's. The half that does ask is
+/// below.
 #[test]
 fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
     let (canonical, directory) = calling_file("spelling");
@@ -5764,6 +5766,74 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
 
     assert!(
         states.open.documents() == vec![Document::Source(dotted)],
+        "the answer's spelling opened a file the reader already had open"
+    );
+    assert_eq!(
+        states.open.active_stop().map(|(_, stop)| stop.line),
+        Some(Some(1)),
+        "the tab did not move to the line the answer named"
+    );
+}
+
+/// **The half of that walk the filesystem has to answer.** `Path` compares by components
+/// and drops a `.` as it goes, so a directory typed with one is already one path; a `..`
+/// is not, and neither is a symlink. Those reduce only through `canonicalize`, which is
+/// why the walk asks the filesystem at all -- once for the answer, and once for each open
+/// source tab.
+///
+/// A `..` here, through a directory that is there for the lookup to walk into and out of.
+#[test]
+fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() {
+    let (canonical, directory) = calling_file("reducing");
+    std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
+    let stepped: Arc<str> = Arc::from(
+        directory
+            .join("sub")
+            .join("..")
+            .join("calls.rs")
+            .to_str()
+            .expect("a utf-8 temporary path"),
+    );
+    assert_ne!(
+        Path::new(&*stepped),
+        Path::new(&*canonical),
+        "the two spellings are one path without asking anybody"
+    );
+    let place = lsp::Place {
+        file: PathBuf::from(&*canonical),
+        line: 1,
+        columns: 3..9,
+    };
+    let (mut test, states, language, _location, _driven, _asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
+                run,
+                id,
+                want,
+                reply: Ok(Reply::Defined(vec![place.clone()])),
+            }),
+            _ => None,
+        },
+        stepped.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(stepped.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    for _ in 0..8 {
+        settle(&mut test);
+    }
+
+    assert!(
+        states.open.documents() == vec![Document::Source(stepped)],
         "the answer's spelling opened a file the reader already had open"
     );
     assert_eq!(

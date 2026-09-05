@@ -205,8 +205,16 @@ The app's own spelling is not canonical either -- a project directory as the rea
 it joined with a Files row, or whatever the debug info said -- and the server's is. So a
 directory typed with a `..`, a `./` or through a symlink spells one file two ways on any
 platform. `open_source_place` names the document by the spelling an **open source tab**
-already has for that file, and by the answer's only where no tab has one: a `canonicalize`
-per open source tab, on the UI thread and at a press, which is a handful of calls.
+already has for that file, and by the answer's only where no tab has one.
+
+That walk asks the filesystem, on the UI thread. The answer's path is reduced once for the
+whole walk, so the cost is one `canonicalize` per open source tab: measured at 11 µs a call
+on a warm local directory, ten source tabs come to 0.1 ms, behind a round trip to a server
+that answers in hundreds of milliseconds. **Nothing is remembered between walks.** A
+canonical path goes stale the way a read file does -- a symlink repointed, a file created
+where the lookup found none -- and `src/source.rs` had to grow `forget_under` for exactly
+that. Saving 0.1 ms once per followed link does not pay for a second thing a build has to
+remember to evict.
 
 **The file is not opened first.** rust-analyzer reads the project's files itself, and this
 app only ever shows what is on disk, so a `didOpen` would put an overlay over the file that
