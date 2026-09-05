@@ -18,4 +18,5 @@ Something wanted becomes a bug the moment the crate claims to do it and does not
 - [`pdb2.md`](pdb2.md) -- the PDB reader, 0.10.2.
 - [`addr2line.md`](addr2line.md) -- the DWARF line-table reader, 0.21.0.
 - [`object.md`](object.md) -- the object-file reader, 0.32.2.
+- [`rfd.md`](rfd.md) -- the desktop's file and message dialogs, 0.17.
 - [`rust-analyzer.md`](rust-analyzer.md) -- the language server a Rust project is read with.

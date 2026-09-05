@@ -30,14 +30,17 @@
 //! that one's place, so the app says the same thing in both builds -- and a guarded panic
 //! stops being fatal in a release build, which it was.
 
-use crate::{project, scratchpad};
+use crate::{project, reveal, scratchpad};
 use std::{
     backtrace::Backtrace,
     fs::{self, OpenOptions},
     io::Write,
     panic::{self, PanicHookInfo},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -48,6 +51,17 @@ const PANICS_DIR: &str = "panics";
 /// per launch, so a worker dying twenty thousand times over one bad file leaves one file
 /// behind and the panics of one run read in order.
 static FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Whether the app is already on its way down.
+///
+/// **The shutdown is asynchronous and the panic is not the end of the thread.** The hook
+/// runs before the unwind, so after it returns the panicking thread goes on unwinding --
+/// back into freya's render loop, on the UI thread -- while the shutdown thread is still
+/// saving. A render that panicked once panics again on the next pass, and the reader who
+/// pressed Close on the first box is handed a second. So the first unguarded panic is the
+/// one that is told about and the one that stops the app, and every panic after it is
+/// written down and nothing more, exactly as a guarded one is.
+static STOPPING: AtomicBool = AtomicBool::new(false);
 
 /// One panic, as much of it as a hook can be sure of.
 struct Panic {
@@ -110,11 +124,27 @@ impl Panic {
         record
     }
 
-    /// The two lines a reader is shown, the message under what panicked.
+    /// The two lines a reader is shown, the message under what panicked. Whole, for the
+    /// file and for stderr: both of them scroll.
     fn told(&self) -> String {
         format!(
             "{} panicked at {}\n{}",
             self.thread, self.location, self.message
+        )
+    }
+
+    /// The same for the box, which does not scroll: the path cut down as a frame's is, and
+    /// the message capped.
+    ///
+    /// **A panic message is the panicking code's to write and can be an essay.** freya's
+    /// hook-order error is 51 lines of prose and example code, of which the first two say
+    /// what happened; put in whole it made the trimmed backtrace under it pointless.
+    fn shown(&self) -> String {
+        format!(
+            "{} panicked at {}\n{}",
+            self.thread,
+            trim_path(&self.location),
+            first_lines(&self.message, MAX_MESSAGE_LINES)
         )
     }
 }
@@ -130,6 +160,7 @@ pub(crate) fn install() {
         handle(
             &panic,
             analysis::guard::guarded(),
+            &STOPPING,
             &mut |panic| base.as_deref().and_then(|base| write_in(base, panic)),
             &mut tell,
             &mut shut_down,
@@ -149,17 +180,27 @@ fn echo(mut out: impl Write, panic: &Panic) {
 }
 
 /// What a panic leads to, with the storing, the telling and the shutting down all handed
-/// in so a test can have the rule without a disk or a window: every panic is written
-/// down, and one the crate does not guard is told about and brings the app down after it.
+/// in so a test can have the rule without a disk or a window: **every** panic is written
+/// down, and the **first** one the crate does not guard is told about and brings the app
+/// down after it.
+///
+/// `stopping` is [`STOPPING`], passed in for [`FILE`]'s reason: it is a static and the
+/// tests share one process.
 fn handle(
     panic: &Panic,
     guarded: bool,
+    stopping: &AtomicBool,
     store: &mut impl FnMut(&Panic) -> Option<PathBuf>,
     tell: &mut impl FnMut(&Panic, Option<&Path>),
     stop: &mut impl FnMut(),
 ) {
     let file = store(panic);
     if guarded {
+        return;
+    }
+    // Claimed here and not after the telling: the box is a blocking call, and a second
+    // panic arrives while the reader is still looking at the first.
+    if stopping.swap(true, Ordering::SeqCst) {
         return;
     }
     tell(panic, file.as_deref());
@@ -201,30 +242,246 @@ fn write_to(file: &Mutex<Option<PathBuf>>, base: &Path, panic: &Panic) -> Option
 
 /// Say what happened, in a box of the app's own: the same one whichever thread panicked,
 /// since a panic on the UI thread leaves no frame to draw a window of the app's in, and
-/// in a debug build as much as a release one. The backtrace is a button away rather than
-/// in the box, being pages long and of no use to most readers.
+/// in a debug build as much as a release one.
+///
+/// **One box, with the top of the backtrace in it.** The box is the desktop's own -- a
+/// `zenity` child process on Linux, `TaskDialogIndirect` on Windows, `NSAlert` on macOS --
+/// which is exactly why the panic path can use it at all, and also why it will not scroll
+/// and why its text cannot be selected. So it holds the few frames that say where the
+/// panic was and nothing more; everything else is in the file, and the button beside Close
+/// goes there.
+///
+/// **The file is shown on this thread**, through [`reveal::reveal_now`] rather than
+/// [`reveal::reveal`]: the shutdown after this would kill a thread of its own before it
+/// had spawned anything. It was a loop back to the box first, to keep the app alive long
+/// enough, and that was worse than the problem -- a crash box that comes back reads as a
+/// second crash, and was reported as one.
 fn tell(panic: &Panic, file: Option<&Path>) {
-    const BACKTRACE: &str = "Show backtrace";
-    let stored = match file {
-        Some(path) => format!("The details were saved to {}.", path.display()),
-        None => "The details could not be saved.".to_owned(),
+    const REVEAL: &str = "Show file";
+    const CLOSE: &str = "Close";
+
+    let said = match file {
+        Some(path) => format!(
+            "{}\n\n{}\nThe whole of it was saved to {}.",
+            panic.shown(),
+            short(&panic.backtrace, MAX_FRAMES),
+            path.display()
+        ),
+        None => format!(
+            "{}\n\n{}\nNothing could be saved.",
+            panic.shown(),
+            short(&panic.backtrace, MAX_FRAMES)
+        ),
     };
+    // Two buttons where there is a file to show and one where there is not: a button that
+    // would do nothing is left out, as the app's menus leave one out.
+    let buttons = match file {
+        Some(_) => rfd::MessageButtons::OkCancelCustom(REVEAL.to_owned(), CLOSE.to_owned()),
+        None => rfd::MessageButtons::OkCustom(CLOSE.to_owned()),
+    };
+
     let answer = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
         .set_title("Assembly Viewer has stopped")
-        .set_description(format!("{}\n\n{stored}", panic.told()))
-        .set_buttons(rfd::MessageButtons::OkCancelCustom(
-            BACKTRACE.to_owned(),
-            "Close".to_owned(),
-        ))
+        .set_description(&said)
+        .set_buttons(buttons)
         .show();
-    if answer == rfd::MessageDialogResult::Custom(BACKTRACE.to_owned()) {
-        rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Error)
-            .set_title("Assembly Viewer has stopped")
-            .set_description(&panic.backtrace)
-            .show();
+
+    if answer == rfd::MessageDialogResult::Custom(REVEAL.to_owned()) {
+        if let Some(path) = file {
+            if !reveal::reveal_now(path) {
+                // Said in the log and not in a second box: the reader has just read the
+                // path in the box above and can go there themselves.
+                log::warn!("no file manager showed {}", path.display());
+            }
+        }
     }
+}
+
+/// How many frames of a backtrace the box is given. A number rather than a scroll bar:
+/// the box is the desktop's own and has none, and one grown past the screen is one whose
+/// buttons cannot be reached. Six is twelve lines, each carrying the file it is in, under
+/// three of the panic itself -- enough to say where it was and short enough that the path
+/// to the rest is still on the screen.
+const MAX_FRAMES: usize = 6;
+
+/// The frames of `backtrace` worth reading, at most `most` of them.
+///
+/// A capture taken **inside a panic hook** opens with the hook itself and the whole of the
+/// runtime that called it -- this module, `Box<dyn Fn>`, `std::panicking`,
+/// `core::panicking`, and the `expect` or `unwrap` that raised it. That is a dozen frames
+/// saying nothing about the panic, they are always the same dozen, and the first frame
+/// that does say something is the one after them.
+///
+/// **The run at the top and not every such frame.** A stack also *ends* in the runtime --
+/// `lang_start`, the `catch_unwind` around `main` -- and cutting at the last one anywhere
+/// in the capture would throw away everything between, which is the whole of what was
+/// asked for. So the names below are consulted only while the opening run lasts, and a
+/// frame further down that happens to carry one is left where it is.
+///
+/// The numbers are the capture's own, kept rather than renumbered, so a frame in the box
+/// and the same frame in the file are the same frame. Nothing is cut where the whole
+/// capture is runtime, or where none of it is: a backtrace this does not recognise is
+/// shown as it came.
+fn short(backtrace: &str, most: usize) -> String {
+    let frames = frames(backtrace);
+    let start = frames.iter().take_while(|frame| is_runtime(frame)).count();
+    let wanted = &frames[start.min(frames.len())..];
+    let shown = wanted.len().min(most);
+
+    let mut text = String::new();
+    for frame in &wanted[..shown] {
+        text.push_str(&drawn(frame));
+        text.push('\n');
+    }
+    if wanted.len() > shown {
+        text.push_str(&format!(
+            "\n... and {} more frames, in the file.",
+            wanted.len() - shown
+        ));
+    }
+    match text.is_empty() {
+        true => backtrace.to_owned(),
+        false => text,
+    }
+}
+
+/// How wide a frame's name may be drawn. A monomorphised name in a UI framework runs to
+/// several hundred characters of turbofish, all of it wrapped into a wall by a box that
+/// takes no width: what the reader is looking for is at the front.
+const MAX_WIDTH: usize = 110;
+
+/// How many lines of the panic's own message the box is given. Three is the rule and its
+/// first item for the error above, which is the whole of what that one says.
+const MAX_MESSAGE_LINES: usize = 3;
+
+/// The first `most` lines of `text`, with a note where any were left behind.
+///
+/// Blank lines at the cut go with what was cut. A message is often a heading, a blank and
+/// then the detail, so the cap lands on the blank as often as not, and a box ending in an
+/// empty line above the note reads as though something failed to draw.
+fn first_lines(text: &str, most: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= most {
+        return text.to_owned();
+    }
+    let kept = {
+        let mut kept = &lines[..most];
+        while kept.last().is_some_and(|line| line.trim().is_empty()) {
+            kept = &kept[..kept.len() - 1];
+        }
+        kept
+    };
+    format!(
+        "{}\n... and {} more lines, in the file.",
+        kept.join("\n"),
+        lines.len() - kept.len()
+    )
+}
+
+/// One frame as the box draws it: the name cut to [`MAX_WIDTH`], and the `at` line under
+/// it with the part of the path nobody needs taken off the front. A file out of the
+/// registry is named by its crate and one out of the standard library by the library,
+/// which is the whole of what a `/home/…/.cargo/registry/src/index.crates.io-1949cf…/`
+/// says that its next segment does not.
+fn drawn(frame: &str) -> String {
+    frame
+        .lines()
+        .map(|line| match line.trim_start().starts_with("at ") {
+            true => shorten_path(line),
+            false => cut(line, MAX_WIDTH),
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+/// `line` cut to `width` characters, with an ellipsis where anything was taken. Counted in
+/// `char`s, a name being text and not bytes.
+fn cut(line: &str, width: usize) -> String {
+    match line.chars().count() > width {
+        true => line.chars().take(width).collect::<String>() + "\u{2026}",
+        false => line.to_owned(),
+    }
+}
+
+/// An `at` line with its path cut down. A line this does not recognise is left as it is.
+fn shorten_path(line: &str) -> String {
+    match line.trim_start().strip_prefix("at ") {
+        Some(path) => format!("             at {}", trim_path(path)),
+        None => line.to_owned(),
+    }
+}
+
+/// A path with the prefix that says nothing removed: everything up to the crate's own
+/// directory for one out of the registry, and up to `library/` for one in the standard
+/// library. A path this does not recognise -- the app's own `./src/…` -- is left as it is,
+/// being short already.
+///
+/// Whatever follows the path is kept, so a `file.rs:87:53` keeps its line and column.
+fn trim_path(path: &str) -> &str {
+    const REGISTRY: &str = "/registry/src/";
+    const LIBRARY: &str = "/library/";
+
+    if let Some(at) = path.rfind(LIBRARY) {
+        return &path[at + 1..];
+    }
+    // Past the index directory as well as the marker: it is a hash and names nothing.
+    if let Some(at) = path.find(REGISTRY) {
+        let rest = &path[at + REGISTRY.len()..];
+        if let Some(slash) = rest.find('/') {
+            return &rest[slash + 1..];
+        }
+    }
+    path
+}
+
+/// A capture cut into frames: a line beginning `<number>:` starts one and the lines under
+/// it -- the `at file:line` the capture puts there -- belong to it. Anything before the
+/// first numbered line is dropped, there being no frame for it to be part of.
+fn frames(backtrace: &str) -> Vec<String> {
+    let mut frames: Vec<String> = Vec::new();
+    for line in backtrace.lines() {
+        let numbered = line
+            .trim_start()
+            .split_once(':')
+            .is_some_and(|(number, _)| {
+                !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+            });
+        match numbered {
+            true => frames.push(line.to_owned()),
+            false => {
+                if let Some(frame) = frames.last_mut() {
+                    frame.push('\n');
+                    frame.push_str(line);
+                }
+            }
+        }
+    }
+    frames
+}
+
+/// Whether `frame` is one of the ones between the panic and the hook capturing it, rather
+/// than anything the app did. This module is on the list, being the innermost frame of
+/// every capture taken here, and so is the `Box<dyn Fn>` the hook is called through.
+///
+/// `Option` and `Result` are named whole rather than by their failure helpers: what raises
+/// the panic is `expect_failed`, but the frame under it is the `expect` itself and the
+/// caller of *that* is the code worth reading. Only ever asked about the opening run, so a
+/// name matching one of these deeper in a stack is not affected ([`short`]).
+fn is_runtime(frame: &str) -> bool {
+    const RUNTIME: [&str; 10] = [
+        "rust_begin_unwind",
+        "core::panicking",
+        "std::panicking",
+        "std::sys::backtrace",
+        "core::option::Option",
+        "core::option::expect_failed",
+        "core::result::Result",
+        "core::result::unwrap_failed",
+        "core::ops::function::Fn",
+        "viewer::panics",
+    ];
+    RUNTIME.iter().any(|name| frame.contains(name))
 }
 
 /// Bring the app down the way closing the window does -- the projects saved, the

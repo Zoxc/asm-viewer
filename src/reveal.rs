@@ -32,6 +32,18 @@ pub fn reveal(path: PathBuf) {
     }
 }
 
+/// The same on **this** thread, for a caller that is about to leave: the panic box, whose
+/// shutdown would kill the thread [`reveal`] starts before it had spawned anything.
+/// Answers whether a program ran.
+///
+/// Safe to wait on because each attempt is a program that hands the path to the desktop
+/// and exits, rather than the file manager itself ([`run`]); the caller is a reader who
+/// has just pressed a button and is waiting either way. Nothing is said in a box when
+/// nothing answers -- the caller is already showing one.
+pub fn reveal_now(path: &Path) -> bool {
+    show(path)
+}
+
 /// Try the platform's ways of showing `path` in order, and say whether one worked.
 fn show(path: &Path) -> bool {
     // The one look at the disk. A path that is gone answers no and is shown as a file

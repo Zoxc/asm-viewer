@@ -615,6 +615,27 @@ matters twice: duplicate symbol names across objects stay distinct, and `#[deriv
 `Arc<T>` field would deep-compare on every parent render.
 
 
+**The crash box is the desktop's own, and it has to be.** `crate::panics`'s hook runs on the
+panicking thread *before* the unwind, so when the UI thread is the one that died the app is inside
+its own render, inside winit's `run_app` callback, with no frame to draw a window of its own in.
+`rfd` works there because on every platform it hands the box to something that is not us: on Linux
+under the default features a `zenity` child process, on Windows `TaskDialogIndirect`, on macOS
+`NSAlert` -- none of which needs our event loop, our GL surface or our main thread.
+
+**A second freya instance is not possible and a second freya window would not help.**
+`winit::EventLoopBuilder::build` flips a process-wide `EVENT_LOOP_CREATED` and answers
+`EventLoopError::RecreationAttempt` for every call after the first, and nothing resets it off the
+web backend; freya's `launch` builds one (`freya-winit/src/lib.rs:76`) and hands it to `run_app`
+(line 180), so a second `launch` fails outright. freya *does* support a second window in the one
+loop -- `WinitPlatformExt::launch_window(WindowConfig)` -- but it posts a `UserEvent` and awaits an
+ack from the renderer, which needs the loop alive and pumping. In the case that matters it is the
+loop that is wedged, and we return into an unwind rather than back to it, so the await would hang.
+It could serve a panic on a worker thread, which is the case where the app is least broken, and it
+would draw the crash window out of the same components that may have just panicked. The cost of
+rfd is that the box does not scroll and its text cannot be selected, which is why what goes in it is
+capped at both ends and why the record on disk is the only way to the rest (`notes/upstream/rfd.md`).
+
+
 ## Testing the UI
 
 `freya-testing` runs the whole app (components, hooks, effects, layout, events) with no window, no

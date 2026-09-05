@@ -173,7 +173,8 @@ command.
   in the order they were added; saved in `project.toml`, live only against what is loaded.
 - `src/naming.rs` — a demangled name cut down to the `module::fn_name` a tab is called by.
 - `src/panics.rs` — a panic on any thread: the record, the file a run appends it to, the box
-  the reader is shown, and the shutdown after it.
+  the reader is shown and how much of the message and the backtrace it is given, and the
+  shutdown after it, which the first unguarded panic claims and the ones behind it do not.
 - `src/fonts.rs` — the desktop's font settings (KDE, Gnome, Win32) merged under the user's own.
 - `src/functions.rs` — the functions a source file defines, by the lines they span, and which
   one a line is inside; `functions/rust.rs` is the scanner that finds Rust's without the grammar.
