@@ -334,11 +334,16 @@ baselines *before* the app is emptied, and freya wakes an effect by a notify rat
 write, so the save observer runs once after the whole handler and sees a settled state that matches
 the baseline exactly. `new_project` is the same thing with nothing to restore.
 
-`restore_project` reads the binaries under **`spawn_forever`**. On a switch the handler runs under
+**What the Project view starts, it starts with `spawn_forever`.** A task belongs to the scope that
+spawned it, and this view is drawn only while its tab is the one on screen, so a `spawn` here is
+dropped by the next raise. `restore_project` is the worse case: on a switch the handler runs under
 the scope of the pressed row, and that row is gone by the next render, the recent list leaving the
 open project out; the runner renders before it polls a new task, so a `spawn` there was dropped
 before it read a byte and the project came up with no binaries and no tabs -- which the save
 observer then wrote into its session. The startup restore never saw it: its scope is the root's.
+An **artifact row**'s load goes the same way, and what it leaves is worse than nothing: the load is
+registered before a byte is read, so a row stays in the Objects list loading for ever, and only
+closing the file clears one.
 
 **Tooltips** are how a truncated row is read, so `row_tooltip` sets the delay to `Duration::ZERO`;
 freya's 500ms default makes sweeping down a list useless. The filter toggles keep the default (their

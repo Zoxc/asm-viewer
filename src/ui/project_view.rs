@@ -112,7 +112,12 @@ impl Component for ArtifactRow {
 
                         let (objects, loading, path) =
                             (states.objects, states.loading, path.clone());
-                        spawn(async move {
+                        // `spawn_forever`, not `spawn`: a task belongs to the scope
+                        // that spawned it, and this row is drawn only while the
+                        // Project page is the tab on screen. Raising another tab
+                        // would drop the load half-read, leaving a row in the
+                        // Objects list that never stops loading.
+                        spawn_forever(async move {
                             open_binaries(objects, loading, vec![path]).await;
                         });
                     })

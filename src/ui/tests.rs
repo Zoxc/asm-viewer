@@ -16975,9 +16975,34 @@ fn build_wiring() {
     use_hook(move || asking.set(Some(jobs)));
 }
 
+/// Whether the Project view has been left. Provided by [`leaving_project_harness`] alone,
+/// so the tests that press buttons inside the view never meet the wrapper below.
+#[derive(Clone, Copy)]
+struct LeftProject(State<bool>);
+
+/// The Project view as `ContentArea` draws it: only while its tab is the one on screen.
+/// The wrapper's press is the raise of another tab, and a press reaches every handler on
+/// the tree measured before it, so the row's own handler runs in the same batch and the
+/// view is gone by the render that follows.
+fn leaving_project_harness() -> Element {
+    let mut left = use_provide_root_context(|| LeftProject(State::create(false))).0;
+    let view = project_view_harness();
+    if left() {
+        return rect().expanded().into_element();
+    }
+    rect()
+        .expanded()
+        .on_press(move |_| left.set(true))
+        .child(view)
+        .into_element()
+}
+
 /// Mount the Project view over a worker that records every job and answers from `answer`.
 macro_rules! mount_project {
-    ($answer:expr) => {{
+    ($answer:expr) => {
+        mount_project!(project_view_harness, $answer)
+    };
+    ($harness:expr, $answer:expr) => {{
         let (asked, asks) = async_channel::unbounded::<AskedToBuild>();
         let answer = $answer;
         let work = move |job: BuildJob| {
@@ -16991,7 +17016,7 @@ macro_rules! mount_project {
         };
 
         let (mut test, (states, language, asking)) = TestingRunner::new(
-            project_view_harness,
+            $harness,
             (600., 700.).into(),
             move |runner: &mut _| {
                 let states = project_states!(runner);
@@ -17107,6 +17132,71 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
         .peek()
         .iter()
         .any(|object| object.path == artifact));
+}
+
+/// **An artifact's load outlives the view that asked for it.** The row is drawn only while
+/// the Project page is the tab on screen, and the runner renders before it polls a new
+/// task, so a load tied to that scope is dropped before it reads a byte -- leaving a row in
+/// the Objects list that loads for ever, which nothing but closing the file clears.
+#[test]
+fn an_artifact_load_survives_the_view_being_left() {
+    let artifact = fixture_artifact();
+    let answer = {
+        let artifact = artifact.clone();
+        move |job: BuildJob| match job {
+            BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
+            _ => BuildAnswer::Read {
+                manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                debug_lines: true,
+            },
+        }
+    };
+    let (mut test, states, _language, asking, _asks) =
+        mount_project!(leaving_project_harness, answer);
+
+    let mut proj = states.proj;
+    proj.write().directory = "/work/app".to_owned();
+    pump(&mut test, || states.build.peek().manifest.is_some());
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    start_build(
+        states.build,
+        &jobs,
+        PathBuf::from("/work/app"),
+        Profile::Release,
+    );
+    pump(&mut test, || !states.build.peek().building);
+
+    // The one press: it starts the load and leaves the view, the wrapper's handler and the
+    // row's own being two listeners on the same event.
+    let row = centre_of(&test, &artifact.to_string_lossy());
+    press_at(&mut test, row);
+    assert!(
+        !labels(&test).iter().any(|text| text == "Cargo build"),
+        "the view was still on screen, so the press proved nothing"
+    );
+
+    // The file is parsed on a thread of its own, so it answers in its own time.
+    for _ in 0..200 {
+        settle(&mut test);
+        if !states.objects.peek().is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    assert!(
+        states
+            .objects
+            .peek()
+            .iter()
+            .any(|object| object.path == artifact),
+        "the load was dropped with the view that asked for it"
+    );
+    assert!(
+        !states.loading.peek().is_loading(&artifact),
+        "the row is still loading a file nothing is reading"
+    );
 }
 
 /// A build is the app's one word that the files under the project's directory have
