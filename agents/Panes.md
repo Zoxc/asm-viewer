@@ -301,10 +301,15 @@ show and the switch it causes must not be what drops it. A change of the active 
 effect's to answer, being a switch of place, which `use_land` owns whole (below). And **the scroll
 is a request, answered once**: `Picked::owed` says which panes have yet to scroll to the run,
 `owed_reveal` only *looks*, `reveal_made` is what clears a pane's flag, and `reveal_row` does
-nothing when the row is already on screen -- measured against the offset it would write and not
-against the `CONTEXT_ROWS` alone, a row in the first few of a listing having nowhere to put them,
-so that asking for them again is a write for ever and the caller reading the scroll is woken by
-it. What pays it is the pane as it stands **now**: the reveal
+nothing when the row is already on screen, nor when the offset it would write is the one the pane
+is at. Both, because a scroll write notifies the caller reading the scroll whether or not the
+number changed, and `use_kept_position` is that caller: a row in the first few of a listing has
+nowhere to put its context rows, so measured against them alone it was never in view; and a pane
+that cannot show the row -- a viewport of 0, which a fresh pane's effect runs with on the desktop,
+where tasks are polled before the first layout -- never has it in view at all. Either was a write
+per wake and a wake per write inside one pass, and a Search hit hung the app on the second: the
+landing it left is spent by `use_land`, a task that never got its turn. `agents/Headless.md` says
+why the headless runner does not see it. What pays it is the pane as it stands **now**: the reveal
 `use_kept_position` calls is the closure the latest render made, taken out of a cell rather than
 handed to the effect, since a tab given another document keeps the panes it had, and one held from
 the mount would go on measuring the row against the file before it (`agents/UI.md`), and a move of

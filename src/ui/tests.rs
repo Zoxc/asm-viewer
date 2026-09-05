@@ -21117,6 +21117,48 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
     );
 }
 
+/// **A reveal never writes the offset the pane is already at.** `State::write` notifies
+/// whether or not the number changed, so an effect that reads the scroll to make a reveal
+/// is woken by the write it made. Where the row cannot be on screen -- a viewport of 0
+/// before the first layout, which is what a fresh pane's effect runs with on the desktop
+/// -- the "already in view" test never holds, and a write per wake is a loop that never
+/// leaves the pass. The cap is the effect's own: uncapped, a regression hangs the suite
+/// rather than failing it.
+#[test]
+fn a_reveal_of_a_row_the_pane_cannot_show_does_not_wake_itself() {
+    #[derive(Clone, Copy)]
+    struct Woken(State<u32>);
+    fn harness() -> impl IntoElement {
+        let mut controller = use_scroll_controller(ScrollConfig::default);
+        let mut woken = use_consume::<Woken>().0;
+        use_side_effect(move || {
+            // `peek` on the state it writes, or the count itself would wake it.
+            let runs = *woken.peek() + 1;
+            woken.set(runs);
+            if runs > 5 {
+                return;
+            }
+            reveal_row(&mut controller, 0.0, 149);
+        });
+        rect().expanded()
+    }
+    let (mut test, woken) = TestingRunner::new(
+        harness,
+        (500., 300.).into(),
+        |runner| runner.provide_root_context(|| Woken(State::create(0))).0,
+        1.,
+    );
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    // Once to scroll, and once more woken by that scroll, finding the offset already there.
+    assert_eq!(
+        *woken.peek(),
+        2,
+        "the reveal woke itself: it wrote an offset the pane was already at"
+    );
+}
+
 /// **A door moves the pane once: from where it was to the line it landed on, and not by
 /// way of the top of the file.** The run a landing names is planted by `use_land`, which
 /// runs off `Active` and so a pass later than the switch reaches the pane's own hook. A

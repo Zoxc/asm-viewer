@@ -80,18 +80,23 @@ pub(crate) struct Planting {
 #[derive(Clone, Copy)]
 pub(crate) struct Plant(pub(crate) State<Option<Planting>>);
 
-/// Bring the row at `index` into view, and leave the scroll alone when it already is.
+/// Bring the row at `index` into view, and leave the scroll alone when it already is, or
+/// when the offset this would write is the one the pane is at.
 ///
 /// A `VirtualScrollView` counts its offset *down* from zero and clamps whatever is set
 /// here against the content on the next layout, so the arithmetic need not know how long
 /// the list is.
 ///
-/// **Already there is measured against the offset this would write**, and not against the
-/// context rows on their own. A row in the first `CONTEXT_ROWS` of a listing cannot have
-/// them all above it, so asking for them was asking for an offset above the top of the
-/// list: the scroll went to 0, the next call measured it against the same impossible
-/// margin, and found it wanting again. That is a write per call for ever, and the caller
-/// that reads the scroll to make it is woken by it (`use_kept_position`).
+/// **Both tests are needed**, and the caller that reads the scroll to make the reveal
+/// (`use_kept_position`) is why: a scroll write notifies it whether or not the number
+/// changed, and a caller woken by its own write, making it again, is a loop. Already there
+/// is measured against the offset this would write, and not against the context rows on
+/// their own: a row in the first `CONTEXT_ROWS` of a listing cannot have them all above
+/// it, so the scroll went to 0 and the next call found it wanting again. And a pane that
+/// cannot show the row at all -- a viewport of 0 before its first layout, which is what a
+/// fresh pane's effect runs with on the desktop -- never finds it in view, so the offset
+/// the pane is at is refused before the row is measured. The loop never leaves the pass
+/// it starts in, so nothing later can end it.
 pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
     let (_, scrolled) = <(i32, i32)>::from(*controller);
     let top = -scrolled as f32;
@@ -99,12 +104,13 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
     let row = index as f32 * height;
     let margin = CONTEXT_ROWS * height;
     let wanted = (row - margin).max(0.0);
+    let writing = -(wanted as i32);
 
-    if top <= wanted && row + height <= top + viewport {
+    if writing == scrolled || (top <= wanted && row + height <= top + viewport) {
         return;
     }
 
-    controller.scroll_to_y(-(wanted as i32));
+    controller.scroll_to_y(writing);
 }
 
 /// Bring the row the keyboard is on into view, and only when it is not: no context rows,

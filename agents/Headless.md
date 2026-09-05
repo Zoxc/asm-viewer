@@ -316,6 +316,15 @@ begins with `handle_events_immediately` (`runner.rs:632-680`), which drains the 
 and otherwise polls every queued task once. The pass then renders exactly the scopes that were dirty
 when it started.
 
+**The desktop polls tasks before a mounted component's first layout; the headless runner does
+not.** `freya-winit` (`renderer.rs:440-456`) runs `handle_events` between the render that mounted a
+component and the `RedrawRequested` that lays it out, so an effect's first run there reads what
+`on_sized` has yet to write, a viewport of 0. Headless, the layout ends the same pass, its
+`on_sized` handlers dirty the scope on the next, and the early return above holds the tasks back
+until that render is done, so the effect's first run sees the measured size. A loop that only turns
+while a pane cannot show a row (the reveal's, `agents/Panes.md`) hung the desktop and passed
+headless, until the window was made too short to show the row.
+
 So a pass is *either* a render *or* a round of task polling, never both, and effects and memos are
 tasks: `use_side_effect` is `Effect::create`, a `spawn`ed loop
 (`freya-core-0.4.3/src/lifecycle/effect.rs:20-28`, reached from `use_side_effect` at `:98-100`), and
