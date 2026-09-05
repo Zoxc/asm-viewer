@@ -247,7 +247,10 @@ the row plus its gutter and the widest would grow by a gutter every layout witho
 the identity of what outlives the rows** (the disassembly, the highlighted file, the *object* for
 the section view, whose `Built` is rebuilt every generation) hashed with the mono font's size; a key
 that no longer matches is a floor of nothing, which is the reset, made without an effect: the old
-listing's rows drop to the pane's width on the new one's first render and report again. The extent
+listing's rows drop to the pane's width on the new one's first render and report again. The key
+reaches a row as a prop and is **compared** there, the handle beside it not: freya replaces a
+scope's props only when they compare unequal, so a row left with the mount's key went on asking its
+floor under the font that is gone. The extent
 is therefore the widest row **drawn so far**, as the scratchpad's run output's is: a wide row
 further down is reached once the reader has scrolled to it. The editor's own estimate (the most
 characters on a line times a `W`) was not taken: it needs Skia on the UI thread, is wrong for tabs

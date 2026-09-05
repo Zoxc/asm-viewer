@@ -7138,6 +7138,56 @@ fn a_listings_extent_does_not_outlive_it() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// A listing's extent is given up when the fixed-width font shrinks under it: the rows
+/// are floored to the width the smaller font measures, not to what the larger one did.
+///
+/// The floor is held under a key that carries the font's size, and the key reaches a row
+/// as a prop. freya replaces a scope's props only when they compare unequal, so a key
+/// left out of a row's `PartialEq` was never handed on: the row re-rendered for the new
+/// row height, asked its floor under the old key, and was laid out as wide as the larger
+/// font had made it -- a sideways scroll over empty space.
+#[test]
+fn a_smaller_fixed_font_gives_up_the_width_the_larger_one_measured() {
+    set_fonts(fixed_fonts(9.0, 18.0));
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("wide.c");
+    std::fs::write(&path, format!("// {}\nint x;\n", "x".repeat(400)))
+        .expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let (mut test, _states, _showing, _marked) = source_file_harness(&file, (300., 200.));
+
+    // How far the rows can be scrolled sideways, which is the widest row less the pane:
+    // the line numbers are the one label every row draws.
+    let numbers = |test: &TestingRunner| {
+        labels_with_areas(test)
+            .into_iter()
+            .filter(|(text, _)| text.ends_with('\u{a0}'))
+            .map(|(_, area)| area)
+            .collect::<Vec<_>>()
+    };
+    let extent = |test: &mut TestingRunner| {
+        test.scroll((150., 100.), (5_000., 0.));
+        settle(test);
+        let home = leftmost(&numbers(test));
+        test.scroll((150., 100.), (-5_000., 0.));
+        settle(test);
+        home - leftmost(&numbers(test))
+    };
+
+    let wide = extent(&mut test);
+    assert!(wide > 300.0, "the line does not overflow the pane: {wide}");
+
+    set_fonts(fixed_fonts(9.0, 9.0));
+    settle(&mut test);
+    let narrow = extent(&mut test);
+    assert!(
+        narrow < wide * 0.75,
+        "the rows kept the width the larger font measured: {narrow} against {wide}"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// Pressing a branch's displacement puts the row it lands on on screen **and picks that
 /// row out** -- the run a press on the target row itself would have made, of the file the
 /// target was compiled from, with the Source pane owed the scroll and the Assembly pane

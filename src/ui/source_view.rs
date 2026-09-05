@@ -51,9 +51,12 @@ struct SourceData {
     /// changes with every word it says about its progress, and every mounted row would be
     /// drawn again for it.
     links: links::Links,
-    /// The widest row drawn, under the highlighted file's identity, and that key: what
-    /// every row is at least as wide as. Handles, so out of the `PartialEq` below.
+    /// The widest row drawn, what every row is at least as wide as. A handle, so out of
+    /// the `PartialEq` below.
     widest: Widest,
+    /// The key it is held under: the highlighted file's identity and the fixed-width
+    /// font's size. **Compared**, unlike the handle, so that rows built after a font
+    /// change are not built under the key the old font measured.
     listing: u64,
 }
 
@@ -69,6 +72,7 @@ impl PartialEq for SourceData {
             && self.chars == other.chars
             && self.drives == other.drives
             && self.links == other.links
+            && self.listing == other.listing
     }
 }
 
@@ -95,7 +99,8 @@ struct SourceRow {
     drives: Option<DocId>,
     /// Which of the file's names the server placed. See [`SourceData::links`].
     links: links::Links,
-    /// The listing's widest row and its key, as an `InstructionRow` carries them.
+    /// The listing's widest row and its key, as an `InstructionRow` carries them: the
+    /// handle out of the `PartialEq` below and the key in it.
     widest: Widest,
     listing: u64,
     key: DiffKey,
@@ -112,6 +117,7 @@ impl PartialEq for SourceRow {
             && self.chars == other.chars
             && self.drives == other.drives
             && self.links == other.links
+            && self.listing == other.listing
     }
 }
 

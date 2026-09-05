@@ -795,10 +795,14 @@ pub(crate) struct InstructionRow {
     /// changes while it lives.
     pub(crate) controller: ScrollController,
     pub(crate) viewport: State<f32>,
-    /// The widest row the listing has drawn, and the listing's key in it, for this row to
-    /// be no narrower than and to report itself to. Out of the `PartialEq` for the same
-    /// reason: a row asks the state itself. See `ui/width.rs`.
+    /// The widest row the listing has drawn, for this row to be no narrower than. Out of
+    /// the `PartialEq` for the same reason as the two above: a row asks the state itself.
+    /// See `ui/width.rs`.
     pub(crate) widest: Widest,
+    /// The listing's key in that state, which the row is floored under and reports
+    /// itself under. **Compared**, unlike the handle: the key holds the fixed-width
+    /// font's size, and a row left with the old one goes on asking for the width the
+    /// larger font measured.
     pub(crate) listing: u64,
     /// Whether this instruction was compiled from a line of the source pane's picked-out
     /// run, and if so which of its edges end the run of such rows. Worked out by the list
@@ -824,6 +828,7 @@ impl PartialEq for InstructionRow {
             && self.wash == other.wash
             && self.chars == other.chars
             && self.arrows == other.arrows
+            && self.listing == other.listing
     }
 }
 
