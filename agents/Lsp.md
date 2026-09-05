@@ -269,6 +269,13 @@ Two things say which server an answer is about, and they are not the same thing:
   handle dropped instead of stopped is a server nothing can ever find again (`pad.rs` has
   the same rule for a run's process).
 
+Which **question** an answer is to is a third thing, and the run cannot stand in for it: a
+run lasts as long as the server, so two questions inside one is the ordinary case.
+`ask_where` mints an id per question, the `Ask` job carries it and the answer copies it
+back, and `Follow` and `Located` each keep the id of the one they are waiting for.
+`worth_doing` drops the duplicates still queued; the id is what makes an answer to a
+question the worker had already taken land on nobody.
+
 What the server says unasked comes back on a bounded channel the `Start` job carries, under
 the run it was started in, and the only thing said so far is whether it is working. Bounded
 so that a server reporting progress in a tight loop cannot outrun the app: the reader thread
@@ -333,9 +340,12 @@ decided **at the press** and kept -- `Asking`'s rule once more. Two workers stan
 the press and the tab moving, so by the time the answer lands the reader may have moved on
 and Ctrl may no longer be held; what was asked for is what was asked for.
 
-One question is held. A reader clicking twice wants the second answer, `worth_doing`
-already drops all but the last, and an answer arriving under a run this no longer holds is
-an answer to nobody.
+One question is held, by the id it went out under. A reader clicking twice wants the
+second answer: `worth_doing` drops all but the last still queued, and the id drops the
+answer to one the worker had already taken. Matched by the run alone -- as it was -- the
+first click's places opened under the second click's reach, and the second click's answer
+was dropped as an answer to nobody. The Locations panel holds its two questions the same
+way.
 
 The place is opened through `land` like every other door: the source pane on the line, both
 panes owed the scroll, and the place on the tab's trail so Back returns to the call --

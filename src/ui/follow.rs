@@ -7,8 +7,11 @@
 //! `ui::language` -- what was asked for is what was asked for.
 //!
 //! One question is remembered, so a reader who clicks twice gets the second answer: the
-//! worker already drops all but the last (`worth_doing`), and an answer arriving for a
-//! question this no longer holds is an answer to nobody.
+//! worker already drops all but the last still queued (`worth_doing`), and an answer
+//! arriving for a question this no longer holds is an answer to nobody. Which is why the
+//! question is held by its **id** and not by the server run it was asked in: a run lasts
+//! as long as the server, so two clicks inside one are the ordinary case, and the first
+//! click's answer would otherwise be taken for the second's.
 
 use super::*;
 
@@ -21,11 +24,12 @@ pub(crate) struct Follow {
     arrived: Option<(lsp::Place, Reach)>,
 }
 
-/// A question put and not yet answered: which server run it was asked in, where it was
-/// asked about, and where its answer is to open.
+/// A question put and not yet answered: which server run it was asked in and which
+/// question of that run it is, where it was asked about, and where its answer is to open.
 #[derive(Clone, PartialEq)]
 struct Asked {
     run: u64,
+    id: u64,
     at: Lookup,
     /// Which question was put, which only matters for what an answer naming the line it
     /// was asked on means. See [`Follow::answer`].
@@ -37,12 +41,18 @@ impl Follow {
     /// Take the answer to the question this is waiting for, `places` being what the
     /// server said. Whether anything changed, so the caller writes only then.
     ///
-    /// An answer for another run, or for a question already answered, is an answer to
-    /// nobody. A name the server places nowhere clears the question and opens nothing:
-    /// the click was a question and never a promise. So does a **declaration** placed on
-    /// the line the question was asked on, which is somewhere the reader already is.
-    pub(crate) fn answer(&mut self, run: u64, places: &[lsp::Place]) -> bool {
-        let Some(asked) = self.asked.as_ref().filter(|asked| asked.run == run) else {
+    /// An answer for another run, for another question of this one, or for a question
+    /// already answered, is an answer to nobody: the reader clicked again, and what they
+    /// are owed is the second click's answer. A name the server places nowhere clears the
+    /// question and opens nothing: the click was a question and never a promise. So does
+    /// a **declaration** placed on the line the question was asked on, which is somewhere
+    /// the reader already is.
+    pub(crate) fn answer(&mut self, run: u64, id: u64, places: &[lsp::Place]) -> bool {
+        let waiting = self
+            .asked
+            .as_ref()
+            .filter(|asked| asked.run == run && asked.id == id);
+        let Some(asked) = waiting else {
             return false;
         };
         let reach = asked.reach;
@@ -70,8 +80,11 @@ impl Follow {
     }
 
     /// Give up on the question this is waiting for: the server refused it, or is gone.
-    pub(crate) fn give_up(&mut self, run: u64) -> bool {
-        let waiting = self.asked.as_ref().is_some_and(|asked| asked.run == run);
+    pub(crate) fn give_up(&mut self, run: u64, id: u64) -> bool {
+        let waiting = self
+            .asked
+            .as_ref()
+            .is_some_and(|asked| asked.run == run && asked.id == id);
         if waiting {
             self.asked = None;
         }
@@ -100,7 +113,7 @@ pub(crate) fn follow_name(
     want: Wanted,
     reach: Reach,
 ) {
-    let Some(run) = ask_where(language, jobs, at.clone(), want) else {
+    let Some((run, id)) = ask_where(language, jobs, at.clone(), want) else {
         return;
     };
     // Bound before the write, the read above being of another state.
@@ -108,6 +121,7 @@ pub(crate) fn follow_name(
     follow.set(Follow {
         asked: Some(Asked {
             run,
+            id,
             at,
             want,
             reach,

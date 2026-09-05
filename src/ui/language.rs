@@ -22,6 +22,12 @@
 //! it. The **handle** is what ends that process, and the app holds it from the moment the
 //! worker hands it over -- a handle dropped instead of stopped is a language server
 //! nothing can ever find again.
+//!
+//! Neither says which **question** an answer is to. A run lasts as long as the server, so
+//! two questions inside one is the ordinary case; the id [`ask_where`] mints is what an
+//! asker matches its own answer by.
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
 
@@ -217,8 +223,15 @@ pub(crate) enum LspJob {
     /// here rather than on the UI thread; it is this worker's and not the build worker's
     /// because what it answers is what a start has to carry.
     ReadSettings { directory: PathBuf },
-    /// What is at a place: which of the four questions is in `want`.
-    Ask { run: u64, at: Lookup, want: Wanted },
+    /// What is at a place: which of the four questions is in `want`. `id` is the
+    /// question's own, minted by [`ask_where`] and copied into the answer: a run says
+    /// which server was asked and nothing about which question this is.
+    Ask {
+        run: u64,
+        id: u64,
+        at: Lookup,
+        want: Wanted,
+    },
     /// What every name in one file is, which is a question about the file and not about
     /// a place in it. The file travels as the `Arc<str>` a document is named by, since
     /// that is what the answer has to be matched against.
@@ -234,9 +247,11 @@ pub(crate) enum LspAnswer {
         run: u64,
         server: Result<lsp::Handle, lsp::Failure>,
     },
-    /// What one question came back with, and which question it was.
+    /// What one question came back with, and which question it was. `id` is the
+    /// [`LspJob::Ask`]'s, carried through untouched.
     Answered {
         run: u64,
+        id: u64,
         want: Wanted,
         reply: Result<Reply, lsp::Failure>,
     },
@@ -306,7 +321,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 };
                 Some(LspAnswer::Started { run, server })
             }
-            LspJob::Ask { run, at, want } => {
+            LspJob::Ask { run, id, at, want } => {
                 let talk = talking.as_mut()?;
                 let places = match want {
                     Wanted::Definition => talk.definition(&at.file, at.line, at.column),
@@ -330,7 +345,12 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                         }))
                     }
                 });
-                Some(LspAnswer::Answered { run, want, reply })
+                Some(LspAnswer::Answered {
+                    run,
+                    id,
+                    want,
+                    reply,
+                })
             }
             LspJob::Tokens { run, file } => {
                 let talk = talking.as_mut()?;
@@ -405,9 +425,18 @@ pub(crate) struct LspJobs {
     /// Handed to each server started, so what it says while nothing was asked arrives
     /// under the run it was started in.
     notes: async_channel::Sender<(u64, lsp::Note)>,
+    /// What the next question is numbered. One counter for every question put, so no two
+    /// of them are ever asked under one id.
+    asked: Arc<AtomicU64>,
 }
 
 impl LspJobs {
+    /// The id the next question goes out under. Never handed out twice, which is what
+    /// lets an answer name the question it is to and not merely the server it came from.
+    fn next_question(&self) -> u64 {
+        self.asked.fetch_add(1, Ordering::Relaxed)
+    }
+
     pub(crate) fn send(&self, job: LspJob) {
         // A full queue is impossible (it is unbounded) and a closed one is the app going
         // down, so there is nothing here to tell anybody about.
@@ -535,7 +564,12 @@ pub(crate) fn use_language_with(
                             server: None,
                         });
                     }
-                    LspAnswer::Answered { run, want, reply } => {
+                    LspAnswer::Answered {
+                        run,
+                        id,
+                        want,
+                        reply,
+                    } => {
                         let held = language.peek().clone();
                         if held.run != run {
                             continue;
@@ -551,8 +585,8 @@ pub(crate) fn use_language_with(
                                 };
                                 let mut waiting = follow.peek().clone();
                                 let moved = match reply.is_some() {
-                                    true => waiting.answer(run, places),
-                                    false => waiting.give_up(run),
+                                    true => waiting.answer(run, id, places),
+                                    false => waiting.give_up(run, id),
                                 };
                                 if moved {
                                     follow.set(waiting);
@@ -567,7 +601,7 @@ pub(crate) fn use_language_with(
                                 // Nothing found and nothing to be found both leave the
                                 // panel saying so: a question that stayed pending would
                                 // say it was still looking for ever.
-                                if waiting.answer_places(run, found) {
+                                if waiting.answer_places(run, id, found) {
                                     located.set(waiting);
                                 }
                             }
@@ -625,6 +659,7 @@ pub(crate) fn use_language_with(
         LspJobs {
             jobs: requests,
             notes: told,
+            asked: Arc::new(AtomicU64::new(0)),
         }
     });
 
@@ -833,8 +868,9 @@ pub(crate) fn stop_server(mut language: State<Language>, jobs: &LspJobs) {
 }
 
 /// Ask `want` about the place `at`. The answer is the worker's, and arrives under the run
-/// it was asked in, which is what this hands back so a caller can tell its own answer from
-/// another's.
+/// it was asked in and the id minted here, which is what this hands back: a run tells one
+/// server from another, and the id tells this question from the next one the same caller
+/// puts.
 ///
 /// `None` with no server: there is nobody to ask, and a question is not what starts one --
 /// that is the control, and only the reader presses it. One that is still starting is
@@ -845,17 +881,19 @@ pub(crate) fn ask_where(
     jobs: &LspJobs,
     at: Lookup,
     want: Wanted,
-) -> Option<u64> {
+) -> Option<(u64, u64)> {
     let held = language.peek().clone();
     if !held.started() {
         return None;
     }
+    let id = jobs.next_question();
     jobs.send(LspJob::Ask {
         run: held.run,
+        id,
         at,
         want,
     });
-    Some(held.run)
+    Some((held.run, id))
 }
 
 /// The control in the top bar: one press starts the language server, the next stops it.

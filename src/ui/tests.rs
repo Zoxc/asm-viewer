@@ -3514,7 +3514,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
 
 /// A uses answer as the panel takes one: the question, and the places the server named.
 fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)]) -> Located {
-    let query = Query::references(at, name.to_owned(), 0, 7);
+    let query = Query::references(at, name.to_owned(), 0, 7, 1);
     let places: Vec<lsp::Place> = places
         .iter()
         .map(|(file, line, columns)| lsp::Place {
@@ -3529,7 +3529,10 @@ fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)])
     };
     // Grouped as the worker groups it, reading each file's text off the disk.
     let found = references::References::of(&places, |path| std::fs::read_to_string(path).ok());
-    assert!(located.answer_places(7, found), "the answer was not taken");
+    assert!(
+        located.answer_places(7, 1, found),
+        "the answer was not taken"
+    );
     located
 }
 
@@ -3550,7 +3553,7 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
     };
     settle(&mut test);
 
-    located.write().asked = Some(Query::references(at.clone(), "helper".to_owned(), 12, 7));
+    located.write().asked = Some(Query::references(at.clone(), "helper".to_owned(), 12, 7, 1));
     settle(&mut test);
     assert!(
         labels(&test).contains(&"Finding references to helper\u{2026}".to_owned()),
@@ -3652,14 +3655,64 @@ fn a_references_question_that_answers_nothing_says_there_are_none() {
     // An answer under a run this did not ask in is an answer to nobody: the question
     // stands and the panel is still looking for it.
     let mut asking = Located {
-        asked: Some(Query::references(at, "helper".to_owned(), 12, 7)),
+        asked: Some(Query::references(at, "helper".to_owned(), 12, 7, 1)),
         ..Located::default()
     };
     assert!(
-        !asking.answer_places(8, references::References::default()),
+        !asking.answer_places(8, 1, references::References::default()),
         "an answer from another server"
     );
     assert!(asking.pending().is_some());
+}
+
+/// A second question asked before the first came back takes its own answer, and the
+/// first's lands on nobody.
+///
+/// Two questions in one server run is the ordinary case -- a run lasts as long as the
+/// server -- so the run cannot be what tells them apart. Matched by it alone, the uses of
+/// `foo` would be drawn under a heading naming what implements `bar`, and `bar`'s own
+/// answer would be dropped as an answer to nothing.
+#[test]
+fn a_locations_answer_lands_on_the_question_it_was_asked_of() {
+    let at = |line: u32| LinePos {
+        file: Arc::from("/p/src/main.rs"),
+        line,
+    };
+    let places = |file: &str, line: u32| {
+        references::References::of(
+            &[lsp::Place {
+                file: PathBuf::from(file),
+                line,
+                columns: 0..3,
+            }],
+            |_| None,
+        )
+    };
+
+    // The uses of `foo`, and then what implements `bar` before the first came back.
+    let mut located = Located {
+        asked: Some(Query::references(at(2), "foo".to_owned(), 4, 7, 1)),
+        ..Located::default()
+    };
+    let second = Query::implementations(at(9), "bar".to_owned(), 8, 7, 2);
+    located.asked = Some(second.clone());
+
+    assert!(
+        !located.answer_places(7, 1, places("/p/src/other.rs", 4)),
+        "the first question's answer was taken for the second's"
+    );
+    assert!(
+        located.pending().is_some(),
+        "the panel stopped looking for the question it is waiting for"
+    );
+    assert!(
+        located.answer_places(7, 2, places("/p/src/bar.rs", 12)),
+        "the second question's own answer was not taken"
+    );
+    assert!(
+        located.found.is_some_and(|found| found.of == second),
+        "the answer is under the wrong question"
+    );
 }
 
 /// Where the text reading `text` was laid out, for a press on it: a `label()` of it, or
@@ -4875,8 +4928,9 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     };
     let (mut test, states, language, location, driven, _asks) = mount_linking!(
         move |job: LspJob| match job {
-            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
+            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
+                id,
                 want,
                 reply: Ok(Reply::Defined(vec![place.clone()])),
             }),
@@ -4953,8 +5007,9 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
     };
     let (mut test, states, language, location, _driven, _asks) = mount_linking!(
         move |job: LspJob| match job {
-            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
+            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
+                id,
                 want,
                 reply: Ok(Reply::Defined(vec![place.clone()])),
             }),
@@ -5012,8 +5067,9 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
     };
     let (mut test, states, language, location, _driven, _asks) = mount_linking!(
         move |job: LspJob| match job {
-            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
+            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
+                id,
                 want,
                 reply: Ok(Reply::Defined(vec![place.clone()])),
             }),
@@ -5047,6 +5103,112 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
         picked.chars.lead(),
         Caret { row: 1, col: 12 },
         "the caret is not on the name"
+    );
+}
+
+/// A file calling two names on one line, written where a test can put one:
+/// `    let n = one(1) + two(2);`, whose calls begin at columns 12 and 21.
+fn two_calling_file(name: &str) -> (Arc<str>, PathBuf) {
+    let (file, directory) = calling_file(name);
+    std::fs::write(
+        PathBuf::from(&*file),
+        "fn main() {\n    let n = one(1) + two(2);\n}\n",
+    )
+    .expect("writing the source file");
+    (file, directory)
+}
+
+/// Both of [`two_calling_file`]'s calls, as a server would classify them: two links on
+/// the second line.
+fn two_calling_links() -> links::Links {
+    let legend = lsp::Legend::of(&["function"], &[]);
+    let call = |columns: Range<u32>| lsp::Token {
+        line: 2,
+        columns,
+        kind: 0,
+        modifiers: 0,
+    };
+    links::Links::of(&legend, &[call(12..15), call(21..24)])
+}
+
+/// A reader who clicks twice gets the **second** click's answer: the first click's is an
+/// answer to nobody, whichever of the two the server answers first.
+///
+/// The question is held by the id it went out under and not by the server run, which
+/// lasts as long as the server: matched by the run alone, the first click's places are
+/// taken for the second question -- so `one`'s definition opens, under the second
+/// click's reach, and `two`'s answer is dropped as an answer to nothing.
+#[test]
+fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
+    let (file, directory) = two_calling_file("twice");
+    let (one, two) = (directory.join("one.rs"), directory.join("two.rs"));
+    for defined in [&one, &two] {
+        std::fs::write(defined, "fn f(n: u32) -> u32 {\n    n\n}\n")
+            .expect("writing the definition's file");
+    }
+    // The first question waits here until the test lets it go, so the second is asked
+    // while it is in flight and answered after it.
+    let (release, held) = async_channel::bounded::<()>(1);
+    let (mut test, states, language, _location, _driven, asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, id, at, want } => {
+                let first = at.column == 12;
+                if first {
+                    let _ = held.recv_blocking();
+                }
+                let place = lsp::Place {
+                    file: if first { one.clone() } else { two.clone() },
+                    line: 1,
+                    columns: 3..4,
+                };
+                Some(LspAnswer::Answered {
+                    run,
+                    id,
+                    want,
+                    reply: Ok(Reply::Defined(vec![place])),
+                })
+            }
+            _ => None,
+        },
+        file.clone(),
+        two_calling_links()
+    );
+    let mut language = language;
+    let calling = Document::Source(file.clone());
+    open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    // The first click, waited for: the worker records a job when it takes it, so this is
+    // what says the question is in flight rather than queued behind the second -- where
+    // `worth_doing` would drop it and there would be nothing to take the wrong answer.
+    let first = word_point(&test, "one");
+    press_at(&mut test, first);
+    let (asked, _) = next_ask(&mut test, &asks).expect("the first question went out");
+    assert_eq!(
+        asked.column, 12,
+        "the first question is about the wrong name"
+    );
+
+    // The second, while the first is still with the server.
+    let second = word_point(&test, "two");
+    press_at(&mut test, second);
+    settle(&mut test);
+
+    let _ = release.send_blocking(());
+    pump(&mut test, || states.open.active() != Some(calling.clone()));
+
+    let opened = |path: &Path| Document::Source(Arc::from(path.to_str().expect("a utf-8 path")));
+    assert!(
+        states.open.active() == Some(opened(&directory.join("two.rs"))),
+        "the tab is not on the second click's definition"
+    );
+    // And the first click's answer put nothing on the trail on its way past.
+    navigate(states.open, Nav::Back);
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(calling),
+        "Back did not return to the call"
     );
 }
 
@@ -5255,8 +5417,9 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
     };
     let (mut test, states, language, location, _driven, _asks) = mount_linking!(
         move |job: LspJob| match job {
-            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
+            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
+                id,
                 want,
                 reply: Ok(Reply::Defined(vec![itself.clone()])),
             }),
@@ -5497,8 +5660,9 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
     let (file, _directory) = calling_file("refused");
     let (mut test, states, language, location, _driven, _asks) = mount_linking!(
         |job: LspJob| match job {
-            LspJob::Ask { run, want, .. } => Some(LspAnswer::Answered {
+            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
+                id,
                 want,
                 reply: Err(lsp::Failure::Refused {
                     code: -32603,
@@ -18389,12 +18553,14 @@ fn the_queue_keeps_the_last_question_and_every_press() {
     let drained = worth_doing(
         LspJob::Ask {
             run: 1,
+            id: 1,
             at: at(1),
             want: Wanted::Definition,
         },
         vec![
             LspJob::Ask {
                 run: 1,
+                id: 2,
                 at: at(2),
                 want: Wanted::Definition,
             },
@@ -18414,6 +18580,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
             },
             LspJob::Ask {
                 run: 2,
+                id: 3,
                 at: at(3),
                 want: Wanted::Definition,
             },
@@ -18428,6 +18595,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
     let alone = worth_doing(
         LspJob::Ask {
             run: 1,
+            id: 9,
             at: at(9),
             want: Wanted::Definition,
         },
@@ -18458,17 +18626,20 @@ fn a_question_about_references_does_not_cancel_one_about_a_definition() {
     let drained = worth_doing(
         LspJob::Ask {
             run: 1,
+            id: 1,
             at: at(1),
             want: Wanted::Definition,
         },
         vec![
             LspJob::Ask {
                 run: 1,
+                id: 2,
                 at: at(2),
                 want: Wanted::References,
             },
             LspJob::Ask {
                 run: 1,
+                id: 3,
                 at: at(3),
                 want: Wanted::References,
             },

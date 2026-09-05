@@ -57,12 +57,24 @@ pub(crate) enum Scope {
     /// Every reference to the name at [`Query::at`], as the language server answers it.
     ///
     /// `column` is where the name was asked about, in the UTF-16 units the protocol
-    /// takes, and `run` is the server run it was asked in: an answer from a server
-    /// started since is not an answer to this question.
-    References { name: String, column: u32, run: u64 },
+    /// takes; `run` is the server run it was asked in, since an answer from a server
+    /// started since is not an answer to this question; and `id` is the question's own,
+    /// since neither is a run when two questions are asked in one -- which is the
+    /// ordinary case, a run lasting as long as the server.
+    References {
+        name: String,
+        column: u32,
+        run: u64,
+        id: u64,
+    },
     /// What implements the name at [`Query::at`], as the language server answers it, with
-    /// `column` and `run` meaning what they mean above.
-    Implementations { name: String, column: u32, run: u64 },
+    /// `column`, `run` and `id` meaning what they mean above.
+    Implementations {
+        name: String,
+        column: u32,
+        run: u64,
+        id: u64,
+    },
 }
 
 impl Query {
@@ -85,30 +97,48 @@ impl Query {
         }
     }
 
-    /// The question about every reference to `name`, asked at `column` of `at` in the server
-    /// run `run`.
-    pub(crate) fn references(at: LinePos, name: String, column: u32, run: u64) -> Query {
+    /// The question about every reference to `name`, asked at `column` of `at` as the
+    /// question `id` of the server run `run`.
+    pub(crate) fn references(at: LinePos, name: String, column: u32, run: u64, id: u64) -> Query {
         Query {
             at,
-            scope: Scope::References { name, column, run },
+            scope: Scope::References {
+                name,
+                column,
+                run,
+                id,
+            },
         }
     }
 
     /// The question about what implements `name`, asked the same way.
-    pub(crate) fn implementations(at: LinePos, name: String, column: u32, run: u64) -> Query {
+    pub(crate) fn implementations(
+        at: LinePos,
+        name: String,
+        column: u32,
+        run: u64,
+        id: u64,
+    ) -> Query {
         Query {
             at,
-            scope: Scope::Implementations { name, column, run },
+            scope: Scope::Implementations {
+                name,
+                column,
+                run,
+                id,
+            },
         }
     }
 
-    /// The server run this was asked in, and `None` where it is not a question for a
-    /// server at all. What an answer is matched against, so that neither the run nor the
-    /// question has to be named twice.
-    pub(crate) fn run(&self) -> Option<u64> {
+    /// The server run this was asked in and which question of it this is, and `None`
+    /// where it is not a question for a server at all. What an answer is matched against,
+    /// so that neither the question nor what it was asked under has to be named twice.
+    pub(crate) fn asked(&self) -> Option<(u64, u64)> {
         match &self.scope {
             Scope::Line | Scope::Function { .. } => None,
-            Scope::References { run, .. } | Scope::Implementations { run, .. } => Some(*run),
+            Scope::References { run, id, .. } | Scope::Implementations { run, id, .. } => {
+                Some((*run, *id))
+            }
         }
     }
 
@@ -195,19 +225,25 @@ impl Located {
         (found != Some(asked)).then_some(asked)
     }
 
-    /// Take `found` as the answer to the question this is waiting for, `run` being the
-    /// server run it came back under. Whether anything changed, so the caller writes only
-    /// then.
+    /// Take `found` as the answer to the question this is waiting for, `run` and `id`
+    /// being the server run and the question it came back under. Whether anything
+    /// changed, so the caller writes only then.
     ///
-    /// Which question it was is not asked: only a question for a server has a run at all
-    /// (`Query::run`), and there is one of those pending at a time.
-    ///
-    /// An answer under a run this did not ask in is an answer to nobody, and so is one to
-    /// a question already answered. **Every way of not answering is an empty answer**: a
-    /// server that refused the question or stopped answering it leaves a question that
-    /// would otherwise be looked for for ever.
-    pub(crate) fn answer_places(&mut self, run: u64, found: references::References) -> bool {
-        let asked = self.pending().filter(|query| query.run() == Some(run));
+    /// An answer under a run this did not ask in is an answer to nobody; so is one to
+    /// another question of that run, which is what a reader asking a second thing before
+    /// the first came back leaves behind; and so is one to a question already answered.
+    /// **Every way of not answering is an empty answer**: a server that refused the
+    /// question or stopped answering it leaves a question that would otherwise be looked
+    /// for for ever.
+    pub(crate) fn answer_places(
+        &mut self,
+        run: u64,
+        id: u64,
+        found: references::References,
+    ) -> bool {
+        let asked = self
+            .pending()
+            .filter(|query| query.asked() == Some((run, id)));
         let Some(of) = asked.cloned() else {
             return false;
         };
@@ -397,7 +433,7 @@ fn find_places(
     name: String,
     column: u32,
     want: Wanted,
-    query: fn(LinePos, String, u32, u64) -> Query,
+    query: fn(LinePos, String, u32, u64, u64) -> Query,
 ) {
     let lookup = Lookup {
         file: PathBuf::from(&*at.file),
@@ -406,14 +442,14 @@ fn find_places(
         line: at.line.saturating_sub(1),
         column,
     };
-    let Some(run) = ask_where(language, jobs, lookup, want) else {
+    let Some((run, id)) = ask_where(language, jobs, lookup, want) else {
         return;
     };
-    let query = query(at, name, column, run);
+    let query = query(at, name, column, run, id);
 
     // Asking again drops the answer that stands, which is what makes this question
     // pending; `find_locations`' rule, and here it cannot even be the same question,
-    // since the run it was asked in is part of it.
+    // since the id it was asked under is part of it.
     let mut next = located.peek().clone();
     if next.found.as_ref().is_some_and(|found| found.of == query) {
         next.found = None;
