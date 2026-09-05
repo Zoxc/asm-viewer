@@ -18,6 +18,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
@@ -1026,6 +1027,14 @@ fn recents_in(base: &Path) -> PathBuf {
 /// made if it is not there, which is what lets a project's first write create its
 /// directory.
 ///
+/// The temporary is **synced before the rename**. A rename is atomic against a crash of
+/// the process, but not against a power loss: the directory entry can reach the disk
+/// before the data does, and the file the next launch then reads is zero bytes or a
+/// truncated tail -- which will not parse, so `rescue` moves the reader's project or
+/// session aside and answers a default. The cost is one fsync per save, at most one every
+/// 30 s. The directory entry itself is left unsynced: losing the rename costs the last
+/// save, where losing the data costs the file.
+///
 /// The one atomic writer for everything the app stores: the two project files, the recent
 /// list, the settings and a scratchpad's package.
 pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
@@ -1037,7 +1046,11 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     temporary.push(".tmp");
     let temporary = PathBuf::from(temporary);
 
-    fs::write(&temporary, contents)?;
+    let mut file = fs::File::create(&temporary)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    drop(file);
+
     fs::rename(&temporary, path)
 }
 

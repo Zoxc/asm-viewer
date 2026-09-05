@@ -601,6 +601,37 @@ fn a_partial_file_still_loads() {
     assert!(session.resolve_tabs(&objects).is_empty());
 }
 
+/// The rename is the last thing `write_atomically` does, so nothing that goes wrong on the
+/// way to it can touch the file already there: the good one is still readable afterwards,
+/// and the reader loses the save rather than the file.
+///
+/// What this cannot see is the `sync_all` itself, which is the point of the ordering: no
+/// test in a process can observe whether the data reached the disk before the directory
+/// entry did. It pins that a failure before the rename is an error and not a replacement.
+#[test]
+fn a_write_that_fails_leaves_the_good_file_where_it_is() {
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-test-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = fs::remove_dir_all(&directory);
+    let path = directory.join(PROJECT_FILE);
+
+    write_atomically(&path, b"the good file").expect("the first write");
+    assert!(
+        !path.with_extension("toml.tmp").exists(),
+        "a temporary was left"
+    );
+
+    // A temporary that cannot be created at all: a directory is already sitting there.
+    fs::create_dir_all(path.with_extension("toml.tmp")).expect("the temporary's stand-in");
+    assert!(write_atomically(&path, b"the new file").is_err());
+    assert_eq!(fs::read(&path).expect("the file reads"), b"the good file");
+
+    let _ = fs::remove_dir_all(&directory);
+}
+
 /// A path TOML cannot spell is refused rather than mangled, in *both* files.
 #[test]
 fn a_non_utf8_path_is_not_written_rather_than_mangled() {

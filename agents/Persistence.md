@@ -45,7 +45,13 @@ never chose.
 
 Everything is written under `dirs::state_dir()` (falling back to `data_local_dir()`) +
 `assembly-viewer/`, atomically via `.tmp` + rename (one `write_atomically`, used by every file
-`project.rs` owns).
+`project.rs` owns). The temporary is **synced before the rename**, because a rename is atomic
+against a crash of the process and not against a power loss: the directory entry can reach the disk
+ahead of the data, and the file the next launch reads is then zero bytes or a truncated tail -- one
+that will not parse, so the rescue moves the reader's project or session aside and hands back a
+default, which is the very loss the dance exists to prevent. The directory entry is left unsynced:
+losing the rename costs the last save, where losing the data costs the file. One fsync per save, at
+most one every 30 s.
 
 **A project is a directory, and its id is that directory's name.** More than one exists; each is
 `projects/<id>/`. `ProjectId` is a validated single path component (ASCII alphanumerics, `-` and
