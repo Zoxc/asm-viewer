@@ -57,6 +57,12 @@ Set `ASSEMBLY_VIEWER_STATE` on every run (the user rule above says why):
 `ASSEMBLY_VIEWER_STATE=$(mktemp -d) cargo run`. It replaces the desktop's own state
 directory, so the app keeps its projects, recents, settings and scratchpads there instead.
 
+**Alt held while the pages menu is opened** adds the Debug page to it: the ways to make the
+app misbehave on purpose -- the three panics `src/panics.rs` tells apart, so the box it puts
+up can be looked at -- and every panic file the app has written. A gesture rather than a
+feature or a variable, so it needs neither a rebuild nor a restart. Only the menu is gated:
+a session that names the page puts it back, a reader with one open having asked for it.
+
 `cargo run --features devtools` starts freya's devtools server alongside the app (`[::1]:7354`,
 opt-in so it never reaches a release build). The viewer is a separate `cargo install
 freya-devtools-app`, only one devtools-enabled freya app can run at a time, and there is no in-app
@@ -172,9 +178,10 @@ command.
 - `src/bookmarks.rs` — the reader's bookmarks: a saved place and the name it was made under,
   in the order they were added; saved in `project.toml`, live only against what is loaded.
 - `src/naming.rs` — a demangled name cut down to the `module::fn_name` a tab is called by.
-- `src/panics.rs` — a panic on any thread: the record, the file a run appends it to, the box
-  the reader is shown and how much of the message and the backtrace it is given, and the
-  shutdown after it, which the first unguarded panic claims and the ones behind it do not.
+- `src/panics.rs` — a panic on any thread: the record, the file a run appends it to and every
+  such file there is, the box the reader is shown and how much of the message and the
+  backtrace it is given, and the shutdown after it, which the first unguarded panic claims
+  and the ones behind it do not.
 - `src/fonts.rs` — the desktop's font settings (KDE, Gnome, Win32) merged under the user's own.
 - `src/functions.rs` — the functions a source file defines, by the lines they span, and which
   one a line is inside; `functions/rust.rs` is the scanner that finds Rust's without the grammar.
@@ -227,6 +234,9 @@ command.
   and the lines of that file the gutter marks as having code.
 - `src/ui/split.rs` — one document drawn: which side leads, and which panes a tab has, with
   the control on the leading pane's bar that puts the other away.
+- `src/ui/debug_view.rs` — the Debug page: the panics that can be raised on purpose, so the
+  box `src/panics.rs` puts up is one press away rather than a patched build, and the files
+  they left behind. In the pages menu only when Alt was held as it opened.
 - `src/ui/dock.rs` — the sidebar's dock: what a panel is, and the groups it can be arranged in.
 - `src/ui/strip.rs` — the app's own tab bar: the chips, the × on one, the list of every open
   tab, and the body under it all.

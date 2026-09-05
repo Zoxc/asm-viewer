@@ -57,6 +57,53 @@ fn a_run_s_panics_are_appended_to_one_file() {
     );
 }
 
+/// The files a run can be shown, newest first, out of a directory that also holds things
+/// this did not write. By name and not by the filesystem's times: the name is the stamp of
+/// the run's first panic, so it sorts, and it survives a file being copied about.
+#[test]
+fn the_panic_files_are_listed_newest_first_and_nothing_else_is() {
+    let base = base(line!());
+    let directory = base.join(PANICS_DIR);
+    fs::create_dir_all(&directory).expect("the temp directory is writable");
+
+    // Written out of order, so what comes back is sorted and not read order.
+    for name in [
+        "2025-09-04-153320.txt",
+        "2026-01-01-000000.txt",
+        "2025-01-01-120000.txt",
+    ] {
+        fs::write(directory.join(name), b"a record").expect("a panic file");
+    }
+    // And three things that are not a run's panics.
+    fs::write(directory.join("notes.md"), b"not ours").expect("a stray file");
+    fs::write(directory.join("no-extension"), b"not ours").expect("a stray file");
+    fs::create_dir_all(directory.join("a-directory.txt")).expect("a stray directory");
+
+    let names: Vec<String> = recorded_in(&base)
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "2026-01-01-000000.txt",
+            "2025-09-04-153320.txt",
+            "2025-01-01-120000.txt"
+        ]
+    );
+}
+
+/// Nothing to show is an empty list and never a failure: the app has not panicked, or has
+/// nowhere to keep what it wrote.
+#[test]
+fn a_directory_with_no_panics_in_it_lists_nothing() {
+    let base = base(line!());
+    assert!(recorded_in(&base).is_empty(), "nothing was ever written");
+
+    fs::create_dir_all(base.join(PANICS_DIR)).expect("the temp directory is writable");
+    assert!(recorded_in(&base).is_empty(), "the directory is empty");
+}
+
 /// A panic the crate guards -- a demangler on a name out of a file -- is written down and
 /// nothing more: nothing has gone wrong with the app, so nobody is told and nothing is
 /// brought down. Any other panic is told about and stops the app.

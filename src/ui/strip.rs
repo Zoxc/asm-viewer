@@ -345,6 +345,7 @@ fn page_icon(page: Page) -> Element {
         Page::Project => bar_icon(("folder-open", lucide::folder_open())),
         Page::Settings => bar_icon(("settings", lucide::settings())),
         Page::Scratchpad => bar_icon(("notebook-pen", lucide::notebook_pen())),
+        Page::Debug => bar_icon(("bug", lucide::bug())),
     }
 }
 
@@ -355,6 +356,7 @@ pub(crate) fn page_body(page: Page) -> Element {
         Page::Project => ProjectTab.into_element(),
         Page::Settings => SettingsTab.into_element(),
         Page::Scratchpad => ScratchpadTab.into_element(),
+        Page::Debug => DebugTab.into_element(),
     }
 }
 
@@ -381,14 +383,28 @@ impl Component for PagesButton {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let mut showing = use_state(|| false);
+        // Whether the menu that is up was opened with Alt held. Kept from the press rather
+        // than read per render: the reader lets the key go to reach for the row, and a row
+        // that vanished under their hand would be worse than not offering it at all.
+        let mut asked = use_state(|| false);
+        let alt = use_consume::<Alt>().0;
         let states = use_project_states();
         let rescued = use_consume::<Rescued>().0;
         let unopened = use_consume::<Unopened>().0;
         // Read and not peeked: the marks are drawn from it, so the menu has to follow a
         // page opening or closing while it is up.
         let strip = states.open.strip.read();
-        let is_open: Vec<bool> = Page::ALL
+        // The Debug page is the ways to make the app misbehave on purpose, so it is not in
+        // a menu the reader opened to get to their project. Alt held as the menu is opened
+        // is what asks for it -- no rebuild, no variable, and nothing on screen for a
+        // reader who has not asked.
+        let pages: Vec<Page> = Page::ALL
             .into_iter()
+            .filter(|page| *page != Page::Debug || asked())
+            .collect();
+        let is_open: Vec<bool> = pages
+            .iter()
+            .copied()
             .map(|page| strip.contains(Tab::Page(page)))
             .collect();
         drop(strip);
@@ -415,7 +431,12 @@ impl Component for PagesButton {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
+                    // Read here and not in the render: this press is the moment the
+                    // reader is asking about, and a freya pointer event carries no
+                    // modifiers of its own, which is what `Alt` is kept for.
+                    let held = *alt.peek();
                     let was = showing();
+                    asked.set(!was && held);
                     showing.set(!was);
                 })
                 .child(bar_icon(("menu", lucide::menu()))),
@@ -431,8 +452,10 @@ impl Component for PagesButton {
                     // window's: the menu opens rightward into it.
                     .position(Position::new_absolute().top(side))
                     .child(
-                        main_menu(states, rescued, unopened, &recents, &is_open, showing)
-                            .on_close(move |_| showing.set(false)),
+                        main_menu(
+                            states, rescued, unopened, &recents, &pages, &is_open, showing,
+                        )
+                        .on_close(move |_| showing.set(false)),
                     )
                     .into_element()
             }))
@@ -479,6 +502,9 @@ fn main_menu(
     rescued: State<Vec<PathBuf>>,
     unopened: State<Option<PathBuf>>,
     recents: &[Recent],
+    // The pages this run has, asked for by the caller: `is_open` is one per page in this
+    // order, and the two cannot be allowed to disagree.
+    pages: &[Page],
     is_open: &[bool],
     close: State<bool>,
 ) -> Menu {
@@ -511,8 +537,9 @@ fn main_menu(
     }
 
     menu.child(menu_rule()).children(
-        Page::ALL
-            .into_iter()
+        pages
+            .iter()
+            .copied()
             .zip(is_open.iter().copied())
             // The Project page is a reading of a project, so with none there is nothing
             // for it to draw.

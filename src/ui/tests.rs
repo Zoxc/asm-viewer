@@ -1977,6 +1977,65 @@ fn pages_harness() -> impl IntoElement {
         .child(PagesButton)
 }
 
+/// **The Debug page is in the menu only when Alt was held as it opened.** It is the ways
+/// to make the app misbehave on purpose, so it has no business in a menu the reader opened
+/// to reach their project; and it was behind an environment variable first, which meant
+/// restarting the app to reach a button.
+///
+/// The modifier is read from `Alt` and not from the press: a freya pointer event carries
+/// no modifiers of its own. And it is read **at the press** and kept, so the row does not
+/// vanish when the reader lets the key go to reach for it.
+#[test]
+fn alt_held_as_the_menu_opens_is_what_offers_the_debug_page() {
+    let (mut test, (states, alt)) = TestingRunner::new(
+        pages_harness,
+        (300., 300.).into(),
+        |runner: &mut _| {
+            let states = project_states!(runner);
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, alt)
+        },
+        1.,
+    );
+    let _ = states;
+    test.sync_and_update();
+
+    let button = (toggle_size() as f64 / 2.0, toggle_size() as f64 / 2.0);
+    let open = |test: &mut TestingRunner| {
+        press_at(test, button);
+        settle(test);
+    };
+
+    // Without it: the three ordinary pages and nothing else.
+    open(&mut test);
+    assert!(
+        !labels(&test).contains(&Page::Debug.title().to_owned()),
+        "{:?}",
+        labels(&test)
+    );
+    open(&mut test);
+
+    // With it held as the menu opens.
+    let mut alt = alt;
+    alt.set(true);
+    settle(&mut test);
+    open(&mut test);
+    assert!(
+        labels(&test).contains(&Page::Debug.title().to_owned()),
+        "Alt was held and the page was not offered: {:?}",
+        labels(&test)
+    );
+
+    // And letting the key go does not take the row away under the reader's hand.
+    alt.set(false);
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&Page::Debug.title().to_owned()),
+        "the row went when the key did: {:?}",
+        labels(&test)
+    );
+}
+
 #[test]
 fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
     let (mut test, states) =
@@ -2014,13 +2073,19 @@ fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
     settle(&mut test);
 
     let rows = labels(&test);
-    for page in Page::ALL {
+    for page in Page::ALL.into_iter().filter(|page| *page != Page::Debug) {
         assert!(
             rows.iter().any(|row| row == page.title()),
             "{} is not in the menu: {rows:?}",
             page.title()
         );
     }
+    // And not the Debug page, which this press did not ask for: the test below is the one
+    // that asks.
+    assert!(
+        !rows.iter().any(|row| row == Page::Debug.title()),
+        "the Debug page is in a menu nobody asked it for: {rows:?}"
+    );
 
     let row = centre_of(&test, "Project");
     press_at(&mut test, row);
@@ -2246,6 +2311,135 @@ impl Component for Restorer {
             .expanded()
             .child(label().text(format!("{} {}", kept(), gone())))
     }
+}
+
+/// The Debug page draws the three panics the hook tells apart, each with a button. The
+/// page is one press away from the menu and the menu is pinned above, so what is left is
+/// that the body under it is the page and not an empty rect.
+#[test]
+fn the_debug_page_offers_the_three_panics_the_hook_tells_apart() {
+    let (mut test, _states) = TestingRunner::new(
+        || page_body(Page::Debug),
+        (500., 400.).into(),
+        project_states!(),
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    for row in [
+        "Panics",
+        "On the UI thread",
+        "On a worker thread",
+        "Inside analysis::guard",
+        // The files those panics leave behind. The heading and not the rows under it:
+        // what is listed is whatever the machine running this has actually panicked
+        // into, which is not a test's to assert.
+        "Panic files",
+    ] {
+        assert!(
+            drawn.iter().any(|text| text == row),
+            "{row:?} is not on the page: {drawn:?}"
+        );
+    }
+}
+
+/// **A row's name is not in a fixed column it can spill out of.** The page's first draft
+/// used `field_row`, whose name column is `field_label_width()` wide with nothing
+/// clipping it, and these names are sentences: the text drew past its box and over the
+/// button beside it. The runner cannot see glyphs, so what is pinned is the cause -- the
+/// name takes the width the button leaves, which is where an ellipsis can do its work.
+#[test]
+fn a_debug_rows_name_takes_the_width_its_button_leaves() {
+    const WIDTH: f32 = 500.0;
+    let (mut test, _states) = TestingRunner::new(
+        || page_body(Page::Debug),
+        (WIDTH, 400.).into(),
+        project_states!(),
+        1.,
+    );
+    settle(&mut test);
+
+    let areas = labels_with_areas(&test);
+    let middle = |area: Area| area.origin.y + area.height() / 2.0;
+    for name in [
+        "On the UI thread",
+        "On a worker thread",
+        "Inside analysis::guard",
+    ] {
+        let row = areas
+            .iter()
+            .find(|(text, _)| text == name)
+            .unwrap_or_else(|| panic!("{name:?} is drawn"))
+            .1;
+        // The button on that row: the Panic whose middle is nearest this name's.
+        let button = areas
+            .iter()
+            .filter(|(text, _)| text == "Panic")
+            .min_by(|(_, a), (_, b)| {
+                (middle(*a) - middle(row))
+                    .abs()
+                    .total_cmp(&(middle(*b) - middle(row)).abs())
+            })
+            .expect("a Panic button")
+            .1;
+
+        assert!(
+            row.width() > field_label_width(),
+            "{name:?} is in a {} px column, which it cannot fit in",
+            row.width()
+        );
+        // It stops where the button starts, and it reaches most of the way there: a name
+        // sized from its own text would leave a gap and could draw past its box instead.
+        assert!(
+            row.origin.x + row.width() <= button.origin.x + 1.0,
+            "{name:?}"
+        );
+        assert!(
+            row.width() > WIDTH / 2.0,
+            "{name:?} took {} px of a {WIDTH} px page",
+            row.width()
+        );
+    }
+}
+
+/// And the button really panics. The whole page exists so that the box `crate::panics`
+/// puts up can be looked at without a patched build, and a button that only *said* it
+/// would panic would be worth nothing at all: the press is the test.
+#[test]
+#[should_panic(expected = "a panic asked for on the Debug page")]
+fn the_ui_threads_panic_button_panics_on_the_ui_thread() {
+    let (mut test, _states) = TestingRunner::new(
+        || page_body(Page::Debug),
+        (500., 400.).into(),
+        project_states!(),
+        1.,
+    );
+    settle(&mut test);
+
+    // The three buttons are all called Panic, so the one wanted is the one on the row
+    // that names the UI thread: the same line, whichever order the rows are drawn in.
+    let row = label_area(&test, "On the UI thread").expect("the row is drawn");
+    let middle = |area: Area| area.origin.y + area.height() / 2.0;
+    let button = labels_with_areas(&test)
+        .into_iter()
+        .filter(|(text, _)| text == "Panic")
+        .min_by(|(_, left), (_, right)| {
+            (middle(*left) - middle(row))
+                .abs()
+                .total_cmp(&(middle(*right) - middle(row)).abs())
+        })
+        .expect("a Panic button")
+        .1;
+
+    press_at(
+        &mut test,
+        (
+            (button.origin.x + button.width() / 2.0) as f64,
+            (middle(button)) as f64,
+        ),
+    );
+    settle(&mut test);
 }
 
 /// Every open tab's chip, drawn as the bar draws them: what a press on one has to answer

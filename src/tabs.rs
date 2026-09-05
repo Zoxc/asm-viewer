@@ -23,11 +23,17 @@ pub enum Page {
     Project,
     Settings,
     Scratchpad,
+    /// The ways to make the app misbehave on purpose, so that what it does about it can
+    /// be looked at (`src/ui/debug_view.rs`). Last in every list here, being the one page
+    /// a reader has no ordinary reason to open.
+    Debug,
 }
 
 impl Page {
-    /// Every page, in the order a menu lists them.
-    pub const ALL: [Page; 3] = [Page::Project, Page::Settings, Page::Scratchpad];
+    /// Every page, in the order a menu lists them. Whether a menu lists the last of them
+    /// is the menu's own question, and is asked of the keyboard rather than of this
+    /// (`src/ui/strip.rs`).
+    pub const ALL: [Page; 4] = [Page::Project, Page::Settings, Page::Scratchpad, Page::Debug];
 
     /// What the tab is called.
     pub fn title(self) -> &'static str {
@@ -35,6 +41,7 @@ impl Page {
             Page::Project => "Project",
             Page::Settings => "Settings",
             Page::Scratchpad => "Scratchpad",
+            Page::Debug => "Debug",
         }
     }
 
@@ -44,11 +51,16 @@ impl Page {
             Page::Project => "project",
             Page::Settings => "settings",
             Page::Scratchpad => "scratchpad",
+            Page::Debug => "debug",
         }
     }
 
     /// The page a session named, or `None` for a name this build does not have -- a file
     /// a build with one more page wrote, which drops that tab and keeps the rest.
+    ///
+    /// [`Page::Debug`] is *not* filtered here. It is kept out of the menu unless it is
+    /// asked for, and a reader who has one open has asked for it: a session that names it
+    /// puts it back, the way a session naming any other page does.
     pub fn from_stored(stored: &str) -> Option<Page> {
         Page::ALL.into_iter().find(|page| page.stored() == stored)
     }

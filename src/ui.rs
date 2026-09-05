@@ -76,6 +76,8 @@ mod building;
 pub(crate) use building::*;
 mod code_row;
 pub(crate) use code_row::*;
+mod debug_view;
+pub(crate) use debug_view::*;
 mod dock;
 // `Panel` by name as well as through the glob: freya's prelude has a `Panel` of its own,
 // and an explicit import is what settles which one the app means.

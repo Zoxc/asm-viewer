@@ -240,6 +240,37 @@ fn write_to(file: &Mutex<Option<PathBuf>>, base: &Path, panic: &Panic) -> Option
     Some(path)
 }
 
+/// Every panic file there is, newest first, with the run each was written for named by
+/// the file's own stamp. Empty where nothing has panicked, or where there is nowhere to
+/// keep them.
+///
+/// The listing is by **name** and not by the filesystem's times: the name is the stamp of
+/// the run's first panic ([`file_stamp`]), it sorts, and a file copied about keeps it
+/// where a modification time does not.
+pub(crate) fn recorded() -> Vec<PathBuf> {
+    project::base()
+        .map(|base| recorded_in(&base))
+        .unwrap_or_default()
+}
+
+/// The same under a given directory, so a test has one of its own.
+fn recorded_in(base: &Path) -> Vec<PathBuf> {
+    let Ok(directory) = fs::read_dir(base.join(PANICS_DIR)) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = directory
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            // Files only, and only the ones this writes: a directory somebody made in
+            // there is not a run's panics, and neither is anything else left lying about.
+            let named = path.extension().is_some_and(|extension| extension == "txt");
+            (named && path.is_file()).then_some(path)
+        })
+        .collect();
+    files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    files
+}
+
 /// Say what happened, in a box of the app's own: the same one whichever thread panicked,
 /// since a panic on the UI thread leaves no frame to draw a window of the app's in, and
 /// in a debug build as much as a release one.

@@ -33,6 +33,9 @@ fn strip(count: u32) -> (Strip, Vec<Tab>, Docs) {
 /// A session is written with the stored name and not the title, so the two are pinned
 /// apart: every page round-trips, and a name this build does not have is dropped rather
 /// than guessed at.
+///
+/// The Debug page round-trips like the rest. It is kept out of the menu unless it is asked
+/// for, and a reader with one open has asked: a restart puts it back.
 #[test]
 fn a_page_round_trips_through_the_name_a_session_holds() {
     for page in Page::ALL {
@@ -40,6 +43,9 @@ fn a_page_round_trips_through_the_name_a_session_holds() {
     }
     assert_eq!(Page::from_stored("Settings"), None);
     assert_eq!(Page::from_stored("terminal"), None);
+    // Every page has a name of its own, so no two tabs answer to one word.
+    let names: std::collections::HashSet<&str> = Page::ALL.iter().map(|p| p.stored()).collect();
+    assert_eq!(names.len(), Page::ALL.len());
 }
 
 #[test]

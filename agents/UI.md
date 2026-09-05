@@ -253,7 +253,8 @@ chips over the tab on screen, and nothing that can be folded, split or dragged o
 used to buy -- one answer to "which document is active", and a strip that closing the last document
 cannot fold away -- the strip states outright, where the dock needed a designated panel, a
 `tidy` exemption and an `on_drop` that refused a document anywhere else. `Tab` is two-kinded,
-`Tab::Document(DocId)` and `Tab::Page(Page)` for Project, Settings and the Scratchpad, because a tab
+`Tab::Document(DocId)` and `Tab::Page(Page)` for Project, Settings, the Scratchpad and Debug,
+because a tab
 is `Copy` -- a list's key, a menu row's capture -- and a `Document` is not. A close never walks the
 bar through intermediate states: `Strip::close` takes the predicate, works the landing out with
 `tabs::landing` before anything is removed, and leaves the tab on screen alone when it survives.
