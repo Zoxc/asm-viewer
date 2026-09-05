@@ -246,7 +246,9 @@ plus a real `Instant` (`freya-animation-0.4.3/src/hook.rs:271-317`), and `sync_a
 ticks; only `poll`/`poll_n` do, and they `std::thread::sleep` for real. `Tooltip`'s 500ms delay is
 an `async_io::Timer` (`freya-components-0.4.3/src/tooltip.rs:209`). Timers do fire under the runner
 (async-io has its own reactor thread), but there is no virtual clock anywhere, so a timing test
-costs its own duration in real seconds. Nothing in this repo has one.
+costs its own duration in real seconds. One here does:
+`a_sweep_past_the_edge_scrolls_the_listing_the_pane_is_drawing_now` drives the sweep's 40ms
+autoscroll with `poll_n` and takes about 0.4s of them.
 
 **The clipboard, honestly.** `ClipboardContext::new()` is attempted at mount and stored as an
 `Option` (`lib.rs:232-238`); on a machine with no display it is `None` and `Clipboard::set` fails
@@ -333,6 +335,22 @@ repo writes `for _ in 0..4 { test.sync_and_update(); }` rather than a number it 
 thread make the count genuinely unbounded, so the test loops until the condition holds (and then
 four more, for the hops the condition itself starts) and fails loudly at 200 rather than asserting
 on whatever happened to have arrived.
+
+**A pass count is not a wait.** `sync_and_update` costs microseconds, so a loop of them gives a
+thread on another core no time at all; only `pump`, `poll` and `poll_n` sleep. Six of the
+link-following tests pressed a name and then ran 32 passes before reading the state, and under load
+one press in ten had not been answered by then. Anything a thread or a `Timer` answers waits on its
+condition and never on a number.
+
+**A timer the test starts goes on running between its assertions.** A sweep held past a pane's edge
+scrolls the view every `AUTOSCROLL_TICK`, and every pass after that costs real time, so whatever the
+scroll moves -- the rows a `VirtualScrollView` has built, the row the sweep reaches -- is a moving
+target that settles differently on a loaded machine. Leave it nothing to move (a window that holds
+the whole listing) or assert on something it does not touch. Two things go with that. The task
+outlives both the render that spawned it and the gesture that started it, since it only notices the
+button is up at its next tick, so a second gesture can be driven by the first one's task -- which is
+a defect in the app as much as a hazard for a test, and was both here. And `paragraphs` counts
+paragraphs: a separator row draws none, so its length is not the listing's row count.
 
 Two corollaries worth knowing. A component that dirties itself every pass would **starve every task
 in the app**: the app's `use_theme` writes during its render body and is safe only because the write
