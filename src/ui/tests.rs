@@ -15345,6 +15345,134 @@ fn a_sweep_past_the_edge_scrolls_the_listing_the_pane_is_drawing_now() {
     );
 }
 
+/// The text every row of [`lending_harness`] draws: wide enough that a column well inside
+/// it is not column 0.
+const LENT_TEXT: &str = "mov rax, qword ptr [rbp - 8]";
+
+/// How many rows [`lending_harness`] draws.
+#[derive(Clone, Copy)]
+struct LentRows(State<usize>);
+
+/// The `Listing` the harness's rows lend their paragraphs to, put out for the test to ask.
+#[derive(Clone)]
+struct LentTo(Rc<RefCell<Option<Listing>>>);
+
+/// One row of text, a component of its own so the harness can stop building it.
+#[derive(Clone, PartialEq)]
+struct LentRow {
+    row: usize,
+    widest: Widest,
+    key: DiffKey,
+}
+
+impl KeyExt for LentRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for LentRow {
+    fn render(&self) -> impl IntoElement {
+        code_row(
+            Chrome {
+                pane: Pane::Assembly,
+                row: self.row,
+                file: None,
+                paired: None,
+                wash: Wash::None,
+                widest: self.widest,
+                listing: 1,
+                measured: true,
+            },
+            Vec::new(),
+            Some(Text {
+                line: Line::text(LENT_TEXT),
+                head: vec![Span::new(LENT_TEXT).assembly_font()],
+                inline: None,
+                tail: Vec::new(),
+                chars: RowChars::default(),
+                door: false,
+                links: Vec::new(),
+                on_link: None,
+            }),
+            None,
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// Rows lending their paragraphs to a `Listing` the test holds, as many of them as the
+/// test says: a virtual list as far as the lending goes, without one's scrolling.
+fn lending_harness() -> impl IntoElement {
+    let rows = *use_consume::<LentRows>().0.read();
+    let widest = use_widest();
+    let controller = use_scroll_controller(ScrollConfig::default);
+    let listing = use_provide_context(|| Listing::new(controller, widest));
+    let out = use_consume::<LentTo>().0;
+    use_hook(|| *out.borrow_mut() = Some(listing.clone()));
+
+    rect().expanded().children(
+        (0..rows)
+            .map(|row| {
+                LentRow {
+                    row,
+                    widest,
+                    key: DiffKey::None,
+                }
+                .key(row)
+                .into_element()
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// A row the list has stopped building lets its paragraph go. The list is keyed by row
+/// and forgets nothing, so the entry a row lends it has to hold the paragraph weakly: a
+/// strong hold kept the shaped text of every row the reader ever scrolled past, for the
+/// life of the list. Asserted through `column_at`, which is the only thing that asks the
+/// lent paragraph anything: it answers a real column while the row is drawn and nothing
+/// once the row is gone.
+#[test]
+fn a_row_the_list_has_stopped_building_lets_its_paragraph_go() {
+    let (mut test, (rows, lent)) = TestingRunner::new(
+        lending_harness,
+        (600., 300.).into(),
+        |runner| {
+            runner.provide_root_context(|| Marked(State::create(Marks::default())));
+            runner.provide_root_context(|| Shift(State::create(false)));
+            (
+                runner.provide_root_context(|| LentRows(State::create(2))).0,
+                runner
+                    .provide_root_context(|| LentTo(Rc::new(RefCell::new(None))))
+                    .0,
+            )
+        },
+        1.,
+    );
+    let mut rows = rows;
+    settle(&mut test);
+    let listing = lent.borrow().clone().expect("the harness lent its listing");
+
+    // A column well inside the second row's text, which only its paragraph can answer.
+    let drawn = paragraphs(&test);
+    assert_eq!(drawn.len(), 2, "{drawn:?}");
+    let x = drawn[1].0.min_x() + (drawn[1].0.width() / 2.0);
+    let column = listing.column_at(1, x);
+    assert!(
+        column > 0 && column < LENT_TEXT.len(),
+        "the row's paragraph did not answer: {column}"
+    );
+
+    // The row taken away: the entry is still there, and answers nothing.
+    rows.set(1);
+    settle(&mut test);
+    assert_eq!(paragraphs(&test).len(), 1);
+    assert_eq!(listing.column_at(1, x), 0);
+}
+
 /// A key under modifiers, which no `TestingRunner` method sends: `press_key` hardcodes
 /// none. Goes to the focused node, as every key does.
 fn key_with(test: &mut TestingRunner, key: Key, modifiers: Modifiers) {

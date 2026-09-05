@@ -27,6 +27,9 @@
 //! press, which is a different event, and to `over`/`out`.
 
 use std::cell::Cell;
+use std::rc::Weak;
+
+use freya::elements::paragraph::ParagraphHolderInner;
 
 use super::*;
 
@@ -132,11 +135,13 @@ pub(crate) struct Listing {
 
 /// A row's laid-out paragraph and where it starts, lent to the list by the row as it
 /// renders: what answers a column for an x on a row the pointer is not over. Written
-/// afresh by every render of the row, so a row the list has stopped building leaves a
-/// stale entry that no reach asks about, the rows asked about being on screen.
+/// afresh by every render of the row, and the paragraph held **weakly**: the list is keyed
+/// by row and never forgets one, so a strong hold would keep a shaped paragraph for every
+/// row the reader has scrolled past. A row the list has stopped building leaves an entry
+/// that answers nothing, and no reach asks it: a sweep only asks about rows on screen.
 #[derive(Clone)]
 pub(crate) struct RowText {
-    holder: ParagraphHolder,
+    holder: Weak<RefCell<Option<ParagraphHolderInner>>>,
     text_x: Rc<Cell<f32>>,
 }
 
@@ -152,8 +157,9 @@ impl Listing {
     }
 
     /// The column at window x `x` on row `row`, off the paragraph the row lent: 0 for a
-    /// row with no text and for an x left of its text, the end for one right of it.
-    fn column_at(&self, row: usize, x: f32) -> usize {
+    /// row with no text, for an x left of its text, and for a row the list has stopped
+    /// building, whose paragraph went with it; the end for an x right of the text.
+    pub(crate) fn column_at(&self, row: usize, x: f32) -> usize {
         let texts = self.texts.borrow();
         let Some(text) = texts.get(&row) else {
             return 0;
@@ -162,7 +168,10 @@ impl Listing {
         if x < 0.0 {
             return 0;
         }
-        caret_col(&text.holder, x, 0.0).unwrap_or(0)
+        let Some(holder) = text.holder.upgrade() else {
+            return 0;
+        };
+        caret_col(&ParagraphHolder(holder), x, 0.0).unwrap_or(0)
     }
 }
 
@@ -283,7 +292,7 @@ pub(crate) fn code_row(
         listing.texts.borrow_mut().insert(
             row,
             RowText {
-                holder: holder.read().clone(),
+                holder: Rc::downgrade(&holder.read().0),
                 text_x: text_x.clone(),
             },
         );

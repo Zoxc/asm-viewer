@@ -728,22 +728,25 @@ listener (`notes/upstream/freya.md`). Each list's box listens with `on_sweep_bey
 row, which answers for itself; else the row on screen nearest it (`Reach`: the first above, the last
 below, the one level with the pointer beside) at **the column under the pointer's x clamped into the
 box**, which the list asks of the row through the paragraph the row lent it (`Listing::texts`,
-written by every render of a row with text). Past the left edge that is the first column in sight
-and past the right the last, and not the row's start or end, which is what the sweep used to jump
-to. Held past any edge of the box, the sweep **scrolls the view**: a task the handler starts moves
-it every `AUTOSCROLL_TICK` towards the pointer (a row up or down, a row's height sideways, the
-sideways extent being the widest row, `Widest::extent`) and reaches the run out to what came in, for
-as long as the button is down and the pointer stays past an edge. The pointer's last place is kept
-in a cell, since nothing arrives from a pointer that is not moving (`use_sweep_beyond`, a hook so
-the cells outlive the handler a render remakes; one task at a time). **The rows and the key the
-extent is asked under are the render's**, handed to the hook beside the `Listing` and not held in
-it: a list is not mounted again when its listing changes -- a link followed in place, a symbol
-previewed into the temporal tab, a companion file switching -- and `Listing` is made once, so a key
-kept there named a listing that was gone, `Widest` answered nothing for it, and every tick put the
-pane back at its left edge instead of scrolling right. The release is the root's
-`on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar thumb
-cancels. **A control the sweep passes over does not answer the pointer**: the companion header and
-the symbol bar's names are `interactive(false)` while a sweep is under way (`sweeping`), since
+written by every render of a row with text and held **weakly**: the map is keyed by row and never
+forgets one, so a strong hold kept the shaped text of every row the reader had scrolled past, for
+the life of the list. A row the list has stopped building leaves an entry that answers nothing,
+which no reach asks anyway, the rows asked about being on screen. Past the left edge that is the
+first column in sight and past the right the last, and not the row's start or end, which is what
+the sweep used to jump to. Held past any edge of the box, the sweep **scrolls the view**: a task the
+handler starts moves it every `AUTOSCROLL_TICK` towards the pointer (a row up or down, a row's
+height sideways, the sideways extent being the widest row, `Widest::extent`) and reaches the run out
+to what came in, for as long as the button is down and the pointer stays past an edge. The pointer's
+last place is kept in a cell, since nothing arrives from a pointer that is not moving
+(`use_sweep_beyond`, a hook so the cells outlive the handler a render remakes; one task at a time).
+**The rows and the key the extent is asked under are the render's**, handed to the hook beside the
+`Listing` and not held in it: a list is not mounted again when its listing changes -- a link
+followed in place, a symbol previewed into the temporal tab, a companion file switching -- and
+`Listing` is made once, so a key kept there named a listing that was gone, `Widest` answered nothing
+for it, and every tick put the pane back at its left edge instead of scrolling right. The release is
+the root's `on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar
+thumb cancels. **A control the sweep passes over does not answer the pointer**: the companion header
+and the symbol bar's names are `interactive(false)` while a sweep is under way (`sweeping`), since
 freya's tooltip arms on the hover alone and a pointer dragging a selection up past them armed and
 showed theirs (`notes/upstream/freya.md`). **What re-renders a row when the caret moves** is its
 list's data: the three lists hand their rows `chars` through `new_with_data`, and the section view's
