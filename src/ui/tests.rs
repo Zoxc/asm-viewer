@@ -19694,24 +19694,50 @@ fn walked_file(root: &Path, relative: &str) -> WalkEvent {
 /// The box is a paragraph too and comes first, being above the list; it is dropped here so
 /// that a row's index is a row's index.
 fn finder_rows(test: &TestingRunner) -> Vec<String> {
+    finder_rows_drawn(test)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
+}
+
+/// The same rows with where each was laid out, which is what says whether the one the
+/// keyboard is on was drawn at all.
+fn finder_rows_drawn(test: &TestingRunner) -> Vec<(String, Area)> {
     use freya::elements::paragraph::ParagraphElement;
     use std::any::Any;
 
-    let mut drawn: Vec<String> = test.find_many(|node, _element| {
+    let mut drawn: Vec<(String, Area)> = test.find_many(|node, _element| {
         (node.element().as_ref() as &dyn Any)
             .downcast_ref::<ParagraphElement>()
             .map(|paragraph| {
-                paragraph
-                    .spans
-                    .iter()
-                    .map(|span| span.text.to_string())
-                    .collect::<String>()
+                (
+                    paragraph
+                        .spans
+                        .iter()
+                        .map(|span| span.text.to_string())
+                        .collect::<String>(),
+                    node.layout().area,
+                )
             })
     });
     if !drawn.is_empty() {
         drawn.remove(0);
     }
     drawn
+}
+
+/// The row the keyboard is on as a reader sees it: what the lit row says. `None` where
+/// nothing is lit, and where the lit row is outside the rows on screen.
+fn finder_selected(test: &TestingRunner) -> Option<String> {
+    let lit: Vec<f32> = test.find_many(|node, element| {
+        (element.style().background == Fill::Color(palette().selected_bg))
+            .then_some(node.layout().area.origin.y)
+    });
+    let top = *lit.first()?;
+    finder_rows_drawn(test)
+        .into_iter()
+        .find(|(_, area)| area.origin.y >= top && area.origin.y < top + list_row_height())
+        .map(|(text, _)| text)
 }
 
 /// Ctrl+P through the root's one key handler, which is where it is answered: not through
@@ -19918,6 +19944,51 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
         states.open.docs.peek().temporal(),
         Some(second),
         "Ctrl+Enter opens a tab that stays"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Down stops at the last row. Counting on past it left the row the keyboard is on above
+/// the list, and every Up after that was spent coming back down before the highlight
+/// moved at all.
+#[test]
+fn down_stops_at_the_last_row_so_up_moves_at_once() {
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            for name in ["one.rs", "two.rs", "three.rs"] {
+                let _ = emit(walked_file(root, name));
+            }
+            let _ = emit(WalkEvent::Finished);
+        });
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    test.write_text("rs");
+    settle(&mut test);
+    let rows = finder_rows(&test);
+    assert_eq!(rows.len(), 3, "{rows:?}");
+
+    // Five presses at three rows: two of them are the reader holding Down.
+    for _ in 0..5 {
+        key_with(
+            &mut test,
+            Key::Named(NamedKey::ArrowDown),
+            Modifiers::empty(),
+        );
+    }
+    settle(&mut test);
+    assert_eq!(
+        finder_selected(&test).as_deref(),
+        Some(rows[2].as_str()),
+        "Down did not stop at the last row"
+    );
+
+    key_with(&mut test, Key::Named(NamedKey::ArrowUp), Modifiers::empty());
+    settle(&mut test);
+    assert_eq!(
+        finder_selected(&test).as_deref(),
+        Some(rows[1].as_str()),
+        "the first Up after the overshoot did not move the highlight"
     );
     let _ = std::fs::remove_dir_all(&directory);
 }

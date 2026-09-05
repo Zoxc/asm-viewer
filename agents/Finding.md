@@ -65,7 +65,10 @@ in the box when it was moved there, and the row is read by comparing them. The o
 an effect that resets the row when the box changes — is wrong in a way only a headless test
 catches: a deps effect runs a render late, so a Down pressed in the same pass as the typing is
 undone by the reset arriving after it. Nothing here needs an effect at all once the row carries
-the query it belongs to.
+the query it belongs to. The row is **clamped where it is moved**, not only where it is drawn:
+counting on past the last row left it above the list, and the reader who held Down then spent an
+Up per overshoot before the highlight moved at all. `moved` works the list out for itself, which
+is the pass the memo already makes per keystroke made once more per press.
 
 **Ranking is on the UI thread**, in a memo over the typed text and the walked files, as a sidebar
 list's own filter is. It is one pass over a string per file with no allocation for the paths that

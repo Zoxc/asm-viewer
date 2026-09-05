@@ -466,8 +466,8 @@ fn note(text: &str) -> Element {
 fn finder_key(finder: State<Finder>, states: ProjectStates, key: &Key, ctrl: bool) {
     match key {
         Key::Named(NamedKey::Escape) => close_finder(finder),
-        Key::Named(NamedKey::ArrowDown) => moved(finder, 1),
-        Key::Named(NamedKey::ArrowUp) => moved(finder, -1),
+        Key::Named(NamedKey::ArrowDown) => moved(finder, states, 1),
+        Key::Named(NamedKey::ArrowUp) => moved(finder, states, -1),
         Key::Named(NamedKey::Enter) => {
             let opened = {
                 let state = finder.peek();
@@ -486,14 +486,22 @@ fn finder_key(finder: State<Finder>, states: ProjectStates, key: &Key, ctrl: boo
 
 /// Move the keyboard `by` rows, and remember what the box said when it was moved: the row
 /// is the list's as the query stands, and the list changes under it.
-fn moved(mut finder: State<Finder>, by: isize) {
+///
+/// Both ends stop at the list, which is why the list is worked out here: unclamped, Down
+/// held past the last row counted on above it, and every Up after that was spent coming
+/// back before the highlight moved at all. `listed` is the pass the memo makes per
+/// keystroke, made once more per press.
+fn moved(mut finder: State<Finder>, states: ProjectStates, by: isize) {
     // Bound before the write, so the read guard is gone by then.
-    let (at, typed) = {
+    let (at, typed, last) = {
         let state = finder.peek();
-        (state.selected(), state.typed.clone())
+        let last = listed(&state, &states.visits.peek())
+            .len()
+            .saturating_sub(1);
+        (state.selected().min(last), state.typed.clone(), last)
     };
     let mut state = finder.write();
-    state.at = at.saturating_add_signed(by);
+    state.at = at.saturating_add_signed(by).min(last);
     state.at_for = typed;
 }
 
