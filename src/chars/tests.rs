@@ -137,6 +137,33 @@ fn a_sweep_beyond_the_rows_reaches_the_row_on_screen_nearest_the_pointer() {
     assert_eq!(beyond(bounds, 0.0, 0.0, 5, 50.0, 70.0), None);
 }
 
+/// A box the rows cannot be read in still answers: freya lays out in `f32`, and a pane
+/// squeezed to a sliver -- a window resized very short, a pane mid-collapse -- gave a box
+/// under half a pixel tall whose last row on screen came out above its first, which
+/// `usize::clamp` panics on. A NaN edge is the same story for the x, `f32::clamp`
+/// panicking on bounds it cannot order.
+#[test]
+fn a_box_the_rows_cannot_be_read_in_reaches_a_row_all_the_same() {
+    // Two tenths of a pixel tall, across the boundary between rows 4 and 5: the first
+    // row on screen is 5 and the last, before it is held to the first, is 4.
+    let sliver = Bounds {
+        left: 0.0,
+        top: 100.0,
+        right: 50.0,
+        bottom: 100.3,
+    };
+    assert_eq!(
+        beyond(sliver, -100.1, 20.0, 10, -5.0, 100.1),
+        Some(Reach { row: 5, x: 0.0 })
+    );
+
+    let edgeless = Bounds {
+        left: f32::NAN,
+        ..sliver
+    };
+    assert_eq!(beyond(edgeless, -100.1, 20.0, 10, -5.0, 100.1), None);
+}
+
 /// The listing the key tests move through: a row of words and punctuation, a short one,
 /// an empty one, one with a character two units wide, and a last.
 fn listing(row: usize) -> Line {

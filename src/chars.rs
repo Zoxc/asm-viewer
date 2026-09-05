@@ -311,6 +311,9 @@ pub struct Reach {
 /// is over a row, which answers for itself. `rows_top` is where row 0 sits relative to
 /// the box's top -- at or below it before any scroll, above it after -- and `length` how
 /// many rows the listing has.
+///
+/// Nothing at all for a box whose edges do not read left to right, a NaN among them
+/// included: freya lays out in `f32` and both clamps below want their bounds in order.
 pub fn beyond(
     bounds: Bounds,
     rows_top: f32,
@@ -320,7 +323,7 @@ pub fn beyond(
     y: f32,
 ) -> Option<Reach> {
     let last = length.checked_sub(1)?;
-    if !(row_height > 0.0) {
+    if !(row_height > 0.0) || !(bounds.left <= bounds.right) {
         return None;
     }
     let row_at = |y: f32| ((y - bounds.top - rows_top) / row_height).floor().max(0.0) as usize;
@@ -330,9 +333,11 @@ pub fn beyond(
     if inside_x && inside_y {
         return (row_at(y) > last).then_some(Reach { row: last, x });
     }
-    // The rows on screen, which a sweep beyond the box reaches and no further.
+    // The rows on screen, which a sweep beyond the box reaches and no further. Never
+    // below the first: a box under half a pixel tall, laid out across a row boundary,
+    // has a last row above its first, and `clamp` panics on a range in that order.
     let first_seen = row_at(bounds.top).min(last);
-    let last_seen = row_at(bounds.bottom - 0.5).min(last);
+    let last_seen = row_at(bounds.bottom - 0.5).min(last).max(first_seen);
     let row = if y < bounds.top {
         first_seen
     } else if y >= bounds.bottom {
