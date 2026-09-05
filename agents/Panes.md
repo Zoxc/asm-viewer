@@ -671,7 +671,12 @@ click is not asking for. The listing's own `ScrollController` and its measured h
 down to each row for it: both are the list's handles and neither changes while it lives.
 
 **A run of rows can be selected and copied** in both panes (press, sweep or shift-click, Ctrl+C;
-Ctrl+A takes the listing, Escape drops it). The state is `Marked`, holding one `Picked` **per pane**
+Ctrl+A takes the listing, Escape drops it). A run made by Ctrl+A alone is a run of the file the list
+says its rows are rows of -- the source pane's own file, and nothing for the two assembly listings,
+where a run's file is the pressed row's. The keyboard reaches a pane with no press on a row, a press
+on the tab's chip being enough, and a run of no file pairs with nothing on the other side and is
+never dropped, since what drops the source run is the pane moving off *its* file.
+The state is `Marked`, holding one `Picked` **per pane**
 (`Marks`), independent, each the other pane's pair and the scroll it owes, and Ctrl+C copies the run
 of the pane whose box has the keyboard. The press is `pointer_down` (a press event arrives only once
 the button is back up), in the same handler as the right button's menu (`secondary`), and the sweep

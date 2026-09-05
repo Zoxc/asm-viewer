@@ -716,9 +716,15 @@ pub(crate) fn copy_text(
 /// fire while a filter bar had the keyboard and — sorting last (`EventName::cmp`) — would
 /// win, turning a copy out of the filter box into a page of disassembly. And it is the
 /// pane's own run that is copied: each pane has one, and the keyboard is in one of them.
+///
+/// `file` is what this listing's rows are rows of -- the source list's own file, and
+/// `None` for the two assembly listings, where a run's file is the row's own. It is what
+/// a run made from nothing takes ([`Picked::file`]): the keyboard reaches a pane with no
+/// press on a row, a press on the tab's chip being enough.
 pub(crate) fn on_listing_key(
     marked: State<Marks>,
     pane: Pane,
+    file: Option<Arc<str>>,
     rows: usize,
     viewport: State<f32>,
     line: impl Fn(usize) -> String + 'static,
@@ -768,13 +774,15 @@ pub(crate) fn on_listing_key(
             Key::Character(character) if command && character == "a" => {
                 // Every row of the listing, first row's start to last row's end, and
                 // nothing at all for one with no rows. The file stays what the run's was,
-                // and no scroll is owed: the whole listing names no one place to go to.
+                // or the listing's own where there is no run yet, and no scroll is owed:
+                // the whole listing names no one place to go to.
                 if let Some(last) = rows.checked_sub(1) {
                     let mut marks = marked.peek().clone();
                     let file = marks
                         .of(pane)
                         .as_ref()
-                        .and_then(|picked| picked.file.clone());
+                        .and_then(|picked| picked.file.clone())
+                        .or_else(|| file.clone());
                     *marks.of_mut(pane) = Some(Picked {
                         rows: RowSelection {
                             anchor: 0,

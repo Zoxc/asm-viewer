@@ -6918,7 +6918,7 @@ fn a_wide_source_line_is_reached_by_scrolling_sideways() {
     std::fs::write(&path, format!("int x;\n// {}\nint y;\n", "x".repeat(400)))
         .expect("writing the source file");
     let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
-    let (mut test, _states, _showing) = source_file_harness(&file, (300., 200.));
+    let (mut test, _states, _showing, _marked) = source_file_harness(&file, (300., 200.));
 
     let widest = |test: &TestingRunner| {
         paragraph_boxes(test)
@@ -7041,15 +7041,17 @@ fn showing_harness() -> impl IntoElement {
 fn source_file_harness(
     file: &Arc<str>,
     size: (f32, f32),
-) -> (TestingRunner, ProjectStates, State<Arc<str>>) {
-    let (mut test, (states, showing)) = TestingRunner::new(
+) -> (TestingRunner, ProjectStates, State<Arc<str>>, State<Marks>) {
+    let (mut test, (states, showing, marked)) = TestingRunner::new(
         showing_harness,
         size.into(),
         {
             let file = file.clone();
             move |runner| {
                 let states = project_states!(runner);
-                runner.provide_root_context(|| Marked(State::create(Marks::default())));
+                let marked = runner
+                    .provide_root_context(|| Marked(State::create(Marks::default())))
+                    .0;
                 runner.provide_root_context(|| Shift(State::create(false)));
                 runner.provide_root_context(|| CodeRows(State::create(None)));
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
@@ -7058,7 +7060,7 @@ fn source_file_harness(
                 let showing = runner
                     .provide_root_context(|| Showing(State::create(file.clone())))
                     .0;
-                (states, showing)
+                (states, showing, marked)
             }
         },
         1.,
@@ -7070,7 +7072,7 @@ fn source_file_harness(
         Reach::NewTab,
     );
     settle(&mut test);
-    (test, states, showing)
+    (test, states, showing, marked)
 }
 
 /// The widest row is the widest row **of this listing**: a pane moved from a file with a
@@ -7091,7 +7093,7 @@ fn a_listings_extent_does_not_outlive_it() {
     std::fs::write(&narrow, "int y;\nint z;\n").expect("writing the source file");
     let wide: Arc<str> = Arc::from(wide.to_str().expect("a utf-8 temporary path"));
     let narrow: Arc<str> = Arc::from(narrow.to_str().expect("a utf-8 temporary path"));
-    let (mut test, states, mut showing) = source_file_harness(&wide, (300., 200.));
+    let (mut test, states, mut showing, _marked) = source_file_harness(&wide, (300., 200.));
 
     // The line numbers: the one label every row of either file draws.
     let numbers = |test: &TestingRunner| {
@@ -16203,6 +16205,50 @@ fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
     let picked = marked.peek().assembly.clone().unwrap();
     assert_eq!(picked.chars.lead(), Caret { row: 0, col: 0 });
     assert_eq!(picked.rows.rows(), 0..=0);
+}
+
+/// Ctrl+A in the Source pane with nothing picked out yet makes a run **of the file the
+/// pane is showing**. A run of the source pane is always a run of its file, and the
+/// keyboard reaches a pane with no press on a row -- a press on the tab's chip focuses
+/// it -- so the file cannot be taken from a run that is not there. A run of no file is
+/// paired with nothing on the assembly side and is never dropped, the pane moving off
+/// its file being what drops one.
+///
+/// The press below the last line is what focuses the pane without picking anything out:
+/// the rows answer a press, the space under them does not.
+#[test]
+fn select_all_with_no_run_is_a_run_of_the_file_the_pane_shows() {
+    let directory = run_directory(line!());
+    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let path = directory.join("two.c");
+    std::fs::write(&path, "int x;\nint y;\n").expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let (mut test, _states, _showing, marked) = source_file_harness(&file, (300., 200.));
+    assert!(marked.peek().source.is_none(), "a run before any press");
+
+    let under = (150., 180.);
+    test.move_cursor(under);
+    test.press_cursor(under);
+    test.release_cursor(under);
+    settle(&mut test);
+    assert!(
+        marked.peek().source.is_none(),
+        "the space under the rows picked something out"
+    );
+
+    key_with(&mut test, Key::Character("a".into()), Modifiers::CONTROL);
+    let picked = marked
+        .peek()
+        .source
+        .clone()
+        .expect("Ctrl+A picked the file out");
+    assert_eq!(picked.rows.rows(), 0..=1);
+    assert_eq!(
+        picked.file.as_deref(),
+        Some(&*file),
+        "the run is of no file, so nothing pairs with it"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The keys move the caret along a row of the unified view, and the row draws it there:

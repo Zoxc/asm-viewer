@@ -638,6 +638,8 @@ impl Component for SourceList {
             on_listing_key(
                 marked,
                 Pane::Source,
+                // Every run of this pane is a run of the file it is showing.
+                Some(self.file.clone()),
                 length,
                 viewport,
                 move |index| {

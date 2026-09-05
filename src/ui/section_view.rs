@@ -635,6 +635,9 @@ impl Component for SectionList {
             on_listing_key(
                 marked,
                 Pane::Assembly,
+                // An assembly run's file is the row's own, so a run of the whole
+                // listing is a run of no one file.
+                None,
                 length,
                 viewport,
                 move |row| {
