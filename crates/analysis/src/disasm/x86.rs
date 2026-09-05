@@ -109,12 +109,14 @@ impl Disassembler for X86 {
                 .map(|target| target.display().to_owned());
 
             // `rip_relative_addresses` is global to the formatter (`format_memory` reads
-            // it), so it is flipped per instruction: the `rip+` is kept only when a name is
-            // replacing the displacement, since `[name]` would claim an absolute address
-            // the encoding does not have. `EIP` counts too — 64-bit code can address
-            // relative to it with a `67h` override.
+            // it), so it is flipped per instruction: the `rip+` is kept wherever a
+            // relocation covers the operand, since without it `format_memory` folds the
+            // displacement into an absolute address the encoding does not have — and a
+            // relocated displacement is a placeholder, whether a name is going into it or
+            // not. `EIP` counts too — 64-bit code can address relative to it with a `67h`
+            // override.
             formatter.options_mut().set_rip_relative_addresses(
-                inst.relocation.is_some()
+                relocated
                     && matches!(
                         instruction.memory_base(),
                         iced_x86::Register::RIP | iced_x86::Register::EIP

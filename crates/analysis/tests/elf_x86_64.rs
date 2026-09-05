@@ -369,10 +369,11 @@ fn the_relocation_span_is_the_only_one_replaced() {
 }
 
 #[test]
-fn an_unresolvable_relocation_keeps_the_plain_displacement() {
+fn an_unresolvable_relocation_keeps_the_rip_form() {
     // The same store relocated against a *data* symbol, which parsing drops: a relocation
-    // on the instruction with nothing to navigate to, so no link — and with no name to put
-    // after it, no `rip+` either, just the absolute address an unrelocated one prints.
+    // on the instruction with nothing to navigate to, so no link. The displacement is
+    // still a placeholder, so the operand stays rip-relative rather than being folded
+    // into an absolute address the encoding does not have.
     let object = parse(&rip_relative_store_to_data());
     let storer = symbol(&object, "storer");
     assert_eq!(names(&object), ["storer"]);
@@ -382,8 +383,8 @@ fn an_unresolvable_relocation_keeps_the_plain_displacement() {
 
     assert!(mov.relocation.is_none());
     assert_eq!(mov.relocation_span, None);
-    assert_eq!(text(mov).trim_end(), "mov       dword ptr [0Ah], 7");
-    assert_eq!(spans_of(mov, SpanKind::Number), ["0Ah", "7"]);
+    assert_eq!(text(mov).trim_end(), "mov       dword ptr [rip], 7");
+    assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
 }
 
 #[test]

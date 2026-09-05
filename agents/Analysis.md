@@ -472,10 +472,12 @@ and the target's name is printed *in place of* the placeholder operand through i
 `SymbolResolver` hook, not by suppressing the number, which left the brackets the formatter had
 already opened empty (`call qword ptr []`). Nothing maps a relocation back to an operand number, so
 the resolver is armed once per instruction and the **first** operand asked takes it; a second
-numeric operand keeps its real value. A rip-relative operand keeps its `rip+` only when a name is
-going into it: `assembly` flips `rip_relative_addresses` **per instruction**, on exactly those with
-both a resolved relocation and a rip-relative memory operand, because `[target]` would otherwise
-claim an absolute address the encoding does not have. The option cannot be set per operand, since
+numeric operand keeps its real value. A rip-relative operand keeps its `rip+` wherever a relocation
+covers it: `assembly` flips `rip_relative_addresses` **per instruction**, on exactly those with both
+a relocation -- resolved to a name or not -- and a rip-relative memory operand, because
+`format_memory` would otherwise fold the displacement into an absolute address the encoding does not
+have. The displacement a relocation covers is a placeholder either way, so a resolved one would
+print `[target]` and an unresolved one a number that names nothing. The option cannot be set per operand, since
 `format_memory` reads the global one. `Instruction::relocation_span` is the index of the span the
 name landed in, recorded by an override of `write_symbol`. That is what lets `InstructionRow` render
 the run before it as one `paragraph()`, the span as a `RelocationLabel`, and the run after it as a
