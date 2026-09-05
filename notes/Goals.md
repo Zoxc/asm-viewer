@@ -73,6 +73,26 @@ leaves this list when it is. That is a move made on request, like everything els
   every pane asks through. Only worth doing once the read is off the UI thread at all -- the
   item above.
 
+- [ ] Notice a source file changed on disk and offer to reload it. A build now empties the
+  source and highlight caches under the directory it built (`source::forget_under`), which
+  covers the app's own rebuilds and nothing else: a file written by an editor beside the app,
+  or by a build the app did not run, is still drawn from the copy read the first time it was
+  asked for. Check at the moments a reader's eye comes back to a file — a source tab switched
+  to, a Source pane coming into view beside a driven assembly, the window regaining focus —
+  rather than on a poll or a watch. Cheap first and certain second: the length and modified
+  time against what the copy was read with, and only then the bytes, since `SourceFile`
+  already holds `SourceDigests` of the bytes as read, so a re-read hashing the same is a file
+  touched and not changed. It would have to keep that length and time, which it does not
+  today. Say it rather than do it: a panel over the rows offering the reload, so a reader
+  part-way down a file is not moved without being asked, and the reload is `source::forget`
+  with the highlight cache's, the pair a build already takes. Two things to keep apart from
+  it: this is not the `STALE_SOURCE` banner, which says the file is not the one the binary was
+  built from and goes on being true after a reload; and reading a file to hash it is a
+  thread's work and not a render's, `source::load` being called in the render body today,
+  which is the *UI* item about keeping expensive things off the UI thread. Undecided: whether
+  freya 0.4 reports the window regaining focus at all, and what the panel says about a file
+  that has since been deleted.
+
 ## Navigation
 
 - [ ] A door into the source shows no in-between state. Following a name puts the pane on the
