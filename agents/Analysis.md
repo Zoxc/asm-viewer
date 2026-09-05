@@ -497,9 +497,12 @@ print `[target]` and an unresolved one a number that names nothing. The option c
 operand, since `format_memory` reads the global one. The placeholder itself is still printed when
 it is not zero -- `[rip-4]`, `[rip+8]`, as `objdump` prints it -- because those bytes are in the
 encoding whatever they stand for; a zero one iced leaves out. A name, though, replaces the whole
-displacement, so an addend a format stores in the operand rather than in the relocation entry (COFF,
-Mach-O) is not printed beside the name. `Instruction::relocation_span` is the index of the span the
-name landed in, recorded by an override of `write_symbol`. That is what lets `InstructionRow` render
+number, whichever operand takes it -- a displacement, an immediate, a branch's own rel32 -- so an
+addend a format stores in the operand rather than in the relocation entry (COFF, Mach-O) is not
+printed beside the name. A near branch has no rip-like form to fall back on either: iced prints its
+target as the address the displacement works out to, so a relocated one reads as an address it does
+not go to. `Instruction::relocation_span` is the index of the span the name landed in, recorded by
+an override of `write_symbol`. That is what lets `InstructionRow` render
 the run before it as one `paragraph()`, the span as a `RelocationLabel`, and the run after it as a
 second `paragraph()`. `branch_span` is its **twin** and is recorded by an override of
 `write_number`, which is how a branch target reaches the output: it is the span an instruction's

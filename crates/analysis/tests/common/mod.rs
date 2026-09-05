@@ -1302,6 +1302,54 @@ pub fn rip_relative_store_to_data(displacement: i32) -> Vec<u8> {
     obj.write().expect("writing the fixture object")
 }
 
+/// `probe` = `code`, with one 32-bit **absolute** relocation at `offset` naming the text
+/// symbol `g` that follows it — the shape of a relocated operand that is neither a branch
+/// nor rip-relative. What the four bytes under the relocation hold is `code`'s business: a
+/// format keeping its addend in the operand leaves it there.
+pub fn elf_x86_64_absolute(code: &[u8], offset: u64) -> Vec<u8> {
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+
+    let text = obj.section_id(write::StandardSection::Text);
+    let probe = obj.append_section_data(text, code, 1);
+    obj.add_symbol(write::Symbol {
+        name: b"probe".to_vec(),
+        value: probe,
+        size: code.len() as u64,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+
+    let value = obj.append_section_data(text, &[0xC3], 1);
+    let g = obj.add_symbol(write::Symbol {
+        name: b"g".to_vec(),
+        value,
+        size: 1,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+
+    obj.add_relocation(
+        text,
+        write::Relocation {
+            offset: probe + offset,
+            size: 32,
+            kind: RelocationKind::Absolute,
+            encoding: RelocationEncoding::Generic,
+            symbol: g,
+            addend: 0,
+        },
+    )
+    .expect("adding a relocation to .text");
+
+    obj.write().expect("writing the fixture object")
+}
+
 /// One entry of a hand-built image's export or dynamic symbol table.
 pub struct ExportedSymbol<'a> {
     pub name: &'a str,

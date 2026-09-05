@@ -5,8 +5,8 @@ mod common;
 
 use analysis::SpanKind;
 use common::{
-    branch_to_data, caller_and_target, elf_x86_64, indirect_caller_and_target, names, parse,
-    rip_relative_store_to_data, symbol, text, TextRelocation, TextSymbol,
+    branch_to_data, caller_and_target, elf_x86_64, elf_x86_64_absolute, indirect_caller_and_target,
+    names, parse, rip_relative_store_to_data, symbol, text, TextRelocation, TextSymbol,
 };
 use std::sync::Arc;
 
@@ -442,6 +442,80 @@ fn a_name_replaces_the_whole_displacement() {
 }
 
 #[test]
+fn a_name_replaces_the_whole_number_on_any_operand() {
+    // Nothing about the swallowing is rip's. The resolver is armed once per instruction and
+    // taken by the first operand the formatter asks about, whatever kind it is, and the name
+    // goes in where the number was: an immediate, a displacement under a base register, a
+    // 64-bit immediate. Each placeholder here holds 2000h and none of them is printed.
+    for (code, offset, printed) in [
+        // mov eax, 2000h
+        (
+            &[0xB8, 0x00, 0x20, 0x00, 0x00, 0xC3][..],
+            1,
+            "mov       eax, g",
+        ),
+        // push 2000h
+        (&[0x68, 0x00, 0x20, 0x00, 0x00, 0xC3][..], 1, "push      g"),
+        // mov dword ptr [rax+2000h], 7
+        (
+            &[
+                0xC7, 0x80, 0x00, 0x20, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0xC3,
+            ][..],
+            2,
+            "mov       dword ptr [rax+g], 7",
+        ),
+        // mov rax, 2000h
+        (
+            &[
+                0x48, 0xB8, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3,
+            ][..],
+            2,
+            "mov       rax, g",
+        ),
+    ] {
+        let object = parse(&elf_x86_64_absolute(code, offset));
+        let probe = symbol(&object, "probe");
+        let assembly = probe.assembly(&object).expect("probe disassembles");
+        let first = &assembly.instructions[0];
+
+        assert_eq!(
+            first.relocation.as_ref().map(|g| g.name.as_str()),
+            Some("g")
+        );
+        assert_eq!(text(first).trim_end(), printed);
+    }
+}
+
+#[test]
+fn a_name_replaces_a_branch_displacement_too() {
+    // And on the branch path, which the resolver reaches through `write_symbol` the same
+    // way. `call rel32` over a placeholder of 10h prints `call target`, which for a COFF
+    // `REL32` -- the format that keeps its addend in those four bytes -- means `target+10h`.
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "caller",
+                bytes: &[0xE8, 0x10, 0x00, 0x00, 0x00, 0xC3],
+            },
+            TextSymbol {
+                name: "target",
+                bytes: &[0xC3],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 0,
+            offset: 1,
+            target: 1,
+        }],
+    );
+    let object = parse(&data);
+    let call = &assemble(&object, "caller").instructions[0];
+
+    assert_eq!(text(call).trim_end(), "call      target");
+    assert_eq!(call.branch_span, None);
+}
+
+#[test]
 fn the_rip_form_is_per_instruction() {
     // Two identical `call qword ptr [rip+0x0]`, only the first relocated: the rip-relative
     // form must not leak into the second, which still prints its own absolute address (it
@@ -678,6 +752,21 @@ fn a_relocation_that_resolves_to_nothing_still_suppresses_the_edge() {
         "expected no edge, got {:?}",
         assembly.edges
     );
+}
+
+#[test]
+fn a_relocated_branch_prints_the_address_its_placeholder_computes() {
+    // What that same jump draws. A near branch has no form that shows the encoded
+    // displacement, so the number is the address the placeholder works out to -- here 5,
+    // the `ret` in this very symbol, which is not where the jump goes and is not what the
+    // four bytes say either. `objdump` prints the same 5 and names the relocation on the
+    // line under it; nothing here does.
+    let object = parse(&branch_to_data());
+    let assembly = assemble(&object, "jumper");
+    let jump = &assembly.instructions[0];
+
+    assert_eq!(text(jump).trim_end(), "jmp       5");
+    assert_eq!(assembly.instructions[1].address, 5);
 }
 
 #[test]
