@@ -16221,10 +16221,10 @@ fn sweeping_harness() -> impl IntoElement {
     let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
     let bounds = listing_ctx.bounds.clone();
 
-    // What a row of the arriving listing reports as it is first laid out.
-    use_side_effect_with_deps(&listing, move |listing: &u64| {
-        widest.note(*listing, SWEPT_WIDTH);
-    });
+    // What a row of the arriving listing reports as it is laid out. The app's rows report
+    // through `on_sized`; this reports in the render, which is the pass a test can rely
+    // on having run, and either way the extent is there before the sweep's next tick.
+    widest.note(listing, SWEPT_WIDTH);
     // Subscribed to the scroll by reading it, so every move the sweep makes is mirrored.
     use_side_effect(move || {
         let (x, _) = <(i32, i32)>::from(controller);
@@ -16245,10 +16245,10 @@ fn sweeping_harness() -> impl IntoElement {
 }
 
 /// A sweep held past the pane's right edge goes on scrolling right after the listing has
-/// changed under the pane. The key the extent is asked under is the render's and not the
-/// mount's: `Widest` answers nothing for a listing it does not hold, and a sweep that
-/// took the mount's key found no extent at all and put the pane back at its left edge on
-/// every tick.
+/// changed under the pane. The key the extent is asked under is the render's, and not the
+/// one the sweep started on: `Widest` answers nothing for a listing it does not hold, so
+/// a task that kept the key it was spawned with found no extent at all and put the pane
+/// back at its left edge on every tick.
 #[test]
 fn a_sweep_past_the_edge_scrolls_the_listing_the_pane_is_drawing_now() {
     let (mut test, (marked, listing, scrolled)) = TestingRunner::new(
@@ -16284,15 +16284,12 @@ fn a_sweep_past_the_edge_scrolls_the_listing_the_pane_is_drawing_now() {
         first < 0,
         "the sweep scrolled to {first} on the first listing"
     );
-    mark_release(marked);
-    settle(&mut test);
 
-    // Another listing under the same pane, and another sweep: it carries on from where
-    // the pane is rather than snapping back to nothing.
+    // Another listing under the same pane, with the button still down: the task moving
+    // the view is the one the first listing started, and it carries on from where the
+    // pane is rather than snapping back to nothing.
     listing.set(2);
     settle(&mut test);
-    mark_press(marked, false, Pane::Assembly, None, 0, None);
-    test.move_cursor((100., 100.));
     let second = sweep(&mut test);
     mark_release(marked);
     assert!(

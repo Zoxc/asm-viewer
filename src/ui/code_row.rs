@@ -776,7 +776,10 @@ fn reach(listing: &Listing, nudge: Nudge, length: usize, at: CursorPoint) -> Opt
 /// link followed in place, a symbol previewed into the temporal tab, a companion file
 /// switching -- is not mounted again, and a key made at the mount would name a listing
 /// that is gone. `Widest` answers nothing for one it does not hold: a sideways extent of
-/// zero, and an autoscroll that pins the pane to its left edge.
+/// zero, and an autoscroll that pins the pane to its left edge. So the pair goes in a
+/// cell each render writes and the task reads: a task outlives the render that spawned
+/// it, and one holding the pair it was spawned with goes on scrolling a listing the pane
+/// stopped drawing.
 pub(crate) fn use_sweep_beyond(
     marked: State<Marks>,
     pane: Pane,
@@ -787,6 +790,8 @@ pub(crate) fn use_sweep_beyond(
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let last = use_hook(|| Rc::new(Cell::new(None::<CursorPoint>)));
     let running = use_hook(|| Rc::new(Cell::new(false)));
+    let drawing = use_hook(|| Rc::new(Cell::new((key, length))));
+    drawing.set((key, length));
 
     move |e: Event<PointerEventData>| {
         let at = e.global_location();
@@ -805,9 +810,11 @@ pub(crate) fn use_sweep_beyond(
         }
         running.set(true);
         let (last, running, listing) = (last.clone(), running.clone(), listing.clone());
+        let drawing = drawing.clone();
         spawn(async move {
             loop {
                 Timer::after(AUTOSCROLL_TICK).await;
+                let (key, length) = drawing.get();
                 let Some(at) = last.get() else { break };
                 if !dragging(marked, pane) {
                     break;

@@ -749,11 +749,14 @@ last place is kept in a cell, since nothing arrives from a pointer that is not m
 (`use_sweep_beyond`, a hook so the cells outlive the handler a render remakes; one task at a time).
 **The rows and the key the extent is asked under are the render's**, handed to the hook beside the
 `Listing` and not held in it: a list is not mounted again when its listing changes -- a link
-followed in place, a symbol previewed into the temporal tab, a companion file switching -- and
-`Listing` is made once, so a key kept there named a listing that was gone, `Widest` answered nothing
-for it, and every tick put the pane back at its left edge instead of scrolling right. The release is
-the root's `on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar
-thumb cancels. **A control the sweep passes over does not answer the pointer**: the companion header
+followed in place, a symbol previewed into the temporal tab, a companion file switching, the worker
+answering -- and `Listing` is made once, so a key kept there named a listing that was gone, `Widest`
+answered nothing for it, and every tick put the pane back at its left edge instead of scrolling
+right. They go in a cell each render writes and the task reads, and not into the task: a task
+outlives the render that spawned it and a sweep outlives the listing it began on, so a task holding
+what it started with is the same bug one gesture later. The release is the root's
+`on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar thumb
+cancels. **A control the sweep passes over does not answer the pointer**: the companion header
 and the symbol bar's names are `interactive(false)` while a sweep is under way (`sweeping`), since
 freya's tooltip arms on the hover alone and a pointer dragging a selection up past them armed and
 showed theirs (`notes/upstream/freya.md`). **What re-renders a row when the caret moves** is its
