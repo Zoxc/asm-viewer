@@ -1074,17 +1074,7 @@ fn use_kept_place(
             if let Some(planting) = planting.filter(|planting| planting.tab == tab.1.document) {
                 plant.set(None);
                 if let Some(row) = built.body_row_for(planting.address) {
-                    let file = match built.row(row) {
-                        Some(Row::Instruction { stretch, index }) => built
-                            .reading
-                            .held
-                            .get(&stretch)
-                            .and_then(|stretched| stretched.code.as_ref())
-                            .and_then(|studied| studied.position(index))
-                            .map(|at| at.file),
-                        _ => None,
-                    };
-                    land_row(marked, file, row, Owed::by(Pane::Assembly));
+                    land_row(marked, file_at(&built, row), row, Owed::by(Pane::Assembly));
                     let first = built.row_for(planting.address).unwrap_or(row);
                     planted = Some((
                         row,
@@ -1094,6 +1084,34 @@ fn use_kept_place(
                         },
                     ));
                     carried = true;
+                }
+            }
+
+            // The file the run is a run of, worked out again while it has none. A run is
+            // planted the moment there are rows, which is the skeleton, where the row it
+            // lands on is a guess and names no file -- and a carry maps row indices and
+            // keeps the rest of the run as it was, so nothing else would ever fill it in.
+            // The unified view draws no symbol of its own, so this run's file is the
+            // whole of what the Source pane beside it has to show (`source_side`): left
+            // unfilled, a tab the reader opened *at* an instruction says "Click an
+            // instruction" for as long as it is open.
+            //
+            // **Filled in, never cleared.** A row that has gone back to a guess keeps the
+            // file it was decoded with, and a run that names one is left alone, so this
+            // is one write on the pass a stretch decodes under the run and none after.
+            let unnamed = marked
+                .peek()
+                .assembly
+                .as_ref()
+                .filter(|picked| picked.file.is_none())
+                .map(|picked| picked.rows.anchor);
+            if let Some(anchor) = unnamed {
+                if let Some(file) = file_at(&built, anchor) {
+                    let named = marked.peek().assembly.as_ref().map(|picked| Picked {
+                        file: Some(file),
+                        ..picked.clone()
+                    });
+                    set_assembly(marked, named);
                 }
             }
 
@@ -1320,6 +1338,22 @@ fn row_compiled_from(rows: &Rows, reading: &Reading, pair: &Picked) -> Option<us
         })?;
         Some(rows.body_start(flat)? + studied.lanes.row_of(index))
     })
+}
+
+/// The file row `row` was compiled from, where it is an instruction of a stretch that has
+/// decoded. [`None`] for every other row -- a label, a header, the bytes no symbol claims,
+/// and any row of a stretch still guessed, none of which is anybody's line yet.
+fn file_at(built: &Built, row: usize) -> Option<Arc<str>> {
+    match built.row(row) {
+        Some(Row::Instruction { stretch, index }) => built
+            .reading
+            .held
+            .get(&stretch)
+            .and_then(|stretched| stretched.code.as_ref())
+            .and_then(|studied| studied.position(index))
+            .map(|at| at.file),
+        _ => None,
+    }
 }
 
 /// The row `spot` names now: its address's row -- the row at or below the address, where

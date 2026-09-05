@@ -15233,6 +15233,138 @@ macro_rules! door_states {
         )
     }};
 }
+/// Both panes of the active document, as `DocumentBody` mounts them, under what the app
+/// puts at the root for a door: [`doors_harness`]'s hooks with the source side beside the
+/// assembly one, so a door's arrival can be asked what the reader is left looking at.
+fn door_panes_harness() -> impl IntoElement {
+    let active = use_consume::<Active>().0;
+    let open = use_open();
+    let marked = use_consume::<Marked>().0;
+    let landing = use_consume::<Land>().0;
+    let plant = use_consume::<Plant>().0;
+    let driven = use_consume::<Drives>().0;
+    let marks_at = use_consume::<MarksAt>().0;
+    let code_rows = use_consume::<CodeRows>().0;
+    let objects = use_consume::<Objects>().0;
+    let reading = use_consume::<Sections>().0;
+    let window = use_consume::<Window>().0;
+    use_land(
+        active, open, marked, landing, plant, driven, marks_at, code_rows,
+    );
+    use_reading_of(active, objects, reading, window);
+
+    let id = {
+        let (strip, docs) = (open.strip.read(), open.docs.read());
+        active_document(&strip, &docs).and_then(|document| docs.showing(&document))
+    };
+    rect()
+        .expanded()
+        .maybe_child(id.map(|id| DocumentBody { id }.into_element()))
+}
+
+/// "Show in unified view" opens the file the instruction was compiled from beside it.
+///
+/// The unified view draws no symbol of its own, so its Source pane is the file of the
+/// assembly pane's run and nothing else: the run the door plants has to name the file,
+/// or the pane says "Click an instruction" over a tab the reader opened *at* an
+/// instruction. The caret is planted the moment there are rows, which is the skeleton,
+/// where the instruction's row is still a guess and names no file -- so the file it names
+/// has to be there once the stretch decodes and the run is carried to its own row.
+///
+/// Headless because it takes both panes at once: the caret is the section view's effect,
+/// the file is what the Source pane reads out of the run, and only the runner has both.
+#[test]
+fn show_in_unified_view_opens_the_instructions_file_beside_it() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let sum_to = Symbol {
+        object: object.clone(),
+        data: object
+            .symbols_sorted
+            .iter()
+            .find(|data| data.name == "sum_to")
+            .expect("the fixture holds sum_to")
+            .clone(),
+    };
+    let studied = Studied::new(sum_to.clone());
+    let assembly = studied.assembly.clone().expect("sum_to decodes");
+    let bias = sum_to
+        .data
+        .section
+        .as_ref()
+        .map_or(0, |section| section.bias);
+    // An instruction the debug info places on a line: the file that line is in is what
+    // the pane beside it has to show.
+    let (index, at) = (0..assembly.instructions.len())
+        .find_map(|index| Some((index, studied.position(index)?)))
+        .expect("sum_to's instructions name a place");
+    let address = assembly.instructions[index].address.wrapping_add(bias);
+
+    let (mut test, (states, doors)) = TestingRunner::new(
+        door_panes_harness,
+        (900., 20.0 * code_row_height()).into(),
+        |runner| {
+            let states = door_states!(runner);
+            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
+            runner.provide_root_context(|| {
+                Splits(State::create(ResizableContext {
+                    direction: Direction::Horizontal,
+                    ..Default::default()
+                }))
+            });
+            states
+        },
+        1.,
+    );
+    let mut open = states.objects;
+    open.write().push(object.clone());
+    settle(&mut test);
+
+    show_in_code(
+        states.open,
+        states.visits,
+        doors.marked,
+        doors.landing,
+        doors.plant,
+        states.code_at,
+        object.clone(),
+        address,
+        Some(at.clone()),
+    );
+    settle(&mut test);
+    settle(&mut test);
+    assert!(states.open.active() == Some(Document::Code(object.clone())));
+
+    // The skeleton, as the worker answers first: every body row is still a guess.
+    let mut sections = doors.sections;
+    sections.set(reading_of(&object, &[]));
+    settle(&mut test);
+    settle(&mut test);
+
+    // And the stretch decodes under the caret, which is carried to the row it now has.
+    let mut decoded = reading_of(&object, &[0, 1, 2]);
+    decoded.generation = sections.peek().generation + 1;
+    sections.set(decoded);
+    settle(&mut test);
+    settle(&mut test);
+
+    let picked = doors
+        .marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the caret was not planted");
+    assert_eq!(
+        picked.file.as_deref(),
+        Some(&*at.file),
+        "the run the door planted names no file, so the pane beside it has nothing to show"
+    );
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text.contains(&*at.file)),
+        "the file the instruction was compiled from is not drawn beside it: {drawn:?}"
+    );
+}
 
 /// "Show in unified view" puts the assembly pane's caret on the instruction and not
 /// only the view: the code tab arrives with no rows and the caret waits; once the

@@ -42,7 +42,13 @@ selects nothing on this side, so neither changes which file is up. **In an objec
 companion is the file of the pressed instruction** and nothing before a press: the listing draws no
 symbol of its own, an instruction row's run is a run of the file the row was compiled from
 (`Picked::file`), and the tab opens on that row's line; the pane says "Click an instruction" until
-then. The other way round, a click on a source row beside it owes the listing a scroll to the
+then. **That file is worked out again while the run has none**, which a run planted by a door
+always does at first: a door plants the caret the moment there are rows, and the first rows are the
+skeleton, where the instruction's row is still a guess and is nobody's line. A carry maps row
+indices and keeps the rest of the run as it was, so nothing else would ever fill the file in, and a
+tab the reader had opened *at* an instruction said "Click an instruction" for as long as it stayed
+open. `file_at` is asked again as the rows rebuild and fills the run in, never clears it: a row that
+has gone back to a guess keeps the file it was decoded with. The other way round, a click on a source row beside it owes the listing a scroll to the
 instruction compiled from that line, which `use_kept_place`'s reveal pays out of whichever held
 stretch has one and leaves owed while none does; the stretch may not be decoded yet, and the answer
 that decodes it wakes the effect again.
