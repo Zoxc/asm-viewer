@@ -4,18 +4,18 @@ use std::{
 };
 
 use super::*;
+use crate::temporary::Temporary;
 
-/// A directory of this test's own, empty, under the system's temp directory.
-fn temp_dir(name: &str) -> PathBuf {
+/// A directory of this test's own, empty, under the system's temp directory, and gone
+/// when the test ends. The oversized case writes 17 MB into it, so leaving one behind is
+/// not a matter of tidiness.
+fn temp_dir(name: &str) -> Temporary {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Atomic::Relaxed);
-    let path = std::env::temp_dir().join(format!(
+    Temporary::directory(std::env::temp_dir().join(format!(
         "viewer-walk-{}-{unique}-{name}",
         std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&path);
-    fs::create_dir_all(&path).expect("the temp directory is writable");
-    path
+    )))
 }
 
 fn write(path: &Path, text: &str) {

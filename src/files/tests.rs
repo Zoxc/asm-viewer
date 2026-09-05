@@ -1,17 +1,20 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
+use crate::temporary::Temporary;
 
-/// A directory of this test's own, empty, under the system's temp directory.
-fn temp_dir(name: &str) -> PathBuf {
+/// A `root/` directory of this test's own, empty, under the system's temp directory. It
+/// and everything above it go when the test ends.
+fn temp_dir(name: &str) -> Temporary {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "viewer-files-{}-{unique}-{name}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&path).expect("the temp directory is writable");
-    path
+    Temporary::under(
+        std::env::temp_dir().join(format!(
+            "viewer-files-{}-{unique}-{name}",
+            std::process::id()
+        )),
+        "root",
+    )
 }
 
 fn touch(path: &Path) {
@@ -37,17 +40,13 @@ fn described(rows: &FileRows) -> Vec<String> {
 }
 
 /// `root/` holding `src/main.rs`, `src/ui/mod.rs` and `Cargo.toml`.
-fn project(name: &str) -> PathBuf {
-    let root = temp_dir(name).join("root");
+fn project(name: &str) -> Temporary {
+    let root = temp_dir(name);
     fs::create_dir_all(root.join("src/ui")).expect("the temp directory is writable");
     touch(&root.join("src/main.rs"));
     touch(&root.join("src/ui/mod.rs"));
     touch(&root.join("Cargo.toml"));
     root
-}
-
-fn remove(root: &Path) {
-    let _ = fs::remove_dir_all(root.parent().unwrap_or(root));
 }
 
 #[test]
@@ -59,7 +58,6 @@ fn a_fresh_tree_is_the_root_and_its_own_entries() {
         described(&tree.rows()),
         ["root/ -", "  src/ +", "  Cargo.toml"]
     );
-    remove(&root);
 }
 
 #[test]
@@ -84,7 +82,6 @@ fn unfolding_reads_one_level_and_folding_drops_it() {
         described(&tree.rows()),
         ["root/ -", "  src/ +", "  Cargo.toml"]
     );
-    remove(&root);
 }
 
 #[test]
@@ -112,7 +109,6 @@ fn a_refold_reads_the_directory_again() {
             "  Cargo.toml"
         ]
     );
-    remove(&root);
 }
 
 #[test]
@@ -129,12 +125,11 @@ fn toggling_the_root_refreshes_the_top_level() {
         described(&tree.rows()),
         ["root/ -", "  src/ +", "  Cargo.toml", "  README.md"]
     );
-    remove(&root);
 }
 
 #[test]
 fn directories_come_first_and_names_sort_without_regard_to_case() {
-    let root = temp_dir("order").join("root");
+    let root = temp_dir("order");
     fs::create_dir_all(root.join("zdir")).expect("the temp directory is writable");
     fs::create_dir_all(root.join("Mdir")).expect("the temp directory is writable");
     touch(&root.join("b.txt"));
@@ -155,7 +150,6 @@ fn directories_come_first_and_names_sort_without_regard_to_case() {
             "  Makefile"
         ]
     );
-    remove(&root);
 }
 
 #[test]
@@ -163,7 +157,6 @@ fn a_root_that_is_not_a_directory_is_nothing() {
     let root = project("noroot");
     assert!(FileTree::new(&root.join("Cargo.toml")).is_none());
     assert!(FileTree::new(&root.join("missing")).is_none());
-    remove(&root);
 }
 
 #[test]
@@ -176,7 +169,6 @@ fn toggling_a_file_changes_nothing() {
     assert!(!tree.toggle(&root.join("src/main.rs")));
     assert!(!tree.toggle(Path::new("/nowhere/at/all")));
     assert_eq!(described(&tree.rows()), before);
-    remove(&root);
 }
 
 #[test]
@@ -212,7 +204,6 @@ fn unfolding_one_branch_leaves_another_where_it_was() {
             "  Cargo.toml"
         ]
     );
-    remove(&root);
 }
 
 #[cfg(unix)]
@@ -232,7 +223,6 @@ fn a_directory_that_cannot_be_read_is_a_failed_row_that_tries_again() {
     if rows.iter().any(|row| row.contains("secret.rs")) {
         // Running as root, which reads anything: nothing here can be asserted.
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("chmod");
-        remove(&root);
         return;
     }
     assert_eq!(rows, ["root/ -", "  locked/ !", "  src/ +", "  Cargo.toml"]);
@@ -250,7 +240,6 @@ fn a_directory_that_cannot_be_read_is_a_failed_row_that_tries_again() {
             "  Cargo.toml"
         ]
     );
-    remove(&root);
 }
 
 /// A press opens what the source cache would read: a regular file within its bound. A
@@ -266,5 +255,4 @@ fn a_press_opens_what_the_source_cache_would_read() {
     assert!(shows_as_source_within(&root.join("Cargo.toml"), 0));
     assert!(!shows_as_source_within(&root, u64::MAX));
     assert!(!shows_as_source_within(&root.join("missing"), u64::MAX));
-    remove(&root);
 }

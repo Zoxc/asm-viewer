@@ -4,18 +4,17 @@ use std::{
 };
 
 use super::*;
+use crate::temporary::Temporary;
 
-/// A directory of this test's own, empty, under the system's temp directory.
-fn temp_dir(name: &str) -> PathBuf {
+/// A directory of this test's own, empty, under the system's temp directory, and gone
+/// when the test ends.
+fn temp_dir(name: &str) -> Temporary {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Atomic::Relaxed);
-    let path = std::env::temp_dir().join(format!(
+    Temporary::directory(std::env::temp_dir().join(format!(
         "viewer-search-{}-{unique}-{name}",
         std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&path);
-    fs::create_dir_all(&path).expect("the temp directory is writable");
-    path
+    )))
 }
 
 fn write(path: &Path, text: &str) {
@@ -87,7 +86,6 @@ fn a_directorys_files_come_before_the_directories_under_it() {
         "{:?}",
         places(&root, &hits)
     );
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// Every line of a file that matches is its own hit, numbered from one.
@@ -99,7 +97,6 @@ fn every_matching_line_is_a_hit_numbered_from_one() {
     let hits = found(&root, "needle");
 
     assert!(places(&root, &hits) == ["x.rs:2", "x.rs:4"]);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// What `.gitignore` names is not searched, and it is honoured outside a git working
@@ -114,7 +111,6 @@ fn what_git_is_told_to_ignore_is_not_searched() {
     let hits = found(&root, "needle");
 
     assert!(places(&root, &hits) == ["kept.rs:1"]);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// A hidden file is not searched, unlike the Files panel, which lists one.
@@ -127,7 +123,6 @@ fn a_hidden_file_is_not_searched() {
     let hits = found(&root, "needle");
 
     assert!(places(&root, &hits) == ["open.rs:1"]);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// A file with a NUL in it is a binary file, and is left where it was found: the match
@@ -141,7 +136,6 @@ fn a_binary_file_is_skipped() {
     let hits = found(&root, "needle");
 
     assert!(places(&root, &hits) == ["source.rs:1"]);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// Nothing typed is no search at all, and neither is a pattern that will not compile:
@@ -152,7 +146,7 @@ fn nothing_typed_and_a_broken_pattern_are_not_questions() {
     write(&root.join("x.rs"), "needle\n");
 
     let query = |pattern: &str, regex: bool| SearchQuery {
-        root: root.clone(),
+        root: root.to_path_buf(),
         filter: Filter {
             pattern: pattern.to_owned(),
             regex,
@@ -164,7 +158,6 @@ fn nothing_typed_and_a_broken_pattern_are_not_questions() {
     assert!(!query("(", true).is_askable());
     assert!(query("needle", false).is_askable());
     assert!(found(&root, "").is_empty());
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// The three toggles mean what they mean in a filter bar, the expression being the same
@@ -211,7 +204,6 @@ fn the_toggles_mean_what_they_mean_in_a_filter_bar() {
         ..Filter::default()
     };
     assert!(places(&root, &hits(&root, expression)) == ["x.rs:3", "x.rs:4"]);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// A pattern anchored to the line's start is answered about the whole line, not the
@@ -229,7 +221,6 @@ fn an_anchored_pattern_is_asked_of_the_whole_line() {
     let hits = hits(&root, anchored);
 
     assert!(places(&root, &hits) == ["x.rs:2"]);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// A match that starts in the whitespace the row does not draw is marked for the part of
@@ -250,7 +241,6 @@ fn a_match_reaching_into_the_indentation_is_marked_for_what_is_drawn() {
     assert!(hits.len() == 1);
     assert!(hits[0].text == "needle;", "{:?}", hits[0].text);
     assert!(hits[0].spans == vec![0..6], "{:?}", hits[0].spans);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// The row's text is the line without its leading whitespace or its terminator, and the
@@ -270,7 +260,6 @@ fn the_spans_are_where_the_matches_are_in_the_text_drawn() {
         .spans
         .iter()
         .all(|span| &hit.text[span.clone()] == "needle"));
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// A hit knows where its first match is in the **file's** line, in the UTF-16 units a
@@ -287,7 +276,6 @@ fn a_hit_knows_where_its_match_is_in_the_files_line() {
     assert!(hits.len() == 1);
     // Two spaces, `\u{e9}` (one unit), an emoji (two) and a space: the match starts at 6.
     assert!(hits[0].columns == Some(6..12), "{:?}", hits[0].columns);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// A line longer than the bound is cut on a character boundary, and a match past the cut
@@ -304,7 +292,6 @@ fn a_long_line_is_cut_on_a_character_boundary() {
     let hit = &hits[0];
     assert!(hit.text.chars().count() == MAX_LINE);
     assert!(hit.spans == vec![0..6], "{:?}", hit.spans);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// A zero-width match marks nothing, so it is not a span, and the line is a hit all the
@@ -323,7 +310,6 @@ fn a_zero_width_match_is_a_hit_with_nothing_marked() {
 
     assert!(hits.len() == 1);
     assert!(hits[0].spans.is_empty());
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// The callback saying stop stops the walk where it stands, and nothing is emitted after
@@ -336,7 +322,7 @@ fn a_break_stops_the_walk_where_it_stands() {
     }
 
     let query = SearchQuery {
-        root: root.clone(),
+        root: root.to_path_buf(),
         filter: filter("needle"),
     };
     let mut seen = 0;
@@ -354,7 +340,6 @@ fn a_break_stops_the_walk_where_it_stands() {
 
     assert!(seen == 2);
     assert!(!finished);
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// The search stops at the cap, and says it ended: a capped search is over, where a
@@ -374,7 +359,6 @@ fn the_search_stops_at_the_cap() {
         held.push(hit);
     }
     assert!(held.capped());
-    let _ = fs::remove_dir_all(&root);
 }
 
 /// Hits are grouped under the file they are in, in the order they arrived, and a folded

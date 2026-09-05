@@ -27,6 +27,8 @@ mod section;
 mod settings;
 mod source;
 mod tabs;
+#[cfg(test)]
+mod temporary;
 mod tree;
 mod ui;
 mod visits;

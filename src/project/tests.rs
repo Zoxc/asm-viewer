@@ -6,6 +6,7 @@ use super::*;
 use crate::bookmarks::Bookmark;
 use crate::docs::Docs;
 use crate::history::Stop;
+use crate::temporary::Temporary;
 
 /// A bare `Object` with the given text symbols — only the fields the mapping reads.
 fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
@@ -333,11 +334,11 @@ fn a_multi_entry_history_round_trips_as_an_array_of_tables() {
 
 #[test]
 fn writes_atomically_and_reads_back() {
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::at(std::env::temp_dir().join(format!(
         "assembly-viewer-test-{}-{}",
         std::process::id(),
         line!()
-    ));
+    )));
     let path = directory.join("nested").join(SESSION_FILE);
 
     let session = Session {
@@ -353,8 +354,6 @@ fn writes_atomically_and_reads_back() {
     assert_eq!(load_session(&path), Some(session));
     // The temporary was renamed, not left behind.
     assert!(!path.with_extension("toml.tmp").exists());
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// Object `a.o`, then its `target` symbol, then object `b.o`, visited in that order.
@@ -610,11 +609,11 @@ fn a_partial_file_still_loads() {
 /// entry did. It pins that a failure before the rename is an error and not a replacement.
 #[test]
 fn a_write_that_fails_leaves_the_good_file_where_it_is() {
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::at(std::env::temp_dir().join(format!(
         "assembly-viewer-test-{}-{}",
         std::process::id(),
         line!()
-    ));
+    )));
     let _ = fs::remove_dir_all(&directory);
     let path = directory.join(PROJECT_FILE);
 
@@ -628,8 +627,6 @@ fn a_write_that_fails_leaves_the_good_file_where_it_is() {
     fs::create_dir_all(path.with_extension("toml.tmp")).expect("the temporary's stand-in");
     assert!(write_atomically(&path, b"the new file").is_err());
     assert_eq!(fs::read(&path).expect("the file reads"), b"the good file");
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// A path TOML cannot spell is refused rather than mangled, in *both* files.
@@ -653,18 +650,16 @@ fn a_non_utf8_path_is_not_written_rather_than_mangled() {
         assert!(toml::to_string_pretty(&project).is_err());
         assert!(toml::to_string_pretty(&session).is_err());
 
-        let directory = std::env::temp_dir().join(format!(
+        let directory = Temporary::at(std::env::temp_dir().join(format!(
             "assembly-viewer-test-{}-{}",
             std::process::id(),
             line!()
-        ));
+        )));
         assert!(write_toml(&directory.join(PROJECT_FILE), &project).is_err());
         assert!(session.save_to(&directory.join(SESSION_FILE)).is_err());
         // Nothing reached the disk, so a good earlier file would still be there.
         assert!(!directory.join(PROJECT_FILE).exists());
         assert!(!directory.join(SESSION_FILE).exists());
-
-        let _ = fs::remove_dir_all(&directory);
     }
 }
 
@@ -1850,12 +1845,13 @@ fn entering_a_project_empties_every_baseline() {
     assert_eq!(flushed(&mut saves), None);
 }
 
-/// A directory of this test's own, named after the line that asked for it.
-fn directory(line: u32) -> PathBuf {
-    std::env::temp_dir().join(format!(
+/// A directory of this test's own, named after the line that asked for it, and gone when
+/// the test ends.
+fn directory(line: u32) -> Temporary {
+    Temporary::at(std::env::temp_dir().join(format!(
         "assembly-viewer-project-test-{}-{line}",
         std::process::id()
-    ))
+    )))
 }
 
 fn a_project() -> Project {
@@ -1943,8 +1939,6 @@ fn the_two_halves_are_written_to_their_own_files() {
         Some(project)
     );
     assert_eq!(load_session(&directory.join(SESSION_FILE)), Some(session));
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// Why the split is worth two files: the half the app rewrites every thirty seconds cannot
@@ -1961,8 +1955,6 @@ fn a_corrupt_session_leaves_the_project_readable() {
         Some(project)
     );
     assert_eq!(load_session(&directory.join(SESSION_FILE)), None);
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// An id is interpolated into a path, so what it may be is what keeps `recents.toml` from
@@ -2000,8 +1992,6 @@ fn a_hand_edited_recent_that_is_not_an_id_is_refused() {
         .join(crate::rescue::INCOMPATIBLE_DIR)
         .join(RECENTS_FILE)
         .exists());
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 fn id(text: &str) -> ProjectId {
@@ -2069,8 +2059,6 @@ fn anonymous_projects_do_not_collide() {
     fs::create_dir(directory.join(format!("{ANONYMOUS_STEM}-3"))).expect("a squatter");
     let third = ProjectId::anonymous(&directory).expect("a third id");
     assert_ne!(third.as_str(), format!("{ANONYMOUS_STEM}-3"));
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// A project appears when there is something to put in it: nothing on disk until the first
@@ -2086,8 +2074,6 @@ fn the_first_write_creates_a_project_and_remembers_it() {
 
     // Every later write of the run goes into the same one rather than allocating another.
     assert_eq!(open_project(&mut saves, &base), Some(id));
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// Startup: the front of the recent list, both halves of it.
@@ -2114,8 +2100,6 @@ fn the_last_project_is_the_one_reopened() {
     assert_eq!(id, self::id("wanted-2"));
     assert_eq!(reopened, project);
     assert_eq!(restored, session);
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// Three ways for there to be nothing to reopen, all of them silence.
@@ -2128,8 +2112,6 @@ fn nothing_to_reopen_is_not_an_error() {
     // A recent list naming a project whose directory has gone.
     remember(&base, &id("gone-1"));
     assert!(reopen_in(&base).is_none());
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// The directory *is* the project, so a run killed between creating one and writing either
@@ -2165,8 +2147,6 @@ fn a_project_missing_a_half_still_reopens() {
         .join(id.as_str())
         .join(SESSION_FILE);
     assert_eq!(fs::read(&moved).ok().as_deref(), Some(&b"{ not toml"[..]));
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// The recent-projects view reads each row's name out of that project's own file, in the
@@ -2203,8 +2183,6 @@ fn the_recent_view_names_each_project_from_its_own_file() {
     assert_eq!(recents[0].name.as_deref(), Some("loader"));
     assert_eq!(recents[0].directory, Some(PathBuf::from("/src/loader")));
     assert_eq!(recents[0].binaries, 2);
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// Reading a project to draw its row is not opening it: a file that will not parse is
@@ -2225,8 +2203,6 @@ fn listing_a_project_does_not_move_its_file_aside() {
 
     assert!(path.exists());
     assert!(!base.join(crate::rescue::INCOMPATIBLE_DIR).exists());
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// A project whose directory has gone is dropped here, where the repair is free; one with
@@ -2243,8 +2219,6 @@ fn a_recent_project_that_is_gone_is_dropped_and_an_empty_one_is_not() {
     assert_eq!(recents[0].id, empty);
     assert_eq!(recents[0].name, None);
     assert_eq!(recents[0].binaries, 0);
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// An object's code is saved the way the object is -- by the file's path and the object's

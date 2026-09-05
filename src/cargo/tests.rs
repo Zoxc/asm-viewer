@@ -1,4 +1,5 @@
 use super::*;
+use crate::temporary::Temporary;
 
 /// The workspace a canned stream is read against. Only the prefix matters: an artifact is
 /// this workspace's or a dependency's by where its manifest is.
@@ -7,14 +8,12 @@ fn workspace() -> PathBuf {
 }
 
 /// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, so a failing test leaves something identifiable behind.
-fn directory(line: u32) -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
+/// line that asked for it, and gone when the test ends.
+fn directory(line: u32) -> Temporary {
+    Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-cargo-test-{}-{line}",
         std::process::id()
-    ));
-    fs::create_dir_all(&path).expect("a directory");
-    path
+    )))
 }
 
 /// What a failed build reports, over a canned cargo stream — which is why `outcome` is a
@@ -306,8 +305,6 @@ fn a_manifest_that_says_nothing_gets_cargos_answer() {
     assert!(manifest(&directory).is_some());
     assert!(debug_lines(&directory, Profile::Debug));
     assert!(!debug_lines(&directory, Profile::Release));
-
-    fs::remove_dir_all(&directory).ok();
 }
 
 /// The three spellings cargo takes, each in the two directions.
@@ -328,8 +325,6 @@ fn debug_information_is_read_however_it_is_spelled() {
     assert!(!says("false"));
     assert!(!says("0"));
     assert!(!says("\"none\""));
-
-    fs::remove_dir_all(&directory).ok();
 }
 
 /// The write is an edit of the reader's own file, so what it must not do is reformat it:
@@ -354,8 +349,6 @@ fn adding_debug_lines_keeps_the_rest_of_the_manifest() {
     // Made implicit, so the file gains the one header it needs and no empty `[profile]`.
     assert!(!after.contains("\n[profile]\n"), "{after}");
     assert!(debug_lines(&directory, Profile::Release));
-
-    fs::remove_dir_all(&directory).ok();
 }
 
 /// A profile the manifest already has keeps everything else it said.
@@ -375,8 +368,6 @@ fn adding_debug_lines_to_a_profile_that_is_there_keeps_its_other_keys() {
     assert!(after.contains("lto = true"), "{after}");
     assert!(after.contains("debug = \"line-tables-only\""), "{after}");
     assert!(!after.contains("debug = false"), "{after}");
-
-    fs::remove_dir_all(&directory).ok();
 }
 
 /// cargo takes `[profile.*]` from the **workspace root** and ignores a member's own table,
@@ -410,8 +401,6 @@ fn a_members_profiles_are_the_workspace_roots() {
     assert_eq!(fs::read_to_string(&own).expect("the file"), before);
     let after = fs::read_to_string(&root_manifest).expect("the file");
     assert!(after.contains("[profile.dev]"), "{after}");
-
-    fs::remove_dir_all(&root).ok();
 }
 
 /// Where the walk up stops. A manifest with a `[workspace]` table of its own **is** a root,
@@ -453,8 +442,6 @@ fn a_package_that_is_its_own_workspace_stops_the_walk() {
     .expect("a manifest");
 
     assert!(debug_lines(&named, Profile::Release));
-
-    fs::remove_dir_all(&root).ok();
 }
 
 /// A directory with no manifest in it is a placeholder and not an error: nothing to build,
@@ -466,8 +453,6 @@ fn a_directory_with_no_manifest_is_not_a_workspace() {
     assert_eq!(manifest(&directory), None);
     assert!(!debug_lines(&directory, Profile::Release));
     assert!(add_debug_lines(&directory, Profile::Release).is_err());
-
-    fs::remove_dir_all(&directory).ok();
 }
 
 fn span(line: usize, column: usize) -> Span {

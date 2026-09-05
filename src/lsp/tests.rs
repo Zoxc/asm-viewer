@@ -1,6 +1,7 @@
 use std::io::{Cursor, PipeReader, PipeWriter};
 
 use super::*;
+use crate::temporary::Temporary;
 
 /// A message as it goes on the wire, for the tests that assert about bytes.
 fn framed(body: &str) -> Vec<u8> {
@@ -855,21 +856,21 @@ fn a_character_split_across_two_reads_is_still_the_character() {
     assert_eq!(String::from_utf8_lossy(&said), line);
 }
 
-/// A program of this test's own, under the system temporary directory and named after the
-/// line that asked for it.
+/// A directory of this test's own under the system temporary directory, named after the
+/// line that asked for it, holding a `server` program that `does`. The directory goes when
+/// the test ends.
 #[cfg(unix)]
-fn program_that(does: &str, line: u32) -> PathBuf {
+fn program_that(does: &str, line: u32) -> Temporary {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-lsp-test-{}-{line}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&directory).expect("a directory");
+    )));
     let program = directory.join("server");
     std::fs::write(&program, format!("#!/bin/sh\n{does}\n")).expect("a program");
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("a mode");
-    program
+    directory
 }
 
 /// What a program says on its way out is waited for, and not read out of whatever the
@@ -883,10 +884,11 @@ fn program_that(does: &str, line: u32) -> PathBuf {
 #[cfg(unix)]
 fn what_a_program_said_on_its_way_out_is_waited_for() {
     let said = "error: no rust-analyzer in this toolchain";
-    let program = program_that(
+    let directory = program_that(
         &format!("exec 1>&-\nsleep 0.05\necho \"{said}\" >&2\nexit 1"),
         line!(),
     );
+    let program = directory.join("server");
     let (mut server, handle) =
         start_program_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
 

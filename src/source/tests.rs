@@ -1,19 +1,20 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
+use crate::temporary::Temporary;
 
 /// A path of this test run's own, named per process and per call so tests can run in
-/// parallel, here and in another checkout at once.
-fn temp_path(name: &str) -> PathBuf {
+/// parallel, here and in another checkout at once. Gone when the test ends.
+fn temp_path(name: &str) -> Temporary {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
+    Temporary::at(std::env::temp_dir().join(format!(
         "viewer-source-{}-{unique}-{name}",
         std::process::id()
-    ))
+    )))
 }
 
-fn write(name: &str, bytes: &[u8]) -> PathBuf {
+fn write(name: &str, bytes: &[u8]) -> Temporary {
     let path = temp_path(name);
     fs::write(&path, bytes).expect("the temp directory is writable");
     path
@@ -27,8 +28,7 @@ fn reads_a_file_verbatim() {
     // Line endings included: what splits the text into lines is the highlighter, and it is
     // entitled to see the file as it is.
     assert!(file.text() == "fn main() {\r\n    let x = 1;\n}\n");
-    assert!(file.path() == path);
-    let _ = fs::remove_file(&path);
+    assert!(file.path() == &*path);
 }
 
 #[test]
@@ -37,7 +37,6 @@ fn invalid_utf8_is_read_lossily() {
     let file = SourceFile::read(&path, MAX_SIZE).expect("a readable file");
 
     assert!(file.text() == "/* caf\u{fffd} */\nint main(void) { return 0; }\n");
-    let _ = fs::remove_file(&path);
 }
 
 #[test]
@@ -46,7 +45,6 @@ fn a_file_over_the_cap_is_refused() {
     assert!(SourceFile::read(&path, 4).is_none());
     // And the same file is fine once it fits, so it is the cap that refused it.
     assert!(SourceFile::read(&path, MAX_SIZE).is_some());
-    let _ = fs::remove_file(&path);
 }
 
 #[test]
@@ -69,13 +67,12 @@ fn a_file_is_read_once() {
 fn a_missing_file_is_remembered_as_missing() {
     let path = temp_path("never-written.rs");
     assert!(load(&path).is_none());
-    assert!(cache().contains_key(&path));
+    assert!(cache().contains_key(&*path));
 
     // Creating it afterwards changes nothing: the pane asks on every render and must not
     // `stat` a missing file every time.
     let _ = fs::write(&path, b"fn main() {}\n");
     assert!(load(&path).is_none());
-    let _ = fs::remove_file(&path);
 }
 
 /// The other half of reading a file once: a build says the files under a directory have
@@ -105,9 +102,6 @@ fn forgetting_a_directory_re_reads_what_is_under_it() {
         &kept,
         &load(&outside).expect("the remembered file")
     ));
-
-    let _ = fs::remove_dir_all(&directory);
-    let _ = fs::remove_file(&outside);
 }
 
 /// The digests are of the bytes as read, so a file answers the checksum the compiler took
@@ -139,7 +133,6 @@ fn a_file_matches_the_checksum_of_its_own_bytes() {
     for hash in [md5, sha1, sha256] {
         assert!(!edited.matches(hash), "{hash:?}");
     }
-    let _ = fs::remove_file(&path);
 }
 
 #[test]

@@ -1971,3 +1971,32 @@ pub fn archive(members: &[(&str, &[u8])]) -> Vec<u8> {
     }
     file
 }
+
+/// A directory of one test's own under the system temporary directory, named after the
+/// test file and the line that asked for it, and removed when the test ends -- when it
+/// panics included, which is the case a removal at the foot of the body misses. The
+/// fixtures that have to be on disk go here, and `/tmp` is memory on many systems.
+pub struct Scratch(pub PathBuf);
+
+impl Scratch {
+    pub fn new(what: &str, line: u32) -> Scratch {
+        let directory =
+            std::env::temp_dir().join(format!("analysis-{what}-{}-{line}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("creating the test directory");
+        Scratch(directory)
+    }
+
+    /// A fixture written into it, at the path it was written to.
+    pub fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = self.0.join(name);
+        std::fs::write(&path, bytes).expect("writing a fixture");
+        path
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

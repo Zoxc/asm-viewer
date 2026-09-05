@@ -1,14 +1,15 @@
 use std::fs;
 
 use super::*;
+use crate::temporary::Temporary;
 
 /// A directory of this test's own under the system temporary directory, named after
-/// the line that asked for it.
-fn directory(line: u32) -> PathBuf {
-    std::env::temp_dir().join(format!(
+/// the line that asked for it, and gone when the test ends.
+fn directory(line: u32) -> Temporary {
+    Temporary::at(std::env::temp_dir().join(format!(
         "assembly-viewer-settings-test-{}-{line}",
         std::process::id()
-    ))
+    )))
 }
 
 fn settings() -> Settings {
@@ -47,8 +48,6 @@ fn a_missing_or_corrupt_file_is_the_default() {
     let moved = directory.join(crate::rescue::INCOMPATIBLE_DIR);
     assert!(moved.join(FILE_NAME).exists());
     assert!(moved.join(format!("2-{FILE_NAME}")).exists());
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// A partial file is not a corrupt one: `serde(default)` on the container, since a
@@ -64,8 +63,6 @@ fn a_file_that_names_one_setting_keeps_it() {
     let loaded = Settings::load_in(&directory);
     assert_eq!(loaded.theme, Theme::Light);
     assert_eq!(loaded.interface, FontSetting::default());
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// The field-order test: TOML cannot reopen a table, so `theme` has to be written
@@ -87,8 +84,6 @@ fn writes_atomically_and_reads_back_with_its_tables_last() {
     assert_eq!(Settings::load_in(&directory.join("nested")), settings);
     // The temporary was renamed, not left behind.
     assert!(!path.with_extension("toml.tmp").exists());
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// Unspecified is an *absent* key, so nothing can later mistake it for a value that was

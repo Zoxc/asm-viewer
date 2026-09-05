@@ -12,6 +12,7 @@ use super::*;
 // explicit import wins over a glob, so this is what the name means here: ours.
 use super::settings_view::use_theme;
 use crate::search::{Hit, SearchEvent, SearchQuery};
+use crate::temporary::Temporary;
 use crate::walk::WalkEvent;
 use freya_testing::TestingRunner;
 
@@ -3716,9 +3717,9 @@ macro_rules! location_states {
 /// assembly side follows that line as it follows a clicked one.
 #[test]
 fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
-    let directory =
-        std::env::temp_dir().join(format!("assembly-viewer-uses-row-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let directory = Temporary::directory(
+        std::env::temp_dir().join(format!("assembly-viewer-uses-row-{}", std::process::id())),
+    );
     let path = directory.join("used.rs");
     std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
         .expect("writing the source file");
@@ -5193,12 +5194,11 @@ fn next_ask(
 }
 
 /// The file a call-following test reads, written where a test can put one.
-fn calling_file(name: &str) -> (Arc<str>, PathBuf) {
-    let directory = std::env::temp_dir().join(format!(
+fn calling_file(name: &str) -> (Arc<str>, Temporary) {
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-following-{}-{name}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    )));
     let path = directory.join("calls.rs");
     std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
         .expect("writing the source file");
@@ -5398,7 +5398,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
 
 /// A file calling two names on one line, written where a test can put one:
 /// `    let n = one(1) + two(2);`, whose calls begin at columns 12 and 21.
-fn two_calling_file(name: &str) -> (Arc<str>, PathBuf) {
+fn two_calling_file(name: &str) -> (Arc<str>, Temporary) {
     let (file, directory) = calling_file(name);
     std::fs::write(
         PathBuf::from(&*file),
@@ -6530,11 +6530,10 @@ fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
 /// the tab; a row outside any function offers the line alone.
 #[test]
 fn a_source_row_inside_a_function_offers_its_instances() {
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-instances-test-{}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    )));
     let path = directory.join("instances.c");
     std::fs::write(
         &path,
@@ -7201,7 +7200,6 @@ fn a_wide_instruction_is_reached_by_scrolling_sideways() {
 #[test]
 fn a_wide_source_line_is_reached_by_scrolling_sideways() {
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("wide.c");
     std::fs::write(&path, format!("int x;\n// {}\nint y;\n", "x".repeat(400)))
         .expect("writing the source file");
@@ -7236,7 +7234,6 @@ fn a_wide_source_line_is_reached_by_scrolling_sideways() {
         after.min_x() < before.min_x() - 100.0,
         "the sideways wheel moved nothing: {after:?} against {before:?}"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A picked-out row's wash runs as wide as the widest row drawn, and no wider than the
@@ -7373,7 +7370,6 @@ fn source_file_harness(
 #[test]
 fn a_listings_extent_does_not_outlive_it() {
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let wide = directory.join("wide.c");
     std::fs::write(&wide, format!("// {}\nint x;\n", "x".repeat(400)))
         .expect("writing the source file");
@@ -7423,7 +7419,6 @@ fn a_listings_extent_does_not_outlive_it() {
         after, before,
         "the second file scrolled sideways over the first file's widest row"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A listing's extent is given up when the fixed-width font shrinks under it: the rows
@@ -7438,7 +7433,6 @@ fn a_listings_extent_does_not_outlive_it() {
 fn a_smaller_fixed_font_gives_up_the_width_the_larger_one_measured() {
     set_fonts(fixed_fonts(9.0, 18.0));
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("wide.c");
     std::fs::write(&path, format!("// {}\nint x;\n", "x".repeat(400)))
         .expect("writing the source file");
@@ -7473,7 +7467,6 @@ fn a_smaller_fixed_font_gives_up_the_width_the_larger_one_measured() {
         narrow < wide * 0.75,
         "the rows kept the width the larger font measured: {narrow} against {wide}"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Pressing a branch's displacement puts the row it lands on on screen **and picks that
@@ -8160,11 +8153,10 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
 
     // A file of this machine's own, the path the fixture's DWARF names being the build
     // machine's, and long enough that the symbol's line is nowhere near the top of it.
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-opening-test-{}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    )));
     let path = directory.join("opening.c");
     let text: String = (1..=200)
         .map(|n| format!("int line_{n}(void);\n"))
@@ -8236,8 +8228,6 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
         rows.contains(&121) && !rows.contains(&line),
         "the tab did not come back to the row it was left at: {rows:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The rule a separator row draws between two basic blocks is laid out on whole device
@@ -8737,8 +8727,9 @@ fn the_leading_bar_puts_the_following_pane_away() {
 fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
     use analysis::{LineInfo, LineRow, SourceHash};
 
-    let dir = std::env::temp_dir().join(format!("viewer-stale-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("the temp directory is writable");
+    let dir = Temporary::directory(
+        std::env::temp_dir().join(format!("viewer-stale-{}", std::process::id())),
+    );
     let path = dir.join("own.c");
     std::fs::write(&path, b"abc").expect("the temp directory is writable");
     let file: Arc<str> = Arc::from(path.to_str().expect("a UTF-8 temp path"));
@@ -8810,7 +8801,6 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
             "{recorded:?}"
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A component with no props at all, which is what every view in the app is. Its parent
@@ -8885,10 +8875,10 @@ fn a_theme_switch_empties_the_highlighted_cache() {
     let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
     set_appearance(Appearance::Light);
 
-    let directory =
-        std::env::temp_dir().join(format!("assembly-viewer-theme-test-{}", std::process::id()));
+    let directory = Temporary::directory(
+        std::env::temp_dir().join(format!("assembly-viewer-theme-test-{}", std::process::id())),
+    );
     let path = directory.join("themed.rs");
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     std::fs::write(&path, b"fn main() {}\n").expect("writing the source file");
 
     // A keyword, which is the one span whose colour is a palette entry rather than the
@@ -8911,7 +8901,6 @@ fn a_theme_switch_empties_the_highlighted_cache() {
 
     set_appearance(Appearance::Light);
     highlighted().clear();
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Neither cache is checked against the disk, so a file rewritten under the app's nose is
@@ -8920,7 +8909,6 @@ fn a_theme_switch_empties_the_highlighted_cache() {
 #[test]
 fn forgetting_a_directory_re_reads_and_re_parses_its_files() {
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("main.rs");
     std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
 
@@ -8945,7 +8933,6 @@ fn forgetting_a_directory_re_reads_and_re_parses_its_files() {
     );
 
     forget_source_under(&directory);
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The windowing system changing its mind about the theme, *after* the window is open,
@@ -10919,7 +10906,6 @@ fn a_finished_pad_build_forgets_the_pad_package() {
     // name inside the package: the pad's directory is the reader's own, and a test writes
     // nothing into it.
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("stand-in.rs");
     std::fs::write(&path, b"fn main() {}\n").expect("writing the source file");
     let stand_in = source_text(&path).expect("the file");
@@ -10960,7 +10946,6 @@ fn a_finished_pad_build_forgets_the_pad_package() {
     );
 
     forget_source_under(&directory);
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Taking a dependency row away does not take the pane with it: each box writes into
@@ -11256,8 +11241,20 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
     );
 }
 
-/// A directory of this test's own, named after the line that asked for it.
-fn run_directory(line: u32) -> PathBuf {
+/// A directory of this test's own, empty and named after the line that asked for it, and
+/// gone when the test ends.
+fn run_directory(line: u32) -> Temporary {
+    Temporary::directory(run_path(line))
+}
+
+/// The same, with the test's own directory `name` under it: what is removed is still the
+/// whole of it.
+fn run_directory_under(line: u32, name: &str) -> Temporary {
+    Temporary::under(run_path(line), name)
+}
+
+/// Where both of those put it.
+fn run_path(line: u32) -> PathBuf {
     std::env::temp_dir().join(format!(
         "assembly-viewer-run-test-{}-{line}",
         std::process::id()
@@ -11821,9 +11818,9 @@ fn a_picked_out_instruction_lights_its_line() {
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
-    let directory =
-        std::env::temp_dir().join(format!("assembly-viewer-pair-test-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let directory = Temporary::directory(
+        std::env::temp_dir().join(format!("assembly-viewer-pair-test-{}", std::process::id())),
+    );
     let path = directory.join("pair.c");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
     std::fs::write(&path, text).expect("writing the source file");
@@ -11927,7 +11924,6 @@ fn the_gutter_marks_the_lines_that_have_code() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("marks.c");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
     std::fs::write(&path, text).expect("writing the source file");
@@ -11998,8 +11994,6 @@ fn the_gutter_marks_the_lines_that_have_code() {
         "another file's answer marked this one: {:?}",
         marked_lines(&test)
     );
-
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The bug the file-wide answer exists for: a **source-driven** tab has no drawn symbol
@@ -12016,7 +12010,6 @@ fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("driven.c");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
     std::fs::write(&path, text).expect("writing the source file");
@@ -12079,8 +12072,6 @@ fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
         vec![3, 4],
         "a source-driven tab was left unmarked with nothing clicked in it"
     );
-
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Which line numbers are drawn beside a gutter mark: the number the mark shares a row
@@ -14916,10 +14907,8 @@ fn files_harness() -> impl IntoElement {
 
 /// A project directory of this test's own, named after the line that asked for it, and
 /// the panel mounted over it as the project's directory.
-fn files_over(line: u32) -> (TestingRunner, ProjectStates, PathBuf) {
-    let directory = run_directory(line).join("project");
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+fn files_over(line: u32) -> (TestingRunner, ProjectStates, Temporary) {
+    let directory = run_directory_under(line, "project");
     let (mut test, states) =
         TestingRunner::new(files_harness, (300., 400.).into(), project_states!(), 1.);
     let mut proj = states.proj;
@@ -14955,7 +14944,6 @@ fn a_directory_row_unfolds_on_press() {
 
     press(&mut test, "a");
     assert!(label_area(&test, "b.c").is_none());
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Pressing a source file's row opens it as a source-driven tab, spelled as the project
@@ -14978,7 +14966,6 @@ fn a_source_row_opens_a_source_driven_tab() {
         .peek()
         .recent()
         .any(|entry| *entry == document));
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A file's menu offers "Open file", which loads it the way the toolbar's Open does --
@@ -15008,7 +14995,6 @@ fn an_object_row_opens_from_its_menu() {
     settle(&mut test);
     assert!(label_area(&test, "Open file").is_none());
     assert!(label_area(&test, "Close file").is_some());
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A directory's row has a menu of its own, and its one item is the file manager's: a
@@ -15026,7 +15012,6 @@ fn a_directory_row_offers_the_file_manager_alone() {
 
     assert!(label_area(&test, "Show in file manager").is_some());
     assert!(label_area(&test, "Open file").is_none());
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A file past what the source cache will read opens nothing when pressed -- the tab
@@ -15049,7 +15034,6 @@ fn a_file_past_the_source_bound_does_nothing_when_pressed() {
     right_click(&mut test, row);
     settle(&mut test);
     assert!(label_area(&test, "Open file").is_some());
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// With no directory set the panel says so and points at the Project view; setting one
@@ -15061,8 +15045,7 @@ fn no_directory_draws_the_placeholder() {
     settle(&mut test);
     assert!(label_area(&test, "No project directory. Set one in the Project view.").is_some());
 
-    let directory = run_directory(line!()).join("project");
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let directory = run_directory_under(line!(), "project");
     std::fs::write(directory.join("main.rs"), "fn main() {}\n").expect("writing the source");
     let mut proj = states.proj;
     proj.write().directory = directory.to_string_lossy().into_owned();
@@ -15078,7 +15061,6 @@ fn no_directory_draws_the_placeholder() {
     settle(&mut test);
     assert!(label_area(&test, "main.rs").is_none());
     assert!(label_area(&test, "No project directory. Set one in the Project view.").is_some());
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The two configuration grammars colour what they parse: a TOML key is a property and a
@@ -15089,7 +15071,6 @@ fn toml_and_json_files_are_highlighted() {
     set_appearance(Appearance::Light);
 
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let toml = directory.join("Cargo.toml");
     let json = directory.join("package.json");
     std::fs::write(&toml, b"name = \"viewer\"\n").expect("writing the file");
@@ -15109,7 +15090,6 @@ fn toml_and_json_files_are_highlighted() {
     assert_ne!(theme.string_special, theme.text);
 
     highlighted().clear();
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A language named for what it compiles to, with no grammar behind it, opens with an
@@ -16355,7 +16335,6 @@ fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
 #[test]
 fn select_all_with_no_run_is_a_run_of_the_file_the_pane_shows() {
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("two.c");
     std::fs::write(&path, "int x;\nint y;\n").expect("writing the source file");
     let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
@@ -16384,7 +16363,6 @@ fn select_all_with_no_run_is_a_run_of_the_file_the_pane_shows() {
         Some(&*file),
         "the run is of no file, so nothing pairs with it"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The keys move the caret along a row of the unified view, and the row draws it there:
@@ -16975,8 +16953,8 @@ fn navigating_harness() -> impl IntoElement {
 }
 
 /// An assembly-driven tab on `sum_to` with a companion file of twenty lines that exists,
-/// so both panes have rows to press: the runner, the states, the symbol's document and
-/// the file.
+/// so both panes have rows to press: the runner, the states, the symbol's document, the
+/// file, and the directory it is in, which the caller holds for as long as it reads it.
 fn navigating_panes() -> (
     TestingRunner,
     ProjectStates,
@@ -16985,16 +16963,16 @@ fn navigating_panes() -> (
     State<Option<Planting>>,
     Document,
     Arc<str>,
+    Temporary,
 ) {
     let sum_to = fixture_symbols()
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-restore-test-{}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    )));
     let path = directory.join("kept.c");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
     std::fs::write(&path, text).expect("writing the source file");
@@ -17028,7 +17006,9 @@ fn navigating_panes() -> (
         1.,
     );
     let document = Document::Assembly(Selection::Symbol(sum_to));
-    (test, states, marked, landing, plant, document, file)
+    (
+        test, states, marked, landing, plant, document, file, directory,
+    )
 }
 
 /// The paragraphs of one pane of [`navigating_panes`]'s window, top to bottom: the
@@ -17075,7 +17055,7 @@ fn runs_of(marked: State<Marks>) -> (Option<Picked>, Option<Picked>) {
 #[test]
 fn navigating_brings_back_each_panes_caret_and_selection() {
     let symbols = fixture_symbols();
-    let (mut test, states, marked, _landing, _plant, sum_to, file) = navigating_panes();
+    let (mut test, states, marked, _landing, _plant, sum_to, file, _directory) = navigating_panes();
     let add = Document::Assembly(Selection::Symbol(symbols[0].clone()));
     let id = open_document(states.open, states.visits, sum_to.clone(), Reach::NewTab)
         .expect("a document panel");
@@ -17160,7 +17140,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
 #[test]
 fn a_landing_on_arrival_wins_over_the_kept_runs() {
     let symbols = fixture_symbols();
-    let (mut test, states, marked, landing, plant, sum_to, file) = navigating_panes();
+    let (mut test, states, marked, landing, plant, sum_to, file, _directory) = navigating_panes();
     let add = Document::Assembly(Selection::Symbol(symbols[0].clone()));
     let id = open_document(states.open, states.visits, sum_to.clone(), Reach::NewTab)
         .expect("a document panel");
@@ -17646,7 +17626,7 @@ fn search_harness() -> impl IntoElement {
 fn search_over(
     line: u32,
     work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync + 'static,
-) -> (TestingRunner, ProjectStates, PathBuf, State<DockArea>) {
+) -> (TestingRunner, ProjectStates, Temporary, State<DockArea>) {
     let (test, states, directory, _, _, _, dock) = search_and_modifiers(line, work);
     (test, states, directory, dock)
 }
@@ -17660,15 +17640,13 @@ fn search_and_modifiers(
 ) -> (
     TestingRunner,
     ProjectStates,
-    PathBuf,
+    Temporary,
     Modifiers5,
     State<Marks>,
     State<Finder>,
     State<DockArea>,
 ) {
-    let directory = run_directory(line).join("searched");
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let directory = run_directory_under(line, "searched");
     let work = Arc::new(work);
     let (mut test, states) = TestingRunner::new(
         search_harness,
@@ -17738,7 +17716,7 @@ fn search_with_modifiers(
 ) -> (
     TestingRunner,
     ProjectStates,
-    PathBuf,
+    Temporary,
     ModifierKeys,
     State<bool>,
     State<bool>,
@@ -17812,7 +17790,6 @@ fn hits_arrive_under_their_file_and_fold() {
         "{folded:?}"
     );
     assert!(folded.iter().any(|label| label == "third hit"));
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A hit that lands after its search has been replaced is dropped: the batch is checked
@@ -17866,7 +17843,6 @@ fn a_hit_from_a_replaced_search_is_dropped() {
         shown.iter().any(|label| label == "1 match in 1 file"),
         "{shown:?}"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A walk still running when the project is left cannot answer into the project that comes
@@ -17924,7 +17900,6 @@ fn a_walk_of_the_project_left_cannot_answer_into_the_next() {
         "the old project's walk ended a search of the new project's that is still going"
     );
     let _ = going.send(());
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Pressing a match opens its file as a source-driven tab landed on the line it was found
@@ -17939,7 +17914,7 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
 
     let mut searched = states.searched;
     searched.write().asked = Some(SearchQuery {
-        root: directory.clone(),
+        root: directory.to_path_buf(),
         filter: Filter {
             pattern: "y".to_owned(),
             ..Filter::default()
@@ -17981,7 +17956,6 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
         Line::text("int y;")
     });
     assert!(copied == "y", "{copied:?}");
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Enter in the box searches for what is in it, over the project's directory. The box is
@@ -18015,9 +17989,8 @@ fn enter_in_the_box_asks_for_what_is_in_it() {
         .peek()
         .asked
         .as_ref()
-        .is_some_and(|query| query.filter.pattern == "needle" && query.root == directory));
+        .is_some_and(|query| query.filter.pattern == "needle" && query.root == *directory));
     assert!(labels(&test).iter().any(|label| label == "found needle"));
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The root's one global key handler: Ctrl+Shift+F asks for the caret in the Search box,
@@ -18028,7 +18001,7 @@ fn enter_in_the_box_asks_for_what_is_in_it() {
 fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
     // A runner, because every `State` here belongs to freya's own context, and the panel
     // is what spends what the chord asks for.
-    let (mut test, states, directory, keys, shift, ctrl, finder, dock) =
+    let (mut test, states, _directory, keys, shift, ctrl, finder, dock) =
         search_with_modifiers(line!());
     let searched = states.searched;
     let proj = states.proj;
@@ -18061,7 +18034,6 @@ fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
         "the flag is spent, not left standing"
     );
     assert!(labels(&test).iter().any(|label| label == "needle"));
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The chord is not typed into a filter box: the `Input`'s pre-key hook declines it, which
@@ -18389,7 +18361,6 @@ fn an_artifact_load_survives_the_view_being_left() {
 #[test]
 fn a_finished_build_forgets_the_workspace_sources() {
     let directory = run_directory(line!());
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("main.rs");
     std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
 
@@ -18412,7 +18383,12 @@ fn a_finished_build_forgets_the_workspace_sources() {
     std::fs::write(&path, b"fn two() {}\n").expect("writing the source file");
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
-    start_build(states.build, &jobs, directory.clone(), Profile::Release);
+    start_build(
+        states.build,
+        &jobs,
+        directory.to_path_buf(),
+        Profile::Release,
+    );
     pump(&mut test, || !states.build.peek().building);
 
     assert_eq!(
@@ -18422,7 +18398,6 @@ fn a_finished_build_forgets_the_workspace_sources() {
     );
 
     forget_source_under(&directory);
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The rule the session carries: a build replaces the artifacts of the build **before**
@@ -19259,12 +19234,11 @@ fn the_project_view_says_how_the_language_server_went() {
 
 /// A directory of this test's own with `text` in its `.vscode/settings.json`, named after
 /// the line that asked for it.
-fn a_project_with_settings(line: u32, text: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!(
+fn a_project_with_settings(line: u32, text: &str) -> Temporary {
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-lsp-settings-{}-{line}",
         std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&directory);
+    )));
     std::fs::create_dir_all(directory.join(".vscode")).expect("creating the test directory");
     std::fs::write(directory.join(".vscode").join("settings.json"), text)
         .expect("writing the settings file");
@@ -19324,8 +19298,6 @@ fn the_project_view_lists_the_settings_the_project_gave_the_server() {
         !drawn.iter().any(|text| text.contains("detectSubmodules")),
         "an editor's own setting was listed: {drawn:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// And says why a settings file could not be used, in the colour the other failure in that
@@ -19358,8 +19330,6 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
         Some(Fill::Color(Palette::LIGHT.invalid_fg)),
         "a settings file that could not be read is not said to be a failure"
     );
-
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Which language server a project is read with is the project's own setting: typed into
@@ -20044,11 +20014,10 @@ fn landing_panes() -> (TestingRunner, ProjectStates, LocationStates) {
 /// asked of the pane the way the reader asks it: by which line numbers are drawn.
 #[test]
 fn a_door_into_another_file_shows_the_line_it_landed_on() {
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-landing-test-{}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    )));
     // The file the tab is showing when the door is pressed, and the one it opens. The
     // second is long enough that the line landed on is nowhere near the top, and longer
     // than the first, so a reveal measuring against the first refuses it.
@@ -20106,8 +20075,6 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
         (LINE.saturating_sub(CONTEXT_ROWS as u32)..=LINE).contains(&top),
         "the pane is at line {top}, not on the line {LINE} it landed on"
     );
-
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// **A door moves the pane once: from where it was to the line it landed on, and not by
@@ -20121,11 +20088,10 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
 /// and the pane settling, which only a test that looks at every pass can see.
 #[test]
 fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-flicker-test-{}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    )));
     // Two long files, so a move to the top of either is a move and not the offset the
     // pane already had.
     let write = |path: &Path, name: &str| {
@@ -20207,8 +20173,6 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
         vec![at(150), at(40)],
         "the pane went by way of another line on its way into the second file"
     );
-
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// **A door lands as the pane draws the document it opened**, and not two passes later.
@@ -20226,11 +20190,10 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
 /// which only a test that looks at every pass can say.
 #[test]
 fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
-    let directory = std::env::temp_dir().join(format!(
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-promptly-test-{}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    )));
     let write = |path: &Path, name: &str| {
         let text: String = (1..=200)
             .map(|n| format!("fn {name}_{n}() {{}}\n"))
@@ -20296,8 +20259,6 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
         "the pane took {passes} passes to show the line it landed on, \
          which is long enough to draw the file where it was before"
     );
-
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -20327,12 +20288,10 @@ fn finder_over(
     ProjectStates,
     State<Finder>,
     ModifierKeys,
-    PathBuf,
+    Temporary,
     State<DockArea>,
 ) {
-    let directory = run_directory(line).join("found");
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
+    let directory = run_directory_under(line, "found");
     let work = Arc::new(work);
     let (mut test, states) = TestingRunner::new(
         finder_harness,
@@ -20459,7 +20418,7 @@ fn press_finder_chord(
 /// the box then picks out. Fails on a finder that draws its list before it is opened.
 #[test]
 fn the_chord_opens_the_finder_over_the_project_files() {
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             let _ = emit(walked_file(root, "src/ui/files_view.rs"));
             let _ = emit(walked_file(root, "notes/Goals.md"));
@@ -20485,7 +20444,6 @@ fn the_chord_opens_the_finder_over_the_project_files() {
         rows.iter().any(|row| row.starts_with("Goals.md")),
         "{rows:?}"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// With nothing typed the list is the source files opened most recently, newest first --
@@ -20527,14 +20485,13 @@ fn an_empty_box_lists_the_files_opened_most_recently() {
         ["second.rs", "first.rs"],
         "newest first, and only these"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A row is the file's name and then the directories above it, which is not the order the
 /// path is written in: a column of names all starting `src/ui/` says nothing.
 #[test]
 fn a_row_is_the_name_and_then_the_directories_above_it() {
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             let _ = emit(walked_file(root, "src/ui/files_view.rs"));
             let _ = emit(walked_file(root, "top.rs"));
@@ -20552,14 +20509,13 @@ fn a_row_is_the_name_and_then_the_directories_above_it() {
         "{rows:?}"
     );
     assert!(rows.iter().any(|row| row == "top.rs"), "{rows:?}");
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Typing narrows the list to the paths the characters appear in, in order, and the best
 /// match is first. Fails on a finder that filters by anything but the fuzzy match.
 #[test]
 fn typing_narrows_the_list_to_the_characters_in_order() {
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             let _ = emit(walked_file(root, "src/ui/files_view.rs"));
             let _ = emit(walked_file(root, "src/ui/source_view.rs"));
@@ -20582,7 +20538,6 @@ fn typing_narrows_the_list_to_the_characters_in_order() {
             .is_some_and(|row| row.starts_with("files_view.rs")),
         "{rows:?}"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Enter opens the row the keyboard is on, as pressing a Files item does: the temporal
@@ -20641,7 +20596,6 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
         Some(second),
         "Ctrl+Enter opens a tab that stays"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Down stops at the last row. Counting on past it left the row the keyboard is on above
@@ -20649,7 +20603,7 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
 /// moved at all.
 #[test]
 fn down_stops_at_the_last_row_so_up_moves_at_once() {
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             for name in ["one.rs", "two.rs", "three.rs"] {
                 let _ = emit(walked_file(root, name));
@@ -20686,7 +20640,6 @@ fn down_stops_at_the_last_row_so_up_moves_at_once() {
         Some(rows[1].as_str()),
         "the first Up after the overshoot did not move the highlight"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The list follows the row the keyboard is on. The panel draws `FINDER_ROWS` rows and
@@ -20695,7 +20648,7 @@ fn down_stops_at_the_last_row_so_up_moves_at_once() {
 #[test]
 fn the_list_scrolls_to_the_row_the_keyboard_is_on() {
     let walked: Vec<String> = (0..20).map(|n| format!("f{n:02}.rs")).collect();
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             for name in &walked {
                 let _ = emit(walked_file(root, name));
@@ -20736,13 +20689,12 @@ fn the_list_scrolls_to_the_row_the_keyboard_is_on() {
         place.is_some_and(|place| place < FINDER_ROWS),
         "the row the keyboard is on is below the panel's edge: {drawn:?}"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Escape closes it, and keeps nothing of what was typed.
 #[test]
 fn escape_closes_the_finder_and_keeps_nothing_typed() {
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             let _ = emit(walked_file(root, "first.rs"));
             let _ = emit(WalkEvent::Finished);
@@ -20762,7 +20714,6 @@ fn escape_closes_the_finder_and_keeps_nothing_typed() {
     press_finder_chord(&states, finder, keys, dock);
     settle(&mut test);
     assert_eq!(finder.peek().typed, "", "the box is empty each time");
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The list is kept between opens: the second open draws it before its own walk has said
@@ -20771,7 +20722,7 @@ fn escape_closes_the_finder_and_keeps_nothing_typed() {
 fn the_second_open_shows_the_files_the_first_walk_found() {
     let held = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let gate = held.clone();
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             // The second walk says nothing at all, so anything drawn after it is the list the
             // first one left.
@@ -20800,7 +20751,6 @@ fn the_second_open_shows_the_files_the_first_walk_found() {
         finder_rows(&test).iter().any(|row| row == "kept.rs"),
         "the second open walked again instead of showing what it had"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The chord is not typed into a filter box: the `Input`'s pre-key hook declines it, which
@@ -20867,7 +20817,7 @@ fn the_finder_chord_is_declined_by_the_scratchpad_editor() {
 /// panel's width, so it ran off the right-hand edge of the window.
 #[test]
 fn the_box_fills_the_panel_with_air_around_it() {
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             let _ = emit(walked_file(root, "kept.rs"));
             let _ = emit(WalkEvent::Finished);
@@ -20887,7 +20837,6 @@ fn the_box_fills_the_panel_with_air_around_it() {
         "the box is {} of the panel's {FINDER_WIDTH}",
         drawn.width()
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A press outside the panel closes it. The rect that takes that press covers the window
@@ -20895,7 +20844,7 @@ fn the_box_fills_the_panel_with_air_around_it() {
 /// what says a rect with no background is still there to be pressed.
 #[test]
 fn a_press_outside_the_panel_closes_the_finder() {
-    let (mut test, states, finder, keys, directory, dock) =
+    let (mut test, states, finder, keys, _directory, dock) =
         finder_over(line!(), move |root, emit| {
             let _ = emit(walked_file(root, "kept.rs"));
             let _ = emit(WalkEvent::Finished);
@@ -20919,7 +20868,6 @@ fn a_press_outside_the_panel_closes_the_finder() {
     );
     settle(&mut test);
     assert!(finder.peek().open, "a press in the box closed the finder");
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// A source reached through a binary's debug info -- the standard library's own, a
@@ -20952,7 +20900,6 @@ fn a_file_outside_the_project_is_not_listed() {
         ["own.rs"],
         "a file outside the project's directory was listed"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Pressing a row opens its file, as Enter on it does.
@@ -20984,5 +20931,4 @@ fn pressing_a_row_opens_its_file() {
         Some(opened),
         "a row opens in the temporal tab, as a Files row does"
     );
-    let _ = std::fs::remove_dir_all(&directory);
 }

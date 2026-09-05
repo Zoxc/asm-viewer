@@ -5,7 +5,7 @@
 mod common;
 
 use analysis::{open_files, open_files_streaming, FileDigest, Progress};
-use common::{archive, caller_and_target};
+use common::{archive, caller_and_target, Scratch};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
@@ -27,37 +27,11 @@ fn events(paths: Vec<PathBuf>) -> Vec<Event> {
     seen
 }
 
-/// A directory named after the line that asked for it, so two tests cannot collide. The
-/// archive fixtures have to be on disk: reading the file is the first half of what is
-/// under test.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(line: u32) -> Scratch {
-        let directory =
-            std::env::temp_dir().join(format!("analysis-streaming-{}-{line}", std::process::id()));
-        std::fs::create_dir_all(&directory).expect("creating the test directory");
-        Scratch(directory)
-    }
-
-    fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
-        let path = self.0.join(name);
-        std::fs::write(&path, bytes).expect("writing a fixture");
-        path
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// Members arrive one by one, each before the file they came out of is finished with. The
 /// archive itself is not an object file and so adds nothing at the end.
 #[test]
 fn an_archive_streams_its_members_before_it_finishes() {
-    let scratch = Scratch::new(line!());
+    let scratch = Scratch::new("streaming", line!());
     let bytes = archive(&[
         ("first.o", &caller_and_target()),
         ("second.o", &caller_and_target()),
@@ -80,7 +54,7 @@ fn an_archive_streams_its_members_before_it_finishes() {
 /// a caller draw "this file is still being read" against the right row.
 #[test]
 fn each_file_is_finished_before_the_next_one_starts() {
-    let scratch = Scratch::new(line!());
+    let scratch = Scratch::new("streaming", line!());
     let first = scratch.write("lib.a", &archive(&[("a.o", &caller_and_target())]));
     let second = scratch.write("plain.o", &caller_and_target());
 
@@ -98,7 +72,7 @@ fn each_file_is_finished_before_the_next_one_starts() {
 /// A caller drawing a pending file has no other way to learn that nothing is coming.
 #[test]
 fn a_path_that_yields_nothing_is_still_finished() {
-    let scratch = Scratch::new(line!());
+    let scratch = Scratch::new("streaming", line!());
     let garbage = scratch.write("garbage", b"not an object file, nor an archive");
     let missing = scratch.0.join("was-never-here");
 
@@ -112,7 +86,7 @@ fn a_path_that_yields_nothing_is_still_finished() {
 /// archive, not the file's own `Finished`, and not the path behind it.
 #[test]
 fn breaking_stops_the_walk_where_it_stands() {
-    let scratch = Scratch::new(line!());
+    let scratch = Scratch::new("streaming", line!());
     let member = caller_and_target();
     let first = scratch.write(
         "lib.a",
@@ -133,7 +107,7 @@ fn breaking_stops_the_walk_where_it_stands() {
 
 #[test]
 fn collecting_the_stream_is_what_open_files_returns() {
-    let scratch = Scratch::new(line!());
+    let scratch = Scratch::new("streaming", line!());
     let member = caller_and_target();
     let first = scratch.write("lib.a", &archive(&[("a.o", &member), ("b.o", &member)]));
     let second = scratch.write("plain.o", &member);
@@ -158,7 +132,7 @@ fn collecting_the_stream_is_what_open_files_returns() {
 /// hashed as a file: a member hashing its own bytes would answer something else.
 #[test]
 fn streaming_does_not_hash_a_file_once_per_object() {
-    let scratch = Scratch::new(line!());
+    let scratch = Scratch::new("streaming", line!());
     let member = caller_and_target();
     let bytes = archive(&[("a.o", &member), ("b.o", &member), ("c.o", &member)]);
     let path = scratch.write("lib.a", &bytes);

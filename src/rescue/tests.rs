@@ -1,14 +1,16 @@
 use serde::Deserialize;
 
 use super::*;
+use crate::temporary::Temporary;
 
 /// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, standing in for the one everything is stored in.
-fn base(line: u32) -> PathBuf {
-    std::env::temp_dir().join(format!(
+/// line that asked for it, standing in for the one everything is stored in. Gone when the
+/// test ends.
+fn base(line: u32) -> Temporary {
+    Temporary::at(std::env::temp_dir().join(format!(
         "assembly-viewer-rescue-test-{}-{line}",
         std::process::id()
-    ))
+    )))
 }
 
 /// A file with `data` in it, made along with the directories above it.
@@ -37,8 +39,6 @@ fn a_file_that_parses_is_left_alone() {
     );
     assert!(path.exists());
     assert!(!base.join(INCOMPATIBLE_DIR).exists());
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// The mirror: a project's file keeps its project's directory rather than being flattened
@@ -58,8 +58,6 @@ fn a_file_that_will_not_parse_is_moved_under_the_path_it_had() {
         .join("project-1")
         .join("session.toml");
     assert_eq!(fs::read(&moved).ok().as_deref(), Some(&b"{ not toml"[..]));
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// TOML that this file's schema does not accept is a file that will not parse: a stale
@@ -72,8 +70,6 @@ fn a_file_of_the_wrong_shape_is_moved_too() {
 
     assert_eq!(parse::<Named>(&base, &path), None);
     assert!(base.join(INCOMPATIBLE_DIR).join("settings.toml").exists());
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// A file that is not text will not parse either, and is lost in the same way, so reading
@@ -89,8 +85,6 @@ fn a_file_that_is_not_text_is_moved() {
         fs::read(base.join(INCOMPATIBLE_DIR).join("recents.toml")).ok(),
         Some(vec![0xFF, 0xFE, 0x00])
     );
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// Nothing there is ever overwritten, so the second rescue of one name takes another.
@@ -119,8 +113,6 @@ fn a_name_already_taken_gets_a_number() {
         fs::read(moved.join("3-settings.toml")).ok().as_deref(),
         Some(&b"third"[..])
     );
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// A file that is not there, or that the system will not hand over, is not a file that
@@ -131,8 +123,6 @@ fn a_missing_file_moves_nothing() {
 
     assert_eq!(parse::<Named>(&base, &base.join("settings.toml")), None);
     assert!(!base.join(INCOMPATIBLE_DIR).exists());
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// A path this app does not store is one it has no mirror for, and moving it would be
@@ -145,6 +135,4 @@ fn a_path_outside_the_base_is_left_where_it_is() {
 
     assert_eq!(parse::<Named>(&base.join("state"), &outside), None);
     assert!(outside.exists());
-
-    let _ = fs::remove_dir_all(&base);
 }

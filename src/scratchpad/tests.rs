@@ -1,12 +1,13 @@
 use super::*;
+use crate::temporary::Temporary;
 
 /// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, so a failing test leaves something identifiable behind.
-fn directory(line: u32) -> PathBuf {
-    std::env::temp_dir().join(format!(
+/// line that asked for it, and gone when the test ends.
+fn directory(line: u32) -> Temporary {
+    Temporary::at(std::env::temp_dir().join(format!(
         "assembly-viewer-scratchpad-test-{}-{line}",
         std::process::id()
-    ))
+    )))
 }
 
 fn scratchpad() -> Scratchpad {
@@ -195,8 +196,6 @@ fn writes_and_reads_back() {
     assert_eq!(Scratchpad::load_from(&directory.join("src")), None);
     fs::remove_file(directory.join("src").join("main.rs")).expect("removing the source");
     assert_eq!(Scratchpad::load_from(&directory), None);
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// An id is the directory a pad lives in, so it is read back through the same check the app
@@ -242,8 +241,6 @@ fn a_manifest_naming_a_path_is_not_a_scratchpad() {
     fs::write(source.join("main.rs"), "fn main() {}\n").expect("the source");
 
     assert_eq!(Scratchpad::load_from(&directory), None);
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// The reason [`Scratchpad::default`] may hand out an id without an `Option`: it is an id
@@ -286,8 +283,6 @@ fn a_scratchpad_opens_as_its_directory_has_it() {
     // disk like everything else, being a value and not a place.
     assert_eq!(opened.id().as_str(), DEFAULT_ID);
     assert_eq!(opened.name(), written.name());
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// A directory with a package in it this module cannot read is not an empty one. Answering
@@ -318,8 +313,6 @@ fn a_package_that_will_not_load_is_refused_and_not_read_as_an_empty_directory() 
         Scratchpad::default().opened_in(&directory),
         Err(Failure::Unreadable)
     );
-
-    let _ = fs::remove_dir_all(&directory);
 }
 
 /// An id for the tests below, which all deal in ids this module would generate.
@@ -382,8 +375,6 @@ fn the_order_keeps_every_pad_and_the_file_keeps_fifty() {
     let written = PadOrder::load_from(&pads.join("recents.toml"));
     assert_eq!(written.ids().len(), MAX_PAD_RECENTS);
     assert_eq!(written.first(), Some(&id("fresh")));
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// Every pad is reachable, which is the difference from the recent-projects list: that one
@@ -415,8 +406,6 @@ fn the_listing_drops_what_is_not_a_pad_and_keeps_what_the_order_forgot() {
     // and `empty` is not a package, so neither is a row. A pad the reader never named
     // comes back with an empty name rather than with its id.
     assert_eq!(pads_in(&base), [row("kept", "Kept one"), row("stray", "")]);
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// A new pad claims its directory with the `create_dir` that fails rather than opens, so an
@@ -443,8 +432,6 @@ fn a_new_pad_steps_over_what_is_already_claimed() {
         PadOrder::load_from(&pads.join("recents.toml")).first(),
         Some(made.id())
     );
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// A delete takes the pad's whole directory, cargo's leavings included — and reaches
@@ -497,8 +484,6 @@ fn a_delete_takes_the_package_and_only_the_package() {
         ));
         assert!(Scratchpad::load_from(&pads.join("staying")).is_some());
     }
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// The line cap: a program writing megabytes with no newline in it must still be

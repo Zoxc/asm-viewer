@@ -4,7 +4,7 @@
 mod common;
 
 use analysis::{open_files, parse_object, FileDigest, ObjectData};
-use common::{archive, caller_and_target};
+use common::{archive, caller_and_target, Scratch};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -98,17 +98,10 @@ fn every_object_out_of_one_archive_shares_one_digest() {
         ("second.o", &caller_and_target()),
     ]);
 
-    let directory = std::env::temp_dir().join(format!(
-        "analysis-digest-test-{}-{}",
-        std::process::id(),
-        line!()
-    ));
-    std::fs::create_dir_all(&directory).expect("creating the test directory");
-    let path = directory.join("lib.a");
-    std::fs::write(&path, &bytes).expect("writing the archive");
+    let scratch = Scratch::new("digest-test", line!());
+    let path = scratch.write("lib.a", &bytes);
 
     let objects = open_files(vec![path.clone()]);
-    let _ = std::fs::remove_dir_all(&directory);
 
     // Both members parsed; the archive itself is not an object file, so it adds none.
     assert_eq!(objects.len(), 2);

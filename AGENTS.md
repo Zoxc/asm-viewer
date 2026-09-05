@@ -112,6 +112,8 @@ command.
   `Language`, the one list of extensions the app knows, which says what compiles.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
+- `src/temporary.rs` — test-only: a path under the system temporary directory that a test
+  owns, removed when the test ends.
 - `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
 - `src/fuzzy.rs` — characters in order: what the file finder's box asks of a path, where it
   hit, and how well.
@@ -231,6 +233,13 @@ unchanged, which is the point: it is where the file sits and not what the module
 **No test runs cargo or rustc.** A suite that builds a program to run costs a compile per test and
 leaves the process behind whenever an assertion fails short of the stop, so what only a real
 process could show is judged by hand instead (`agents/Scratchpad.md`).
+
+**A test that writes to the system temporary directory takes what it wrote with it**, through
+`Temporary` (`src/temporary.rs`; `Scratch` in `crates/analysis/tests/common/mod.rs` for the other
+crate). A removal at the foot of the body is not enough: the usual failure is an `assert!` part way
+down, and the lines after it never run. The guard removes on `Drop`, which unwinding runs. `/tmp`
+is memory on many systems and the suite writes tens of megabytes into it, under names carrying the
+process id, so a leak is per run rather than once.
 
 ## Design notes
 

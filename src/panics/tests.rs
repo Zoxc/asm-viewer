@@ -1,12 +1,14 @@
 use super::*;
+use crate::temporary::Temporary;
 
 /// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, standing in for the one everything is stored in.
-fn base(line: u32) -> PathBuf {
-    std::env::temp_dir().join(format!(
+/// line that asked for it, standing in for the one everything is stored in. Gone when the
+/// test ends.
+fn base(line: u32) -> Temporary {
+    Temporary::at(std::env::temp_dir().join(format!(
         "assembly-viewer-panics-test-{}-{line}",
         std::process::id()
-    ))
+    )))
 }
 
 fn panic_at(at: u64, message: &str) -> Panic {
@@ -53,8 +55,6 @@ fn a_run_s_panics_are_appended_to_one_file() {
         written.contains("2025-09-04 15:35:00 ") && written.contains("  the second\n"),
         "the second panic is not in the file: {written}"
     );
-
-    let _ = fs::remove_dir_all(&base);
 }
 
 /// A panic the crate guards -- a demangler on a name out of a file -- is written down and
