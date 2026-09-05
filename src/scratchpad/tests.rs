@@ -518,6 +518,49 @@ fn a_line_with_no_end_to_it_is_cut_rather_than_kept() {
     assert!(lines.iter().all(|line| line.stream == Stream::Out));
 }
 
+/// The cut falls between characters and not between bytes. A program printing a long line
+/// of box-drawing glyphs -- a table, a progress bar -- would otherwise show a replacement
+/// character at the seam of every 4 KiB, with the character that was there on neither of
+/// the two rows.
+#[test]
+fn a_character_on_the_cut_is_not_split_between_two_rows() {
+    // The cut lands one byte into the `é`, so its two bytes are on either side of it.
+    let written = format!("{}é{}", "x".repeat(MAX_LINE as usize - 1), "y".repeat(10));
+    let mut lines = Vec::new();
+    stream_lines(io::Cursor::new(written.clone()), Stream::Out, |line| {
+        lines.push(line)
+    });
+
+    assert_eq!(lines.len(), 2);
+    // One byte short of the cap: what the character needed is on the next row instead.
+    assert_eq!(lines[0].text.len(), MAX_LINE as usize - 1);
+    assert_eq!(&*lines[1].text, format!("é{}", "y".repeat(10)));
+    // Nothing added and nothing lost: the rows are the line, in pieces.
+    assert_eq!(
+        lines.iter().map(|line| &*line.text).collect::<String>(),
+        written
+    );
+}
+
+/// What is not a character is still delivered, lossily, as it always was. The carry is for
+/// a cut this module made, and `error_len() == None` is what tells that from output that is
+/// simply not UTF-8: bytes that are genuinely invalid must not be held back for a
+/// continuation nobody is going to write.
+#[test]
+fn what_is_not_a_character_is_still_delivered() {
+    let mut written = b"a\xffb\n".to_vec();
+    // The first two bytes of a box-drawing character, and then the program stops.
+    written.extend_from_slice(&[0xe2, 0x94]);
+
+    let mut lines = Vec::new();
+    stream_lines(io::Cursor::new(written), Stream::Err, |line| {
+        lines.push(line)
+    });
+
+    let text: Vec<&str> = lines.iter().map(|line| &*line.text).collect();
+    assert_eq!(text, ["a\u{fffd}b", "\u{fffd}"]);
+}
+
 /// The ordinary case, including the two things a naive `read_line` gets wrong: a Windows
 /// line ending left in the text, and a last line with no terminator being dropped.
 #[test]

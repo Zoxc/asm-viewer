@@ -1030,19 +1030,38 @@ fn reader_finished(emit: &Emit, unfinished: &AtomicUsize, process: &Arc<Process>
 /// Split what a program writes into lines and hand each one over as it arrives, cut at
 /// [`MAX_LINE`]. Invalid UTF-8 is taken lossily: what a program writes is not this app's
 /// to reject.
+///
+/// **The cut falls between characters**, not between bytes. `take` stops after a byte
+/// count wherever that lands, and a multi-byte character straddling it would arrive as a
+/// replacement character on each of the two rows with the character itself on neither, so
+/// what is left of one is carried to the front of the next read.
 fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(OutputLine)) {
-    let mut buffer = Vec::new();
+    let mut carry = Vec::new();
     loop {
-        buffer.clear();
-        match reader
-            .by_ref()
-            .take(MAX_LINE)
-            .read_until(b'\n', &mut buffer)
-        {
-            // The end of the pipe, or a pipe that will not read: either way there is
-            // nothing more to say.
-            Ok(0) | Err(_) => return,
+        let mut buffer = std::mem::take(&mut carry);
+        let room = MAX_LINE - buffer.len() as u64;
+        match reader.by_ref().take(room).read_until(b'\n', &mut buffer) {
+            // The end of the pipe, or a pipe that will not read: what the last cut fell
+            // inside of is the last thing there is to say, and it is said lossily, the
+            // rest of that character never having been written.
+            Ok(0) | Err(_) => {
+                if !buffer.is_empty() {
+                    emit(output_line(stream, &buffer));
+                }
+                return;
+            }
             Ok(_) => {}
+        }
+
+        // `error_len() == None` is exactly "an incomplete sequence at the end", so bytes
+        // that are genuinely invalid still go through lossily below.
+        carry = match std::str::from_utf8(&buffer) {
+            Err(error) if error.error_len().is_none() => buffer.split_off(error.valid_up_to()),
+            _ => Vec::new(),
+        };
+        // The read was that character's first bytes and nothing else: no row yet.
+        if buffer.is_empty() {
+            continue;
         }
 
         // The terminator, and a `\r` in front of it: the rows are drawn one line each, so
@@ -1051,10 +1070,15 @@ fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(O
             buffer.pop();
         }
 
-        emit(OutputLine {
-            stream,
-            text: Arc::from(String::from_utf8_lossy(&buffer).as_ref()),
-        });
+        emit(output_line(stream, &buffer));
+    }
+}
+
+/// One row out of the bytes it was read as.
+fn output_line(stream: Stream, text: &[u8]) -> OutputLine {
+    OutputLine {
+        stream,
+        text: Arc::from(String::from_utf8_lossy(text).as_ref()),
     }
 }
 

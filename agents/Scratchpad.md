@@ -159,12 +159,17 @@ closure that could not be spawned, so nothing would read that stream either: the
 rather than left half-read, which also bounds the reap when the failing side is the last one. A test
 refuses the spawn to reach that path, nothing else being able to. **Three bounds, and each is a
 different failure.** `MAX_LINE` (4 KiB) cuts a line with no newline in it, so a program writing
-megabytes in one line is still *delivered* rather than accumulated. `MAX_OUTPUT_LINES` (5000) is
-what is kept, oldest first out, with `RunOutput::dropped` so the view can say the story is missing
-its beginning; it is a line cap and not a byte cap, because the view is a list of rows and a byte
-budget would make the row count depend on how long the lines happened to be. And the app's own
-`RUN_EVENTS`-bounded channel is backpressure that reaches the program itself: a full channel blocks
-the pipe thread, which fills the pipe, which blocks the writer.
+megabytes in one line is still *delivered* rather than accumulated. That cut falls **between
+characters**: a byte count lands wherever it lands, and a multi-byte character straddling it would
+be a replacement character on each of the two rows with the character itself on neither, so what is
+left of one is carried to the front of the next read. Only an incomplete sequence at the end is
+carried -- bytes that are genuinely invalid go through lossily, as what a program writes is not this
+app's to reject. `MAX_OUTPUT_LINES` (5000) is what is kept, oldest first out, with
+`RunOutput::dropped` so the view can say the story is missing its beginning; it is a line cap and
+not a byte cap, because the view is a list of rows and a byte budget would make the row count depend
+on how long the lines happened to be. And the app's own `RUN_EVENTS`-bounded channel is backpressure
+that reaches the program itself: a full channel blocks the pipe thread, which fills the pipe, which
+blocks the writer.
 
 
 ## The Scratchpad view
