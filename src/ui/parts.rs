@@ -157,6 +157,13 @@ pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoE
 /// One labelled field: what it is on the left in a fixed column, what it says on the right
 /// taking the rest. A `flex` row, so a text box in the value position takes the width that
 /// is left rather than the width of its contents.
+///
+/// **The name is clipped inside its column**, and that is not tidiness. A `label` given a
+/// width draws its text at that width and paints past it regardless; there is nothing
+/// between this column and the value beside it, so a name too long for the column drew
+/// over a control the reader was meant to press. The column follows the font
+/// ([`field_label_width`]) so that a reader who enlarges the interface font is not the one
+/// who finds this out.
 pub(crate) fn field_row(name: &str, value: impl IntoElement) -> impl IntoElement {
     rect()
         .width(Size::fill())
@@ -165,11 +172,17 @@ pub(crate) fn field_row(name: &str, value: impl IntoElement) -> impl IntoElement
         .content(Content::Flex)
         .spacing(8.0)
         .child(
-            label()
-                .text(name.to_owned())
-                .width(Size::px(FIELD_LABEL_WIDTH))
-                .color(palette().address_fg)
-                .max_lines(1),
+            rect()
+                .width(Size::px(field_label_width()))
+                .overflow(Overflow::Clip)
+                .child(
+                    label()
+                        .text(name.to_owned())
+                        .width(Size::fill())
+                        .color(palette().address_fg)
+                        .max_lines(1)
+                        .text_overflow(TextOverflow::Ellipsis),
+                ),
         )
         .child(value)
 }

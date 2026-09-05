@@ -94,7 +94,14 @@ pub(crate) const TREE_INDENT: f32 = 16.0;
 
 /// The column a project field's name is written in, so the values line up whatever each
 /// is called.
-pub(crate) const FIELD_LABEL_WIDTH: f32 = 72.0;
+///
+/// A function of the font and not a `const`, [`list_row_height`]'s reasoning: the
+/// interface font is the reader's to set, and a column fixed at one size is one the names
+/// spill out of at a larger one. Six times the size is the 72 px it was, at the 12 px the
+/// font starts at.
+pub(crate) fn field_label_width() -> f32 {
+    fonts().ui.size() * 6.0
+}
 
 /// How wide the Scratchpad view's list of pads is.
 ///

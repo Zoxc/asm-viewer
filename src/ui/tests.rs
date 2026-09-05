@@ -9969,6 +9969,48 @@ fn a_font_change_repaints_and_resizes_a_component_nothing_else_woke() {
     assert_eq!(painted_height(&test, code), 26.0);
 }
 
+/// **A field's name column follows the interface font.** It was a `const` 72 px while the
+/// font is the reader's to set, so at any size above the default the names drew past their
+/// column -- a `label` given a width paints past it -- and straight over the box beside
+/// them, there being nothing between the two. Asserted through a real `field_row`, since
+/// the number is only worth anything if the row is built from it.
+#[test]
+fn a_field_names_column_follows_the_interface_font() {
+    set_fonts(fixed_fonts(9.0, 10.5));
+
+    let (mut test, ()) = TestingRunner::new(
+        || {
+            rect()
+                .expanded()
+                .child(field_row("Debug lines", rect().expanded()))
+        },
+        (400., 100.).into(),
+        |_| (),
+        1.,
+    );
+    test.sync_and_update();
+
+    // 9pt is 12 logical pixels, which is the 72 the column has always been.
+    assert_eq!(field_label_width(), 72.0);
+    assert_eq!(
+        label_area(&test, "Debug lines").expect("the name").width(),
+        72.0
+    );
+
+    // 21pt is 28, and the column goes with it rather than staying where a name no longer
+    // fits.
+    set_fonts(fixed_fonts(21.0, 10.5));
+    test.sync_and_update();
+    assert_eq!(field_label_width(), 168.0);
+    assert_eq!(
+        label_area(&test, "Debug lines").expect("the name").width(),
+        168.0,
+        "the row was built from a number the font no longer agrees with"
+    );
+
+    set_fonts(fixed_fonts(9.0, 10.5));
+}
+
 /// A `VirtualScrollView`'s `item_size` and the height its rows actually draw at must be the
 /// same number, or scrolling misaligns silently. Two claims since the height was split in
 /// two, so it is asserted over a code pane and a sidebar list.

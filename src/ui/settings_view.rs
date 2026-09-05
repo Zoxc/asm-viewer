@@ -79,15 +79,23 @@ fn setting_row(
         .cross_align(Alignment::Center)
         .content(Content::Flex)
         .spacing(8.0)
+        // Clipped inside its column, `field_row`'s reasoning: a `label` given a width
+        // paints past it, and the value beside this one is a box the reader types in.
         .child(
-            label()
-                .text(name.to_owned())
-                .width(Size::px(FIELD_LABEL_WIDTH))
-                .color(match overridden {
-                    true => palette().text_fg,
-                    false => palette().address_fg,
-                })
-                .max_lines(1),
+            rect()
+                .width(Size::px(field_label_width()))
+                .overflow(Overflow::Clip)
+                .child(
+                    label()
+                        .text(name.to_owned())
+                        .width(Size::fill())
+                        .color(match overridden {
+                            true => palette().text_fg,
+                            false => palette().address_fg,
+                        })
+                        .max_lines(1)
+                        .text_overflow(TextOverflow::Ellipsis),
+                ),
         )
         .child(value)
         .child(
@@ -189,7 +197,7 @@ fn font_section(
         .child(
             rect()
                 .width(Size::fill())
-                .padding(Gaps::new(2.0, 0.0, 8.0, FIELD_LABEL_WIDTH + 8.0))
+                .padding(Gaps::new(2.0, 0.0, 8.0, field_label_width() + 8.0))
                 .overflow(Overflow::Clip)
                 .child(
                     label()
