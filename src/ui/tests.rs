@@ -5242,9 +5242,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    for _ in 0..8 {
-        settle(&mut test);
-    }
+    pump(&mut test, || states.open.active() != Some(calling.clone()));
 
     let opened: Arc<str> = Arc::from(defined.to_str().expect("a utf-8 temporary path"));
     let document = Document::Source(opened.clone());
@@ -5325,9 +5323,7 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    for _ in 0..8 {
-        settle(&mut test);
-    }
+    pump(&mut test, || location.marked.peek().source.is_some());
 
     let picked = location
         .marked
@@ -5385,9 +5381,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    for _ in 0..8 {
-        settle(&mut test);
-    }
+    pump(&mut test, || location.marked.peek().source.is_some());
 
     let picked = location
         .marked
@@ -5818,9 +5812,12 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    for _ in 0..8 {
-        settle(&mut test);
-    }
+    pump(&mut test, || {
+        states
+            .open
+            .active_stop()
+            .is_some_and(|(_, stop)| stop.line.is_some())
+    });
 
     assert!(
         states.open.documents() == vec![Document::Source(dotted)],
@@ -5886,9 +5883,12 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    for _ in 0..8 {
-        settle(&mut test);
-    }
+    pump(&mut test, || {
+        states
+            .open
+            .active_stop()
+            .is_some_and(|(_, stop)| stop.line.is_some())
+    });
 
     assert!(
         states.open.documents() == vec![Document::Source(stepped)],
@@ -6101,7 +6101,7 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
         line: 2,
         columns: 12..18,
     };
-    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+    let (mut test, states, language, location, _driven, asks) = mount_linking!(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -6124,9 +6124,14 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
     let before = stops_of(&states, tab).len();
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    for _ in 0..8 {
-        settle(&mut test);
-    }
+    // Nothing to wait for, this one saying that nothing happens, so it waits on the far
+    // side of the round trip instead: the worker records the job as it takes it, and
+    // sends the answer the moment after.
+    assert!(
+        next_ask(&mut test, &asks).is_some(),
+        "the press asked the server nothing"
+    );
+    settle(&mut test);
 
     assert!(
         location.marked.peek().source.is_none(),
