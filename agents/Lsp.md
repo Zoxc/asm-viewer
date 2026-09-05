@@ -165,7 +165,9 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   first, its lock held over the wait, is losing it about half the time. So the order is:
   wait for the program to be gone, then for its stderr thread, then read. That wait is
   bounded too, since stderr is inherited and a grandchild left behind holds the pipe open
-  after the program itself has gone.
+  after the program itself has gone. What is kept is **bytes**, decoded once when they are
+  read: a read of a pipe returns whatever is there, and decoding chunk by chunk turned a
+  character the reads fell across into two replacement characters.
 - The one notification worth keeping is `window/showMessage`, which is all a client with no
   capabilities is told when the server cannot make sense of the project; it goes to the log.
   A question asked before the workspace is loaded can also come back as InternalError with

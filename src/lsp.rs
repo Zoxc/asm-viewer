@@ -61,8 +61,8 @@ pub const SERVER: &str = "rust-analyzer";
 /// gigabyte is a broken conversation and not an allocation.
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 
-/// How much of what the server writes to stderr is kept. The **first** of it, since what
-/// is wanted is why a program that would not run said no.
+/// How many bytes of what the server writes to stderr are kept. The **first** of them,
+/// since what is wanted is why a program that would not run said no.
 const MAX_SAID: usize = 4096;
 
 /// How long a handshake that failed waits for the program to be gone before deciding it is
@@ -197,7 +197,10 @@ pub struct Server {
     talk: Talk<ChildStdin>,
     process: Arc<Process>,
     /// What it wrote to stderr, which is where a program that will not run says why.
-    said: Arc<Mutex<String>>,
+    /// Bytes, and decoded once when they are read: a `read` of a pipe returns whatever is
+    /// there, so a character decoded chunk by chunk is two replacement characters
+    /// wherever the writer's own buffering split it.
+    said: Arc<Mutex<Vec<u8>>>,
     /// The thread filling `said`. Kept so a handshake that failed can wait for it to
     /// reach EOF before reading what it collected.
     stderr: Option<std::thread::JoinHandle<()>>,
@@ -242,7 +245,7 @@ fn start_program_in(
     // Taken before the child goes behind the mutex: the conversation owns its two pipes
     // outright and must never need the lock a stop is waiting on.
     let (to, from) = (child.stdin.take(), child.stdout.take());
-    let said = Arc::new(Mutex::new(String::new()));
+    let said = Arc::new(Mutex::new(Vec::new()));
     let stderr = keep_stderr(child.stderr.take(), &said);
     let process = Arc::new(Process {
         child: Mutex::new(Some((child, group))),
@@ -278,7 +281,7 @@ fn start_program_in(
 /// last words are all in.
 fn keep_stderr(
     pipe: Option<impl Read + Send + 'static>,
-    said: &Arc<Mutex<String>>,
+    said: &Arc<Mutex<Vec<u8>>>,
 ) -> Option<std::thread::JoinHandle<()>> {
     let mut pipe = pipe?;
     let said = said.clone();
@@ -293,7 +296,7 @@ fn keep_stderr(
             }
             let mut said = said.lock().unwrap_or_else(|held| held.into_inner());
             if said.len() < MAX_SAID {
-                said.push_str(&String::from_utf8_lossy(&buffer[..read]));
+                said.extend_from_slice(&buffer[..read]);
             }
         }
     }))
@@ -335,7 +338,7 @@ impl Server {
                 }
             }
             let said = self.said.lock().unwrap_or_else(|held| held.into_inner());
-            gone_instead(failure, ended, &said)
+            gone_instead(failure, ended, &String::from_utf8_lossy(&said))
         })
     }
 

@@ -818,6 +818,43 @@ fn what_a_program_said_is_cut_to_something_a_line_can_hold() {
     assert!(reason.chars().count() <= 203, "{reason}");
 }
 
+/// A reader handing back one canned chunk per `read`, which is what a pipe does: a read
+/// returns whatever is there, and where that falls is the writer's own buffering.
+struct InChunks(Vec<Vec<u8>>);
+
+impl Read for InChunks {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.0.is_empty() {
+            return Ok(0);
+        }
+        let chunk = self.0.remove(0);
+        buffer[..chunk.len()].copy_from_slice(&chunk);
+        Ok(chunk.len())
+    }
+}
+
+/// The bytes are kept and decoded once. Decoded a chunk at a time, a character the reads
+/// fell across came out as two replacement characters -- in the one message this whole
+/// path exists to carry, about a path the reader can read for themselves.
+#[test]
+fn a_character_split_across_two_reads_is_still_the_character() {
+    let line = "error: /home/j\u{f6}rg/bin/rust-analyzer: not found";
+    // Between the two bytes of the character, where a read that returned what was there
+    // would leave it.
+    let at = line.find('\u{f6}').expect("a two-byte character") + 1;
+    let said = Arc::new(Mutex::new(Vec::new()));
+    let chunks = vec![
+        line.as_bytes()[..at].to_vec(),
+        line.as_bytes()[at..].to_vec(),
+    ];
+
+    let reader = keep_stderr(Some(InChunks(chunks)), &said).expect("a thread");
+    reader.join().expect("the stderr thread");
+
+    let said = said.lock().expect("what was said");
+    assert_eq!(String::from_utf8_lossy(&said), line);
+}
+
 /// A program of this test's own, under the system temporary directory and named after the
 /// line that asked for it.
 #[cfg(unix)]
