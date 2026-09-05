@@ -104,6 +104,21 @@ fn forgetting_a_directory_re_reads_what_is_under_it() {
     ));
 }
 
+/// A seeded file goes when its guard does: `CACHE` is a `static` and every test after
+/// this one would otherwise be holding what this one made up. Nothing is written, so what
+/// is left behind is a path with no file at it.
+#[test]
+fn a_seeded_file_is_forgotten_when_its_guard_goes() {
+    let seeded = Seeded::directory("dropped");
+    let path = seeded.file("one.rs", "fn one() {}\n");
+    assert!(load(&path).expect("the seeded file").text() == "fn one() {}\n");
+
+    drop(seeded);
+    assert!(!cache().contains_key(&path));
+    // Read rather than `load`, which would leave the miss in the cache it just left.
+    assert!(SourceFile::read(&path, MAX_SIZE).is_none());
+}
+
 /// The digests are of the bytes as read, so a file answers the checksum the compiler took
 /// of it — the published vectors for `abc`, here — and not one taken of other bytes.
 #[test]

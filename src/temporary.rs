@@ -3,9 +3,9 @@
 //!
 //! Removing it at the foot of the body is not enough: the common failure is an `assert!`
 //! part way down, and the lines after it never run. So the removal is a `Drop`, which
-//! unwinding runs. It matters because `/tmp` is memory on many systems and the suite
-//! writes tens of megabytes into it per run, under names carrying the process id: each run
-//! leaves a fresh set rather than writing over the last one's.
+//! unwinding runs. It matters because `/tmp` is memory on many systems and the names carry
+//! the process id: each run writes a fresh set rather than over the last one's, so a leak
+//! is per run rather than once.
 //!
 //! The pid stays in the names. It is what lets the suite run in two checkouts at once, and
 //! what tells one live run's directories from another's.

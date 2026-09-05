@@ -127,7 +127,8 @@ command.
   are run on.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
 - `src/source.rs` — source files read off disk and cached by path, failures included; and
-  `Language`, the one list of extensions the app knows, which says what compiles.
+  `Language`, the one list of extensions the app knows, which says what compiles. `Seeded` is
+  the test-only other way into that cache: a file with nothing on the disk behind it.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
 - `src/temporary.rs` — test-only: a path under the system temporary directory that a test
@@ -258,8 +259,14 @@ process could show is judged by hand instead (`agents/Scratchpad.md`).
 `Temporary` (`src/temporary.rs`; `Scratch` in `crates/analysis/tests/common/mod.rs` for the other
 crate). A removal at the foot of the body is not enough: the usual failure is an `assert!` part way
 down, and the lines after it never run. The guard removes on `Drop`, which unwinding runs. `/tmp`
-is memory on many systems and the suite writes tens of megabytes into it, under names carrying the
-process id, so a leak is per run rather than once.
+is memory on many systems and the suite writes into it under names carrying the process id, so a
+leak is per run rather than once.
+
+**A test writes a real file only when the filesystem is what it is about**: an atomic write, a
+rename, a `create_new` collision, a file moved aside, directory order, an unreadable directory, a
+path that only reduces through `canonicalize`. Where the file is a fixture -- something for the
+Source pane to draw -- it is seeded into the cache instead, through `Seeded` (`src/source.rs`),
+which forgets what it seeded on `Drop` as `Temporary` removes what it wrote.
 
 ## Design notes
 

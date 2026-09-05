@@ -12,6 +12,7 @@ use super::*;
 // explicit import wins over a glob, so this is what the name means here: ours.
 use super::settings_view::use_theme;
 use crate::search::{Hit, SearchEvent, SearchQuery};
+use crate::source::Seeded;
 use crate::temporary::Temporary;
 use crate::walk::WalkEvent;
 use freya_testing::TestingRunner;
@@ -5665,18 +5666,10 @@ fn next_ask(
 }
 
 /// The file a call-following test reads, written where a test can put one.
-fn calling_file(name: &str) -> (Arc<str>, Temporary) {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-following-{}-{name}",
-        std::process::id()
-    )));
-    let path = directory.join("calls.rs");
-    std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
-        .expect("writing the source file");
-    (
-        Arc::from(path.to_str().expect("a utf-8 temporary path")),
-        directory,
-    )
+fn calling_file(name: &str) -> (Arc<str>, Seeded) {
+    let directory = Seeded::directory(name);
+    let file = directory.named("calls.rs", "fn main() {\n    let n = helper(1);\n}\n");
+    (file, directory)
 }
 
 /// The answer opens the definition: the tab goes to the file and line the server named,
@@ -5685,9 +5678,7 @@ fn calling_file(name: &str) -> (Arc<str>, Temporary) {
 #[test]
 fn a_definition_answer_opens_the_file_and_line_it_names() {
     let (file, directory) = calling_file("opens");
-    let defined = directory.join("helper.rs");
-    std::fs::write(&defined, "fn helper(n: u32) -> u32 {\n    n\n}\n")
-        .expect("writing the definition's file");
+    let defined = directory.file("helper.rs", "fn helper(n: u32) -> u32 {\n    n\n}\n");
     let place = lsp::Place {
         file: defined.clone(),
         line: 1,
@@ -5760,9 +5751,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
 #[test]
 fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
     let (file, directory) = calling_file("column");
-    let defined = directory.join("helper.rs");
-    std::fs::write(&defined, "pub fn helper(n: u32) -> u32 {\n    n\n}\n")
-        .expect("writing the definition's file");
+    let defined = directory.file("helper.rs", "pub fn helper(n: u32) -> u32 {\n    n\n}\n");
     // `helper` is the seventh column of the definition's first line, counted from zero
     // in UTF-16 units, which is what the protocol answers in and what a row is drawn in.
     let place = lsp::Place {
@@ -5869,13 +5858,9 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
 
 /// A file calling two names on one line, written where a test can put one:
 /// `    let n = one(1) + two(2);`, whose calls begin at columns 12 and 21.
-fn two_calling_file(name: &str) -> (Arc<str>, Temporary) {
+fn two_calling_file(name: &str) -> (Arc<str>, Seeded) {
     let (file, directory) = calling_file(name);
-    std::fs::write(
-        PathBuf::from(&*file),
-        "fn main() {\n    let n = one(1) + two(2);\n}\n",
-    )
-    .expect("writing the source file");
+    directory.file("calls.rs", "fn main() {\n    let n = one(1) + two(2);\n}\n");
     (file, directory)
 }
 
@@ -5902,11 +5887,11 @@ fn two_calling_links() -> links::Links {
 #[test]
 fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
     let (file, directory) = two_calling_file("twice");
-    let (one, two) = (directory.join("one.rs"), directory.join("two.rs"));
-    for defined in [&one, &two] {
-        std::fs::write(defined, "fn f(n: u32) -> u32 {\n    n\n}\n")
-            .expect("writing the definition's file");
-    }
+    let defined = "fn f(n: u32) -> u32 {\n    n\n}\n";
+    let (one, two) = (
+        directory.file("one.rs", defined),
+        directory.file("two.rs", defined),
+    );
     // The first question waits here until the test lets it go, so the second is asked
     // while it is in flight and answered after it.
     let (release, held) = async_channel::bounded::<()>(1);
@@ -5983,9 +5968,7 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
 #[test]
 fn a_definition_lands_in_the_tab_it_was_asked_in() {
     let (file, directory) = calling_file("in-its-tab");
-    let defined = directory.join("helper.rs");
-    std::fs::write(&defined, "fn helper(n: u32) -> u32 {\n    n\n}\n")
-        .expect("writing the definition's file");
+    let defined = directory.file("helper.rs", "fn helper(n: u32) -> u32 {\n    n\n}\n");
     let place = lsp::Place {
         file: defined.clone(),
         line: 1,
@@ -6310,8 +6293,16 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
 /// A `..` here, through a directory that is there for the lookup to walk into and out of.
 #[test]
 fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() {
-    let (canonical, directory) = calling_file("reducing");
+    // The one following test with a file really on the disk: `canonicalize` is what
+    // reduces the `..`, and it answers for a path that is there and for no other.
+    let directory = Temporary::directory(
+        std::env::temp_dir().join(format!("assembly-viewer-reducing-{}", std::process::id())),
+    );
     std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
+    let path = directory.join("calls.rs");
+    std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
+        .expect("writing the source file");
+    let canonical: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
     let stepped: Arc<str> = Arc::from(
         directory
             .join("sub")
@@ -7001,17 +6992,11 @@ fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
 /// the tab; a row outside any function offers the line alone.
 #[test]
 fn a_source_row_inside_a_function_offers_its_instances() {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-instances-test-{}",
-        std::process::id()
-    )));
-    let path = directory.join("instances.c");
-    std::fs::write(
-        &path,
+    let directory = Seeded::directory("instances");
+    let file = directory.named(
+        "instances.c",
         "int add(int a, int b)\n{\n    return a + b;\n}\n\nint x;\n",
-    )
-    .expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    );
 
     let (mut test, (states, located)) = TestingRunner::new(
         source_menu_harness,
@@ -7670,11 +7655,11 @@ fn a_wide_instruction_is_reached_by_scrolling_sideways() {
 /// and the other kind of row, of the test above.
 #[test]
 fn a_wide_source_line_is_reached_by_scrolling_sideways() {
-    let directory = run_directory(line!());
-    let path = directory.join("wide.c");
-    std::fs::write(&path, format!("int x;\n// {}\nint y;\n", "x".repeat(400)))
-        .expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let directory = Seeded::directory("wide");
+    let file = directory.named(
+        "wide.c",
+        &format!("int x;\n// {}\nint y;\n", "x".repeat(400)),
+    );
     let (mut test, _states, _showing, _marked) = source_file_harness(&file, (300., 200.));
 
     let widest = |test: &TestingRunner| {
@@ -7840,14 +7825,9 @@ fn source_file_harness(
 /// below would move them.
 #[test]
 fn a_listings_extent_does_not_outlive_it() {
-    let directory = run_directory(line!());
-    let wide = directory.join("wide.c");
-    std::fs::write(&wide, format!("// {}\nint x;\n", "x".repeat(400)))
-        .expect("writing the source file");
-    let narrow = directory.join("narrow.c");
-    std::fs::write(&narrow, "int y;\nint z;\n").expect("writing the source file");
-    let wide: Arc<str> = Arc::from(wide.to_str().expect("a utf-8 temporary path"));
-    let narrow: Arc<str> = Arc::from(narrow.to_str().expect("a utf-8 temporary path"));
+    let directory = Seeded::directory("extent");
+    let wide = directory.named("wide.c", &format!("// {}\nint x;\n", "x".repeat(400)));
+    let narrow = directory.named("narrow.c", "int y;\nint z;\n");
     let (mut test, states, mut showing, _marked) = source_file_harness(&wide, (300., 200.));
 
     // The line numbers: the one label every row of either file draws.
@@ -7903,11 +7883,8 @@ fn a_listings_extent_does_not_outlive_it() {
 #[test]
 fn a_smaller_fixed_font_gives_up_the_width_the_larger_one_measured() {
     set_fonts(fixed_fonts(9.0, 18.0));
-    let directory = run_directory(line!());
-    let path = directory.join("wide.c");
-    std::fs::write(&path, format!("// {}\nint x;\n", "x".repeat(400)))
-        .expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let directory = Seeded::directory("smaller");
+    let file = directory.named("wide.c", &format!("// {}\nint x;\n", "x".repeat(400)));
     let (mut test, _states, _showing, _marked) = source_file_harness(&file, (300., 200.));
 
     // How far the rows can be scrolled sideways, which is the widest row less the pane:
@@ -8622,18 +8599,13 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
         .line
         .expect("the gcc fixture opens sum_to on a line");
 
-    // A file of this machine's own, the path the fixture's DWARF names being the build
+    // A file of this test's own, the path the fixture's DWARF names being the build
     // machine's, and long enough that the symbol's line is nowhere near the top of it.
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-opening-test-{}",
-        std::process::id()
-    )));
-    let path = directory.join("opening.c");
+    let directory = Seeded::directory("opening");
     let text: String = (1..=200)
         .map(|n| format!("int line_{n}(void);\n"))
         .collect();
-    std::fs::write(&path, text).expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let file = directory.named("opening.c", &text);
     studied.lines.file = Some(file.clone());
     assert!(
         line > CONTEXT_ROWS as u32 + 1,
@@ -9191,19 +9163,15 @@ fn the_leading_bar_puts_the_following_pane_away() {
 /// A source file the debug info recorded a checksum for is compared with the file the pane
 /// opened: a row over the source says so when the bytes differ, and nothing is said over a
 /// file that matches or over one no checksum was recorded for. Headless because the notice
-/// is a row the pane draws or does not; the file is a temporary one holding `abc`, whose
-/// MD5 is the published vector, and the line info naming it is built by hand as the PDB
+/// is a row the pane draws or does not; the file is a seeded one holding `abc`, whose MD5
+/// is the published vector, and the line info naming it is built by hand as the PDB
 /// backend would have built it.
 #[test]
 fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
     use analysis::{LineInfo, LineRow, SourceHash};
 
-    let dir = Temporary::directory(
-        std::env::temp_dir().join(format!("viewer-stale-{}", std::process::id())),
-    );
-    let path = dir.join("own.c");
-    std::fs::write(&path, b"abc").expect("the temp directory is writable");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a UTF-8 temp path"));
+    let dir = Seeded::directory("stale");
+    let file = dir.named("own.c", "abc");
 
     let compiled = SourceHash::Md5([
         0x90, 0x01, 0x50, 0x98, 0x3c, 0xd2, 0x4f, 0xb0, 0xd6, 0x96, 0x3f, 0x7d, 0x28, 0xe1, 0x7f,
@@ -9346,11 +9314,8 @@ fn a_theme_switch_empties_the_highlighted_cache() {
     let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
     set_appearance(Appearance::Light);
 
-    let directory = Temporary::directory(
-        std::env::temp_dir().join(format!("assembly-viewer-theme-test-{}", std::process::id())),
-    );
-    let path = directory.join("themed.rs");
-    std::fs::write(&path, b"fn main() {}\n").expect("writing the source file");
+    let directory = Seeded::directory("theme");
+    let path = directory.file("themed.rs", "fn main() {}\n");
 
     // A keyword, which is the one span whose colour is a palette entry rather than the
     // text colour -- and the reason this is a `.rs` file and not any file at all.
@@ -11374,12 +11339,10 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
 #[test]
 fn a_finished_pad_build_forgets_the_pad_package() {
     // The entry that stands for the pad's source. A file of this test's own, filed under a
-    // name inside the package: the pad's directory is the reader's own, and a test writes
-    // nothing into it.
-    let directory = run_directory(line!());
-    let path = directory.join("stand-in.rs");
-    std::fs::write(&path, b"fn main() {}\n").expect("writing the source file");
-    let stand_in = source_text(&path).expect("the file");
+    // name inside the package: the pad's directory is the reader's own, and a test goes
+    // nowhere near it.
+    let directory = Seeded::directory("pad-build");
+    let stand_in = source_text(&directory.file("stand-in.rs", "fn main() {}\n")).expect("the file");
 
     let (mut test, _states, pad, _text, asking, _asks) =
         mount_scratchpad!(scratchpad_harness, |job: PadJob| match job {
@@ -12280,7 +12243,7 @@ fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
 
 /// An instruction picked out in the listing lights, in the source pane, the line it was
 /// compiled from; one placed nowhere lights no line. The line info is built by hand over a
-/// file of this machine's own, so the pane can open it.
+/// file of this test's own, so the pane can open it.
 #[test]
 fn a_picked_out_instruction_lights_its_line() {
     use analysis::{LineInfo, LineRow};
@@ -12289,13 +12252,9 @@ fn a_picked_out_instruction_lights_its_line() {
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
-    let directory = Temporary::directory(
-        std::env::temp_dir().join(format!("assembly-viewer-pair-test-{}", std::process::id())),
-    );
-    let path = directory.join("pair.c");
+    let directory = Seeded::directory("pair");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
-    std::fs::write(&path, text).expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let file = directory.named("pair.c", &text);
 
     let mut studied = Studied::new(sum_to.clone());
     let first = studied
@@ -12394,11 +12353,9 @@ fn the_gutter_marks_the_lines_that_have_code() {
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
-    let directory = run_directory(line!());
-    let path = directory.join("marks.c");
+    let directory = Seeded::directory("marks");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
-    std::fs::write(&path, text).expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let file = directory.named("marks.c", &text);
 
     // The companion the pane draws, and nothing about which of its lines have code: the
     // marks come from the answer written below and not from this.
@@ -12480,11 +12437,9 @@ fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
-    let directory = run_directory(line!());
-    let path = directory.join("driven.c");
+    let directory = Seeded::directory("driven");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
-    std::fs::write(&path, text).expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let file = directory.named("driven.c", &text);
 
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
@@ -15565,11 +15520,9 @@ fn toml_and_json_files_are_highlighted() {
     let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
     set_appearance(Appearance::Light);
 
-    let directory = run_directory(line!());
-    let toml = directory.join("Cargo.toml");
-    let json = directory.join("package.json");
-    std::fs::write(&toml, b"name = \"viewer\"\n").expect("writing the file");
-    std::fs::write(&json, b"{\"name\": 1}\n").expect("writing the file");
+    let directory = Seeded::directory("highlighted");
+    let toml = directory.file("Cargo.toml", "name = \"viewer\"\n");
+    let json = directory.file("package.json", "{\"name\": 1}\n");
 
     // The span at `at` on the first line.
     let colour = |path: &Path, at: usize| {
@@ -16829,10 +16782,8 @@ fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
 /// the rows answer a press, the space under them does not.
 #[test]
 fn select_all_with_no_run_is_a_run_of_the_file_the_pane_shows() {
-    let directory = run_directory(line!());
-    let path = directory.join("two.c");
-    std::fs::write(&path, "int x;\nint y;\n").expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let directory = Seeded::directory("select-all");
+    let file = directory.named("two.c", "int x;\nint y;\n");
     let (mut test, _states, _showing, marked) = source_file_harness(&file, (300., 200.));
     assert!(marked.peek().source.is_none(), "a run before any press");
 
@@ -17447,9 +17398,9 @@ fn navigating_harness() -> impl IntoElement {
     panes_harness()
 }
 
-/// An assembly-driven tab on `sum_to` with a companion file of twenty lines that exists,
-/// so both panes have rows to press: the runner, the states, the symbol's document, the
-/// file, and the directory it is in, which the caller holds for as long as it reads it.
+/// An assembly-driven tab on `sum_to` with a companion file of twenty lines the pane can
+/// open, so both panes have rows to press: the runner, the states, the symbol's document,
+/// the file, and the guard holding it, which the caller keeps for as long as it reads it.
 fn navigating_panes() -> (
     TestingRunner,
     ProjectStates,
@@ -17458,20 +17409,15 @@ fn navigating_panes() -> (
     State<Option<Planting>>,
     Document,
     Arc<str>,
-    Temporary,
+    Seeded,
 ) {
     let sum_to = fixture_symbols()
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-restore-test-{}",
-        std::process::id()
-    )));
-    let path = directory.join("kept.c");
+    let directory = Seeded::directory("restore");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
-    std::fs::write(&path, text).expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let file = directory.named("kept.c", &text);
 
     let mut studied = Studied::new(sum_to.clone());
     studied.lines.file = Some(file.clone());
@@ -20509,20 +20455,13 @@ fn landing_panes() -> (TestingRunner, ProjectStates, LocationStates) {
 /// asked of the pane the way the reader asks it: by which line numbers are drawn.
 #[test]
 fn a_door_into_another_file_shows_the_line_it_landed_on() {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-landing-test-{}",
-        std::process::id()
-    )));
+    let directory = Seeded::directory("landing");
     // The file the tab is showing when the door is pressed, and the one it opens. The
     // second is long enough that the line landed on is nowhere near the top, and longer
     // than the first, so a reveal measuring against the first refuses it.
-    let first = directory.join("first.rs");
-    std::fs::write(&first, "fn a() {}\nfn b() {}\n").expect("writing the first file");
-    let second = directory.join("second.rs");
+    let opened = directory.named("first.rs", "fn a() {}\nfn b() {}\n");
     let text: String = (1..=200).map(|n| format!("fn line_{n}() {{}}\n")).collect();
-    std::fs::write(&second, text).expect("writing the second file");
-    let opened: Arc<str> = Arc::from(first.to_str().expect("a utf-8 temporary path"));
-    let landed: Arc<str> = Arc::from(second.to_str().expect("a utf-8 temporary path"));
+    let landed = directory.named("second.rs", &text);
     const LINE: u32 = 150;
 
     let (mut test, states, location) = landing_panes();
@@ -20583,24 +20522,17 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
 /// and the pane settling, which only a test that looks at every pass can see.
 #[test]
 fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-flicker-test-{}",
-        std::process::id()
-    )));
+    let directory = Seeded::directory("flicker");
     // Two long files, so a move to the top of either is a move and not the offset the
     // pane already had.
-    let write = |path: &Path, name: &str| {
+    let seed = |file: &str, name: &str| {
         let text: String = (1..=200)
             .map(|n| format!("fn {name}_{n}() {{}}\n"))
             .collect();
-        std::fs::write(path, text).expect("writing a source file");
+        directory.named(file, &text)
     };
-    let first = directory.join("first.rs");
-    let second = directory.join("second.rs");
-    write(&first, "one");
-    write(&second, "two");
-    let opened: Arc<str> = Arc::from(first.to_str().expect("a utf-8 temporary path"));
-    let landed: Arc<str> = Arc::from(second.to_str().expect("a utf-8 temporary path"));
+    let opened = seed("first.rs", "one");
+    let landed = seed("second.rs", "two");
 
     let (mut test, states, location) = landing_panes();
     open_document(
@@ -20685,22 +20617,15 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
 /// which only a test that looks at every pass can say.
 #[test]
 fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-promptly-test-{}",
-        std::process::id()
-    )));
-    let write = |path: &Path, name: &str| {
+    let directory = Seeded::directory("promptly");
+    let seed = |file: &str, name: &str| {
         let text: String = (1..=200)
             .map(|n| format!("fn {name}_{n}() {{}}\n"))
             .collect();
-        std::fs::write(path, text).expect("writing a source file");
+        directory.named(file, &text)
     };
-    let first = directory.join("first.rs");
-    let second = directory.join("second.rs");
-    write(&first, "one");
-    write(&second, "two");
-    let opened: Arc<str> = Arc::from(first.to_str().expect("a utf-8 temporary path"));
-    let landed: Arc<str> = Arc::from(second.to_str().expect("a utf-8 temporary path"));
+    let opened = seed("first.rs", "one");
+    let landed = seed("second.rs", "two");
 
     let (mut test, states, location) = landing_panes();
     open_document(

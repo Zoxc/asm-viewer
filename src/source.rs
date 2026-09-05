@@ -233,5 +233,82 @@ pub fn forget_under(root: &Path) {
     cache().retain(|path, _| !path.starts_with(root));
 }
 
+/// A source file the cache answers for with nothing on the disk: what a test uses when the
+/// file is a fixture and not the thing under test.
+///
+/// [`Temporary`](crate::temporary::Temporary) is the other half of this, and what a test
+/// is about is what decides between them. A real file when the reading is the point — a
+/// file read once, a miss remembered, a directory forgotten and read again, a path that
+/// only reduces through `canonicalize` — and one of these when the pane merely has to have
+/// something to draw.
+///
+/// Nothing is made, so the directory is a name and not a place. The entries come out on
+/// `Drop`, which unwinding runs: [`CACHE`] is a `static` that outlives every test in the
+/// process, and a test that left its files in it would be paying for them in every test
+/// after. What the drop takes is this cache and not the parsed copies above it, so a test
+/// that reads a seeded file through `source_text` forgets it with `forget_source_under`
+/// as it would a real one.
+#[cfg(test)]
+pub struct Seeded {
+    directory: PathBuf,
+}
+
+#[cfg(test)]
+impl Seeded {
+    /// A directory of this call's own, named per process and per call so that tests seeding
+    /// files can run in parallel, here and in another checkout at once. It is under the
+    /// system temporary directory for one reason, that being an absolute path on every
+    /// platform; nothing is written there.
+    pub fn directory(name: &str) -> Seeded {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        Seeded {
+            directory: std::env::temp_dir().join(format!(
+                "assembly-viewer-seeded-{}-{unique}-{name}",
+                std::process::id()
+            )),
+        }
+    }
+
+    /// Put `text` at `name` under it, and hand back the path a pane asks for it by.
+    pub fn file(&self, name: &str, text: &str) -> PathBuf {
+        let path = self.directory.join(name);
+        let bytes = text.as_bytes();
+        let file = SourceFile {
+            path: path.clone(),
+            digests: SourceDigests::of(bytes),
+            text: text.to_owned(),
+        };
+        cache().insert(path.clone(), Some(Arc::new(file)));
+        path
+    }
+
+    /// The same, as the string a `Document::Source` names a file by.
+    pub fn named(&self, name: &str, text: &str) -> Arc<str> {
+        Arc::from(
+            self.file(name, text)
+                .to_str()
+                .expect("the temporary directory is utf-8"),
+        )
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for Seeded {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.directory
+    }
+}
+
+#[cfg(test)]
+impl Drop for Seeded {
+    fn drop(&mut self) {
+        forget_under(&self.directory);
+    }
+}
+
 #[cfg(test)]
 mod tests;
