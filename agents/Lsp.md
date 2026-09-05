@@ -158,6 +158,14 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   has already ended is therefore reported as a program that would not start, carrying what
   it said (`gone_instead`). The wait for it to finish ending is bounded, and only paid by a
   handshake that has already failed.
+
+  **The last words are waited for as well.** Both pipes close at the same instant, so
+  whether the line is in `said` when the failure is built is a race between the reader
+  thread seeing EOF on stdout and the stderr thread seeing the bytes -- and reading `said`
+  first, its lock held over the wait, is losing it about half the time. So the order is:
+  wait for the program to be gone, then for its stderr thread, then read. That wait is
+  bounded too, since stderr is inherited and a grandchild left behind holds the pipe open
+  after the program itself has gone.
 - The one notification worth keeping is `window/showMessage`, which is all a client with no
   capabilities is told when the server cannot make sense of the project; it goes to the log.
   A question asked before the workspace is loaded can also come back as InternalError with

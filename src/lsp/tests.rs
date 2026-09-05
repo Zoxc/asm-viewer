@@ -818,6 +818,50 @@ fn what_a_program_said_is_cut_to_something_a_line_can_hold() {
     assert!(reason.chars().count() <= 203, "{reason}");
 }
 
+/// A program of this test's own, under the system temporary directory and named after the
+/// line that asked for it.
+#[cfg(unix)]
+fn program_that(does: &str, line: u32) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = std::env::temp_dir().join(format!(
+        "assembly-viewer-lsp-test-{}-{line}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("a directory");
+    let program = directory.join("server");
+    std::fs::write(&program, format!("#!/bin/sh\n{does}\n")).expect("a program");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("a mode");
+    program
+}
+
+/// What a program says on its way out is waited for, and not read out of whatever the
+/// stderr thread happened to have collected by then.
+///
+/// The program here closes its output first and speaks afterwards, which is the order the
+/// race is lost in: the handshake ends on that EOF while the line is still to come. A real
+/// rustup proxy writes and exits in one breath and loses the same race about half the
+/// time.
+#[test]
+#[cfg(unix)]
+fn what_a_program_said_on_its_way_out_is_waited_for() {
+    let said = "error: no rust-analyzer in this toolchain";
+    let program = program_that(
+        &format!("exec 1>&-\nsleep 0.05\necho \"{said}\" >&2\nexit 1"),
+        line!(),
+    );
+    let (mut server, handle) =
+        start_program_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
+
+    let failure = server
+        .initialize(Path::new("."), &wanted())
+        .err()
+        .expect("no server");
+    handle.stop();
+
+    assert_eq!(failure, Failure::NoServer(said.to_owned()));
+}
+
 /// The whole of it against a real program: one that exits at once is a server that would
 /// not start, and not a conversation that broke.
 #[test]

@@ -198,6 +198,9 @@ pub struct Server {
     process: Arc<Process>,
     /// What it wrote to stderr, which is where a program that will not run says why.
     said: Arc<Mutex<String>>,
+    /// The thread filling `said`. Kept so a handshake that failed can wait for it to
+    /// reach EOF before reading what it collected.
+    stderr: Option<std::thread::JoinHandle<()>>,
 }
 
 /// Start rust-analyzer over `directory` and hand back the conversation and a handle that
@@ -240,7 +243,7 @@ fn start_program_in(
     // outright and must never need the lock a stop is waiting on.
     let (to, from) = (child.stdin.take(), child.stdout.take());
     let said = Arc::new(Mutex::new(String::new()));
-    keep_stderr(child.stderr.take(), &said);
+    let stderr = keep_stderr(child.stderr.take(), &said);
     let process = Arc::new(Process {
         child: Mutex::new(Some((child, group))),
         over: AtomicBool::new(false),
@@ -263,18 +266,23 @@ fn start_program_in(
         talk: Talk::over(to, BufReader::new(from), told),
         process,
         said,
+        stderr,
     };
     Ok((server, handle))
 }
 
 /// Read the program's stderr on a thread of its own, keeping the first [`MAX_SAID`] bytes
 /// of it and dropping the rest on the floor.
-fn keep_stderr(pipe: Option<impl Read + Send + 'static>, said: &Arc<Mutex<String>>) {
-    let Some(mut pipe) = pipe else {
-        return;
-    };
+///
+/// The thread is handed back, since when it has reached EOF is what says the program's
+/// last words are all in.
+fn keep_stderr(
+    pipe: Option<impl Read + Send + 'static>,
+    said: &Arc<Mutex<String>>,
+) -> Option<std::thread::JoinHandle<()>> {
+    let mut pipe = pipe?;
     let said = said.clone();
-    std::thread::spawn(move || {
+    Some(std::thread::spawn(move || {
         let mut buffer = [0; 1024];
         loop {
             let Ok(read) = pipe.read(&mut buffer) else {
@@ -288,7 +296,23 @@ fn keep_stderr(pipe: Option<impl Read + Send + 'static>, said: &Arc<Mutex<String
                 said.push_str(&String::from_utf8_lossy(&buffer[..read]));
             }
         }
-    });
+    }))
+}
+
+/// Wait for the stderr thread to reach EOF, up to [`ENDING`], and let it go either way.
+///
+/// Bounded and not a plain join: stderr is inherited, so a grandchild the program left
+/// behind holds the pipe open after the program itself is gone, and this is the failure
+/// path of a handshake rather than somewhere to wait for ever.
+fn all_said(reader: std::thread::JoinHandle<()>) {
+    let until = std::time::Instant::now() + ENDING;
+    while !reader.is_finished() {
+        if std::time::Instant::now() >= until {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let _ = reader.join();
 }
 
 impl Server {
@@ -299,8 +323,19 @@ impl Server {
     /// "rust-analyzer stopped answering" and the line it wrote on its way out.
     pub fn initialize(&mut self, directory: &Path, options: &Value) -> Result<(), Failure> {
         self.talk.initialize(directory, options).map_err(|failure| {
+            // In this order. The program's last words reach `said` on a thread of its
+            // own, and both its pipes close at the same instant, so reading `said` first
+            // -- and holding its lock over the wait -- is a race the stderr thread loses
+            // about half the time. What it costs is the one line saying why the program
+            // would not run, which is what this path is here to carry.
+            let ended = self.process.ending();
+            if ended.is_some() {
+                if let Some(reader) = self.stderr.take() {
+                    all_said(reader);
+                }
+            }
             let said = self.said.lock().unwrap_or_else(|held| held.into_inner());
-            gone_instead(failure, self.process.ending(), &said)
+            gone_instead(failure, ended, &said)
         })
     }
 
