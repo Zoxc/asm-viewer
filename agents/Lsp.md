@@ -30,8 +30,13 @@ reader's project and, by the capabilities section below, runs that project's own
 scripts and expands its proc macros -- which is code somebody else wrote. So a directory
 the reader has not agreed to is **asked about instead of started**.
 
-The answer is the project's, a plain `trusted` in `project.toml` beside the program's name,
-and **absent is no**: a project nobody has been asked about writes no key.
+The answer is the project's, a plain `trusted`, and **absent is no**: a project nobody has
+been asked about writes no key. It is in the **session** and not in the project file, which is
+the one thing about it that is not obvious. A project file is something a reader may check in,
+and a `trusted = true` travelling with it would run a language server over a stranger's tree
+without ever asking; the agreement is this machine's. The cost is the session's own timing --
+it is written on the 30 s timer rather than at once -- so an unclean exit inside that window
+means being asked again, which is the mild half of getting this wrong.
 
 Agreeing happens where the question is asked, at the start it holds up; **taking it back is
 the Project view's**, beside the program and the status, because a reader who cannot see the
@@ -44,8 +49,8 @@ What it is about is a *directory*, and the effect that follows the project is wh
 kept honest -- but only one of the three things it sees is the agreement being outlived.
 The reader typing a new directory into the box has pointed **this** project somewhere else,
 and the agreement was to the old place, so it goes. A project *arriving* brings its own
-answer with it, out of its own file, and taking that off it would not only ask again but
-write the `false` straight back into the file it was read from, since the open project is
+answer with it, out of its own session, and taking that off it would not only ask again but
+write the `false` straight back into the session it was read from, since the open project is
 saved as it changes. And the mount is neither: the deps it mounts with are already the
 reopened project's, the restore being an earlier hook of the same render. So the effect
 remembers the id and directory it last saw, and clears only where the id stayed and the

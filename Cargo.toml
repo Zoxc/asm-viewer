@@ -75,6 +75,13 @@ serde = { version = "1", features = ["derive"] }
 # this is a protocol, not a file.
 serde_json = "1"
 dirs = "6"
+# One call: the sixty-four random bits a project is identified by (`src/project.rs`). It has
+# to be random rather than a counter or a hash of the clock, since the id is what says a
+# session belongs to the project it sits beside and two projects made on two machines must
+# not collide. Not a new crate in the build: getrandom 0.3.4 is already compiled in this
+# tree under `ahash` and `rand_core`, so this adds an edge and no packages, and the version
+# is the one the lock already holds. `cargo tree -d` is how that stays true.
+getrandom = "0.3"
 toml = "1.1.4"
 # Editing a manifest the app did not write: the Build control offers to turn on debug
 # information for a profile (`src/cargo.rs`), and that means changing the reader's own

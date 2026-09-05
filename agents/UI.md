@@ -84,6 +84,50 @@ project *owns* travel together as a `ProjectStates`, since a project switch clos
 reopens all of them. `MarksAt` is among them for the closing and not the reopening, being the one
 that is never saved.
 
+**The bar says which project is open, and the controls beside the name are not one control**
+(`ProjectChip`, `src/ui/no_project.rs`). A project the reader gave a place needs only to be
+let go of, so it has a close; one the app is keeping has nowhere to be let go *to*, so it has
+Save and Delete named outright rather than a x that would mean one of them. Each is a
+component holding a `Doing` and not a handler, for `TabClose`'s reason: a `Component` is
+`PartialEq` and a closure is not. Delete sets `Deleting` and nothing else -- what acts is
+`DeleteProjectPopup` over freya's `Popup`, whose `on_close_request` is the "no" for free and
+which draws nothing at all while there is nothing to ask, the same shape the scratchpad's
+delete has.
+
+**The menu at the top left leaves out what would do nothing, except the one row that is
+about the reader's own past.** freya's `MenuItem` has no disabled state and freya has no
+separator either, so the app answers the first the way a tab's menu does -- omit the row --
+and the second with a rect a pixel high. Save as is not there with no project, nor for one
+the app is keeping, which has Save in the bar instead; Close project and Project are not
+there with no project at all. **Open recent is different**: it stays, drawn dim, because a
+reader looking for a project they had open should be told the list is empty rather than left
+to wonder where the item went, which is what its absence would say. Dim is a bare `rect` and
+not a `MenuItem`, laid out at the same width and padding freya gives one (pinned by a test):
+a dead row that still lit under the pointer would be saying it can be pressed.
+
+**With no project the pages are still ordinary tabs.** They went through a state of their own for
+a while, shown in place of the screen with no bar at all, and that was a second way for a page to
+be open beside the one the app already had -- a mark to resolve from whichever was answering, and
+a toggle standing in for a close. The strip does it: opening Settings with no project brings the
+bar back for it, and closing the last tab takes the bar away and puts the screen back.
+`WindowBody` asks the strip through a memo over the one thing it wants, whether there is any tab
+at all, so a tab moved along the bar does not re-render the window. The recents are a real
+`SubMenu`, **keyed by how many there are**, because `MenuContainer` measures itself once and a
+list that grew after it was laid out would hang off the side of the window
+(`notes/upstream/freya.md`).
+
+**The window has a body and the body has two shapes** (`WindowBody`, `src/ui/no_project.rs`).
+With a project it is the sidebar beside `ContentArea`, which is what the app has always been.
+With none it is one screen, and no sidebar at all -- that one *is* a project's. The tab bar
+comes back for a page, Settings and the Scratchpad being nobody's project's, and goes again
+with the last of them. A component and not a
+`match` in `app()`, for two reasons that are both about the root: `Proj` is written by every
+keystroke in the Project view's boxes and the root must not re-render for those, so the read is
+a **memo** over the one thing the branch is about; and `app()` is mounted by no test, so a
+branch inside it is a branch nothing can ask about. Settings and the Scratchpad still open
+with no project -- they are nobody's project's -- out of `NoProjectPage` and **not** the strip:
+the strip's tabs are written into the session, and there is no session to put a tab in.
+
 **One strip, three kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**.
 `Document::Assembly(Selection)` is an object or a function. `Document::Source(Arc<str>)` is a file
 as a string and not a `PathBuf`: the spelling the debug info said, or the project directory joined

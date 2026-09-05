@@ -22,6 +22,39 @@ pub(crate) enum Panel {
 }
 
 impl Panel {
+    /// Every panel, in the order the default sidebar stacks them.
+    const ALL: [Panel; 7] = [
+        Panel::Objects,
+        Panel::Files,
+        Panel::Search,
+        Panel::Symbols,
+        Panel::History,
+        Panel::Bookmarks,
+        Panel::Locations,
+    ];
+
+    /// What a session names it. A name of its own rather than the title, for [`Page`]'s
+    /// reason: a title is what the reader sees and may be reworded, where a stored name
+    /// changing would empty every saved sidebar.
+    fn stored(self) -> &'static str {
+        match self {
+            Panel::Objects => "objects",
+            Panel::Files => "files",
+            Panel::Search => "search",
+            Panel::Symbols => "symbols",
+            Panel::History => "history",
+            Panel::Bookmarks => "bookmarks",
+            Panel::Locations => "locations",
+        }
+    }
+
+    /// The panel a session named, or `None` for a name this build does not have.
+    fn from_stored(stored: &str) -> Option<Panel> {
+        Panel::ALL
+            .into_iter()
+            .find(|panel| panel.stored() == stored)
+    }
+
     fn title(self) -> &'static str {
         match self {
             Panel::Objects => "Objects",
@@ -111,6 +144,127 @@ impl DockArea {
                         DockNode::Panel(DockPanel::new(panel_id as PanelId, panels))
                     })
                     .collect(),
+            },
+        }
+    }
+
+    /// The area a session described, or `None` where it described none this build can use.
+    ///
+    /// **Every panel this build has, exactly once.** What comes out of the file is a
+    /// reader's arrangement and not a promise: a name this build does not have is dropped,
+    /// one it does have twice is kept where it first appeared, and one the file never
+    /// mentions -- a panel added since it was written -- is put in the first group, so the
+    /// sidebar cannot come back with a panel missing and no way to reach it. An empty group
+    /// is dropped, and a file describing nothing usable answers `None` and leaves the
+    /// default alone.
+    pub(crate) fn restored(saved: &SavedDock) -> Option<DockArea> {
+        let mut seen = HashSet::new();
+        let mut next = 0;
+        let tree = Self::node_of(saved, &mut seen, &mut next)?;
+        let mut area = DockArea {
+            tree,
+            next_panel_id: next,
+        };
+        for panel in Panel::ALL.into_iter().filter(|panel| !seen.contains(panel)) {
+            area.add_to_first(panel);
+        }
+        Some(area)
+    }
+
+    /// One node of that walk. `seen` is what has been placed already, so a panel named
+    /// twice lands once; `next` hands out the group ids, which have to be the area's own.
+    fn node_of(
+        saved: &SavedDock,
+        seen: &mut HashSet<Panel>,
+        next: &mut PanelId,
+    ) -> Option<DockNode<Panel, PanelId>> {
+        match saved {
+            SavedDock::Split {
+                horizontal,
+                children,
+            } => {
+                let children: Vec<_> = children
+                    .iter()
+                    .filter_map(|child| Self::node_of(child, seen, next))
+                    .collect();
+                match children.len() {
+                    0 => None,
+                    // A split of one is the child itself: a group left alone by its
+                    // siblings being dropped is not a split any more.
+                    1 => children.into_iter().next(),
+                    _ => Some(DockNode::Split {
+                        direction: match horizontal {
+                            true => Direction::Horizontal,
+                            false => Direction::Vertical,
+                        },
+                        children,
+                    }),
+                }
+            }
+            SavedDock::Group { panels, showing } => {
+                let panels: Vec<Panel> = panels
+                    .iter()
+                    .filter_map(|name| Panel::from_stored(name))
+                    .filter(|panel| seen.insert(*panel))
+                    .collect();
+                if panels.is_empty() {
+                    return None;
+                }
+                let id = *next;
+                *next += 1;
+                let mut group = DockPanel::new(id, panels);
+                // The one that was showing, where it is still in this group; the first
+                // otherwise, which is what `DockPanel::new` already chose.
+                if let Some(panel) = showing.as_deref().and_then(Panel::from_stored) {
+                    if group.tabs.contains(&panel) {
+                        group.active_tab_id = Some(panel);
+                    }
+                }
+                Some(DockNode::Panel(group))
+            }
+        }
+    }
+
+    /// Put `panel` in the first group there is: where a panel this build has and the file
+    /// did not name ends up.
+    fn add_to_first(&mut self, panel: Panel) {
+        let mut node = &mut self.tree;
+        loop {
+            match node {
+                DockNode::Split { children, .. } => match children.first_mut() {
+                    Some(first) => node = first,
+                    None => return,
+                },
+                DockNode::Panel(group) => {
+                    group.tabs.push(panel);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// How this area would be written down: the shape, each group's panels in their order,
+    /// and which of them is showing.
+    pub(crate) fn saved(&self) -> SavedDock {
+        Self::saved_node(&self.tree)
+    }
+
+    fn saved_node(node: &DockNode<Panel, PanelId>) -> SavedDock {
+        match node {
+            DockNode::Split {
+                direction,
+                children,
+            } => SavedDock::Split {
+                horizontal: *direction == Direction::Horizontal,
+                children: children.iter().map(Self::saved_node).collect(),
+            },
+            DockNode::Panel(group) => SavedDock::Group {
+                panels: group
+                    .tabs
+                    .iter()
+                    .map(|panel| panel.stored().to_owned())
+                    .collect(),
+                showing: group.active_tab_id.map(|panel| panel.stored().to_owned()),
             },
         }
     }

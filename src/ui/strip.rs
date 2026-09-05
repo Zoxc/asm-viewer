@@ -348,8 +348,9 @@ fn page_icon(page: Page) -> Element {
     }
 }
 
-/// What a page's tab draws under the bar.
-fn page_body(page: Page) -> Element {
+/// What a page's tab draws under the bar -- and what a window with no project draws in
+/// place of its screen, there being no bar there to put a tab in.
+pub(crate) fn page_body(page: Page) -> Element {
     match page {
         Page::Project => ProjectTab.into_element(),
         Page::Settings => SettingsTab.into_element(),
@@ -357,13 +358,19 @@ fn page_body(page: Page) -> Element {
     }
 }
 
-/// The menu at the **top left of the window** that opens Project, Settings and the
-/// Scratchpad, and the whole of the way back to one that has been closed.
+/// The menu at the **top left of the window**: the ways in and out of a project, and under
+/// them Project, Settings and the Scratchpad -- the whole of the way back to a page that has
+/// been closed.
 ///
-/// It lists all three and marks the ones that are open, rather than listing only the
+/// It lists all three pages and marks the ones that are open, rather than listing only the
 /// closed ones: a menu whose rows come and go as tabs are closed is a menu a reader has to
 /// read every time, where a list that is always the same three is one they learn. Picking
 /// an open one shows it, which is what the reader meant by picking it.
+///
+/// **An item that would do nothing is left out** rather than drawn dim, freya's `MenuItem`
+/// having no disabled state and the app answering that the way it does on a tab's menu:
+/// Save as is not there with no project open, nor for one the app is keeping, which has Save
+/// in the bar instead; Close project and Project are not there with no project at all.
 ///
 /// The popup is positioned by hand, as [`TabListButton`]'s is: `ContextMenu` pins a menu
 /// to the pointer and clamps to nothing.
@@ -374,19 +381,27 @@ impl Component for PagesButton {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let mut showing = use_state(|| false);
-        let open = use_open();
+        let states = use_project_states();
+        let rescued = use_consume::<Rescued>().0;
+        let unopened = use_consume::<Unopened>().0;
         // Read and not peeked: the marks are drawn from it, so the menu has to follow a
         // page opening or closing while it is up.
-        let strip = open.strip.read();
+        let strip = states.open.strip.read();
         let is_open: Vec<bool> = Page::ALL
             .into_iter()
             .map(|page| strip.contains(Tab::Page(page)))
             .collect();
         drop(strip);
+        // Read when the menu is opened and not per render: each row is a small read of
+        // another project's own file.
+        let recents = match showing() {
+            true => project::recent_projects(),
+            false => Vec::new(),
+        };
 
         let side = toggle_size();
         let button = row_tooltip(
-            "Project, Settings and the Scratchpad".to_owned(),
+            "Projects, Settings and the Scratchpad".to_owned(),
             rect()
                 .width(Size::px(side))
                 .height(Size::px(side))
@@ -416,7 +431,8 @@ impl Component for PagesButton {
                     // window's: the menu opens rightward into it.
                     .position(Position::new_absolute().top(side))
                     .child(
-                        pages_menu(open, &is_open, showing).on_close(move |_| showing.set(false)),
+                        main_menu(states, rescued, unopened, &recents, &is_open, showing)
+                            .on_close(move |_| showing.set(false)),
                     )
                     .into_element()
             }))
@@ -424,20 +440,93 @@ impl Component for PagesButton {
     }
 }
 
-/// The menu [`PagesButton`] opens: one row per page, the open ones marked. Built per
-/// press, like the bar's own.
-fn pages_menu(open: Open, is_open: &[bool], mut close: State<bool>) -> Menu {
-    Page::ALL.into_iter().zip(is_open.iter().copied()).fold(
-        Menu::new(),
-        |menu, (page, open_already)| {
-            menu.child(
+/// One row of that menu: a word, and what pressing it does. A helper and not a component,
+/// the hover being `MenuItem`'s own.
+pub(crate) fn menu_row(
+    text: &str,
+    mut close: State<bool>,
+    mut act: impl FnMut() + 'static,
+) -> MenuButton {
+    let text = text.to_owned();
+    MenuButton::new()
+        .on_press(move |_| {
+            act();
+            close.set(false);
+        })
+        .child(label().text(text).max_lines(1))
+}
+
+/// What freya lays a `MenuItem` out at, so a row of the app's own beside them lines up.
+/// Neither is reachable from the theme, so both are written here and pinned by a test.
+const MENU_ROW_WIDTH: f32 = 105.0;
+const MENU_ROW_PADDING: (f32, f32) = (6.0, 12.0);
+
+/// A line between two groups of the menu. freya has no separator, and a `Menu` takes any
+/// child, so it is a rect a pixel high in the colour the panes are divided by.
+fn menu_rule() -> Element {
+    rect()
+        .width(Size::fill())
+        .height(Size::px(1.0))
+        .margin(Gaps::new_symmetric(4.0, 0.0))
+        .background(palette().hairline)
+        .into_element()
+}
+
+/// The menu [`PagesButton`] opens. Built per press, like the bar's own, which is what lets
+/// it leave out the items that would do nothing.
+fn main_menu(
+    states: ProjectStates,
+    rescued: State<Vec<PathBuf>>,
+    unopened: State<Option<PathBuf>>,
+    recents: &[Recent],
+    is_open: &[bool],
+    close: State<bool>,
+) -> Menu {
+    let open = states.proj.peek().file.clone();
+    let unsaved = open.as_deref().is_some_and(project::unsaved);
+
+    let mut menu = Menu::new()
+        .child(menu_row("Open a project...", close, move || {
+            ask_for_a_project(states, rescued, unopened)
+        }))
+        .child(recents_submenu(states, rescued, unopened, recents, close))
+        .child(menu_row(
+            "Open a directory as a project...",
+            close,
+            move || ask_for_a_directory(states),
+        ))
+        .child(menu_row("Open a file as a project...", close, move || {
+            ask_for_a_binary(states)
+        }));
+
+    if open.is_some() && !unsaved {
+        menu = menu.child(menu_row("Save as...", close, move || {
+            ask_where_to_save(states, project::Put::Copy)
+        }));
+    }
+    if open.is_some() {
+        menu = menu.child(menu_row("Close project", close, move || {
+            close_project(states)
+        }));
+    }
+
+    menu.child(menu_rule()).children(
+        Page::ALL
+            .into_iter()
+            .zip(is_open.iter().copied())
+            // The Project page is a reading of a project, so with none there is nothing
+            // for it to draw.
+            .filter(|(page, _)| *page != Page::Project || open.is_some())
+            .map(|(page, open_already)| {
+                let mut strip = states.open.strip;
+                let mut close = close;
                 MenuItem::new()
                     .selected(open_already)
                     .on_press(move |_| {
                         // `show` and not `push`: a page opens beside the tab on screen,
                         // the way anything else the reader opens does, and one already
-                        // open is only raised.
-                        let mut strip = open.strip;
+                        // open is only raised. With no project it is still a tab: the bar
+                        // comes back for it, and closing it takes the bar away again.
                         strip.write().show(Tab::Page(page));
                         close.set(false);
                     })
@@ -448,10 +537,62 @@ fn pages_menu(open: Open, is_open: &[bool], mut close: State<bool>) -> Menu {
                             .spacing(6.0)
                             .child(page_icon(page))
                             .child(label().text(page.title()).max_lines(1)),
-                    ),
-            )
-        },
+                    )
+                    .into_element()
+            })
+            .collect::<Vec<Element>>(),
     )
+}
+
+/// The projects there have been, under one row of the menu. **Keyed by how many there
+/// are**: `MenuContainer` measures itself once and keeps that offset, so a list that grew
+/// after it was laid out would hang off the side of the window
+/// (`notes/upstream/freya.md`).
+pub(crate) fn recents_submenu(
+    states: ProjectStates,
+    rescued: State<Vec<PathBuf>>,
+    unopened: State<Option<PathBuf>>,
+    recents: &[Recent],
+    close: State<bool>,
+) -> Element {
+    // Nothing to open: the row stays, drawn dim, rather than going away. It is the one
+    // item here that is about the reader's *own* past, and a reader looking for a project
+    // they had open should be told the list is empty rather than left to wonder where the
+    // item went -- which is what leaving it out would say. A bare `rect` and not a
+    // `MenuItem`: freya has no disabled item, and a dead row that still lights under the
+    // pointer would be saying it can be pressed.
+    if recents.is_empty() {
+        return rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .min_width(Size::px(MENU_ROW_WIDTH))
+            .padding(MENU_ROW_PADDING)
+            .child(
+                label()
+                    .text("Open recent")
+                    .color(dimmed(palette().text_fg, palette().pane_bg))
+                    .max_lines(1),
+            )
+            .into_element();
+    }
+
+    let rows: Vec<Element> = recents
+        .iter()
+        .map(|recent| {
+            let path = recent.path.clone();
+            menu_row(&project::label(&recent.path), close, move || {
+                switch_project(states, rescued, unopened, path.clone())
+            })
+            .key(recent.path.to_string_lossy().into_owned())
+            .into_element()
+        })
+        .collect();
+
+    SubMenu::new()
+        .label(label().text("Open recent").max_lines(1))
+        .children(rows)
+        .key(recents.len())
+        .into_element()
 }
 
 /// How wide [`TabListButton`] is.

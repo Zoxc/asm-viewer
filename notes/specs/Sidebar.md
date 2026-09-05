@@ -31,6 +31,8 @@ shows.
 
 ## Objects panel
 
+A control at the top of the panel opens binaries and adds them to the project.
+
 The panel is a tree: one item per file, an archive's members as its children. Each item has
 a tag for its format: `ELF`, `PE`, `COFF`, `MACH` or `AR`.
 
@@ -80,7 +82,8 @@ A name nothing implements says so.
 
 The project's directory as a tree, one level read per unfold and read again on a refold.
 Clicking a file opens it as a source-driven tab. A file's context menu has "Open file", which
-opens it as a binary, and "Close file" once it is loaded.
+opens it as a binary, and "Close file" once it is loaded. A project file's menu has "Open as
+project" as well.
 
 ## Search panel
 

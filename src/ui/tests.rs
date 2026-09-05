@@ -437,6 +437,26 @@ fn project_harness() -> impl IntoElement {
     rect().expanded()
 }
 
+/// Everything `app()` draws under the top bar, which is what the window with no project
+/// open is a branch of.
+fn body_harness() -> impl IntoElement {
+    rect().expanded().child(WindowBody)
+}
+
+/// Every loaded object's symbols, the way `app()`'s own memo builds them.
+fn collect_symbols(objects: &State<Vec<Arc<Object>>>) -> Vec<Symbol> {
+    objects
+        .read()
+        .iter()
+        .flat_map(|object| {
+            object.symbols_sorted.iter().cloned().map(|data| Symbol {
+                object: object.clone(),
+                data,
+            })
+        })
+        .collect()
+}
+
 /// The twelve contexts `app()` provides, in one `ProjectStates`. A macro and not a
 /// function: the runner's type is `freya_core::integration::Runner`, which freya's prelude
 /// does not re-export, so naming it would mean naming a crate the app does not depend on.
@@ -485,6 +505,22 @@ macro_rules! project_states {
         // places a file can be moved aside.
         $runner.provide_root_context(|| Rescued(State::create(Vec::new())));
 
+        // How the window is arranged, which the save observer reads and the window's body
+        // draws from. Provided in `app()`'s own order, beside the dock above.
+        $runner.provide_root_context(|| SidebarWidth(State::create(300.0)));
+        $runner.provide_root_context(|| {
+            SidebarSplits(State::create(ResizableContext {
+                direction: Direction::Horizontal,
+                ..Default::default()
+            }))
+        });
+
+        // The four the project's views reach for beside their own states. Provided and
+        // not returned: a test that wants one asks for it again by name.
+        $runner.provide_root_context(|| Rescued(State::create(Vec::new())));
+        $runner.provide_root_context(|| Unopened(State::create(None)));
+        $runner.provide_root_context(|| Deleting(State::create(None)));
+
         ProjectStates {
             proj: $runner
                 .provide_root_context(|| Proj(State::create(OpenProject::default())))
@@ -525,6 +561,433 @@ macro_rules! project_states {
                 .0,
         }
     }};
+}
+
+/// With no project open the window is the top bar and one screen: no tab bar, no sidebar,
+/// no panes. The three are what a project brings, and each of them would go on drawing over
+/// a project that is not there -- the sidebar's lists empty, the bar's placeholder saying
+/// nothing was selected -- which is the state this replaces.
+#[test]
+fn a_window_with_no_project_is_one_screen() {
+    let (mut test, states) = TestingRunner::new(
+        body_harness,
+        (900., 600.).into(),
+        |runner: &mut _| {
+            let states = project_states!(runner);
+            // What the sidebar and the panes want when they *are* mounted, so that the
+            // half of this test where a project arrives is a real mount and not a panic.
+            let objects = states.objects;
+            runner.provide_root_context(move || {
+                Symbols(Memo::create(move || {
+                    SymbolList(Arc::new(collect_symbols(&objects)))
+                }))
+            });
+            runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
+            runner.provide_root_context(|| Locations(State::create(Located::default())));
+            runner.provide_root_context(|| Coding(State::create(Coded::default())));
+            runner.provide_root_context(|| Sections(State::create(Reading::default())));
+            runner.provide_root_context(|| Window(State::create(None)));
+            runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
+            runner.provide_root_context(|| Keyboard(State::create(Keys::default())));
+            runner.provide_root_context(|| Marked(State::create(Marks::default())));
+            runner.provide_root_context(|| Land(State::create(None)));
+            runner.provide_root_context(|| Plant(State::create(None)));
+            runner.provide_root_context(|| Follows(State::create(HashMap::new())));
+            runner.provide_root_context(|| Talking(State::create(Language::default())));
+            runner.provide_root_context(|| Finding(State::create(Finder::default())));
+            runner.provide_root_context(|| CodeRows(State::create(None)));
+            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
+            runner.provide_root_context(|| {
+                Splits(State::create(ResizableContext {
+                    direction: Direction::Horizontal,
+                    ..Default::default()
+                }))
+            });
+            states
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // The screen, and nothing the sidebar or the bar would have drawn.
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "Recent projects"),
+        "{drawn:?}"
+    );
+    assert!(!drawn.iter().any(|text| text == "Objects"), "{drawn:?}");
+    assert!(
+        !drawn.iter().any(|text| text == "Nothing selected"),
+        "{drawn:?}"
+    );
+
+    // A project arrives, and the window is the app again.
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/src/kernel/kernel.avproj")),
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text == "Objects"), "{drawn:?}");
+    assert!(
+        !drawn.iter().any(|text| text == "Recent projects"),
+        "{drawn:?}"
+    );
+}
+
+/// Settings and the Scratchpad are nobody's project's, so they open with none -- as ordinary
+/// tabs, which brings the bar back for them. The screen is what there is when the strip is
+/// empty, so closing the last one takes the bar away and puts the screen back.
+#[test]
+fn a_page_opens_as_a_tab_with_no_project() {
+    let (mut test, states) = TestingRunner::new(
+        body_harness,
+        (900., 600.).into(),
+        |runner: &mut _| {
+            let states = project_states!(runner);
+            // The settings page's own state, since that is the page this opens.
+            runner.provide_root_context(|| {
+                Prefs(State::create(EditedSettings::of(&Settings::default())))
+            });
+            states
+        },
+        1.,
+    );
+    settle(&mut test);
+    assert!(labels(&test).iter().any(|text| text == "Recent projects"));
+
+    let mut strip = states.open.strip;
+    strip.write().show(Tab::Page(Page::Settings));
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text == "Theme"), "{drawn:?}");
+    // The bar came back for it, and the screen went.
+    assert!(drawn.iter().any(|text| text == "Settings"), "{drawn:?}");
+    assert!(
+        !drawn.iter().any(|text| text == "Recent projects"),
+        "{drawn:?}"
+    );
+
+    // And closing the last tab takes the bar away and comes back to the screen.
+    strip.write().close(|tab| matches!(tab, Tab::Page(_)));
+    settle(&mut test);
+    assert!(labels(&test).iter().any(|text| text == "Recent projects"));
+}
+
+/// The bar says which project is open and what can be done with it, and the two are not the
+/// same control. One the reader gave a place needs only to be let go of; one the app is
+/// keeping has nowhere to be let go *to*, so it gets Save and Delete instead of a close.
+///
+/// The buttons are glyphs and their words are tooltips, which are half a second of real
+/// time away (`agents/Headless.md`), so they are counted as the squares they lay out as --
+/// the same way the menu's own button is found.
+fn chip_harness() -> impl IntoElement {
+    rect().expanded().child(ProjectChip)
+}
+
+/// How many controls the chip is offering: each is one glyph, and the name beside them is
+/// the only other thing it draws.
+fn chip_buttons(test: &TestingRunner) -> usize {
+    use freya::elements::image::ImageElement;
+    use std::any::Any;
+
+    test.find_many(|node, _| {
+        let element = node.element();
+        (element.as_ref() as &dyn Any)
+            .downcast_ref::<ImageElement>()
+            .map(|_| ())
+    })
+    .len()
+}
+
+#[test]
+fn the_bar_offers_a_close_or_a_save_and_a_delete() {
+    let (mut test, (states, deleting)) = TestingRunner::new(
+        chip_harness,
+        (400., 100.).into(),
+        |runner: &mut _| {
+            let states = project_states!(runner);
+            let deleting = runner
+                .provide_root_context(|| Deleting(State::create(None)))
+                .0;
+            (states, deleting)
+        },
+        1.,
+    );
+    let mut proj = states.proj;
+
+    // With no project the bar says nothing about one.
+    settle(&mut test);
+    assert_eq!(chip_buttons(&test), 0);
+    assert!(labels(&test).is_empty(), "{:?}", labels(&test));
+
+    // One the reader gave a place is called by its file, and can be closed.
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/src/kernel/kernel.avproj")),
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+    assert_eq!(labels(&test), vec!["kernel.avproj".to_owned()]);
+    assert_eq!(chip_buttons(&test), 1, "a close and nothing else");
+
+    // One the app is keeping is called by its number, and has the two things that can
+    // become of it instead.
+    let base = project::base().expect("a state directory");
+    proj.set(OpenProject {
+        file: Some(base.join("projects").join("1.avproj")),
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+    assert_eq!(labels(&test), vec!["Unsaved project 1".to_owned()]);
+    assert_eq!(chip_buttons(&test), 2, "a save and a delete");
+
+    // And Delete asks rather than deleting: the project is still open when it is pressed,
+    // and what the window will name is what the bar is naming.
+    assert_eq!(*deleting.peek(), None);
+    let last = {
+        use freya::elements::image::ImageElement;
+        use std::any::Any;
+        test.find_many(|node, _| {
+            let element = node.element();
+            (element.as_ref() as &dyn Any)
+                .downcast_ref::<ImageElement>()
+                .map(|_| node.layout().area)
+        })
+        .into_iter()
+        .max_by(|a, b| a.origin.x.total_cmp(&b.origin.x))
+        .expect("the rightmost of the two")
+    };
+    press_at(
+        &mut test,
+        (
+            (last.origin.x + last.width() / 2.0) as f64,
+            (last.origin.y + last.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+    assert_eq!(deleting.peek().as_deref(), Some("Unsaved project 1"));
+    assert!(
+        proj.peek().file.is_some(),
+        "the project went without an answer"
+    );
+}
+
+/// The sidebar's arrangement goes into the session and comes back out of it: which panels
+/// are in which groups, their order, and which of each group is showing.
+#[test]
+fn the_sidebars_arrangement_survives_a_save_and_a_restore() {
+    // The sidebar as `app()` builds it, and then not the default: a panel dragged into
+    // another group, and another brought to the top of its own.
+    let mut dock = DockArea::column(vec![
+        vec![Panel::Objects, Panel::Files, Panel::Search],
+        vec![Panel::Symbols],
+        vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+    ]);
+    dock.on_drop(Panel::Files, DropTarget::Center(1));
+    dock.show_panel(Panel::Bookmarks);
+
+    let saved = dock.saved();
+    assert_ne!(
+        saved,
+        DockArea::column(vec![
+            vec![Panel::Objects, Panel::Files, Panel::Search],
+            vec![Panel::Symbols],
+            vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+        ])
+        .saved(),
+        "the arrangement under test is the default one"
+    );
+    let back = DockArea::restored(&saved).expect("an arrangement");
+    assert_eq!(back.saved(), saved);
+
+    // And through the file, which is where it actually goes.
+    let session = Session {
+        ui: Some(SavedUi {
+            dock: Some(saved.clone()),
+            ..SavedUi::default()
+        }),
+        ..Session::new()
+    };
+    let text = toml::to_string_pretty(&session).expect("writing");
+    let read: Session = toml::from_str(&text).expect("reading it back");
+    assert_eq!(read.ui.and_then(|ui| ui.dock), Some(saved));
+}
+
+/// A saved arrangement is a reader's and not a promise: a panel this build no longer has is
+/// dropped, and one it has that the file never mentions is put somewhere reachable rather
+/// than lost. Otherwise a build that adds a panel would hide it from everyone who has ever
+/// arranged their sidebar.
+#[test]
+fn a_saved_arrangement_keeps_every_panel_this_build_has() {
+    let saved = SavedDock::Split {
+        horizontal: false,
+        children: vec![
+            SavedDock::Group {
+                panels: vec!["objects".to_owned(), "gone".to_owned()],
+                showing: Some("gone".to_owned()),
+            },
+            SavedDock::Group {
+                panels: vec!["symbols".to_owned()],
+                showing: None,
+            },
+            // Every panel here is one this build does not have, so the group is dropped
+            // and the split closes up around it.
+            SavedDock::Group {
+                panels: vec!["nothing".to_owned()],
+                showing: None,
+            },
+        ],
+    };
+
+    let area = DockArea::restored(&saved).expect("an arrangement");
+    let back = area.saved();
+    let SavedDock::Split { children, .. } = &back else {
+        panic!("the shape is a split: {back:?}");
+    };
+    assert_eq!(
+        children.len(),
+        2,
+        "the group of nothing was dropped: {back:?}"
+    );
+
+    // Every panel this build has, exactly once, and the ones the file never named are
+    // reachable in the first group.
+    let mut named: Vec<String> = children
+        .iter()
+        .flat_map(|child| match child {
+            SavedDock::Group { panels, .. } => panels.clone(),
+            SavedDock::Split { .. } => Vec::new(),
+        })
+        .collect();
+    named.sort();
+    let mut every: Vec<String> = [
+        "objects",
+        "files",
+        "search",
+        "symbols",
+        "history",
+        "bookmarks",
+        "locations",
+    ]
+    .iter()
+    .map(|name| (*name).to_owned())
+    .collect();
+    every.sort();
+    assert_eq!(named, every);
+
+    // A name this build does not have cannot be the one showing either.
+    let SavedDock::Group { showing, .. } = &children[0] else {
+        panic!("a group: {back:?}");
+    };
+    assert_eq!(showing.as_deref(), Some("objects"));
+}
+
+/// Picking Settings from the menu with no project opens it, as the tab it is. It did
+/// nothing at all for a while: the row wrote the strip and the window drew a page out of a
+/// state of its own, so the two never met. A test that set that state by hand could not tell.
+#[test]
+fn a_page_picked_with_no_project_opens_as_a_tab() {
+    let (mut test, states) =
+        TestingRunner::new(pages_harness, (300., 400.).into(), project_states!(), 1.);
+    settle(&mut test);
+    assert!(states.open.strip.peek().tabs().is_empty());
+
+    let open_menu = |test: &mut TestingRunner| {
+        let area = test
+            .find(|node, _| {
+                let area = node.layout().area;
+                (area.width() == toggle_size() && area.height() == toggle_size()).then_some(area)
+            })
+            .expect("the button is a square of its own");
+        press_at(
+            test,
+            (
+                (area.origin.x + area.width() / 2.0) as f64,
+                (area.origin.y + area.height() / 2.0) as f64,
+            ),
+        );
+        settle(test);
+    };
+
+    // The Project page is a reading of a project, so with none it is not offered; the two
+    // that are nobody's project's are.
+    open_menu(&mut test);
+    let rows = labels(&test);
+    assert!(!rows.iter().any(|row| row == "Project"), "{rows:?}");
+    assert!(rows.iter().any(|row| row == "Settings"), "{rows:?}");
+
+    let row = centre_of(&test, "Settings");
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert_eq!(
+        states.open.strip.peek().tabs(),
+        &[Tab::Page(Page::Settings)]
+    );
+
+    // And picking it again only raises the tab it already opened.
+    open_menu(&mut test);
+    let row = centre_of(&test, "Settings");
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert_eq!(
+        states.open.strip.peek().tabs(),
+        &[Tab::Page(Page::Settings)]
+    );
+}
+
+/// A reader with no projects yet still sees that the list is there and is empty: the row is
+/// drawn dim rather than left out, unlike every other item here that would do nothing. It is
+/// the one item about the reader's own past, and a missing one would have them wondering
+/// where it went rather than knowing there is nothing in it.
+///
+/// The empty list is handed in rather than read off this machine: `recent_projects` reads
+/// the state directory, so a test that went through it would pass or fail on whether whoever
+/// ran it happened to have projects.
+fn empty_recents_harness() -> impl IntoElement {
+    let states = use_project_states();
+    let rescued = use_consume::<Rescued>().0;
+    let unopened = use_consume::<Unopened>().0;
+    let close = use_state(|| true);
+
+    rect().expanded().child(
+        Menu::new()
+            .child(menu_row("Open a project...", close, || {}))
+            .child(recents_submenu(states, rescued, unopened, &[], close)),
+    )
+}
+
+#[test]
+fn open_recent_is_dim_when_there_is_nothing_in_it() {
+    let (mut test, _states) = TestingRunner::new(
+        empty_recents_harness,
+        (300., 400.).into(),
+        project_states!(),
+        1.,
+    );
+    settle(&mut test);
+
+    // The row is there whatever the recent list holds.
+    assert!(
+        labels(&test).iter().any(|row| row == "Open recent"),
+        "{:?}",
+        labels(&test)
+    );
+    // And it is drawn in the disabled colour, which is what says it cannot be pressed.
+    // A colour of its own at all is half the answer: every live row here inherits the
+    // menu's, so having one is what tells this row apart.
+    let dim = label_colour(&test, "Open recent").expect("the row is drawn");
+    assert_eq!(
+        dim,
+        Fill::Color(dimmed(palette().text_fg, palette().pane_bg))
+    );
+    assert_ne!(dim, Fill::Color(palette().text_fg), "drawn as a live row");
+    assert_eq!(
+        label_colour(&test, "Open a project"),
+        None,
+        "a live row has a colour of its own, so this test cannot tell them apart"
+    );
 }
 
 /// The documents on the trail behind `id`, oldest first: what a test asserts a trail by,
@@ -1489,6 +1952,7 @@ fn the_tab_on_screen_is_marked_and_the_mark_says_where_the_keyboard_is() {
 /// three whether or not they are open, marks the ones that are, and opens a closed one
 /// beside the tab on screen. It is mounted alone: where it sits in the toolbar is not what
 /// this is about.
+
 fn pages_harness() -> impl IntoElement {
     rect()
         .expanded()
@@ -1500,6 +1964,13 @@ fn pages_harness() -> impl IntoElement {
 fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
     let (mut test, states) =
         TestingRunner::new(pages_harness, (300., 300.).into(), project_states!(), 1.);
+    // A project open: the Project page is a reading of one, so with none the menu leaves
+    // it out.
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/src/kernel/kernel.avproj")),
+        ..OpenProject::default()
+    });
     let document = Document::Source(Arc::from("/src/one.rs"));
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     {
@@ -15014,6 +15485,30 @@ fn a_directory_row_offers_the_file_manager_alone() {
     assert!(label_area(&test, "Open file").is_none());
 }
 
+/// A project file's row offers one more thing than any other file's: it is the one kind of
+/// file this view knows something more about than "it is a file", so the menu says so.
+#[test]
+fn a_project_files_row_offers_to_open_it_as_one() {
+    let (mut test, _states, directory) = files_over(line!());
+    std::fs::write(directory.join("kernel.avproj"), b"binaries = []").expect("a project file");
+    std::fs::write(directory.join("main.rs"), b"fn main() {}").expect("a source file");
+    press(&mut test, "project");
+    press(&mut test, "project");
+
+    let row = centre_of(&test, "kernel.avproj");
+    right_click(&mut test, row);
+    settle(&mut test);
+    assert!(label_area(&test, "Open as project").is_some());
+    // And it is still a file, so what any file's row offers is there too.
+    assert!(label_area(&test, "Open file").is_some());
+
+    // A file that is not one is not offered it.
+    let row = centre_of(&test, "main.rs");
+    right_click(&mut test, row);
+    settle(&mut test);
+    assert!(label_area(&test, "Open as project").is_none());
+}
+
 /// A file past what the source cache will read opens nothing when pressed -- the tab
 /// could only say so -- and still has its menu, since what it is is not judged here.
 #[test]
@@ -19722,10 +20217,10 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
     assert!(nothing_pressed(&asks), "the one press started two servers");
     assert_eq!(language.read().state, Lsp::Running);
 
-    // The question is gone, and the answer is in what `project.toml` is written from.
+    // The question is gone, and the answer is held. It is the *session* it reaches disk
+    // through, never the project file, so a project that is shared asks whoever opens it.
     assert!(!labels(&test).iter().any(|text| text == "Start it"));
     assert!(proj.read().trusted);
-    assert!(proj.read().details().trusted);
 }
 
 /// Declining starts nothing and is remembered nowhere: the next press asks again, since
@@ -19907,11 +20402,11 @@ fn switching_projects_keeps_the_answer_the_new_one_brought() {
     press_at(&mut test, the_control());
     until_server(&mut test, language, &Lsp::Running);
 
-    // What a switch does to these states: the id and the directory arrive together, out of
-    // the other project's own file, with its own answer.
+    // What a switch does to these states: the file and the directory arrive together, out
+    // of the other project's own file, with its own answer.
     let mut proj = states.proj;
     let mut open = proj.peek().clone();
-    open.id = ProjectId::new("other-1");
+    open.file = Some(PathBuf::from("/elsewhere/other.avproj"));
     open.directory = "/elsewhere".to_owned();
     open.trusted = true;
     proj.set(open);

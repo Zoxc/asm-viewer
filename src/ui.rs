@@ -46,8 +46,8 @@ pub(crate) use crate::lsp;
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::project::{
-    self, Cargo, Details, Document, OnScreen, Project, ProjectId, Recent, RestoredTab,
-    SavedDocument, SavingTab, Selection, Session,
+    self, Cargo, Details, Document, OnScreen, Project, Recent, RestoredTab, SavedDock,
+    SavedDocument, SavedUi, SavingTab, Selection, Session,
 };
 pub(crate) use crate::references::{self, ReferenceRow, ReferenceRows};
 pub(crate) use crate::rescue;
@@ -105,6 +105,8 @@ mod marks;
 pub(crate) use marks::*;
 mod metrics;
 pub(crate) use metrics::*;
+mod no_project;
+pub(crate) use no_project::*;
 mod pad;
 pub(crate) use pad::*;
 mod pad_view;
@@ -230,23 +232,7 @@ impl Component for NavButton {
     }
 }
 
-fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl IntoElement {
-    let on_open = move |_| {
-        spawn(async move {
-            let Some(handles) = AsyncFileDialog::new()
-                .set_title("Open a binary file...")
-                .pick_files()
-                .await
-            else {
-                return;
-            };
-
-            let paths: Vec<PathBuf> = handles.iter().map(|h| h.path().to_path_buf()).collect();
-
-            open_binaries(objects, loading, paths).await;
-        });
-    };
-
+fn toolbar() -> impl IntoElement {
     rect()
         .horizontal()
         .width(Size::fill())
@@ -261,10 +247,12 @@ fn toolbar(objects: State<Vec<Arc<Object>>>, loading: State<Loads>) -> impl Into
                 .cross_align(Alignment::Center)
                 .margin(4.0)
                 .spacing(4.0)
-                // At the very left of the window: the way back to a page that has been
-                // closed, which is why it comes before Open rather than after it.
+                // At the very left of the window: the ways in and out of a project, and
+                // the way back to a page that has been closed.
                 .child(PagesButton)
-                .child(Button::new().on_press(on_open).child("Open")),
+                // What those items are about, said where the reader can see it without
+                // opening a menu.
+                .child(ProjectChip),
         )
         // The bar's controls sit at its two ends, so the pair the reader reaches for
         // without looking stays under the same corner however many controls Open grows
@@ -309,7 +297,10 @@ pub(crate) fn root_key_down(
     }
 }
 
-pub fn app() -> impl IntoElement {
+/// The whole window. `opening` is the project named on the command line, where there was
+/// one: it is opened in place of the project last open, and `main` has already answered for
+/// a path that is not a project file at all.
+pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // First of all, and here rather than in `main`: freya installs a panic hook of its
     // own inside `launch`, so this is where ours can be the outer one (`crate::panics`).
     use_hook(crate::panics::install);
@@ -360,6 +351,15 @@ pub fn app() -> impl IntoElement {
             ..Default::default()
         }))
     });
+    // The sidebar's own width and the context its two panels register into: the pair the
+    // document's split has, and for the same reason.
+    use_provide_context(|| SidebarWidth(State::create(300.0)));
+    use_provide_context(|| {
+        SidebarSplits(State::create(ResizableContext {
+            direction: Direction::Horizontal,
+            ..Default::default()
+        }))
+    });
     let asm_at = use_provide_context(|| AsmAt(State::create(Positions::default()))).0;
     let src_at = use_provide_context(|| SrcAt(State::create(Positions::default()))).0;
     let code_at = use_provide_context(|| CodeAt(State::create(Positions::default()))).0;
@@ -382,6 +382,11 @@ pub fn app() -> impl IntoElement {
     let control_held = use_state(|| false);
     let keys = ModifierKeys::new(shift, ctrl, alt, caps_is_ctrl, control_held);
     let proj = use_provide_context(|| Proj(State::create(OpenProject::default()))).0;
+    // Whether a delete is being asked about. At the root, since the control that asks is
+    // in the bar and the window that answers is over everything.
+    let asking = use_provide_context(|| Deleting(State::create(None))).0;
+    // And which project would not open, for the window that says so.
+    let unopened = use_provide_context(|| Unopened(State::create(None))).0;
     let searched = use_provide_context(|| Searching(State::create(Searched::default()))).0;
     // At the root, not in the overlay: the list of a project's files is kept between
     // opens, and the walk that fills it outlives the overlay being closed.
@@ -411,7 +416,7 @@ pub fn app() -> impl IntoElement {
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.
-    use_restore_on_startup(states);
+    use_restore_on_startup(states, opening);
     // After the restore, which is the last of the loads a startup makes: `Settings::load`
     // above, the same again behind `fonts()`, and the project the line above reopened.
     // All three are synchronous, so one ask here catches everything they moved aside.
@@ -477,22 +482,6 @@ pub fn app() -> impl IntoElement {
     use_follow(follow, open, visits, marked, landing, plant, driven);
     use_linking(language, linked, jobs);
 
-    // A fixed 300px sidebar beside the one proportional panel, which therefore takes
-    // whatever is left. Docking cannot express a literal 300px, which is why this split is
-    // a `ResizableContainer` and not another `DockingArea`.
-    let split = ResizableContainer::new()
-        .direction(Direction::Horizontal)
-        .panel(
-            ResizablePanel::new(PanelSize::px(300.0))
-                .min_size(120.0)
-                .child(docking_area(sidebar_dock)),
-        )
-        .panel(
-            ResizablePanel::new(PanelSize::percent(100.0))
-                .min_size(10.0)
-                .child(ContentArea),
-        );
-
     rect()
         .expanded()
         .content(Content::Flex)
@@ -536,22 +525,31 @@ pub fn app() -> impl IntoElement {
         .child(ContextMenuViewer::new())
         // Over everything, and drawn as nothing at all until a file has been moved aside.
         .child(RescuedPopup)
+        // The same, until a delete is asked about.
+        .child(DeleteProjectPopup {
+            asking: asking.read().clone(),
+        })
+        // And until a project the reader asked for would not open.
+        .child(UnopenedPopup {
+            naming: unopened.read().clone(),
+        })
         // The same, until Ctrl+P. Over the window and not in a pane, so it is reached
         // from wherever the reader is.
         .child(FinderOverlay)
-        .child(toolbar(objects, loading))
+        .child(toolbar())
         // Under the bar rather than in the view that has the other Start button: the
         // control above is pressed from wherever the reader is, and a question drawn
         // where they are not looking is a press that did nothing. Lays out as nothing
         // while there is nothing to ask.
         .child(TrustPrompt)
-        // `ResizableContainer` renders itself `.expanded()`, so it needs a parent that
-        // has already been given the leftover height under the toolbar.
+        // `WindowBody` renders a `ResizableContainer`, which renders itself `.expanded()`,
+        // so it needs a parent that has already been given the leftover height under the
+        // toolbar.
         .child(
             rect()
                 .width(Size::fill())
                 .height(Size::flex(1.0))
-                .child(split),
+                .child(WindowBody),
         )
 }
 

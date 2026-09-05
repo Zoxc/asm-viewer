@@ -33,6 +33,9 @@ impl Component for EntryRow {
         // Consumed here, in the render, because the handlers that use them may not run a
         // hook.
         let states = use_project_states();
+        // Consumed here and not in the handler: a handler may run no hook.
+        let rescued = use_consume::<Rescued>().0;
+        let unopened = use_consume::<Unopened>().0;
         let ctrl = use_consume::<Ctrl>().0;
         let fold = self.row.fold;
         let path = self.row.path.clone();
@@ -111,7 +114,21 @@ impl Component for EntryRow {
                     };
                     // Appended rather than built into either, so that the Objects rows,
                     // which share `close_menu`, keep the one item they had.
-                    let menu = menu.child(reveal_item(path.clone()));
+                    // Appended after the match, beside the reveal, so the Objects rows -- which
+                    // share `close_menu` -- keep the one item they had. A project file is the one
+                    // kind of file this view knows something more about than "it is a file".
+                    let menu = menu
+                        .maybe(project::is_project_file(&path), |menu| {
+                            let path = path.clone();
+                            menu.child(
+                                MenuButton::new()
+                                    .on_press(move |_| {
+                                        switch_project(states, rescued, unopened, path.clone())
+                                    })
+                                    .child("Open as project"),
+                            )
+                        })
+                        .child(reveal_item(path.clone()));
                     ContextMenu::open_from_event(&e, menu);
                 })
                 .child(rect().width(Size::px(self.row.depth as f32 * TREE_INDENT)))

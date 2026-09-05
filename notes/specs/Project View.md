@@ -1,8 +1,10 @@
 # Project View
 
-A tab showing the open project: its name and directory, both editable, the id it is stored
-under, and each open binary with the number of objects it gave. The directory has a folder
-picker. A change to the name or directory is saved at once.
+A tab showing the open project: the directory it is about, where it is kept, and each open
+binary with the number of objects it gave. The directory can be typed or chosen with a folder
+picker, and a change to it is saved at once.
+
+Where it is kept is the file it is in, or the app's own storage.
 
 ## Building
 
@@ -28,9 +30,3 @@ plain text.
 
 The compiler's output is the last build's and is not saved. Which paths a build produced is
 remembered, so a build after a restart still replaces them.
-
-## Recent projects
-
-A section of the tab lists the other projects, most recent first; a project whose directory
-is gone is not listed. Clicking one saves the open project, closes its binaries and tabs, and
-opens the clicked one as it was left.

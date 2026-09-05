@@ -4607,6 +4607,7 @@ dependencies = [
  "env_logger",
  "freya",
  "freya-testing",
+ "getrandom 0.3.4",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",

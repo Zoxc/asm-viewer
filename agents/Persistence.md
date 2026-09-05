@@ -16,19 +16,22 @@ parse either, and is lost the same way), and on a failure copies them to `incomp
 path the file had, removes the original, and answers `None` -- which is what all four of these loads
 already meant by "not there", so no caller changed shape. A file the system will not hand over at
 all is left alone: nothing can be salvaged from it, and nothing is about to write over it either.
-The mirror (`incompatible/projects/<id>/session.toml`) is so that a project's files keep the shape
-they had rather than being flattened into one heap of `session.toml`s, and the destination is
+The mirror (`incompatible/projects/1.avproj.session`) is so that a moved file keeps the shape of
+the path it had rather than being flattened into one heap, and the destination is
 claimed by `File::create_new` -- `settings.toml`, then `2-settings.toml` -- which is
-`ProjectId::anonymous`'s "a create that fails rather than opens", and for its reason: nothing there
+`unsaved_project`'s "a create that fails rather than opens", and for its reason: nothing there
 is ever overwritten, not by an earlier rescue and not by a second copy of the app moving the same
 file at this moment. The original is **removed** rather than copied, since nothing writes over
 `settings.toml` until a setting changes and a file left in place would be rescued again on every
 launch.
 
-The one load that does **not** go through it is `Project::load_from` as `recent_projects_in` calls
-it, which reads every listed project's file to describe its row. Drawing a row is a reading of a
-project and not a claim on it: nothing is about to write over a project nobody has entered, so its
-file stays where it is until it is opened. `load_project`, which *is* the open, rescues both halves.
+**A project file is never moved aside, and that is now the rule and not an exception.** It may be
+the reader's own file, sitting in their tree beside the code, and the app has no business taking one
+away; so `Project::load_from`, the plain read `recent_projects_in` has always drawn its rows with,
+is what `load_project` opens one with too. A project file that will not parse therefore does not
+open at all -- and since nothing opens, nothing writes over what could not be read, which is the
+whole of what the rescue was protecting. The session beside it *is* the app's own and still goes
+through `rescue::parse`.
 
 **And the reader is told**, which is the half that makes it a rescue at all: a file moved somewhere
 nobody hears about is a file lost politely. `rescue::moved()` hands over the destinations recorded
@@ -62,28 +65,116 @@ hands back a default, which is the very loss the dance exists to prevent. The di
 left unsynced: losing the rename costs the last save, where losing the data costs the file. One
 fsync per save, at most one every 30 s.
 
-**A project is a directory, and its id is that directory's name.** More than one exists; each is
-`projects/<id>/`. `ProjectId` is a validated single path component (ASCII alphanumerics, `-` and
-`_`, first character alphanumeric), because it is interpolated into a path and is read back out of a
-file a user can edit. An **anonymous** project is one whose `name` key is simply *absent*, the way
-an unspecified font is in `settings.rs`. Its id is the first free `project-N`, claimed by a
-`create_dir` that **fails rather than opens**, so the claim is one atomic operation rather than a
-listing followed by a race. It survives a restart because it is a directory, and it costs the user
-no decision. The `project-N` spelling carries no meaning: naming a project later does not move it. A
-project directory is created by the **first write that has something to say** (`open_project`,
-reached only from `record`/`flush`), so a run in which nothing was ever opened leaves nothing
-behind.
+**A project is its project file's path.** `ProjectId` is not where a project is but *which* one it
+is: sixty-four random bits in the file, written as sixteen hex digits, and carried by every file the
+app keeps beside it. That is what a session is checked against -- the session is found by the
+project file's *name*, which says nothing about whether that file still holds the project it held,
+so one whose id does not match is dropped whole rather than opened over a project it was never
+written for. An **absent** id counts as another id, since a session that cannot say which project it
+belongs to is not this one's. Random and not a counter, because a counter is only unique to the
+machine that kept it and two projects meet the moment one is checked in.
+
+An **unsaved** project is one whose file is under the app's own `projects/`, and nothing else
+distinguishes it from one the reader gave a place. Its file is `projects/<n>.avproj`, claimed by a
+`File::create_new` that **fails rather than opens**, so the claim is one atomic operation rather
+than a listing followed by a race; `project::label` turns the stem back into `Unsaved project 3`.
+The number carries no meaning: giving a project a place later does not change which project it is,
+the id having said that all along. **Nothing makes a project but the reader asking for one**
+(`start_new`, reached from the menu): with none open, `record` and `flush` write nothing and claim
+nothing. A project file used to be claimed by the first write that had anything to say, which read
+well until the app could sit with no project open at all -- then arranging the window, or opening
+Settings, was a project appearing on disk behind the reader's back. It is still claimed **empty**,
+which is why `Project::binaries` needs its `serde(default)` like every other field: between the
+claim and the first write the file holds no keys at all and has to read as the empty project it
+is.
+
+**How the window was arranged is the session's `[ui]`**: the sidebar's width, the document
+split's, and the sidebar's own arrangement. It is what the app *noticed* the reader doing to
+their own window, which is the line the two files are drawn along, and it never travels --
+how somebody arranged their sidebar is not a thing to check in. Every field is an `Option`
+and the section is absent until something is dragged, so a window nobody has touched writes
+nothing and a build without one of them reads the rest.
+
+The arrangement is a **mirror** of freya's `DockNode`, which derives no serde -- and a mirror
+is what keeps `project.rs` framework-free besides. Panels are written as **strings**
+(`Panel::stored`) for `SavedTab`'s reason: an unknown name is a parse error where a string is
+one panel this build does not have. `DockArea::restored` therefore treats what comes back as
+a reader's arrangement and not a promise: a name this build lacks is dropped, one named twice
+lands once, an empty group is dropped and the split closes up around it, and **every panel
+this build has that the file never named is put in the first group** -- otherwise a release
+that adds a panel would hide it from everyone who had ever arranged their sidebar. The
+sidebar's width needs `SidebarWidth` beside `SidebarSplits` for `SplitRatio`'s reason: a
+`ResizablePanel` registers at its `initial_size` and forgets on unmount, and the window's body
+is rebuilt whenever a project arrives or goes. What **cannot** be saved is how tall a group
+inside the dock was dragged; freya recomputes those on every render and hands out no
+controller (`notes/upstream/freya.md`).
+
+**Startup opens what the app was given, or what it was last in.** `app()` takes the project
+named on the command line and `use_restore_on_startup` prefers it (`project::open_at`, which
+is `switch` without the flush, there being nothing to flush yet). `main` answers for a path
+that is not a project file *before* `launch`, on the command line it came from: a windowed
+program that starts and says nothing has said nothing. A path that **is** one and still will
+not open is the app's to answer, and it says so in a window (`Unopened`), which is the whole
+of what is left to do -- the file is never moved aside and nothing is written over it.
+
+**Where a project is kept is `put_in`, and it reads and writes rather than copying bytes.**
+A path in a project file is relative to that file's own directory, so the same bytes in
+another directory would be a claim about *that* tree; the project is therefore loaded and
+saved through `Project::save_to`, and the session -- absolute throughout -- carried across.
+What is pending is flushed **first**, while `Saves` still points at the old place, so what
+travels is what the app holds and not what the disk happened to have. `Put::Copy` is Save as:
+a copy under a **new id**, because there are two projects afterwards and one id across both
+would mean each matched the other's session. `Put::Move` is an unsaved project's Save: the id
+stays, and the two files it came from go. `Saves::moved_to` then moves the id and nothing
+else -- only *where* the project is has changed, so every other baseline still describes what
+the app is holding.
+
+**`close` and `delete` both end with `Saves::closed`**, which is every baseline back to what
+the app boots into: the caller is about to empty the app, and a baseline still describing the
+project just left would read that emptying as a change and write it back into it -- the same
+ordering `switch` has. `close` flushes first and `delete` does not, the project being about
+to go. `delete` refuses any path that is not under `projects/`: a project the reader gave a
+place is their own file, and this app has no business deleting one whatever asked.
+
+**A path in the project file is relative where it can be** (`Project::against`, turned one way
+by `load_from` and the other by `save_to`). It is what makes a project worth checking in: a
+`binaries` naming `target/debug/viewer` is a claim about the tree the file sits in, where the
+absolute spelling is a claim about one machine. Only paths **under the project file's own
+directory** are turned, everything else having nothing to be relative to; and it is the project
+file alone -- the session beside it never travels and its digests are keyed by the paths the app
+is holding. In memory a project is always absolute, so `Saves`' baselines and the app's binaries
+compare as they always did; the relative spelling exists for the length of one `save_to`. What
+is turned is `directory`, `binaries`, and each bookmark's *binary* path -- a `SavedDocument::Source`
+is what the debug information said rather than something this filesystem was asked about.
+
+**The agreement to run a language server is the session's** (`Session::trusted`,
+`agents/Lsp.md`), and it is the one field placed by something other than "what the user said
+against what the app noticed" -- the reader chose it, so by that rule it would be the project
+file's. It is here because a project file is a thing a reader may check in, and an agreement
+travelling with it would run a language server over a stranger's tree without asking. `Proj`
+still holds it, `Session::from_state` takes it, and `Saves::opened` seeds it into the baseline
+beside the id: like the directory and the bookmarks, it is restored *synchronously*, so a
+baseline without it would read the state the app boots into as a change.
 
 **Each project is two files, and the line between them is the one the save policy already drew.**
-`project.toml` is what the user *said* (`name`, `directory`, `binaries`, `bookmarks`) and is written
-**at once**, because a binaries change is what `Saves` writes immediately. `session.toml` is what
-the app *noticed* (`digests`, `active`, `active_page`, `tabs` with their trails, `history`, the
-record of visits) and is the file rewritten every thirty seconds.
+`<project>.avproj` is what the user *said* (`name`, `directory`, `binaries`, `bookmarks`) and is
+written **at once**, because a binaries change is what `Saves` writes immediately.
+`<project>.avproj.session` beside it is what the app *noticed* (`digests`, `active`, `active_page`,
+`tabs` with their trails, `history`, the record of visits) and is the file rewritten every thirty
+seconds. The session takes the project file's whole name and not its stem, so the two sort together
+and one ignore rule reaches both -- which is the point of the naming, a project file being something
+a reader may check in.
+
+**The id is stamped by the policy and not by the caller.** `Saves::id` is which project the open
+file holds; `Saves::record` puts it on the session before comparing it against the baseline, so the
+stamp cannot read as a change, and `record` puts it on both halves again after `writing_into`, since
+a project that was not open when the record was decided has only just been given an id. Nothing in
+the UI knows the id, which is why nothing in the UI can get it wrong.
 
 **Building puts a `[cargo]` section in each file, and which file each half goes in is that same
-line.** The profile is what the reader chose, so it is `project.toml`'s and is written the moment
+line.** The profile is what the reader chose, so it is the project file's and is written the moment
 they choose it, a rename's own timing. The paths the last build produced are what the app noticed,
-so they are `session.toml`'s. They are saved at all for one reason: a build replaces the artifacts
+so they are the session's. They are saved at all for one reason: a build replaces the artifacts
 of the build *before* it, and the build before it may have been in another run of the app -- without
 them a restart would leave the reader's binaries behind with nothing that could refresh them. Each
 section is a **table of its own and is absent when it has nothing to say**, so a project nobody has
@@ -97,25 +188,29 @@ tests can no longer fail on a misplaced field. The declaration order is kept any
 what a reader of the struct is entitled to assume and because nothing here wants to depend on that
 serializer detail. So the file a user might keep, copy or hand-edit is
 exactly the one that changes only when they do something. Three things follow, and they are why it
-is two files rather than two tables. A `session.toml` that will not parse loses a scroll position
-and not the list of binaries. The directory *is* the project, so a run killed between `create_dir`
+is two files rather than two tables. A session that will not parse loses a scroll position
+and not the list of binaries. The file *is* the project, so a run killed between the `create_new`
 and the first write reopens as the empty project it is rather than being orphaned. And a binaries
-change writes **both**, so `session.toml` can never name a tab into a binary `project.toml` has
+change writes **both**, so a session can never name a tab into a binary the project file has
 already let go of.
 
-`recents.toml` sits above `projects/`, beside `settings.toml`: the ids, most recently opened first.
+`recents.toml` sits above `projects/`, beside `settings.toml`: the project files, most recently
+opened first.
 **Which project to reopen is the first entry and not a field of its own**; a `last` beside the list
 would be a second answer the order already gives. It is an *order* and not an index of what exists
-(the directories are that), which is why `MAX_RECENTS` (50) is safe and why nothing prunes an id
-whose directory has gone: repairing it on load would write a file on a startup where the reader did
-nothing. `Recents::touch` answers whether anything moved, so reopening the project already at the
-front writes nothing. The recent-projects view reads each row's name out of that project's own
-`project.toml`, never out of this file: a name copied in here would be a second copy to keep in step
-with the one the user edits.
+(the files are that), which is why `MAX_RECENTS` (50) is safe and why nothing prunes a path
+whose file has gone: repairing it on load would write a file on a startup where the reader did
+nothing. A path under `base` is written **relative to it** and every other path absolutely, so
+moving the state directory does not lose every unsaved project at once; in memory they are all
+absolute, the relative spelling belonging to the file and nowhere else (`Recents::stored_in`).
+`Recents::touch` answers whether anything moved, so reopening the project already at the front
+writes nothing. The recent-projects view reads each row's name out of that project's own file,
+never out of this file: a copy in here would be a second copy to keep in step with the one the
+user edits.
 
-**Bookmarks are `project.toml`'s** (`src/bookmarks.rs`; the panel over them is
+**Bookmarks are the project file's** (`src/bookmarks.rs`; the panel over them is
 `agents/Sidebar.md`'s). A bookmark is a place the reader chose to be able to come back to, which is
-the deliberate side of the split, so the list is written at once like a rename. It is a
+the deliberate side of the split, so the list is written at once like the directory. It is a
 `SavedDocument` with the **name it was made under** beside it, because a saved symbol carries only
 its mangled name and a bookmark whose binary is closed has nothing else to be drawn by. A place
 that can spell its own name keeps none: a symbol the *app* named rather than the file is saved as
@@ -126,9 +221,9 @@ shrink behind their back, where the history's rule is to drop. So whether one is
 asked of the objects loaded now, wherever it is drawn, and never a fact the list keeps. So is
 whether a document *is* bookmarked (`Bookmarks::matching`), since a rebuild moves a symbol while its
 entry keeps the address it was made at, and the two saved forms would never agree again about a
-bookmark the panel is drawing live. Nothing about it is in `session.toml`: `clear_project` leaves
-the state alone and the incoming project sets it the way it sets the name, and `close_binary` has
-nothing to forget.
+bookmark the panel is drawing live. Nothing about it is in the session: `clear_project` leaves
+the state alone and the incoming project sets it the way it sets the directory, and `close_binary`
+has nothing to forget.
 
 Inside those files, identity is **path + object name + symbol name + address** for a place in a
 binary and **the path itself** for a source file, never pointers. The symbol name is a `SavedName`:
@@ -183,7 +278,7 @@ rather than a tuple, since the rows and the line no longer survive the same thin
 `History::rebuilt` over the places that resolved with the saved cursor carried past the ones that
 did not, and a `RestoredEntry` per surviving place. A tab with nothing left on its trail is dropped
 whole, and so is a page this build does not have. **Field order within these structs is load-bearing**: TOML emits plain values before tables,
-so `binaries` sits beside the name only because every other field of `Project` is a plain value and
+so `binaries` sits beside the id only because every other field of `Project` is a plain value and
 `bookmarks`, the one array of tables in that file, comes last; `SavedTab`'s `temporal` and `cursor`
 must precede its `entries`, a `SavedEntry`'s rows its `document`, a `SavedDocument::Symbol`'s
 `address` its `symbol_name` (a `SavedName` is written as a table where it holds the file's own
@@ -213,17 +308,18 @@ and `Visits::restored` does the same for the record, at its own `MAX_VISITS` (20
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
 two of the three things driving it sit outside the component tree.
 `record(details, binaries, loading, bookmarks, session)` is called on every state change and
-compares each against its baseline. A change to the `binaries` writes **both files immediately**. A
-change to the user-given `details` (the name and the directory) or to the `bookmarks` writes
-**`project.toml` alone**, since neither lets go of a binary and so neither can leave the two files
-disagreeing. A change to only the session marks it **pending**: a tab is expressed against the
-binaries rather than the other way round, costs one click to remake, and arrives on every
-navigation, since `open_document` pushes onto a trail or opens a tab on the way to each change of
-document. Nothing in `record` has to *say* which is which: which file a field lives in is what
-decides it, and the `Option<Session>` beside the `Project` in the `Recorded` it hands back is how it
-says which half it decided. `flush()` writes the pending session, on a 30s timer and from the
-window's close hook, which is the one exit hook freya 0.4 has (`WindowConfig::with_on_close`, a
-`Send` callback that cannot read any `State`, which is exactly why the policy is a static).
+compares each against its baseline. A change to the `binaries` writes **both files immediately**.
+A change to the user-given `details` (the directory, the server, the profile) or to the
+`bookmarks` writes **the project file alone**, since neither lets go of a binary and so neither
+can leave the two files disagreeing. A change to only the session marks it **pending**: a tab is
+expressed against the binaries rather than the other way round, costs one click to remake, and
+arrives on every navigation, since `open_document` pushes onto a trail or opens a tab on the way
+to each change of document. Nothing in `record` has to *say* which is which: which file a field
+lives in is what decides it, and the `Option<Session>` beside the `Project` in the `Recorded` it
+hands back is how it says which half it decided. `flush()` writes the pending session, on a 30s
+timer and from the window's close hook, which is the one exit hook freya 0.4 has
+(`WindowConfig::with_on_close`, a `Send` callback that cannot read any `State`, which is exactly
+why the policy is a static).
 
 **A baseline is what the file holds, so it moves with the write and not with the decision to write
 it.** `record` and `owing` only hand back what to write; the caller moves the baselines afterwards,
@@ -232,7 +328,7 @@ was written. A failure leaves the change for the next `record` to see again and 
 for the next `flush`. Advancing first meant that a disk full for one tick left the app believing a
 file held a session that never reached it: nothing marked the session pending again, so the close
 hook's flush found nothing to do and the reader kept the one from before, for one warning in a log a
-windowed app never shows. Which baselines a `project.toml` write moves is the
+windowed app never shows. Which baselines a project-file write moves is the
 `binaries_changed` beside it -- the details and the bookmarks always, the binaries only when the
 change was to them, since any other write puts back the list the file already held.
 
@@ -240,16 +336,17 @@ change was to them, since any other write puts back the list the file already he
 not. The binaries and the session are restored *asynchronously*: the app boots holding nothing and
 fills in when the parse lands. So seeding them from the loaded project would make the first
 comparison see the still-empty boot state as a change and write an empty project over a good one.
-`Saves::given` and `Saves::bookmarks` *are* seeded by `reopen`, because the name, the directory and
+`Saves::given` and `Saves::bookmarks` *are* seeded by `reopen`, because the directory and
 the bookmarks are restored *synchronously*, into `Proj` and `Bookmarked`, before a single effect has
 run. An effect's first run is a later pass than the render whose `use_hook` set them
 (`agents/Headless.md`), so registering the save observer before the restore is not what keeps them
-apart and does not have to be. Until the project view held a name (`Proj`), `Saves` **carried** the
-name across the calls instead of comparing it against a baseline; a rename now arrives through
-`record` like everything else and that special case is gone. `Saves::listed` is the one piece of
-bookkeeping that grew out of it: it is what `project.toml` currently *says* the binaries are, and a
+apart and does not have to be. Until the project view held them (`Proj`), `Saves` **carried** the
+details across the calls instead of comparing them against a baseline; a change to one now arrives
+through `record` like everything else and that special case is gone. `Saves::listed` is the one
+piece of bookkeeping that grew out of it: it is what the project file currently *says* the binaries
+are, and a
 write that is not about the binaries writes that back rather than the app's own list. Otherwise a
-rename during the startup parse, or after a restore that opened none of them, would forget a file
+change during the startup parse, or after a restore that opened none of them, would forget a file
 through a change that had nothing to do with it.
 
 **A list still being read is not the app's list**, which is the `loading` flag. The objects arrive
@@ -266,7 +363,7 @@ instead of reaching the disk at once.
 the one being entered at the front of `recents.toml`, and re-point every baseline through
 `Saves::opened`, to empty, because the app is about to be emptied. Emptying it is the caller's half
 and stays in `ui/project_view.rs`, the states being the UI's. `recent_projects()` is the list a view
-draws: `recents.toml`'s order, each row described by reading *that project's own* `project.toml`,
+draws: `recents.toml`'s order, each row described by reading *that project's own* file,
 with an id whose directory has gone dropped here. The list never prunes itself on load, and this is
 the point of use where the repair is free.
 

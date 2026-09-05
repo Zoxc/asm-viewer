@@ -19,8 +19,9 @@ everything it started.
 A language server runs the project's own build scripts and macros, so the first start over a
 directory is asked about, whichever button asked for it. A question appears under the top
 bar naming the program, what running it means, and the directory, with a button for each
-answer. Agreeing starts it and is saved with the project, so that directory is not asked
-about again, now or in a later run. Declining starts nothing and is saved nowhere.
+answer. Agreeing starts it and is saved with the project's session, so that directory is not
+asked about again, now or in a later run. Declining starts nothing and is saved nowhere. It is
+not in the project file, so a project that is shared asks whoever opens it.
 
 What was agreed to is the directory, so editing the project's directory takes the agreement
 back. Another project brings its own answer, and is not asked again for having been away.

@@ -7,8 +7,9 @@ A tab is one open document — a function, an object or a source file — or one
 Settings and the Scratchpad. A document tab is assembly-driven, showing a symbol, or
 source-driven, showing a file; an icon tells them apart. Clicking a tab switches to it and
 focuses it. Its × closes it and switches to the neighbour; closing the last shows the
-placeholder. The × has a square target with four pixels of air around it, and is highlighted
-under the pointer. The tabs are saved with the session in their order.
+placeholder, and with no project open takes the bar with it. The × has a square target with
+four pixels of air around it, and is highlighted under the pointer. The tabs are saved with
+the session in their order.
 
 The tab on screen has a two-pixel rule along its top: lit while the tab has focus, dim
 otherwise. Every other tab's name is fainter.

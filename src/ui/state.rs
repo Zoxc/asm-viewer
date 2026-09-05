@@ -151,6 +151,20 @@ pub(crate) struct SplitRatio(pub(crate) State<f32>);
 #[derive(Clone, Copy)]
 pub(crate) struct Splits(pub(crate) State<ResizableContext>);
 
+/// How wide the sidebar is, in pixels. [`SplitRatio`]'s shape and for its reason: a
+/// `ResizablePanel` registers at its `initial_size` and forgets on unmount, so a container
+/// that is rebuilt -- which the window's body is, whenever a project arrives or goes --
+/// comes back at the initial size unless the number is held out here.
+///
+/// Pixels and not a percentage: this panel is `PanelSize::px`, so what the context holds
+/// after a drag is a literal width.
+#[derive(Clone, Copy)]
+pub(crate) struct SidebarWidth(pub(crate) State<f32>);
+
+/// The `ResizableContext` the sidebar and the content register into. See [`SidebarWidth`].
+#[derive(Clone, Copy)]
+pub(crate) struct SidebarSplits(pub(crate) State<ResizableContext>);
+
 /// Which row each place on each open tab's trail had its **assembly** side left on. At
 /// the root rather than in the pane, which reuses one scroll controller for every symbol
 /// and so would leave a newly opened function at the offset the old one was at. Keyed by
@@ -226,19 +240,17 @@ pub(crate) struct Bookmarked(pub(crate) State<Bookmarks>);
 
 /// The project the app is in, as the project view holds it.
 ///
-/// Two of its three fields are `String`s where [`Details`] has `Option`s, because this is
-/// what is in two text boxes and a text box has no third state: an empty box *is* how a
-/// reader says "I have not said". [`OpenProject::details`] is the one place the two
-/// spellings meet.
+/// Two of its fields are `String`s where [`Details`] has `Option`s, because this is what is
+/// in two text boxes and a text box has no third state: an empty box *is* how a reader says
+/// "I have not said". [`OpenProject::details`] is the one place the two spellings meet.
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct OpenProject {
-    /// The directory the project is stored in, which is its identity. `None` until a
-    /// project exists on disk at all.
-    pub(crate) id: Option<ProjectId>,
-    pub(crate) name: String,
+    /// The file the project is kept in, which is its identity. `None` until a project
+    /// exists on disk at all.
+    pub(crate) file: Option<PathBuf>,
     pub(crate) directory: String,
     /// The language server to read this project with, empty for the usual one. A box like
-    /// the two above: a project on a toolchain of its own is the only one that fills it.
+    /// the one above: a project on a toolchain of its own is the only one that fills it.
     pub(crate) language_server: String,
     /// Whether the reader has agreed to a language server being run over the directory
     /// above. A plain value like the profile below: the prompt has no third answer, and
@@ -251,17 +263,16 @@ pub(crate) struct OpenProject {
 
 impl OpenProject {
     /// The project as it was found on disk.
-    pub(crate) fn opened(id: ProjectId, project: &Project) -> OpenProject {
+    pub(crate) fn opened(file: PathBuf, project: &Project, trusted: bool) -> OpenProject {
         OpenProject {
-            id: Some(id),
-            name: project.name.clone().unwrap_or_default(),
+            file: Some(file),
             directory: project
                 .directory
                 .as_ref()
                 .map(|directory| directory.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             language_server: project.language_server.clone().unwrap_or_default(),
-            trusted: project.trusted,
+            trusted,
             profile: project.cargo.clone().unwrap_or_default().profile,
         }
     }
@@ -273,14 +284,13 @@ impl OpenProject {
             .to_owned()
     }
 
-    /// What of this reaches `project.toml`. Trimmed, so a box holding nothing but spaces
-    /// is a box holding nothing.
+    /// What of this reaches the project file. Trimmed, so a box holding nothing but spaces
+    /// is a box holding nothing. `trusted` is not here: the agreement is the session's, so
+    /// it reaches the disk through [`Session::from_state`] instead.
     pub(crate) fn details(&self) -> Details {
         Details {
-            name: given(&self.name).map(str::to_owned),
             directory: given(&self.directory).map(PathBuf::from),
             language_server: given(&self.language_server).map(str::to_owned),
-            trusted: self.trusted,
             // Absent while it says nothing the defaults do not: a reader who has never
             // touched the profile leaves no `[cargo]` behind, and choosing the default
             // back takes the section out again.

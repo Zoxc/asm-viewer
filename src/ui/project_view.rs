@@ -222,11 +222,12 @@ impl Component for SourceTarget {
 }
 
 /// One project in the recent list. Pressing it opens this one in place of the one on
-/// screen.
+/// screen. Drawn by the Project view and by the screen a window with no project is
+/// (`src/ui/no_project.rs`).
 #[derive(Clone, PartialEq)]
-struct RecentRow {
-    recent: Recent,
-    key: DiffKey,
+pub(crate) struct RecentRow {
+    pub(crate) recent: Recent,
+    pub(crate) key: DiffKey,
 }
 
 impl KeyExt for RecentRow {
@@ -240,14 +241,12 @@ impl Component for RecentRow {
         let mut hovering = use_state(|| false);
         let states = use_project_states();
         let rescued = use_consume::<Rescued>().0;
-        let id = self.recent.id.clone();
+        let unopened = use_consume::<Unopened>().0;
+        let path = self.recent.path.clone();
         let recent = &self.recent;
 
-        // The id where there is no name, drawn as a tag rather than as a name.
-        let (text, color) = match &recent.name {
-            Some(name) => (name.clone(), palette().text_fg),
-            None => (recent.id.as_str().to_owned(), palette().address_fg),
-        };
+        // What the project is called, which is what its file is called.
+        let text = project::label(&recent.path);
         // What is known about it without opening it, out of its own file.
         let about = match &recent.directory {
             Some(directory) => directory.to_string_lossy().into_owned(),
@@ -259,7 +258,7 @@ impl Component for RecentRow {
         };
 
         row_tooltip(
-            recent.id.as_str().to_owned(),
+            recent.path.to_string_lossy().into_owned(),
             rect()
                 .width(Size::fill())
                 .height(Size::px(list_row_height()))
@@ -274,14 +273,8 @@ impl Component for RecentRow {
                 })
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |_| switch_project(states, rescued, id.clone()))
-                .child(
-                    label()
-                        .text(text)
-                        .width(Size::flex(1.0))
-                        .color(color)
-                        .max_lines(1),
-                )
+                .on_press(move |_| switch_project(states, rescued, unopened, path.clone()))
+                .child(label().text(text).width(Size::flex(1.0)).max_lines(1))
                 .child(label().text(about).color(palette().address_fg).max_lines(1)),
         )
     }
@@ -291,9 +284,9 @@ impl Component for RecentRow {
     }
 }
 
-/// The Project pane: the project the app is in, the two things about it the reader can
-/// say, and the other projects they can go to. The recent list leaves out the open
-/// project, which the pane above it already describes.
+/// The Project pane: the project the app is in, what the reader can say about it, and the
+/// other projects they can go to. The recent list leaves out the open project, which the
+/// pane above it already describes.
 #[derive(PartialEq)]
 pub(crate) struct ProjectTab;
 
@@ -307,7 +300,7 @@ impl Component for ProjectTab {
         // each row is a small read of another project's own file.
         let mut recents = use_state(project::recent_projects);
         let open = proj.read().clone();
-        use_side_effect_with_deps(&open.id, move |_: &Option<ProjectId>| {
+        use_side_effect_with_deps(&open.file, move |_: &Option<PathBuf>| {
             recents.set(project::recent_projects());
         });
 
@@ -377,13 +370,13 @@ impl Component for ProjectTab {
         let others: Vec<Element> = recents
             .read()
             .iter()
-            .filter(|recent| Some(&recent.id) != open.id.as_ref())
+            .filter(|recent| Some(&recent.path) != open.file.as_ref())
             .map(|recent| {
                 RecentRow {
                     recent: recent.clone(),
                     key: DiffKey::None,
                 }
-                .key(recent.id.as_str().to_owned())
+                .key(recent.path.to_string_lossy().into_owned())
                 .into()
             })
             .collect();
@@ -416,19 +409,9 @@ impl Component for ProjectTab {
                         .padding(Gaps::new_symmetric(8.0, 12.0))
                         .spacing(6.0)
                         .child(section_heading("Project", None))
-                        // Each box writes straight into `Proj`, so a keystroke is a
-                        // state change the save observer sees and `project.toml` is
-                        // written at once.
-                        .child(field_row(
-                            "Name",
-                            Input::new(
-                                proj.into_writable()
-                                    .map(|open| &open.name, |open| &mut open.name),
-                            )
-                            .placeholder("Unnamed")
-                            .compact()
-                            .width(Size::flex(1.0)),
-                        ))
+                        // The box writes straight into `Proj`, so a keystroke is a state
+                        // change the save observer sees and the project file is written
+                        // at once.
                         .child(field_row(
                             "Directory",
                             rect()
@@ -450,15 +433,15 @@ impl Component for ProjectTab {
                                 )
                                 .child(Button::new().on_press(on_choose).child("Choose...")),
                         ))
-                        // The directory the project is stored in, which is its identity
-                        // and is written inside neither of the files in it.
+                        // The file the project is kept in, which is its identity and is
+                        // written inside neither it nor the session beside it.
                         .child(field_row(
-                            "Stored as",
+                            "Kept in",
                             label()
-                                .text(match &open.id {
-                                    Some(id) => id.as_str().to_owned(),
-                                    // A project directory is made by the first write
-                                    // that has something to put in it.
+                                .text(match &open.file {
+                                    Some(file) => file.to_string_lossy().into_owned(),
+                                    // A project file is made by the first write that has
+                                    // something to put in it.
                                     None => "not saved yet".to_owned(),
                                 })
                                 .color(palette().address_fg)
@@ -756,12 +739,21 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         build,
     } = states;
 
+    // How the window is arranged, which is nobody's `ProjectStates` but is the session's
+    // all the same: it is what the app noticed the reader doing to their own window.
+    let sidebar_dock = use_consume::<SidebarDock>().0;
+    let sidebar_width = use_consume::<SidebarWidth>().0;
+    let split_ratio = use_consume::<SplitRatio>().0;
+
     use_side_effect(move || {
         // Reading these subscribes the effect to them: any change re-runs it.
         let objects = objects.read();
         let loading = !loading.read().is_empty();
+        // One read, for the two halves it feeds: what the user said goes in the project
+        // file and the agreement goes in the session.
+        let about = proj.read().clone();
         project::record(
-            proj.read().details(),
+            about.details(),
             project::binaries(&objects),
             loading,
             bookmarks.read().entries().to_vec(),
@@ -801,6 +793,14 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                     shown,
                     &visits.read(),
                     &build.read().previous,
+                    about.trusted,
+                    // Reading these three is what subscribes the observer to a panel being
+                    // dragged and to either handle being moved.
+                    SavedUi {
+                        sidebar: Some(*sidebar_width.read()),
+                        split: Some(*split_ratio.read()),
+                        dock: Some(sidebar_dock.read().saved()),
+                    },
                 )
             },
         );
@@ -822,9 +822,21 @@ pub(crate) fn use_periodic_save() {
 
 /// Reopen the last project -- its name, binaries, tabs and selection -- once, at startup.
 /// Which project that is, is `project::reopen`'s answer.
-pub(crate) fn use_restore_on_startup(states: ProjectStates) {
+pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<PathBuf>) {
+    // Outside the hook, a hook running inside another being what it is.
+    let mut unopened = use_consume::<Unopened>().0;
     use_hook(move || {
-        let Some((id, project, session)) = project::reopen() else {
+        // What the app was given beats what it was last in. A file that will not parse
+        // opens nothing and is said so, the same as one picked from a menu would be: it is
+        // the reader's own file and is left exactly as it is.
+        let opened = match &opening {
+            Some(path) => project::open_at(path),
+            None => project::reopen(),
+        };
+        let Some((file, project, session)) = opened else {
+            if let Some(path) = opening {
+                unopened.set(Some(path));
+            }
             return;
         };
 
@@ -833,7 +845,7 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates) {
         // agree by the time the first effect runs or the save observer would see the
         // name, or the bookmarks, as a change and write them straight back out.
         let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
-        proj.set(OpenProject::opened(id, &project));
+        proj.set(OpenProject::opened(file, &project, session.trusted));
         bookmarks.set(Bookmarks::from_entries(project.bookmarks.clone()));
 
         restore_project(states, project, session);
@@ -856,6 +868,11 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates) {
 /// only moment anything looks at it. A tab's trail is opened whole and its rows go in per
 /// entry, so Back after a restart comes back to the rows that were left.
 pub(crate) fn restore_project(states: ProjectStates, project: Project, session: Session) {
+    // How the window was arranged. Before everything else and outside the early return
+    // below: it is about the window and not about what is open in it, so a project with no
+    // binaries left still comes back arranged the way it was left.
+    restore_ui(session.ui.as_ref());
+
     // What the last build produced, which the next build replaces. Set before the early
     // return below: a project whose binaries are all gone still knows what it built.
     let mut build = states.build;
@@ -1062,14 +1079,22 @@ pub(crate) fn clear_project(states: ProjectStates) {
     build.set(Builds::default());
 }
 
-/// Leave the project on screen and open the one `id` names in its place.
+/// Leave the project on screen and open the one the file at `path` holds in its place.
 ///
 /// The order is what makes a switch safe: `project::switch` flushes the old project and
 /// re-points every baseline while the policy still points at it, and only then is the app
 /// emptied -- so the save observer, woken by a notify after this handler, sees one
 /// settled state that matches the baseline and writes nothing.
-fn switch_project(states: ProjectStates, mut rescued: State<Vec<PathBuf>>, id: ProjectId) {
-    let Some((project, session)) = project::switch(&id) else {
+pub(crate) fn switch_project(
+    states: ProjectStates,
+    mut rescued: State<Vec<PathBuf>>,
+    mut unopened: State<Option<PathBuf>>,
+    path: PathBuf,
+) {
+    let Some((project, session)) = project::switch(&path) else {
+        // A project file is never moved aside and nothing is written over it, so telling
+        // the reader is the whole of what is left to do.
+        unopened.set(Some(path));
         return;
     };
 
@@ -1084,19 +1109,157 @@ fn switch_project(states: ProjectStates, mut rescued: State<Vec<PathBuf>>, id: P
 
     clear_project(states);
     let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
-    proj.set(OpenProject::opened(id, &project));
+    proj.set(OpenProject::opened(path, &project, session.trusted));
     bookmarks.set(Bookmarks::from_entries(project.bookmarks.clone()));
     restore_project(states, project, session);
 }
 
-/// Start a project nobody has named yet and go to it.
-fn new_project(states: ProjectStates) {
-    let Some(id) = project::start_new() else {
+/// Ask for a project file and open it in place of the one on screen.
+///
+/// `spawn_forever` in all three of these, not `spawn`: the dialog is asynchronous and,
+/// through the xdg portal, not modal to the window, so the reader can raise another tab
+/// while it is up -- and that unmounts the scope a `spawn` would belong to, losing the file
+/// they then chose. Every state written here is a root state, so the write is good whatever
+/// is on screen.
+pub(crate) fn ask_for_a_project(
+    states: ProjectStates,
+    rescued: State<Vec<PathBuf>>,
+    unopened: State<Option<PathBuf>>,
+) {
+    spawn_forever(async move {
+        let Some(handle) = AsyncFileDialog::new()
+            .set_title("Open a project...")
+            .add_filter("Project", &[project::PROJECT_EXTENSION])
+            .pick_file()
+            .await
+        else {
+            return;
+        };
+        switch_project(states, rescued, unopened, handle.path().to_path_buf());
+    });
+}
+
+/// Ask for a directory and start a project about it.
+pub(crate) fn ask_for_a_directory(states: ProjectStates) {
+    let mut proj = states.proj;
+    spawn_forever(async move {
+        let Some(handle) = AsyncFileDialog::new()
+            .set_title("Open a directory as a project...")
+            .pick_folder()
+            .await
+        else {
+            return;
+        };
+        new_project(states);
+        proj.write().directory = handle.path().to_string_lossy().into_owned();
+    });
+}
+
+/// Ask for binaries and start a project holding them.
+pub(crate) fn ask_for_a_binary(states: ProjectStates) {
+    spawn_forever(async move {
+        let Some(handles) = AsyncFileDialog::new()
+            .set_title("Open a file as a project...")
+            .pick_files()
+            .await
+        else {
+            return;
+        };
+        new_project(states);
+        let paths: Vec<PathBuf> = handles.iter().map(|h| h.path().to_path_buf()).collect();
+        open_binaries(states.objects, states.loading, paths).await;
+    });
+}
+
+/// Put the window back the way the session left it: the sidebar's arrangement, and the two
+/// widths that were dragged.
+///
+/// Each is taken on its own, so a file that says nothing about one of them leaves that one
+/// as it comes. A `None` from `DockArea::restored` is a saved arrangement this build can
+/// make nothing of, which is the default sidebar and not an empty one.
+fn restore_ui(ui: Option<&SavedUi>) {
+    let Some(ui) = ui else {
+        return;
+    };
+    if let Some(dock) = ui.dock.as_ref().and_then(DockArea::restored) {
+        use_consume::<SidebarDock>().0.set(dock);
+    }
+    if let Some(width) = ui.sidebar {
+        use_consume::<SidebarWidth>().0.set(width);
+    }
+    if let Some(split) = ui.split {
+        use_consume::<SplitRatio>().0.set(split);
+    }
+}
+
+/// Ask where to put the open project, and put it there.
+///
+/// A **save** dialog, which is the one place in the app that has one: the reader is naming
+/// a file that is not there yet, and the extension is what makes it a project.
+pub(crate) fn ask_where_to_save(states: ProjectStates, put: project::Put) {
+    let mut proj = states.proj;
+    let suggested = proj
+        .peek()
+        .file
+        .as_ref()
+        .and_then(|file| {
+            file.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .filter(|_| put == project::Put::Copy)
+        .unwrap_or_else(|| format!("project.{}", project::PROJECT_EXTENSION));
+
+    spawn_forever(async move {
+        let Some(handle) = AsyncFileDialog::new()
+            .set_title("Save the project as...")
+            .add_filter("Project", &[project::PROJECT_EXTENSION])
+            .set_file_name(suggested)
+            .save_file()
+            .await
+        else {
+            return;
+        };
+        let path = handle.path().to_path_buf();
+        if project::put_in(&path, put) {
+            // The only thing that changed is where the project is kept, so this is the
+            // only state that moves; the save observer sees no change and writes nothing.
+            proj.write().file = Some(path);
+        }
+    });
+}
+
+/// Leave the project the app is in with none in its place.
+pub(crate) fn close_project(states: ProjectStates) {
+    project::close();
+    empty_the_app(states);
+}
+
+/// The same, and take the project away with it.
+pub(crate) fn delete_project(states: ProjectStates) {
+    if project::delete() {
+        empty_the_app(states);
+    }
+}
+
+/// What both of those leave behind. `project::close` and `project::delete` re-point the
+/// save policy **before** this runs, for `switch_project`'s reason: a baseline still
+/// describing the project just left would read the emptying as a change and write it back
+/// into it.
+fn empty_the_app(states: ProjectStates) {
+    clear_project(states);
+    let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
+    proj.set(OpenProject::default());
+    bookmarks.set(Bookmarks::default());
+}
+
+/// Start a project the reader has not given a place and go to it.
+pub(crate) fn new_project(states: ProjectStates) {
+    let Some(path) = project::start_new() else {
         return;
     };
 
     clear_project(states);
     let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
-    proj.set(OpenProject::opened(id, &Project::default()));
+    proj.set(OpenProject::opened(path, &Project::default(), false));
     bookmarks.set(Bookmarks::default());
 }

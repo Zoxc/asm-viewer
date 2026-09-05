@@ -731,18 +731,18 @@ pub(crate) fn use_language_with(
     // counts. The two reads are bound first, since the stop below writes the state this
     // effect is about.
     let open = proj.read().clone();
-    let deps = (open.id.clone(), workspace(&open));
+    let deps = (open.file.clone(), workspace(&open));
     // What the effect last saw, so that it can tell the two changes apart. A directory
     // typed into the box is the reader pointing *this* project somewhere else, and the
     // agreement was to the old place; a project arriving is another project's answer
     // arriving with it, and that answer is its own to give. The mount is neither: what it
     // mounts with is the reopened project, the restore being an earlier hook of the same
     // render, so an agreement read out of `project.toml` survives the launch that read it.
-    let seen: Rc<RefCell<Option<(Option<ProjectId>, Option<PathBuf>)>>> =
+    let seen: Rc<RefCell<Option<(Option<PathBuf>, Option<PathBuf>)>>> =
         use_hook(|| Rc::new(RefCell::new(None)));
     use_side_effect_with_deps(&deps, {
         let jobs = jobs.clone();
-        move |(id, directory): &(Option<ProjectId>, Option<PathBuf>)| {
+        move |(file, directory): &(Option<PathBuf>, Option<PathBuf>)| {
             stop_server(language, &jobs);
             // And the settings go with it: they were another project's. Read again here,
             // where a project arrives, so the answer is in hand before either press can
@@ -756,9 +756,9 @@ pub(crate) fn use_language_with(
             if let Some(directory) = directory.clone() {
                 jobs.send(LspJob::ReadSettings { directory });
             }
-            let before = seen.replace(Some((id.clone(), directory.clone())));
-            let moved = before.is_some_and(|(was_id, was_directory)| {
-                was_id == *id && was_directory != *directory
+            let before = seen.replace(Some((file.clone(), directory.clone())));
+            let moved = before.is_some_and(|(was_file, was_directory)| {
+                was_file == *file && was_directory != *directory
             });
             if moved {
                 proj.write().trusted = false;

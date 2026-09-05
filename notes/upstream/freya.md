@@ -181,6 +181,22 @@ writes `Pads::confirming` directly and leaves the menu itself to
 inside freya's own component and nothing above it can reach the flag. Not reported yet; the fix
 upstream is one `interactive(false)` on the closing frames.
 
+## A dock's group sizes are recomputed on every render and cannot be read
+
+`DockingArea` builds each `DockNode::Split` as a `ResizableContainer` whose panels are an
+even `100/n` share, and passes **no controller** (`docking.rs:394-411`), so the context those
+panels register into is the anonymous one the container makes for itself
+(`resizable_container.rs:284-299`) and nothing outside can reach it. `DockNode::Split` has no
+field for a size either, so a group dragged taller is not in the model that *is* readable:
+a drag, a tab switch and a split all write straight back into the app's own `State<DockArea>`
+(`DockingArea::new` takes it as a `Writable`), and the sizes are the one thing that does not.
+**Cost:** the session saves which panels are in which groups, their order and each group's
+showing tab, and cannot save how tall the reader made one (`src/ui/dock.rs`,
+`agents/Persistence.md`). The two widths the app does save -- the sidebar's and the
+document's split -- are its own `ResizableContainer`s, where it passes a controller and can.
+A `.controller(..)` on the containers `render_node` builds, or a size on `DockNode::Split`,
+would do it.
+
 ## Wanted
 
 **A `Popup` that need not be centred down the window.** `PopupBackground` stacks two

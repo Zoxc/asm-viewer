@@ -38,9 +38,23 @@ use freya::prelude::*;
 
 fn main() {
     env_logger::init();
+
+    // One optional argument: the project to open, in place of the one last open. Checked
+    // here rather than in the app so that a path that is not a project can be answered on
+    // the command line it came from and the window never opens -- a windowed program that
+    // starts and says nothing has said nothing.
+    let opening = match std::env::args_os().nth(1).map(std::path::PathBuf::from) {
+        Some(path) if project::is_project_file(&path) => Some(path),
+        Some(path) => {
+            eprintln!("{}: not a project file", path.display());
+            return;
+        }
+        None => None,
+    };
+
     launch(
         LaunchConfig::new().with_window(
-            WindowConfig::new(ui::app)
+            WindowConfig::new(move || ui::app(opening.clone()))
                 .with_title("Assembly Viewer")
                 .with_size(1200., 800.)
                 // The only exit hook freya 0.4 offers, and it is a `Send` callback outside

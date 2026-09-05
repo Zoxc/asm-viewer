@@ -410,6 +410,50 @@ impl Component for HistoryRow {
 #[derive(PartialEq)]
 pub(crate) struct ObjectsPanel;
 
+/// The control at the top of the Objects panel: what the top bar's Open button was.
+///
+/// It moved here because this is the list it adds to. The bar is about the *project* --
+/// which one is open, and what becomes of it -- and a binary is one of the things a project
+/// holds, so the place to add one is over the panel that lists them. It is a button and not
+/// a menu item for the same reason the Files view's Open is one: adding a binary is a thing
+/// a reader does over and over while they work.
+#[derive(PartialEq)]
+struct AddBinaries;
+
+impl Component for AddBinaries {
+    fn render(&self) -> impl IntoElement {
+        let objects = use_consume::<Objects>().0;
+        let loading = use_consume::<Loading>().0;
+
+        rect()
+            .width(Size::fill())
+            .horizontal()
+            .padding(Gaps::new(4.0, 4.0, 0.0, 4.0))
+            .child(
+                Button::new()
+                    .on_press(move |_| {
+                        // `spawn_forever`, not `spawn`: the dialog is not modal to the
+                        // window, so the reader can drag this panel elsewhere in the dock
+                        // while it is up -- and that unmounts the scope a `spawn` would
+                        // belong to, losing the files they then chose.
+                        spawn_forever(async move {
+                            let Some(handles) = AsyncFileDialog::new()
+                                .set_title("Add binaries to the project...")
+                                .pick_files()
+                                .await
+                            else {
+                                return;
+                            };
+                            let paths: Vec<PathBuf> =
+                                handles.iter().map(|h| h.path().to_path_buf()).collect();
+                            open_binaries(objects, loading, paths).await;
+                        });
+                    })
+                    .child("Add binaries..."),
+            )
+    }
+}
+
 impl Component for ObjectsPanel {
     fn render(&self) -> impl IntoElement {
         let objects = use_consume::<Objects>().0;
@@ -447,7 +491,7 @@ impl Component for ObjectsPanel {
         };
         let length = tree.len();
 
-        use_filter_pane(
+        let pane = use_filter_pane(
             filter,
             palette().pane_bg,
             // `new_with_data`, never a capture: the builder closure is not compared across
@@ -495,7 +539,19 @@ impl Component for ObjectsPanel {
             )
             .length(length)
             .item_size(list_row_height()),
-        )
+        );
+
+        rect()
+            .expanded()
+            .content(Content::Flex)
+            .background(palette().pane_bg)
+            .child(AddBinaries)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.0))
+                    .child(pane),
+            )
     }
 }
 

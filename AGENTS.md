@@ -230,6 +230,8 @@ command.
   tab, and the body under it all.
 - `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers,
   and what the language server has to say for itself.
+- `src/ui/no_project.rs` — the window with no project open: what is drawn under the top bar
+  either way, and the screen that offers the ways into one.
 - `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.

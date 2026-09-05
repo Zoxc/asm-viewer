@@ -98,6 +98,18 @@ pointer), which is exactly the row that can never be folded, so it draws no tria
 beside it is dimmed to `address_fg`. Those are two static cues rather than a spinner, because a
 sidebar row is one of hundreds and none of the others move.
 
+**A project file's row offers one thing more**: "Open as project", appended in the same
+handler as the reveal so the Objects rows -- which share `close_menu` -- keep the one item
+they had. It is the one kind of file this view knows something about beyond "it is a file",
+and it is still a file, so what any row offers is offered too.
+
+**Adding a binary is a control over the Objects panel** (`AddBinaries`, `src/ui/sidebar.rs`),
+which is what the top bar's Open button was. It moved because this is the list it adds to:
+the bar is about the *project* -- which one is open, and what becomes of it -- and a binary is
+one of the things a project holds. With no project there is no sidebar and so no control,
+which is right: the way in from there is the menu's "Open a file as a project", and that
+makes a project to put the binary in.
+
 **A file row is also how a binary is closed.** Right-click opens a `ContextMenu` (which needs the
 `ContextMenuViewer` mounted at the root of `app()`; opening one without it panics) with a single
 "Close file". A member row has nothing: the unit that closes is the file. `close_binary` is composed
