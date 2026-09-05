@@ -213,6 +213,10 @@ pub enum Failure {
     /// The built program could not be started — deleted since the build, or on a
     /// filesystem mounted `noexec`.
     NoProgram(String),
+    /// There is a package under the pad's id and this module cannot read it back. Said
+    /// rather than stepped over, because the answer to a package that will not load is to
+    /// leave it alone: see [`Scratchpad::opened_in`].
+    Unreadable,
 }
 
 /// What a build came back with.
@@ -403,13 +407,21 @@ impl Scratchpad {
     /// derived from the id, so a hand-edited `Cargo.toml` naming another crate would
     /// otherwise send the next write somewhere the reader never opened. The *name* comes
     /// off the disk like everything else, being a value and not a place.
-    pub fn opened_in(self, directory: &Path) -> Scratchpad {
+    ///
+    /// **A package this module cannot read is not an empty directory**, and the two are
+    /// told apart here. Falling back to what was handed in for either would answer with
+    /// the caller's own scratchpad, and the next keystroke would write that over the
+    /// reader's files -- which a manifest with one hand-written dependency table entry is
+    /// enough to bring about. So a directory holding either file is [`Failure::Unreadable`]
+    /// rather than a scratchpad.
+    pub fn opened_in(self, directory: &Path) -> Result<Scratchpad, Failure> {
         match Scratchpad::load_from(directory) {
-            Some(loaded) => Scratchpad {
+            Some(loaded) => Ok(Scratchpad {
                 id: self.id,
                 ..loaded
-            },
-            None => self,
+            }),
+            None if holds_package(directory) => Err(Failure::Unreadable),
+            None => Ok(self),
         }
     }
 
@@ -461,6 +473,12 @@ fn scratchpads_in(base: &Path) -> PathBuf {
 
 fn pad_in(base: &Path, id: &PadId) -> PathBuf {
     scratchpads_in(base).join(id.as_str())
+}
+
+/// Whether `directory` holds either half of a package. What tells "nothing there" from
+/// "something there this module cannot read"; see [`Scratchpad::opened_in`].
+fn holds_package(directory: &Path) -> bool {
+    directory.join(MANIFEST_NAME).exists() || directory.join(SOURCE_DIR).join(SOURCE_NAME).exists()
 }
 
 /// The order file sits **beside the pads** rather than at the top of the state directory,
@@ -1131,6 +1149,7 @@ impl fmt::Display for Failure {
             Failure::NoCargo(error) => write!(formatter, "could not run cargo: {error}"),
             Failure::NoArtifact => write!(formatter, "cargo built nothing to open"),
             Failure::NoProgram(error) => write!(formatter, "could not start it: {error}"),
+            Failure::Unreadable => write!(formatter, "the package could not be read"),
         }
     }
 }

@@ -296,6 +296,17 @@ not the first: `Scratchpad::problems` answers with `(index, Problem)` for all of
 `Problem::half` says which of the row's two boxes to redden, because `Repeated` is a *name*
 collision and nothing in its wording says so.
 
+**A package that will not load is refused rather than replaced.** `load_from` answers `None` both
+for a directory with nothing in it and for one holding a package this module cannot read back -- a
+dependency written by hand as a table, the ordinary way to ask for a feature, is enough. `opened_in`
+tells the two apart on whether either file is there, and answers `Failure::Unreadable` for the
+second. The pad is then left **unopened**: no buffer is made for it, its baseline is never seeded,
+and `save_if_changed` steps over a pad that is not open, so the reader's own `Cargo.toml` and
+`src/main.rs` stay as they are and the pane says why. Answering what was handed in, as an empty
+directory does, would seed the pad from the default the app boots holding, and the first keystroke
+would write that over both files. Such a pad does not move to the front of the order either: a
+restart may not come back to one that will not open.
+
 **A failed build points back at a row structurally, never by looking for a crate name in a
 sentence.** A rejected build with no compiler diagnostics at all is cargo refusing before it
 compiled anything, and `[dependencies]` is the only part of the generated package this pane can get

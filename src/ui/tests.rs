@@ -9746,6 +9746,46 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
     );
 }
 
+/// A pad whose package will not load is left unopened, and nothing is written over it.
+/// The reader's own `Cargo.toml` and `src/main.rs` are on the disk and this module cannot
+/// read them back; seeding the pad from the default the app booted holding would put that
+/// default over both on the first keystroke. So there is no buffer, nothing to type into
+/// and no save -- only the reason, where the pane says it.
+#[test]
+fn a_pad_that_will_not_load_is_left_unopened_and_never_written() {
+    let (mut test, _states, pad, text, _asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Unopened {
+                pad: scratchpad.id().clone(),
+                failure: Failure::Unreadable,
+            },
+            PadJob::Save(_) => unreachable!("a pad that will not load is not written over"),
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().unsaved.is_some());
+
+    let shown = pad.peek().shown().clone();
+    assert!(!pad.peek().state().opened);
+    // No buffer, so the editor is never mounted and there is nothing to type into.
+    assert!(!text.peek().holds(&shown));
+    assert_eq!(pad.peek().state().unsaved, Some(Failure::Unreadable));
+
+    assert_eq!(asks.try_recv(), Ok(Asked::List));
+    assert_eq!(
+        asks.try_recv(),
+        Ok(Asked::Open(crate::scratchpad::DEFAULT_ID.to_owned()))
+    );
+    assert!(
+        asks.is_empty(),
+        "a pad that would not load was written anyway"
+    );
+}
+
 /// An edit is written out, and a row that cannot be written says so against itself.
 /// `Failure::Dependencies` carries the **index** of every row that is wrong, which is
 /// what lets the pane mark them in place.

@@ -453,6 +453,16 @@ pub(crate) enum PadAnswer {
     /// this: the app let the pad go when the reader said to.
     Deleted(Option<Failure>),
     Opened(Scratchpad),
+    /// A pad that could not be read, and why.
+    ///
+    /// **It is left unopened**, which is the whole of the answer: no buffer is made for
+    /// it, its baseline is never seeded, and [`save_if_changed`] steps over a pad that is
+    /// not open. So a package this module cannot read stays on the disk as it is instead
+    /// of being written over by the pad the app boots holding.
+    Unopened {
+        pad: PadId,
+        failure: Failure,
+    },
     /// Why the package could not be written, or `None` when it was.
     Saved {
         pad: PadId,
@@ -479,19 +489,26 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
         PadJob::List => PadAnswer::Listed(crate::scratchpad::pads()),
         PadJob::New => PadAnswer::Created(crate::scratchpad::new_pad()),
         PadJob::Delete(name) => PadAnswer::Deleted(crate::scratchpad::delete_pad(&name).err()),
-        PadJob::Open(scratchpad) => PadAnswer::Opened(match scratchpad.directory() {
+        PadJob::Open(scratchpad) => match scratchpad.directory() {
             Some(directory) => {
-                let opened = scratchpad.opened_in(&directory);
-                // Opening a pad is what puts it at the front of the order, so the pad a
-                // restart comes back to is the one the reader was last in -- and `touch`
-                // answering whether anything moved is what keeps a startup that reopens
-                // the pad already at the front from writing a file at all.
-                crate::scratchpad::remember(opened.id());
-                opened
+                let pad = scratchpad.id().clone();
+                match scratchpad.opened_in(&directory) {
+                    Ok(opened) => {
+                        // Opening a pad is what puts it at the front of the order, so the
+                        // pad a restart comes back to is the one the reader was last in --
+                        // and `touch` answering whether anything moved is what keeps a
+                        // startup that reopens the pad already at the front from writing a
+                        // file at all. Only a pad that was read: a restart may not come
+                        // back to one that will not open.
+                        crate::scratchpad::remember(opened.id());
+                        PadAnswer::Opened(opened)
+                    }
+                    Err(failure) => PadAnswer::Unopened { pad, failure },
+                }
             }
             // Nowhere to have been read from, so what was handed in is what there is.
-            None => scratchpad,
-        }),
+            None => PadAnswer::Opened(scratchpad),
+        },
         PadJob::Save(scratchpad) => PadAnswer::Saved {
             pad: scratchpad.id().clone(),
             failure: match scratchpad.directory() {
@@ -659,6 +676,15 @@ pub(crate) fn use_scratchpad_with(
                             if let Some(state) = next.get_mut(&pad_id) {
                                 state.scratchpad = scratchpad;
                                 state.opened = true;
+                            }
+                            pad.set(next);
+                        }
+                        PadAnswer::Unopened { pad: name, failure } => {
+                            // `opened` stays false, so nothing here is ever written back:
+                            // the reason is all the app does with it.
+                            let mut next = pad.peek().clone();
+                            if let Some(state) = next.get_mut(&name) {
+                                state.unsaved = Some(failure);
                             }
                             pad.set(next);
                         }

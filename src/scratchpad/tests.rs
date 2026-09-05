@@ -269,14 +269,16 @@ fn a_scratchpad_opens_as_its_directory_has_it() {
 
     // Nothing there yet: what the caller was holding, unchanged.
     let fresh = Scratchpad::default().opened_in(&directory);
-    assert_eq!(fresh, Scratchpad::default());
+    assert_eq!(fresh, Ok(Scratchpad::default()));
 
     let mut written = scratchpad();
     written.source = "fn main() { /* saved */ }\n".to_owned();
     written.dependencies = vec![dependency("anyhow", "1.0.86")];
     written.write_to(&directory).expect("writing");
 
-    let opened = Scratchpad::default().opened_in(&directory);
+    let opened = Scratchpad::default()
+        .opened_in(&directory)
+        .expect("a package this module wrote");
     assert_eq!(opened.source, written.source);
     assert_eq!(opened.dependencies, written.dependencies);
     // The manifest's crate name says `sketch` and the caller asked for `scratch`: the
@@ -284,6 +286,38 @@ fn a_scratchpad_opens_as_its_directory_has_it() {
     // disk like everything else, being a value and not a place.
     assert_eq!(opened.id().as_str(), DEFAULT_ID);
     assert_eq!(opened.name(), written.name());
+
+    let _ = fs::remove_dir_all(&directory);
+}
+
+/// A directory with a package in it this module cannot read is not an empty one. Answering
+/// the caller's own scratchpad for it is what would put the default source and manifest
+/// over the reader's own files on the next keystroke, and a dependency written by hand as a
+/// table -- the ordinary way to ask for a feature -- is enough to bring it about.
+#[test]
+fn a_package_that_will_not_load_is_refused_and_not_read_as_an_empty_directory() {
+    let directory = directory(line!());
+    let source = directory.join("src");
+    fs::create_dir_all(&source).expect("the directory");
+    fs::write(source.join("main.rs"), "fn main() { /* kept */ }\n").expect("the source");
+
+    // Only half a package: still not an empty directory.
+    assert_eq!(
+        Scratchpad::default().opened_in(&directory),
+        Err(Failure::Unreadable)
+    );
+
+    fs::write(
+        directory.join("Cargo.toml"),
+        "[package]\nname = \"scratch\"\nedition = \"2021\"\n\n\
+         [dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n",
+    )
+    .expect("the manifest");
+
+    assert_eq!(
+        Scratchpad::default().opened_in(&directory),
+        Err(Failure::Unreadable)
+    );
 
     let _ = fs::remove_dir_all(&directory);
 }
