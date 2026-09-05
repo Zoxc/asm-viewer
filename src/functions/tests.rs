@@ -375,6 +375,33 @@ fn b() {
     assert_eq!(named(&rust::functions(text)), [("a", 1, 3), ("b", 4, 6)]);
 }
 
+/// Defect: a `fn` whose signature never reached a body or a `;` was dropped at the end of
+/// the text with `truncate`, which took every function found after it with it, and while it
+/// sat on the stack it hid the enclosing function's closing brace.
+#[test]
+fn a_signature_with_no_body_takes_nothing_else_with_it() {
+    // The grouping it was seen at closes -- a `fn` inside a macro's parentheses -- so it
+    // goes there, and the brace after it is the enclosing function's again.
+    let text = "\
+fn a() {
+    m!(fn b)
+}
+fn c() {
+    1
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("a", 1, 3), ("c", 4, 6)]);
+
+    // One left at the end of the text -- a file saved mid-edit -- takes only itself.
+    let text = "\
+fn a
+fn b() {
+    1
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("b", 2, 4)]);
+}
+
 /// Nothing in the text can make the scanner index past it: every shape of unfinished
 /// token at the end of the file, and a file that is nothing but one of them.
 #[test]

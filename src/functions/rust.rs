@@ -67,6 +67,20 @@ pub fn functions(text: &str) -> Vec<Function> {
                 if bracket != b'{' {
                     scanner.grouped = scanner.grouped.saturating_sub(1);
                 }
+                // A signature whose grouping has closed under it never had a body and
+                // never will: `fn` inside a macro invocation's parentheses. Dropped
+                // here, so it does not hide the enclosing function's brace from the
+                // match below. From the top down, which is descending index order, so
+                // the indices still on the stack stay valid.
+                while let Some(&(index, at, None)) = open.last() {
+                    if scanner.grouped >= at {
+                        break;
+                    }
+                    open.pop();
+                    if index < found.len() {
+                        found.remove(index);
+                    }
+                }
                 if let Some((index, _, Some(depth))) = open.last() {
                     if *depth == scanner.depth {
                         if let (Some(function), Some(line)) =
@@ -97,7 +111,9 @@ pub fn functions(text: &str) -> Vec<Function> {
 
     // A body still open at the end of the text is unterminated; it reaches the last
     // line there is -- the one the final byte is on, which a trailing newline is part of.
-    for (index, _, body) in open {
+    // A signature that never began one is no function and goes, but only it: taken from
+    // the back, so the entries under it keep their indices.
+    for (index, _, body) in open.into_iter().rev() {
         if body.is_some() {
             if let (Some(function), Some(line)) = (
                 found.get_mut(index),
@@ -105,8 +121,8 @@ pub fn functions(text: &str) -> Vec<Function> {
             ) {
                 function.lines = *function.lines.start()..=line;
             }
-        } else {
-            found.truncate(index);
+        } else if index < found.len() {
+            found.remove(index);
         }
     }
     found
