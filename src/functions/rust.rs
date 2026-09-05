@@ -322,12 +322,13 @@ impl<'a> Scanner<'a> {
     fn skip_char_or_lifetime(&mut self) {
         let rest = &self.text[self.position + 1..];
         let closes_at = match rest.first() {
-            // An escape: `'\n'`, `'\u{1F600}'`, `'\''`.
+            // An escape: `'\n'`, `'\u{1F600}'`, `'\''`. The escaped byte is skipped with
+            // the backslash, since in `'\''` it is the quote itself and closes nothing.
             Some(b'\\') => rest
                 .iter()
-                .skip(1)
+                .skip(2)
                 .position(|&byte| byte == b'\'')
-                .map(|at| at + 1),
+                .map(|at| at + 2),
             // One character -- of however many bytes -- then the closing quote.
             Some(&first) => {
                 let width = utf8_width(first);

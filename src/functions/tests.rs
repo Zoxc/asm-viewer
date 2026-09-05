@@ -327,6 +327,23 @@ fn unterminated() {
     assert_eq!(enclosing(&found, 29), None);
 }
 
+/// Defect: the scanner looked for the closing quote of an escaped character one byte past
+/// the backslash, so `'\''` ended on the escaped quote. The real one then opened a literal
+/// of its own, `|'` was read as a character, and the `"` after it opened a string that ran
+/// to the next one in the file -- swallowing every brace and `fn` in between.
+#[test]
+fn an_escaped_quote_ends_where_it_ends() {
+    let text = "\
+fn a(c: char) -> bool {
+    matches!(c, '\\''|'\"')
+}
+fn b() {
+    1
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("a", 1, 3), ("b", 4, 6)]);
+}
+
 /// Nothing in the text can make the scanner index past it: every shape of unfinished
 /// token at the end of the file, and a file that is nothing but one of them.
 #[test]
