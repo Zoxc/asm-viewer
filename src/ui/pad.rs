@@ -648,6 +648,23 @@ pub(crate) fn use_scratchpad_with(
                             pad.set(next);
                         }
                         PadAnswer::Opened(scratchpad) => {
+                            // A pad shown, left and shown again before its first answer
+                            // arrived was asked for twice, `show_pad` going by `opened`
+                            // and `opened` being what this arm sets. The second answer is
+                            // the disk as it was read *before* any save of what has been
+                            // typed since, so taking it would put the older text back on
+                            // screen and make it the baseline -- leaving the disk ahead of
+                            // the screen with no save owing, until the next keystroke
+                            // wrote the older text over it. A pad that is open is read
+                            // once and never again.
+                            let already = pad
+                                .peek()
+                                .get(scratchpad.id())
+                                .is_some_and(|state| state.opened);
+                            if already {
+                                continue;
+                            }
+
                             // The pad's own buffer, built once when its source arrives:
                             // this is the first thing that happens to it, so there is no
                             // cursor and no undo history to preserve. A later switch away

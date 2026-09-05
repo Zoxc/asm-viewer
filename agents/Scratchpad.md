@@ -292,7 +292,12 @@ effects, the second woken by the first, so a click landing between them would le
 keystroke unwritten. `save_if_changed` is the one comparison behind both callers, the effect for the
 pad being typed into and `show_pad` for the pad being left, and the baseline it compares against
 travels in `PadJobs`, since a switch has to reach it from outside the hook that owns the loop. A pad
-already read is shown from what is held and is never read a second time.
+already read is shown from what is held and is never read a second time. **That is the answer's rule
+as well as the question's**: a pad shown, left and shown again before its first answer arrives is
+asked for twice, `show_pad` going by `opened` and the answer being what sets it, so an answer for a
+pad that is already open is dropped. Taking it would put back what the disk held before the read --
+older than anything typed since -- and make that the baseline, leaving the disk ahead of the screen
+with no save owing until the next keystroke wrote the older text back over it.
 
 **Nothing is written until the disk has been read.** `PadState::opened` is `Saves::written`'s rule
 in a second place, and now per pad: the app boots holding `Scratchpad::default` and the reader's own

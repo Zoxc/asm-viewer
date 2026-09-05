@@ -9894,6 +9894,92 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
     );
 }
 
+/// A pad read twice is opened once, and the second answer is dropped.
+///
+/// `show_pad` asks for a pad whose `opened` is false, and `opened` is what the answer sets,
+/// so a pad shown, left and shown again before its first answer arrives is asked for twice.
+/// The second answer is the disk as it was read before anything typed since was saved:
+/// taking it would put the older text back in the buffer and make it the baseline, so the
+/// disk would be ahead of the screen with no save owing, and the next keystroke would write
+/// the older text back over it.
+///
+/// The worker is held on every `Open` here, which is what puts the second one behind the
+/// first without depending on how fast a disk is.
+#[test]
+fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
+    let (letting, through) = async_channel::unbounded::<()>();
+    let (mut test, _states, pad, text, asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
+            PadJob::New => unreachable!("no pad is made here"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => {
+                // Whatever the disk had when the read happened, which is what makes the
+                // second answer the stale one.
+                let _ = through.recv_blocking();
+                PadAnswer::Opened(pad_on_disk(scratchpad))
+            }
+            // Refused, so that there is something on screen to wait for *behind* the
+            // second answer: answers arrive in order, so a refusal here means the one in
+            // front of it has been dealt with. Nothing else in this test needs it.
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: Some(Failure::NoDirectory),
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    // The listing has landed and the front of the order is shown, its read on the worker.
+    pump(&mut test, || pad.peek().shown().as_str() == "one");
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    let (one, two) = (pad_id("one"), pad_id("two"));
+
+    // Away and back while the first read is still on the worker: neither pad is open, so
+    // each switch asks.
+    let mut pad = pad;
+    show_pad(pad, &jobs, two.clone());
+    show_pad(pad, &jobs, one.clone());
+    assert_eq!(pad.peek().shown(), &one);
+
+    // The first read lands and the reader types into what it put on screen.
+    letting.send_blocking(()).expect("the worker is waiting");
+    pump(&mut test, || {
+        pad.peek().get(&one).is_some_and(|state| state.opened)
+    });
+    assert_eq!(
+        shown_rope(text, pad),
+        "// one
+"
+    );
+    edit_shown(text, pad, |editor| editor.rope.insert(0, "// typed\n"));
+    pump(&mut test, || {
+        pad.peek().state().scratchpad.source.starts_with("// typed")
+    });
+
+    // The other pad's read, and then the second read of this one.
+    letting.send_blocking(()).expect("the worker is waiting");
+    pump(&mut test, || {
+        pad.peek().get(&two).is_some_and(|state| state.opened)
+    });
+    letting.send_blocking(()).expect("the worker is waiting");
+    pump(&mut test, || pad.peek().state().unsaved.is_some());
+
+    let typed = "// typed\n// one\n";
+    assert_eq!(shown_rope(text, pad), typed, "the older text was put back");
+    assert_eq!(pad.peek().state().scratchpad.source, typed);
+
+    // It really was asked for twice: the second answer was dropped, not the second job.
+    let asked: Vec<Asked> = std::iter::from_fn(|| asks.try_recv().ok()).collect();
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|job| *job == &Asked::Open("one".to_owned()))
+            .count(),
+        2
+    );
+}
+
 /// The panel draws the **name** the reader gave a pad and never the id it is filed under,
 /// which is the whole of what the id being hidden means. The two are different strings here
 /// on purpose: a pad whose name has been changed, and a pad with no name at all, which
