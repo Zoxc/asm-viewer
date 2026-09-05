@@ -874,7 +874,11 @@ impl Component for InstructionRow {
             )
         });
         // The door back takes the symbol's own address, the space its listing draws.
-        let alone = self.data.code_tab.then(|| {
+        // Wherever this listing is not the tab itself, which is an object's code and the
+        // assembly side of a source-driven tab: in the second the symbol has no other
+        // door, the Symbols list aside, since the tab is a file. An assembly-driven tab
+        // is the symbol already and gets none.
+        let alone = (self.data.code_tab || self.data.subject.is_some()).then(|| {
             (
                 Symbol {
                     object: self.data.object.clone(),

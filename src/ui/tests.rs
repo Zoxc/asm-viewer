@@ -13821,6 +13821,83 @@ fn menu_listing_harness() -> impl IntoElement {
         })
 }
 
+/// A source-driven tab's assembly side is a symbol the tab has no other door to, the
+/// Symbols list aside, so an instruction's menu opens it: the symbol read alone, in a tab
+/// of its own, landed on the instruction the menu was over. The item an object's code has
+/// already, in the other place the listing is not the tab.
+///
+/// Not in an assembly-driven tab, where the listing is the tab already.
+#[test]
+fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let at = a_line_of(&sum_to);
+    let studied = Studied::new(sum_to.clone());
+    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let entry = "Open as symbol".to_string();
+
+    let shown = Shown {
+        ask: Ask::Source {
+            at: at.clone(),
+            chosen: Some(sum_to.clone()),
+        },
+        studied: studied.clone(),
+    };
+    let (mut test, (states, _marked, landing)) = TestingRunner::new(
+        menu_listing_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    let file = Document::Source(at.file.clone());
+    open_document(states.open, states.visits, file.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    let row = centre_of(&test, &format!("{first:016X} "));
+    right_click(&mut test, row);
+    assert!(labels(&test).contains(&entry), "{:?}", labels(&test));
+    let item = centre_of(&test, &entry);
+    press_at(&mut test, item);
+    settle(&mut test);
+
+    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    assert!(states.open.active() == Some(symbol.clone()));
+    assert!(
+        states.open.strip.peek().tabs().len() == 2,
+        "the symbol took the tab the file was in"
+    );
+    let landed = landing
+        .peek()
+        .clone()
+        .expect("the instruction is left to land");
+    assert!(landed.tab == symbol);
+    assert_eq!(landed.address, Some(first));
+
+    // The same listing as the tab itself: nothing to open.
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+        menu_listing_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    open_document(states.open, states.visits, symbol, Reach::NewTab);
+    settle(&mut test);
+    let row = centre_of(&test, &format!("{first:016X} "));
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Show in unified view".to_owned()),
+        "the menu never opened: {drawn:?}"
+    );
+    assert!(!drawn.contains(&entry), "{drawn:?}");
+}
+
 /// An instruction's menu offers to show it among its neighbours: the object's code tab
 /// opens with its place set on that instruction's address -- written before the tab is
 /// opened, the order a restore uses -- and the line it was compiled from left as a
