@@ -56,6 +56,32 @@ leaves this list when it is. That is a move made on request, like everything els
   every pane asks through. Only worth doing once the read is off the UI thread at all -- the
   item above.
 
+- [ ] Deal with the code the compiler inlined. Both backends answer with the innermost location
+  and nothing else -- `find_location_range` gives the line table's rows, and a row inside an
+  inlined body names the callee's file and line -- so nothing says an instruction is there
+  because the function on screen called something. What the reader gets is a run in the middle
+  of a symbol that pairs with no line of the file the Source pane is drawing, only the symbol's
+  own file being drawn since a Rust function inlines dozens (`agents/Panes.md`), so a click on
+  one selects nothing on that side; a symbol's rows over-covering its own function's lines,
+  which `src/functions.rs` already writes down; and a function that only ever inlines having no
+  symbol at all, so the Symbols list cannot offer it and no tab can open it. Already right and
+  not this: `line/source.rs` inverts those same rows, so the Locations panel answers "which
+  symbols was this line compiled into" with the ones it was inlined into. The debug info has
+  the rest. DWARF's `DW_TAG_inlined_subroutine` names the callee and its `DW_AT_call_file` and
+  `DW_AT_call_line`, and `addr2line` hands the stack over from `find_frames` -- one probe at a
+  time, there being no range form in 0.21, where a screenful of rows comes out of one
+  `find_location_range` pass today, so what that costs is the first thing to measure; a PDB has
+  `S_INLINESITE` and the inlinee lines `pdb2` iterates (`ModuleInfo::inlinees()`), whose
+  addresses sit in binary annotations this crate would decode itself. The decisions are the
+  shape it takes. A `LineRow` is flat -- one range, one file, one line -- where an inline stack
+  is a list per address, so either a row grows a chain or the chain is a question beside
+  `line_info`, and either way both backends answer it, every answer being made to hold
+  `LineInfo`'s invariants in the one collector. Then what the panes do with it: whether an
+  inlined run switches the Source pane to the callee's file, the companion switch a selected run
+  already makes, or keeps the caller's line up and says what was inlined into it; whether the
+  assembly side marks the run, and with what, the arrow gutter being the only column it has to
+  spare; and whether an inlined body becomes something the Symbols list can offer, which would
+  be a symbol the object does not have.
 - [ ] Notice a source file changed on disk and offer to reload it. A build now empties the
   source and highlight caches under the directory it built (`source::forget_under`), which
   covers the app's own rebuilds and nothing else: a file written by an editor beside the app,
@@ -220,6 +246,20 @@ leaves this list when it is. That is a move made on request, like everything els
   split view*. None of those four is measured, which is where this starts: the rule is worth
   keeping, and an atomic write of a few hundred bytes may still be cheaper than the channel it
   would take to move it.
+- [ ] Rank the finder's list once per query, not once per keypress. Holding Down through Ctrl+P's
+  list freezes the overlay, and it is not the disk: nothing on that path reads one, the walk
+  being on a thread of its own already. `moved` calls `listed` for the row count alone -- the
+  count is what clamps the row, Down held past the end having counted on above the list -- and
+  the write it then makes re-runs the `listed` memo behind it, so one arrow press is two passes
+  of the query over every walked path, at the keyboard's repeat rate. The count a press wants is
+  the one the memo has just worked out, the box being unchanged, so handing the memo to the key
+  handler is most of this; it rewrites the paragraph in `agents/Finding.md` that has `moved`
+  making the memo's pass once more per press. What is left after that is typing rather than
+  selecting -- one ranking per keystroke, still on the UI thread -- which the same note says
+  moves onto the worker beside the walk. That half wants measuring first, and carries a decision
+  the cheap half does not: a list that lags the box has to say which query it was ranked for, as
+  `Finder::at_for` already does for the row, so that Enter never opens a file the reader has
+  stopped asking for.
 - [ ] Make the line-number gutter gray, in the scratchpad's editor and in the Source pane alike,
   so the numbers read as a margin beside the code and not as a column of it.
 - [ ] No text cursor over a scroll bar. The I-beam a code row sets follows the pointer onto the
