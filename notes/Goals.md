@@ -405,6 +405,21 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Projects
 
+- [ ] Let a project be saved and loaded as files, so one can sit beside the code it is about
+  and be shared or checked in. A project is a directory under `projects/` in the app's own
+  state directory today, and `ProjectId` is that directory's name (`src/project.rs`), so a
+  project exists only on the machine that made it. Two rules stay: **no manual saves** — the
+  files go on being written the way they are now, `project.toml` at once and `session.toml` on
+  the timer, wherever they live, and there is no Save item anywhere; and an **anonymous project
+  stays in app storage**, having no name and nowhere else to be, where a project the reader
+  gave files keeps them and not a copy under `projects/`. The decisions: whether the session
+  travels with the project or stays behind, since `session.toml` is tabs, scroll positions and
+  digests — a reader checking a project in wants what they said, not where they were, and a
+  file that rewrites itself every thirty seconds in a git worktree is a dirty status all day;
+  what identity a project has once it is a path rather than a directory name, `recents.toml`
+  holding ids; what opening one is (a Files row, a dialog, an argument); and what two instances
+  open on one file do to each other, which nothing has had to answer while every project was
+  the app's own.
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
 
