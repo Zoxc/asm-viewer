@@ -389,7 +389,12 @@ impl Component for ProjectTab {
             .collect();
 
         let on_choose = move |_| {
-            spawn(async move {
+            // `spawn_forever`, not `spawn`: the dialog is asynchronous and, through the
+            // xdg portal, not modal to the window, so the reader can raise another tab
+            // while it is up -- and that unmounts the scope a `spawn` would belong to,
+            // losing the folder they then chose. `proj` is a root state, so the write
+            // is good whatever is on screen.
+            spawn_forever(async move {
                 let Some(handle) = AsyncFileDialog::new()
                     .set_title("Choose the project's directory...")
                     .pick_folder()

@@ -343,7 +343,9 @@ before it read a byte and the project came up with no binaries and no tabs -- wh
 observer then wrote into its session. The startup restore never saw it: its scope is the root's.
 An **artifact row**'s load goes the same way, and what it leaves is worse than nothing: the load is
 registered before a byte is read, so a row stays in the Objects list loading for ever, and only
-closing the file clears one.
+closing the file clears one. So does the **folder dialog** behind "Choose...": through the xdg
+portal it is not modal to the window, the app keeps taking input while it is up, and a reader who
+raised another tab meanwhile got the directory they had before and nothing to say why.
 
 **Tooltips** are how a truncated row is read, so `row_tooltip` sets the delay to `Duration::ZERO`;
 freya's 500ms default makes sweeping down a list useless. The filter toggles keep the default (their
