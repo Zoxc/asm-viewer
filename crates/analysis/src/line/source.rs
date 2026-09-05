@@ -19,6 +19,10 @@
 //!   forward direction's question and is already answered, so a caller wanting the ranges asks
 //!   the symbol it was given. One definition of "which rows are this line's" rather than two
 //!   that can drift.
+//! * **The build has a budget** ([`budget`]). The index is one pair per row per symbol
+//!   covering it, and neither number is the app's to choose, so a file naming one address a
+//!   hundred thousand times is answered with an empty index rather than with the tens of
+//!   gigabytes it asked for.
 //!
 //! **What it costs, measured** (release, first ask against a fully parsed file). On
 //! `viewer-sample` — one object, 115 577 symbols, 267 MB of DWARF — **0.43 s**, down from
@@ -92,17 +96,36 @@ impl SourceIndex {
         // handed a borrow that ends with the call, so the key cannot be the borrow itself.
         let mut files: HashMap<Arc<str>, Vec<(u32, SymbolIndex)>> = HashMap::new();
 
+        // What the walk has cost against what it is allowed ([`budget`]). Sticky, and no
+        // backend's walk can be cut short, so past the budget a row is attributed to nothing
+        // and the whole index is dropped below: one missing the rows it skipped would be
+        // wrong where an empty one only says nothing.
+        let mut rows = 0usize;
+        let mut pairs = 0usize;
+        let mut over = false;
+
         // The whole address space in one pass; every row the backend hands over names a file
         // and a line, and covers at least one byte.
         debug.each_row(&mut |range, file, line| {
+            rows += 1;
+            over |= pairs > budget(rows);
+            if over {
+                return;
+            }
+
             let entry = match files.get_mut(file) {
                 Some(entry) => entry,
                 None => files.entry(Arc::from(file)).or_default(),
             };
             for symbol in intersecting(&ranges, range.start, range.end) {
+                pairs += 1;
                 entry.push((line, symbol.symbol));
             }
         });
+
+        if over {
+            return SourceIndex::default();
+        }
 
         let files = files
             .into_iter()
@@ -128,6 +151,32 @@ impl SourceIndex {
         let end = entries.partition_point(|(line, _)| *line <= last);
         &entries[start..end]
     }
+}
+
+/// The most `(line, symbol)` pairs a build may push: 64 per row walked, never fewer than
+/// 64 Ki and never more than 64 Mi.
+///
+/// Neither factor of the index's size is the app's to choose. A symbol table may name one
+/// address any number of times and nothing folds them — [`SymbolData::extent`] answers each
+/// alias its own declared size — so a row can be attributed to as many symbols as the file
+/// names, and how many rows there are is the line program's to say. 100 000 symbols at one
+/// address, with 100 000 rows over them, is a 3 MB file asking for 10^10 pairs — tens of
+/// gigabytes, and Rust aborts on an allocation failure, the one failure no `catch_unwind`
+/// here sees.
+///
+/// The rate is what such a file inflates, and the ceiling is what a file with rows enough
+/// would get around the rate with. A real file attributes a row to one symbol, occasionally
+/// two: the app's own 451 MB debug binary pushes 1 964 064 pairs over 2 112 859 rows, 0.93
+/// each against the 64 allowed, and the floor leaves a small object room for aliases the rate
+/// alone would not.
+fn budget(rows: usize) -> usize {
+    const PER_ROW: usize = 64;
+    const FLOOR: usize = 64 << 10;
+    const CEILING: usize = 64 << 20;
+
+    FLOOR
+        .saturating_add(rows.saturating_mul(PER_ROW))
+        .min(CEILING)
 }
 
 /// Every symbol of `object` that has bytes, as a range in the address space the debug info is

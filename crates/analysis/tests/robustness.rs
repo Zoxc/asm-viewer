@@ -5,8 +5,9 @@ mod common;
 
 use analysis::{parse_object, Object};
 use common::{
-    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, elf_x86_64, garbage,
-    parse_and_walk, survivors, TextRelocation, TextSymbol,
+    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, elf_x86_64,
+    elf_x86_64_with_dwarf, garbage, parse, parse_and_walk, survivors, DwarfFixture, DwarfRow,
+    DwarfSection, TextRelocation, TextSymbol, UnitRanges,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -1013,4 +1014,67 @@ fn one_symbol_that_cannot_be_analysed_does_not_take_out_the_others() {
     let deep = named("?deep@@");
     assert_eq!(deep.demangled, None);
     assert!(deep.assembly(&object).is_some());
+}
+
+/// Defect: the reverse index held one `(line, symbol)` pair per row per symbol covering it,
+/// and a symbol table may name one address any number of times. A file crafted with 100 000
+/// symbols at one address and 100 000 rows over them asks for 10^10 pairs — tens of gigabytes
+/// on the worker, and an allocation failure aborts where a panic would have been caught. The
+/// build now has a budget and answers with an empty index past it.
+#[test]
+fn a_row_attributed_to_every_symbol_at_once_does_not_grow_the_index_without_bound() {
+    // Within the budget nothing changes: every alias is named, as several names for one
+    // address always have been.
+    let data = aliased_at_one_address(8, 100);
+    let object = parse(&data);
+    assert_eq!(object.symbols_at_line("/src/main.c", 1).len(), 8);
+    assert_eq!(object.lines_from_source("/src/main.c").len(), 100);
+
+    // Past it the index says nothing, which is the answer a build that panicked gives. This
+    // fixture is 35 KB and asks for a million pairs; the shape scales.
+    let data = aliased_at_one_address(1000, 1000);
+    let object = parse(&data);
+    assert!(object.symbols_at_line("/src/main.c", 1).is_empty());
+    assert!(object.lines_from_source("/src/main.c").is_empty());
+}
+
+/// `aliases` symbols at one address, each covering the whole `.text`, under a line program of
+/// `rows` rows over it: one row per line, and every row inside every symbol. The shape a
+/// symbol table full of aliases has, and the one the index's size is the product of.
+fn aliased_at_one_address(aliases: usize, rows: usize) -> Vec<u8> {
+    let names: Vec<String> = (0..aliases).map(|i| format!("alias{i}")).collect();
+    let code = vec![0x90; rows];
+
+    // Only the last symbol has bytes, so every one of them starts at 0 and, with no next
+    // address to bound it, reaches the end of the section.
+    let mut symbols: Vec<TextSymbol> = names
+        .iter()
+        .map(|name| TextSymbol { name, bytes: &[] })
+        .collect();
+    if let Some(last) = symbols.last_mut() {
+        last.bytes = &code;
+    }
+
+    let rows: Vec<DwarfRow> = (0..rows)
+        .map(|i| DwarfRow {
+            address: i as u64,
+            file: 0,
+            line: i as u64 + 1,
+            column: 0,
+        })
+        .collect();
+
+    elf_x86_64_with_dwarf(DwarfFixture {
+        comp_dir: "/src",
+        files: &["main.c"],
+        sections: &[DwarfSection {
+            name: None,
+            symbols: &symbols,
+            rows: &rows,
+            length: code.len() as u64,
+            subprograms: &[],
+            base_symbol: None,
+        }],
+        unit_ranges: UnitRanges::Relocated,
+    })
 }

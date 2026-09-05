@@ -379,6 +379,19 @@ attributing by `estimate_size`, is one binary search per row and lets the index 
 own line info does not name the line back. One line into many symbols is not theoretical:
 `core/src/ptr/mod.rs:848`, `drop_in_place`, answers with **9 374** of the 331 MB binary's symbols.
 
+**The build has a budget**, since neither factor of the index's size is the app's to choose: it
+holds one pair per row per symbol covering that row, a symbol table may name one address any number
+of times, and nothing folds those — `SymbolData::extent` answers each alias its own declared size.
+100 000 symbols at one address under a line program of 100 000 rows is a few megabytes of file
+asking for 10^10 pairs, and Rust aborts on an allocation failure, the one failure the
+`catch_unwind` around the build does not see. So the walk counts the pairs it pushes against 64 a
+row, never fewer than 64 Ki and never more than 64 Mi, and past that hands back an **empty** index
+— the "says nothing" answer a panicking build already gives, and empty rather than partial because
+an index missing the rows the walk skipped would be wrong, where an empty one only says nothing. The rate is what a
+crafted file inflates; the ceiling is what a file with rows enough would get around the rate with.
+Measured, a 451 MB build of the app's own binary pushes 1 964 064 pairs over 2 112 859 rows: 0.93 a
+row against the 64 allowed.
+
 `without_panicking` (a `catch_unwind`) is `DebugInfo`'s and wraps the backend build and every
 question at the seam, one net whichever backend is under it, for known reachable bugs in the
 dependencies behind it. All are unchecked arithmetic on numbers a debug section states, and none is
