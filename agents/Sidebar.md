@@ -188,9 +188,13 @@ it would start a fresh search for each batch of its own answer. Hits come back t
 `take_hits`, which is `take_load`'s loop -- a batch per wake, since a write is a render -- and which
 returns the moment the search is no longer the one being asked for. Returning drops the receiver,
 the walk's next send fails, and it breaks where it stands. That one rule covers a second search, a
-project switched away from (`clear_project` resets the state), and the app closing. The check is
+project switched away from (`clear_project` empties the state), and the app closing. The check is
 made **before** the write and not at the end of the loop, or the old walk's last batch lands under
-the new question. The work is an argument to the hook for the reason the analysis worker's is: a
+the new question. `clear_project` **bumps** the id rather than setting it back to nothing: a walk of
+the project being left is parked in its receiver and learns nothing until its next batch, so a
+counter that restarted at zero would hand the new project the very numbers that walk still answers
+to, and its hits -- files outside the new directory -- would land under the new question. `Loads`
+keeps its `next` across a `clear` for the same reason. The work is an argument to the hook for the reason the analysis worker's is: a
 walk that answers as fast as it is asked can say nothing about superseding.
 
 **The references panel is the Locations panel and its rows are the Search panel's**

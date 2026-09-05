@@ -16746,6 +16746,64 @@ fn a_hit_from_a_replaced_search_is_dropped() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// A walk still running when the project is left cannot answer into the project that comes
+/// next. `clear_project` empties the search by **bumping** its id, so the numbers the next
+/// project hands out are numbers no walk of the last one answers to. Fails on a reset to
+/// `Searched::default()`, whose id is zero and whose searches are numbered 1, 2, 3 again.
+#[test]
+fn a_walk_of_the_project_left_cannot_answer_into_the_next() {
+    let (gate, held) = std::sync::mpsc::channel::<()>();
+    let held = Arc::new(std::sync::Mutex::new(held));
+    // The new project's walk is held open too, so the old one's `Finished` has a running
+    // search to end.
+    let (going, waiting) = std::sync::mpsc::channel::<()>();
+    let waiting = Arc::new(std::sync::Mutex::new(waiting));
+    let file = PathBuf::from("/project/one.rs");
+    let (mut test, states, directory, dock) = search_over(line!(), move |query, emit| {
+        if query.filter.pattern == "left" {
+            let _ = emit(SearchEvent::Hit(hit_at(&file, 1, "the old project")));
+            // Held until the project has been switched and asked something of its own.
+            let _ = held.lock().expect("the gate").recv();
+            let _ = emit(SearchEvent::Hit(hit_at(&file, 2, "the late answer")));
+            let _ = emit(SearchEvent::Finished);
+            return;
+        }
+        let _ = emit(SearchEvent::Hit(hit_at(&file, 5, "the new project")));
+        let _ = waiting.lock().expect("the gate").recv();
+    });
+
+    let searched = states.searched;
+    ask_for(&states, dock, &directory, "left");
+    pump(&mut test, || searched.peek().hits.counts().0 == 1);
+    assert!(labels(&test).iter().any(|label| label == "the old project"));
+
+    // The project left, and one search asked of the one that replaced it.
+    clear_project(states);
+    settle(&mut test);
+    ask_for(&states, dock, &directory, "new");
+    pump(&mut test, || searched.peek().hits.counts().0 == 1);
+    assert!(labels(&test).iter().any(|label| label == "the new project"));
+
+    // The old walk goes on, and answers to the number it was given.
+    gate.send(()).expect("the held search is still running");
+    for _ in 0..40 {
+        test.sync_and_update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let shown = labels(&test);
+    assert!(
+        !shown.iter().any(|label| label == "the late answer"),
+        "a file of the project left is in the new project's hits: {shown:?}"
+    );
+    assert!(
+        searched.peek().running,
+        "the old project's walk ended a search of the new project's that is still going"
+    );
+    let _ = going.send(());
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// Pressing a match opens its file as a source-driven tab landed on the line it was found
 /// at, and a file the source pane would refuse opens nothing.
 #[test]

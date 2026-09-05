@@ -1031,7 +1031,15 @@ pub(crate) fn clear_project(states: ProjectStates) {
     // The search likewise: its hits are places in the directory being left, and dropping
     // the question is also what stops a walk still running -- the task takes the next
     // batch, sees a search it is not, and lets its end of the channel go.
-    searched.set(Searched::default());
+    //
+    // The id is bumped and not set back to nothing. A walk from this project is parked in
+    // its receiver and learns nothing until its next batch, so a counter that restarted
+    // at zero would hand the next project the very numbers that walk still answers to.
+    let id = searched.peek().id.wrapping_add(1);
+    searched.set(Searched {
+        id,
+        ..Searched::default()
+    });
 
     // What one project built says nothing about the next, and a list left standing would
     // have the first build over there replace binaries opened over here.
