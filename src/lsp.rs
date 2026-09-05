@@ -548,8 +548,15 @@ impl<W: Write + Send + 'static> Talk<W> {
     ///
     /// The options are the caller's: [`wanted`] with whatever the project's own
     /// `.vscode/settings.json` said laid over it ([`settings_from`]).
+    ///
+    /// The directory is made absolute first ([`rooted`]). The box it was typed into takes
+    /// any spelling, and a `rootUri` built out of `dev/viewer` or `.` names a place that
+    /// is not there -- which a server reports through `window/showMessage` and this
+    /// client only logs, leaving a control that says it is running and every question
+    /// answering nothing.
     pub fn initialize(&mut self, directory: &Path, options: &Value) -> Result<(), Failure> {
-        let root = uri_of(directory);
+        let directory = rooted(directory);
+        let root = uri_of(&directory);
         let name = directory
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -1422,6 +1429,22 @@ pub fn read_message(from: &mut impl BufRead) -> Result<Value, Failure> {
     from.read_exact(&mut body)
         .map_err(|error| Failure::Broken(error.to_string()))?;
     serde_json::from_slice(&body).map_err(|error| Failure::Broken(error.to_string()))
+}
+
+/// The project's directory as the server is told about it: absolute, since a `rootUri` is
+/// a URI and a relative one names a place nobody has.
+///
+/// `path::absolute` and not the `fs::canonicalize` `src/cargo.rs` uses on Unix, because
+/// nothing here has to match a spelling something else prints back: the server's answers
+/// are reconciled against the tabs already open (`ui::follow`). Resolving would only cost:
+/// the reader's own spelling of their project, and on Windows a verbatim prefix
+/// (`\\?\C:\work`) that no `file:` URI can carry.
+///
+/// The process needs none of this: [`start_program_in`] hands the same relative directory
+/// to `current_dir`, which the spawn resolves against the same working directory this
+/// does.
+fn rooted(directory: &Path) -> PathBuf {
+    std::path::absolute(directory).unwrap_or_else(|_| directory.to_path_buf())
 }
 
 /// A path as the `file:` URI the protocol names files by.

@@ -181,6 +181,16 @@ bookmarks' `matching` split across the two. `path_of` puts the separators back. 
 letter is what says a path is Windows', not a `cfg`, so the rule is the same everywhere and
 is tested from either platform.
 
+**The root goes out absolute.** The directory box is free text, and `.` is what a reader
+who launched the app from their project types; a `rootUri` built from that names a place
+the server cannot find, and what it says about that is a `window/showMessage` this client
+only logs -- a control that turns green and every question afterwards answering nothing.
+`rooted` is `path::absolute` and not the `fs::canonicalize` `src/cargo.rs` uses on Unix,
+because nothing here has to match a spelling something else prints back. Resolving would
+only cost: the reader's own spelling of their project, and on Windows a verbatim prefix
+that no `file:` URI can carry. The process needs none of it: `current_dir` resolves a
+relative directory against the same place.
+
 The app's own spelling is not canonical either -- a project directory as the reader typed
 it joined with a Files row, or whatever the debug info said -- and the server's is. So a
 directory typed with a `..`, a `./` or through a symlink spells one file two ways on any

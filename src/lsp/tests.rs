@@ -306,6 +306,47 @@ fn the_handshake_is_initialize_and_then_initialized() {
     assert_eq!(wanted(), json!({ "checkOnSave": false }));
 }
 
+/// A handshake against a fake server that says only that it has capabilities, and the
+/// `initialize` it heard.
+fn handshake_over(directory: &Path) -> Value {
+    let directory = directory.to_path_buf();
+    let (said, (), _notes) = against(
+        |fake, message| {
+            if message.get("method").and_then(Value::as_str) == Some("initialize") {
+                fake.say(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"].clone(),
+                    "result": { "capabilities": {} },
+                }));
+            }
+        },
+        move |talk| {
+            talk.initialize(&directory, &wanted()).expect("a handshake");
+        },
+    );
+    said[0]["params"].clone()
+}
+
+/// The directory box takes any spelling, and `.` is what a reader who launched the app
+/// from their project types. A relative `rootUri` names a place the server cannot find,
+/// which it says only in a message this client logs.
+#[test]
+fn a_relative_project_directory_is_named_to_the_server_as_an_absolute_one() {
+    let typed = Path::new("dev/viewer");
+    let params = handshake_over(typed);
+    let root = params["rootUri"].as_str().expect("a root");
+
+    assert_eq!(
+        path_of(root),
+        Some(std::path::absolute(typed).expect("an absolute path"))
+    );
+    // The folder the server is given is the root, and it is named after the directory --
+    // which `.` has no name for until it has been resolved.
+    assert_eq!(params["workspaceFolders"][0]["uri"], json!(root));
+    let here = handshake_over(Path::new("."));
+    assert_ne!(here["workspaceFolders"][0]["name"], json!(""));
+}
+
 #[test]
 fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_place() {
     let (said, found, _notes) = against(
