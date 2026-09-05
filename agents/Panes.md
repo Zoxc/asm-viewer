@@ -301,15 +301,16 @@ show and the switch it causes must not be what drops it. A change of the active 
 effect's to answer, being a switch of place, which `use_land` owns whole (below). And **the scroll
 is a request, answered once**: `Picked::owed` says which panes have yet to scroll to the run,
 `owed_reveal` only *looks*, `reveal_made` is what clears a pane's flag, and `reveal_row` does
-nothing when the row is already on screen, nor when the offset it would write is the one the pane
-is at. Both, because a scroll write notifies the caller reading the scroll whether or not the
-number changed, and `use_kept_position` is that caller: a row in the first few of a listing has
-nowhere to put its context rows, so measured against them alone it was never in view; and a pane
-that cannot show the row -- a viewport of 0, which a fresh pane's effect runs with on the desktop,
-where tasks are polled before the first layout -- never has it in view at all. Either was a write
-per wake and a wake per write inside one pass, and a Search hit hung the app on the second: the
-landing it left is spent by `use_land`, a task that never got its turn. `agents/Headless.md` says
-why the headless runner does not see it. What pays it is the pane as it stands **now**: the reveal
+nothing when the row is already on screen -- measured against the offset it would write and not
+against the context rows alone, a row in the first few of a listing having nowhere to put them, so
+that measured that way it was never in view. It writes nothing at all in a pane it has no answer
+for, a viewport of 0 being a pane not measured yet, which is what a fresh pane's effect runs with
+on the desktop, where tasks are polled before the first layout. Either was a write per wake and a
+wake per write inside one pass, a scroll write notifying the caller that reads the scroll whether
+or not the number changed and `use_kept_position` being that caller; a Search hit hung the app on
+the second, the landing it left being spent by `use_land`, a task that never got its turn.
+`agents/Headless.md` says why the headless runner does not see it, and what an unmeasured pane
+keeps owed instead is below. What pays it is the pane as it stands **now**: the reveal
 `use_kept_position` calls is the closure the latest render made, taken out of a cell rather than
 handed to the effect, since a tab given another document keeps the panes it had, and one held from
 the mount would go on measuring the row against the file before it (`agents/UI.md`), and a move of
@@ -546,6 +547,16 @@ rows** and not instruction indices, so that one state can serve a listing of man
 converts it back through `Lanes::instructions_in` and asks `Lanes::touching_any` once for the run,
 one pass over the edges rather than one per row, and a run that is one separator lights nothing. In
 an object's code that is done per held stretch, each stretch's lanes speaking its own instructions.
+
+**A reveal owed to a pane that has not been measured is kept, not spent.** `reveal_row` needs to
+know what is on screen already -- to leave a row alone that is on it, and to give up the margin
+rather than the row in a pane too short for both -- and before the first `on_sized` there is no
+answer: a viewport of zero is not a pane with no room but a pane not measured yet, which is the
+pass a door arrives on. Read as room, it puts the row flush against the top, which is the one
+answer the margin exists to avoid, and `reveal_made` spends the debt so nothing corrects it. So
+`reveal_row` says it did nothing and the caller keeps what it owes. The callers **read** their
+viewport rather than peeking it, which is what wakes them when the measurement lands; peeked, the
+debt would be kept and never paid.
 
 **Every stroke in it is put on the device pixel grid by its edges.** freya lays a window out in
 logical pixels and multiplies the whole tree by the window's scale factor on the way to Skia,

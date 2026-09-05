@@ -80,37 +80,59 @@ pub(crate) struct Planting {
 #[derive(Clone, Copy)]
 pub(crate) struct Plant(pub(crate) State<Option<Planting>>);
 
-/// Bring the row at `index` into view, and leave the scroll alone when it already is, or
-/// when the offset this would write is the one the pane is at.
+/// Bring the row at `index` into view, and leave the scroll alone when it already is.
 ///
 /// A `VirtualScrollView` counts its offset *down* from zero and clamps whatever is set
 /// here against the content on the next layout, so the arithmetic need not know how long
 /// the list is.
 ///
-/// **Both tests are needed**, and the caller that reads the scroll to make the reveal
-/// (`use_kept_position`) is why: a scroll write notifies it whether or not the number
-/// changed, and a caller woken by its own write, making it again, is a loop. Already there
-/// is measured against the offset this would write, and not against the context rows on
-/// their own: a row in the first `CONTEXT_ROWS` of a listing cannot have them all above
-/// it, so the scroll went to 0 and the next call found it wanting again. And a pane that
-/// cannot show the row at all -- a viewport of 0 before its first layout, which is what a
-/// fresh pane's effect runs with on the desktop -- never finds it in view, so the offset
-/// the pane is at is refused before the row is measured. The loop never leaves the pass
-/// it starts in, so nothing later can end it.
-pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) {
+/// Answers whether the row could be positioned at all: [`false`] only for a pane that has
+/// not been measured, where the caller must keep whatever it owes. A caller keeping one
+/// has to have **read** its viewport rather than peeked it, or nothing wakes it when the
+/// measurement arrives and what it kept is never paid.
+///
+/// **Already there is measured against the offset this would write**, and not against the
+/// context rows on their own. A row in the first `CONTEXT_ROWS` of a listing cannot have
+/// them all above it, so asking for them was asking for an offset above the top of the
+/// list: the scroll went to 0, the next call measured it against the same impossible
+/// margin, and found it wanting again. That is a write per call for ever, and the caller
+/// that reads the scroll to make it is woken by it (`use_kept_position`).
+pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) -> bool {
+    // **Nothing is known before the pane has been laid out.** A viewport of zero is not a
+    // pane with no room, it is a pane not measured yet -- its first pass, which is the one
+    // a door arrives on -- and the clamp below would read it as a pane too short to hold
+    // the row and its margin, putting the row flush against the top: the one answer the
+    // margin exists to avoid. So nothing is done and `false` says so, for the caller to
+    // keep what it owes rather than spend it on a guess. The measurement wakes the next
+    // pass, which pays it properly.
+    if viewport <= 0.0 {
+        return false;
+    }
     let (_, scrolled) = <(i32, i32)>::from(*controller);
     let top = -scrolled as f32;
     let height = code_row_height();
     let row = index as f32 * height;
     let margin = CONTEXT_ROWS * height;
-    let wanted = (row - margin).max(0.0);
-    let writing = -(wanted as i32);
+    // The context rows are what the caller wants, never what it asks for: a caller hands
+    // over the row it means and the margin is applied here, once, so that no two callers
+    // disagree about how much of the listing above a row is part of showing it.
+    //
+    // **Never so far that the row itself leaves the view.** The margin is what is wanted
+    // above the row and the row is what was asked for, so a pane too short to hold both
+    // gives up the margin and not the row: scrolled to `row - margin` regardless, a pane
+    // two rows tall showed the two rows *before* the instruction a door had just opened
+    // it on. It is also what makes the offset written here satisfy the test above on the
+    // next call, in every viewport -- which is what keeps a caller that is woken by its
+    // own scroll from asking again for ever (`notes/upstream/freya.md`).
+    let lowest = row + height - viewport;
+    let wanted = (row - margin).max(lowest).min(row).max(0.0);
 
-    if writing == scrolled || (top <= wanted && row + height <= top + viewport) {
-        return;
+    if top <= wanted && row + height <= top + viewport {
+        return true;
     }
 
-    controller.scroll_to_y(writing);
+    controller.scroll_to_y(-(wanted as i32));
+    true
 }
 
 /// Bring the row the keyboard is on into view, and only when it is not: no context rows,

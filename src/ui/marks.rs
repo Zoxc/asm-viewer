@@ -495,9 +495,10 @@ pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: us
 
 /// Put the assembly pane's caret on `row`, at its start, as a [`Planting`] lands: the
 /// door that opened the listing named an instruction, and this is the one run in the
-/// pane, over whatever was there. `owed` is what the pane still owes it -- its own
-/// reveal in a symbol's listing, nothing in an object's code, where the tab's place
-/// (`CodeAt`) is what scrolls to the instruction and a reveal beside it would fight it.
+/// pane, over whatever was there. `owed` is what the pane still owes it, which is its
+/// own reveal in both listings: the tab's place (`CodeAt`) can say where an object's
+/// code sits but not that the rows before an instruction are part of showing it, and a
+/// place given that margin would carry it into every restore and every switch.
 ///
 /// The source pane's run, where the same door left one, stops owing this pane a scroll
 /// to its pair: the caret **is** that pair, and one scroll to it is this pane's own or

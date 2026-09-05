@@ -591,8 +591,10 @@ impl Component for SectionList {
                         row
                     }
                 };
+                if !reveal_row(controller, *viewport.read(), row) {
+                    return false;
+                }
                 reveal_made(marked, Pane::Assembly);
-                reveal_row(controller, *viewport.peek(), row);
                 true
             },
             reading_state,
@@ -1059,6 +1061,14 @@ fn use_kept_place(
             // address in no stretch is dropped rather than left for ever. Read and not
             // peeked, so a door opened while the tab is on top wakes this. The address
             // goes with the row into the places kept below, exactly.
+            //
+            // The pane owes the caret its reveal, as the symbol pane owes its own
+            // planting one: the reveal below wins over the place the door wrote, and
+            // keeps `CONTEXT_ROWS` above the row where the place alone put the
+            // instruction against the top of the pane with nothing before it. The place
+            // is still the exact address, so a stretch decoding under the view re-places
+            // it on the instruction itself; what the reveal gives is where the view sits
+            // when the door opens, which is the only moment the reader is reading it.
             let mut planted: Option<(usize, Spot)> = None;
             let planting = plant.read().clone();
             if let Some(planting) = planting.filter(|planting| planting.tab == tab.1.document) {
@@ -1074,7 +1084,7 @@ fn use_kept_place(
                             .map(|at| at.file),
                         _ => None,
                     };
-                    land_row(marked, file, row, Owed::default());
+                    land_row(marked, file, row, Owed::by(Pane::Assembly));
                     let first = built.row_for(planting.address).unwrap_or(row);
                     planted = Some((
                         row,

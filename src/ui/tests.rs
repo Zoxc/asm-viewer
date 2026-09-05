@@ -69,6 +69,15 @@ struct KeptListing(State<u64>);
 /// for the pair.
 const PAIRED_LISTING: u64 = 1;
 
+/// How tall the scrolling harnesses say they are. Stated rather than measured: nothing
+/// here lays out against a window, and a reveal needs to know what it can already see.
+const VIEWPORT: f32 = 100.0;
+
+/// A viewport a test states for itself, for the one case that is about not having one
+/// yet. Absent, [`revealing_harness`] is [`VIEWPORT`] tall.
+#[derive(Clone, Copy)]
+struct KeptViewport(State<f32>);
+
 /// A scroll view wired the way both **code** panes are: one `ScrollController` reused across
 /// every tab the pane shows, `use_kept_position` between them, and [`code_row_height`] on
 /// both halves of the view.
@@ -229,6 +238,9 @@ fn revealing_harness() -> impl IntoElement {
     let showing = tab.read().clone();
     let rows = *length.read();
     let drawn = *listing.read();
+    // What the pane has been measured as, which a test may say is nothing yet. Held as
+    // the panes hold theirs and read inside the closure, so the measurement wakes it.
+    let seen = try_consume_context::<KeptViewport>().map(|kept| kept.0);
     use_kept_position(
         at,
         move |tab: &String| open.peek().contains(tab),
@@ -246,8 +258,11 @@ fn revealing_harness() -> impl IntoElement {
                     *pair.rows.rows().start()
                 }
             };
+            let measured = seen.map_or(VIEWPORT, |kept| *kept.read());
+            if !reveal_row(controller, measured, row) {
+                return false;
+            }
             reveal_made(marked, Pane::Assembly);
-            reveal_row(controller, 100.0, row);
             true
         },
         // No landing machinery here, so no landing to take.
@@ -275,6 +290,73 @@ fn revealing_harness() -> impl IntoElement {
         .length(rows)
         .item_size(code_row_height()),
     )
+}
+
+/// A reveal owed to a pane that has not been laid out yet is **kept owed**, not spent on
+/// a guess. Nothing is known about what is on screen before the first measurement, and a
+/// reveal that went ahead anyway would read the unmeasured viewport as a pane too short
+/// to hold the row and its context rows -- putting the row flush against the top, which
+/// is the one answer the margin exists to avoid, and spending the debt so that nothing
+/// ever corrected it. A door into a tab that is opening at that moment landed there.
+#[test]
+fn a_reveal_owed_to_an_unmeasured_pane_is_kept_until_it_is_measured() {
+    let (mut test, (top, marked, viewport)) = TestingRunner::new(
+        revealing_harness,
+        (100., 100.).into(),
+        |runner| {
+            runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
+            runner.provide_root_context(|| KeptOpen(State::create(vec!["a".to_owned()])));
+            runner.provide_root_context(|| KeptLength(State::create(100)));
+            runner.provide_root_context(|| KeptListing(State::create(PAIRED_LISTING)));
+            runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
+            (
+                runner.provide_root_context(|| KeptTop(State::create(0))).0,
+                runner
+                    .provide_root_context(|| Marked(State::create(Marks::default())))
+                    .0,
+                // Not laid out yet, as a pane is on the pass a door reaches it.
+                runner
+                    .provide_root_context(|| KeptViewport(State::create(0.0)))
+                    .0,
+            )
+        },
+        1.,
+    );
+    let (mut marked, mut viewport) = (marked, viewport);
+    let top_row = |test: &mut TestingRunner| {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        test.move_cursor((50., 90.));
+        test.sync_and_update();
+        test.move_cursor((50., 5.));
+        test.sync_and_update();
+        *top.peek()
+    };
+    test.sync_and_update();
+
+    marked.set(Marks {
+        assembly: None,
+        source: Some(picked_row(40, "a.rs", Owed::by(Pane::Assembly))),
+    });
+    assert_eq!(
+        top_row(&mut test),
+        0,
+        "an unmeasured pane was scrolled anyway"
+    );
+    assert!(
+        owed_reveal(marked, Pane::Assembly).is_some(),
+        "the reveal was spent on a pane that could not answer it"
+    );
+
+    // Measured, and the pass that measures it pays what was kept.
+    viewport.set(VIEWPORT);
+    let landed = top_row(&mut test);
+    assert!(
+        (30..=40).contains(&landed),
+        "the reveal was not paid once the pane was measured: row {landed}"
+    );
+    assert!(owed_reveal(marked, Pane::Assembly).is_none());
 }
 
 /// A reveal owed when the tab changes wins over where the tab was left: the two are
@@ -14186,6 +14268,66 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
     );
 }
 
+/// A door into the unified view keeps the rows before the instruction in view, as every
+/// other door here keeps them before the row it lands on: the reader is put *at* the
+/// instruction and not against the top of the pane with nothing before it. The margin is
+/// the pane's to add -- the door asks for the instruction and nothing else.
+#[test]
+fn show_in_unified_view_keeps_the_rows_before_the_instruction() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0]);
+    let (mut test, ((states, marked, sections, _window, landing, _ctrl), plant)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 30.0 * code_row_height()).into(),
+            |runner| {
+                let states = code_states!(runner, reading);
+                let plant = runner.provide_root_context(|| Plant(State::create(None))).0;
+                (states, plant)
+            },
+            1.,
+        );
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    // An instruction far enough down the listing to have the whole margin above it.
+    let rows = rows_of(&sections.peek());
+    let address = (0..rows.len())
+        .filter_map(|row| rows.address_of(row))
+        .find(|address| {
+            rows.row_for(*address)
+                .is_some_and(|row| row > CONTEXT_ROWS as usize + 2)
+        })
+        .expect("the listing is long enough");
+    let at = rows.row_for(address).expect("the address has a row");
+
+    show_in_code(
+        states.open,
+        states.visits,
+        marked,
+        landing,
+        plant,
+        states.code_at,
+        object.clone(),
+        address,
+        None,
+    );
+    settle(&mut test);
+    settle(&mut test);
+
+    assert_eq!(
+        states
+            .code_at
+            .peek()
+            .at(&code_entry_of(&states, &code, address))
+            .and_then(|spot| row_of(&rows, spot)),
+        Some(at - CONTEXT_ROWS as usize),
+        "the instruction was not opened with the rows before it in view"
+    );
+}
+
 /// Shown among its neighbours while the object's code is already on top, the view
 /// scrolls to the instruction and nothing else changes: the place is written and read
 /// back by the pane, and the document stays.
@@ -14656,7 +14798,7 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     };
     let operand = call_operand(&f);
     let reading = reading_of(&object, &[0]);
-    let (mut test, (states, marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
+    let (mut test, (states, marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
         code_harness,
         (600., 6.0 * code_row_height()).into(),
         |runner| code_states!(runner, reading),
@@ -14674,15 +14816,18 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
         states.open.active() == Some(code.clone()),
         "the listing was left"
     );
+    // The place the view is left at is the row the reveal put at the top, which is the
+    // target's own less the rows kept before it: the door asks for the instruction and
+    // the margin is the pane's to add (`reveal_row`).
+    let rows = rows_of(&sections.peek());
+    let at = rows.row_for(target).expect("the target has a row");
     assert_eq!(
         states
             .code_at
             .peek()
-            .at(&code_entry_of(&states, &code, target)),
-        Some(Spot {
-            address: target,
-            rows: 0
-        }),
+            .at(&code_entry_of(&states, &code, target))
+            .and_then(|spot| row_of(&rows, spot)),
+        Some(at.saturating_sub(CONTEXT_ROWS as usize)),
         "the listing did not move to the target"
     );
     assert!(
@@ -14741,18 +14886,19 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
         states.open.active() == Some(code.clone()),
         "the tab changed"
     );
+    let rows = rows_of(&sections.peek());
+    let at = rows.row_for(target).expect("the target has a row");
     assert_eq!(
         states
             .code_at
             .peek()
-            .at(&code_entry_of(&states, &code, target)),
-        Some(Spot {
-            address: target,
-            rows: 0
-        })
+            .at(&code_entry_of(&states, &code, target))
+            .and_then(|spot| row_of(&rows, spot)),
+        Some(at.saturating_sub(CONTEXT_ROWS as usize))
     );
-    // The view is on the guessed row: `f`'s rows have scrolled off, and the top row is
-    // the one the guess puts the address in, which is nobody's address.
+    // The view is on the guessed row: `f` has scrolled off but for the rows the reveal
+    // keeps above the target, and the target's own row is one the guess puts the address
+    // in, which is nobody's address.
     let guess = guessed.row_for(target).expect("the target has a row");
     assert!(matches!(guessed.row(guess), Some(Row::Empty { .. })));
     assert!(
@@ -14760,14 +14906,9 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
         "the view did not move: {:?}",
         labels(&test)
     );
-    assert!(
-        address_labels(&test).is_empty(),
-        "{:?}",
-        address_labels(&test)
-    );
     // And the caret is on that row, the door being a caret as well as a scroll: planted
-    // by the pane, the door having been opened while the tab was on top, and owing
-    // the pane nothing beside the place it wrote.
+    // by the pane, the door having been opened while the tab was on top. The reveal the
+    // planting owed has been paid by now, which is why the run owes nothing here.
     let picked = marked
         .peek()
         .assembly
@@ -14787,7 +14928,18 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     sections.set(decoded);
     settle(&mut test);
     settle(&mut test);
-    assert_eq!(address_labels(&test)[0], format!("{holding:016X} "));
+    // On screen with the rows the reveal keeps before it, and not flush against the top.
+    let want = format!("{holding:016X} ");
+    let drawn = labels_with_areas(&test)
+        .into_iter()
+        .find(|(text, _)| *text == want)
+        .map(|(_, area)| area)
+        .unwrap_or_else(|| {
+            panic!(
+                "the instruction holding the byte is not on screen: {:?}",
+                address_labels(&test)
+            )
+        });
     let picked = marked
         .peek()
         .assembly
@@ -14796,10 +14948,11 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     assert_eq!(picked.chars.lead(), Caret { row: exact, col: 0 });
     let caret = carets(&test);
     assert_eq!(caret.len(), 1, "one caret is drawn");
-    let top = paragraphs(&test)[0].0;
+    // By their middles: the address is a label centred in a row taller than it is.
+    let middle = |area: Area| area.origin.y + area.height() / 2.0;
     assert!(
-        caret[0].origin.y >= top.origin.y - 1.0 && caret[0].origin.y < top.max_y(),
-        "the caret is not drawn on the top row: {:?} against {top:?}",
+        (middle(caret[0]) - middle(drawn)).abs() < code_row_height() / 2.0,
+        "the caret is not drawn on the instruction's row: {:?} against {drawn:?}",
         caret[0]
     );
 }
@@ -15206,13 +15359,28 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .expect("the caret went with the decode");
     assert_eq!(picked.chars.lead(), Caret { row, col: 0 });
     assert_eq!(picked.rows.rows(), row..=row);
-    assert_eq!(address_labels(&test)[0], format!("{address:016X} "));
+    // On screen and not at the top of it: the door reveals the instruction, which keeps
+    // the rows before it in view where the pane is tall enough to hold them. What must
+    // hold in every pane is that the instruction is drawn at all -- this one is two rows
+    // tall, and giving it its context rows regardless would scroll clean past it.
+    let want = format!("{address:016X} ");
+    let drawn = labels_with_areas(&test)
+        .into_iter()
+        .find(|(text, _)| *text == want)
+        .map(|(_, area)| area)
+        .unwrap_or_else(|| {
+            panic!(
+                "the instruction is not on screen: {:?}",
+                address_labels(&test)
+            )
+        });
     let caret = carets(&test);
     assert_eq!(caret.len(), 1, "one caret is drawn");
-    let top = paragraphs(&test)[0].0;
+    // By their middles: the address is a label centred in a row taller than it is.
+    let middle = |area: Area| area.origin.y + area.height() / 2.0;
     assert!(
-        caret[0].origin.y >= top.origin.y - 1.0 && caret[0].origin.y < top.max_y(),
-        "the caret is not drawn on the top row: {:?} against {top:?}",
+        (middle(caret[0]) - middle(drawn)).abs() < code_row_height() / 2.0,
+        "the caret is not drawn on the instruction's row: {:?} against {drawn:?}",
         caret[0]
     );
 }
@@ -21206,15 +21374,14 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
     );
 }
 
-/// **A reveal never writes the offset the pane is already at.** `State::write` notifies
-/// whether or not the number changed, so an effect that reads the scroll to make a reveal
-/// is woken by the write it made. Where the row cannot be on screen -- a viewport of 0
-/// before the first layout, which is what a fresh pane's effect runs with on the desktop
-/// -- the "already in view" test never holds, and a write per wake is a loop that never
-/// leaves the pass. The cap is the effect's own: uncapped, a regression hangs the suite
-/// rather than failing it.
+/// **A reveal in an unmeasured pane writes nothing, and so wakes nothing.** `State::write`
+/// notifies whether or not the number changed, so an effect that reads the scroll to make
+/// a reveal is woken by the write it made. A viewport of 0 -- what a fresh pane's effect
+/// runs with on the desktop, before the first layout -- has no offset that can satisfy
+/// the reveal, so a write per wake would be a loop that never leaves the pass. The cap is
+/// the effect's own: uncapped, a regression hangs the suite rather than failing it.
 #[test]
-fn a_reveal_of_a_row_the_pane_cannot_show_does_not_wake_itself() {
+fn a_reveal_in_an_unmeasured_pane_writes_nothing_and_wakes_nothing() {
     #[derive(Clone, Copy)]
     struct Woken(State<u32>);
     fn harness() -> impl IntoElement {
@@ -21240,11 +21407,12 @@ fn a_reveal_of_a_row_the_pane_cannot_show_does_not_wake_itself() {
     for _ in 0..4 {
         test.sync_and_update();
     }
-    // Once to scroll, and once more woken by that scroll, finding the offset already there.
+    // The one run the mount makes: the reveal refuses an unmeasured pane before it
+    // touches the scroll, so there is no write to be woken by.
     assert_eq!(
         *woken.peek(),
-        2,
-        "the reveal woke itself: it wrote an offset the pane was already at"
+        1,
+        "the reveal woke itself: it scrolled a pane it could not position the row in"
     );
 }
 

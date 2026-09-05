@@ -600,8 +600,10 @@ impl Component for SourceList {
                     if index >= length {
                         return false;
                     }
+                    if !reveal_row(controller, *viewport.read(), index) {
+                        return false;
+                    }
                     reveal_made(marked, Pane::Source);
-                    reveal_row(controller, *viewport.peek(), index);
                     true
                 }
             },
@@ -626,8 +628,10 @@ impl Component for SourceList {
                     else {
                         return false;
                     };
-                    reveal_row(controller, *viewport.peek(), index);
-                    true
+                    // Answered only where the pane could go there: a landing is gone
+                    // to once, so one taken by a pane with no measurement yet would be
+                    // remembered as answered and never made good.
+                    reveal_row(controller, *viewport.read(), index)
                 }
             },
             controller,

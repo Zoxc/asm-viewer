@@ -543,7 +543,8 @@ impl Component for BranchLabel {
                 // instruction is picked out, where the reader asked for the one it
                 // jumps to.
                 e.stop_propagation();
-                reveal_row(&mut controller, *viewport.peek(), to);
+                // The row is reached by a press, so the pane is on screen and measured.
+                let _ = reveal_row(&mut controller, *viewport.peek(), to);
                 // The row landed on becomes the picked-out one, replacing the row the
                 // press started on -- which `pointer_down` has already marked, that
                 // being the one handler a stopped press does not undo. The source
@@ -1217,8 +1218,10 @@ impl Component for InstructionList {
                             data.lanes.row_of(index)
                         }
                     };
+                    if !reveal_row(controller, *viewport.read(), row) {
+                        return false;
+                    }
                     reveal_made(marked, Pane::Assembly);
-                    reveal_row(controller, *viewport.peek(), row);
                     true
                 }
             },
