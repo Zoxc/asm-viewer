@@ -199,6 +199,11 @@ fn the_desktop_variable_only_sorts_the_two() {
     // Absent, or a desktop neither of them recognises: KDE first, and Gnome after it.
     assert_eq!(order(""), [Desktop::Kde, Desktop::Gnome]);
     assert_eq!(order("sway:wlroots"), [Desktop::Kde, Desktop::Gnome]);
+    // Whatever launched the session set the variable, so a name need not be ASCII and its
+    // fifth byte need not be a character boundary. "ÖÖÖ" is six bytes, with boundaries
+    // at 0, 2, 4 and 6.
+    assert_eq!(order("ÖÖÖ"), [Desktop::Kde, Desktop::Gnome]);
+    assert_eq!(order("ÖÖÖ:GNOME"), [Desktop::Gnome, Desktop::Kde]);
 }
 
 /// A `LOGFONTW`'s `lfFaceName`: UTF-16, NUL-padded, and with no terminator at all when

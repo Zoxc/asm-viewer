@@ -131,7 +131,11 @@ mod desktop {
             // `GNOME-Classic`, `GNOME-Flashback:GNOME` and the like all still answer to
             // `gsettings`, so this is a prefix and not an equality. Unity, Budgie and
             // Pantheon are GTK desktops that keep their fonts in the same schema.
-            name.len() >= 5 && name[..5].eq_ignore_ascii_case("GNOME")
+            //
+            // `get` and not a slice: the variable is whatever launched the session, and
+            // five bytes into a name is not always a character boundary.
+            name.get(..5)
+                .is_some_and(|head| head.eq_ignore_ascii_case("GNOME"))
                 || name.eq_ignore_ascii_case("Unity")
                 || name.eq_ignore_ascii_case("Budgie")
                 || name.eq_ignore_ascii_case("Pantheon")
