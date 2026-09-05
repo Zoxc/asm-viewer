@@ -404,6 +404,38 @@ pub fn elf_unreadable_section(data: &mut [u8], name: &str) {
     data[header + 0x18..header + 0x20].copy_from_slice(&past.to_le_bytes());
 }
 
+/// The ELF in `data` with `name`'s `st_name` pointed past its string table, so `object`
+/// answers `Err` for that symbol's name and nothing else about the file changes: the
+/// corrupt or mutated object where a text symbol is in the table but cannot be read out
+/// of it. Written here rather than by a writer because no writer emits an unreadable name.
+pub fn elf_with_unreadable_name(data: &[u8], name: &str) -> Vec<u8> {
+    use object::read::{Object as _, ObjectSection as _, ObjectSymbol as _};
+
+    /// `Elf64_Sym`, whose `st_name` is its first field.
+    const SYMBOL: usize = 24;
+
+    let mut data = data.to_vec();
+    let (index, table) = {
+        let file = object::File::parse(&data[..]).expect("the fixture parses");
+        let index = file
+            .symbols()
+            .find(|symbol| symbol.name() == Ok(name))
+            .unwrap_or_else(|| panic!("no symbol named {name} in the fixture"))
+            .index()
+            .0;
+        let table = file
+            .section_by_name(".symtab")
+            .and_then(|section| section.file_range())
+            .expect("the fixture has a symbol table")
+            .0;
+        (index, table as usize)
+    };
+
+    let at = table + index * SYMBOL;
+    data[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    data
+}
+
 /// An x86-64 **COFF** relocatable object whose `.text` holds `symbols` back to back, each an
 /// `IMAGE_SYM_CLASS_EXTERNAL` function whose auxiliary function-definition record declares
 /// the given `TotalSize` — the one nonzero size `object` reads out of a COFF symbol.

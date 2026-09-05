@@ -3,11 +3,12 @@
 
 mod common;
 
-use analysis::{parse_object, Object};
+use analysis::{parse_object, Listing, Object};
 use common::{
-    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, elf_x86_64,
-    elf_x86_64_with_dwarf, garbage, parse, parse_and_walk, survivors, DwarfFixture, DwarfRow,
-    DwarfSection, TextRelocation, TextSymbol, UnitRanges,
+    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture,
+    elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage, named, names, parse,
+    parse_and_walk, survivors, DwarfFixture, DwarfRow, DwarfSection, TextRelocation, TextSymbol,
+    UnitRanges,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -1077,4 +1078,66 @@ fn aliased_at_one_address(aliases: usize, rows: usize) -> Vec<u8> {
         }],
         unit_ranges: UnitRanges::Relocated,
     })
+}
+
+/// Defect: `parse_object` walked the symbol table twice and the two walks disagreed about a
+/// symbol whose name will not read. The first pushed every text symbol's address into its
+/// section, the second dropped the symbol on the name failure — so the address cut its
+/// neighbour's derived extent and blocked any export or unwind entry from naming it, while
+/// nothing listed it. The middle function then showed as a gap in a section no symbol
+/// claimed. Both walks now skip it.
+#[test]
+fn a_symbol_whose_name_will_not_read_does_not_bound_its_neighbour() {
+    let data = elf_with_unreadable_name(
+        &elf_x86_64(
+            &[
+                TextSymbol {
+                    name: "a",
+                    bytes: &[0x90; 16],
+                },
+                TextSymbol {
+                    name: "b",
+                    bytes: &[0x90; 16],
+                },
+                TextSymbol {
+                    name: "c",
+                    bytes: &[0xC3; 4],
+                },
+            ],
+            &[],
+        ),
+        "b",
+    );
+    let object = parse(&data);
+    assert_eq!(names(&object), ["a", "c"]);
+
+    // `a` derives its extent from the next symbol the section has, which is now `c`.
+    let a = named(&object, "a");
+    assert_eq!(a.extent(&object), Some(32));
+
+    // And the listing's labels say the same: two stretches, `a`'s reaching `c`, with no
+    // gap between what `a` claims and where `c` starts.
+    let section = object
+        .sections
+        .iter()
+        .find(|section| section.name == ".text")
+        .expect("a .text section");
+    let listing = Listing::new(&object, section.clone());
+    let stretches: Vec<_> = listing
+        .stretches()
+        .iter()
+        .map(|stretch| {
+            (
+                stretch.range.start,
+                stretch.range.end,
+                stretch.symbol().map(|symbol| symbol.name.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(stretches, [(0, 32, Some("a")), (32, 36, Some("c"))]);
+    assert!(listing
+        .decode(&object, 0)
+        .expect("a's stretch decodes")
+        .gap
+        .is_none());
 }

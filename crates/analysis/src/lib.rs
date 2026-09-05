@@ -838,9 +838,14 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
             // Insert symbol addresses into sections. The addresses are collected as they go,
             // because that set is what tells `declared_code` which of the file's exports are
             // already in the symbol table under their own name.
+            //
+            // A symbol whose name will not read is skipped, exactly as the walk below that
+            // builds the symbols skips it: kept here it would cut its neighbour's derived
+            // extent and refuse an export or an unwind entry the address, while being
+            // listed nowhere.
             let mut known: HashSet<u64> = HashSet::new();
             file.symbols().for_each(|symbol| {
-                if symbol.kind() != SymbolKind::Text {
+                if symbol.kind() != SymbolKind::Text || symbol.name_bytes().is_err() {
                     return;
                 }
 
