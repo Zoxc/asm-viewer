@@ -699,7 +699,18 @@ pub(crate) async fn take_load(
         };
 
         if !parsed.is_empty() {
-            objects.write().extend(parsed);
+            let mut objects = objects.write();
+            for object in parsed {
+                // After the last object of the same file, never simply at the end: two
+                // loads running at once interleave their batches, and the Objects list
+                // groups a file by the run its objects make (`crate::tree`). Appended,
+                // one archive would be drawn as several file rows, each with a fold of
+                // its own, for the rest of the session.
+                match objects.iter().rposition(|held| held.path == object.path) {
+                    Some(last) => objects.insert(last + 1, object),
+                    None => objects.push(object),
+                }
+            }
         }
         if !finished.is_empty() {
             let mut held = loading.write();

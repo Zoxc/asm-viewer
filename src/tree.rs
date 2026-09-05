@@ -3,9 +3,11 @@
 //!
 //! [`ObjectTree`] groups objects into the **consecutive runs** sharing a [`Object::path`] —
 //! runs rather than a map keyed by path, so the rows keep the order the files were opened
-//! in. One file opened twice therefore folds into one row over both copies. A file that
-//! contributed exactly one object is its own row and grows no parent. [`Loads`] is the
-//! other half: the files being read right now, which have a row before they have an object.
+//! in. One file opened twice therefore folds into one row over both copies. The run is the
+//! writer's to keep: an object is put after the last one of its own file, so two loads
+//! arriving at once cannot split a file in two. A file that contributed exactly one object
+//! is its own row and grows no parent. [`Loads`] is the other half: the files being read
+//! right now, which have a row before they have an object.
 
 use std::{
     collections::HashSet,

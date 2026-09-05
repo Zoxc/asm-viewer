@@ -2053,38 +2053,34 @@ fn closing_a_binary_keeps_the_source_tabs() {
     );
 }
 
-/// The channel a load test feeds by hand, and the paths the harness registers as being
-/// read, standing in for `open_binaries`' worker thread. The receiver is *taken* rather
-/// than cloned: a clone left in the context map would keep the channel open for ever, and
-/// the test could never see `take_load` returning and dropping the last receiver.
+/// The channels a load test feeds by hand, one per load, with the paths each of them is
+/// reading: `open_binaries`' worker threads, played by the test. The receivers are
+/// *taken* rather than cloned: a clone left in the context map would keep a channel open
+/// for ever, and the test could never see `take_load` returning and dropping the last
+/// receiver.
 #[derive(Clone)]
-struct Feed(
-    Arc<Mutex<Option<async_channel::Receiver<Progress>>>>,
-    Arc<Vec<PathBuf>>,
-);
+struct Feed(Arc<Mutex<Vec<(async_channel::Receiver<Progress>, Vec<PathBuf>)>>>);
 
-/// The real `take_load` over the real Objects tree, with the worker replaced by [`Feed`].
-/// The tree is mounted so these tests also build the rows for a file being read --
-/// including the row with no group behind it, which no other test reaches.
+/// The real `take_load` over the real Objects tree, one per load, with the workers
+/// replaced by [`Feed`]. The tree is mounted so these tests also build the rows for a file
+/// being read -- including the row with no group behind it, which no other test reaches.
 fn load_harness() -> impl IntoElement {
     let objects = use_consume::<Objects>().0;
     let loading = use_consume::<Loading>().0;
     let feed = use_consume::<Feed>().clone();
 
     use_hook(move || {
-        let Feed(events, paths) = feed;
-        let events = events
-            .lock()
-            .expect("the feed is not poisoned")
-            .take()
-            .expect("the harness is mounted once");
-        // Bound out of its own statement, so the guard is gone before anything else
-        // touches the state.
-        let id = {
-            let mut loading = loading;
-            loading.write().begin(&paths)
-        };
-        spawn(async move { take_load(objects, loading, id, events).await });
+        let loads = std::mem::take(&mut *feed.0.lock().expect("the feed is not poisoned"));
+        assert!(!loads.is_empty(), "the harness is mounted once");
+        for (events, paths) in loads {
+            // Bound out of its own statement, so the guard is gone before anything else
+            // touches the state.
+            let id = {
+                let mut loading = loading;
+                loading.write().begin(&paths)
+            };
+            spawn(async move { take_load(objects, loading, id, events).await });
+        }
     });
 
     rect().expanded().child(ObjectsPanel)
@@ -2094,8 +2090,14 @@ fn load_harness() -> impl IntoElement {
 /// above the analysis crate. Parsed `n` times rather than cloned, so they are `n` distinct
 /// `Arc`s exactly as real members are.
 fn fixture_objects(n: usize) -> (PathBuf, Vec<Arc<Object>>) {
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
+    fixture_objects_of("line_fixture.o", n)
+}
+
+/// The same, of a named fixture, so a test can have two files to interleave.
+fn fixture_objects_of(name: &str, n: usize) -> (PathBuf, Vec<Arc<Object>>) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("crates/analysis/tests/fixtures")
+        .join(name);
     let objects = (0..n)
         .map(|_| {
             analysis::open_files(vec![path.clone()])
@@ -2107,8 +2109,36 @@ fn fixture_objects(n: usize) -> (PathBuf, Vec<Arc<Object>>) {
     (path, objects)
 }
 
-/// Mount [`load_harness`] over one path, and hand back the states and the sender the
-/// test plays the worker with.
+/// Mount [`load_harness`] over one load per path, and hand back the states and the
+/// senders the test plays the workers with, in the order the paths were given.
+fn mount_loads(
+    paths: &[&Path],
+) -> (
+    TestingRunner,
+    ProjectStates,
+    Vec<async_channel::Sender<Progress>>,
+) {
+    let mut senders = Vec::new();
+    let mut loads = Vec::new();
+    for path in paths {
+        let (sender, events) = async_channel::unbounded::<Progress>();
+        senders.push(sender);
+        loads.push((events, vec![path.to_path_buf()]));
+    }
+    let loads = Arc::new(Mutex::new(loads));
+    let (test, states) = TestingRunner::new(
+        load_harness,
+        (300., 300.).into(),
+        move |runner| {
+            runner.provide_root_context(|| Feed(loads.clone()));
+            project_states!(runner)
+        },
+        1.,
+    );
+    (test, states, senders)
+}
+
+/// One load over one path, which is what most of these tests want.
 fn mount_load(
     path: &Path,
 ) -> (
@@ -2116,19 +2146,8 @@ fn mount_load(
     ProjectStates,
     async_channel::Sender<Progress>,
 ) {
-    let (sender, events) = async_channel::unbounded::<Progress>();
-    let paths = Arc::new(vec![path.to_path_buf()]);
-    let events = Arc::new(Mutex::new(Some(events)));
-    let (test, states) = TestingRunner::new(
-        load_harness,
-        (300., 300.).into(),
-        move |runner| {
-            runner.provide_root_context(|| Feed(events.clone(), paths.clone()));
-            project_states!(runner)
-        },
-        1.,
-    );
-    (test, states, sender)
+    let (test, states, mut senders) = mount_loads(&[path]);
+    (test, states, senders.remove(0))
 }
 
 /// How the Objects tree describes what is on screen: a file being read has a row before it
@@ -2189,6 +2208,57 @@ fn objects_reach_the_sidebar_as_they_are_parsed() {
     // Done, so the ordinary rules take over: three objects out of one file is an
     // archive-shaped row.
     assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 3, false)]);
+}
+
+/// Two loads reading at once put their objects into one list, and each file still makes
+/// exactly one row. The list groups a file by the run its objects make, so a batch put at
+/// the end rather than after the file's own objects splits an archive into a row per run
+/// -- with the same name and path, its own fold, and a part of the count.
+#[test]
+fn two_loads_at_once_keep_a_file_to_one_row() {
+    let (first, ones) = fixture_objects_of("line_fixture.o", 3);
+    let (second, twos) = fixture_objects_of("line_fixture_split.o", 2);
+    let (mut test, states, senders) = mount_loads(&[&first, &second]);
+    test.sync_and_update();
+
+    // Alternating, which is what two workers reading at once do.
+    let arrivals = [
+        (0, &ones[0]),
+        (1, &twos[0]),
+        (0, &ones[1]),
+        (1, &twos[1]),
+        (0, &ones[2]),
+    ];
+    for (landed, (load, object)) in arrivals.iter().enumerate() {
+        senders[*load]
+            .send_blocking(Progress::Parsed((*object).clone()))
+            .expect("the app is still listening");
+        pump(&mut test, || states.objects.peek().len() == landed + 1);
+    }
+
+    assert_eq!(
+        reading(&states),
+        [
+            ("line_fixture.o".to_owned(), 3, true),
+            ("line_fixture_split.o".to_owned(), 2, true)
+        ],
+        "the interleaved loads made more rows than there are files"
+    );
+
+    for (load, path) in [(0, &first), (1, &second)] {
+        senders[load]
+            .send_blocking(Progress::Finished(path.clone()))
+            .expect("the app is still listening");
+    }
+    pump(&mut test, || states.loading.peek().is_empty());
+
+    assert_eq!(
+        reading(&states),
+        [
+            ("line_fixture.o".to_owned(), 3, false),
+            ("line_fixture_split.o".to_owned(), 2, false)
+        ]
+    );
 }
 
 /// Closing a file half way through reading it takes the objects that have already arrived

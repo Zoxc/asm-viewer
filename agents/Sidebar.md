@@ -56,7 +56,11 @@ nothing focused, answered from a pressed row, and not typed into the box it reac
 **Pressing an object opens all of its code** as one listing (`Document::Code`, `agents/UI.md`). That
 is the one thing an object has to show that a symbol does not; the file's own facts belong to the
 file-tab goal. **The Objects list is a tree** (`src/tree.rs`). `ObjectTree::new` groups objects by
-*consecutive runs* of equal `Object::path` and flattens the result into `TreeRow`s. The tree is a
+*consecutive runs* of equal `Object::path` and flattens the result into `TreeRow`s. Keeping the run
+is the writer's job: `take_load` puts each object after the last one of its own file and not at the
+end, because two loads reading at once interleave their batches and the order is permanent -- a file
+split over two runs would be drawn as two rows with the same name, each with its own fold and a part
+of the count, for the rest of the session. The tree is a
 shape in the data, never in the element tree, because a `VirtualScrollView` is told a length and
 asked for row *n*. A file contributing exactly **one** object is its own row and gets no parent.
 Filter and folds interact by one rule: a file row is never hidden while a row under it is visible.
