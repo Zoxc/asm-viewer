@@ -5212,6 +5212,92 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
     );
 }
 
+/// A definition opened in place opens in the tab the **press** was made in, however the
+/// reader has moved between tabs while the server was thinking.
+///
+/// The round trip is seconds long while rust-analyzer is reading the project, which is
+/// long enough to press a chip: without the tab the question was asked in, the definition
+/// is pushed onto whichever tab is on screen when the answer lands, and a tab nobody
+/// asked about shows a file nobody asked to see.
+#[test]
+fn a_definition_lands_in_the_tab_it_was_asked_in() {
+    let (file, directory) = calling_file("in-its-tab");
+    let defined = directory.join("helper.rs");
+    std::fs::write(&defined, "fn helper(n: u32) -> u32 {\n    n\n}\n")
+        .expect("writing the definition's file");
+    let place = lsp::Place {
+        file: defined.clone(),
+        line: 1,
+        columns: 3..9,
+    };
+    // The question waits here until the test lets it go, so the answer lands after the
+    // reader has moved to the other tab.
+    let (release, held) = async_channel::bounded::<()>(1);
+    let (mut test, states, language, _location, _driven, asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, id, want, .. } => {
+                let _ = held.recv_blocking();
+                Some(LspAnswer::Answered {
+                    run,
+                    id,
+                    want,
+                    reply: Ok(Reply::Defined(vec![place.clone()])),
+                })
+            }
+            _ => None,
+        },
+        file.clone()
+    );
+    let mut language = language;
+    let calling = Document::Source(file.clone());
+    let elsewhere = Document::Source(Arc::from("/p/src/elsewhere.rs"));
+    open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
+    open_document(states.open, states.visits, elsewhere.clone(), Reach::NewTab);
+    settle(&mut test);
+    let asking = tab_showing(&states, &calling).expect("the tab the press is made in");
+    let other = tab_showing(&states, &elsewhere).expect("the tab the reader moves to");
+    raise_document(&states, &calling);
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    // The press, waited for: the worker records a job when it takes it, so this is what
+    // says the question is with the server and the answer still to come.
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    next_ask(&mut test, &asks).expect("the question went out");
+
+    // And the reader moves on while it is in flight.
+    raise_document(&states, &elsewhere);
+    settle(&mut test);
+    assert!(states.open.active_id() == Some(other));
+
+    let _ = release.send_blocking(());
+    pump(&mut test, || {
+        states.open.active() != Some(elsewhere.clone())
+    });
+
+    let opened = Document::Source(Arc::from(defined.to_str().expect("a utf-8 path")));
+    assert!(
+        states.open.active_id() == Some(asking),
+        "the answer landed in a tab the press was not made in"
+    );
+    assert!(
+        states.open.active() == Some(opened),
+        "the tab that asked is not on the definition"
+    );
+    // And the tab the reader had moved to is as they left it.
+    let untouched = states
+        .open
+        .docs
+        .peek()
+        .current(other)
+        .map(|stop| stop.document.clone());
+    assert!(
+        untouched == Some(elsewhere),
+        "the tab the reader moved to was replaced"
+    );
+}
+
 /// A right-click on a link offers the name's uses, and asks for them where the pointer
 /// was: the question carries the name it was on and the column it begins at. A press
 /// elsewhere in the row offers no such thing -- the answer would be to no name.

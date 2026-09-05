@@ -4,7 +4,9 @@
 //! Two workers stand between the press and the tab moving, so what to do with the answer
 //! cannot be worked out when it lands: the reader may have moved on, and Ctrl may no
 //! longer be held. It is decided at the press and kept here, `Asking`'s rule in
-//! `ui::language` -- what was asked for is what was asked for.
+//! `ui::language` -- what was asked for is what was asked for. Which includes **where**:
+//! a press asking for the definition in place asked for it in the tab it was made in,
+//! and that tab is raised to take it however the reader has moved between tabs since.
 //!
 //! One question is remembered, so a reader who clicks twice gets the second answer: the
 //! worker already drops all but the last still queued (`worth_doing`), and an answer
@@ -20,8 +22,9 @@ use super::*;
 pub(crate) struct Follow {
     asked: Option<Asked>,
     /// Where the answer said the name is defined, until [`use_follow`] has taken it: the
-    /// place the server named, and where the press said it should open.
-    arrived: Option<(lsp::Place, Reach)>,
+    /// place the server named, where the press said it should open, and the tab it was
+    /// made in.
+    arrived: Option<(lsp::Place, Reach, Option<DocId>)>,
 }
 
 /// A question put and not yet answered: which server run it was asked in and which
@@ -35,6 +38,10 @@ struct Asked {
     /// was asked on means. See [`Follow::answer`].
     want: Wanted,
     reach: Reach,
+    /// The tab the press was made in, so that a [`Reach::InPlace`] answer replaces what
+    /// **that** tab shows and not what the tab on screen when it lands does. `None` with
+    /// no document tab on screen, which a press inside a pane always has.
+    tab: Option<DocId>,
 }
 
 impl Follow {
@@ -55,7 +62,7 @@ impl Follow {
         let Some(asked) = waiting else {
             return false;
         };
-        let reach = asked.reach;
+        let (reach, tab) = (asked.reach, asked.tab);
         // A **declaration** naming the line it was asked on is nowhere to go. A trait's
         // own method declaration is the case: it is a link, since nothing the server says
         // of it tells it from the `impl` item that has the trait to go to, and asking
@@ -74,7 +81,7 @@ impl Follow {
         self.arrived = places
             .first()
             .filter(|place| !nowhere(place))
-            .map(|place| (place.clone(), reach));
+            .map(|place| (place.clone(), reach, tab));
         self.asked = None;
         true
     }
@@ -103,12 +110,17 @@ pub(crate) struct Following(pub(crate) State<Follow>);
 /// item in a trait `impl`, whose definition is itself (`src/links.rs`). Both answers open
 /// the same door, which is why both arrive here.
 ///
+/// The tab the press was made in is kept with the question. The pane is the active tab's,
+/// which is what `open` is read for, and it is read at the press for the reason the rest
+/// of it is.
+///
 /// With no server there is nobody to ask and nothing is remembered: a question is not
 /// what starts one, that being the control the reader presses.
 pub(crate) fn follow_name(
     language: State<Language>,
     mut follow: State<Follow>,
     jobs: &LspJobs,
+    open: Open,
     at: Lookup,
     want: Wanted,
     reach: Reach,
@@ -116,7 +128,8 @@ pub(crate) fn follow_name(
     let Some((run, id)) = ask_where(language, jobs, at.clone(), want) else {
         return;
     };
-    // Bound before the write, the read above being of another state.
+    // Bound before the write, the reads above being of other states.
+    let tab = open.active_id();
     let held = follow.peek().clone();
     follow.set(Follow {
         asked: Some(Asked {
@@ -125,6 +138,7 @@ pub(crate) fn follow_name(
             at,
             want,
             reach,
+            tab,
         }),
         ..held
     });
@@ -146,10 +160,26 @@ pub(crate) fn use_follow(
         // Reading is what wakes this; the write below clears what it read, so the run
         // it wakes finds nothing and stops.
         let arrived = follow.read().arrived.clone();
-        let Some((place, reach)) = arrived else {
+        let Some((place, reach, tab)) = arrived else {
             return;
         };
         follow.write().arrived = None;
+
+        // In place means in the tab the press was made in. The round trip is seconds long
+        // while the server reads the project, so the reader may be in another tab by now,
+        // and pushing the definition onto that one would replace what a tab nobody asked
+        // about is showing. The asking tab is raised to take it instead. An answer to a
+        // tab that has closed is an answer to nobody: a tab of its own would be a place
+        // nothing is waiting for.
+        let asking = tab.filter(|_| reach == Reach::InPlace && tab != open.active_id());
+        if let Some(tab) = asking {
+            // Bound before the raise below, which writes the state this read.
+            let still_open = open.strip.peek().contains(Tab::Document(tab));
+            if !still_open {
+                return;
+            }
+            raise(open, tab);
+        }
 
         // An empty run at the column the name starts at: a caret at the head of the
         // definition and not at the head of its line, the reader being taken there to

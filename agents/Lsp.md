@@ -340,6 +340,12 @@ decided **at the press** and kept -- `Asking`'s rule once more. Two workers stan
 the press and the tab moving, so by the time the answer lands the reader may have moved on
 and Ctrl may no longer be held; what was asked for is what was asked for.
 
+The **tab** is half of that. `Reach::InPlace` means the tab the press was made in, and a
+reader who presses a chip while the server is indexing is in another one by the time the
+answer lands; so the asking tab is kept with the question and raised to take it, and an
+answer to a tab that has closed opens nothing -- nobody is waiting for it. Resolved against
+the tab on screen instead, as it was, the definition replaced what an unrelated tab showed.
+
 One question is held, by the id it went out under. A reader clicking twice wants the
 second answer: `worth_doing` drops all but the last still queued, and the id drops the
 answer to one the worker had already taken. Matched by the run alone -- as it was -- the

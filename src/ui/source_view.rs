@@ -193,6 +193,8 @@ impl Component for SourceRow {
         // Consumed here, in the render, because the menu handler may not run a hook.
         let located = use_consume::<Locations>().0;
         let docs = use_consume::<OpenDocs>().0;
+        // Which tab a press on a link is made in: where its answer opens.
+        let open = use_open();
         // What a press on a link needs, all three or none: a pane mounted without them
         // draws its text and no links (`links_in`).
         let ctrl = use_consume::<Ctrl>().0;
@@ -258,6 +260,7 @@ impl Component for SourceRow {
                         language,
                         follow,
                         &jobs,
+                        open,
                         Lookup {
                             file: PathBuf::from(&*file),
                             // The protocol counts lines from zero, where a row's line is
@@ -319,6 +322,7 @@ impl Component for SourceRow {
                                         language,
                                         follow,
                                         &jobs,
+                                        open,
                                         asked_at(&at, column),
                                         Wanted::Definition,
                                         Reach::InPlace,
