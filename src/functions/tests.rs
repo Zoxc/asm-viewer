@@ -327,6 +327,37 @@ fn unterminated() {
     assert_eq!(enclosing(&found, 29), None);
 }
 
+/// Defect: the brace of a `{ .. }` const argument in a return type was taken for the
+/// function's body, because only `(` and `[` were counted as grouping and a type's angle
+/// brackets are neither. The body's own braces were then unowned and the function's span
+/// was its signature alone.
+#[test]
+fn a_const_argument_in_a_return_type_is_not_the_body() {
+    let text = "\
+fn a<const N: usize>() -> Foo<{ N + 1 }> {
+    todo!()
+}
+fn b() {
+    1
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("a", 1, 3), ("b", 4, 6)]);
+
+    // The same in a `where` clause, whose `>` is a comparison and not a close.
+    let text = "\
+fn a<const N: usize>() -> usize
+where
+    Assert<{ N > 0 }>: True,
+{
+    N
+}
+fn b() {
+    1
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("a", 1, 6), ("b", 7, 9)]);
+}
+
 /// Defect: the scanner looked for the closing quote of an escaped character one byte past
 /// the backslash, so `'\''` ended on the escaped quote. The real one then opened a literal
 /// of its own, `|'` was read as a character, and the `"` after it opened a string that ran

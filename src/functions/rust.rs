@@ -47,11 +47,11 @@ pub fn functions(text: &str) -> Vec<Function> {
             }
             Token::Open(bracket) => {
                 scanner.depth += 1;
-                // The first brace after a signature at the parenthesis depth the `fn`
-                // was seen at is the body's: the signature's own `{` never comes inside
-                // a `(` or `[` of its own, a `{ N }` in a const generic argument does,
-                // and the depth is relative because a whole item can sit inside a macro
-                // invocation's parentheses (`const_eval_select!( ... )`).
+                // The first brace after a signature at the grouping depth the `fn` was
+                // seen at is the body's: the signature's own `{` never comes inside a
+                // `(`, `[` or `<` of its own, a `{ N }` in a const generic argument
+                // does, and the depth is relative because a whole item can sit inside a
+                // macro invocation's parentheses (`const_eval_select!( ... )`).
                 if bracket == b'{' {
                     if let Some((_, at, body @ None)) = open.last_mut() {
                         if scanner.grouped == *at {
@@ -81,7 +81,7 @@ pub fn functions(text: &str) -> Vec<Function> {
             }
             // A signature that ends before its body began is a declaration -- a
             // trait's, or an `extern` block's -- and has no lines of code. At the `fn`'s
-            // own parenthesis depth, since the `;` of `[u8; 4]` is a type's and not an end.
+            // own grouping depth, since the `;` of `[u8; 4]` is a type's and not an end.
             Token::Semicolon => {
                 if let Some((index, at, None)) = open.last() {
                     if scanner.grouped == *at {
@@ -124,9 +124,11 @@ struct Scanner<'a> {
     text: &'a [u8],
     /// The byte after the token last handed out.
     position: usize,
-    /// How many brackets of any kind are open.
+    /// How many braces and brackets are open.
     depth: usize,
-    /// How many of them are `(` or `[`.
+    /// How many `(`, `[` or `<` are open: the grouping a `fn`'s own body brace is never
+    /// inside. Angle brackets are counted by [`next`](Scanner::next) as it passes them,
+    /// the rest by the walk over the tokens it hands out.
     grouped: usize,
     /// Where each line starts, for turning an offset into a 1-based line.
     lines: Vec<usize>,
@@ -184,6 +186,22 @@ impl<'a> Scanner<'a> {
                 b';' => {
                     self.position += 1;
                     return Some(Token::Semicolon);
+                }
+                // A type's angle brackets group like a parenthesis, so that the `{` of a
+                // `{ N }` const argument in one is not read as a body. `>` after `-` is
+                // the arrow of a return type; `>>` is two closes and arrives as two
+                // bytes. A comparison miscounts, which is why the close saturates: those
+                // only occur in a body, whose function already has its brace, and any
+                // `fn` inside one is measured from the count as it stood at its keyword.
+                b'<' => {
+                    self.grouped += 1;
+                    self.position += 1;
+                }
+                b'>' => {
+                    if self.position == 0 || self.text[self.position - 1] != b'-' {
+                        self.grouped = self.grouped.saturating_sub(1);
+                    }
+                    self.position += 1;
                 }
                 _ if is_identifier_start(byte) => {
                     let word = self.word();
