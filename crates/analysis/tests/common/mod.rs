@@ -1235,17 +1235,30 @@ pub fn elf_x86_64_two_sequences() -> Vec<u8> {
     obj.write().expect("writing the fixture object")
 }
 
-/// `storer` = `mov dword ptr [rip+0x0], 7; ret`, relocated at offset 2 against a **data**
-/// symbol — which parsing drops, so the relocation is on the instruction and yet resolves
-/// to nothing navigable.
-pub fn rip_relative_store_to_data() -> Vec<u8> {
+/// `storer` = `mov dword ptr [rip+displacement], 7; ret`, relocated at offset 2 against a
+/// **data** symbol — which parsing drops, so the relocation is on the instruction and yet
+/// resolves to nothing navigable. `displacement` is what the four placeholder bytes hold:
+/// zero is what an ELF RELA leaves them, since its addend is in the relocation entry, and
+/// anything else is what a format storing the addend in the operand writes there.
+pub fn rip_relative_store_to_data(displacement: i32) -> Vec<u8> {
     let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
 
+    let placeholder = displacement.to_le_bytes();
     let text = obj.section_id(write::StandardSection::Text);
     let offset = obj.append_section_data(
         text,
         &[
-            0xC7, 0x05, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0xC3,
+            0xC7,
+            0x05,
+            placeholder[0],
+            placeholder[1],
+            placeholder[2],
+            placeholder[3],
+            0x07,
+            0x00,
+            0x00,
+            0x00,
+            0xC3,
         ],
         1,
     );

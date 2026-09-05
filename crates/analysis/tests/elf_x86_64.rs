@@ -374,7 +374,7 @@ fn an_unresolvable_relocation_keeps_the_rip_form() {
     // on the instruction with nothing to navigate to, so no link. The displacement is
     // still a placeholder, so the operand stays rip-relative rather than being folded
     // into an absolute address the encoding does not have.
-    let object = parse(&rip_relative_store_to_data());
+    let object = parse(&rip_relative_store_to_data(0));
     let storer = symbol(&object, "storer");
     assert_eq!(names(&object), ["storer"]);
 
@@ -383,7 +383,61 @@ fn an_unresolvable_relocation_keeps_the_rip_form() {
 
     assert!(mov.relocation.is_none());
     assert_eq!(mov.relocation_span, None);
+    // No offset, because an ELF RELA keeps its addend out of the operand: the four
+    // placeholder bytes are zero, and a zero displacement is not printed.
     assert_eq!(text(mov).trim_end(), "mov       dword ptr [rip], 7");
+    assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
+}
+
+#[test]
+fn a_relocated_operand_keeps_a_non_zero_displacement() {
+    // A format that stores the addend in the operand rather than in the relocation entry
+    // -- COFF, Mach-O -- leaves a placeholder that is routinely not zero, and those bytes
+    // are in the encoding whatever they stand for. Each is printed against the `rip`, the
+    // way `objdump -dr` prints `0x8(%rip)` for the same instruction.
+    for (displacement, printed) in [(-4, "[rip-4]"), (8, "[rip+8]"), (0x20, "[rip+20h]")] {
+        let object = parse(&rip_relative_store_to_data(displacement));
+        let storer = symbol(&object, "storer");
+        let assembly = storer.assembly(&object).expect("storer disassembles");
+        let mov = &assembly.instructions[0];
+
+        assert_eq!(
+            text(mov).trim_end(),
+            format!("mov       dword ptr {printed}, 7")
+        );
+    }
+}
+
+#[test]
+fn a_name_replaces_the_whole_displacement() {
+    // The resolved case of the same thing: the name goes in where the placeholder was, so
+    // what it stood for -- here a displacement of 8 -- is not printed beside it. The
+    // operand reads `[rip+target]` and not `[rip+target+8]`.
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "storer",
+                bytes: &[
+                    0xC7, 0x05, 0x08, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0xC3,
+                ],
+            },
+            TextSymbol {
+                name: "target",
+                bytes: &[0xC3],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 0,
+            offset: 2,
+            target: 1,
+        }],
+    );
+    let object = parse(&data);
+    let storer = symbol(&object, "storer");
+    let assembly = storer.assembly(&object).expect("storer disassembles");
+    let mov = &assembly.instructions[0];
+
+    assert_eq!(text(mov).trim_end(), "mov       dword ptr [rip+target], 7");
     assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
 }
 

@@ -491,8 +491,12 @@ covers it: `assembly` flips `rip_relative_addresses` **per instruction**, on exa
 a relocation -- resolved to a name or not -- and a rip-relative memory operand, because
 `format_memory` would otherwise fold the displacement into an absolute address the encoding does not
 have. The displacement a relocation covers is a placeholder either way, so a resolved one would
-print `[target]` and an unresolved one a number that names nothing. The option cannot be set per operand, since
-`format_memory` reads the global one. `Instruction::relocation_span` is the index of the span the
+print `[target]` and an unresolved one a number that names nothing. The option cannot be set per
+operand, since `format_memory` reads the global one. The placeholder itself is still printed when
+it is not zero -- `[rip-4]`, `[rip+8]`, as `objdump` prints it -- because those bytes are in the
+encoding whatever they stand for; a zero one iced leaves out. A name, though, replaces the whole
+displacement, so an addend a format stores in the operand rather than in the relocation entry (COFF,
+Mach-O) is not printed beside the name. `Instruction::relocation_span` is the index of the span the
 name landed in, recorded by an override of `write_symbol`. That is what lets `InstructionRow` render
 the run before it as one `paragraph()`, the span as a `RelocationLabel`, and the run after it as a
 second `paragraph()`. `branch_span` is its **twin** and is recorded by an override of
