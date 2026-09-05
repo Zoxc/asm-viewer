@@ -988,24 +988,9 @@ fn pipe_thread<R: Read + Send + 'static>(
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    /// How many reader threads a test wants refused. Thread-local, so a test refuses its
-    /// own readers and not those of the runs other tests have going in the same binary:
-    /// both are started on the thread that called [`run_in`].
-    static REFUSED_READERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 /// Start a reader thread, named so that a panic on it says which thread died
 /// (`crate::panics`).
 fn spawn_reader(body: impl FnOnce() + Send + 'static) -> io::Result<thread::JoinHandle<()>> {
-    // A reader a test asked not to be started: the one path through [`pipe_thread`] no
-    // fixture can reach, a thread the system will not spawn.
-    #[cfg(test)]
-    if REFUSED_READERS.with(|left| left.replace(left.get().saturating_sub(1))) > 0 {
-        return Err(io::Error::new(io::ErrorKind::Other, "refused by a test"));
-    }
-
     thread::Builder::new()
         .name("a scratchpad's output reader".to_owned())
         .spawn(body)

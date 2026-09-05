@@ -140,9 +140,9 @@ member of, and the system is free to have handed that pid on -- to a group leade
 every scratchpad's run is. Stop pressed as a program exits by itself is the ordinary way into that
 window. The **reap is untouched**, since the group changes who dies, not how the end is noticed, and
 every other way a run is stopped (`stop_all`, the rebuild, the next run, the window closing) goes
-through the same `stop` and inherits it. What is tested is the group being real: the pgid the kernel
-reports for a run is the run's own pid, and not the one it would have inherited. What is inside the
-group once the program starts forking is the same fact one step on, and is judged by hand.
+through the same `stop` and inherits it. None of this is tested. Nothing short of a real program
+says whether a stop killed anything, and building one means running cargo, which no test here does;
+the group and what a stop reaches are judged by hand.
 
 **Output is streamed, not collected**, which is the whole difference from `build_in`'s
 run-it-and-return-the-output shape: a program that prints and then loops for ever has said
@@ -156,8 +156,8 @@ because holding the `Child` is exactly what would make a stop wait for the proce
 at their end has to reach zero however a thread ends, or the process is never reaped, the one
 `Ended` is never said, and the pad reads "Running" for ever over a zombie. The pipe went with the
 closure that could not be spawned, so nothing would read that stream either: the run is killed
-rather than left half-read, which also bounds the reap when the failing side is the last one. A test
-refuses the spawn to reach that path, nothing else being able to. **Three bounds, and each is a
+rather than left half-read, which also bounds the reap when the failing side is the last one. Only a
+real run reaches that path, so it is judged by hand. **Three bounds, and each is a
 different failure.** `MAX_LINE` (4 KiB) cuts a line with no newline in it, so a program writing
 megabytes in one line is still *delivered* rather than accumulated. That cut falls **between
 characters**: a byte count lands wherever it lands, and a multi-byte character straddling it would

@@ -228,6 +228,10 @@ the foot of `src/<module>.rs`, so the module a reader opens is the module and no
 half again of what it is asserted to do. The path a test is named by (`project::tests::…`) is
 unchanged, which is the point: it is where the file sits and not what the module tree looks like.
 
+**No test runs cargo or rustc.** A suite that builds a program to run costs a compile per test and
+leaves the process behind whenever an assertion fails short of the stop, so what only a real
+process could show is judged by hand instead (`agents/Scratchpad.md`).
+
 ## Design notes
 
 The reasoning behind the code (what was decided, what it cost, and what was measured) is in
