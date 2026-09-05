@@ -202,6 +202,12 @@ impl Component for SourceRow {
             .zip(try_consume_context::<LspJobs>())
             .map(|((talking, follow), jobs)| (talking.0, follow.0, jobs));
         let dock = use_consume::<SidebarDock>().0;
+        // What the door out of a companion lands through, consumed here for the same
+        // reason the rest are.
+        let visits = use_consume::<Visited>().0;
+        let marked = use_consume::<Marked>().0;
+        let landing = use_consume::<Land>().0;
+        let plant = use_consume::<Plant>().0;
         let index = self.index;
 
         // The position this row is, and so the one its menu asks about. Lines are
@@ -283,6 +289,9 @@ impl Component for SourceRow {
         let menu: Rc<dyn Fn(Event<PressEventData>, Option<usize>)> = Rc::new({
             let at = at.clone();
             let subject = self.drives.map(|tab| (tab, self.file.clone()));
+            // The file this row is in, where the pane is showing it beside somebody
+            // else's tab. A subject is that tab already and has nothing to open.
+            let opens = self.drives.is_none().then(|| self.file.clone());
             let source = self.source.clone();
             let links = self.links.clone();
             // Whom to ask about a name, where this row's names are links at all. A row
@@ -364,10 +373,30 @@ impl Component for SourceRow {
                         vec![definition, references, implementations]
                     })
                     .unwrap_or_default();
-                ContextMenu::open_from_event(
-                    &e,
-                    locate_menu(located, dock, at.clone(), subject.clone(), function, named),
-                );
+                let menu = locate_menu(located, dock, at.clone(), subject.clone(), function, named);
+                // The door into the file itself, which the tab has only beside it: the
+                // same arrival every other door into a source file makes, so the
+                // assembly side follows this line as it follows a clicked one.
+                let menu = menu.maybe_child(opens.clone().map(|file| {
+                    let (line, name) = (at.line, file_name(&file));
+                    MenuButton::new()
+                        .on_press(move |_| {
+                            open_source_place(
+                                open,
+                                visits,
+                                marked,
+                                landing,
+                                plant,
+                                driven,
+                                Path::new(&*file),
+                                line,
+                                None,
+                                Reach::NewTab,
+                            )
+                        })
+                        .child(format!("Open {name}"))
+                }));
+                ContextMenu::open_from_event(&e, menu);
             }
         });
 

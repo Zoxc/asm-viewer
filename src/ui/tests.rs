@@ -7252,6 +7252,142 @@ fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
     settle(test);
 }
 
+/// The contexts a companion's rows read, beside the project's: the analysis the pane takes
+/// its file from, and the two states a door lands through.
+macro_rules! companion_states {
+    ($runner:expr, $shown:expr) => {{
+        let states = project_states!($runner);
+        $runner.provide_root_context(|| Marked(State::create(Marks::default())));
+        $runner.provide_root_context(|| Shift(State::create(false)));
+        $runner.provide_root_context(|| CodeRows(State::create(None)));
+        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
+        $runner.provide_root_context(|| Locations(State::create(Located::default())));
+        $runner.provide_root_context(|| {
+            Analysis(State::create(Analyzed {
+                shown: Some($shown),
+                ..Analyzed::default()
+            }))
+        });
+        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
+        $runner.provide_root_context(|| Plant(State::create(None)));
+        (states, landing)
+    }};
+}
+
+/// The Source pane over a **companion** -- the file a drawn symbol was compiled from,
+/// beside an assembly-driven tab -- with a menu viewer over it. The document comes out of
+/// the analysis, as [`listing_harness`]'s does, so the same harness draws a subject when
+/// the answer is a source-driven tab's.
+fn companion_menu_harness() -> impl IntoElement {
+    let analysis = use_consume::<Analysis>().0;
+    let document = analysis
+        .read()
+        .shown
+        .as_ref()
+        .map(|shown| asked_of(&shown.ask))
+        .unwrap_or_else(|| Document::Source(Arc::from("")));
+
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .child(SourcePane {
+            tab: pane_tab(&document),
+            document,
+        })
+}
+
+/// The file beside an assembly-driven tab is somewhere a reader may want to go rather than
+/// glance at, so a line's menu opens it as a source-driven tab of its own, on that line,
+/// with the assembly side following it as a clicked line is followed.
+///
+/// Not on the rows of a source-driven tab, which is that file already.
+#[test]
+fn a_companions_line_opens_the_file_it_is_in() {
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
+        "assembly-viewer-companion-door-test-{}",
+        std::process::id()
+    )));
+    let path = directory.join("door.c");
+    std::fs::write(&path, "int add(int a, int b)\n{\n    return a + b;\n}\n")
+        .expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    // The fixture's own DWARF names a path that is not on this machine, so the companion
+    // is pointed at a file the pane can read. What is under test is the door and not
+    // which file the pane chose.
+    let companion = |ask: Ask| {
+        let mut studied = Studied::new(sum_to.clone());
+        studied.lines.file = Some(file.clone());
+        Shown { ask, studied }
+    };
+    let entry = "Open door.c".to_string();
+
+    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let (mut test, (states, landing)) = TestingRunner::new(
+        companion_menu_harness,
+        (500., 400.).into(),
+        |runner| companion_states!(runner, companion(Ask::Symbol(sum_to.clone()))),
+        1.,
+    );
+    open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    let row = centre_of(&test, "3\u{a0}");
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find all locations".to_owned()),
+        "the menu never opened: {drawn:?}"
+    );
+    assert!(drawn.contains(&entry), "{drawn:?}");
+
+    let item = centre_of(&test, &entry);
+    press_at(&mut test, item);
+    settle(&mut test);
+
+    let opened = Document::Source(file.clone());
+    assert!(states.open.active() == Some(opened.clone()));
+    assert!(
+        states.open.strip.peek().tabs().len() == 2,
+        "the file took the tab the symbol was in"
+    );
+    let landed = landing.peek().clone().expect("the line is left to land");
+    assert!(landed.tab == opened);
+    assert!(
+        landed.at
+            == Some(LinePos {
+                file: file.clone(),
+                line: 3,
+            })
+    );
+
+    // The same file as the tab itself: nothing to open.
+    let at = LinePos {
+        file: file.clone(),
+        line: 1,
+    };
+    let (mut test, (states, _landing)) = TestingRunner::new(
+        companion_menu_harness,
+        (500., 400.).into(),
+        |runner| companion_states!(runner, companion(Ask::Source { at, chosen: None })),
+        1.,
+    );
+    open_document(states.open, states.visits, opened, Reach::NewTab);
+    settle(&mut test);
+    let row = centre_of(&test, "3\u{a0}");
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find all locations".to_owned()),
+        "the menu never opened: {drawn:?}"
+    );
+    assert!(!drawn.contains(&entry), "{drawn:?}");
+}
+
 /// A source row inside a function offers that function's instances beside the line's
 /// locations, and choosing them asks for the function's lines from that row, chosen for
 /// the tab; a row outside any function offers the line alone.
@@ -7276,6 +7412,8 @@ fn a_source_row_inside_a_function_offers_its_instances() {
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Subject(file.clone()));
                 runner.provide_root_context(|| Coding(State::create(Coded::default())));
+                runner.provide_root_context(|| Land(State::create(None)));
+                runner.provide_root_context(|| Plant(State::create(None)));
                 let located = runner
                     .provide_root_context(|| Locations(State::create(Located::default())))
                     .0;
@@ -8063,6 +8201,10 @@ fn source_file_harness(
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Locations(State::create(Located::default())));
                 runner.provide_root_context(|| Coding(State::create(Coded::default())));
+                // The door out of a companion lands through these, and every source row
+                // carries it.
+                runner.provide_root_context(|| Land(State::create(None)));
+                runner.provide_root_context(|| Plant(State::create(None)));
                 let showing = runner
                     .provide_root_context(|| Showing(State::create(file.clone())))
                     .0;

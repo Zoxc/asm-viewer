@@ -29,6 +29,11 @@ within the symbol.
 A line that produced code, in any open object, is marked with a dot at its left edge. So is an
 instruction the debug info places on a source line, in any file.
 
+## Opening the other pane
+
+In the pane the tab is not driven from, a context menu opens that pane as a tab of its own, on
+the instruction or line it was over.
+
 ## Following a name
 
 While a language server is running, every name it can place is a link: a call, a type or a
