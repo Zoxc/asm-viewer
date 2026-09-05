@@ -133,12 +133,16 @@ object**, created and assigned right after the spawn, and closing the app's only
 kill. The sliver between the spawn and the assignment is accepted rather than bought back with
 `CREATE_SUSPENDED` and a `ResumeThread`, for a window a scratchpad's program does not use, and a job
 the system refuses leaves the stop exactly what it was. The child's own kill stays, under the same
-lock and after the group's, as what a refused job or a third platform still gets. The **reap is
-untouched**, since the group changes who dies, not how the end is noticed, and every other way a run
-is stopped (`stop_all`, the rebuild, the next run, the window closing) goes through the same `stop`
-and inherits it. What is tested is the group being real: the pgid the kernel reports for a run is
-the run's own pid, and not the one it would have inherited. What is inside the group once the
-program starts forking is the same fact one step on, and is judged by hand.
+lock and after the group's, as what a refused job or a third platform still gets. **Whether the run
+is already over is read under that same lock**, the one the reap sets it under: a stop that read it
+first and then waited for the lock would go on to signal a group the reap has just taken the last
+member of, and the system is free to have handed that pid on -- to a group leader of its own, which
+every scratchpad's run is. Stop pressed as a program exits by itself is the ordinary way into that
+window. The **reap is untouched**, since the group changes who dies, not how the end is noticed, and
+every other way a run is stopped (`stop_all`, the rebuild, the next run, the window closing) goes
+through the same `stop` and inherits it. What is tested is the group being real: the pgid the kernel
+reports for a run is the run's own pid, and not the one it would have inherited. What is inside the
+group once the program starts forking is the same fact one step on, and is judged by hand.
 
 **Output is streamed, not collected**, which is the whole difference from `build_in`'s
 run-it-and-return-the-output shape: a program that prints and then loops for ever has said

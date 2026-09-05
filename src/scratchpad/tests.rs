@@ -739,6 +739,69 @@ fn a_reader_that_will_not_start_still_ends_the_run() {
     let _ = fs::remove_dir_all(&directory);
 }
 
+/// A stop that arrives after the reap signals nothing.
+///
+/// The reap sets `over` while holding the child, so a stop that read `over` before taking
+/// that lock could be waiting on it as the reap succeeds, and would go on to `kill(-pgid)`
+/// a pid whose process has just been waited for. The system is free to hand that pid to
+/// somebody else, and `kill(-pgid)` reaches a whole group.
+///
+/// The race is made rather than waited for: the lock is held here while a stop runs into
+/// it, and `over` is set the way the reaper sets it, under that same lock. What the stop
+/// must not have done is kill the program, which is still going.
+#[test]
+fn a_stop_that_arrives_after_the_reap_kills_nothing() {
+    let directory = directory(line!());
+    let executable = program(
+        &directory,
+        "fn main() {\n\
+             \x20   println!(\"before the loop\");\n\
+             \x20   loop { std::thread::sleep(std::time::Duration::from_millis(50)); }\n\
+             }\n",
+    );
+
+    let (events, arrived) = std::sync::mpsc::channel();
+    let running = run_in(&executable, &directory, move |event| {
+        let _ = events.send(event);
+    })
+    .expect("it started");
+    // Up and running, so the pid a stop would signal is a live one.
+    assert!(arrived.recv_timeout(Duration::from_secs(30)).is_ok());
+
+    let stopping = {
+        let held = running.0.child.lock().expect("the child");
+        let stopping = std::thread::spawn({
+            let running = running.clone();
+            move || running.stop()
+        });
+        // Long enough for the stop to be waiting on the lock rather than still in front
+        // of the check it used to make before taking it.
+        std::thread::sleep(Duration::from_millis(200));
+        running.0.over.store(true, Ordering::SeqCst);
+        drop(held);
+        stopping
+    };
+    stopping.join().expect("the stop");
+
+    // Still running: a stop reading `over` under the lock finds what the reap left there.
+    for _ in 0..15 {
+        let waited = {
+            let mut child = running.0.child.lock().expect("the child");
+            child.try_wait().expect("a status")
+        };
+        assert_eq!(waited, None, "the stop killed a run it was told was over");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Left as it was found, so the run can be stopped for real and nothing outlives the
+    // test.
+    running.0.over.store(false, Ordering::SeqCst);
+    running.stop();
+    assert_eq!(until_ended(&arrived), vec![RunEvent::Ended(Ended::Stopped)]);
+
+    let _ = fs::remove_dir_all(&directory);
+}
+
 /// The group is real, which is the half of "a stop kills the grandchildren too" that can be
 /// asserted: a run is started in a process group of its own, so the pgid the kernel reports
 /// for the child is the child's own pid and not this test binary's. That is what makes

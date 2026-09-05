@@ -873,14 +873,11 @@ impl Running {
     /// so a run abandoned rather than stopped goes on running with nothing left that could
     /// find it, and a grandchild is worse still — nothing but the group ever knew its pid.
     ///
-    /// Ends immediately if the run is already over, so a stop that races an exit cannot
-    /// name a pid the system has since given to somebody else.
+    /// A run that is already over is left alone, so a stop that races an exit cannot name
+    /// a pid the system has since given to somebody else. [`Process::kill`] is where that
+    /// is decided, under the lock the reap sets `over` under.
     pub fn stop(&self) {
         self.0.stopped.store(true, Ordering::SeqCst);
-        if self.0.over.load(Ordering::SeqCst) {
-            return;
-        }
-
         self.0.kill();
     }
 
@@ -903,13 +900,22 @@ struct Process {
 }
 
 impl Process {
-    /// End the program and everything it forked.
+    /// End the program and everything it forked, unless it is already over.
     ///
-    /// The child's own kill stays under the same lock as the reap and after the group's:
-    /// it is what a platform with no group, or a job object the system refused, still
-    /// gets.
+    /// `over` is read **under the lock the reap sets it under**, since that is the whole
+    /// of the guard: a caller that read it first and then waited here would go on to
+    /// signal a group the reap has since taken the last member of, and the system may
+    /// have given that pid to somebody else -- to a group leader of its own, which is
+    /// exactly what another scratchpad's run is.
+    ///
+    /// The child's own kill stays under the same lock and after the group's: it is what a
+    /// platform with no group, or a job object the system refused, still gets.
     fn kill(&self) {
         let mut child = self.child.lock().unwrap_or_else(|held| held.into_inner());
+        if self.over.load(Ordering::SeqCst) {
+            return;
+        }
+
         self.group.kill();
         let _ = child.kill();
     }
