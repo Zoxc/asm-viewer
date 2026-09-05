@@ -171,6 +171,23 @@ conversion is in one place and happens once. The column comes back as it was giv
 UTF-16 unit counted from zero, since that is the unit a pane counts columns in; an answer
 that leaves it out is column 0 and not no place at all, the line being what opens the file.
 
+**A path comes back spelled the way it went out.** The `file:` URI is written and read
+here by hand, and a round trip does not give back what it took: a URI's separator is `/`
+and its path carries a leading slash no drive letter has, so `C:\x\y.rs` goes out as
+`file:///C:/x/y.rs` and came back `C:/x/y.rs`. A `Document::Source` is compared as text and
+never canonicalised (`src/project.rs`), so on Windows every place followed through the
+server was a second tab of a file already open, with the trail, the positions and the
+bookmarks' `matching` split across the two. `path_of` puts the separators back. The drive
+letter is what says a path is Windows', not a `cfg`, so the rule is the same everywhere and
+is tested from either platform.
+
+The app's own spelling is not canonical either -- a project directory as the reader typed
+it joined with a Files row, or whatever the debug info said -- and the server's is. So a
+directory typed with a `..`, a `./` or through a symlink spells one file two ways on any
+platform. `open_source_place` names the document by the spelling an **open source tab**
+already has for that file, and by the answer's only where no tab has one: a `canonicalize`
+per open source tab, on the UI thread and at a press, which is a handful of calls.
+
 **The file is not opened first.** rust-analyzer reads the project's files itself, and this
 app only ever shows what is on disk, so a `didOpen` would put an overlay over the file that
 has to be taken off again and can only go stale. The cost is that a file outside the

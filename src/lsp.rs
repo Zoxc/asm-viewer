@@ -37,6 +37,7 @@
 //! server that is indexing may take seconds to answer it; a stop must be over when it
 //! returns, and rust-analyzer has nothing to lose by being killed.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -1471,12 +1472,26 @@ fn path_of(uri: &str) -> Option<PathBuf> {
     }
 
     let path = String::from_utf8(bytes).ok()?;
-    // `/C:/x` is how a Windows path comes back; a Unix one keeps its leading slash.
-    let path = match path.as_bytes() {
-        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => &path[1..],
-        _ => &path[..],
-    };
-    Some(PathBuf::from(path))
+    Some(PathBuf::from(spelled(&path).as_ref()))
+}
+
+/// A decoded URI path as the platform it names spells one.
+///
+/// `/C:/x/y.rs` is how a Windows path comes back: both the leading slash and the
+/// separators are the URI's, where the app spells that file `C:\x\y.rs`. A
+/// [`Document::Source`](crate::project::Document) is compared as text and never
+/// canonicalised, so the two spellings are two tabs of one file.
+///
+/// The drive letter is what says a path is Windows', not a `cfg`, so the rule is the same
+/// everywhere and can be tested from either platform -- no Unix path begins with one, and
+/// one keeps its leading slash and every character after it.
+fn spelled(path: &str) -> Cow<'_, str> {
+    match path.as_bytes() {
+        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => {
+            Cow::Owned(path[1..].replace('/', "\\"))
+        }
+        _ => Cow::Borrowed(path),
+    }
 }
 
 #[cfg(test)]

@@ -5555,6 +5555,69 @@ fn a_question_on_its_way_is_not_asked_again() {
     assert!(linked.pending(1).is_some());
 }
 
+/// **A definition in a file already open moves inside its tab.** The server answers with
+/// canonical absolute paths, where the app's own spelling is a project directory as the
+/// reader typed it joined with a Files row -- and a `Document::Source` is compared as
+/// text, so the two spell one file two ways. The tab the reader is in is the tab the
+/// definition opens in, whichever way the answer spells the file.
+///
+/// A `./` in the path here, which `canonicalize` reduces as it reduces a `..` or a
+/// symlink. On Windows the case is every answer, whose separators are the URI's.
+#[test]
+fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
+    let (canonical, directory) = calling_file("spelling");
+    let dotted: Arc<str> = Arc::from(
+        directory
+            .join(".")
+            .join("calls.rs")
+            .to_str()
+            .expect("a utf-8 temporary path"),
+    );
+    assert_ne!(dotted, canonical, "the two spellings are one string");
+    let place = lsp::Place {
+        file: PathBuf::from(&*canonical),
+        line: 1,
+        columns: 3..9,
+    };
+    let (mut test, states, language, _location, _driven, _asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
+                run,
+                id,
+                want,
+                reply: Ok(Reply::Defined(vec![place.clone()])),
+            }),
+            _ => None,
+        },
+        dotted.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(dotted.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    for _ in 0..8 {
+        settle(&mut test);
+    }
+
+    assert!(
+        states.open.documents() == vec![Document::Source(dotted)],
+        "the answer's spelling opened a file the reader already had open"
+    );
+    assert_eq!(
+        states.open.active_stop().map(|(_, stop)| stop.line),
+        Some(Some(1)),
+        "the tab did not move to the line the answer named"
+    );
+}
+
 /// **What a stopped server said goes with it.** The names it classified are still the
 /// right names, but there is nobody left to answer a press on one: the rows are handed
 /// the links as data, so every one of them went on drawing as a link a click did nothing

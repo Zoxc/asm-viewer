@@ -225,7 +225,7 @@ pub(crate) fn open_source_place(
     columns: Option<Range<usize>>,
     reach: Reach,
 ) {
-    let file: Arc<str> = Arc::from(path.to_string_lossy().as_ref());
+    let file = spelling(open, path);
     let document = Document::Source(file.clone());
     let id = land(
         open,
@@ -252,4 +252,41 @@ pub(crate) fn open_source_place(
     // Bound to a `let` of its own, so the table's guard is gone before the write.
     let entry = place_at(&open.docs.peek(), id, &document);
     driven.write().remember((id, entry), line);
+}
+
+/// What to name the document opening `path`: the spelling an open source tab already has
+/// for that file, and `path`'s own where no tab has one.
+///
+/// A [`Document::Source`] is compared as text and never canonicalised, so one file reached
+/// two ways is one tab only where both ways spell it alike (`src/project.rs`). The server
+/// answers with canonical absolute paths; the app's own spelling is a project directory as
+/// the reader typed it joined with a Files row, or whatever the debug info said. So a
+/// directory typed with a `..`, a `./` or through a symlink -- and on Windows every answer,
+/// whose separators are the URI's -- would open a second tab of the file the reader is
+/// already reading, splitting its trail, its positions and its driven line across the two.
+fn spelling(open: Open, path: &Path) -> Arc<str> {
+    // A filesystem call per open source tab, on the UI thread. There are a handful of
+    // them and this is a press, so it costs what following a link already costs.
+    let held = {
+        let docs = open.docs.peek();
+        open.ids()
+            .into_iter()
+            .filter_map(|id| match docs.get(id) {
+                Some(Document::Source(file)) => Some(file.clone()),
+                _ => None,
+            })
+            .find(|file| same_file(Path::new(&**file), path))
+    };
+    held.unwrap_or_else(|| Arc::from(path.to_string_lossy().as_ref()))
+}
+
+/// Whether two paths name one file: spelled alike, or reducing to one path. Two that
+/// cannot be reduced -- a file that is not there to be looked up -- are the same only
+/// when they are spelled alike.
+fn same_file(one: &Path, other: &Path) -> bool {
+    one == other
+        || matches!(
+            (one.canonicalize(), other.canonicalize()),
+            (Ok(one), Ok(other)) if one == other
+        )
 }
