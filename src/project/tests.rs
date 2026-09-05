@@ -212,7 +212,7 @@ fn saves_and_resolves_a_symbol() {
         Some(SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "b.o".into(),
-            symbol_name: "caller".into(),
+            symbol_name: SavedName::File("caller".into()),
             address: 0,
         })
     );
@@ -244,7 +244,7 @@ fn a_missing_symbol_falls_back_to_its_object() {
         active: Some(SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "a.o".into(),
-            symbol_name: "gone".into(),
+            symbol_name: SavedName::File("gone".into()),
             address: 12,
         }),
         history: SavedHistory::default(),
@@ -269,7 +269,7 @@ fn a_missing_object_falls_back_to_nothing() {
         SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "c.o".into(),
-            symbol_name: "caller".into(),
+            symbol_name: SavedName::File("caller".into()),
             address: 0,
         },
     ] {
@@ -302,7 +302,7 @@ fn toml_round_trips() {
         active: Some(SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "b.o".into(),
-            symbol_name: "caller".into(),
+            symbol_name: SavedName::File("caller".into()),
             address: 0x1234,
         }),
         history: SavedHistory::default(),
@@ -433,7 +433,7 @@ fn history_entries_that_no_longer_resolve_are_dropped() {
         SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "a.o".into(),
-            symbol_name: "gone".into(),
+            symbol_name: SavedName::File("gone".into()),
             address: 12,
         },
         saved_object("b.o"),
@@ -525,7 +525,7 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
     let gone = SavedDocument::Symbol {
         path: PathBuf::from("/tmp/lib.a"),
         object_name: "a.o".into(),
-        symbol_name: "gone".into(),
+        symbol_name: SavedName::File("gone".into()),
         address: 12,
     };
     let session = Session {
@@ -778,7 +778,7 @@ fn saves_and_resolves_the_open_tabs() {
                 SavedDocument::Symbol {
                     path: PathBuf::from("/tmp/lib.a"),
                     object_name: "a.o".into(),
-                    symbol_name: "target".into(),
+                    symbol_name: SavedName::File("target".into()),
                     address: 6,
                 },
                 0,
@@ -814,7 +814,7 @@ fn open_tabs_that_no_longer_resolve_are_dropped() {
                 SavedDocument::Symbol {
                     path: PathBuf::from("/tmp/lib.a"),
                     object_name: "a.o".into(),
-                    symbol_name: "gone".into(),
+                    symbol_name: SavedName::File("gone".into()),
                     address: 12,
                 },
                 5,
@@ -1134,7 +1134,7 @@ fn saved_symbol(object_name: &str, symbol_name: &str, address: u64) -> SavedDocu
     SavedDocument::Symbol {
         path: PathBuf::from("/tmp/lib.a"),
         object_name: object_name.to_owned(),
-        symbol_name: symbol_name.to_owned(),
+        symbol_name: SavedName::File(symbol_name.to_owned()),
         address,
     }
 }
@@ -2566,11 +2566,11 @@ fn bookmarks_are_written_after_the_binaries_and_name_first() {
         trusted: false,
         bookmarks: vec![
             Bookmark {
-                name: "kernel::start".into(),
+                name: Some("kernel::start".into()),
                 document: saved_symbol("a.o", "_ZN6kernel5startE", 6),
             },
             Bookmark {
-                name: "main.rs".into(),
+                name: Some("main.rs".into()),
                 document: SavedDocument::Source {
                     path: "/src/main.rs".into(),
                 },
@@ -2601,6 +2601,74 @@ fn bookmarks_are_written_after_the_binaries_and_name_first() {
     assert!(!round_trip(&a_project()).contains("bookmarks"));
 }
 
+/// A bookmark on a name the app made up outlives the spelling it was made under. What is
+/// saved is which name it is and the symbol's address, and the name is rendered again from
+/// those two, so it is whatever the app calls one today. The other bookmark here is what an
+/// earlier spelling would have left in the file: it finds nothing, which is what a stored
+/// string does the day the app stops spelling it that way.
+#[test]
+fn a_bookmark_on_a_made_up_name_outlives_its_spelling() {
+    const ADDRESS: u64 = 0x10;
+    // Whatever `MadeUp` spells it now, which is what the parser gave the symbol too.
+    let today = MadeUp::Function(ADDRESS).to_string();
+    let objects = vec![object("/tmp/lib.a", "a.o", &[(today.as_str(), ADDRESS)])];
+
+    let structure = SavedDocument::Symbol {
+        path: PathBuf::from("/tmp/lib.a"),
+        object_name: "a.o".into(),
+        address: ADDRESS,
+        symbol_name: SavedName::Function,
+    };
+    let found = structure.resolve_by_name(&objects).expect("the symbol");
+    assert!(
+        found
+            == Document::Assembly(Selection::Symbol(Symbol {
+                object: objects[0].clone(),
+                data: objects[0].symbols_sorted[0].clone(),
+            }))
+    );
+    // And saving it again writes the structure back, not the name it was found under.
+    assert!(SavedDocument::from_document(&found) == structure);
+
+    let spelling = SavedDocument::Symbol {
+        path: PathBuf::from("/tmp/lib.a"),
+        object_name: "a.o".into(),
+        address: ADDRESS,
+        symbol_name: SavedName::File("<fn 0x10>".into()),
+    };
+    assert!(
+        spelling.resolve_by_name(&objects).is_none(),
+        "a spelling in the file is what a change of spelling loses"
+    );
+}
+
+/// So nothing of that spelling reaches the file: the bookmark is the address and which name
+/// it is, and it carries no name of its own, the place being able to say what it is called.
+#[test]
+fn a_bookmark_on_a_made_up_name_writes_no_spelling() {
+    let spelling = MadeUp::Function(0x10).to_string();
+    let bookmark = Bookmark::new(
+        SavedDocument::Symbol {
+            path: PathBuf::from("/tmp/lib.a"),
+            object_name: "a.o".into(),
+            address: 0x10,
+            symbol_name: SavedName::Function,
+        },
+        spelling.clone(),
+    );
+    assert_eq!(bookmark.label(), spelling.as_str());
+
+    let project = Project {
+        bookmarks: vec![bookmark],
+        ..a_project()
+    };
+    let text = round_trip(&project);
+    let written = &text[text.find("[[bookmarks]]").expect("a bookmark")..];
+    assert!(!written.contains(&spelling), "the spelling is in\n{text}");
+    assert!(!written.contains("\nname = "), "a name of its own\n{text}");
+    assert!(written.contains("symbol_name = \"Function\""), "{text}");
+}
+
 /// A bookmarks change is written at once and to `project.toml` alone, like a rename: it
 /// lets go of no binary, so it cannot leave the two files disagreeing, and it writes back
 /// the binaries the file already lists rather than the app's own.
@@ -2611,7 +2679,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         language_server: None,
         trusted: false,
         bookmarks: vec![Bookmark {
-            name: "caller".into(),
+            name: Some("caller".into()),
             document: saved_symbol("a.o", "caller", 0),
         }],
         ..a_project()
@@ -2630,7 +2698,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 
     let mut added = reopened.bookmarks.clone();
     added.push(Bookmark {
-        name: "target".into(),
+        name: Some("target".into()),
         document: saved_symbol("a.o", "target", 6),
     });
     let decided = saves.record(
@@ -2723,7 +2791,7 @@ fn a_cargo_section_is_written_where_toml_can_read_it_back() {
             profile: Profile::Debug,
         }),
         bookmarks: vec![Bookmark {
-            name: "start".to_owned(),
+            name: Some("start".to_owned()),
             document: SavedDocument::Source {
                 path: "/src/kernel/main.rs".to_owned(),
             },

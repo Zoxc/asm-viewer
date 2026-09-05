@@ -16,6 +16,7 @@
 //! (`rescue.rs`), the one thing owed to a reader whose file the next write would replace.
 
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashSet},
     fs,
     io::Write,
@@ -24,7 +25,7 @@ use std::{
     time::Duration,
 };
 
-use analysis::{Object, Symbol, SymbolData};
+use analysis::{MadeUp, Object, Symbol, SymbolData};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::bookmarks::Bookmark;
@@ -656,8 +657,10 @@ pub enum SavedDocument {
     Symbol {
         path: PathBuf,
         object_name: String,
-        symbol_name: String,
         address: u64,
+        /// Last, and after `address`: a name the file stated is written as a table of its
+        /// own, and a table cannot precede a plain value (`write_toml`).
+        symbol_name: SavedName,
     },
     Source {
         path: String,
@@ -667,6 +670,65 @@ pub enum SavedDocument {
         path: PathBuf,
         object_name: String,
     },
+}
+
+/// What a saved symbol is called: the file's own name for it, or, for one the app named
+/// itself, **which** name the app made up. The address is saved beside it either way
+/// ([`SavedDocument::Symbol`]).
+///
+/// The spelling of a made-up name is not saved. It is a function of which name it is and
+/// the symbol's address ([`MadeUp`]), so those two go in the file and the name is rendered
+/// again on the way back. A bookmark on `<function 0x140001000>` therefore survives the app
+/// deciding to spell that some other way: a saved string would quietly stop matching the
+/// symbol it was made on, and a bookmark that resolves to nothing is a bookmark gone.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SavedName {
+    /// The file's own name, spelled as the file spells it.
+    File(String),
+    /// The app's name for the entry point.
+    EntryPoint,
+    /// The app's name for a function at the saved address.
+    Function,
+    /// The app's name for a fragment at the saved address.
+    Fragment,
+}
+
+impl SavedName {
+    /// The saved form of `name`, borne by a symbol at `address`. Every variant of
+    /// [`MadeUp`] is named here, so a fourth made-up name is a compile error and not a
+    /// spelling silently written to a file.
+    pub fn of(name: &str, address: u64) -> SavedName {
+        match MadeUp::of(name, address) {
+            None => SavedName::File(name.to_owned()),
+            Some(MadeUp::EntryPoint) => SavedName::EntryPoint,
+            Some(MadeUp::Function(_)) => SavedName::Function,
+            Some(MadeUp::Fragment(_)) => SavedName::Fragment,
+        }
+    }
+
+    /// The name a symbol at `address` carries now: the file's own as it was saved, or a
+    /// made-up one spelled the way the app spells it today. What the symbol is looked up
+    /// by.
+    pub fn text(&self, address: u64) -> Cow<'_, str> {
+        match (self.made_up(address), self) {
+            (Some(made_up), _) => Cow::Owned(made_up.to_string()),
+            (None, SavedName::File(name)) => Cow::Borrowed(name),
+            // [`SavedName::made_up`] answers `None` for `File` and for nothing else.
+            (None, _) => Cow::Borrowed(""),
+        }
+    }
+
+    /// Which name the app made up, for a symbol at `address`; [`None`] where the name is
+    /// the file's own. The other half of [`SavedName::of`], and what says a saved place
+    /// can spell itself without the file it points into being open.
+    pub fn made_up(&self, address: u64) -> Option<MadeUp> {
+        match self {
+            SavedName::File(_) => None,
+            SavedName::EntryPoint => Some(MadeUp::EntryPoint),
+            SavedName::Function => Some(MadeUp::Function(address)),
+            SavedName::Fragment => Some(MadeUp::Fragment(address)),
+        }
+    }
 }
 
 impl SavedDocument {
@@ -684,12 +746,26 @@ impl SavedDocument {
             Document::Assembly(Selection::Symbol(symbol)) => SavedDocument::Symbol {
                 path: symbol.object.path.clone(),
                 object_name: symbol.object.name.clone(),
-                symbol_name: symbol.data.name.clone(),
                 address: symbol.data.address,
+                symbol_name: SavedName::of(&symbol.data.name, symbol.data.address),
             },
             Document::Source(file) => SavedDocument::Source {
                 path: file.to_string(),
             },
+        }
+    }
+
+    /// The name this place spells for itself: a made-up symbol name, rendered from what
+    /// was saved ([`SavedName`]). [`None`] for every other place, whose name is the
+    /// file's or the reader's and has to be stored to be drawn.
+    pub fn made_up_name(&self) -> Option<String> {
+        match self {
+            SavedDocument::Symbol {
+                address,
+                symbol_name,
+                ..
+            } => symbol_name.made_up(*address).map(|name| name.to_string()),
+            _ => None,
         }
     }
 
@@ -738,8 +814,13 @@ impl SavedDocument {
                 symbol_name,
                 address,
                 ..
-            } => SavedDocument::find_symbol(object, symbol_name, *address, rebuilt.changed(path))
-                .map(|data| {
+            } => SavedDocument::find_symbol(
+                object,
+                &symbol_name.text(*address),
+                *address,
+                rebuilt.changed(path),
+            )
+            .map(|data| {
                 Selection::Symbol(Symbol {
                     object: object.clone(),
                     data: data.clone(),

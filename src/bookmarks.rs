@@ -5,7 +5,7 @@
 //! bookmark outlives the binary it points into, so whether it is *live* is a question asked
 //! of what is loaded now and never a thing the list remembers.
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use analysis::Object;
 use serde::{Deserialize, Serialize};
@@ -19,10 +19,37 @@ use crate::project::{Document, SavedDocument};
 /// shortened one a row draws, so what a filter matches is what the tooltip says. Field
 /// order is load-bearing (`crate::project`): the name is a plain value and has to reach the
 /// file before the table its document is written as.
+///
+/// It is **absent** where the place spells its own name — a symbol the app named rather
+/// than the file, which is saved as which name it is and an address
+/// ([`SavedDocument::made_up_name`]). Storing the spelling here would put it back in the
+/// file, and a spelling in the file is the one thing that would stop the app changing it.
+/// [`Bookmark::label`] is what a row draws either way.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Bookmark {
-    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub document: SavedDocument,
+}
+
+impl Bookmark {
+    /// A bookmark of `document`, called `name` where the place cannot say what it is
+    /// called itself. The one place that rule is applied.
+    pub fn new(document: SavedDocument, name: impl Into<String>) -> Bookmark {
+        Bookmark {
+            name: document.made_up_name().is_none().then(|| name.into()),
+            document,
+        }
+    }
+
+    /// What to call this: the name it was made under, or the place's own, which is
+    /// rendered afresh and so is never a spelling the app has since stopped using.
+    pub fn label(&self) -> Cow<'_, str> {
+        match self.document.made_up_name() {
+            Some(name) => Cow::Owned(name),
+            None => Cow::Borrowed(self.name.as_deref().unwrap_or_default()),
+        }
+    }
 }
 
 /// The bookmarks, in the order they were added.
@@ -64,10 +91,8 @@ impl Bookmarks {
             self.entries.remove(index);
             return false;
         }
-        self.entries.push(Bookmark {
-            name: name.into(),
-            document: SavedDocument::from_document(document),
-        });
+        self.entries
+            .push(Bookmark::new(SavedDocument::from_document(document), name));
         true
     }
 

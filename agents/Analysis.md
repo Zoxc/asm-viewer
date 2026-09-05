@@ -97,11 +97,13 @@ doubles as the filter keeping exported *data* out. A relocatable object is skipp
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`
 or `<fragment 0x…>`, in angle brackets because no assembler, linker or mangling scheme emits them,
 so none can collide with a real one. The three are one type, `made_up::MadeUp`, whose `Display` is
-the only place they are spelled. A name reaches `project.toml` as a string and a bookmark on one
-resolves by that string alone once the binary has been rebuilt, so a changed spelling would drop
-the reader's bookmarks without a word; `made_up/tests.rs` pins all three. The type stops at
-construction — what is stored is still the `String` it builds — and it carries the one thing every
-made-up name shares: it is not the file's own, so no demangler is ever offered one.
+the only place they are spelled and whose `of` reads one back — by rendering the three candidates
+for an address and comparing, so there is no second spelling to keep in step. What a symbol holds
+is still the `String` it builds. The type itself travels as far as the app's *saved* places, which
+write which name it is and the symbol's address rather than the spelling, so a bookmark on one
+outlives a change of spelling (`agents/Persistence.md`); `made_up/tests.rs` pins today's three all
+the same. And it carries the one thing every made-up name shares: it is not the file's own, so no
+demangler is ever offered one.
 `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>`
 (for relocation-target lookup), `symbols_sorted` (name-sorted, for the UI list) and `by_address`
 (placed-address-sorted, built on the first disassembly, for a call target's name; below).

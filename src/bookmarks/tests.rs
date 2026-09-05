@@ -53,11 +53,11 @@ fn symbol(object: &Arc<Object>, index: usize) -> Document {
     }))
 }
 
-fn names(bookmarks: &Bookmarks) -> Vec<&str> {
+fn names(bookmarks: &Bookmarks) -> Vec<Cow<'_, str>> {
     bookmarks
         .entries()
         .iter()
-        .map(|entry| entry.name.as_str())
+        .map(|entry| entry.label())
         .collect()
 }
 

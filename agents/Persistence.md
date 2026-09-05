@@ -108,8 +108,11 @@ with the one the user edits.
 `agents/Sidebar.md`'s). A bookmark is a place the reader chose to be able to come back to, which is
 the deliberate side of the split, so the list is written at once like a rename. It is a
 `SavedDocument` with the **name it was made under** beside it, because a saved symbol carries only
-its mangled name and a bookmark whose binary is closed has nothing else to be drawn by. The list
-holds no `Arc`: a bookmark *outlives* the binary it points into, since a reader's own list must not
+its mangled name and a bookmark whose binary is closed has nothing else to be drawn by. A place
+that can spell its own name keeps none: a symbol the *app* named rather than the file is saved as
+which name it is and an address, and `Bookmark::label` renders it afresh, so the one thing that
+would tie a reader's bookmarks to a spelling is not in the file. The list holds no `Arc`: a
+bookmark *outlives* the binary it points into, since a reader's own list must not
 shrink behind their back, where the history's rule is to drop. So whether one is live is a question
 asked of the objects loaded now, wherever it is drawn, and never a fact the list keeps. So is
 whether a document *is* bookmarked (`Bookmarks::matching`), since a rebuild moves a symbol while its
@@ -119,9 +122,14 @@ the state alone and the incoming project sets it the way it sets the name, and `
 nothing to forget.
 
 Inside those files, identity is **path + object name + symbol name + address** for a place in a
-binary and **the path itself** for a source file, never pointers. That mapping lives in exactly two
-places, `SavedDocument::from_document` and `::resolve`. A source file's path is a `String`, since it
-is what the debug info said rather than something this filesystem was asked about.
+binary and **the path itself** for a source file, never pointers. The symbol name is a `SavedName`:
+the file's own spelling, or — for one of the names the app made up (`agents/Analysis.md`) — which
+of them it is, the address beside it being the rest of what such a name says. Those are rendered
+again on the way back, by whatever `MadeUp` spells them now, which is what lets the app rename them
+without dropping the places saved on them; a saved string would quietly stop matching. That mapping
+lives in exactly two places, `SavedDocument::from_document` and `::resolve`. A source file's path
+is a `String`, since it is what the debug info said rather than something this filesystem was
+asked about.
 
 **One `tabs` list of every kind, not a `tabs` and a `sources` beside it**, because there is one
 bar. `SavedDocument::Code`, an object's whole code, is saved by its object's path and name exactly
@@ -168,9 +176,11 @@ did not, and a `RestoredEntry` per surviving place. A tab with nothing left on i
 whole, and so is a page this build does not have. **Field order within these structs is load-bearing**: TOML emits plain values before tables,
 so `binaries` sits beside the name only because every other field of `Project` is a plain value and
 `bookmarks`, the one array of tables in that file, comes last; `SavedTab`'s `temporal` and `cursor`
-must precede its `entries`, a `SavedEntry`'s rows its `document`, and a `Bookmark`'s `name` its
-`document` (`SavedHistory` has no plain field at all). Getting it wrong fails at *runtime*, not at
-compile time, and a round trip through real TOML per struct is what holds it.
+must precede its `entries`, a `SavedEntry`'s rows its `document`, a `SavedDocument::Symbol`'s
+`address` its `symbol_name` (a `SavedName` is written as a table where it holds the file's own
+name), and a `Bookmark`'s `name` its `document` (`SavedHistory` has no plain field at all).
+Getting it wrong fails at *runtime*, not at compile time, and a round trip through real TOML per
+struct is what holds it.
 
 `Session::digests` is the digest each binary had when the session was saved, keyed by path. It is in
 the *other* file from `binaries` and not a field beside them, because `binaries` is the list to

@@ -40,16 +40,17 @@ impl Component for BookmarkRow {
         let live = self.live.clone();
         let dead = live.is_none();
 
-        // Drawn from the stored name whether or not the place is live, so a row does not
+        // Drawn from the bookmark whether or not the place is live, so a row does not
         // change its spelling when its binary is closed.
+        let label = self.bookmark.label();
         let text = match &self.bookmark.document {
-            SavedDocument::Symbol { .. } => short_name(&self.bookmark.name),
-            _ => self.bookmark.name.clone(),
+            SavedDocument::Symbol { .. } => short_name(&label),
+            _ => label.to_string(),
         };
         let tooltip = match &self.bookmark.document {
             SavedDocument::Source { path } => path.clone(),
             SavedDocument::Code { path, .. } => path.display().to_string(),
-            _ => self.bookmark.name.clone(),
+            _ => label.to_string(),
         };
 
         let background = match hovering() && !dead {
@@ -185,7 +186,7 @@ impl Component for BookmarksPanel {
             let rows = entries
                 .iter()
                 .enumerate()
-                .filter(|(_, bookmark)| matcher.matches(&bookmark.name))
+                .filter(|(_, bookmark)| matcher.matches(&bookmark.label()))
                 .map(|(index, bookmark)| {
                     BookmarkRow {
                         index,

@@ -14865,10 +14865,7 @@ fn bookmarks_harness() -> impl IntoElement {
 
 /// A bookmark of `symbol`, the way a gesture on a live document would make one.
 fn bookmark_of(document: &Document) -> Bookmark {
-    Bookmark {
-        name: entry_name(document),
-        document: SavedDocument::from_document(document),
-    }
+    Bookmark::new(SavedDocument::from_document(document), entry_name(document))
 }
 
 /// Pressing a live bookmark is a navigation: the place becomes the active document and
@@ -14982,7 +14979,7 @@ fn a_bookmark_row_is_removed_from_its_menu() {
     settle(&mut test);
 
     let left = bookmarks.peek().entries().to_vec();
-    let left: Vec<&str> = left.iter().map(|entry| entry.name.as_str()).collect();
+    let left: Vec<_> = left.iter().map(|entry| entry.label()).collect();
     assert_eq!(left, [symbols[0].data.display()]);
 }
 
@@ -15065,10 +15062,10 @@ fn a_symbol_row_bookmarks_its_symbol_from_its_menu() {
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
     assert_eq!(
         made,
-        [Bookmark {
-            name: entry_name(&document),
-            document: SavedDocument::from_document(&document),
-        }]
+        [Bookmark::new(
+            SavedDocument::from_document(&document),
+            entry_name(&document)
+        )]
     );
     assert!(
         states.open.active().is_none(),
@@ -15107,12 +15104,12 @@ fn a_history_row_bookmarks_its_place_from_its_menu() {
     let made = states.bookmarks.peek().entries().to_vec();
     assert_eq!(
         made,
-        [Bookmark {
-            name: "main.rs".into(),
-            document: SavedDocument::Source {
+        [Bookmark::new(
+            SavedDocument::Source {
                 path: "/src/main.rs".into(),
             },
-        }]
+            "main.rs"
+        )]
     );
 }
 

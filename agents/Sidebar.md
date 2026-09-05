@@ -123,9 +123,11 @@ loading-file-row idiom, with no press or hover handler at all, the way a history
 to go has none. Dropping it would be the history's rule, and a reader's own list must not shrink
 behind their back. And a live row's press is `open_document` like a Symbols row's, a `Preview` into
 the temporal tab and a `NewTab` with Ctrl (`reach`, the one rule every sidebar row reads), never
-`navigate`, since a bookmark is a place and not a position on a trail. The row draws the **stored
-name** even when live, `short_name` of it for a symbol with the whole in the tooltip and under the
-filter, as a History row does, so a row does not change its spelling when its binary goes.
+`navigate`, since a bookmark is a place and not a position on a trail. The row draws
+`Bookmark::label` even when live, `short_name` of it for a symbol with the whole in the tooltip and
+under the filter, as a History row does, so a row does not change its spelling when its binary
+goes. That is the **stored name**, except for a symbol the app named rather than the file, which
+stores no name and spells itself from what was saved (`agents/Persistence.md`).
 Right-click offers **Remove bookmark**, by index rather than by place, because a dead row is exactly
 the one that resolves to no place and the one it is most wanted on. **A bookmark is made wherever
 the thing it is about is under the pointer**, through one `bookmark_item` (`bookmarks_view.rs`): a
