@@ -5,10 +5,10 @@ mod common;
 
 use analysis::{parse_object, Listing, Object};
 use common::{
-    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture,
+    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, elf_shared_object,
     elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage, named, names, parse,
-    parse_and_walk, survivors, DwarfFixture, DwarfRow, DwarfSection, TextRelocation, TextSymbol,
-    UnitRanges,
+    parse_and_walk, survivors, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SharedObject,
+    TextRelocation, TextSymbol, UnitRanges, TEXT_ADDRESS,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -1082,12 +1082,12 @@ fn aliased_at_one_address(aliases: usize, rows: usize) -> Vec<u8> {
 
 /// Defect: `parse_object` walked the symbol table twice and the two walks disagreed about a
 /// symbol whose name will not read. The first pushed every text symbol's address into its
-/// section, the second dropped the symbol on the name failure — so the address cut its
-/// neighbour's derived extent and blocked any export or unwind entry from naming it, while
-/// nothing listed it. The middle function then showed as a gap in a section no symbol
-/// claimed. Both walks now skip it.
+/// section, the second dropped the symbol on the name failure — so the address bounded its
+/// neighbour and blocked any export or unwind entry from naming it, while nothing listed
+/// it. The middle function showed as a gap in a section no symbol claimed. The symbol is
+/// now kept and called by its address, so the extents and the labels say the same thing.
 #[test]
-fn a_symbol_whose_name_will_not_read_does_not_bound_its_neighbour() {
+fn a_symbol_whose_name_will_not_read_is_listed_by_its_address() {
     let data = elf_with_unreadable_name(
         &elf_x86_64(
             &[
@@ -1109,14 +1109,16 @@ fn a_symbol_whose_name_will_not_read_does_not_bound_its_neighbour() {
         "b",
     );
     let object = parse(&data);
-    assert_eq!(names(&object), ["a", "c"]);
 
-    // `a` derives its extent from the next symbol the section has, which is now `c`.
+    // `b` is still there, under the address that is all there is left to call it by.
+    assert_eq!(names(&object), ["<function 0x10>", "a", "c"]);
+
+    // Its address bounds `a`, and it is the symbol standing at that bound.
     let a = named(&object, "a");
-    assert_eq!(a.extent(&object), Some(32));
+    assert_eq!(a.extent(&object), Some(16));
+    assert_eq!(named(&object, "<function 0x10>").address, 16);
 
-    // And the listing's labels say the same: two stretches, `a`'s reaching `c`, with no
-    // gap between what `a` claims and where `c` starts.
+    // The listing's labels say the same: three stretches, each claiming its whole span.
     let section = object
         .sections
         .iter()
@@ -1134,10 +1136,65 @@ fn a_symbol_whose_name_will_not_read_does_not_bound_its_neighbour() {
             )
         })
         .collect();
-    assert_eq!(stretches, [(0, 32, Some("a")), (32, 36, Some("c"))]);
-    assert!(listing
-        .decode(&object, 0)
-        .expect("a's stretch decodes")
-        .gap
-        .is_none());
+    assert_eq!(
+        stretches,
+        [
+            (0, 16, Some("a")),
+            (16, 32, Some("<function 0x10>")),
+            (32, 36, Some("c")),
+        ]
+    );
+    for index in 0..stretches.len() {
+        assert!(
+            listing
+                .decode(&object, index)
+                .expect("the stretch decodes")
+                .gap
+                .is_none(),
+            "stretch {index} left a gap"
+        );
+    }
+}
+
+/// The other half of the rule above: the placeholder is a last resort and never displaces a
+/// name the file does state. The unreadable symbol's address stays out of `known`, so the
+/// `.dynsym` entry at it is taken and names it, and the symbol table's own symbol is then
+/// dropped rather than added as a second row for the one place.
+#[test]
+fn a_declaration_still_names_a_symbol_whose_name_will_not_read() {
+    let text = [0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3, 0xC3];
+    let dynamic = [ExportedSymbol {
+        name: "exported",
+        offset: 4,
+        size: 2,
+        code: true,
+    }];
+    let statics = [
+        ExportedSymbol {
+            name: "first",
+            offset: 0,
+            size: 4,
+            code: true,
+        },
+        ExportedSymbol {
+            name: "second",
+            offset: 4,
+            size: 2,
+            code: true,
+        },
+    ];
+    let data = elf_with_unreadable_name(
+        &elf_shared_object(SharedObject {
+            text: &text,
+            dynamic: &dynamic,
+            static_symbols: &statics,
+            entry: None,
+            eh_frame: &[],
+        }),
+        "second",
+    );
+    let object = parse(&data);
+
+    assert_eq!(names(&object), ["exported", "first"]);
+    assert_eq!(named(&object, "exported").address, TEXT_ADDRESS + 4);
 }

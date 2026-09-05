@@ -86,11 +86,13 @@ extent used is still `SymbolData::extent`. The symbol table itself may hold two 
 address (an alias, an assembler label) and both are kept, but `Section::symbols`, the sorted list
 `estimate_size` binary-searches, holds each address **once**: a repeated entry made the search land
 on either twin and answer 0 for an aliased symbol, which in an object without DWARF was a function
-with no listing at all. A symbol whose name will not read is in neither list: it is dropped where
-the symbols are built, so the walk filling `Section::symbols` and `known` drops it too. Kept there
-it would cut the extent of the symbol below it and refuse an export or an unwind entry its address,
-while being listed nowhere. The section comes from looking the address up in the kept **text** sections,
-which doubles as the filter keeping exported *data* out. A relocatable object is skipped entirely:
+with no listing at all. A symbol whose name will not read out of the string table is a place in the
+file all the same and is kept: its address goes into `Section::symbols`, so the symbol below it is
+bounded by it, but **not** into `known`, so an export, a PDB procedure or public, or an unwind entry
+can still claim that address and give it a real name. Only where none does is the symbol listed at
+all, under `<function 0x…>`, which is why the walk that builds the symbols runs after
+`declared_code`. The section comes from looking the address up in the kept **text** sections, which
+doubles as the filter keeping exported *data* out. A relocatable object is skipped entirely:
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. The two nameless
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`
 or `<fragment 0x…>`, in angle brackets because no assembler, linker or mangling scheme emits them,

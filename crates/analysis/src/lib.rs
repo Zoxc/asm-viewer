@@ -595,8 +595,9 @@ fn zstd_data(data: &[u8], size: u64) -> Option<Vec<u8>> {
 struct Pending {
     index: SymbolIndex,
     name: String,
-    /// Whether the name is the file's own. The entry point's is not — it is
-    /// [`ENTRY_POINT_NAME`], which no demangler has anything to say about.
+    /// Whether the name is the file's own. Two are not: the entry point's
+    /// [`ENTRY_POINT_NAME`], and the [`function_name`] a symbol whose own name will not
+    /// read is listed under. No demangler has anything to say about either.
     mangled: bool,
     section: Option<Arc<Section>>,
     address: u64,
@@ -629,15 +630,23 @@ struct DeclaredCode {
 /// can collide with a name that was in the file.
 const ENTRY_POINT_NAME: &str = "<entry point>";
 
-/// The name given to code only an unwind entry declares: `<function 0x140001000>`, or
-/// `<fragment 0x140001000>` for a chained entry — its own address either way, since 20 000
-/// of them in one Symbols list have to be told apart and found.
+/// The name given to a function the file offers no readable name for: `<function
+/// 0x140001000>`, its own address, since 20 000 of them in one Symbols list have to be told
+/// apart and found. Code only an unwind entry declares is called this, and so is a text
+/// symbol whose name will not read out of the string table.
+fn function_name(address: u64) -> String {
+    format!("<function {address:#x}>")
+}
+
+/// The name given to code only an unwind entry declares: [`function_name`], or
+/// `<fragment 0x140001000>` for a chained entry — a second range of some function's
+/// rather than a function.
 fn unwind_name(entry: &UnwindEntry) -> String {
     let address = entry.range.start;
     if entry.chained {
         format!("<fragment {address:#x}>")
     } else {
-        format!("<function {address:#x}>")
+        function_name(address)
     }
 }
 
@@ -839,17 +848,20 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
             // because that set is what tells `declared_code` which of the file's exports are
             // already in the symbol table under their own name.
             //
-            // A symbol whose name will not read is skipped, exactly as the walk below that
-            // builds the symbols skips it: kept here it would cut its neighbour's derived
-            // extent and refuse an export or an unwind entry the address, while being
-            // listed nowhere.
+            // A symbol whose name will not read out of the string table is a place in the
+            // file all the same, so its address goes into the section and the symbol below
+            // it keeps its extent. It stays out of `known`, so an export, a PDB procedure or
+            // public, or an unwind entry can still claim that address and give it a real
+            // name; only where none does is the symbol listed by its address, below.
             let mut known: HashSet<u64> = HashSet::new();
             file.symbols().for_each(|symbol| {
-                if symbol.kind() != SymbolKind::Text || symbol.name_bytes().is_err() {
+                if symbol.kind() != SymbolKind::Text {
                     return;
                 }
 
-                known.insert(symbol.address());
+                if symbol.name_bytes().is_ok() {
+                    known.insert(symbol.address());
+                }
                 symbol
                     .section()
                     .index()
@@ -924,10 +936,26 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                         .index()
                         .and_then(|index| section_map.get(&index).cloned());
 
+                    // A name that will not read leaves the address as the only thing to
+                    // call the symbol by. `known` now holds every address the table named
+                    // and every one `declared_code` claimed, so this walk runs after it
+                    // and takes only what nothing else named: a second symbol at an
+                    // address an export or an unwind entry already named would be a second
+                    // row for one place in the file.
+                    let (name, mangled) = match symbol.name_bytes() {
+                        Ok(name) => (String::from_utf8_lossy(name).into_owned(), true),
+                        Err(_) => {
+                            let address = symbol.address();
+                            known
+                                .insert(address)
+                                .then(|| (function_name(address), false))?
+                        }
+                    };
+
                     Some(Pending {
                         index: symbol.index(),
-                        name: String::from_utf8_lossy(symbol.name_bytes().ok()?).into_owned(),
-                        mangled: true,
+                        name,
+                        mangled,
                         section,
                         address: symbol.address(),
                         size: symbol.size(),
