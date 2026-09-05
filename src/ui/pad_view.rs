@@ -917,9 +917,11 @@ impl Component for ScratchpadTab {
                                 .spacing(6.0)
                                 .child(
                                     Button::new()
-                                        // "Two builds cannot be started at once", on the
-                                        // control as well as in `request_build`.
-                                        .enabled(!state.building)
+                                        // "Two builds cannot be started at once" and
+                                        // "nothing is written until the disk has been
+                                        // read", on the control as well as in
+                                        // `request_build`.
+                                        .enabled(state.opened && !state.building)
                                         .on_press(move |_| request_build(pad, &jobs))
                                         .child(match state.building {
                                             true => "Building...",

@@ -326,8 +326,11 @@ second. The pad is then left **unopened**: no buffer is made for it, its baselin
 and `save_if_changed` steps over a pad that is not open, so the reader's own `Cargo.toml` and
 `src/main.rs` stay as they are and the pane says why. Answering what was handed in, as an empty
 directory does, would seed the pad from the default the app boots holding, and the first keystroke
-would write that over both files. Such a pad does not move to the front of the order either: a
-restart may not come back to one that will not open.
+would write that over both files. **Building is the same write**, `build_in` putting the package on
+disk before it compiles it, so `request_build` refuses a pad that is not open, on the button
+(`enabled`) and in the request both -- or the loss the keystroke cannot bring about would be one
+deliberate press away. Such a pad does not move to the front of the order either: a restart may not
+come back to one that will not open.
 
 **A failed build points back at a row structurally, never by looking for a crate name in a
 sentence.** A rejected build with no compiler diagnostics at all is cargo refusing before it

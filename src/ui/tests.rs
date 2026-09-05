@@ -10692,6 +10692,42 @@ fn a_pad_that_will_not_load_is_left_unopened_and_never_written() {
     );
 }
 
+/// Nor is such a pad built over. A build **writes the package before it compiles it**, so
+/// pressing Build on a pad this app could not read is the same loss as typing into one: the
+/// default manifest and source over the reader's own two files. Through `request_build`
+/// rather than the button, the guard being a property of asking.
+#[test]
+fn a_pad_that_will_not_load_is_not_built_over_either() {
+    let (mut test, _states, pad, _text, asking, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Unopened {
+                pad: scratchpad.id().clone(),
+                failure: Failure::Unreadable,
+            },
+            PadJob::Save(_) => unreachable!("a pad that will not load is not written over"),
+            PadJob::Build(_) => unreachable!("a pad that will not load is not built over"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().unsaved.is_some());
+    assert!(!pad.peek().state().opened);
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_build(pad, &jobs);
+    // Nothing asked for, and nothing on screen saying a build is going.
+    assert!(!pad.peek().state().building);
+
+    assert_eq!(asks.try_recv(), Ok(Asked::List));
+    assert_eq!(
+        asks.try_recv(),
+        Ok(Asked::Open(crate::scratchpad::DEFAULT_ID.to_owned()))
+    );
+    assert!(asks.is_empty(), "a pad that would not load was built over");
+}
+
 /// An edit is written out, and a row that cannot be written says so against itself.
 /// `Failure::Dependencies` carries the **index** of every row that is wrong, which is
 /// what lets the pane mark them in place.

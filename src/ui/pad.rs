@@ -1048,12 +1048,17 @@ pub(crate) fn superseded(
     job
 }
 
-/// Ask for a build of what is on screen, unless one is already running. The guard is here
-/// as well as on the button, so "two builds cannot be started at once" is a property of
-/// the request rather than of one control's disabled state.
+/// Ask for a build of what is on screen, unless one is already running or the pad has
+/// never been read. Both guards are here as well as on the button, so "two builds cannot
+/// be started at once" and "nothing is written until the disk has been read" are properties
+/// of the request rather than of one control's disabled state.
+///
+/// A build writes the package before it compiles it, so building a pad this app could not
+/// read would put the default manifest and source over the reader's own two files -- the
+/// loss leaving such a pad unopened is there to prevent, one deliberate press away.
 pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     let state = pad.peek().state().clone();
-    if state.building {
+    if state.building || !state.opened {
         return;
     }
 
