@@ -20,7 +20,9 @@
 //! a thread of its own and only reaches the lock once the unwind has let it go.
 //!
 //! **It must not panic itself**, which aborts. Everything here is best-effort: a store
-//! that cannot be written is one the reader is told about anyway.
+//! that cannot be written is one the reader is told about anyway, and the line put on
+//! stderr goes through `echo` rather than `eprintln!`, which panics when that write
+//! fails.
 //!
 //! The hook is installed once the window is up (`crate::ui::app`) and not from `main`, so
 //! that it is the outer one: freya installs its own inside `launch`, in a release build
@@ -124,9 +126,7 @@ pub(crate) fn install() {
     let base = project::base();
     panic::set_hook(Box::new(move |info| {
         let panic = Panic::of(info);
-        // The line the default hook would have written, since a developer running the
-        // app from a terminal is reading it and no other hook runs now.
-        eprintln!("{}", panic.told());
+        echo(std::io::stderr(), &panic);
         handle(
             &panic,
             analysis::guard::guarded(),
@@ -135,6 +135,17 @@ pub(crate) fn install() {
             &mut shut_down,
         );
     }));
+}
+
+/// Write the line the default hook would have written, since a developer running the app
+/// from a terminal is reading it and no other hook runs now.
+///
+/// Best-effort, which is why it is not `eprintln!`: that panics when the write fails, and
+/// a stderr that is a pipe whose reader has gone answers `EPIPE`. A panic raised inside
+/// the hook aborts the process on the spot, before the record is written or the reader is
+/// told.
+fn echo(mut out: impl Write, panic: &Panic) {
+    let _ = writeln!(out, "{}", panic.told());
 }
 
 /// What a panic leads to, with the storing, the telling and the shutting down all handed

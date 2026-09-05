@@ -83,6 +83,35 @@ fn only_a_panic_the_crate_does_not_guard_is_told_about() {
     }
 }
 
+/// A stderr whose reader has gone answers `EPIPE`, and the hook has to survive it: a
+/// panic raised inside the hook aborts before anything is written down. `eprintln!` is
+/// exactly that panic, which is why the line goes through `echo`.
+#[test]
+fn a_stderr_that_will_not_take_the_line_is_not_a_second_panic() {
+    struct Broken;
+
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        }
+    }
+
+    let panic = panic_at(1_757_000_000, "a dependency's bug");
+    echo(Broken, &panic);
+
+    // And the line itself, so the writer that does take it is pinned too.
+    let mut taken = Vec::new();
+    echo(&mut taken, &panic);
+    assert_eq!(
+        String::from_utf8(taken).expect("the line is text"),
+        format!("{}\n", panic.told())
+    );
+}
+
 /// The stamp on a record and on a file: UTC, and right over a leap day and a year's end,
 /// which is the whole of what the arithmetic can get wrong.
 #[test]
