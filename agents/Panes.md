@@ -600,7 +600,11 @@ stretch's decoded body takes (the symbol's own instruction rows and separators, 
 its bytes over four, x86's mean instruction length, and never fewer than one. The listing therefore
 has its whole length from the first frame, the scrollbar means something, and what the reader
 scrolls over is empty space that fills in as the worker reaches it; the length starts estimated and
-settles. What makes that bearable is that **every row has an address and every address a row**
+settles. A body that decoded to **no instructions** -- an architecture no backend reads, where the
+symbol's own pane says so -- is widened to a gap over the whole stretch, and the view draws its
+bytes from the rows' gap and not from the reading's. Otherwise such a stretch counts no rows at
+all: every function collapsed to its label the moment the worker answered, and no address in one
+had a row. What makes that bearable is that **every row has an address and every address a row**
 (`address_of` and `row_for`, placed addresses both, an empty row's being its share of the stretch's
 bytes rounded so the two agree), since an address is the one name for a row that survives the rows
 around it changing. The view keeps the reader's place as an address for exactly that reason, plus

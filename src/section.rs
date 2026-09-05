@@ -8,13 +8,14 @@
 //! with a blank under that, a **label** row per symbol at a stretch's address, then the
 //! stretch's body. A body that has been decoded is the symbol's instruction rows and block
 //! separators -- exactly the rows its own listing draws, `Lanes` and all -- followed by
-//! its gap as rows of hex bytes. A body nobody has decoded yet is a run of **empty** rows,
-//! as many as its bytes suggest, so the listing has its whole length from the first frame
-//! and the reader scrolls over empty space that fills in as the worker reaches it. The
-//! length therefore starts estimated and settles; keeping the reader's row still while it
-//! does is the view's job, and [`Rows::address_of`] / [`Rows::row_for`] are what it does
-//! it with, an address being the one name for a row that survives the rows around it
-//! changing.
+//! its gap as rows of hex bytes; where the decode found no instructions, no backend
+//! reading the architecture, the whole stretch is those bytes. A body nobody has decoded
+//! yet is a run of **empty** rows, as many as its bytes suggest, so the listing has its
+//! whole length from the first frame and the reader scrolls over empty space that fills
+//! in as the worker reaches it. The length therefore starts estimated and settles;
+//! keeping the reader's row still while it does is the view's job, and
+//! [`Rows::address_of`] / [`Rows::row_for`] are what it does it with, an address being
+//! the one name for a row that survives the rows around it changing.
 //!
 //! Every address here is **placed** (`Placed::place`): the section's own plus where the
 //! object's layout put it, so two functions of a relocatable object, both at 0 in the file,
@@ -40,6 +41,7 @@ pub struct Body {
     /// with no bytes.
     pub assembly: Option<Arc<Assembly>>,
     pub lanes: Arc<Lanes>,
+    /// Widened to the whole stretch where nothing was decoded ([`Rows::new`]).
     pub gap: Option<Range<u64>>,
 }
 
@@ -193,7 +195,16 @@ impl Rows {
                 let bytes = stretch.range.end.saturating_sub(stretch.range.start);
                 let labels = stretch.symbols.len();
                 let body = match decoded(flat) {
-                    Some(body) => BodyRows::Decoded(body),
+                    Some(mut body) => {
+                        // No instructions -- an architecture no backend decodes -- so no
+                        // byte of the stretch is an instruction's: draw the whole of it
+                        // as bytes. Otherwise the body is no rows at all.
+                        if body.instructions() == 0 {
+                            let end = body.gap.as_ref().map_or(stretch.range.end, |gap| gap.end);
+                            body.gap = Some(stretch.range.start..end);
+                        }
+                        BodyRows::Decoded(body)
+                    }
                     None => BodyRows::Estimated(StretchRows::estimate(bytes, labels > 0)),
                 };
                 stretches.push(StretchRows {

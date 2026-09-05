@@ -402,8 +402,9 @@ backwards. An architecture no backend claims is a **third answer**, not an empty
 byte sequence a decoder could refuse on. The same bytes that are an aarch64 function are a confident
 page of x86 nonsense, which is what this used to print, and an empty listing on its own looks like a
 symbol that holds no code. `assembly` still answers `None` for one thing only: a symbol with no
-bytes at all. Nothing in the UI reads `undecodable` yet, so such an object currently draws an empty
-pane rather than the reason.
+bytes at all. The symbol's pane reads `undecodable` and names the architecture instead of a
+listing; the section view, where a symbol is one stretch among many, draws the stretch's bytes as a
+hex dump (`src/section.rs`, `agents/Panes.md`).
 
 The trait is **one call wide** (`Disassembler::disassemble(&Code) -> Vec<Instruction>`) and is
 shaped by what `Assembly` needs rather than by what a disassembler library offers. **The dispatch

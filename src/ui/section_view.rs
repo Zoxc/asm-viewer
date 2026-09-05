@@ -163,7 +163,7 @@ pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
             .and_then(|assembly| assembly.instructions.get(index))
             .map(|instruction| asm_line(instruction, rows.bias(stretch).unwrap_or(0)))
             .unwrap_or_default(),
-        Some(Row::Gap { stretch, index }) => gap_bytes(rows, reading, stretch, index)
+        Some(Row::Gap { stretch, index }) => gap_bytes(rows, stretch, index)
             .map(|(address, bytes)| {
                 let (mark, values) = dump_line(&bytes);
                 format!("{address:016X} {mark} {values}")
@@ -195,7 +195,7 @@ pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
             .filter(|assembly| index < assembly.instructions.len())
             .map(|assembly| instruction_line(assembly, index))
             .unwrap_or_default(),
-        Some(Row::Gap { stretch, index }) => gap_bytes(rows, reading, stretch, index)
+        Some(Row::Gap { stretch, index }) => gap_bytes(rows, stretch, index)
             .map(|(_, bytes)| {
                 let (mark, values) = dump_line(&bytes);
                 text_line(Some(mark), &values)
@@ -221,17 +221,18 @@ fn label_of(rows: &Rows, flat: usize, index: usize) -> Option<Arc<SymbolData>> {
 
 /// The bytes gap row `index` of stretch `flat` draws, and the placed address they start
 /// at.
-fn gap_bytes(rows: &Rows, reading: &Reading, flat: usize, index: usize) -> Option<(u64, Vec<u8>)> {
-    let gap = reading.held.get(&flat)?.gap.as_ref()?;
+fn gap_bytes(rows: &Rows, flat: usize, index: usize) -> Option<(u64, Vec<u8>)> {
+    // The rows' own gap and not the reading's: they are counted from it, and it is the
+    // whole stretch where nothing was decoded.
+    let gap = rows.body(flat)?.gap.as_ref()?;
     let start = gap
-        .range
         .start
         .checked_add((index as u64).checked_mul(GAP_BYTES_PER_ROW)?)?;
-    if start >= gap.range.end {
+    if start >= gap.end {
         return None;
     }
-    let end = start.saturating_add(GAP_BYTES_PER_ROW).min(gap.range.end);
-    // The section the stretch is in holds the bytes; `gap.range` is in its own addresses.
+    let end = start.saturating_add(GAP_BYTES_PER_ROW).min(gap.end);
+    // The section the stretch is in holds the bytes; `gap` is in its own addresses.
     let placed = rows.placed_of(flat)?;
     let section = placed.listing.section();
     let offset = start.checked_sub(section.address)?;
@@ -818,8 +819,7 @@ fn build_row(
         .key(RowKey::Empty(rows.start_of(stretch).unwrap_or(0), index))
         .into_element(),
         Some(Row::Gap { stretch, index }) => {
-            let (address, bytes) =
-                gap_bytes(rows, &rows.reading, stretch, index).unwrap_or((0, Vec::new()));
+            let (address, bytes) = gap_bytes(rows, stretch, index).unwrap_or((0, Vec::new()));
             let (mark, values) = dump_line(&bytes);
             text(
                 Some(address),

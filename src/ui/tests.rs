@@ -12659,6 +12659,45 @@ fn a_gap_row_is_marked_as_data() {
     );
 }
 
+/// A stretch decoded to no instructions -- an architecture no backend reads -- draws the
+/// whole of its bytes. The rows are the gap the counting widened to the stretch, and the
+/// bytes in them are read from that gap and not from the reading's, which such a stretch
+/// has none of.
+#[test]
+fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let mut reading = reading_of(&object, &[0]);
+    let held = reading.held.get(&0).expect("stretch 0 is held").clone();
+    let mut studied = held.code.clone().expect("stretch 0 has a symbol");
+    // What the worker answers for a symbol whose architecture no backend decodes.
+    studied.assembly = Some(Arc::new(Assembly {
+        instructions: Vec::new(),
+        edges: Vec::new(),
+        undecodable: Some("aarch64"),
+    }));
+    studied.lanes = Arc::new(Lanes::new(&[], 0));
+    reading.held.insert(
+        0,
+        Arc::new(Stretched {
+            code: Some(studied),
+            gap: None,
+        }),
+    );
+
+    let rows = rows_of(&reading);
+    let gaps: Vec<usize> = (0..rows.len())
+        .filter(|&row| matches!(rows.row(row), Some(Row::Gap { stretch: 0, .. })))
+        .collect();
+    assert!(!gaps.is_empty(), "the stretch draws none of its bytes");
+    for &row in &gaps {
+        let address = rows.address_of(row).expect("a gap row has an address");
+        let line = row_line(&rows, &reading, row);
+        assert!(line.starts_with(&format!("{address:016X} ")), "{line:?}");
+        assert!(line.ends_with('|'), "row {row} draws no bytes: {line:?}");
+    }
+}
+
 /// The Assembly pane over an object's code with a menu viewer above it, so a row's menu
 /// can open.
 fn menu_code_harness() -> impl IntoElement {

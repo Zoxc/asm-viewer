@@ -539,3 +539,47 @@ fn a_separator_row_belongs_to_the_instruction_below_it() {
         assert_eq!(rows.address_of(row), rows.address_of(row + 1));
     }
 }
+
+/// A stretch whose decode found no instructions -- an architecture no backend reads --
+/// draws its bytes as a gap. Without that its body is no rows at all: the function
+/// collapses to its label as the worker answers, and no address inside it has a row.
+#[test]
+fn a_stretch_that_decoded_to_no_instructions_draws_its_bytes() {
+    let (_, code) = split();
+    let stretch = &code.sections()[1].listing.stretches()[0];
+    let bytes = stretch.range.end - stretch.range.start;
+    assert!(bytes > GAP_BYTES_PER_ROW, "one row of bytes proves little");
+    // What the worker answers for a symbol on an architecture no backend decodes: an
+    // assembly saying so, with no instructions, and no gap, the extent being the whole
+    // stretch.
+    let undecodable = Body {
+        assembly: Some(Arc::new(Assembly {
+            instructions: Vec::new(),
+            edges: Vec::new(),
+            undecodable: Some("aarch64"),
+        })),
+        lanes: Arc::new(Lanes::new(&[], 0)),
+        gap: None,
+    };
+    let rows = Rows::new(code.clone(), |flat| {
+        (flat == 1).then(|| undecodable.clone())
+    });
+
+    let range = rows_of(&rows, 1);
+    let body = rows.body_start(1).unwrap();
+    assert_eq!(range.end - body, bytes.div_ceil(GAP_BYTES_PER_ROW) as usize);
+    let start = rows.start_of(1).unwrap();
+    assert_eq!(rows.address_of(body), Some(start));
+    for byte in 0..bytes {
+        let index = (byte / GAP_BYTES_PER_ROW) as usize;
+        let address = start + byte;
+        assert_eq!(rows.row(body + index), Some(Row::Gap { stretch: 1, index }));
+        assert_eq!(
+            rows.body_row_for(address),
+            Some(body + index),
+            "{address:#x}"
+        );
+        let expected = if byte == 0 { range.start } else { body + index };
+        assert_eq!(rows.row_for(address), Some(expected), "{address:#x}");
+    }
+}
