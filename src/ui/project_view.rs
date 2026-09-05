@@ -712,10 +712,11 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
     let ProjectStates {
         proj,
         objects,
-        // What is still being read is deliberately not saved and deliberately does not
-        // What is still being read is deliberately not saved: `binaries` is derived
-        // from the objects.
-        loading: _,
+        // What is still being read is not itself saved -- `binaries` is derived from
+        // the objects -- but a list still filling in is not the app's list, so the
+        // record below is told. Reading it also re-runs this when the load ends, which
+        // is the record that writes.
+        loading,
         open,
         asm_at,
         src_at,
@@ -733,9 +734,11 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
     use_side_effect(move || {
         // Reading these subscribes the effect to them: any change re-runs it.
         let objects = objects.read();
+        let loading = !loading.read().is_empty();
         project::record(
             proj.read().details(),
             project::binaries(&objects),
+            loading,
             bookmarks.read().entries().to_vec(),
             {
                 // The dock and the table rather than `Active`, which is a memo and so a

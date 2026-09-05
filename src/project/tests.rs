@@ -1307,7 +1307,7 @@ fn recorded(
 ) -> Option<(Project, Option<Session>)> {
     let unchanged = saves.given.clone();
     let bookmarks = saves.bookmarks.clone();
-    saves.record(unchanged, binaries, bookmarks, session)
+    saves.record(unchanged, binaries, false, bookmarks, session)
 }
 
 fn written(
@@ -1316,6 +1316,18 @@ fn written(
     selection: Option<&str>,
 ) -> Option<(Project, Option<Session>)> {
     recorded(saves, paths(binaries), session_with(selection))
+}
+
+/// `record` from inside a load: the app holds `binaries` so far and the rest are still
+/// being read.
+fn mid_load(
+    saves: &mut Saves,
+    binaries: &[&str],
+    session: Session,
+) -> Option<(Project, Option<Session>)> {
+    let unchanged = saves.given.clone();
+    let bookmarks = saves.bookmarks.clone();
+    saves.record(unchanged, paths(binaries), true, bookmarks, session)
 }
 
 #[test]
@@ -1491,6 +1503,91 @@ fn reopening_seeds_the_name_but_not_the_baseline() {
     assert_eq!(project, loaded);
 }
 
+/// The objects arrive one at a time, so a list still being read is not the app's list.
+/// Writing it would put a project naming only what has landed on disk, and with it the
+/// empty session the app holds until the restore has resolved its tabs.
+#[test]
+fn a_binary_landing_mid_load_is_not_written() {
+    let mut saves = Saves::new();
+    let loaded = Project {
+        name: None,
+        directory: None,
+        language_server: None,
+        trusted: false,
+        binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
+        cargo: None,
+        bookmarks: Vec::new(),
+    };
+    saves.opened(ProjectId::new("kernel-1").expect("an id"), &loaded);
+
+    // The first of the two lands, and the app's session is still the empty one. Nothing
+    // is written, and nothing is left pending for a flush to write either.
+    assert_eq!(
+        mid_load(&mut saves, &["/tmp/vmlinux"], Session::new()),
+        None
+    );
+    assert_eq!(saves.flush(), None);
+
+    // The second lands while the load is still in flight, so the baseline stays behind
+    // it: the record after the load has to see a change even where nothing more arrived.
+    assert_eq!(
+        mid_load(&mut saves, &["/tmp/vmlinux", "/tmp/lib.a"], Session::new()),
+        None
+    );
+
+    // The load ends, the restore resolves the session against everything it opened, and
+    // that record is the one that writes: both files, and the whole list.
+    let (project, session) = recorded(
+        &mut saves,
+        loaded.binaries.clone(),
+        session_with(Some("a.o")),
+    )
+    .expect("a write");
+    assert_eq!(project, loaded);
+    assert_eq!(session, Some(session_with(Some("a.o"))));
+}
+
+/// A write that does go out mid-load -- a rename, a bookmark -- must not take the
+/// half-read list for the baseline either, or the record after the load would see no
+/// change and the file would never learn the rest of it.
+#[test]
+fn a_rename_mid_load_leaves_the_binaries_baseline_behind() {
+    let mut saves = Saves::new();
+    written(&mut saves, &["/tmp/lib.a"], None);
+
+    // A second binary is opened, and the reader renames the project while it is still
+    // being read.
+    let named = Details {
+        name: Some("kernel".into()),
+        ..saves.given.clone()
+    };
+    let (project, session) = saves
+        .record(
+            named,
+            paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+            true,
+            Vec::new(),
+            Session::new(),
+        )
+        .expect("a write");
+    assert_eq!(project.name.as_deref(), Some("kernel"));
+    assert_eq!(
+        project.binaries,
+        paths(&["/tmp/lib.a"]),
+        "the listed binaries, not the half-read list"
+    );
+    assert_eq!(session, None);
+
+    // The load ends, and this is the record that has to put the second binary on disk.
+    let (project, _) = recorded(
+        &mut saves,
+        paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+        Session::new(),
+    )
+    .expect("a write");
+    assert_eq!(project.binaries, paths(&["/tmp/lib.a", "/tmp/some.dll"]));
+}
+
 /// A rename is on disk before the next click, and is a `project.toml` write and nothing
 /// else: it lets go of no binary and so cannot leave the two files disagreeing.
 #[test]
@@ -1511,6 +1608,7 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
         .record(
             named.clone(),
             paths(&["/tmp/lib.a"]),
+            false,
             Vec::new(),
             session_with(Some("a.o")),
         )
@@ -1536,6 +1634,7 @@ fn a_rename_is_written_at_once_and_leaves_the_session_pending() {
         saves.record(
             named,
             paths(&["/tmp/lib.a"]),
+            false,
             Vec::new(),
             session_with(Some("a.o"))
         ),
@@ -1558,7 +1657,13 @@ fn clearing_a_name_is_a_change_too() {
     );
 
     let written = saves
-        .record(Details::default(), Vec::new(), Vec::new(), Session::new())
+        .record(
+            Details::default(),
+            Vec::new(),
+            false,
+            Vec::new(),
+            Session::new(),
+        )
         .expect("a write");
     assert_eq!(written.0.name, None);
     assert_eq!(written.1, None);
@@ -1589,7 +1694,7 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
         cargo: None,
     };
     let written = saves
-        .record(named, Vec::new(), Vec::new(), Session::new())
+        .record(named, Vec::new(), true, Vec::new(), Session::new())
         .expect("a write");
     assert_eq!(written.0.name.as_deref(), Some("kernel"));
     assert_eq!(written.0.binaries, loaded.binaries);
@@ -1600,6 +1705,7 @@ fn a_rename_before_the_binaries_have_loaded_does_not_forget_them() {
         .record(
             saves.given.clone(),
             paths(&["/tmp/vmlinux"]),
+            false,
             Vec::new(),
             Session::new(),
         )
@@ -1638,6 +1744,7 @@ fn entering_a_project_empties_every_baseline() {
                 cargo: None,
             },
             Vec::new(),
+            false,
             Vec::new(),
             Session::new()
         ),
@@ -2419,6 +2526,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
     let unchanged = saves.record(
         saves.given.clone(),
         Vec::new(),
+        false,
         reopened.bookmarks.clone(),
         Session::new(),
     );
@@ -2433,6 +2541,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         .record(
             saves.given.clone(),
             Vec::new(),
+            false,
             added.clone(),
             Session::new(),
         )
@@ -2446,7 +2555,13 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 
     // Removing them all is a change too, written as an absent key.
     let (project, _) = saves
-        .record(saves.given.clone(), Vec::new(), Vec::new(), Session::new())
+        .record(
+            saves.given.clone(),
+            Vec::new(),
+            false,
+            Vec::new(),
+            Session::new(),
+        )
         .expect("a write");
     assert!(project.bookmarks.is_empty());
 }

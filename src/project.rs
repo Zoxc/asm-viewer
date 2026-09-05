@@ -1076,17 +1076,17 @@ struct Saves {
     /// The bookmarks as last written: the other baseline seeded by [`Saves::opened`], since
     /// they too are restored synchronously, out of the file and not out of a parse.
     bookmarks: Vec<Bookmark>,
-    /// The binaries the app was last seen holding. Empty to start with, deliberately not
-    /// the ones loaded at startup: they arrive asynchronously, so a baseline holding them
-    /// would read the still-empty boot state as a change and write an empty project over
-    /// a good one.
+    /// The binaries the app was last seen holding, out of a moment when nothing was
+    /// loading. Empty to start with, deliberately not the ones loaded at startup: they
+    /// arrive asynchronously, so a baseline holding them would read the still-empty boot
+    /// state as a change and write an empty project over a good one.
     binaries: Vec<PathBuf>,
     /// What `project.toml` currently *says* the binaries are.
     ///
-    /// The same list as `binaries` in every state but one: between a project being
-    /// reopened and its parse landing, the app holds none while the file names several. A
-    /// write that is not about the binaries writes this back rather than the app's own
-    /// list, so a rename in that window cannot forget them.
+    /// The same list as `binaries` in every state but one: while a load is in flight, the
+    /// app holds what has landed so far while the file names the whole list. A write that
+    /// is not about the binaries writes this back rather than the app's own list, so a
+    /// rename in that window cannot forget them.
     listed: Vec<PathBuf>,
     /// The session as last written, empty for `binaries`' reason.
     session: Session,
@@ -1162,14 +1162,22 @@ impl Saves {
     /// **bookmarks**, for the same reason. Everything else — a selection, a tab, a history
     /// entry — only marks the session pending. Nothing here has to say which is which:
     /// which file a field lives in is what decides it.
+    ///
+    /// While a load is in flight `binaries` is not the app's list but the part of it that
+    /// has landed, so it is neither compared nor written: a project naming only what has
+    /// arrived, and the session the app holds until a restore has resolved its tabs,
+    /// would otherwise go to disk over the good ones. Both baselines are left where they
+    /// were for the record that follows the load, which is the one that sees the change.
+    /// A binaries change the reader makes in that window waits for the same record.
     fn record(
         &mut self,
         details: Details,
         binaries: Vec<PathBuf>,
+        loading: bool,
         bookmarks: Vec<Bookmark>,
         session: Session,
     ) -> Option<(Project, Option<Session>)> {
-        let binaries_changed = self.binaries != binaries;
+        let binaries_changed = !loading && self.binaries != binaries;
         let details_changed = self.given != details;
         let bookmarks_changed = self.bookmarks != bookmarks;
 
@@ -1182,11 +1190,11 @@ impl Saves {
 
         self.given = details;
         self.bookmarks = bookmarks;
-        self.binaries = binaries.clone();
-        // A write that is not about the binaries keeps the ones already in the file; see
-        // [`Saves::listed`].
+        // A write that is not about the binaries keeps the ones already in the file, and
+        // leaves both baselines where they were; see [`Saves::listed`].
         let project = match binaries_changed {
             true => {
+                self.binaries = binaries.clone();
                 self.listed = binaries.clone();
                 self.project(binaries)
             }
@@ -1312,17 +1320,20 @@ pub fn start_new() -> Option<ProjectId> {
 
 /// Take note of the project the app is now in, writing it out immediately if it is a
 /// change that must not be lost and marking it pending otherwise. Cheap enough to call on
-/// every state change.
+/// every state change. `loading` says the binaries are still arriving, which is what
+/// keeps a half-read list off the disk.
 pub fn record(
     details: Details,
     binaries: Vec<PathBuf>,
+    loading: bool,
     bookmarks: Vec<Bookmark>,
     session: Session,
 ) {
     // The write happens under the lock, so two writes can never reach the file out of
     // the order they were decided in.
     let mut saves = saves();
-    let Some((project, session)) = saves.record(details, binaries, bookmarks, session) else {
+    let Some((project, session)) = saves.record(details, binaries, loading, bookmarks, session)
+    else {
         return;
     };
     let Some(directory) = writing_into(&mut saves) else {

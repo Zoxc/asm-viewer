@@ -63,6 +63,12 @@ impl Loads {
         self.entries.iter().any(|(entry, _)| *entry == id)
     }
 
+    /// Whether nothing is being read at all, which is what the save policy asks: a list
+    /// of binaries still filling in is not the list the app holds.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Whether anything is still producing objects for `path`, which is what a row draws.
     pub fn is_loading(&self, path: &Path) -> bool {
         self.entries.iter().any(|(_, loading)| loading == path)

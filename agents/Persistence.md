@@ -187,18 +187,18 @@ and `Visits::restored` does the same for the record, at its own `MAX_VISITS` (20
 
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
 two of the three things driving it sit outside the component tree.
-`record(details, binaries, bookmarks, session)` is called on every state change and compares each
-against its baseline. A change to the `binaries` writes **both files immediately**. A change to the
-user-given `details` (the name and the directory) or to the `bookmarks` writes **`project.toml`
-alone**, since neither lets go of a binary and so neither can leave the two files disagreeing. A
-change to only the session marks it **pending**: a tab is expressed against the binaries rather than
-the other way round, costs one click to remake, and arrives on every navigation, since
-`open_document` pushes onto a trail or opens a tab on the way to each change of document. Nothing in
-`record` has to *say* which is which: which file a field lives in is what decides it, and the
-`Option<Session>` beside the `Project` it hands back is how it says which half it decided. `flush()`
-writes the pending session, on a 30s timer and from the window's close hook, which is the one exit
-hook freya 0.4 has (`WindowConfig::with_on_close`, a `Send` callback that cannot read any `State`,
-which is exactly why the policy is a static).
+`record(details, binaries, loading, bookmarks, session)` is called on every state change and
+compares each against its baseline. A change to the `binaries` writes **both files immediately**. A
+change to the user-given `details` (the name and the directory) or to the `bookmarks` writes
+**`project.toml` alone**, since neither lets go of a binary and so neither can leave the two files
+disagreeing. A change to only the session marks it **pending**: a tab is expressed against the
+binaries rather than the other way round, costs one click to remake, and arrives on every
+navigation, since `open_document` pushes onto a trail or opens a tab on the way to each change of
+document. Nothing in `record` has to *say* which is which: which file a field lives in is what
+decides it, and the `Option<Session>` beside the `Project` it hands back is how it says which half
+it decided. `flush()` writes the pending session, on a 30s timer and from the window's close hook,
+which is the one exit hook freya 0.4 has (`WindowConfig::with_on_close`, a `Send` callback that
+cannot read any `State`, which is exactly why the policy is a static).
 
 **Every baseline is the state the app boots into**, which is why two of them start empty and two do
 not. The binaries and the session are restored *asynchronously*: the app boots holding nothing and
@@ -215,6 +215,15 @@ bookkeeping that grew out of it: it is what `project.toml` currently *says* the 
 write that is not about the binaries writes that back rather than the app's own list. Otherwise a
 rename during the startup parse, or after a restore that opened none of them, would forget a file
 through a change that had nothing to do with it.
+
+**A list still being read is not the app's list**, which is the `loading` flag. The objects arrive
+one at a time, so while a load is in flight `record` neither compares the binaries nor writes them:
+the first to land would otherwise put a project naming only itself on disk, and beside it the empty
+session the app holds until `restore_project` has resolved its tabs. Both baselines stay behind the
+streamed list, so the record that follows the load is the one that sees the change and writes both
+files -- the save observer reads `Loads` as well, which is what re-runs it when the load ends. The
+cost is that a binary opened or closed while another is being read waits for that same record
+instead of reaching the disk at once.
 
 **Which project is open is `Saves`' too**, and changing it at runtime is `switch(id)` or
 `start_new()`. Both `flush` the project being left while the policy still points at it, `remember`
