@@ -535,7 +535,9 @@ pub(crate) fn use_language_with(
                         }
                         // Nothing found and a server that refused both leave the pane
                         // with no links, which is what it draws with no server either:
-                        // there is nothing to say about a name nobody classified.
+                        // there is nothing to say about a name nobody classified. The two
+                        // are still told apart: a refusal is a question to put again, and
+                        // an empty answer is the answer.
                         let why = match links {
                             Ok(links) => {
                                 let mut waiting = linked.peek().clone();
@@ -547,7 +549,7 @@ pub(crate) fn use_language_with(
                             Err(failure @ lsp::Failure::Refused { .. }) => {
                                 log::warn!("the language server refused a question: {failure}");
                                 let mut waiting = linked.peek().clone();
-                                if waiting.answer(run, file, links::Links::default()) {
+                                if waiting.answer_refused(run, file) {
                                     linked.set(waiting);
                                 }
                                 continue;
@@ -653,6 +655,16 @@ pub(crate) fn use_language_with(
                     continue;
                 }
                 language.set(Language { working, ..held });
+                // A server that has gone quiet has read more of the project than it had
+                // when it refused a question about a file's names, so that question is
+                // put again. Here and not on every word it says: a server that goes on
+                // refusing would otherwise be asked in a tight loop.
+                if !working {
+                    let mut waiting = linked.peek().clone();
+                    if waiting.forget_refusal() {
+                        linked.set(waiting);
+                    }
+                }
             }
         });
 

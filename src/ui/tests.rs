@@ -4821,7 +4821,11 @@ fn linking_harness() -> impl IntoElement {
     let jobs = use_language_with(language, follow, located, linked, states.proj, move |job| {
         work(job)
     });
-    use_linking(language, linked, jobs);
+    use_linking(language, linked, jobs.clone());
+    // Handed out, so a test that is about the server itself can start one and be given
+    // the channel its remarks come back on. The rest reach the server through the pane.
+    let mut asking = use_consume::<ServerAsking>().0;
+    use_hook(move || asking.set(Some(jobs)));
 
     let open = use_open();
     let marked = use_consume::<Marked>().0;
@@ -4884,9 +4888,15 @@ macro_rules! mount_linking {
         mount_linking!($answer, $file, calling_links())
     };
     ($answer:expr, $file:expr, $links:expr) => {{
+        let links: links::Links = $links;
+        let (test, states, language, location, driven, _asking, asks) =
+            mount_linking!(classifying: move || Ok(links.clone()), $answer, $file);
+        (test, states, language, location, driven, asks)
+    }};
+    (classifying: $classify:expr, $answer:expr, $file:expr) => {{
         let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
         let answer = $answer;
-        let links: links::Links = $links;
+        let classify = $classify;
         let work = move |job: LspJob| {
             let recorded = match &job {
                 LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
@@ -4900,13 +4910,13 @@ macro_rules! mount_linking {
                 LspJob::Tokens { run, file } => Some(LspAnswer::Linked {
                     run: *run,
                     file: file.clone(),
-                    links: Ok(links.clone()),
+                    links: classify(),
                 }),
                 _ => answer(job),
             }
         };
         let file: Arc<str> = $file;
-        let (mut test, (states, language, location, driven)) = TestingRunner::new(
+        let (mut test, (states, language, location, driven, asking)) = TestingRunner::new(
             linking_harness,
             (700., 400.).into(),
             move |runner: &mut _| {
@@ -4919,16 +4929,19 @@ macro_rules! mount_linking {
                 runner.provide_root_context(|| Following(State::create(Follow::default())));
                 runner.provide_root_context(|| Linking(State::create(Linked::default())));
                 runner.provide_root_context(move || Subject(file.clone()));
+                let asking = runner
+                    .provide_root_context(|| ServerAsking(State::create(None)))
+                    .0;
                 // Which line each tab's assembly side follows: what the answer writes.
                 let driven = runner
                     .provide_root_context(|| Drives(State::create(Driven::default())))
                     .0;
-                (states, language, location, driven)
+                (states, language, location, driven, asking)
             },
             1.,
         );
         test.sync_and_update();
-        (test, states, language, location, driven, asks)
+        (test, states, language, location, driven, asking, asks)
     }};
 }
 
@@ -5540,6 +5553,129 @@ fn a_question_on_its_way_is_not_asked_again() {
     // And the pane moving to another file is a question of its own.
     linked.wanted = Some(Arc::from("/p/src/other.rs"));
     assert!(linked.pending(1).is_some());
+}
+
+/// The file the server was next asked to classify, waited for while the app runs: the
+/// question goes out from an effect, and what wakes that effect is a note the server's own
+/// channel carries.
+fn until_tokens(
+    test: &mut TestingRunner,
+    asks: &async_channel::Receiver<AskedOfServer>,
+) -> Option<Arc<str>> {
+    for _ in 0..500 {
+        settle(test);
+        while let Ok(job) = asks.try_recv() {
+            if let AskedOfServer::Tokens(file) = job {
+                return Some(file);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    None
+}
+
+/// **A refusal is not an answer.** A handshake's reply and the server's first `$/progress`
+/// can arrive in either order, so there is a beat in which a server that has read nothing
+/// is ready to be asked -- and it refuses. Filed as the empty answer it looks like, that
+/// beat cost the file on screen its links for the whole life of the server, with nothing
+/// the server said afterwards putting the question again.
+///
+/// It is put again once the server has gone quiet, and the names it classifies then are
+/// links a press follows.
+#[test]
+fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
+    let (file, directory) = calling_file("refused");
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let classify = {
+        let asked = asked.clone();
+        move || match asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) {
+            // What rust-analyzer says about a file it has not read yet.
+            0 => Err(lsp::Failure::Refused {
+                code: -32603,
+                said: "file not found".to_owned(),
+            }),
+            _ => Ok(calling_links()),
+        }
+    };
+    let handle = lsp::Handle::to_nothing();
+    let (told, channel) = async_channel::unbounded();
+    let (mut test, states, language, _location, _driven, asking, asks) = mount_linking!(
+        classifying: classify,
+        move |job: LspJob| match job {
+            // A real start, since what puts the question again is the server's own
+            // account of itself, and it arrives on the channel a start hands over.
+            LspJob::Start { run, notes, .. } => {
+                let _ = told.send_blocking(notes);
+                Some(LspAnswer::Started {
+                    run,
+                    server: Ok(handle.clone()),
+                })
+            }
+            _ => None,
+        },
+        file.clone()
+    );
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    with_a_directory(
+        &mut test,
+        &states,
+        directory.to_str().expect("a utf-8 temporary path"),
+    );
+    let jobs = asking.read().clone().expect("the worker");
+    start_server(language, states.proj, &jobs);
+    until_server(&mut test, language, &Lsp::Running);
+
+    // Asked, and refused. Nothing is drawn as a link, so a press on the call asks nobody
+    // where it is defined.
+    assert_eq!(
+        until_tokens(&mut test, &asks).as_deref(),
+        Some(&*file),
+        "the file on screen was never asked about"
+    );
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    assert!(
+        next_ask(&mut test, &asks).is_none(),
+        "a refused file drew links all the same"
+    );
+
+    // The server reads the project, and says so both ways round.
+    let notes = channel.recv_blocking().expect("the start's channel");
+    let run = language.peek().run;
+    let _ = notes.send_blocking((run, lsp::Note::Busy(true)));
+    for _ in 0..500 {
+        settle(&mut test);
+        let working = language.read().working;
+        if working {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let _ = notes.send_blocking((run, lsp::Note::Busy(false)));
+
+    // So the question is put again, and this time it is answered.
+    assert_eq!(
+        until_tokens(&mut test, &asks).as_deref(),
+        Some(&*file),
+        "a file refused while the server was loading was never asked about again"
+    );
+    // The answer travels back over the worker's own thread, which the settling waits for.
+    for _ in 0..20 {
+        settle(&mut test);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    assert!(
+        next_ask(&mut test, &asks).is_some(),
+        "the names that came back are not links"
+    );
 }
 
 /// A **declaration** the server places on the line it was asked about opens nothing. A

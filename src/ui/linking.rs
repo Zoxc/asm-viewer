@@ -30,10 +30,17 @@ pub(crate) struct Linked {
     /// keeps a second question from going out at all. The server says how far through the
     /// project it has got over and over, each word of it a reason for the effect below to
     /// look again; without this, every one of them sent the same question afresh, and the
-    /// one that came back refused wrote its empty answer over the one that had not.
+    /// one that came back refused wrote over the one that had not.
     asked: Option<(Arc<str>, u64)>,
-    /// The file the links below are of, the server run they came back under, and them.
-    found: Option<(Arc<str>, u64, links::Links)>,
+    /// The file the links below are of, the server run they came back under, and them --
+    /// `None` where the server refused to answer.
+    ///
+    /// **A refusal is not an answer.** rust-analyzer refuses a question about a file it
+    /// has not read yet, and there is a beat before it says it is working in which it is
+    /// asked; filed as an empty answer, that beat cost the file its links for the whole
+    /// life of the server. Held as a refusal instead, it is what [`Linked::forget_refusal`]
+    /// drops when the server has read more of the project.
+    found: Option<(Arc<str>, u64, Option<links::Links>)>,
 }
 
 impl Linked {
@@ -65,11 +72,12 @@ impl Linked {
         true
     }
 
-    /// The links in `file`, and nothing where what is held is about another -- which is
-    /// what a pane draws in the beat between moving and being answered.
+    /// The links in `file`, and nothing where what is held is about another or is a
+    /// refusal -- which is what a pane draws in the beat between moving and being
+    /// answered.
     pub(crate) fn links_in(&self, file: &str) -> Option<&links::Links> {
         match &self.found {
-            Some((of, _, links)) if &**of == file => Some(links),
+            Some((of, _, Some(links))) if &**of == file => Some(links),
             _ => None,
         }
     }
@@ -77,16 +85,40 @@ impl Linked {
     /// Take `links` as the answer about `file` in run `run`. Whether anything changed, so
     /// the caller writes only then.
     pub(crate) fn answer(&mut self, run: u64, file: Arc<str>, links: links::Links) -> bool {
+        self.take(run, file, Some(links))
+    }
+
+    /// The server refused to answer about `file` in run `run`. Nothing is drawn for it,
+    /// and it is asked again once the server has read more of the project.
+    pub(crate) fn answer_refused(&mut self, run: u64, file: Arc<str>) -> bool {
+        self.take(run, file, None)
+    }
+
+    /// Both answers, the guard being the same one.
+    fn take(&mut self, run: u64, file: Arc<str>, links: Option<links::Links>) -> bool {
         // An answer to a question nobody is waiting for: one already answered, one about
         // a file the pane has since left, or one from a server that has been restarted
-        // since. Taking it would let a refusal, whose answer is empty, land on top of the
-        // names that came back for the same file.
+        // since. Taking it would let a second question's refusal land on top of the names
+        // the first one came back with.
         if self.asked.as_ref() != Some(&(file.clone(), run)) {
             return false;
         }
         self.asked = None;
         self.found = Some((file, run, links));
         true
+    }
+
+    /// Drop a refusal, so the next turn of [`use_linking`] asks again. Whether anything
+    /// changed, so the caller writes only then.
+    ///
+    /// Called where the server says it has gone quiet, and not on every word it says: a
+    /// server that keeps refusing would otherwise be asked in a tight loop.
+    pub(crate) fn forget_refusal(&mut self) -> bool {
+        let refused = matches!(&self.found, Some((_, _, None)));
+        if refused {
+            self.found = None;
+        }
+        refused
     }
 }
 

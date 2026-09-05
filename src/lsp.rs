@@ -634,20 +634,18 @@ impl<W: Write + Send + 'static> Talk<W> {
     ///
     /// A server that declared no legend is one that answers none of this, and is not
     /// asked.
+    ///
+    /// **A refusal is passed on and not read as an empty answer.** The two "not now"
+    /// codes and the one a server gives for a file it has not read yet all mean "ask
+    /// again", which only the caller can do -- and does, once the server says it has read
+    /// more of the project (`src/ui/linking.rs`).
     pub fn semantic_tokens(&mut self, file: &Path) -> Result<Vec<Token>, Failure> {
         if self.legend.is_empty() {
             return Ok(Vec::new());
         }
         let params = json!({ "textDocument": { "uri": uri_of(file) } });
-        match self.request("textDocument/semanticTokens/full", params) {
-            Ok(value) => Ok(tokens(&value)),
-            // The same "ask again" the questions about a place get, and for the same
-            // reason. A file the server has not read yet refuses with a code that is not
-            // one of these, which arrives as nothing found and is asked again when it
-            // says it has finished reading (`src/ui/language.rs`).
-            Err(Failure::Refused { code, .. }) if NOT_NOW.contains(&code) => Ok(Vec::new()),
-            Err(failure) => Err(failure),
-        }
+        self.request("textDocument/semanticTokens/full", params)
+            .map(|value| tokens(&value))
     }
 
     /// What the server said it would spell its semantic tokens with.

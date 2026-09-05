@@ -415,13 +415,23 @@ through the same `open_source_place` the definition uses -- the same landing, th
 drive, and the answer's columns selected there, where a definition leaves only a caret at
 their start.
 
-**Every way of not answering is nothing found.** An empty answer is one; so is
-`Refused`, which is where a question asked before the workspace is loaded arrives --
-`-32801` and `-32800` the crate already turns into an empty answer, and InternalError
-"file not found" it does not, since it is not a code that means "ask again". It goes to the
-log and leaves the control alone: a server that refuses a question is a server that is
-answering. Only `Broken` still says the server stopped answering, which is the one thing
-the control has to show.
+**An empty answer is nothing found; a refusal is not an answer at all.** A question about
+a place takes both as nothing found -- a click is a question, not a promise -- and the
+`-32801` and `-32800` "not now" codes arrive there as an empty answer. The question about a
+file's names keeps them apart. `Refused` is where a question put before the workspace is
+loaded arrives, those two codes and the InternalError "file not found" rust-analyzer gives
+for a file it has not read; it goes to the log, leaves the control alone -- a server that
+refuses is a server that is answering -- and is held as a refusal, drawn as no links and
+put again once the server says it has gone quiet (`Linked::forget_refusal`).
+
+Filed as an empty answer, as it was, it cost that file its links for the life of the
+server. `ready()` is true for a beat before the first `$/progress`, the handshake's reply
+and that note arriving in either order, and the file on screen when the control was pressed
+is asked in exactly that beat. Asking again only where the server has been busy and gone
+quiet is what keeps one that goes on refusing from being asked in a loop.
+
+Only `Broken` still says the server stopped answering, which is the one thing the control
+has to show.
 
 `$/progress` says a server is reading the project, and "running" means the handshake
 returned rather than that indexing finished -- so a first question can come back empty
