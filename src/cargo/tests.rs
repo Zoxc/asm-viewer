@@ -162,9 +162,10 @@ fn a_dependencys_artifact_is_not_this_workspaces() {
     assert_eq!(artifacts, Vec::new());
 }
 
-/// Where every artifact went on Windows. `fs::canonicalize` answers `\\?\C:\work\app` and
-/// cargo names `C:\work\app\Cargo.toml`; `Path` reads the one prefix as `VerbatimDisk` and
-/// the other as `Disk`, so nothing was ever inside the directory being built.
+/// A verbatim directory still reaches the comparison: a reader can type one into the
+/// project box, and `path::absolute` hands it back as given. `Path` reads the prefix of
+/// `\\?\C:\work\app` as `VerbatimDisk` and cargo's `C:\work\app\Cargo.toml` as `Disk`, so
+/// nothing would be inside the directory being built.
 ///
 /// The strip is what is asserted here: only Windows' own `Path` reads the components.
 #[test]
@@ -190,10 +191,10 @@ fn a_verbatim_path_is_the_plain_one_it_names() {
 }
 
 /// The same rule end to end, on the platform whose `Path` can read the components: an
-/// artifact cargo named is inside the canonicalised directory it was built in.
+/// artifact cargo named is inside the verbatim directory it was built in.
 #[cfg(windows)]
 #[test]
-fn a_canonicalised_windows_directory_keeps_its_artifacts() {
+fn a_verbatim_windows_directory_keeps_its_artifacts() {
     let stdout = concat!(
         r#"{"reason":"compiler-artifact","manifest_path":"C:\\work\\app\\Cargo.toml","#,
         r#""target":{"name":"sketch","kind":["bin"]},"#,
@@ -211,6 +212,30 @@ fn a_canonicalised_windows_directory_keeps_its_artifacts() {
 
     assert_eq!(artifacts.len(), 1);
     assert_eq!(artifacts[0].target, "sketch");
+}
+
+/// The Unix half of the rule, which is why `path::absolute` is not used on both platforms.
+/// cargo derives its manifest paths from `getcwd(2)`, and the kernel answers that with
+/// symlinks resolved and `..` gone, so the directory they are matched against is resolved
+/// too. `path::absolute` leaves a Unix path alone and would match neither spelling.
+#[cfg(unix)]
+#[test]
+fn a_directory_the_reader_spelled_their_own_way_holds_what_cargo_named() {
+    let root = directory(line!());
+    let real = root.join("real");
+    let link = root.join("link");
+    fs::create_dir_all(&real).expect("a directory");
+    let _ = fs::remove_file(&link);
+    std::os::unix::fs::symlink(&real, &link).expect("a symlink");
+
+    // What cargo names, having been started in either spelling of the same directory.
+    let manifest = real.join(MANIFEST);
+
+    assert!(inside(&manifest, &as_cargo_names_it(&link)));
+    assert!(inside(
+        &manifest,
+        &as_cargo_names_it(&real.join("..").join("real"))
+    ));
 }
 
 /// A library names no executable, so its own files are what it contributes: the `.rlib`,

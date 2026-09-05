@@ -299,15 +299,21 @@ drives the whole mechanism with no cargo on the machine.
 **Artifacts are what cargo named, and the workspace's own are found by `manifest_path`.** cargo
 reports a `compiler-artifact` for every crate in the graph -- 449 of them for this app's own
 workspace, of which two are its own -- so the list is filtered to the artifacts whose manifest is
-under the directory being built, matched by path component after canonicalising, since a `..` or a
-symlink in what the reader typed would match nothing. Both sides are reduced to a plain path first:
-on Windows `fs::canonicalize` answers in the verbatim form (`\\?\C:\work\app`) and cargo's paths are
-plain, and `Path` reads the two prefixes as different components, so the unreduced directory held
-nothing cargo named and every build there listed no artifact at all. A target contributes its
-`executable` where it has one and its `filenames` otherwise, which is what puts a library's `.rlib`
-in the list: an archive this app opens like any other, and the most interesting thing a workspace
-produces for it. The `.rmeta` beside it is dropped, the one place here a file is judged by its
-name, because it holds no code and a row for it could only ever fail to parse.
+under the directory being built, matched by path component. cargo is handed a working directory
+rather than a path, and derives every manifest path from its own `env::current_dir()`, so the
+directory is first spelled the way cargo will spell it -- and the two platforms spell it
+differently. On Unix that is `getcwd(2)`, which the kernel answers with symlinks resolved and `..`
+gone, so only `fs::canonicalize` meets it: a `..` or a symlink in what the reader typed would
+otherwise match nothing. On Windows it is `GetCurrentDirectoryW`, which keeps the plain prefix,
+collapses `..` by spelling and leaves a junction alone -- `path::absolute` exactly.
+`fs::canonicalize` answers verbatim there (`\\?\C:\work\app`), which `Path` reads as a different
+prefix from cargo's plain one, and every build listed no artifact at all. Both sides are still
+reduced from the verbatim form before the comparison, since a reader can type one into the project
+box and `path::absolute` hands a verbatim path back as given. A target contributes its `executable`
+where it has one and its `filenames` otherwise, which is what puts a library's `.rlib` in the list:
+an archive this app opens like any other, and the most interesting thing a workspace produces for
+it. The `.rmeta` beside it is dropped, the one place here a file is judged by its name, because
+it holds no code and a row for it could only ever fail to parse.
 
 **A build replaces the artifacts of the build before it, and nothing else.** `reopen_binary`'s rule
 -- a binary is a path, so two generations of one file cannot both be in the objects list -- but

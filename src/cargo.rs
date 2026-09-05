@@ -169,9 +169,9 @@ pub fn run(directory: &Path, profile: Profile) -> Run {
         Err(error) => return Run::NoCargo(error.to_string()),
     };
 
-    // cargo's own paths are canonical, so the directory they are matched against has to be
-    // too: the reader typed this one, and `..` or a symlink in it would match nothing.
-    let directory = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_owned());
+    // The reader typed this directory; the artifacts are matched against cargo's spelling
+    // of it. See `as_cargo_names_it`.
+    let directory = as_cargo_names_it(directory);
 
     outcome(
         &String::from_utf8_lossy(&output.stdout),
@@ -210,6 +210,30 @@ fn outcome(stdout: &str, stderr: &str, success: bool, directory: &Path) -> Run {
     }
 }
 
+/// The directory as cargo will name it, which is what its artifacts are matched against.
+///
+/// cargo is handed a working directory rather than a path, and builds every
+/// `manifest_path` by walking up from its own `env::current_dir()`. Meeting that is the
+/// whole rule, and the two platforms answer differently.
+///
+/// On Unix it is `getcwd(2)`, which the kernel walks out of the directory tree: symlinks
+/// resolved and `..` gone. Only `fs::canonicalize` reaches the same path, so a `..` or a
+/// symlink in what the reader typed would match nothing without it.
+///
+/// On Windows it is `GetCurrentDirectoryW`, which is logical: the prefix stays plain, `..`
+/// is collapsed by spelling, and a junction is left as it was written. `path::absolute` is
+/// `GetFullPathNameW` and answers in exactly that form. `fs::canonicalize` there answers
+/// verbatim (`\\?\C:\work\app`) and resolves the junction cargo kept, so it agrees with
+/// cargo on neither.
+fn as_cargo_names_it(directory: &Path) -> PathBuf {
+    #[cfg(windows)]
+    let full = std::path::absolute(directory);
+    #[cfg(not(windows))]
+    let full = fs::canonicalize(directory);
+
+    full.unwrap_or_else(|_| directory.to_owned())
+}
+
 /// Whether `path` is inside `directory`, each reduced to a plain path first.
 ///
 /// By path component and not by text, so `/work/apple` is not inside `/work/app`.
@@ -219,11 +243,14 @@ fn inside(path: &Path, directory: &Path) -> bool {
 
 /// A Windows verbatim path as the plain path it names, and anything else unchanged.
 ///
-/// On Windows `fs::canonicalize` answers in the verbatim form (`\\?\C:\work\app`) while
-/// cargo's own paths are plain (`C:\work\app\Cargo.toml`), and the two do not compare
-/// equal: `Path` parses the first prefix as `VerbatimDisk` and the second as `Disk`. Left
-/// alone, the directory a build is matched against contains nothing cargo named, and every
-/// artifact is dropped.
+/// [`as_cargo_names_it`] normally leaves the two sides agreeing. But a reader can
+/// type `\\?\C:\work\app` into the project box, and `path::absolute` hands a verbatim path
+/// back as given, so that spelling reaches this side whole. Whether it reaches cargo's is
+/// Windows' business: the working directory a child is started in goes through the loader,
+/// which may hand `GetCurrentDirectoryW` back either form. `Path` compares the two as
+/// different components -- `VerbatimDisk` is not `Disk` -- and a directory that holds
+/// nothing cargo named drops every artifact of the build. Reducing both sides costs nothing
+/// where they already match and saves the build where they do not.
 ///
 /// The strip is textual, so it is the same on every platform and can be tested from any of
 /// them; no Unix path begins `\\?\`. Only the two forms with a plain spelling are reduced:
