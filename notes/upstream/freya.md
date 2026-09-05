@@ -197,6 +197,26 @@ document's split -- are its own `ResizableContainer`s, where it passes a control
 A `.controller(..)` on the containers `render_node` builds, or a size on `DockNode::Split`,
 would do it.
 
+## A hook-order error names the innocent hook and blames the wrong rule
+
+`use_hook` reads the value at the scope's `current_value` and `downcast_ref`s it to the type
+this call expects; where it is a different type the `expect` fails with `HOOKS_ERROR`
+(`lifecycle/base.rs:87`), a page of prose about calling hooks conditionally and in for-loops.
+Two things about that message are wrong in the common case. **The rule it names need not be
+the one broken**: a hook called from inside another hook's closure, or from an event handler,
+shifts the order the same way and is a different rule, the third on its own list. And **the
+frame it panics in is the hook after the extra ones**, not the one that took the slots -- so
+the backtrace names a hook that is correct, in a file nobody has touched, and the offending
+call is not in the capture at all: it ran on an *earlier* render.
+
+**Cost:** a crash here reported `use_restore_on_startup` and had nothing to do with it; what
+took the slots was `restore_ui` reaching for three contexts through `use_consume` from inside
+`use_hook`'s closure, one render earlier, and only where the saved session held an `[ui]`
+table. Found by reading which contexts the restore touched, not from the message. The app
+consumes contexts in the component and hands the states down (`Arrangement`,
+`src/ui/state.rs`), and `AGENTS.md`'s UI gotchas carry the rule. Naming the hook's index, or
+the type found against the type expected, would have said it outright.
+
 ## Wanted
 
 **A `Popup` that need not be centred down the window.** `PopupBackground` stacks two

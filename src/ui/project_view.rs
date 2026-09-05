@@ -737,13 +737,8 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         // A search is a view of the project's files, not part of the session.
         searched: _,
         build,
+        arranged,
     } = states;
-
-    // How the window is arranged, which is nobody's `ProjectStates` but is the session's
-    // all the same: it is what the app noticed the reader doing to their own window.
-    let sidebar_dock = use_consume::<SidebarDock>().0;
-    let sidebar_width = use_consume::<SidebarWidth>().0;
-    let split_ratio = use_consume::<SplitRatio>().0;
 
     use_side_effect(move || {
         // Reading these subscribes the effect to them: any change re-runs it.
@@ -797,9 +792,9 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                     // Reading these three is what subscribes the observer to a panel being
                     // dragged and to either handle being moved.
                     SavedUi {
-                        sidebar: Some(*sidebar_width.read()),
-                        split: Some(*split_ratio.read()),
-                        dock: Some(sidebar_dock.read().saved()),
+                        sidebar: Some(*arranged.sidebar.read()),
+                        split: Some(*arranged.split.read()),
+                        dock: Some(arranged.dock.read().saved()),
                     },
                 )
             },
@@ -871,7 +866,7 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
     // How the window was arranged. Before everything else and outside the early return
     // below: it is about the window and not about what is open in it, so a project with no
     // binaries left still comes back arranged the way it was left.
-    restore_ui(session.ui.as_ref());
+    restore_ui(states.arranged, session.ui.as_ref());
 
     // What the last build produced, which the next build replaces. Set before the early
     // return below: a project whose binaries are all gone still knows what it built.
@@ -1177,18 +1172,23 @@ pub(crate) fn ask_for_a_binary(states: ProjectStates) {
 /// Each is taken on its own, so a file that says nothing about one of them leaves that one
 /// as it comes. A `None` from `DockArea::restored` is a saved arrangement this build can
 /// make nothing of, which is the default sidebar and not an empty one.
-fn restore_ui(ui: Option<&SavedUi>) {
+fn restore_ui(arranged: Arrangement, ui: Option<&SavedUi>) {
     let Some(ui) = ui else {
         return;
     };
-    if let Some(dock) = ui.dock.as_ref().and_then(DockArea::restored) {
-        use_consume::<SidebarDock>().0.set(dock);
+    let Arrangement {
+        mut dock,
+        mut sidebar,
+        mut split,
+    } = arranged;
+    if let Some(saved) = ui.dock.as_ref().and_then(DockArea::restored) {
+        dock.set(saved);
     }
     if let Some(width) = ui.sidebar {
-        use_consume::<SidebarWidth>().0.set(width);
+        sidebar.set(width);
     }
-    if let Some(split) = ui.split {
-        use_consume::<SplitRatio>().0.set(split);
+    if let Some(ratio) = ui.split {
+        split.set(ratio);
     }
 }
 

@@ -329,6 +329,16 @@ feature there with the substitute, so a release that brings it is noticed.
   until the end of its **body**, so `if let Some(x) = *state.peek() { state.set(..) }` compiles and
   panics the moment it runs. `let ... else` and `match` end theirs with the statement. Bind the read
   to a `let` of its own before any write. That class of bug is invisible to every other test in the repo; the headless tests in `src/ui/tests.rs` catch it.
+- **A hook may only be called while a component is rendering, and the same ones every time.**
+  `use_consume` is a hook, which makes reaching for a context one -- so a plain function that
+  consumes a context cannot be called from an event handler, from a task, or from inside
+  another hook's closure. Doing it takes slots in whatever scope is rendering, and *nothing
+  fails there*: the next render of that scope reads a hook back as the wrong type and panics
+  somewhere else entirely, with a message about conditional hooks and a backtrace pointing at
+  the innocent hook after the guilty one. Worse, a function whose hooks are behind an `if let`
+  shifts the order by however many keys the data happened to have, so it is a crash that only
+  some readers see. Consume in the component and hand the states down (`Arrangement`,
+  `src/ui/state.rs`).
 - There is no `.hover()` pseudo-state. A hoverable row is a `Component` with `use_state(|| false)`
   plus `on_pointer_over`/`on_pointer_out` (`over`/`out`, not `enter`/`leave`, so hovering a child
   keeps the highlight).

@@ -474,13 +474,15 @@ macro_rules! project_states {
             .0;
         // The sidebar as `app()` builds it: a panel that brings another to the front
         // reaches for this, so a harness mounting one needs it provided.
-        $runner.provide_root_context(|| {
-            SidebarDock(State::create(DockArea::column(vec![
-                vec![Panel::Objects, Panel::Files, Panel::Search],
-                vec![Panel::Symbols],
-                vec![Panel::History, Panel::Bookmarks, Panel::Locations],
-            ])))
-        });
+        let dock = $runner
+            .provide_root_context(|| {
+                SidebarDock(State::create(DockArea::column(vec![
+                    vec![Panel::Objects, Panel::Files, Panel::Search],
+                    vec![Panel::Symbols],
+                    vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+                ])))
+            })
+            .0;
         let docs = $runner
             .provide_root_context(|| OpenDocs(State::create(Docs::default())))
             .0;
@@ -508,7 +510,17 @@ macro_rules! project_states {
 
         // How the window is arranged, which the save observer reads and the window's body
         // draws from. Provided in `app()`'s own order, beside the dock above.
-        $runner.provide_root_context(|| SidebarWidth(State::create(300.0)));
+        let sidebar = $runner
+            .provide_root_context(|| SidebarWidth(State::create(300.0)))
+            .0;
+        // The third of the arrangement below, which used to be provided by each harness
+        // that draws a document. Here instead, and **only** here: a second
+        // `provide_root_context` for a type already provided replaces it, so a harness
+        // providing its own would leave the save observer reading one state and the pane
+        // another. A test wanting a different ratio writes `states.arranged.split`.
+        let split = $runner
+            .provide_root_context(|| SplitRatio(State::create(50.0)))
+            .0;
         $runner.provide_root_context(|| {
             SidebarSplits(State::create(ResizableContext {
                 direction: Direction::Horizontal,
@@ -560,6 +572,11 @@ macro_rules! project_states {
             build: $runner
                 .provide_root_context(|| Building(State::create(Builds::default())))
                 .0,
+            arranged: Arrangement {
+                dock,
+                sidebar,
+                split,
+            },
         }
     }};
 }
@@ -597,7 +614,6 @@ fn a_window_with_no_project_is_one_screen() {
             runner.provide_root_context(|| Talking(State::create(Language::default())));
             runner.provide_root_context(|| Finding(State::create(Finder::default())));
             runner.provide_root_context(|| CodeRows(State::create(None)));
-            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
@@ -2175,6 +2191,61 @@ fn a_restore_survives_the_row_that_asked_for_it() {
         [path],
         "the restore was dropped with the row that asked for it"
     );
+}
+
+/// **A restore leaves the hook order alone.** `app` restores inside a `use_hook`, and a
+/// session that saved an arrangement had that restore reach the three states it writes
+/// through `use_consume` -- hooks, called from inside a hook, which take slots in the
+/// scope that is restoring. The order shifted by one per key the file held, so the *next*
+/// render of that scope read a hook back as the wrong type and panicked: an app that came
+/// up looking right and died on the reader's first press, and only where a session had
+/// been saved with an `[ui]` in it.
+#[test]
+fn a_restore_that_arranges_the_window_leaves_the_hook_order_alone() {
+    let (mut test, gone) = TestingRunner::new(
+        || Restorer.into_element(),
+        (200., 200.).into(),
+        |runner: &mut _| {
+            project_states!(runner);
+            runner.provide_root_context(|| Gone(State::create(false))).0
+        },
+        1.,
+    );
+    settle(&mut test);
+    assert_eq!(labels(&test), ["7 false".to_owned()]);
+
+    // The render after the one that restored, which is where a shifted order shows.
+    let mut gone = gone;
+    gone.set(true);
+    settle(&mut test);
+    assert_eq!(
+        labels(&test),
+        ["7 true".to_owned()],
+        "the hook after the restore came back as something else"
+    );
+}
+
+/// A scope that restores the way `app` does: inside a `use_hook`, with a hook after it.
+#[derive(PartialEq)]
+struct Restorer;
+
+impl Component for Restorer {
+    fn render(&self) -> impl IntoElement {
+        let states = use_project_states();
+        use_hook(move || {
+            let session: Session = toml::from_str("[ui]\nsidebar = 210.0\nsplit = 40.0\n")
+                .expect("a session naming an arrangement");
+            restore_project(states, Project::default(), session);
+        });
+        // The hook after the restore. Its value is what a shifted order hands back as the
+        // wrong type, and the read below is what re-renders this scope.
+        let kept = use_state(|| 7u32);
+        let gone = use_consume::<Gone>().0;
+
+        rect()
+            .expanded()
+            .child(label().text(format!("{} {}", kept(), gone())))
+    }
 }
 
 /// Every open tab's chip, drawn as the bar draws them: what a press on one has to answer
@@ -8873,11 +8944,13 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
         (600., 300.).into(),
         |runner| {
             let states = listing_states!(runner, shown);
-            // The two `app()` provides beside the project's, which `DocumentBody` sizes
-            // its panels from. Deliberately *uneven*: the number is the leading pane's
-            // width in both kinds of tab, so the wide half moving with the swap is half of
-            // what is asserted below.
-            runner.provide_root_context(|| SplitRatio(State::create(LEADING)));
+            // The split `DocumentBody` sizes its panels from, written and not provided:
+            // the macro above provides it, and a second provide would replace it with a
+            // state nothing else reads. Deliberately *uneven*: the number is the leading
+            // pane's width in both kinds of tab, so the wide half moving with the swap is
+            // half of what is asserted below.
+            let mut split = states.0.arranged.split;
+            split.set(LEADING);
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
@@ -8957,7 +9030,6 @@ fn a_file_in_no_compiled_language_opens_without_an_assembly_side() {
         (600., 300.).into(),
         |runner| {
             let states = listing_states!(runner, shown);
-            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
@@ -9033,7 +9105,6 @@ fn the_leading_bar_puts_the_following_pane_away() {
         (600., 300.).into(),
         |runner| {
             let states = listing_states!(runner, shown);
-            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
@@ -9209,7 +9280,6 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
             (600., 300.).into(),
             |runner| {
                 let states = listing_states!(runner, shown);
-                runner.provide_root_context(|| SplitRatio(State::create(50.0)));
                 runner.provide_root_context(|| {
                     Splits(State::create(ResizableContext {
                         direction: Direction::Horizontal,
@@ -12456,7 +12526,6 @@ fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
             let coded = runner
                 .provide_root_context(|| Coding(State::create(Coded::default())))
                 .0;
-            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
@@ -17435,7 +17504,6 @@ fn navigating_panes() -> (
             let states = listing_states!(runner, shown);
             // Re-provided, as `Ctrl` is elsewhere, to be handed to `land`.
             let plant = runner.provide_root_context(|| Plant(State::create(None))).0;
-            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
@@ -20431,7 +20499,6 @@ fn landing_panes() -> (TestingRunner, ProjectStates, LocationStates) {
             runner.provide_root_context(|| Shift(State::create(false)));
             // The two `app()` provides beside the project's, which `DocumentBody` sizes
             // its panels from.
-            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,

@@ -325,7 +325,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;
     let docs = use_provide_context(|| OpenDocs(State::create(Docs::default()))).0;
-    let sidebar_dock = use_provide_context(|| {
+    let dock = use_provide_context(|| {
         SidebarDock(State::create(DockArea::column(vec![
             vec![Panel::Objects, Panel::Files, Panel::Search],
             vec![Panel::Symbols],
@@ -344,7 +344,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     })
     .0;
     // 50.0: what the leading side starts at, before anything is dragged.
-    use_provide_context(|| SplitRatio(State::create(50.0)));
+    let split = use_provide_context(|| SplitRatio(State::create(50.0))).0;
     use_provide_context(|| {
         Splits(State::create(ResizableContext {
             direction: Direction::Horizontal,
@@ -353,7 +353,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     });
     // The sidebar's own width and the context its two panels register into: the pair the
     // document's split has, and for the same reason.
-    use_provide_context(|| SidebarWidth(State::create(300.0)));
+    let sidebar = use_provide_context(|| SidebarWidth(State::create(300.0))).0;
     use_provide_context(|| {
         SidebarSplits(State::create(ResizableContext {
             direction: Direction::Horizontal,
@@ -408,6 +408,11 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         bookmarks,
         searched,
         build,
+        arranged: Arrangement {
+            dock,
+            sidebar,
+            split,
+        },
     };
     use_save_on_change(states);
     use_land(
@@ -508,15 +513,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         // A freya pointer event carries no modifiers, so Shift and Ctrl have to be known
         // before the click that asks about them: `ModifierKeys`.
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
-            root_key_down(
-                keys,
-                searched,
-                finder,
-                proj,
-                sidebar_dock,
-                &e.key,
-                e.modifiers,
-            )
+            root_key_down(keys, searched, finder, proj, dock, &e.key, e.modifiers)
         })
         .on_global_key_up(move |e: Event<KeyboardEventData>| keys.up(&e.key, e.modifiers))
         // Provides the root state `ContextMenu::open_from_event` looks up: opening a menu

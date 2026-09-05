@@ -408,6 +408,25 @@ pub(crate) struct ProjectStates {
     pub(crate) searched: State<Searched>,
     /// What the project's own workspace built, and what a build replaces.
     pub(crate) build: State<Builds>,
+    /// How the window itself is arranged. Not a project's state, and here all the same:
+    /// it is written into the session, and a restore has to put it back.
+    pub(crate) arranged: Arrangement,
+}
+
+/// The three states a session's `[ui]` is kept in: what a restore writes and what the
+/// save observer reads back out.
+///
+/// **Held as states and not reached for.** They live in contexts of their own, and the one
+/// way to a context is `use_consume`, which is a hook -- so a restore that asked for them
+/// itself would be calling hooks from wherever it was called from. A restore runs inside
+/// `use_hook` at startup and inside a press handler on a switch, and neither may
+/// (`src/ui/project_view.rs`, `restore_ui`). Consumed by whoever is rendering and handed
+/// down instead.
+#[derive(Clone, Copy)]
+pub(crate) struct Arrangement {
+    pub(crate) dock: State<DockArea>,
+    pub(crate) sidebar: State<f32>,
+    pub(crate) split: State<f32>,
 }
 
 /// What is open, as a component sees it: the strip and the id table together.
@@ -435,6 +454,16 @@ pub(crate) fn use_project_states() -> ProjectStates {
         bookmarks: use_consume::<Bookmarked>().0,
         searched: use_consume::<Searching>().0,
         build: use_consume::<Building>().0,
+        arranged: use_arrangement(),
+    }
+}
+
+/// The window's arrangement, out of the three contexts it is kept in.
+pub(crate) fn use_arrangement() -> Arrangement {
+    Arrangement {
+        dock: use_consume::<SidebarDock>().0,
+        sidebar: use_consume::<SidebarWidth>().0,
+        split: use_consume::<SplitRatio>().0,
     }
 }
 
