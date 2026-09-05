@@ -195,6 +195,18 @@ leaves this list when it is. That is a move made on request, like everything els
   reads no relocation kind, both of which the sum depends on (`S + A` against a PC-relative
   `P`); with those read it would be one more `target` and the door above would serve it. An
   undefined import has no address at all and stays plain text whatever is read.
+- [ ] Print the addend beside a resolved relocation's name, where the format keeps it in the
+  operand. A name replaces the *whole* rip-relative displacement, so `[rip+g]` is drawn for
+  what is really `g+8`: COFF and Mach-O store the addend in the operand bytes where an ELF
+  RELA keeps it in the relocation entry, and a field read off a struct is exactly where a
+  non-zero one comes from. The reader is shown the right symbol and the wrong place inside it,
+  with nothing saying so — where the same operand *unresolved* prints its placeholder honestly
+  (`[rip+8]`, pinned in `tests/elf_x86_64.rs`). iced can say it: a `SymbolResolver` may answer
+  for an address below the one it was asked about, and the formatter appends the difference.
+  The cost is the one the item above pays — the addend has to be taken off the operand and the
+  relocation kind's implicit bias read per format, a COFF `REL32` counting from the byte after
+  the field and `REL32_1`..`_5` from further on — so the two are one piece of work, this being
+  the half that already has a name to hang the number on.
 
 ## UI
 
