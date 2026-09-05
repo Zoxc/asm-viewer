@@ -23,6 +23,11 @@ gimli = { version = "0.28", default-features = false, features = ["read", "std",
 # add `rand` for a randomly seeded hasher, which would be the one crate this does add and
 # is the opposite of what a digest compared across runs needs.
 twox-hash = { version = "1.6.3", default-features = false }
+# The zstd decoder, named here for the same reason `twox-hash` is: `object` already builds
+# this exact version, so nothing new is compiled. A zstd section is inflated with it
+# directly (`section_data`) because `object`'s own `decompress()` reads the frame to its end
+# and bounds it by nothing — see `notes/upstream/object.md`.
+ruzstd = "0.5"
 # PDB line info (`src/line/pdb.rs`). `pdb2` is the maintained fork of `pdb` 0.8 with the
 # same API; chosen over `pdb` itself because that one wants `fallible-iterator` 0.2 beside
 # the 0.3 `gimli` already brings, and over `pdb-addr2line` because it answers one address at

@@ -533,7 +533,9 @@ const MAX_SECTION_DATA: u64 = 1 << 30;
 /// allocating. Two bounds have to hold, and a section failing either is dropped exactly like
 /// one whose data will not read: a ratio bound (DEFLATE cannot expand by more than 1032:1
 /// nor a zstd frame by more than 32768:1, so a larger declared size is a lie about *these*
-/// bytes), and an absolute one, since the ratio bound still scales with the input.
+/// bytes), and an absolute one, since the ratio bound still scales with the input. The
+/// declared size then bounds what zlib produces on its own, `decompress()` inflating it into
+/// a vector it never grows; what zstd produces is bounded by [`zstd_data`] instead.
 pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Option<Vec<u8>> {
     let compressed = section.compressed_data().ok()?;
 
@@ -551,7 +553,29 @@ pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Optio
         return None;
     }
 
+    if compressed.format == CompressionFormat::Zstandard {
+        return zstd_data(compressed.data, compressed.uncompressed_size);
+    }
+
     Some(compressed.decompress().ok()?.into_owned())
+}
+
+/// A zstd section inflated here rather than by `decompress()`, which takes the declared size
+/// as a hint only: it reserves that much and then reads the frame to its end, whatever that
+/// produces, so the bounds above bound nothing (`notes/upstream/object.md`). The read stops
+/// one byte past `size`, and a frame producing any other number of bytes is a lie about
+/// these ones and is dropped like a declared size the ratio bound rejects.
+fn zstd_data(data: &[u8], size: u64) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+
+    let capacity: usize = size.try_into().ok()?;
+    let mut out = Vec::with_capacity(capacity);
+    let decoder = ruzstd::StreamingDecoder::new(data).ok()?;
+    decoder
+        .take(size.saturating_add(1))
+        .read_to_end(&mut out)
+        .ok()?;
+    (out.len() as u64 == size).then_some(out)
 }
 
 /// One symbol as the file states it, held while the whole object's names are demangled in

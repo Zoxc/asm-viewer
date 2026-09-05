@@ -164,18 +164,80 @@ fn section_names(object: &Object) -> Vec<String> {
         .collect()
 }
 
+/// Defect: `decompress()` bounds a zstd frame by nothing. It reserves the declared size and
+/// then reads the frame to its end, whatever that produces, so a header declaring one byte
+/// over a frame producing four MiB passed both bounds and allocated all four — never a panic,
+/// and nothing the mutation sweep can synthesize (`notes/upstream/object.md`). The frame is
+/// now read one byte past what the header declares and a section that produces more is
+/// dropped, as one whose declared size the ratio bound rejects already is.
+#[test]
+fn a_zstd_frame_producing_more_than_its_header_declares_is_dropped() {
+    let size = 4 << 20;
+    let frame = zstd_rle(b'A', size);
+
+    let data = elf_with_compression(object::elf::ELFCOMPRESS_ZSTD, &frame, 1);
+    let object = parse_and_walk(&data).expect("the object still parses");
+    assert!(
+        !section_names(&object).contains(&".debug_info".to_owned()),
+        "a section declaring 1 byte was inflated to {size} anyway"
+    );
+
+    // The same frame under an honest header is still read, so it is the bound and not the
+    // frame that the first half turns on.
+    let data = elf_with_compression(object::elf::ELFCOMPRESS_ZSTD, &frame, size as u64);
+    let honest = parse_and_walk(&data).expect("parses");
+    let section = honest
+        .sections
+        .iter()
+        .find(|section| section.name == ".debug_info")
+        .expect("an honestly sized zstd section is kept");
+    assert_eq!(section.data, vec![b'A'; size]);
+}
+
+/// `byte` repeated `len` times as a valid zstd frame: RLE blocks, so no compressor is needed
+/// to build the fixture. The frame declares no content size and asks for the smallest window
+/// there is, so nothing in it says how much it will produce.
+fn zstd_rle(byte: u8, len: usize) -> Vec<u8> {
+    const BLOCK: usize = 1024; // The window, and so the most one RLE block may repeat.
+
+    let mut out = 0xFD2F_B528u32.to_le_bytes().to_vec();
+    out.push(0); // No content size, not one segment, no dictionary, no checksum.
+    out.push(0); // Window descriptor: the 1 KiB minimum.
+
+    let mut left = len;
+    while left > 0 {
+        let repeats = left.min(BLOCK);
+        left -= repeats;
+        // Block header: last-block bit, two bits of type (1 = RLE), then the repeat count.
+        let header = u32::from(left == 0) | (1 << 1) | (repeats as u32) << 3;
+        out.extend_from_slice(&header.to_le_bytes()[..3]);
+        out.push(byte);
+    }
+    out
+}
+
 /// An ELF holding one `SHF_COMPRESSED` `.debug_info` whose zlib stream really does decode
 /// to `payload`, but whose compression header declares `declared_size` bytes of output.
 fn elf_with_compressed_section(payload: &[u8], declared_size: u64) -> Vec<u8> {
+    elf_with_compression(
+        object::elf::ELFCOMPRESS_ZLIB,
+        &zlib_stored(payload),
+        declared_size,
+    )
+}
+
+/// The same, over any compression format: `stream` as it sits in the section, under a header
+/// naming `ch_type` and declaring `declared_size` bytes of output.
+fn elf_with_compression(ch_type: u32, stream: &[u8], declared_size: u64) -> Vec<u8> {
     use object::{write, Architecture, BinaryFormat, Endianness, SectionFlags, SectionKind};
 
     let mut contents = Vec::new();
-    // Elf64_Chdr: ch_type = ELFCOMPRESS_ZLIB, ch_reserved, ch_size, ch_addralign.
-    contents.extend_from_slice(&1u32.to_le_bytes());
+    // Elf64_Chdr: ch_type, ch_reserved, ch_size, ch_addralign.
+    contents.extend_from_slice(&ch_type.to_le_bytes());
     contents.extend_from_slice(&0u32.to_le_bytes());
     contents.extend_from_slice(&declared_size.to_le_bytes());
     contents.extend_from_slice(&1u64.to_le_bytes());
-    contents.extend_from_slice(&zlib_stored(payload));
+    contents.extend_from_slice(stream);
 
     let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
     let id = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);

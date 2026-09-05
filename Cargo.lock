@@ -193,6 +193,7 @@ dependencies = [
  "md-5",
  "object",
  "pdb2",
+ "ruzstd",
  "sha1",
  "sha2",
  "symbolic-common",

@@ -594,7 +594,9 @@ info, the reverse index, and every section's `Listing` with its first `MAX_LISTI
 stretches decoded, since a decode is the symbol's disassembly over again and a section of any kind
 has a listing. The PDB sweep found nothing the seam's guard did not already catch, and it cannot
 find the one defect that is not a panic, the declared stream length `pdb2` would allocate before
-reading, which `BoundedFile` answers by construction (`notes/upstream/pdb2.md`). The rule that goes
+reading, which `BoundedFile` answers by construction (`notes/upstream/pdb2.md`). Nor can either
+sweep write a zstd frame, so what `object` would inflate one to, whatever its header declared, is
+pinned by a hand-built fixture in `robustness.rs` (`notes/upstream/object.md`). The rule that goes
 with them is the user rule in `AGENTS.md`: a minimal test case every time something is found wrong,
 and **checked arithmetic in preference to a wider `catch_unwind`**; the guard is for a dependency's
 bug, never for ours. Note also what *cannot* be caught: a stack overflow aborts, so anything
