@@ -204,7 +204,7 @@ only spelling that stays honest once a selection is something a tab can hold. A 
 **beside the tab on screen** (`Strip::show`), the way a browser opens a link, whatever kind that tab
 is: a page has no reserved place at the left of the bar, being a tab like any other.
 
-**Layout** is a toolbar over a `ResizableContainer`: a `PanelSize::px(300.)` sidebar and a
+**Layout** is a toolbar over a `ResizableContainer`: a `PanelSize::px(380.)` sidebar and a
 `PanelSize::percent(100.)` content pane, mixing the two sizing modes deliberately so the sidebar
 keeps a fixed width and the content takes the rest, with freya's 4px `ResizableHandle` between them.
 `ResizableContainer` renders itself `.expanded()`, so it needs a parent already sized;
@@ -240,7 +240,10 @@ change re-renders only the panes that read it and never the root. Adding or remo
 no migration: the sidebar's layout is not persisted, so a removed one is a compile-time deletion and
 an added one starts where the default layout puts it. `Panel` is imported by name as well as through
 the glob (`src/ui.rs`), freya's prelude having a `Panel` of its own. The outer split stays a
-`ResizableContainer` because docking cannot express a literal 300px.
+`ResizableContainer` because docking cannot express a literal width. That width is 380 because
+a group's tab bar neither elides nor scrolls (`notes/upstream/freya.md`): the sidebar has to open
+wide enough for the widest default group to name every panel in it, which is the four across the
+top.
 
 `tidy` is freya's `close_empty_panels` **written out rather than called**, because that sweep can
 leave a tree with no panel at all where this keeps one: an area that loses its last panel keeps an

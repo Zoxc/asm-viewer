@@ -27,10 +27,10 @@ impl Panel {
         Panel::Objects,
         Panel::Files,
         Panel::Search,
+        Panel::Locations,
         Panel::Symbols,
         Panel::History,
         Panel::Bookmarks,
-        Panel::Locations,
     ];
 
     /// What a session names it. A name of its own rather than the title, for [`Page`]'s

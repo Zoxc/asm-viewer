@@ -477,9 +477,13 @@ macro_rules! project_states {
         let dock = $runner
             .provide_root_context(|| {
                 SidebarDock(State::create(DockArea::column(vec![
-                    vec![Panel::Objects, Panel::Files, Panel::Search],
-                    vec![Panel::Symbols],
-                    vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+                    vec![
+                        Panel::Objects,
+                        Panel::Files,
+                        Panel::Search,
+                        Panel::Locations,
+                    ],
+                    vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
                 ])))
             })
             .0;
@@ -511,7 +515,7 @@ macro_rules! project_states {
         // How the window is arranged, which the save observer reads and the window's body
         // draws from. Provided in `app()`'s own order, beside the dock above.
         let sidebar = $runner
-            .provide_root_context(|| SidebarWidth(State::create(300.0)))
+            .provide_root_context(|| SidebarWidth(State::create(380.0)))
             .0;
         // The third of the arrangement below, which used to be provided by each harness
         // that draws a document. Here instead, and **only** here: a second
@@ -798,9 +802,13 @@ fn the_sidebars_arrangement_survives_a_save_and_a_restore() {
     // The sidebar as `app()` builds it, and then not the default: a panel dragged into
     // another group, and another brought to the top of its own.
     let mut dock = DockArea::column(vec![
-        vec![Panel::Objects, Panel::Files, Panel::Search],
-        vec![Panel::Symbols],
-        vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+        vec![
+            Panel::Objects,
+            Panel::Files,
+            Panel::Search,
+            Panel::Locations,
+        ],
+        vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
     ]);
     dock.on_drop(Panel::Files, DropTarget::Center(1));
     dock.show_panel(Panel::Bookmarks);
@@ -809,9 +817,13 @@ fn the_sidebars_arrangement_survives_a_save_and_a_restore() {
     assert_ne!(
         saved,
         DockArea::column(vec![
-            vec![Panel::Objects, Panel::Files, Panel::Search],
-            vec![Panel::Symbols],
-            vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+            vec![
+                Panel::Objects,
+                Panel::Files,
+                Panel::Search,
+                Panel::Locations
+            ],
+            vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
         ])
         .saved(),
         "the arrangement under test is the default one"
@@ -7512,8 +7524,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
         (100., 100.).into(),
         |runner| {
             let states = analysis_states!(runner, answer);
-            // The sidebar as `app()` builds it, with Locations behind History in one
-            // group.
+            // One group, with Locations behind History.
             let sidebar = runner
                 .provide_root_context(|| {
                     SidebarDock(State::create(DockArea::column(vec![vec![

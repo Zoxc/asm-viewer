@@ -242,6 +242,22 @@ at an `offset_x`, and the wheel, the reveal and the drag's edge all writing that
 (`src/ui/strip.rs`). A code pane still uses a controller, where the pane re-renders on the same
 change that scrolls it.
 
+**A dock group's tab bar that handles its own overflow.** `DockingArea` hands the bar
+renderer the headers and their count and nothing else (`docking.rs:269-275`, `:548`), so a
+group narrower than its headers lays them out at their natural widths and past its own right
+edge: there is no scrolling, no elision and no overflow list, and a panel drawn out there is
+one the reader cannot get at. Measured here: the four names of the sidebar's top group take
+376px, and at the 300px it used to open at Locations was laid out from 294 to 368. **Cost:**
+the sidebar opens at 380, what the widest default group needs (`src/ui.rs`); a reader who
+drags it narrower is on their own. A `ScrollView` around `tab_children` is not the answer it
+looks like: it does scroll (measured), but only under Shift or a horizontal wheel, the axes
+swapping for `pressing_shift` alone (`scrollview.rs:259-268`), so a plain wheel over a 26px
+bar does nothing -- and a `ScrollView` stops answering the wheel entirely while a `DragZone`
+holds a payload (above), which is exactly when a panel is being dragged along the bar. The
+app's own tab strip scrolls itself for that reason (`src/ui/strip.rs`); a dock's bars would
+each need the same again. freya scrolling the headers itself, or a `TabBarContext` saying
+which of them did not fit, would do it.
+
 **A pointer release nothing can cancel.** There is no `on_global_pointer_up`; a release is
 `on_global_pointer_press`, which any handler's `prevent_default` on the way cancels, and
 freya's own scrollbar thumb does (above). The app ends a sweep on the capture-phase press

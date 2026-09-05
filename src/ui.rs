@@ -329,9 +329,13 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let docs = use_provide_context(|| OpenDocs(State::create(Docs::default()))).0;
     let dock = use_provide_context(|| {
         SidebarDock(State::create(DockArea::column(vec![
-            vec![Panel::Objects, Panel::Files, Panel::Search],
-            vec![Panel::Symbols],
-            vec![Panel::History, Panel::Bookmarks, Panel::Locations],
+            vec![
+                Panel::Objects,
+                Panel::Files,
+                Panel::Search,
+                Panel::Locations,
+            ],
+            vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
         ])))
     })
     .0;
@@ -355,7 +359,11 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     });
     // The sidebar's own width and the context its two panels register into: the pair the
     // document's split has, and for the same reason.
-    let sidebar = use_provide_context(|| SidebarWidth(State::create(300.0))).0;
+    //
+    // 380: what the widest group of the default arrangement needs to name every panel in
+    // it, the four across the top being the widest. A group's bar neither elides nor
+    // scrolls, so a narrower sidebar would open with the last name clipped.
+    let sidebar = use_provide_context(|| SidebarWidth(State::create(380.0))).0;
     use_provide_context(|| {
         SidebarSplits(State::create(ResizableContext {
             direction: Direction::Horizontal,
