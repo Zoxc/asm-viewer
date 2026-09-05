@@ -62,6 +62,16 @@ leaves this list when it is. That is a move made on request, like everything els
   spans, and the highlighter
   is `freya-code-editor`'s), and which palette a parse off the thread resolves its colours
   against, the answer having to be the one the rows are drawn in when it arrives.
+- [ ] Read and parse a source file *alongside* working out which of its lines have code, not
+  after it. The two are independent questions about the same file -- the text and its spans off
+  disk, and `Question::Marks` over the open objects -- and a source document wants both the
+  moment it opens. There is one analysis worker for the app's lifetime and it answers one
+  question at a time (`agents/Worker.md`), so a read put on it queues the file behind whatever
+  a pane is asking for, and the supersession rule has the two kinds dropping each other. The
+  decision is where the read runs: a thread of its own, which is a second worker for one job,
+  or a worker that can hold more than one job in flight, which is a change to the mechanism
+  every pane asks through. Only worth doing once the read is off the UI thread at all -- the
+  item above.
 
 ## Navigation
 
