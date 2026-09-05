@@ -306,12 +306,17 @@ address in it is asked about (its rows through `RowCollector::finish` into one `
 unit's subprogram extents. A row with no length, one whose successor sits below it, which only
 assemblers emit, is dropped rather than given an end. Line 0 and column 0 are `None` as in DWARF.
 `each_row` walks every module, so a first source question decodes the whole PDB, as the DWARF one
-parses every line program. **Two things a PDB has that DWARF-as-read does not**: a checksum per
-source file (`SourceHash`: MD5 from clang-cl and rustc, SHA-256 from MSVC since 2022, as the
-samples' CRT objects show), carried on `LineInfo` beside the file name so a reader can tell the file
-they have from the one the compiler read (`SourceDigests::of` takes all three digests of a file's
-bytes at once, so a file read once answers any kind); and file names in the producer's spelling
-(`C:\...` from MSVC, `/rustc/<hash>\library\...` from rustc), handed out verbatim as DWARF's are.
+parses every line program. The DBI module list is a chain of variable-length records with no index,
+so an index is reached only by parsing every record before it and **one walk serves every module a
+question wants** (`Pdb::walk`, stopped after the last one asked for). A walk per module would cost
+the square of a count the file states, and a module list of a few hundred honest megabytes declares
+millions: the first source question would then hang the analysis worker, which no guard can catch.
+**Two things a PDB has that DWARF-as-read does not**: a checksum per source file (`SourceHash`: MD5
+from clang-cl and rustc, SHA-256 from MSVC since 2022, as the samples' CRT objects show), carried on
+`LineInfo` beside the file name so a reader can tell the file they have from the one the compiler
+read (`SourceDigests::of` takes all three digests of a file's bytes at once, so a file read once
+answers any kind); and file names in the producer's spelling (`C:\...` from MSVC,
+`/rustc/<hash>\library\...` from rustc), handed out verbatim as DWARF's are.
 **The PDB is also a source of symbols**, the one debug format that is. A `/DEBUG` image has no COFF
 symbol table, so what the image names is its exports and entry point (its `.pdata` states where its
 functions are, not what they are called), and what the PDB knows is every function.
@@ -344,11 +349,11 @@ is one read of every module stream (2907 modules, of which 2250 have none) and 1
 through the demangling batch, the publics walk itself being 55 ms over 229 318 symbol records. Its
 first line question is 0.5 ms, the PDB being open and matched already, and the first source
 question, every module decoded, 1.3–1.5 s to 525 MB. Against the DWARF side's 2.2 s and +470 MB on a
-331 MB binary that is the same shape at half the cost; the `modules().nth(m)` walk per module load
-was not worth a table of offsets. The open-time cost is the module streams' bytes: `pdb2` reads a
-module's stream whole, lines and all, where the symbols are its first substream, so a `Source` that
-read only that far would be the saving if it is ever worth it. Rust's legacy-mangled publics run up
-to 4059 bytes (past `MAX_MANGLED_NAME`, so shown as written).
+331 MB binary that is the same shape at half the cost, one walk of the module list serving all 2907
+of them. The open-time cost is the module streams' bytes: `pdb2` reads a module's stream whole,
+lines and all, where the symbols are its first substream, so a `Source` that read only that far
+would be the saving if it is ever worth it. Rust's legacy-mangled publics run up to 4059 bytes
+(past `MAX_MANGLED_NAME`, so shown as written).
 
 **The reverse mapping is an index, and a whole-object one** (`line/source.rs`). "Which functions was
 this line compiled into" is not a question about one symbol, so it is not a query but a table. It is

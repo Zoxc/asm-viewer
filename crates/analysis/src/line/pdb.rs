@@ -57,6 +57,11 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// How many walks of a DBI module list have been started, so a test can pin that a question
+/// over every module costs one walk and not one per module. Test builds only.
+#[cfg(test)]
+pub(super) static WALKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// One image's `.pdb`, opened and matched once and kept for the object's lifetime.
 pub(super) struct Pdb {
     /// Every stream read goes through `&mut PDB`, and `PDB` is `Send` but not `Sync`: the
@@ -77,9 +82,6 @@ pub(super) struct Pdb {
 
     /// What an RVA is added to for the address space the image's sections are in.
     image_base: u64,
-
-    /// How many modules the DBI lists, so [`Pdb::each_row`] knows where to stop.
-    module_count: usize,
 
     /// Every section contribution as a virtual address range and the module it belongs to,
     /// sorted by start with a running `max_end`, so a range is mapped to its modules by a
@@ -146,7 +148,6 @@ impl Pdb {
 
         let address_map = pdb.address_map().ok()?;
         let strings = pdb.string_table().ok();
-        let module_count = dbi.modules().ok()?.count().ok()?;
 
         let mut contributions = Vec::new();
         let mut listed = dbi.section_contributions().ok()?;
@@ -188,7 +189,6 @@ impl Pdb {
             strings,
             address_map,
             image_base,
-            module_count,
             contributions,
             modules: Mutex::default(),
         })
@@ -201,7 +201,7 @@ impl Pdb {
     /// back — the caller's one-per-address rule decides between them.
     pub(super) fn procedures(&self) -> Vec<Procedure> {
         let mut procedures = Vec::new();
-        let Ok(mut modules) = self.dbi.modules() else {
+        let Ok(mut modules) = self.module_list() else {
             return procedures;
         };
         let mut pdb = self.pdb.lock().unwrap_or_else(|e| e.into_inner());
@@ -277,7 +277,12 @@ impl Pdb {
     /// The rows over `range`, out of every module contributing to it.
     pub(super) fn line_info(&self, range: Range<u64>) -> Option<LineInfo> {
         let mut rows = RowCollector::default();
-        for module in self.modules_over(range.clone()) {
+        let over = self.modules_over(range.clone());
+        // One walk for the lot: `module` alone would start a walk per module not yet decoded.
+        if over.iter().any(|&index| self.remembered(index).is_none()) {
+            self.walk(Some(&over));
+        }
+        for module in over {
             let Some(module) = self.module(module) else {
                 continue;
             };
@@ -313,11 +318,13 @@ impl Pdb {
             .find_map(|module| module.procedures.get(&address).copied())
     }
 
-    /// Every row of every module that names a file and a line. Each module is loaded under
-    /// the PDB's lock and visited after it is released; the `modules` lock is held for no
+    /// Every row of every module that names a file and a line. Every module is decoded in
+    /// one walk of the module list and visited from the table after. Each is loaded under
+    /// the PDB's lock and visited once it is released; the `modules` lock is held for no
     /// longer than a lookup.
     pub(super) fn each_row(&self, visit: &mut dyn FnMut(Range<u64>, &str, u32)) {
-        for index in 0..self.module_count {
+        let count = self.walk(None);
+        for index in 0..count {
             let Some(module) = self.module(index) else {
                 continue;
             };
@@ -351,25 +358,77 @@ impl Pdb {
     /// The module with this index, decoded on first ask and remembered — including as
     /// [`None`] when it has nothing to say.
     fn module(&self, index: usize) -> Option<Arc<ModuleLines>> {
+        if let Some(module) = self.remembered(index) {
+            return module;
+        }
+        self.walk(Some(&[index]));
+        self.remembered(index).flatten()
+    }
+
+    /// The module with this index if it has been decoded: the outer [`None`] is "not yet",
+    /// the inner one "nothing to say".
+    fn remembered(&self, index: usize) -> Option<Option<Arc<ModuleLines>>> {
         // A poisoned lock means a previous query panicked. A module is inserted only once it
         // is whole, so nothing here is left half-written by one: recover, do not propagate.
         let modules = self.modules.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(module) = modules.get(&index) {
-            return module.clone();
-        }
-        drop(modules);
-
-        let decoded = self.decode(index).map(Arc::new);
-
-        let mut modules = self.modules.lock().unwrap_or_else(|e| e.into_inner());
-        modules.entry(index).or_insert(decoded).clone()
+        modules.get(&index).cloned()
     }
 
-    fn decode(&self, index: usize) -> Option<ModuleLines> {
-        let module = self.dbi.modules().ok()?.nth(index).ok()??;
+    /// Decode the modules `wanted` names, remembering each, and answer how many modules were
+    /// walked past. `wanted` is ascending; [`None`] wants every module.
+    ///
+    /// The DBI module list is a chain of variable-length records, so an index is reached only
+    /// by parsing every record before it. Decoding each module from a walk of its own costs
+    /// the square of a count the file states, and a big enough module list turns that into a
+    /// hang on the analysis thread. One walk serves however many modules are wanted, and
+    /// stops after the last of them.
+    fn walk(&self, wanted: Option<&[usize]>) -> usize {
+        let last = match wanted {
+            Some(&[.., last]) => Some(last),
+            Some([]) => return 0,
+            None => None,
+        };
+        let Ok(mut modules) = self.module_list() else {
+            return 0;
+        };
+        let mut count = 0;
+        // A malformed tail stops the walk where it goes wrong and keeps what was read.
+        while let Ok(Some(module)) = modules.next() {
+            let index = count;
+            count += 1;
+            let asked = wanted.is_none_or(|wanted| wanted.binary_search(&index).is_ok());
+            if asked && self.remembered(index).is_none() {
+                let decoded = self.decode(&module).map(Arc::new);
+                let mut modules = self.modules.lock().unwrap_or_else(|e| e.into_inner());
+                modules.entry(index).or_insert(decoded);
+            }
+            if last.is_some_and(|last| index >= last) {
+                break;
+            }
+        }
+        // A wanted module the walk never reached — past the end of the list, or past where a
+        // malformed one stopped it — has nothing to say. Remembering that is what keeps it
+        // from starting a walk of its own on every later ask.
+        if let Some(wanted) = wanted {
+            let mut modules = self.modules.lock().unwrap_or_else(|e| e.into_inner());
+            for &index in wanted {
+                modules.entry(index).or_insert(None);
+            }
+        }
+        count
+    }
+
+    /// The DBI module list from the front, the one place it is walked from.
+    fn module_list(&self) -> pdb2::Result<pdb2::ModuleIter<'_>> {
+        #[cfg(test)]
+        WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.dbi.modules()
+    }
+
+    fn decode(&self, module: &pdb2::Module<'_>) -> Option<ModuleLines> {
         let info = {
             let mut pdb = self.pdb.lock().unwrap_or_else(|e| e.into_inner());
-            pdb.module_info(&module).ok()??
+            pdb.module_info(module).ok()??
         };
 
         let mut rows = RowCollector::default();
@@ -586,3 +645,6 @@ impl<'s> pdb2::Source<'s> for BoundedFile {
         Ok(Box::new(Bytes(bytes)))
     }
 }
+
+#[cfg(test)]
+mod tests;
