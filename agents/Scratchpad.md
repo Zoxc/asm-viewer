@@ -230,16 +230,18 @@ all of them go to one `std::thread` fed an `async_channel`, `use_analysis`'s sha
 and not several because the point is not only that the UI thread stays free but that a directory has
 a single writer, so a save cannot land inside the build that is reading what it writes. **Saves
 supersede, per pad, and builds never do**: a keystroke is a save, so the loop drains its queue while
-what it holds is one, and whatever is behind it is either a newer save or a build that writes the
-package itself. The **per pad** is a correctness rule and not a refinement. Keyed on nothing, a save
-of one pad would be dropped in favour of a job for another, and that pad's package would quietly
-fall behind what is on screen, since the pad that lost the write is the one nobody is looking at. So
-`superseded` replaces a save only while the job behind it names the same pad, and hands a job for
-another pad back to a hold-back queue rather than stepping over it. That a build of one pad delays
-another's save is accepted: the reader types in one pad at a time. Two builds cannot start at once,
-on the button (`enabled`) and in `request_build` both, because a build takes seconds and a second
-job queued behind the first would compile bytes that have since changed. A build that comes back
-also **forgets what the panes have read of the pad's package**, which is written to the same
+what it holds is one, and whatever is behind it is a newer save, a build that writes the package
+itself, or a delete that takes it away. Which jobs may stand in for a save is a correctness rule and
+not a refinement. Taking whatever was next, a save would be dropped in favour of a job that writes
+nothing -- another pad's, or a run of this one queued behind the save the same keystroke made -- and
+the package would quietly fall behind what is on screen. The baseline has already moved to the
+dropped save, so nothing would ever write that edit again. So `superseded` replaces a save only with
+a job that names the same pad *and* writes or removes its package, and hands anything else back to a
+hold-back queue rather than stepping over it. That a build of one pad delays another's save is
+accepted: the reader types in one pad at a time. Two builds cannot start at once, on the button
+(`enabled`) and in `request_build` both, because a build takes seconds and a second job queued
+behind the first would compile bytes that have since changed. A build that comes back also
+**forgets what the panes have read of the pad's package**, which is written to the same
 `src/main.rs` every time and would otherwise be drawn as it was first read for the life of the
 process (`forget_source_under`, `agents/Panes.md`).
 

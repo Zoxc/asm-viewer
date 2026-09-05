@@ -3,8 +3,8 @@
 //!
 //! **One worker thread**, so every pad's directory has a single writer and a save cannot
 //! land inside the build that is reading what it writes. **Saves supersede, per pad, and
-//! builds never do**: a save of one pad must not be dropped in favour of a job for
-//! another, or that pad's disk copy goes quietly stale. **A run does not sit on that
+//! builds never do**: a save may be dropped only for a job that writes the same pad's
+//! package, or that pad's disk copy goes quietly stale. **A run does not sit on that
 //! worker and a stop does not go near it**: a run has no bound on how long it takes, and a
 //! stop queued behind a build would arrive after the thing it was meant to interrupt.
 //!
@@ -966,13 +966,14 @@ pub(crate) fn request_delete_pad(
 /// The newest of a run of saves of one pad, dropping the ones it has overtaken before any
 /// of them is started.
 ///
-/// A save is superseded only by a job for the **same** pad. Whatever is behind one of those
-/// is a newer save, a build, which writes the package itself, or a delete, which is about to
-/// take the package away and has nothing to want from a write; a job for another pad
-/// says nothing about this pad's disk copy, so it goes to `hold` rather than being allowed
-/// to drop this save on the floor -- which is what a rule that took whatever was next would
-/// do, leaving that pad's package quietly behind what is on screen. Anything that is not a
-/// save supersedes nothing and is handed straight back.
+/// A save is superseded only by a job for the **same** pad that writes or removes its
+/// package: a newer save, a build, which writes the package itself, or a delete, which is
+/// about to take the package away and has nothing to want from a write. Everything else
+/// goes to `hold` rather than being allowed to drop this save on the floor -- which is what
+/// a rule that took whatever was next would do, leaving the package quietly behind what is
+/// on screen. That is a job for another pad, which says nothing about this pad's disk copy;
+/// and a run or an open of this one, neither of which writes anything. Anything that is not
+/// a save supersedes nothing and is handed straight back.
 pub(crate) fn superseded(
     job: PadJob,
     mut take: impl FnMut() -> Option<PadJob>,
@@ -981,7 +982,15 @@ pub(crate) fn superseded(
     let mut job = job;
     while matches!(job, PadJob::Save(_)) {
         match take() {
-            Some(newer) if newer.pad() == job.pad() => job = newer,
+            Some(newer)
+                if newer.pad() == job.pad()
+                    && matches!(
+                        newer,
+                        PadJob::Save(_) | PadJob::Build(_) | PadJob::Delete(_)
+                    ) =>
+            {
+                job = newer
+            }
             Some(newer) => {
                 hold(newer);
                 break;

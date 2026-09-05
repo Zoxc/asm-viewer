@@ -9668,6 +9668,38 @@ fn a_save_is_superseded_only_by_a_job_for_the_same_pad() {
     assert_eq!(queue[0].pad().map(PadId::as_str), Some("one"));
 }
 
+/// A run writes nothing, so it may not stand in for the save it is queued behind. The
+/// reader types in one pad while another builds and presses Run, leaving `Save(X), Run(X)`
+/// on the queue; a rule keyed on the pad alone would start the program and leave
+/// `src/main.rs` behind what is on screen -- with the baseline saying it is not, so nothing
+/// would ever write that edit again.
+#[test]
+fn a_run_does_not_stand_in_for_the_save_in_front_of_it() {
+    let mut scratchpad = Scratchpad::new("one").expect("an id");
+    scratchpad.source = "typed".to_owned();
+
+    let mut queue = VecDeque::from([PadJob::Run {
+        run: 1,
+        scratchpad: scratchpad.clone(),
+        executable: PathBuf::from("/nowhere/one"),
+        emit: Box::new(|_| {}),
+    }]);
+    let mut held = Vec::new();
+
+    let job = superseded(
+        PadJob::Save(scratchpad),
+        || queue.pop_front(),
+        |newer| held.push(newer),
+    );
+
+    let PadJob::Save(scratchpad) = &job else {
+        panic!("the save is done first");
+    };
+    assert_eq!(scratchpad.source, "typed");
+    // And the run is still to come, behind it.
+    assert!(matches!(held.as_slice(), [PadJob::Run { .. }]));
+}
+
 /// The scratchpad on disk is what the app opens on, and **nothing is written until it has
 /// arrived** -- the app boots holding `Scratchpad::default`, and a save before the answer
 /// lands would put that default over a scratchpad someone had been keeping.
