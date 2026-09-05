@@ -162,6 +162,57 @@ fn a_dependencys_artifact_is_not_this_workspaces() {
     assert_eq!(artifacts, Vec::new());
 }
 
+/// Where every artifact went on Windows. `fs::canonicalize` answers `\\?\C:\work\app` and
+/// cargo names `C:\work\app\Cargo.toml`; `Path` reads the one prefix as `VerbatimDisk` and
+/// the other as `Disk`, so nothing was ever inside the directory being built.
+///
+/// The strip is what is asserted here: only Windows' own `Path` reads the components.
+#[test]
+fn a_verbatim_path_is_the_plain_one_it_names() {
+    let plain = |text| simplified(Path::new(text)).into_owned();
+
+    assert_eq!(plain(r"\\?\C:\work\app"), PathBuf::from(r"C:\work\app"));
+    assert_eq!(plain(r"\\?\C:\"), PathBuf::from(r"C:\"));
+    assert_eq!(
+        plain(r"\\?\UNC\server\share\app"),
+        PathBuf::from(r"\\server\share\app")
+    );
+
+    // The verbatim forms naming something no drive letter can are left as they are, as is
+    // every path that was never verbatim -- on either platform.
+    assert_eq!(plain(r"\\?\pipe\cargo"), PathBuf::from(r"\\?\pipe\cargo"));
+    assert_eq!(
+        plain(r"\\?\Volume{d0e1}\app"),
+        PathBuf::from(r"\\?\Volume{d0e1}\app")
+    );
+    assert_eq!(plain(r"C:\work\app"), PathBuf::from(r"C:\work\app"));
+    assert_eq!(plain("/work/app"), PathBuf::from("/work/app"));
+}
+
+/// The same rule end to end, on the platform whose `Path` can read the components: an
+/// artifact cargo named is inside the canonicalised directory it was built in.
+#[cfg(windows)]
+#[test]
+fn a_canonicalised_windows_directory_keeps_its_artifacts() {
+    let stdout = concat!(
+        r#"{"reason":"compiler-artifact","manifest_path":"C:\\work\\app\\Cargo.toml","#,
+        r#""target":{"name":"sketch","kind":["bin"]},"#,
+        r#""executable":"C:\\work\\app\\target\\debug\\sketch.exe","#,
+        r#""filenames":["C:\\work\\app\\target\\debug\\sketch.exe"]}"#,
+        "\n",
+        r#"{"reason":"build-finished","success":true}"#,
+        "\n",
+    );
+
+    let Run::Built { artifacts, .. } = outcome(stdout, "", true, Path::new(r"\\?\C:\work\app"))
+    else {
+        panic!("a build");
+    };
+
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(artifacts[0].target, "sketch");
+}
+
 /// A library names no executable, so its own files are what it contributes: the `.rlib`,
 /// which is an archive this app opens like any other, and never the `.rmeta` beside it,
 /// which holds no code.

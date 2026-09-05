@@ -10,6 +10,7 @@
 //! is what lets a build be a test over a canned stream.
 
 use std::{
+    borrow::Cow,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -209,6 +210,47 @@ fn outcome(stdout: &str, stderr: &str, success: bool, directory: &Path) -> Run {
     }
 }
 
+/// Whether `path` is inside `directory`, each reduced to a plain path first.
+///
+/// By path component and not by text, so `/work/apple` is not inside `/work/app`.
+fn inside(path: &Path, directory: &Path) -> bool {
+    simplified(path).starts_with(simplified(directory))
+}
+
+/// A Windows verbatim path as the plain path it names, and anything else unchanged.
+///
+/// On Windows `fs::canonicalize` answers in the verbatim form (`\\?\C:\work\app`) while
+/// cargo's own paths are plain (`C:\work\app\Cargo.toml`), and the two do not compare
+/// equal: `Path` parses the first prefix as `VerbatimDisk` and the second as `Disk`. Left
+/// alone, the directory a build is matched against contains nothing cargo named, and every
+/// artifact is dropped.
+///
+/// The strip is textual, so it is the same on every platform and can be tested from any of
+/// them; no Unix path begins `\\?\`. Only the two forms with a plain spelling are reduced:
+/// `\\?\pipe\...` and `\\?\Volume{...}` name what no drive letter can, and are left alone.
+fn simplified(path: &Path) -> Cow<'_, Path> {
+    let Some(text) = path.to_str() else {
+        return Cow::Borrowed(path);
+    };
+
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return Cow::Owned(PathBuf::from(format!(r"\\{share}")));
+    }
+
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if drive(rest) => Cow::Borrowed(Path::new(rest)),
+        _ => Cow::Borrowed(path),
+    }
+}
+
+/// Whether `text` starts with a drive letter and a colon, ending there or at a separator.
+fn drive(text: &str) -> bool {
+    let text = text.as_bytes();
+    text.first().is_some_and(u8::is_ascii_alphabetic)
+        && text.get(1) == Some(&b':')
+        && matches!(text.get(2), None | Some(b'\\'))
+}
+
 /// The manifest in `directory`, or `None` when there is none to build.
 pub fn manifest(directory: &Path) -> Option<PathBuf> {
     let path = directory.join(MANIFEST);
@@ -329,7 +371,7 @@ impl ArtifactMessage {
     /// so it can start early, it holds no code, and a row for it could only ever fail to
     /// parse. The one place here a file is judged by its name.
     fn built(self, directory: &Path) -> Vec<Artifact> {
-        if !self.manifest_path.starts_with(directory) {
+        if !inside(&self.manifest_path, directory) {
             return Vec::new();
         }
 
