@@ -1406,6 +1406,86 @@ fn a_saved_page_comes_back_with_no_binaries() {
     assert_eq!(strip.active(), Some(Tab::Page(Page::Settings)));
 }
 
+/// Whether the row below is still drawn; its own press decides.
+#[derive(Clone, Copy)]
+struct Gone(State<bool>);
+
+/// The binary the project being switched to holds.
+#[derive(Clone)]
+struct Restoring(PathBuf);
+
+/// A recent project's row, down to what the press does: it makes that project the open
+/// one, and the list leaves the open project out, so the row goes with the render that
+/// follows. `switch_project` without the project store, which a test has no business
+/// writing into.
+#[derive(PartialEq)]
+struct RestoreRow;
+
+impl Component for RestoreRow {
+    fn render(&self) -> impl IntoElement {
+        let states = use_project_states();
+        let mut gone = use_consume::<Gone>().0;
+        let path = use_consume::<Restoring>().0;
+
+        rect().expanded().on_press(move |_| {
+            gone.set(true);
+            let project = Project {
+                binaries: vec![path.clone()],
+                ..Project::default()
+            };
+            restore_project(states, project, Session::default());
+        })
+    }
+}
+
+fn restore_harness() -> impl IntoElement {
+    let gone = use_consume::<Gone>().0;
+
+    rect().expanded().children(match gone() {
+        true => Vec::new(),
+        false => vec![RestoreRow.into_element()],
+    })
+}
+
+/// **A restore outlives the row that asked for it.** The row is unmounted by the render
+/// the press causes, and the runner renders before it polls a task spawned in the handler,
+/// so a restore tied to that scope is dropped before it reads a byte: the project switched
+/// to would come up with none of its binaries and none of its tabs.
+#[test]
+fn a_restore_survives_the_row_that_asked_for_it() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
+    let held = path.clone();
+    let (mut test, states) = TestingRunner::new(
+        restore_harness,
+        (200., 200.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(|| Gone(State::create(false)));
+            runner.provide_root_context(move || Restoring(held));
+            project_states!(runner)
+        },
+        1.,
+    );
+    test.sync_and_update();
+
+    press_at(&mut test, (100.0, 100.0));
+    // The file is parsed on a thread of its own, so the objects arrive in their own time
+    // and not in this one's.
+    for _ in 0..200 {
+        settle(&mut test);
+        if !states.objects.peek().is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    assert_eq!(
+        project::binaries(&states.objects.peek()),
+        [path],
+        "the restore was dropped with the row that asked for it"
+    );
+}
+
 /// Every open tab's chip, drawn as the bar draws them: what a press on one has to answer
 /// for now that the bar is the app's own. freya's docking wrapped a header in a
 /// `rect().on_press(set_active)` and the chip did nothing; here the chip is the whole of

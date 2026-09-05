@@ -868,7 +868,11 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         return;
     }
 
-    spawn(async move {
+    // `spawn_forever`, not `spawn`: a task belongs to the scope that spawned it, and on a
+    // switch that scope is the recent project's row, which the press unmounts -- the row
+    // is left out of the list the moment its project is the open one, so the restore
+    // would be dropped before its first poll.
+    spawn_forever(async move {
         // The objects arrive as they are parsed, but the *session* waits for the whole
         // load: a tab is resolved against the objects by name, and resolving one against
         // a half-filled list would drop the tabs whose object had not landed yet.

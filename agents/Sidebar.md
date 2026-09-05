@@ -332,6 +332,12 @@ baselines *before* the app is emptied, and freya wakes an effect by a notify rat
 write, so the save observer runs once after the whole handler and sees a settled state that matches
 the baseline exactly. `new_project` is the same thing with nothing to restore.
 
+`restore_project` reads the binaries under **`spawn_forever`**. On a switch the handler runs under
+the scope of the pressed row, and that row is gone by the next render, the recent list leaving the
+open project out; the runner renders before it polls a new task, so a `spawn` there was dropped
+before it read a byte and the project came up with no binaries and no tabs -- which the save
+observer then wrote into its session. The startup restore never saw it: its scope is the root's.
+
 **Tooltips** are how a truncated row is read, so `row_tooltip` sets the delay to `Duration::ZERO`;
 freya's 500ms default makes sweeping down a list useless. The filter toggles keep the default (their
 tooltip explains what `\b` means), and the code rows have none.
