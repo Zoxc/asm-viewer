@@ -852,15 +852,28 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<Path
         // opens nothing and is said so, the same as one picked from a menu would be: it is
         // the reader's own file and is left exactly as it is.
         let store = states.store.peek().clone();
-        let opened = store.as_ref().and_then(|store| match &opening {
-            Some(path) => project::open_at(store, path),
-            None => project::reopen(store),
-        });
-        let Some((file, project, session)) = opened else {
-            if let Some(path) = opening {
-                unopened.set(Some(path));
+        let opened = match (store.as_ref(), &opening) {
+            (Some(store), Some(path)) => Some(project::open_at(store, path)),
+            (Some(store), None) => project::reopen(store),
+            // Nowhere to keep anything, so nothing opens. Only worth saying to a reader
+            // who asked for a project; a startup that would have reopened one has the
+            // empty screen to show for it either way.
+            (None, opening) => opening.clone().map(|path| {
+                Err(project::Failure {
+                    path,
+                    reason: project::Reason::NoStore,
+                })
+            }),
+        };
+        // Nothing to reopen is the empty screen and not something to say; `project::reopen`
+        // counts a last project whose file has gone as one of those.
+        let (file, project, session) = match opened {
+            None => return,
+            Some(Ok(opened)) => opened,
+            Some(Err(failure)) => {
+                unopened.set(Some(failure));
+                return;
             }
-            return;
         };
 
         // Synchronously, and before anything else here: `project::reopen` has just
@@ -1111,18 +1124,25 @@ pub(crate) fn clear_project(states: ProjectStates) {
 pub(crate) fn switch_project(
     states: ProjectStates,
     mut rescued: State<Vec<PathBuf>>,
-    mut unopened: State<Option<PathBuf>>,
+    mut unopened: State<Option<project::Failure>>,
     path: PathBuf,
 ) {
     let store = states.store.peek().clone();
-    let switched = store
-        .as_ref()
-        .and_then(|store| project::switch(store, &path));
-    let Some((project, session)) = switched else {
-        // A project file is never moved aside and nothing is written over it, so telling
-        // the reader is the whole of what is left to do.
-        unopened.set(Some(path));
-        return;
+    let switched = match store.as_ref() {
+        Some(store) => project::switch(store, &path),
+        None => Err(project::Failure {
+            path: path.clone(),
+            reason: project::Reason::NoStore,
+        }),
+    };
+    let (project, session) = match switched {
+        Ok(both) => both,
+        Err(failure) => {
+            // A project file is never moved aside and nothing is written over it, so
+            // telling the reader why is the whole of what is left to do.
+            unopened.set(Some(failure));
+            return;
+        }
     };
 
     // The other of the two loads a run makes, the startup's being `app()`'s. Added to
@@ -1151,7 +1171,7 @@ pub(crate) fn switch_project(
 pub(crate) fn ask_for_a_project(
     states: ProjectStates,
     rescued: State<Vec<PathBuf>>,
-    unopened: State<Option<PathBuf>>,
+    unopened: State<Option<project::Failure>>,
 ) {
     spawn_forever(async move {
         let Some(handle) = AsyncFileDialog::new()

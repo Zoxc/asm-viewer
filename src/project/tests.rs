@@ -1988,7 +1988,7 @@ fn a_path_under_the_project_file_is_written_relative_to_it() {
         "{text}"
     );
 
-    assert_eq!(Project::load_from(&path), Some(project));
+    assert_eq!(Project::load_from(&path), Ok(project));
 }
 
 /// And the point of it: the same file read from somewhere else answers about that place,
@@ -2043,7 +2043,7 @@ fn the_two_halves_are_written_to_their_own_files() {
 
     assert_eq!(
         Project::load_from(&directory.join("one.avproj")),
-        Some(project)
+        Ok(project)
     );
     assert_eq!(
         load_session(&directory.join("one.avproj.session")),
@@ -2065,7 +2065,7 @@ fn a_corrupt_session_leaves_the_project_readable() {
 
     assert_eq!(
         Project::load_from(&directory.join("one.avproj")),
-        Some(project)
+        Ok(project)
     );
     assert_eq!(load_session(&directory.join("one.avproj.session")), None);
 }
@@ -2295,13 +2295,19 @@ fn the_last_project_is_the_one_reopened() {
         remember(&store, &path);
     }
 
-    let (path, reopened, restored) = reopen(&store).expect("a project to reopen");
+    let (path, reopened, restored) = reopen(&store)
+        .expect("a project to reopen")
+        .expect("it opens");
     assert_eq!(path, wanted);
     assert_eq!(reopened, project);
     assert_eq!(restored, session);
 }
 
-/// Three ways for there to be nothing to reopen, all of them silence.
+/// Two ways for there to be nothing to reopen, both of them silence -- and the one way a
+/// startup does have something to say, which is the point of telling them apart. The
+/// recent list never prunes itself, so a name in it with nothing behind it is what an
+/// ordinary startup after a deleted project looks like; a file that is *there* and will
+/// not open is news.
 #[test]
 fn nothing_to_reopen_is_not_an_error() {
     let base = directory(line!());
@@ -2310,11 +2316,17 @@ fn nothing_to_reopen_is_not_an_error() {
     assert!(reopen(&store).is_none());
 
     // A recent list naming a project whose file has gone.
-    remember(
-        &store,
-        &store.projects().join(format!("gone.{PROJECT_EXTENSION}")),
-    );
+    let gone = store.projects().join(format!("gone.{PROJECT_EXTENSION}"));
+    remember(&store, &gone);
     assert!(reopen(&store).is_none());
+
+    // The same name, with a file behind it that will not parse.
+    fs::create_dir_all(store.projects()).expect("creating the test directory");
+    fs::write(&gone, b"{ not toml").expect("writing");
+    let failure = reopen(&store)
+        .expect("something to say")
+        .expect_err("it does not open");
+    assert_eq!(failure.path, gone);
 }
 
 /// The file *is* the project, so a run killed between claiming one and writing anything
@@ -2328,7 +2340,9 @@ fn a_project_missing_a_half_still_reopens() {
     remember(&store, &path);
 
     // The file claimed and nothing written into it yet.
-    let (reopened, project, session) = reopen(&store).expect("a project to reopen");
+    let (reopened, project, session) = reopen(&store)
+        .expect("a project to reopen")
+        .expect("it opens");
     assert_eq!(reopened, path);
     assert_eq!(project, Project::default());
     assert_eq!(session, Session::default());
@@ -2340,7 +2354,9 @@ fn a_project_missing_a_half_still_reopens() {
         .expect("saving the project");
     fs::write(session_beside(&path), b"{ not toml").expect("writing the corrupt half");
 
-    let (_, reopened, session) = reopen(&store).expect("a project to reopen");
+    let (_, reopened, session) = reopen(&store)
+        .expect("a project to reopen")
+        .expect("it opens");
     assert_eq!(reopened, project);
     assert_eq!(session, Session::default());
 
@@ -2359,21 +2375,59 @@ fn a_project_missing_a_half_still_reopens() {
 
 /// The project file is the reader's own, wherever it is kept, so one that will not parse is
 /// **not** moved aside: the project simply does not open, and nothing writes over what
-/// could not be read.
+/// could not be read. Telling the reader is therefore the whole of what happens, so what
+/// is answered instead is where the parser stopped and what it said there.
 #[test]
 fn a_project_file_that_will_not_parse_is_left_where_it_is() {
     let base = directory(line!());
     let store = Store::at(&base);
     let path = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
     fs::create_dir_all(store.projects()).expect("creating the test directory");
-    fs::write(&path, b"{ not toml").expect("writing");
+    let text = b"binaries = []\n{ not toml\n";
+    fs::write(&path, text).expect("writing");
 
-    assert!(load_project(&store, &path).is_none());
-    assert_eq!(
-        fs::read(&path).expect("the file is still there"),
-        b"{ not toml"
-    );
+    let failure = load_project(&store, &path).expect_err("the project does not open");
+    assert_eq!(failure.path, path);
+    let Reason::Malformed { at, message } = &failure.reason else {
+        panic!("a file that will not parse: {}", failure.reason);
+    };
+    // The second line, where the keys that do parse stop.
+    assert_eq!(*at, Some((2, 1)));
+    assert!(!message.is_empty(), "the parser said nothing");
+    // And the sentence the reader is shown carries both.
+    let said = failure.reason.to_string();
+    assert!(said.contains("line 2, column 1"), "{said}");
+    assert!(said.contains(message.as_str()), "{said}");
+
+    assert_eq!(fs::read(&path).expect("the file is still there"), text);
     assert!(!base.join(crate::store::INCOMPATIBLE_DIR).exists());
+}
+
+/// The other ways one does not open, told apart. Which it was decides what the window
+/// says, and a file that is not there is the one the startup keeps to itself.
+#[test]
+fn a_project_that_does_not_open_says_which_way() {
+    let base = directory(line!());
+    let store = Store::at(&base);
+    let path = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
+    fs::create_dir_all(store.projects()).expect("creating the test directory");
+
+    assert_eq!(
+        load_project(&store, &path)
+            .expect_err("nothing is there")
+            .reason,
+        Reason::Missing
+    );
+
+    // Not text at all, which is not a parse failure and cannot be given a place in the
+    // file: the bytes are what is read for exactly this.
+    fs::write(&path, [0xff, 0xfe, 0x00, 0x41]).expect("writing");
+    assert_eq!(
+        load_project(&store, &path)
+            .expect_err("it is not text")
+            .reason,
+        Reason::NotText
+    );
 }
 
 /// The session is found by the project file's name, which says nothing about whether that

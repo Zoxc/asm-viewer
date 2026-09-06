@@ -500,7 +500,7 @@ fn menu_rule() -> Element {
 fn main_menu(
     states: ProjectStates,
     rescued: State<Vec<PathBuf>>,
-    unopened: State<Option<PathBuf>>,
+    unopened: State<Option<project::Failure>>,
     recents: &[Recent],
     // The pages this run has, asked for by the caller: `is_open` is one per page in this
     // order, and the two cannot be allowed to disagree.
@@ -578,7 +578,7 @@ fn main_menu(
 pub(crate) fn recents_submenu(
     states: ProjectStates,
     rescued: State<Vec<PathBuf>>,
-    unopened: State<Option<PathBuf>>,
+    unopened: State<Option<project::Failure>>,
     recents: &[Recent],
     close: State<bool>,
 ) -> Element {

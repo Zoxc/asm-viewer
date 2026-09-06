@@ -36,6 +36,21 @@ open at all -- and since nothing opens, nothing writes over what could not be re
 whole of what the rescue was protecting. The session beside it *is* the app's own and still goes
 through `Store::read`.
 
+**So what is left is saying why.** `load_project` answers a `Failure` -- the path that was asked
+for, and a `Reason` -- rather than a bare `None`: telling the reader is the whole of what happens
+to a project that will not open, and "it is not there, or it is not a project file the app can
+read" was the window declining to say what the load already knew. Four answers and not one:
+nothing at that path, a file the system would not hand over, bytes that are not text, and TOML
+that will not parse. The last two are why `load_from` reads **bytes** here as well -- `read_to_string`
+folds them into one `io::Error` -- and it is `Store::read`'s reason a level up. A parse failure is
+taken apart rather than printed: `message()` and `span()`, the span counted over the text into a
+line and a column, since the error's own `Display` is a three-line diagram with a caret under the
+column, which lines up only in a fixed-width font and only while nothing wraps, and a window this
+wide can promise neither. `Reason`'s `Display` is then one whole sentence per variant -- what the
+reader is shown -- and `UnopenedPopup` draws it with the path under it. `Reason::NoStore` is the
+one a caller supplies rather than the load: nowhere to keep anything is not a fact about the file,
+but it is still why the project did not open.
+
 **And the reader is told**, which is the half that makes it a rescue at all: a file moved somewhere
 nobody hears about is a file lost politely. `store::moved()` hands over the destinations recorded
 since it was last asked -- a `static Mutex<Vec<PathBuf>>`, because what fills it is a load and not a
@@ -128,8 +143,13 @@ named on the command line and `use_restore_on_startup` prefers it (`project::ope
 is `switch` without the flush, there being nothing to flush yet). `main` answers for a path
 that is not a project file *before* `launch`, on the command line it came from: a windowed
 program that starts and says nothing has said nothing. A path that **is** one and still will
-not open is the app's to answer, and it says so in a window (`Unopened`), which is the whole
-of what is left to do -- the file is never moved aside and nothing is written over it.
+not open is the app's to answer, and it says so in a window (`Unopened`, which carries the
+`Failure` and not just the path), which is the whole of what is left to do -- the file is never
+moved aside and nothing is written over it. `reopen` is the one open nobody asked for, and so
+the one that keeps quiet: a recent list naming a file that has **gone** is `None`, nothing to
+reopen rather than a failure, since the list never prunes itself and that is what an ordinary
+startup after a deleted project looks like. A file that is there and will not open is reported
+like any other.
 
 **Where a project is kept is `put_in`, and it reads and writes rather than copying bytes.**
 A path in a project file is relative to that file's own directory, so the same bytes in

@@ -341,17 +341,24 @@ impl Project {
         }
     }
 
-    /// Read one, or `None` if it is not there or will not parse. The plain read, and the
-    /// only one: it is what draws a row for a project that is **not open**
+    /// Read one, or [`Reason`] if it is not there or will not parse. The plain read, and
+    /// the only one: it is what draws a row for a project that is **not open**
     /// ([`recent_projects`]), and listing a project must not move its file aside.
     /// [`load_project`], which opens one, goes through [`Store::read`].
-    fn load_from(path: &Path) -> Option<Project> {
-        let data = fs::read_to_string(path).ok()?;
-        let mut project: Project = toml::from_str(&data).ok()?;
+    ///
+    /// The **bytes** and not a string, so that a file which is not text is told apart from
+    /// one the system would not hand over: they fail as one `io::Error` otherwise, and
+    /// what the reader is told about a project that will not open is the point of this
+    /// answering a reason at all.
+    fn load_from(path: &Path) -> Result<Project, Reason> {
+        let data = fs::read(path).map_err(Reason::reading)?;
+        let text = std::str::from_utf8(&data).map_err(|_| Reason::NotText)?;
+        let mut project: Project =
+            toml::from_str(text).map_err(|error| Reason::of(&error, text))?;
         if let Some(directory) = path.parent() {
             project.against(directory, Spelling::Working);
         }
-        Some(project)
+        Ok(project)
     }
 
     /// The other half: written out at `path`, with its paths turned the way the file
@@ -362,6 +369,101 @@ impl Project {
             stored.against(directory, Spelling::Stored);
         }
         store.write_toml(path, &stored)
+    }
+}
+
+/// A project that would not open: the file the reader asked for, and what was wrong with
+/// it.
+///
+/// **The project file is never moved aside** ([`load_project`]), so telling the reader is
+/// the whole of what happens to a project that will not open -- which is why the reason is
+/// carried this far rather than logged and dropped. The path travels with it because
+/// [`reopen`] picks the file itself: the one open nobody asked for is the one whose failure
+/// names a file the reader has not seen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Failure {
+    /// The project file, as it was asked for.
+    pub path: PathBuf,
+    pub reason: Reason,
+}
+
+/// What was wrong with a project file. Its [`fmt::Display`] is the sentence the reader is
+/// shown, so each is a whole one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reason {
+    /// There is nothing at that path.
+    Missing,
+    /// The system would not hand the file over: no permission, a directory, a broken
+    /// link.
+    Unreadable(String),
+    /// Not text at all, so nothing can be said about where it goes wrong.
+    NotText,
+    /// There is nowhere for the app to keep its own files, so there is nothing to open a
+    /// project into. Nothing to do with the file, and the one reason this module does not
+    /// find for itself: it is what a caller with no [`Store`] has instead of one.
+    NoStore,
+    /// Text, but not TOML this app can read: what the parser said, and where it stopped
+    /// when it said where.
+    Malformed {
+        /// The line and the column, both counted from one and in characters rather than
+        /// bytes -- what an editor puts in its corner.
+        at: Option<(usize, usize)>,
+        message: String,
+    },
+}
+
+impl Reason {
+    /// What an `io::Error` from the read was about. Not being there is its own answer:
+    /// it is the one failure here that is nobody's mistake, and the only one a startup
+    /// keeps quiet about.
+    fn reading(error: std::io::Error) -> Reason {
+        match error.kind() {
+            std::io::ErrorKind::NotFound => Reason::Missing,
+            _ => Reason::Unreadable(error.to_string()),
+        }
+    }
+
+    /// What a TOML error said, and where in `text` it said it.
+    ///
+    /// Taken apart rather than printed: the error's own [`fmt::Display`] is a three-line
+    /// diagram with a caret under the column, which lines up only in a fixed-width font
+    /// and only while nothing wraps -- neither of which a window this wide can promise.
+    /// A span that is not a character boundary, or is past the end, costs the position
+    /// and not the message.
+    fn of(error: &toml::de::Error, text: &str) -> Reason {
+        let at = error
+            .span()
+            .and_then(|span| text.get(..span.start))
+            .map(|before| {
+                let line = before.matches('\n').count() + 1;
+                let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+                (line, column)
+            });
+        Reason::Malformed {
+            at,
+            message: error.message().to_owned(),
+        }
+    }
+}
+
+impl fmt::Display for Reason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Reason::Missing => write!(formatter, "There is no file there."),
+            Reason::Unreadable(error) => write!(formatter, "It could not be read: {error}."),
+            Reason::NotText => write!(formatter, "It is not a text file."),
+            Reason::NoStore => write!(formatter, "The app has nowhere to keep its own files."),
+            Reason::Malformed {
+                at: Some((line, column)),
+                message,
+            } => write!(
+                formatter,
+                "It will not parse: {message}, at line {line}, column {column}."
+            ),
+            Reason::Malformed { at: None, message } => {
+                write!(formatter, "It will not parse: {message}.")
+            }
+        }
     }
 }
 
@@ -1553,35 +1655,42 @@ fn write_recents(store: &Store, recents: Recents) {
 /// Reopen the project the app was last in: the first entry of `recents.toml`. Hands back
 /// both halves for the caller to restore, and points the save policy at it — but seeds it
 /// with nothing else (see [`Saves::binaries`]).
-pub fn reopen(store: &Store) -> Option<(PathBuf, Project, Session)> {
+///
+/// `None` when there is nothing to reopen, which is a first run and not a failure — and a
+/// project whose file has **gone** is one of those: the recent list never prunes itself, so
+/// a name in it with nothing behind it is an ordinary startup rather than news. A file that
+/// is there and will not open is the [`Failure`], for the caller to say.
+pub fn reopen(store: &Store) -> Option<Result<(PathBuf, Project, Session), Failure>> {
     let path = load_recents(store).first()?.clone();
-    let (project, session) = load_project(store, &path)?;
-    saves().opened(store, path.clone(), &project, session.trusted);
-    Some((path, project, session))
+    match open_at(store, &path) {
+        Err(failure) if failure.reason == Reason::Missing => None,
+        opened => Some(opened),
+    }
 }
 
-/// Both halves of the project the file at `path` holds, or `None` when it is not there or
-/// will not parse.
+/// Both halves of the project the file at `path` holds, or the [`Failure`] when it is not
+/// there or will not parse.
 ///
 /// **The project file is never moved aside**, however it fails: it may be the reader's own
 /// file, sitting in their tree beside the code, and the app has no business taking one
-/// away. `None` here therefore means the project does not open at all, and since nothing
+/// away. A failure here therefore means the project does not open at all, and since nothing
 /// opens, nothing writes over what could not be read. That is the whole of the rule — the
 /// plain read is [`Project::load_from`], which the recent list has always used for the same
-/// reason.
+/// reason. It also makes telling the reader everything that is left to do, which is what
+/// the [`Reason`] is carried out of here for.
 ///
 /// The session beside it *is* the app's own, and goes through [`Store::read`] like everything
 /// else the app stores. One written for another project is dropped rather than believed:
 /// the file is found by the project file's name, which says nothing about whether that file
 /// still holds the project it did.
-fn load_project(store: &Store, path: &Path) -> Option<(Project, Session)> {
-    let project = match Project::load_from(path) {
-        Some(project) => project,
-        None => {
-            log::debug!("the project {} will not open", path.display());
-            return None;
+fn load_project(store: &Store, path: &Path) -> Result<(Project, Session), Failure> {
+    let project = Project::load_from(path).map_err(|reason| {
+        log::warn!("the project {} will not open: {reason}", path.display());
+        Failure {
+            path: path.to_path_buf(),
+            reason,
         }
-    };
+    })?;
 
     let session: Session = store.read(session_beside(path)).unwrap_or_default();
     let session = match session.id == project.id && project.id.is_some() {
@@ -1593,7 +1702,7 @@ fn load_project(store: &Store, path: &Path) -> Option<(Project, Session)> {
             Session::default()
         }
     };
-    Some((project, session))
+    Ok((project, session))
 }
 
 /// Leave the project the app is in and enter the one the file at `path` holds, handing back
@@ -1605,21 +1714,21 @@ fn load_project(store: &Store, path: &Path) -> Option<(Project, Session)> {
 /// baselines because the caller is about to empty the app — a baseline still describing
 /// the old binaries would read that emptying as a change and write it into the project
 /// just entered. Emptying the app is the caller's half, the states being the UI's.
-pub fn switch(store: &Store, path: &Path) -> Option<(Project, Session)> {
+pub fn switch(store: &Store, path: &Path) -> Result<(Project, Session), Failure> {
     flush();
     let (_, project, session) = open_at(store, path)?;
     log::debug!("switched to the project {}", path.display());
-    Some((project, session))
+    Ok((project, session))
 }
 
 /// Open the project the file at `path` holds without leaving one first: what a startup
 /// given a project file on the command line does, where there is nothing to flush.
 /// [`switch`] is this with the flush in front of it.
-pub fn open_at(store: &Store, path: &Path) -> Option<(PathBuf, Project, Session)> {
+pub fn open_at(store: &Store, path: &Path) -> Result<(PathBuf, Project, Session), Failure> {
     let (project, session) = load_project(store, path)?;
     remember(store, path);
     saves().opened(store, path.to_path_buf(), &project, session.trusted);
-    Some((path.to_path_buf(), project, session))
+    Ok((path.to_path_buf(), project, session))
 }
 
 /// Start a project the reader has not given a place and enter it: [`switch`] with nothing
@@ -1666,7 +1775,7 @@ pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
         log::warn!("no project to save");
         return false;
     };
-    let Some((project, session)) = load_project(store, &from) else {
+    let Ok((project, session)) = load_project(store, &from) else {
         return false;
     };
 

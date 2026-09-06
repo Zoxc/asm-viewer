@@ -204,20 +204,20 @@ impl Component for WindowBody {
     }
 }
 
-/// A project the reader asked for that would not open, until they have been told.
+/// A project that would not open, and why, until the reader has been told.
 ///
 /// A project file is never moved aside -- it may be their own file, beside their code -- so
 /// one that will not parse is left exactly where it is and nothing is written over it. That
-/// makes telling them the whole of what happens, and this is what carries it as far as the
-/// window below.
+/// makes telling them the whole of what happens, and this is what carries the reason as
+/// far as the window below.
 #[derive(Clone, Copy)]
-pub(crate) struct Unopened(pub(crate) State<Option<PathBuf>>);
+pub(crate) struct Unopened(pub(crate) State<Option<project::Failure>>);
 
 /// The window that says so. Drawn as nothing at all until there is something to say, the
 /// way `RescuedPopup` is.
 #[derive(PartialEq)]
 pub(crate) struct UnopenedPopup {
-    pub(crate) naming: Option<PathBuf>,
+    pub(crate) naming: Option<project::Failure>,
 }
 
 impl Component for UnopenedPopup {
@@ -227,7 +227,7 @@ impl Component for UnopenedPopup {
         Popup::new()
             .width(Size::px(ASKING_WIDTH))
             .on_close_request(move |_| unopened.set(None))
-            .map(self.naming.clone(), |popup, path| {
+            .map(self.naming.clone(), |popup, failure| {
                 popup
                     .child(
                         rect()
@@ -236,22 +236,29 @@ impl Component for UnopenedPopup {
                             .font(&fonts().ui)
                             .color(palette().text_fg)
                             .child(label().text("That project would not open".to_owned()))
+                            // What went wrong, in the reason's own words. A paragraph and
+                            // not a label: a parser's message is as long as it is.
                             .child(
-                                label()
-                                    .text(
-                                        "It is not there, or it is not a project file the \
-                                         app can read. It has been left exactly as it is."
-                                            .to_owned(),
-                                    )
-                                    .color(palette().address_fg),
+                                paragraph()
+                                    .color(palette().address_fg)
+                                    .span(failure.reason.to_string()),
                             )
+                            // Said only where there is a file to have left alone. The app
+                            // never moves a project of the reader's aside, and a window
+                            // about a file that will not parse is the one place that is
+                            // worth saying.
+                            .maybe_child((failure.reason != project::Reason::Missing).then(|| {
+                                label()
+                                    .text("It has been left exactly as it is.".to_owned())
+                                    .color(palette().address_fg)
+                            }))
                             // A path is as long as it is, and one that is cut off is one
                             // the reader cannot go and look at.
                             .child(
                                 paragraph()
                                     .assembly_font()
                                     .color(palette().address_fg)
-                                    .span(path.to_string_lossy().into_owned()),
+                                    .span(failure.path.to_string_lossy().into_owned()),
                             ),
                     )
                     .child(
