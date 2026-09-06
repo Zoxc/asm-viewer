@@ -22,9 +22,10 @@ use symbolic_demangle::{Demangle, DemangleOptions};
 ///
 /// **A demangler's recursion depth is the file's to choose**, and a stack overflow is an
 /// **abort** no `catch_unwind` turns back into "this symbol has no demangled name", so it has
-/// to be headed off before the call. `msvc-demangler` 0.11 has no recursion limit at all
-/// (one level per `P` byte) and `cpp_demangle`'s is deep enough that reaching it is megabytes
-/// of stack. Measured at roughly 10 KiB of stack per byte of name, so this and
+/// to be headed off before the call. `cpp_demangle`'s own limit is deep enough that reaching
+/// it is megabytes of stack; the MSVC side is capped at 128 levels by `symbolic-demangle`,
+/// which vendors that demangler. Measured at roughly 10 KiB of stack per byte of name, so
+/// this and
 /// [`DEMANGLE_STACK`] are one bound. The longest name in any sample in the repo is 1038
 /// bytes; a name past the cap is displayed exactly as the file wrote it.
 const MAX_MANGLED_NAME: usize = 2048;

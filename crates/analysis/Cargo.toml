@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 object = "0.40.0"
-symbolic-demangle = "12.4.1"
-symbolic-common = "12.4.1"
+symbolic-demangle = "13.9.0"
+symbolic-common = "13.9.0"
 iced-x86 = "1.20.0"
 # DWARF line info. 0.27 is the `addr2line` release that pairs with `object` 0.40 and
 # `gimli` 0.34, and the four move together: `addr2line` names `gimli` and `object` by exact
@@ -38,14 +38,17 @@ ruzstd = "0.9"
 # already in the tree. `cargo tree -p analysis -d` reports nothing doubled.
 pdb2 = "0.10"
 # The digests a PDB records per source file (`SourceDigests`), so the app can tell a file it
-# opened apart from the one the binary was built from. All three share `digest` 0.10;
-# `sha1` and `digest` were already in the lock through the devtools feature's `tungstenite`,
-# so the default build gains `md-5`, `sha2` and the `digest` family it did not compile
-# before. Hashing lives here and not in the app so it is tested against known vectors
-# without a UI in the way.
-md-5 = "0.10"
-sha1 = "0.10"
-sha2 = "0.10"
+# opened apart from the one the binary was built from. All three share `digest` 0.11, and a
+# default build compiles one copy of it. A `--features devtools` build compiles two:
+# `tungstenite` pulls `sha1` 0.10 and so `digest` 0.10 beside it, with `block-buffer`,
+# `crypto-common` and `cpufeatures` doubled behind them. Holding all three at 0.10 would
+# keep that build to one copy, at the price of an old digest family in every other build
+# and in the shipped one; the doubling costs a devtools build some compile time and
+# nothing else. Hashing lives here and not in the app so it is tested against known
+# vectors without a UI in the way.
+md-5 = "0.11"
+sha1 = "0.11"
+sha2 = "0.11"
 
 [dev-dependencies]
 # Test fixtures are built in memory with the writers rather than committed as blobs:

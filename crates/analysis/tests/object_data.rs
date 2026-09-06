@@ -89,6 +89,16 @@ fn the_digest_is_of_the_bytes_and_nothing_else() {
     assert_eq!(FileDigest::of(&bytes).to_string().len(), 16);
 }
 
+/// The digest is written into the session file and read back on a later run, so the number
+/// is part of the format and not an implementation detail: a hasher that changed algorithm
+/// under us would declare every saved binary rebuilt. These are xxHash64's own published
+/// vectors for seed 0.
+#[test]
+fn the_digest_is_xxhash64_of_the_bytes() {
+    assert_eq!(FileDigest::of(b"").to_string(), "ef46db3751d8e999");
+    assert_eq!(FileDigest::of(b"abc").to_string(), "44bc2cf5ad770999");
+}
+
 /// 196 members must cost one hash, not 196, and every object out of one file must answer
 /// the same thing.
 #[test]

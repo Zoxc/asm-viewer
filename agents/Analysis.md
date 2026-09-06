@@ -169,10 +169,11 @@ take 756 ms because the 15 636 no entry covers each go to the PDB.
 
 **Names are demangled in one batch per object, on stacks sized for them** (`demangle.rs`). A mangled
 name is bytes out of a string table, and it is the *file* that chooses how deep the demangler
-reading it recurses. `msvc-demangler` 0.11 has no recursion limit at all (`P` → pointee → type →
-pointee, one byte per level) and `cpp_demangle`'s is deep enough that reaching it is megabytes of
-stack, so a 209-byte name overflows the 2 MiB a `std::thread` gets. A stack overflow is an
-**abort**, which no `catch_unwind` turns back into "this symbol has no demangled name". Two bounds
+reading it recurses. `cpp_demangle`'s own limit is deep enough that reaching it is megabytes of
+stack, so a 209-byte name overflows the 2 MiB a `std::thread` gets. The MSVC side used to be worse
+— `msvc-demangler` 0.11 had no limit at all, one level per `P` byte — and is now capped at 128 by
+`symbolic-demangle`, which vendors that demangler rather than depending on it. A stack overflow is
+an **abort**, which no `catch_unwind` turns back into "this symbol has no demangled name". Two bounds
 together: a name over `MAX_MANGLED_NAME` (2048 bytes, against a longest of 1038 across every input
 tried) is not demangled at all, and the rest are demangled on a thread with `DEMANGLE_STACK` (64
 MiB, a reservation and not a cost). The exception is an object where every name is under
