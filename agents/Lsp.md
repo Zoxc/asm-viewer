@@ -125,7 +125,7 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   anything else a malformed header, and dies.
 - `initialized` must be the very next message after the `initialize` answer. Anything else
   first and the server gives up on the conversation.
-- **The declared capabilities are two lines long**, and what is left out is the decision.
+- **The declared capabilities are three lines long**, and what is left out is the decision.
   Every request rust-analyzer makes of a client -- for configuration, to register a file
   watcher -- is opt-in through a capability, so declaring none of those leaves a
   conversation this app only ever speaks first in. Nothing is said about positions or about
@@ -138,6 +138,8 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   server that asks something anyway is answered -- an empty configuration, nothing for a
   progress token, and "not a method this client has" for the rest -- because a server
   waiting on a reply is a conversation that stops.
+- **The third line asks the server to say when it has settled**, which is the one thing
+  the protocol has no way to ask. See below.
 - **The second line is the format a hover is written in**, which is the one default not
   worth taking. Measured against a real server, over the same name, both ways: a client
   that names none is answered `plaintext`, with the fences gone and the doc comment's list
@@ -237,10 +239,62 @@ where the lookup found none -- and `src/source.rs` had to grow `forget_under` fo
 that. Saving 0.1 ms once per followed link does not pay for a second thing a build has to
 remember to evict.
 
-**The file is not opened first.** rust-analyzer reads the project's files itself, and this
-app only ever shows what is on disk, so a `didOpen` would put an overlay over the file that
-has to be taken off again and can only go stale. The cost is that a file outside the
-project answers nothing, which is the same nothing a question with no answer gets.
+## The documents the app has open
+
+**The file is opened first**, and that is a reversal. The app used to open nothing: it
+shows what is on disk and edits nothing, so a `didOpen` looked like an overlay to be taken
+off again and kept in step for no gain, with rust-analyzer reading the project's files
+itself anyway.
+
+It does read them, and the cost of waiting for it is the whole of the bug this fixed.
+Measured over a two-file crate: opened, the file answers its names at **0.0s**; not opened,
+the first answer that is not empty comes at **4.3s**, and on anything the size of a real
+project it is far worse. The protocol is built the other way round from the assumption --
+the client owns the documents it shows, and a server answers about the text it was given
+until it is told the file has closed -- so opening is the normal path and reading the disk
+is the courtesy.
+
+**What is opened is what the reader has in tabs**, which is what an editor does: `Opened`
+holds the set and the run it was sent to, `use_opened` diffs it against the source
+documents in the strip, and a server that has been restarted holds nothing so everything
+open is new. Measured, opening is nearly free: 41 files in **7 ms**, and one megabyte of
+the server's memory against the 686 it takes to sit there.
+
+**Only files the server is for.** A server answers about a file whatever language it is:
+asked about a C file, rust-analyzer reads it as Rust and answers with what a Rust lexer
+made of it -- three `struct` tokens and a `property` in a nine-line file, every one of
+which this app would draw as a link and follow to nowhere.
+
+**Which files those are is the project's to say**, since what the app knows is the program
+and not what it serves: a box of extensions in the Project view beside the program, in
+whatever spelling the reader types them (`c, h` and `.c .h` are one answer). Where they say
+nothing it is the program's own: the one program this app knows by name is Rust's, and a
+project that named its own gets asked about whatever it opens, that being the reader's
+business. The identifier the file is opened with is `source::Language::spoken` where the
+app knows the language, and the extension itself where the reader named one it does not --
+which is what the specification says to send, and which a server that does not know it
+ignores.
+
+**Nothing is sent to a server that says it takes no documents**, which unlike the semantic
+tokens beside it is asked and not assumed: `textDocumentSync` is in the specification,
+every server answers it, and a `didOpen` to a server that declined them is a client it may
+call broken.
+
+**The one document the app has of a file is version 1**, always. It shows what is on disk
+and edits nothing, so a version that counted would only ever count re-reads.
+
+**A file read afresh is closed and opened again**, which is the overlay's cost and the
+whole of it. The server answers about the text it was handed until told otherwise, so a
+build that rewrites a file under an open tab leaves it answering about the version before
+-- names at columns that have moved, a hover describing what a line used to say. The app
+re-reads in one place (`forget_source_under`, a build and a scratchpad's build), and that
+place marks the open files under the directory stale; the effect that keeps the server's
+set in step sends the pair. Closed and opened rather than a change notification, because
+the app has one version of a file to give and no history of edits to describe.
+
+**The server's own diagnostics are turned off** in the handshake's options, since it
+computes them for open documents and this app draws none: 41 notifications for 41 files,
+read and thrown away. It needed no turning off while the app opened nothing.
 
 ## The project's own settings
 
@@ -529,3 +583,54 @@ has to show.
 `$/progress` says a server is reading the project, and "running" means the handshake
 returned rather than that indexing finished -- so a first question can come back empty
 while rust-analyzer is still working, and the reader presses again.
+
+## What "ready" is, and what it was
+
+**The gaps between progress tokens are not readiness.** A server opens and closes a token
+per piece of work, and rust-analyzer runs eight of them in the first two seconds of a
+forty-module crate: `Fetching`, `Building CrateGraph`, `Roots Scanned`, `Building
+compile-time-deps`, `Loading proc-macros`, `cachePriming`, several of them twice. The set
+of open tokens empties **nine times** in the first four seconds. Every one of those was a
+moment `ready()` was true and the file on screen was asked about, and the answer was as far
+as the server had got.
+
+That is what the reader saw as *no links at all*. The first question is put in the beat
+between the handshake's reply and the first progress token, when the file is not in the
+server's own view of the project yet and it refuses; the refusal is dropped and put again
+at the first gap, half a second later, and answered with **no names**. An empty answer is
+the answer, so nothing asked again, and the file kept no links for the life of the server.
+Closing the tab and opening it afresh changed nothing: what is held is keyed by the file,
+and the file had been answered.
+
+**So the server is asked to say.** rust-analyzer sends `experimental/serverStatus` to a
+client that declares `experimental.serverStatusNotification`, carrying `quiescent` -- it
+has read what it is going to read. Measured over the same crate: at `quiescent` the file
+answers 540 names, and forty-five seconds later it answers 540. The same run without cache
+priming, which a project's own settings may turn off, is quiescent at 1.0s where the
+`cachePriming` token never arrives at all -- which is why the token is not what is watched
+for.
+
+**Nothing in the protocol says any of this.** `initialize` and `initialized` are the whole
+of its lifecycle, and after them a server is simply expected to answer. `$/progress` is
+defined as the progress of an operation, with nothing said about having none. The nearest
+the specification comes is two error codes for a server that cannot answer yet
+(`ContentModified`, `ServerCancelled`), and rust-analyzer uses neither here -- it answers,
+with fewer names. Every large server has invented a notification of its own for this;
+clangd's and the Java server's are different again.
+
+**A server that says nothing is judged as it was**, by its progress. The capability is a
+free-form `experimental` bag the specification allows anything in, and a server with no
+such notification simply never sends one -- so what is held is `Option<bool>`, "what it
+last said, if it has ever said anything", and `ready()` reads the progress only while that
+is `None`. There is nothing to detect it by: rust-analyzer's `initialize` reply lists a
+dozen experimental capabilities of its own and this is not among them, the notification
+being something it *reads* rather than offers.
+
+**An answer given before it settled is asked again.** `Linked::forget_answer` drops what
+is held when the notification turns true, and the question goes out once more. Not
+belt-and-braces: measured against a real server, the same file answered 492 names before
+it settled and 540 after, and the difference is not only in the count -- seven names came
+back `const` that are not const, five parameters were not parameters yet, and five
+`builtinType`s were something else. `src/links.rs` draws a `const` as a link and a
+`builtinType` as nothing, so the early answer is not a smaller set of links but a **wrong**
+one, on names that lead nowhere.

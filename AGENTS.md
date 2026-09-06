@@ -209,7 +209,8 @@ command.
   the language server, and the place its answer opens.
 - `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what
   it has asked the server, what came back, and why the asking waits until the server is
-  ready.
+  ready; and which files the server has been told the reader has open, which is what makes
+  it answer about them.
 - `src/ui/marks.rs` — the run of rows selected in each pane, the pair it lights on the other
   side, the scroll it owes, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file read and parsed off the UI thread: the reader's worker

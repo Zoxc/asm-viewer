@@ -271,6 +271,10 @@ pub(crate) struct OpenProject {
     /// The language server to read this project with, empty for the usual one. A box like
     /// the one above: a project on a toolchain of its own is the only one that fills it.
     pub(crate) language_server: String,
+    /// Which of the project's files that server is for, as extensions with anything
+    /// between them: `c h cpp`. Empty for the program's own answer, which is what nearly
+    /// every project leaves it at.
+    pub(crate) language_files: String,
     /// Whether the reader has agreed to a language server being run over the directory
     /// above. A plain value like the profile below: the prompt has no third answer, and
     /// a project that was never asked is one that has not agreed.
@@ -291,6 +295,7 @@ impl OpenProject {
                 .map(|directory| directory.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             language_server: project.language_server.clone().unwrap_or_default(),
+            language_files: project.language_files.clone().unwrap_or_default(),
             trusted,
             profile: project.cargo.clone().unwrap_or_default().profile,
         }
@@ -305,6 +310,18 @@ impl OpenProject {
             .to_owned()
     }
 
+    /// The extensions the reader named for that server, as they wrote them and in that
+    /// order, with the dots off. Anything is a separator: what is wanted is the
+    /// extensions, and `c, h` and `c h` and `.c .h` are all somebody saying the same
+    /// thing.
+    pub(crate) fn server_files(&self) -> Vec<String> {
+        self.language_files
+            .split(|letter: char| !letter.is_alphanumeric() && letter != '+' && letter != '#')
+            .filter(|extension| !extension.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
     /// What of this reaches the project file. Trimmed, so a box holding nothing but spaces
     /// is a box holding nothing. `trusted` is not here: the agreement is the session's, so
     /// it reaches the disk through [`Session::from_state`] instead.
@@ -312,6 +329,7 @@ impl OpenProject {
         Details {
             directory: given(&self.directory).map(PathBuf::from),
             language_server: given(&self.language_server).map(str::to_owned),
+            language_files: given(&self.language_files).map(str::to_owned),
             // Absent while it says nothing the defaults do not: a reader who has never
             // touched the profile leaves no `[cargo]` behind, and choosing the default
             // back takes the section out again.

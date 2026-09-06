@@ -415,6 +415,18 @@ leaves this list when it is. That is a move made on request, like everything els
   deciding first: what "the focused pane" means, the sidebar's panels being arrangeable and the
   bar's tabs not.
 
+- [ ] Two clicks on a row in a panel open it as a tab of its own. A sidebar item opens in
+  the temporal tab, which the next item reuses, and the ways out of that are Ctrl+click, a
+  double-click **on the chip**, and a link followed inside it (`notes/specs/Tabs.md`) --
+  none of which is where the reader's pointer is when they decide they want to keep the
+  file they are looking at. A second click on the row that opened it is where an editor
+  puts this. The rows already tell a press from a press with Ctrl (`reach`), so what this
+  wants is the double-click, and the decisions are which lists it is offered in -- the
+  Files view surely, and the Objects, Symbols, Search, History, Bookmarks and Locations
+  lists all open something too -- and whether the second click promotes the tab the first
+  opened or opens another, which is the same question as what a double-click on a row
+  already showing means.
+
 ## Projects
 
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
@@ -520,6 +532,18 @@ leaves this list when it is. That is a move made on request, like everything els
   operation here that destroys a reader's source, so it is asked for and not one click.
 
 ## Binary inspection design
+
+- [ ] Read LLVM bitcode as something to browse, both as a file the reader opens and as a
+  member of an archive. A `.bc` file is what `--emit=llvm-bc` and a linker-plugin LTO build
+  leave behind, and an rlib built for LTO holds them where the objects would be, so the app
+  opens the archive and lists members it can say nothing at all about. What a symbol's
+  "assembly" would be is the module's own IR, which is a text the reader reads rather than
+  instructions with addresses, so most of what a document is -- an address column, a branch
+  gutter, relocations resolved to names, a line table -- has no meaning here and the pane
+  would be drawing something else. The decisions are what reads it (`llvm-ir` parses
+  bitcode in Rust; `llvm-dis` is a program the app would have to find and run, as it finds
+  cargo), what a "symbol" is in a module and what its source line is, and whether this is
+  the assembly pane drawing another kind of listing or a page of its own.
 
 - [?] A multi-threaded, **deterministic** analysis pass that finds all the code: labels,
   functions, jump targets, entry points, exports and the rest. Deterministic in the strong

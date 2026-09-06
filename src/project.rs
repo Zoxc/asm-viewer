@@ -217,6 +217,7 @@ impl ProjectId {
 pub struct Details {
     pub directory: Option<PathBuf>,
     pub language_server: Option<String>,
+    pub language_files: Option<String>,
     pub cargo: Option<Cargo>,
 }
 
@@ -226,6 +227,7 @@ impl Details {
         Details {
             directory: project.directory.clone(),
             language_server: project.language_server.clone(),
+            language_files: project.language_files.clone(),
             cargo: project.cargo.clone(),
         }
     }
@@ -272,6 +274,12 @@ pub struct Project {
     /// rust-analyzer, which is what a Rust project has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_server: Option<String>,
+    /// Which of the project's files that server is for, as extensions separated by
+    /// whatever the reader typed between them: `c h cpp`, or `rs`. **Absent** means the
+    /// program's own answer -- Rust for rust-analyzer, and every language this app knows
+    /// for a program it cannot guess about (`language_files`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_files: Option<String>,
     /// The paths that were opened, deduplicated, in the order they were opened.
     ///
     /// `serde(default)` for the reason the session's fields have it, and for one more: a
@@ -1401,6 +1409,7 @@ impl Saves {
             id: self.id,
             directory: details.directory,
             language_server: details.language_server,
+            language_files: details.language_files,
             binaries: listed,
             cargo: details.cargo,
             bookmarks,

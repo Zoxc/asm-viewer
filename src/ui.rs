@@ -528,7 +528,12 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let pad_text = use_provide_context(|| PadText(State::create(PadBuffers::default()))).0;
     use_scratchpad_with(pad, pad_text, store, pad_work);
 
-    use_building_with(build, states, build_work);
+    // Which files the server is told the reader has open, which is what makes it answer
+    // about them at all -- and what a build has to say it rewrote, the server holding the
+    // text it was given until it is told otherwise. Provided before the build worker for
+    // that reason.
+    let opened = use_provide_context(|| Documents(State::create(Opened::default()))).0;
+    use_building_with(build, states, opened, build_work);
 
     // At the root for the reason the other three are, and one more: a language server is a
     // process, and a process that outlives the view it was started from is one nothing can
@@ -552,7 +557,8 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     );
     // What a name followed in the source opens, which the answer above fills in.
     use_follow(follow, open, visits, marked, landing, plant, driven);
-    use_linking(language, linked, jobs.clone());
+    use_opened(language, opened, open, proj, jobs.clone());
+    use_linking(language, linked, opened, jobs.clone());
     use_hovering(language, hover, jobs);
 
     rect()

@@ -233,6 +233,7 @@ pub(crate) type BuildJobs = Requests<BuildJob>;
 pub(crate) fn use_building_with(
     build: State<Builds>,
     states: ProjectStates,
+    opened: State<Opened>,
     work: impl Fn(BuildJob) -> BuildAnswer + Send + 'static,
 ) -> BuildJobs {
     let jobs = use_worker(
@@ -249,7 +250,7 @@ pub(crate) fn use_building_with(
             } => {
                 write_if(build, |next| next.read(manifest, profiles, debug_lines));
             }
-            BuildAnswer::Done(run) => finished(build, states, run),
+            BuildAnswer::Done(run) => finished(build, states, opened, run),
         },
     );
 
@@ -266,13 +267,22 @@ pub(crate) fn use_building_with(
 /// the new bytes parse, the objects in hand describe bytes that are gone -- and takes
 /// those files' tabs, positions and visits with it, exactly as a scratchpad's rebuild
 /// does.
-fn finished(mut build: State<Builds>, states: ProjectStates, run: cargo::Run) {
+fn finished(
+    mut build: State<Builds>,
+    states: ProjectStates,
+    opened: State<Opened>,
+    run: cargo::Run,
+) {
     // What the panes have read of the workspace is from before the reader edited it and
     // pressed Build. Dropped whatever the build came to: a build that failed says the
     // files have changed just as one that did not.
     let directory = workspace(&states.proj.peek());
     if let Some(directory) = directory {
         forget_source_under(&directory);
+        // And the language server is holding the text from before it, for every file of
+        // the reader's the build rewrote: it answers about what it was given until it is
+        // told otherwise (`src/ui/linking.rs`).
+        write_if(opened, |waiting| waiting.reread(&directory));
     }
 
     // Bound before the write, as ever.

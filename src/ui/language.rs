@@ -66,6 +66,10 @@ pub(crate) struct Language {
     /// Whether it is reading the project rather than answering about it. Not a state of
     /// its own: a server that is working is running, and this is what it is doing.
     pub(crate) working: bool,
+    /// What the server last said about having settled, and `None` for one that has never
+    /// said -- which is every server but rust-analyzer, the notification being its own
+    /// (`lsp::Note::Settled`).
+    pub(crate) settled: Option<bool>,
     /// The start that has been asked about and not answered yet. `None` unless the
     /// prompt is up.
     pub(crate) asking: Option<Asking>,
@@ -91,6 +95,7 @@ impl PartialEq for Language {
         self.state == other.state
             && self.run == other.run
             && self.working == other.working
+            && self.settled == other.settled
             && self.asking == other.asking
             && self.settings == other.settings
     }
@@ -104,9 +109,19 @@ impl Language {
 
     /// Whether it is there to be asked a question about a whole file: running, and done
     /// reading the project. A question put before that would hold the one conversation
-    /// until it was answered, with every click queued behind it (`src/ui/linking.rs`).
+    /// until it was answered, with every click queued behind it (`src/ui/linking.rs`) --
+    /// and would be answered with as much as the server had worked out so far.
+    ///
+    /// **What a server says about itself beats what its progress implies.** A server that
+    /// reports having settled is taken at its word; one that never does is judged by its
+    /// progress, which is the old rule and is only ever a guess: the gaps between progress
+    /// tokens are not readiness (`lsp::Note::Settled`).
     pub(crate) fn ready(&self) -> bool {
-        matches!(self.state, Lsp::Running) && !self.working
+        matches!(self.state, Lsp::Running)
+            && match self.settled {
+                Some(settled) => settled,
+                None => !self.working,
+            }
     }
 
     /// Whether the app is holding what would end a server, which is a process that
@@ -175,6 +190,17 @@ impl Language {
         true
     }
 
+    /// Run `run`'s server says whether it has settled -- read the project and ready to
+    /// answer about it. [`Language::noted`]'s rules: whether anything changed, and a
+    /// remark from a server that has been stopped says nothing.
+    fn noted_settled(&mut self, run: u64, settled: bool) -> bool {
+        if self.run != run || self.settled == Some(settled) {
+            return false;
+        }
+        self.settled = Some(settled);
+        true
+    }
+
     /// Run `run`'s process exists, and `handle` is what ends it. Held from this moment
     /// and not from the end of the handshake: a stop while it is starting has to reach it
     /// too.
@@ -226,6 +252,7 @@ impl Language {
         }
         self.state = Lsp::Failed(why);
         self.working = false;
+        self.settled = None;
         self.server = None;
         true
     }
@@ -288,6 +315,9 @@ impl Language {
             handle.stop();
         }
         self.working = false;
+        // A new server has said nothing about itself yet, and what the last one said is
+        // about a process that is gone.
+        self.settled = None;
         self.asking = None;
         self.server = None;
         self.run += 1;
@@ -318,6 +348,7 @@ impl Language {
         }
         self.state = Lsp::Off;
         self.working = false;
+        self.settled = None;
         self.asking = None;
         self.server = None;
         self.run += 1;
@@ -401,7 +432,9 @@ pub(crate) enum LspJob {
     /// Read the project's own `.vscode/settings.json`. A file read blocks, so it happens
     /// here rather than on the UI thread; it is this worker's and not the build worker's
     /// because what it answers is what a start has to carry.
-    ReadSettings { directory: PathBuf },
+    ReadSettings {
+        directory: PathBuf,
+    },
     /// What is at a place: which of the four questions is in `want`. `id` is the
     /// question's own, minted by [`ask_where`] and copied into the answer: a run says
     /// which server was asked and nothing about which question this is.
@@ -414,12 +447,35 @@ pub(crate) enum LspJob {
     /// What every name in one file is, which is a question about the file and not about
     /// a place in it. The file travels as the `Arc<str>` a document is named by, since
     /// that is what the answer has to be matched against.
-    Tokens { run: u64, file: Arc<str> },
+    Tokens {
+        run: u64,
+        file: Arc<str>,
+    },
     /// What the name under the pointer is. A question about a place like [`LspJob::Ask`]'s
     /// four, and **not** a fifth `Wanted`: those are bucketed by consumer, of which this
     /// is a third, and a pointer crossing a name must neither take back a definition the
     /// reader clicked for nor be taken back by one.
-    Hover { run: u64, id: u64, at: Lookup },
+    Hover {
+        run: u64,
+        id: u64,
+        at: Lookup,
+    },
+    /// The app is showing this file, or has stopped showing it. Not a question: the
+    /// server answers neither, and what they change is what every other question about
+    /// the file is answered out of (`lsp::Talk::opened`).
+    ///
+    /// The text is not carried: the file is read on the worker, which is the thread that
+    /// may block, and read at all only for a server that takes documents. The language is,
+    /// since what a file is told to be is the project's to say (`src/ui/linking.rs`).
+    Opened {
+        run: u64,
+        file: Arc<str>,
+        language: String,
+    },
+    Closed {
+        run: u64,
+        file: Arc<str>,
+    },
     /// Let go of the server: it has been stopped already, and this is what reaps it.
     Stop,
 }
@@ -450,6 +506,10 @@ pub(crate) enum LspAnswer {
         file: Arc<str>,
         links: Result<links::Links, lsp::Failure>,
     },
+    /// The server has been told about a file, so what it said about that file before is
+    /// what it could work out without it. Not an answer to a question -- an opening is
+    /// not one -- but the same shape, since what it does is put the question again.
+    Reopened { run: u64, file: Arc<str> },
     /// What the server says the name at one place is. Its own answer and not a `Reply`,
     /// for the reason the links are: it is contents and a range where the four are places.
     Hovered {
@@ -581,6 +641,37 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 }
                 Some(LspAnswer::Hovered { run, id, said })
             }
+            LspJob::Opened {
+                run,
+                file,
+                language,
+            } => {
+                let talk = talking.as_mut()?;
+                // Asked before the file is read: a server that takes no documents is one
+                // this reads nothing for.
+                if !talk.opens() {
+                    return None;
+                }
+                let path = PathBuf::from(&*file);
+                let text = std::fs::read_to_string(&path).ok()?;
+                if matches!(
+                    talk.opened(&path, &language, &text),
+                    Err(lsp::Failure::Broken(_))
+                ) {
+                    *talking = None;
+                }
+                // Everything the server said about this file before it had it is what it
+                // could work out from the disk, which may have been nothing at all.
+                Some(LspAnswer::Reopened { run, file })
+            }
+            LspJob::Closed { run: _, file } => {
+                let talk = talking.as_mut()?;
+                let path = PathBuf::from(&*file);
+                if matches!(talk.closed(&path), Err(lsp::Failure::Broken(_))) {
+                    *talking = None;
+                }
+                None
+            }
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
                 settings: lsp::settings_in(&directory),
                 directory,
@@ -633,6 +724,10 @@ pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -
             LspJob::ReadSettings { .. } => Some(*at) == read,
             LspJob::Tokens { .. } => Some(*at) == linking,
             LspJob::Hover { .. } => Some(*at) == hovering,
+            // Never dropped, and not questions: they are the difference between what the
+            // server holds and what the reader has open, and a dropped one leaves the two
+            // disagreeing for good.
+            LspJob::Opened { .. } | LspJob::Closed { .. } => true,
             LspJob::Start { .. } | LspJob::Stop => true,
         })
         .map(|(_, job)| job)
@@ -688,14 +783,30 @@ pub(crate) fn use_language_with(
         let (told, notes) = async_channel::bounded::<(u64, lsp::Note)>(64);
         spawn(async move {
             while let Ok((run, note)) = notes.recv().await {
-                let lsp::Note::Busy(working) = note;
-                let noted = write_if(language, |held| held.noted(run, working));
-                // A server that has gone quiet has read more of the project than it had
-                // when it refused a question about a file's names, so that question is
-                // put again. Here and not on every word it says: a server that goes on
-                // refusing would otherwise be asked in a tight loop.
-                if noted && !working {
-                    write_if(linked, |waiting| waiting.forget_refusal());
+                match note {
+                    lsp::Note::Busy(working) => {
+                        let noted = write_if(language, |held| held.noted(run, working));
+                        // A server that has gone quiet has read more of the project than
+                        // it had when it refused a question about a file's names, so that
+                        // question is put again. Here and not on every word it says: a
+                        // server that goes on refusing would otherwise be asked in a tight
+                        // loop. A server that says when it has settled says so below
+                        // instead, and better.
+                        if noted && !working {
+                            write_if(linked, |waiting| waiting.forget_refusal());
+                        }
+                    }
+                    lsp::Note::Settled(settled) => {
+                        let noted = write_if(language, |held| held.noted_settled(run, settled));
+                        // Everything asked before this was asked of a server still reading
+                        // the project, and what it answered about a file's names was as
+                        // far as it had got: fewer names, and some of them the wrong kind.
+                        // So the answer is dropped and the question put again, which is
+                        // the whole reason this notification is asked for.
+                        if noted && settled {
+                            write_if(linked, |waiting| waiting.forget_answer());
+                        }
+                    }
                 }
             }
         });
@@ -753,6 +864,17 @@ pub(crate) fn use_language_with(
                     Err(failure) => failure,
                 };
                 write_if(language, |held| held.failed(run, why.to_string()));
+            }
+            LspAnswer::Reopened { run, file } => {
+                // Bound to a `let` of its own, the write below being of another state.
+                let mine = language.peek().run == run;
+                if !mine {
+                    return;
+                }
+                // What was said about the file before the server had it is what it could
+                // work out from the disk, which is nothing until its own scan reaches the
+                // file.
+                write_if(linked, |waiting| waiting.forget_file(&file));
             }
             LspAnswer::Hovered { run, id, said } => {
                 // Bound to a `let` of its own, the writes below being of this state.

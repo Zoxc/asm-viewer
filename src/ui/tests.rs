@@ -5912,7 +5912,9 @@ fn linking_harness() -> impl IntoElement {
         states.proj,
         move |job| work(job),
     );
-    use_linking(language, linked, jobs.clone());
+    let opened = use_consume::<Documents>().0;
+    use_opened(language, opened, states.open, states.proj, jobs.clone());
+    use_linking(language, linked, opened, jobs.clone());
     use_hovering(language, hover, jobs.clone());
     // Handed out, so a test that is about the server itself can start one and be given
     // the channel its remarks come back on. The rest reach the server through the pane.
@@ -5987,7 +5989,7 @@ macro_rules! mount_linking {
     };
     ($answer:expr, $file:expr, $links:expr) => {{
         let links: links::Links = $links;
-        let (test, states, language, location, driven, _asking, asks) =
+        let (test, states, language, location, driven, _asking, _opened, asks) =
             mount_linking!(classifying: move || Ok(links.clone()), $answer, $file);
         (test, states, language, location, driven, asks)
     }};
@@ -6001,6 +6003,8 @@ macro_rules! mount_linking {
                 LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
                 LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
                 LspJob::Hover { at, .. } => AskedOfServer::Hover(at.clone()),
+                LspJob::Opened { file, .. } => AskedOfServer::Opened(file.clone()),
+                LspJob::Closed { file, .. } => AskedOfServer::Closed(file.clone()),
                 LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
                 LspJob::Stop => AskedOfServer::Stop,
             };
@@ -6015,7 +6019,7 @@ macro_rules! mount_linking {
             }
         };
         let file: Arc<str> = $file;
-        let (mut test, (states, language, location, driven, asking)) = TestingRunner::new(
+        let (mut test, (states, language, location, driven, asking, opened)) = TestingRunner::new(
             linking_harness,
             (700., 400.).into(),
             move |runner: &mut _| {
@@ -6027,6 +6031,9 @@ macro_rules! mount_linking {
                     .0;
                 runner.provide_root_context(|| Following(State::create(Follow::default())));
                 runner.provide_root_context(|| Linking(State::create(Linked::default())));
+                let opened = runner
+                    .provide_root_context(|| Documents(State::create(Opened::default())))
+                    .0;
                 runner.provide_root_context(move || Subject(file.clone()));
                 let asking = runner
                     .provide_root_context(|| ServerAsking(State::create(None)))
@@ -6035,12 +6042,12 @@ macro_rules! mount_linking {
                 let driven = runner
                     .provide_root_context(|| Drives(State::create(Driven::default())))
                     .0;
-                (states, language, location, driven, asking)
+                (states, language, location, driven, asking, opened)
             },
             1.,
         );
         test.sync_and_update();
-        (test, states, language, location, driven, asking, asks)
+        (test, states, language, location, driven, asking, opened, asks)
     }};
 }
 
@@ -7263,7 +7270,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
 #[test]
 fn a_stopped_server_leaves_no_links_behind() {
     let (file, _directory) = calling_file("stopped");
-    let (mut test, states, language, _location, _driven, asking, _asks) = mount_linking!(
+    let (mut test, states, language, _location, _driven, asking, _opened, _asks) = mount_linking!(
         classifying: || Ok(calling_links()),
         |_job: LspJob| None,
         file.clone()
@@ -7348,7 +7355,7 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
     };
     let handle = process::Handle::to_nothing();
     let (told, channel) = async_channel::unbounded();
-    let (mut test, states, language, _location, _driven, asking, asks) = mount_linking!(
+    let (mut test, states, language, _location, _driven, asking, _opened, asks) = mount_linking!(
         classifying: classify,
         move |job: LspJob| match job {
             // A real start, since what puts the question again is the server's own
@@ -7424,6 +7431,326 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
     assert!(
         next_ask(&mut test, &asks).is_some(),
         "the names that came back are not links"
+    );
+}
+
+/// The server is told what the reader has open, and told when a tab is closed: the
+/// protocol has the client own the documents it shows, and a file the server was never
+/// told about it can only answer for out of its own reading of the directory -- which is
+/// four seconds into a two-file crate and longer for anything real.
+#[test]
+fn the_server_is_told_which_files_the_reader_has_open() {
+    let (file, _directory) = calling_file("shown");
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
+        std::iter::from_fn(|| next_job(asks))
+            .filter(|job| matches!(job, AskedOfServer::Opened(_) | AskedOfServer::Closed(_)))
+            .collect()
+    };
+    assert_eq!(
+        told(&asks),
+        [AskedOfServer::Opened(file.clone())],
+        "the file the reader has open was not opened with the server"
+    );
+
+    // And the tab goes.
+    let id = states.open.active_id().expect("a tab");
+    close_tab(
+        states.open,
+        states.asm_at,
+        states.src_at,
+        states.code_at,
+        states.driven,
+        states.marks_at,
+        id,
+    );
+    for _ in 0..20 {
+        settle(&mut test);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        told(&asks),
+        [AskedOfServer::Closed(file.clone())],
+        "a file the reader closed was left open with the server"
+    );
+}
+
+/// **A file read afresh is given to the server again.** It answers about the text it was
+/// handed until it is told otherwise, so a build that rewrites a file under an open tab
+/// leaves it answering about the version before -- names at columns that have moved, and a
+/// hover describing what a line used to say. Closed and opened again is how it is told:
+/// the app holds one version of a file, so there is nothing else to send.
+#[test]
+fn a_file_read_afresh_is_opened_with_the_server_again() {
+    let (file, directory) = calling_file("reread");
+    let (mut test, states, language, _location, _driven, _asking, opened, asks) = mount_linking!(
+        classifying: || Ok(calling_links()),
+        |_job: LspJob| None,
+        file.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+    let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
+        std::iter::from_fn(|| next_job(asks))
+            .filter(|job| matches!(job, AskedOfServer::Opened(_) | AskedOfServer::Closed(_)))
+            .collect()
+    };
+    assert_eq!(told(&asks), [AskedOfServer::Opened(file.clone())]);
+
+    // What a build does when it has rewritten the workspace.
+    let mut waiting = opened.peek().clone();
+    assert!(
+        waiting.reread(&directory),
+        "the file the reader has open was not one the re-read covered"
+    );
+    let mut opened = opened;
+    opened.set(waiting);
+    for _ in 0..20 {
+        settle(&mut test);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    assert_eq!(
+        told(&asks),
+        [
+            AskedOfServer::Closed(file.clone()),
+            AskedOfServer::Opened(file.clone()),
+        ],
+        "the server was left holding the text from before the build"
+    );
+}
+
+/// **A file of another language is not the server's business.** rust-analyzer, asked about
+/// a C file, reads it as Rust and answers with what a Rust lexer made of it -- measured, a
+/// small C file came back with three `struct` tokens and a `property`, every one of which
+/// this app would draw as a link and follow to nowhere. So it is neither opened nor asked
+/// about.
+#[test]
+fn a_file_the_server_is_not_for_is_neither_opened_nor_asked_about() {
+    let directory = Seeded::directory("other-language");
+    let file = directory.named(
+        "add.c",
+        "struct Counter { int seen; };\nint bump(struct Counter *counter) {\n    return counter->seen;\n}\n",
+    );
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+    for _ in 0..20 {
+        settle(&mut test);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let asked: Vec<AskedOfServer> = std::iter::from_fn(|| next_job(&asks)).collect();
+    assert!(
+        !asked
+            .iter()
+            .any(|job| matches!(job, AskedOfServer::Opened(_) | AskedOfServer::Tokens(_))),
+        "a C file was handed to a Rust server: {asked:?}"
+    );
+}
+
+/// The project says which of its files the server is for, since the app knows the program
+/// and not what it serves: a C project on clangd is told about its C files, where the
+/// default server is told about Rust and nothing else.
+#[test]
+fn a_project_names_the_files_its_server_is_for() {
+    let directory = Seeded::directory("named-files");
+    let file = directory.named("add.c", "int bump(int n) {\n    return n + 1;\n}\n");
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+    let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
+        std::iter::from_fn(|| next_job(asks))
+            .filter(|job| matches!(job, AskedOfServer::Opened(_)))
+            .collect()
+    };
+    assert!(
+        told(&asks).is_empty(),
+        "a C file went to a server nobody said was for C"
+    );
+
+    // The project names them, in whatever spelling: this is a reader typing into the box.
+    {
+        let mut proj = states.proj;
+        let mut open = proj.write();
+        open.language_server = "clangd".to_owned();
+        open.language_files = ".c, .h".to_owned();
+    }
+    for _ in 0..20 {
+        settle(&mut test);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        told(&asks),
+        [AskedOfServer::Opened(file.clone())],
+        "the file the project named its server for was not opened with it"
+    );
+}
+
+/// **Quiet progress is not a settled server.** rust-analyzer opens and closes a progress
+/// token per piece of work -- eight of them in the first two seconds of a small crate --
+/// so the gaps between them are moments when the app used to call the server ready and
+/// ask. It answered, with as much as it had: fewer names, and some of them the wrong kind.
+/// A server that says whether it has settled is taken at its word instead.
+#[test]
+fn a_file_is_asked_about_only_once_the_server_says_it_has_settled() {
+    let (file, _directory) = calling_file("unsettled");
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+
+    // Running, with nothing in flight, and saying it has not settled.
+    {
+        let mut held = language.write();
+        held.state = Lsp::Running;
+        held.settled = Some(false);
+    }
+    for _ in 0..20 {
+        settle(&mut test);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let asked: Vec<AskedOfServer> = std::iter::from_fn(|| next_job(&asks)).collect();
+    assert!(
+        !asked
+            .iter()
+            .any(|job| matches!(job, AskedOfServer::Tokens(_))),
+        "a server that has not settled was asked about a file: {asked:?}"
+    );
+
+    // And it settles.
+    language.write().settled = Some(true);
+    assert_eq!(
+        until_tokens(&mut test, &asks).as_deref(),
+        Some(&*file),
+        "a settled server was never asked about the file on screen"
+    );
+}
+
+/// What a server said before it settled is asked again once it has. The first answer is
+/// as far as it had got -- measured against a real one, 492 names where the same question
+/// answers 540 a second later, with `builtinType` and `parameter` among what it had not
+/// worked out -- so a name that is no link at all arrives as one, and a link that leads
+/// nowhere is worse than no link.
+#[test]
+fn what_a_server_said_before_it_settled_is_asked_again_once_it_has() {
+    let (file, directory) = calling_file("provisional");
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let classify = {
+        let asked = asked.clone();
+        move || match asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) {
+            // As far as it had got: the call is not a name it has placed yet.
+            0 => Ok(links::Links::default()),
+            _ => Ok(calling_links()),
+        }
+    };
+    let handle = process::Handle::to_nothing();
+    let (told, channel) = async_channel::unbounded();
+    let (mut test, states, language, _location, _driven, asking, _opened, asks) = mount_linking!(
+        classifying: classify,
+        move |job: LspJob| match job {
+            // A real start, since what puts the question again is the server's own
+            // account of itself, and it arrives on the channel a start hands over.
+            LspJob::Start { run, notes, .. } => {
+                let _ = told.send_blocking(notes);
+                Some(LspAnswer::Started {
+                    run,
+                    server: Ok(handle.clone()),
+                })
+            }
+            _ => None,
+        },
+        file.clone()
+    );
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    with_a_directory(
+        &mut test,
+        &states,
+        directory.to_str().expect("a utf-8 temporary path"),
+    );
+    let jobs = asking.read().clone().expect("the worker");
+    start_server(language, states.proj, &jobs);
+    until_server(&mut test, language, &Lsp::Running);
+
+    // Asked before it had settled, and answered with nothing it had placed: no links.
+    assert_eq!(
+        until_tokens(&mut test, &asks).as_deref(),
+        Some(&*file),
+        "the file on screen was never asked about"
+    );
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    assert!(
+        next_ask(&mut test, &asks).is_none(),
+        "a name the server had not placed was drawn as a link"
+    );
+
+    // The server says it has settled.
+    let notes = channel.recv_blocking().expect("the start's channel");
+    let run = language.peek().run;
+    let _ = notes.send_blocking((run, lsp::Note::Settled(true)));
+
+    // So the question is put again, and this time it is answered with the names.
+    assert_eq!(
+        until_tokens(&mut test, &asks).as_deref(),
+        Some(&*file),
+        "what a server said before it settled was never asked again"
+    );
+    for _ in 0..20 {
+        settle(&mut test);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    assert!(
+        next_ask(&mut test, &asks).is_some(),
+        "the names that came back once it had settled are not links"
     );
 }
 
@@ -21047,7 +21374,8 @@ fn build_wiring() {
     let work = use_consume::<BuildWorking>().0;
     let mut asking = use_consume::<BuildAsking>().0;
 
-    let jobs = use_building_with(states.build, states, move |job| work(job));
+    let opened = use_provide_root_context(|| Documents(State::create(Opened::default()))).0;
+    let jobs = use_building_with(states.build, states, opened, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
 }
 
@@ -21709,6 +22037,8 @@ enum AskedOfServer {
     Ask(Lookup, Wanted),
     Tokens(Arc<str>),
     Hover(Lookup),
+    Opened(Arc<str>),
+    Closed(Arc<str>),
     Read(PathBuf),
     Stop,
 }
@@ -21760,6 +22090,8 @@ macro_rules! mount_server {
                 LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
                 LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
                 LspJob::Hover { at, .. } => AskedOfServer::Hover(at.clone()),
+                LspJob::Opened { file, .. } => AskedOfServer::Opened(file.clone()),
+                LspJob::Closed { file, .. } => AskedOfServer::Closed(file.clone()),
                 LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
                 LspJob::Stop => AskedOfServer::Stop,
             };
@@ -22522,7 +22854,7 @@ fn a_start_carries_the_projects_own_settings() {
     let options = options.try_recv().expect("the start carried options");
     assert_eq!(
         options,
-        r#"{"cargo":{"features":["one"]},"checkOnSave":false}"#
+        r#"{"cargo":{"features":["one"]},"checkOnSave":false,"diagnostics":{"enable":false}}"#
     );
 }
 
@@ -22572,6 +22904,8 @@ fn the_queue_keeps_the_last_question_and_every_press() {
                 LspJob::Ask { at, .. } => format!("ask {}", at.line),
                 LspJob::Tokens { file, .. } => format!("tokens {file}"),
                 LspJob::Hover { at, .. } => format!("hover {}", at.line),
+                LspJob::Opened { file, .. } => format!("opened {file}"),
+                LspJob::Closed { file, .. } => format!("closed {file}"),
                 LspJob::ReadSettings { directory } => format!("read {}", directory.display()),
                 LspJob::Stop => "stop".to_owned(),
             })

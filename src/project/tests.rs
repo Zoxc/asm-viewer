@@ -1419,6 +1419,7 @@ fn opening_a_binary_is_written_at_once() {
                 id: None,
                 directory: None,
                 language_server: None,
+                language_files: None,
                 binaries: paths(&["/tmp/lib.a"]),
                 cargo: None,
                 bookmarks: Vec::new(),
@@ -1534,6 +1535,7 @@ fn a_record_keeps_the_directory_the_project_was_given() {
         id: None,
         directory: Some(PathBuf::from("/src/kernel")),
         language_server: None,
+        language_files: None,
         binaries: paths(&["/tmp/vmlinux"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1557,6 +1559,7 @@ fn reopening_seeds_the_details_but_not_the_baseline() {
         id: None,
         directory: Some(PathBuf::from("/src/kernel")),
         language_server: None,
+        language_files: None,
         binaries: paths(&["/tmp/vmlinux"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1581,6 +1584,7 @@ fn a_binary_landing_mid_load_is_not_written() {
         id: None,
         directory: None,
         language_server: None,
+        language_files: None,
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1671,6 +1675,7 @@ fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
     let named = Details {
         directory: Some(PathBuf::from("/src/kernel")),
         language_server: None,
+        language_files: None,
         cargo: None,
     };
     let decided = saves.record(
@@ -1687,6 +1692,7 @@ fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
             id: None,
             directory: named.directory.clone(),
             language_server: None,
+            language_files: None,
             binaries: paths(&["/tmp/lib.a"]),
             cargo: None,
             bookmarks: Vec::new(),
@@ -1716,6 +1722,7 @@ fn clearing_a_detail_is_a_change_too() {
         kept_at("kernel-1"),
         &Project {
             language_server: None,
+            language_files: None,
             directory: Some(PathBuf::from("/src/kernel")),
             ..Project::default()
         },
@@ -1744,6 +1751,7 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
         id: None,
         directory: None,
         language_server: None,
+        language_files: None,
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1753,6 +1761,7 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
     let named = Details {
         directory: Some(PathBuf::from("/src/kernel")),
         language_server: None,
+        language_files: None,
         cargo: None,
     };
     let decided = saves.record(named, Vec::new(), true, Vec::new(), Session::default());
@@ -1839,6 +1848,7 @@ fn entering_a_project_empties_every_baseline() {
 
     let entered = Project {
         language_server: None,
+        language_files: None,
         directory: Some(PathBuf::from("/src/other")),
         ..Project::default()
     };
@@ -1850,6 +1860,7 @@ fn entering_a_project_empties_every_baseline() {
         Details {
             directory: entered.directory.clone(),
             language_server: None,
+            language_files: None,
             cargo: None,
         },
         Vec::new(),
@@ -1878,6 +1889,7 @@ fn a_project() -> Project {
         id: ProjectId::parse("00000000deadbeef"),
         directory: Some(PathBuf::from("/src/kernel")),
         language_server: Some("ra-multiplex".into()),
+        language_files: Some("rs".into()),
         binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
         cargo: None,
         bookmarks: Vec::new(),
@@ -1949,6 +1961,7 @@ fn a_path_under_the_project_file_is_written_relative_to_it() {
         id: ProjectId::parse("00000000deadbeef"),
         directory: Some(directory.to_path_buf()),
         language_server: None,
+        language_files: None,
         binaries: vec![
             directory.join("target/debug/vmlinux"),
             "/usr/lib/libc.so".into(),
@@ -2423,6 +2436,7 @@ fn the_recent_view_describes_each_project_from_its_own_file() {
                     id: None,
                     directory: Some(PathBuf::from("/src").join(name)),
                     language_server: None,
+                    language_files: None,
                     binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
                     cargo: None,
                     bookmarks: Vec::new(),
@@ -2807,6 +2821,7 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
 fn bookmarks_are_written_after_the_binaries_and_name_first() {
     let project = Project {
         language_server: None,
+        language_files: None,
         bookmarks: vec![
             Bookmark {
                 name: Some("kernel::start".into()),
@@ -2920,6 +2935,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
     let mut saves = Saves::default();
     let reopened = Project {
         language_server: None,
+        language_files: None,
         bookmarks: vec![Bookmark {
             name: Some("caller".into()),
             document: saved_symbol("a.o", "caller", 0),
@@ -3027,6 +3043,7 @@ fn a_cargo_section_is_written_where_toml_can_read_it_back() {
         id: None,
         directory: Some(PathBuf::from("/src/kernel")),
         language_server: None,
+        language_files: None,
         binaries: paths(&["/tmp/vmlinux"]),
         cargo: Some(Cargo {
             profile: Profile::Debug,
@@ -3061,6 +3078,7 @@ fn nothing_chosen_and_nothing_built_write_no_section() {
         id: None,
         directory: None,
         language_server: None,
+        language_files: None,
         binaries: Vec::new(),
         cargo: None,
         bookmarks: Vec::new(),

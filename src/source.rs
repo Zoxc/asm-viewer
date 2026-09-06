@@ -66,6 +66,37 @@ pub enum Language {
 }
 
 impl Language {
+    /// What a language server calls this language, which is what a file is opened with
+    /// (`textDocument/didOpen`). The identifiers are the protocol's own list where it has
+    /// one and the extension otherwise, which is what the specification says to do.
+    ///
+    /// Exhaustive on purpose, as every match over this is: a language added above is one
+    /// a server has to be told the name of.
+    pub fn spoken(self) -> &'static str {
+        match self {
+            Language::Rust => "rust",
+            Language::C => "c",
+            Language::Cpp => "cpp",
+            Language::ObjC => "objective-c",
+            Language::Assembly => "asm",
+            Language::Go => "go",
+            Language::Zig => "zig",
+            Language::D => "d",
+            Language::Swift => "swift",
+            Language::Nim => "nim",
+            Language::Odin => "odin",
+            Language::Fortran => "fortran",
+            Language::Ada => "ada",
+            Language::Pascal => "pascal",
+            Language::Haskell => "haskell",
+            Language::OCaml => "ocaml",
+            Language::Crystal => "crystal",
+            Language::Cuda => "cuda",
+            Language::Toml => "toml",
+            Language::Json => "json",
+        }
+    }
+
     /// The language of the file at `path`, or [`None`] for an extension this does not
     /// know, which is not the same as saying the file is not source.
     ///

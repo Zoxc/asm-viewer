@@ -293,22 +293,96 @@ fn the_handshake_is_initialize_and_then_initialized() {
     // itself, and a message before it ends the conversation.
     assert_eq!(methods, ["initialize", "initialized"]);
     assert_eq!(said[0]["params"]["rootUri"], json!("file:///p"));
-    // Two things are declared and nothing else: progress, which is the only way to know
-    // the server is still reading the project, and the format a hover is written in,
-    // which rust-analyzer flattens to plain text for a client that names none. Neither is
-    // any of what would have it ask this app for configuration or for a file watcher.
+    // Three things are declared and nothing else: progress, which is how far a server
+    // that says nothing else about itself has got; the format a hover is written in,
+    // which rust-analyzer flattens to plain text for a client that names none; and the
+    // notification a server sends when it has settled, which no specification has and
+    // which a server without one simply never sends. None of them is what would have it
+    // ask this app for configuration or for a file watcher.
     assert_eq!(
         said[0]["params"]["capabilities"],
         json!({
             "window": { "workDoneProgress": true },
             "textDocument": { "hover": { "contentFormat": ["markdown"] } },
+            "experimental": { "serverStatusNotification": true },
         })
     );
     // The options are what this app asks of every server, and what a project's own
-    // settings will be laid over: one line, turning off the check it would otherwise run
-    // on loading the workspace.
+    // settings will be laid over: two lines, turning off the check it would otherwise run
+    // on loading the workspace and the diagnostics it would compute for every file the
+    // app opens and this app never draws.
     assert_eq!(said[0]["params"]["initializationOptions"], wanted());
-    assert_eq!(wanted(), json!({ "checkOnSave": false }));
+    assert_eq!(
+        wanted(),
+        json!({ "checkOnSave": false, "diagnostics": { "enable": false } })
+    );
+}
+
+/// A conversation with a server whose handshake said `sync` about taking documents, and
+/// every message it heard after the handshake.
+fn opening(sync: Value) -> Vec<Value> {
+    let (said, (), _notes) = against(
+        move |fake, message| {
+            if message.get("method").and_then(Value::as_str) == Some("initialize") {
+                fake.say(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"].clone(),
+                    "result": { "capabilities": { "textDocumentSync": sync.clone() } },
+                }));
+            }
+        },
+        |talk| {
+            talk.initialize(Path::new("/p"), &wanted())
+                .expect("a handshake");
+            talk.opened(Path::new("/p/src/main.rs"), "rust", "fn main() {}")
+                .expect("an opening");
+            talk.closed(Path::new("/p/src/main.rs")).expect("a closing");
+        },
+    );
+    said.into_iter().skip(2).collect()
+}
+
+/// The app owns the documents it shows: the server is told what is in them, and told when
+/// it stops showing them.
+#[test]
+fn a_file_the_app_shows_is_opened_with_the_server_and_closed_after() {
+    let heard = opening(json!({ "openClose": true, "change": 2 }));
+    assert_eq!(
+        heard,
+        [
+            json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": { "textDocument": {
+                    "uri": "file:///p/src/main.rs",
+                    "languageId": "rust",
+                    "version": 1,
+                    "text": "fn main() {}",
+                } },
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didClose",
+                "params": { "textDocument": { "uri": "file:///p/src/main.rs" } },
+            }),
+        ]
+    );
+}
+
+/// **A server that says it takes no documents is told about none.** The specification has
+/// this one, unlike the semantic tokens beside it, and a notification a server said it
+/// does not take is a client it is entitled to call broken.
+#[test]
+fn a_server_that_takes_no_documents_is_told_about_none() {
+    let none: Vec<Value> = Vec::new();
+    assert_eq!(opening(json!({ "openClose": false, "change": 0 })), none);
+    assert_eq!(opening(json!(0)), none);
+    // Nothing said at all, which is the same answer.
+    assert_eq!(opening(Value::Null), none);
+    // The older spelling, a number: 1 is the whole text and 2 is incremental, and both
+    // carry an open and a close.
+    assert_eq!(opening(json!(1)).len(), 2);
+    assert_eq!(opening(json!(2)).len(), 2);
 }
 
 /// A handshake against a fake server that says only that it has capabilities, and the
@@ -831,6 +905,34 @@ fn what_the_server_says_unasked_is_whether_it_is_working() {
     assert_eq!(notes, [Note::Busy(true), Note::Busy(false)]);
 }
 
+/// The other thing a server may say about itself, which no specification has: that it has
+/// settled. Progress says nothing about this -- the tokens above open and close all
+/// through a start -- so the two are told apart and both are passed on.
+#[test]
+fn a_server_that_says_it_has_settled_is_heard_saying_so() {
+    let (_said, (), notes) = against(
+        |fake, message| {
+            let status = |quiescent: bool| {
+                json!({ "jsonrpc": "2.0", "method": "experimental/serverStatus",
+                        "params": { "health": "ok", "quiescent": quiescent } })
+            };
+            fake.say(status(false));
+            fake.say(status(true));
+            fake.say(json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }));
+        },
+        |talk| {
+            talk.definition(Path::new("/p/src/main.rs"), 0, 0)
+                .expect("an answer");
+        },
+    );
+
+    let notes = notes
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .clone();
+    assert_eq!(notes, [Note::Settled(false), Note::Settled(true)]);
+}
+
 #[test]
 fn a_server_that_is_still_reading_the_project_is_no_answer_and_not_a_failure() {
     let _ = against(
@@ -1076,9 +1178,15 @@ fn a_name_loses_its_prefix_and_its_dots_become_a_tree() {
     )
     .expect("a file that reads");
 
+    // The project's own `checkOnSave` wins over the app's, and what the project said
+    // nothing about is still the app's.
     assert_eq!(
         settings.options(),
-        &json!({ "checkOnSave": true, "cargo": { "features": ["a"] } })
+        &json!({
+            "checkOnSave": true,
+            "diagnostics": { "enable": false },
+            "cargo": { "features": ["a"] },
+        })
     );
     assert_eq!(
         settings.overrides,
@@ -1127,6 +1235,7 @@ fn the_workspace_folder_is_resolved_wherever_it_is_written() {
         settings.options(),
         &json!({
             "checkOnSave": false,
+            "diagnostics": { "enable": false },
             "rustc": { "source": "/p/Cargo.toml" },
             "server": { "extraEnv": { "RUSTC": "/p/build/rustc" } },
             "linkedProjects": ["/p/library/Cargo.toml", 7],

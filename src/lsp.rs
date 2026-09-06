@@ -75,6 +75,11 @@ pub enum Failure {
     Refused { code: i64, said: String },
 }
 
+/// The notification a server sends about itself, which is rust-analyzer's own and is in
+/// no specification: `quiescent` says it has finished reading the project. Asked for by
+/// name in the handshake's `experimental` bag, and never sent by a server that has none.
+const SETTLED: &str = "experimental/serverStatus";
+
 /// The two error codes that mean "not now" rather than "no": ContentModified, which is
 /// what a server still reading the project says, and RequestCancelled. Both are answers a
 /// reader gets by asking again, and neither is worth reporting.
@@ -103,6 +108,22 @@ pub enum Note {
     /// reports progress on. An answer asked for while this is true can be empty because
     /// the server has not read the file yet.
     Busy(bool),
+    /// Whether it has **settled**: everything it was going to read, read, and an answer
+    /// now the answer it will keep giving.
+    ///
+    /// Progress cannot say this. A server opens and closes a token per piece of work --
+    /// rust-analyzer runs eight of them in the first two seconds of a small crate -- so
+    /// the gaps between them are not readiness, and a question asked in one comes back
+    /// with fewer names than the same question a second later. Measured: 492 names in
+    /// such a gap against 540 once settled, with `builtinType` and `parameter` among
+    /// what the early answer had not worked out yet.
+    ///
+    /// The protocol has nothing for this at all: `initialized` is the whole of its
+    /// lifecycle, and every large server has invented its own notification. This is
+    /// rust-analyzer's, asked for in the handshake's `experimental` bag and simply never
+    /// sent by a server that has no such thing -- which is why what is held of it is
+    /// "what the server last said, if it has ever said anything".
+    Settled(bool),
 }
 
 /// Where something is: a file, a **1-based** line in it, and the columns of the name on
@@ -403,6 +424,21 @@ impl Server {
     ) -> Result<Option<Hovered>, Failure> {
         self.talk.hover(file, line, column)
     }
+
+    /// Tell it the app is showing `file`, and that it is not any more.
+    pub fn opened(&mut self, file: &Path, language: &str, text: &str) -> Result<(), Failure> {
+        self.talk.opened(file, language, text)
+    }
+
+    pub fn closed(&mut self, file: &Path) -> Result<(), Failure> {
+        self.talk.closed(file)
+    }
+
+    /// Whether it takes documents at all, so a file it would never hear about is not read
+    /// off the disk for nothing.
+    pub fn opens(&self) -> bool {
+        self.talk.opens()
+    }
 }
 
 /// The failure a handshake really was, given what became of the program and what it said.
@@ -453,6 +489,9 @@ pub struct Talk<W> {
     /// What the server said it would spell its semantic tokens with, from the handshake.
     /// Empty until then, and empty for a server that answers none.
     legend: Legend,
+    /// Whether it said it takes documents from the client, from the same reply. False
+    /// until then, so nothing is sent to a server that has not been asked yet.
+    opens: bool,
 }
 
 impl<W: Write + Send + 'static> Talk<W> {
@@ -471,6 +510,7 @@ impl<W: Write + Send + 'static> Talk<W> {
             answers,
             id: 0,
             legend: Legend::default(),
+            opens: false,
         }
     }
 
@@ -526,21 +566,23 @@ impl<W: Write + Send + 'static> Talk<W> {
                 "capabilities": {
                     "window": { "workDoneProgress": true },
                     "textDocument": { "hover": { "contentFormat": ["markdown"] } },
+                    "experimental": { "serverStatusNotification": true },
                 },
                 "initializationOptions": options,
             }),
         )?;
         self.legend = legend_of(&said);
+        self.opens = opens_documents(&said);
         self.notify("initialized", json!({}))
     }
 
     /// Where what is at `line` and `column` of `file` is defined.
     ///
-    /// The file is not opened first. rust-analyzer reads the project's files itself, and
-    /// this app only ever shows what is on disk, so telling it about one would put an
-    /// overlay over the file that has to be taken back off again and can only go stale.
-    /// The cost is that a file outside the project answers nothing, which is the same
-    /// nothing a question with no answer gets.
+    /// The file has been opened first ([`Talk::opened`]), which is what makes a server
+    /// answer about it at all rather than when its own reading of the directory catches
+    /// up. A file the app never opened -- one outside the project, or of a language this
+    /// server is not for -- answers whatever the server can work out on its own, which
+    /// is often nothing, and nothing is what a question with no answer gets anyway.
     pub fn definition(
         &mut self,
         file: &Path,
@@ -594,7 +636,7 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// What the name at `line` and `column` of `file` is, in the server's own words, and
     /// nothing where it has none to say. The units are [`Talk::definition`]'s.
     ///
-    /// The file is not opened first, for that question's reason.
+    /// The file has been opened first, for [`Talk::definition`]'s reason.
     ///
     /// **A refusal is an empty answer**, as it is for a place and not as it is for the
     /// names in a file: the pointer resting on the name again is what asks anew, and it
@@ -617,7 +659,7 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// One request for the whole file rather than one per name: it is the only way to be
     /// told what a name **is** without asking about each in turn, and asking about each
     /// would be a round trip per name down a conversation that holds one question at a
-    /// time. The file is not opened first, for [`Talk::definition`]'s reason.
+    /// time. The file has been opened first, for [`Talk::definition`]'s reason.
     ///
     /// A server that declared no legend is one that answers none of this, and is not
     /// asked.
@@ -633,6 +675,54 @@ impl<W: Write + Send + 'static> Talk<W> {
         let params = json!({ "textDocument": { "uri": uri_of(file) } });
         self.request("textDocument/semanticTokens/full", params)
             .map(|value| tokens(&value))
+    }
+
+    /// Tell the server the app is showing `file`, whose text is `text` and whose language
+    /// a server calls `language` (`source::Language::spoken`).
+    ///
+    /// **This is what makes an answer about the file arrive at all.** The protocol has the
+    /// client own the documents it shows: after this the server answers about the text
+    /// given here, until [`Talk::closed`]. A file it was never told about is one it can
+    /// only answer for out of its own reading of the directory, which rust-analyzer does
+    /// -- once its scan has caught up, four seconds into a two-file crate and longer for
+    /// anything real. Measured over the same file: names at 0.0s opened, and at 4.3s not.
+    ///
+    /// Nothing is sent to a server that did not say it takes documents.
+    pub fn opened(&mut self, file: &Path, language: &str, text: &str) -> Result<(), Failure> {
+        if !self.opens {
+            return Ok(());
+        }
+        self.notify(
+            "textDocument/didOpen",
+            json!({
+                "textDocument": {
+                    "uri": uri_of(file),
+                    "languageId": language,
+                    // The one document the app ever has of a file: it shows what is on
+                    // disk and edits nothing, so a version that counted would only ever
+                    // count re-reads.
+                    "version": 1,
+                    "text": text,
+                },
+            }),
+        )
+    }
+
+    /// Tell it the app is no longer showing `file`, so what is on disk is the truth about
+    /// it again.
+    pub fn closed(&mut self, file: &Path) -> Result<(), Failure> {
+        if !self.opens {
+            return Ok(());
+        }
+        self.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": uri_of(file) } }),
+        )
+    }
+
+    /// Whether it said it takes documents at all.
+    pub fn opens(&self) -> bool {
+        self.opens
     }
 
     /// What the server said it would spell its semantic tokens with.
@@ -760,8 +850,8 @@ fn read_from<W: Write + Send + 'static>(
                             }
                         }
                         None => {
-                            if let Some(busy) = busy_after(&method, &message, &mut working) {
-                                told(Note::Busy(busy));
+                            for note in noted(&method, &message, &mut working) {
+                                told(note);
                             }
                         }
                     },
@@ -779,23 +869,51 @@ fn read_from<W: Write + Send + 'static>(
     }
 }
 
-/// Whether the server is working, if this notification changed the answer.
-///
-/// Progress arrives as a token that begins and ends, and several are open at once while
-/// rust-analyzer reads a project -- so what is kept is the set of them, and what is said is
-/// only that it went from empty to not or back.
-fn busy_after(
+/// What one notification says about the server itself, and nothing for one that says
+/// nothing.
+fn noted(
     method: &str,
     message: &Value,
     working: &mut std::collections::HashSet<String>,
-) -> Option<bool> {
+) -> Vec<Note> {
     // The one notification a client with no capabilities of its own is told when the
     // server cannot make sense of the project. Every definition after it will be empty,
     // and this is the only place it is said.
     if method == "window/showMessage" {
         log::warn!("the language server said: {message}");
-        return None;
+        return Vec::new();
     }
+    // rust-analyzer's own account of itself, asked for in the handshake and sent by
+    // nothing else. `quiescent` is the whole of what is wanted: it has read what it is
+    // going to read, and an answer now is the answer it will keep giving.
+    if method == SETTLED {
+        let settled = message
+            .get("params")
+            .and_then(|params| params.get("quiescent"))
+            .and_then(Value::as_bool);
+        return settled.map(Note::Settled).into_iter().collect();
+    }
+    busy_after(method, message, working)
+        .map(Note::Busy)
+        .into_iter()
+        .collect()
+}
+
+/// Whether the server is working, if this notification changed the answer.
+///
+/// Progress arrives as a token that begins and ends, and several are open at once while
+/// rust-analyzer reads a project -- so what is kept is the set of them, and what is said is
+/// only that it went from empty to not or back.
+///
+/// **Not readiness.** The gaps between those tokens are not the server being done: a small
+/// crate's start has nine of them in four seconds, and the file asked about in one comes
+/// back with fewer names than the same file a moment later. [`Note::Settled`] is what
+/// says done, where the server says it at all.
+fn busy_after(
+    method: &str,
+    message: &Value,
+    working: &mut std::collections::HashSet<String>,
+) -> Option<bool> {
     if method != "$/progress" {
         return None;
     }
@@ -829,16 +947,20 @@ fn busy_after(
 /// when a document is saved: watched, it opens a `rust-analyzer/flycheck/0` progress token
 /// over a client that has opened no document and saved nothing. This app runs cargo itself
 /// from the Project view and shows what came of it, so leaving it alone is a second build
-/// of the reader's project whose output goes nowhere. The server's own diagnostics need no
-/// turning off beside it: they are published for open documents, and this client opens
-/// none.
+/// of the reader's project whose output goes nowhere.
+///
+/// **The second turns the server's own diagnostics off**, which it publishes for every
+/// document a client opens -- and this one opens what the reader has in tabs
+/// (`Talk::opened`). Measured: 41 notifications for 41 files, every one of them read and
+/// thrown away, since nothing here draws a diagnostic a server found. It used to need no
+/// turning off because the app opened nothing.
 ///
 /// What a project needs beyond this -- which manifests are its workspaces, where a tree
 /// keeps its own proc-macro server, sysroot sources or toolchain -- depends on the tree and
 /// not on this app, and nothing here can guess it: that is what a project's own settings
 /// file is read for.
 pub fn wanted() -> Value {
-    json!({ "checkOnSave": false })
+    json!({ "checkOnSave": false, "diagnostics": { "enable": false } })
 }
 
 /// The file a project's own settings for the server are in, which is VS Code's:
@@ -1250,6 +1372,32 @@ fn asked_at(file: &Path, line: u32, column: u32) -> Value {
         "textDocument": { "uri": uri_of(file) },
         "position": { "line": line, "character": column },
     })
+}
+
+/// Whether the server said it takes documents from the client: `textDocumentSync` as
+/// either the table with `openClose` or the number the older spelling of it is, where
+/// anything but `None` means open and close are sent.
+///
+/// Asked rather than assumed, unlike the semantic tokens beside it: this one is in the
+/// specification, every server answers it, and a `didOpen` to a server that says it takes
+/// none is a message it is entitled to treat as a broken client.
+fn opens_documents(said: &Value) -> bool {
+    let Some(sync) = said
+        .get("capabilities")
+        .and_then(|value| value.get("textDocumentSync"))
+    else {
+        return false;
+    };
+    match sync {
+        // The table: `openClose` says outright.
+        Value::Object(_) => sync
+            .get("openClose")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        // The number: 0 is none, 1 is full text and 2 is incremental, and both of the
+        // last two carry open and close.
+        value => value.as_u64().is_some_and(|kind| kind != 0),
+    }
 }
 
 /// What the handshake's reply said it would spell semantic tokens with, and an empty

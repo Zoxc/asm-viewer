@@ -628,6 +628,25 @@ impl Component for ProjectTab {
                             .placeholder(source::Language::Rust.server().unwrap_or_default())
                             .width(Size::fill()),
                         ))
+                        // Which of the project's files that server is for. A server
+                        // answers about a file whatever language it is -- rust-analyzer
+                        // reads a C file as Rust and names things in it the app would
+                        // draw as links -- and the app knows the program and not what it
+                        // serves, so this is where a project says.
+                        .child(field_row(
+                            "Files",
+                            Input::new(
+                                proj.into_writable().map(
+                                    |open| &open.language_files,
+                                    |open| &mut open.language_files,
+                                ),
+                            )
+                            .placeholder(match given(&open.language_server) {
+                                Some(_) => "every file opened",
+                                None => source::Language::Rust.spoken(),
+                            })
+                            .width(Size::fill()),
+                        ))
                         // Whether the reader has agreed to a server reading this
                         // directory, and the way back. Agreeing happens where the question
                         // is asked, at the start it holds up; taking it back has nowhere
