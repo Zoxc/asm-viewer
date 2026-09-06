@@ -265,10 +265,6 @@ struct TextRow {
     mark: Option<&'static str>,
     /// The columns of this row inside the pane's character selection (`RowChars`).
     chars: RowChars,
-    /// The listing's widest row and its key, as every row of a listing carries them:
-    /// a gap's bytes are the widest row in the app, and what the others are floored to.
-    widest: Widest,
-    listing: u64,
     key: DiffKey,
 }
 
@@ -392,8 +388,6 @@ impl Component for TextRow {
                 file: None,
                 paired: None,
                 wash: self.wash,
-                widest: self.widest,
-                listing: self.listing,
                 measured: true,
             },
             before,
@@ -442,9 +436,6 @@ fn text_line(mark: Option<&str>, text: &str) -> Line {
 struct EmptyRow {
     row: usize,
     wash: Wash,
-    /// The listing's widest row and its key: empty space is washed too.
-    widest: Widest,
-    listing: u64,
     /// Whether the row carries the rule: the space over a stretch does, so one function
     /// is told from the next the way one basic block is told from the one above it, and
     /// the guessed rows of a stretch nobody has decoded do not.
@@ -470,8 +461,6 @@ impl Component for EmptyRow {
                 file: None,
                 paired: None,
                 wash: self.wash,
-                widest: self.widest,
-                listing: self.listing,
                 measured: false,
             },
             vec![code_mark(false)],
@@ -689,6 +678,9 @@ impl Component for SectionList {
         // The list as its rows and a sweep past its edge know it: its scroll, its box,
         // the paragraphs the rows lend it, and its widest row.
         let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
+        // Every render, since the context is made once and this pane is handed another
+        // object's code without being mounted again.
+        listing_ctx.drawing(listing);
         let bounds = listing_ctx.bounds.clone();
 
         rect()
@@ -711,7 +703,6 @@ impl Component for SectionList {
                 listing_ctx.clone(),
                 nudge,
                 length,
-                listing,
             ))
             // On the grid: see `Nudge`.
             .padding(nudge.padding())
@@ -725,9 +716,7 @@ impl Component for SectionList {
                         marks,
                         chars,
                     },
-                    move |i, data: &SectionRows| {
-                        build_row(i, data, controller, viewport, widest, listing)
-                    },
+                    move |i, data: &SectionRows| build_row(i, data),
                     controller,
                 )
                 .length(length)
@@ -738,14 +727,7 @@ impl Component for SectionList {
 }
 
 /// Row `i` of the listing, as what it draws.
-fn build_row(
-    i: usize,
-    data: &SectionRows,
-    controller: ScrollController,
-    viewport: State<f32>,
-    widest: Widest,
-    listing: u64,
-) -> Element {
+fn build_row(i: usize, data: &SectionRows) -> Element {
     let Some(rows) = data.rows.as_ref() else {
         return rect().height(Size::px(code_row_height())).into_element();
     };
@@ -776,8 +758,6 @@ fn build_row(
             opens,
             mark,
             chars,
-            widest,
-            listing,
             key: DiffKey::None,
         }
         .key(key)
@@ -823,8 +803,6 @@ fn build_row(
         Some(Row::Rule { stretch }) => EmptyRow {
             row: i,
             wash,
-            widest,
-            listing,
             rule: true,
             key: DiffKey::None,
         }
@@ -833,8 +811,6 @@ fn build_row(
         Some(Row::Space { stretch, under }) => EmptyRow {
             row: i,
             wash,
-            widest,
-            listing,
             rule: false,
             key: DiffKey::None,
         }
@@ -843,8 +819,6 @@ fn build_row(
         Some(Row::Empty { stretch, index }) => EmptyRow {
             row: i,
             wash,
-            widest,
-            listing,
             rule: false,
             key: DiffKey::None,
         }
@@ -890,10 +864,6 @@ fn build_row(
                 data: asm,
                 index,
                 row: i,
-                controller,
-                viewport,
-                widest,
-                listing,
                 paired,
                 wash,
                 chars,
@@ -919,8 +889,6 @@ fn build_row(
                     lanes: asm.lanes.boundary(below),
                     lit,
                 },
-                widest,
-                listing,
                 key: DiffKey::None,
             }
             .key(RowKey::Sep(address))

@@ -121,16 +121,23 @@ impl RowChars {
 /// The list a row is in, provided by each list to its rows: its scroll and its box, for
 /// a row that draws the caret out of the pane's sight to bring it sideways into it -- the
 /// box and not the row's own `visible_area`, which freya reports unclipped, the whole row
-/// wide -- and the paragraphs its rows have lent it, for a sweep that has left the rows
-/// to ask a row where a column is. The widest row is the sideways extent, asked under the
-/// key the list hands [`use_sweep_beyond`] every render: a key held here is made once and
-/// would go on naming the listing the list was mounted on.
+/// wide -- the paragraphs its rows have lent it, for a sweep that has left the rows to ask
+/// a row where a column is, and the widest row drawn, which every row is floored to and
+/// which is the sideways extent.
+///
+/// The listing that width is held under is a **cell**, written by every render of the
+/// list ([`Listing::drawing`]) and read where it is wanted. A list is not mounted again
+/// when its listing changes -- a link followed in place, a symbol previewed into the
+/// temporal tab, a companion file switching, the worker answering -- and this context is
+/// made once, so a key stored at the mount would go on naming the listing the list
+/// started on, for which [`Widest`] answers nothing.
 #[derive(Clone)]
 pub(crate) struct Listing {
     pub(crate) controller: ScrollController,
     pub(crate) bounds: Rc<Cell<Area>>,
     pub(crate) texts: Rc<RefCell<HashMap<usize, RowText>>>,
     pub(crate) widest: Widest,
+    key: Rc<Cell<u64>>,
 }
 
 /// A row's laid-out paragraph and where it starts, lent to the list by the row as it
@@ -146,14 +153,26 @@ pub(crate) struct RowText {
 }
 
 impl Listing {
-    /// A fresh list, with nothing lent yet.
+    /// A fresh list, with nothing lent yet and no listing drawn.
     pub(crate) fn new(controller: ScrollController, widest: Widest) -> Self {
         Listing {
             controller,
             bounds: Rc::new(Cell::new(Area::zero())),
             texts: Rc::new(RefCell::new(HashMap::new())),
             widest,
+            key: Rc::new(Cell::new(0)),
         }
+    }
+
+    /// The listing the list is drawing, told to this by every render of the list: what
+    /// its rows are floored to and what a sweep's sideways extent is asked under.
+    pub(crate) fn drawing(&self, listing: u64) {
+        self.key.set(listing);
+    }
+
+    /// That listing, as a row and a sweep ask for it.
+    pub(crate) fn key(&self) -> u64 {
+        self.key.get()
     }
 
     /// The column at window x `x` on row `row`, off the paragraph the row lent: 0 for a
@@ -192,11 +211,9 @@ pub(crate) struct Chrome {
     pub(crate) file: Option<Arc<str>>,
     pub(crate) paired: Option<Edges>,
     pub(crate) wash: Wash,
-    pub(crate) widest: Widest,
-    pub(crate) listing: u64,
-    /// Whether the row reports its width to `widest`. A separator does not: its rule fills
-    /// the row, so it would report the row plus its gutter and the widest would grow by a
-    /// gutter's width every layout, without end.
+    /// Whether the row reports its width to the listing's [`Widest`]. A separator does
+    /// not: its rule fills the row, so it would report the row plus its gutter and the
+    /// widest would grow by a gutter's width every layout, without end.
     pub(crate) measured: bool,
 }
 
@@ -262,10 +279,11 @@ pub(crate) fn code_row(
         file,
         paired,
         wash,
-        widest,
-        listing: listing_key,
         measured,
     } = chrome;
+    // The widest row of the listing the list is drawing now, and the listing itself: this
+    // row's floor and what it reports its own width under, read once so the two agree.
+    let (widest, listing_key) = (listing.widest, listing.key());
     let has_text = text.is_some();
 
     // The column under `at`, a location relative to the row: `None` left of the text on
@@ -771,27 +789,24 @@ fn reach(listing: &Listing, nudge: Nudge, length: usize, at: CursorPoint) -> Opt
 /// hook, for the cells to outlive the handler a render makes afresh; one task at a time,
 /// the flag says.
 ///
-/// `length` and `key` are the listing's rows and its identity in [`Widest`], both this
-/// render's: neither is held in the [`Listing`], since a list handed another listing -- a
-/// link followed in place, a symbol previewed into the temporal tab, a companion file
-/// switching -- is not mounted again, and a key made at the mount would name a listing
-/// that is gone. `Widest` answers nothing for one it does not hold: a sideways extent of
-/// zero, and an autoscroll that pins the pane to its left edge. So the pair goes in a
-/// cell each render writes and the task reads: a task outlives the render that spawned
-/// it, and one holding the pair it was spawned with goes on scrolling a listing the pane
-/// stopped drawing.
+/// `length` is the listing's rows, this render's, and it goes in a cell each render
+/// writes and the task reads rather than into the task: a task outlives the render that
+/// spawned it and the sweep that started it, so a task holding the count it began with
+/// goes on scrolling a listing the pane has stopped drawing. The sideways extent is
+/// asked under the listing the [`Listing`] says is being drawn, a cell for the same
+/// reason and read at the tick: `Widest` answers nothing for a listing it does not hold,
+/// which is a sideways extent of zero and a pane pinned to its left edge.
 pub(crate) fn use_sweep_beyond(
     marked: State<Marks>,
     pane: Pane,
     listing: Listing,
     nudge: Nudge,
     length: usize,
-    key: u64,
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let last = use_hook(|| Rc::new(Cell::new(None::<CursorPoint>)));
     let running = use_hook(|| Rc::new(Cell::new(false)));
-    let drawing = use_hook(|| Rc::new(Cell::new((key, length))));
-    drawing.set((key, length));
+    let drawing = use_hook(|| Rc::new(Cell::new(length)));
+    drawing.set(length);
 
     move |e: Event<PointerEventData>| {
         let at = e.global_location();
@@ -814,7 +829,7 @@ pub(crate) fn use_sweep_beyond(
         spawn(async move {
             loop {
                 Timer::after(AUTOSCROLL_TICK).await;
-                let (key, length) = drawing.get();
+                let length = drawing.get();
                 let Some(at) = last.get() else { break };
                 if !dragging(marked, pane) {
                     break;
@@ -846,7 +861,7 @@ pub(crate) fn use_sweep_beyond(
                     }
                 }
                 if across != 0 {
-                    let extent = (listing.widest.extent(key) - area.width()).max(0.0);
+                    let extent = (listing.widest.extent(listing.key()) - area.width()).max(0.0);
                     let target = (x + across * step).clamp(-(extent as i32), 0);
                     if target != x {
                         controller.scroll_to_x(target);

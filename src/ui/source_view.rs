@@ -44,13 +44,6 @@ struct SourceData {
     /// changes with every word it says about its progress, and every mounted row would be
     /// drawn again for it.
     links: links::Links,
-    /// The widest row drawn, what every row is at least as wide as. A handle, so out of
-    /// the `PartialEq` below.
-    widest: Widest,
-    /// The key it is held under: the highlighted file's identity and the fixed-width
-    /// font's size. **Compared**, unlike the handle, so that rows built after a font
-    /// change are not built under the key the old font measured.
-    listing: u64,
 }
 
 impl PartialEq for SourceData {
@@ -65,7 +58,6 @@ impl PartialEq for SourceData {
             && self.chars == other.chars
             && self.drives == other.drives
             && self.links == other.links
-            && self.listing == other.listing
     }
 }
 
@@ -92,10 +84,6 @@ struct SourceRow {
     drives: Option<DocId>,
     /// Which of the file's names the server placed. See [`SourceData::links`].
     links: links::Links,
-    /// The listing's widest row and its key, as an `InstructionRow` carries them: the
-    /// handle out of the `PartialEq` below and the key in it.
-    widest: Widest,
-    listing: u64,
     key: DiffKey,
 }
 
@@ -110,7 +98,6 @@ impl PartialEq for SourceRow {
             && self.chars == other.chars
             && self.drives == other.drives
             && self.links == other.links
-            && self.listing == other.listing
     }
 }
 
@@ -424,8 +411,6 @@ impl Component for SourceRow {
                 file: Some(self.file.clone()),
                 paired: self.paired,
                 wash: self.wash,
-                widest: self.widest,
-                listing: self.listing,
                 measured: true,
             },
             vec![mark, number],
@@ -623,6 +608,9 @@ impl Component for SourceList {
         // The list as its rows and a sweep past its edge know it: its scroll, its box,
         // the paragraphs the rows lend it, and its widest row.
         let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
+        // Every render, since the context is made once and this pane is handed another
+        // file without being mounted again.
+        listing_ctx.drawing(listing);
         let bounds = listing_ctx.bounds.clone();
         let on_key_down = {
             let source = self.source.clone();
@@ -684,7 +672,6 @@ impl Component for SourceList {
                         listing_ctx.clone(),
                         nudge,
                         length,
-                        listing,
                     ))
                     // On the grid: see `Nudge`.
                     .padding(nudge.padding())
@@ -702,8 +689,6 @@ impl Component for SourceList {
                                 drives: matches!(self.document, Document::Source(_))
                                     .then_some(self.tab),
                                 links,
-                                widest,
-                                listing,
                             },
                             |i, data: &SourceData| {
                                 let paired_at = |row: usize| data.pairs.contains(&(row as u32 + 1));
@@ -717,8 +702,6 @@ impl Component for SourceList {
                                     chars: RowChars::of(data.chars, i),
                                     drives: data.drives,
                                     links: data.links.clone(),
-                                    widest: data.widest,
-                                    listing: data.listing,
                                     key: DiffKey::None,
                                 }
                                 .key(i)

@@ -499,10 +499,6 @@ struct BranchLabel {
     /// nowhere. The target's own position and not this row's: the run is the one a click
     /// on the row being jumped to would have made, of that row's file.
     at: Option<LinePos>,
-    /// The listing's own scroll, and how tall it is: `reveal_row` needs both, and needs
-    /// them at the moment of the press rather than at the render that drew this label.
-    controller: ScrollController,
-    viewport: State<f32>,
 }
 
 impl Component for BranchLabel {
@@ -513,8 +509,9 @@ impl Component for BranchLabel {
         let text = self.text.clone();
         let to = self.to;
         let at = self.at.clone();
-        let mut controller = self.controller;
-        let viewport = self.viewport;
+        // The list's own scroll and its box, which `reveal_row` needs at the moment of
+        // the press rather than at the render that drew this label.
+        let listing = use_consume::<Listing>();
 
         rect()
             .maybe(hovering(), |rect| {
@@ -544,7 +541,8 @@ impl Component for BranchLabel {
                 // jumps to.
                 e.stop_propagation();
                 // The row is reached by a press, so the pane is on screen and measured.
-                let _ = reveal_row(&mut controller, *viewport.peek(), to);
+                let mut controller = listing.controller;
+                let _ = reveal_row(&mut controller, listing.bounds.get().height(), to);
                 // The row landed on becomes the picked-out one, replacing the row the
                 // press started on -- which `pointer_down` has already marked, that
                 // being the one handler a stopped press does not undo. The source
@@ -729,10 +727,6 @@ pub(crate) struct SeparatorRow {
     /// The gutter's width for the whole symbol, and the lanes crossing this boundary.
     pub(crate) width: usize,
     pub(crate) arrows: RowArrows,
-    /// The listing's widest row and its key, as `InstructionRow` carries them: the rule
-    /// runs the width of the widest row, so the listing does not read as ending early.
-    pub(crate) widest: Widest,
-    pub(crate) listing: u64,
     pub(crate) key: DiffKey,
 }
 
@@ -759,8 +753,6 @@ impl Component for SeparatorRow {
                 file: None,
                 paired: None,
                 wash: self.wash,
-                widest: self.widest,
-                listing: self.listing,
                 measured: false,
             },
             std::iter::once(code_mark(false))
@@ -790,20 +782,6 @@ pub(crate) struct InstructionRow {
     /// What this row draws in the gutter, worked out by the list for the reason `paired`
     /// is: the lanes lit in row 40 belong to a branch of row 12.
     pub(crate) arrows: RowArrows,
-    /// The listing's scroll and its height, for a branch operand to scroll to the row it
-    /// names. Out of the `PartialEq` below: both are the list's own handles and neither
-    /// changes while it lives.
-    pub(crate) controller: ScrollController,
-    pub(crate) viewport: State<f32>,
-    /// The widest row the listing has drawn, for this row to be no narrower than. Out of
-    /// the `PartialEq` for the same reason as the two above: a row asks the state itself.
-    /// See `ui/width.rs`.
-    pub(crate) widest: Widest,
-    /// The listing's key in that state, which the row is floored under and reports
-    /// itself under. **Compared**, unlike the handle: the key holds the fixed-width
-    /// font's size, and a row left with the old one goes on asking for the width the
-    /// larger font measured.
-    pub(crate) listing: u64,
     /// Whether this instruction was compiled from a line of the source pane's picked-out
     /// run, and if so which of its edges end the run of such rows. Worked out by the list
     /// rather than read here, so that a run growing by a line leaves every row not on it
@@ -828,7 +806,6 @@ impl PartialEq for InstructionRow {
             && self.wash == other.wash
             && self.chars == other.chars
             && self.arrows == other.arrows
-            && self.listing == other.listing
     }
 }
 
@@ -921,8 +898,6 @@ impl Component for InstructionRow {
                         text: text.clone(),
                         to: self.data.base + self.data.lanes.row_of(edge.to),
                         at: self.data.position(edge.to),
-                        controller: self.controller,
-                        viewport: self.viewport,
                     }
                     .into_element()
                 })
@@ -1088,8 +1063,6 @@ impl Component for InstructionRow {
                 file: at.as_ref().map(|at| at.file.clone()),
                 paired: self.paired,
                 wash: self.wash,
-                widest: self.widest,
-                listing: self.listing,
                 measured: true,
             },
             before,
@@ -1319,6 +1292,9 @@ impl Component for InstructionList {
         // The list as its rows and a sweep past its edge know it: its scroll, its box,
         // the paragraphs the rows lend it, and its widest row.
         let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
+        // Every render, since the context is made once and this pane is handed another
+        // disassembly without being mounted again.
+        listing_ctx.drawing(listing);
         let bounds = listing_ctx.bounds.clone();
 
         rect()
@@ -1341,7 +1317,6 @@ impl Component for InstructionList {
                 listing_ctx.clone(),
                 nudge,
                 length,
-                listing,
             ))
             // On the grid: see `Nudge`.
             .padding(nudge.padding())
@@ -1375,8 +1350,6 @@ impl Component for InstructionList {
                                     lanes: rows.data.lanes.boundary(below),
                                     lit,
                                 },
-                                widest,
-                                listing,
                                 key: DiffKey::None,
                             }
                             .key((true, address))
@@ -1403,10 +1376,6 @@ impl Component for InstructionList {
                                 lanes: rows.data.lanes.row(index),
                                 lit: lanes::lit(&rows.touching, index),
                             },
-                            controller,
-                            viewport,
-                            widest,
-                            listing,
                             key: DiffKey::None,
                         }
                         // Tagged, for the separators' sake: an address alone could be

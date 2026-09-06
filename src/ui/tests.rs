@@ -8529,11 +8529,11 @@ fn a_listings_extent_does_not_outlive_it() {
 /// A listing's extent is given up when the fixed-width font shrinks under it: the rows
 /// are floored to the width the smaller font measures, not to what the larger one did.
 ///
-/// The floor is held under a key that carries the font's size, and the key reaches a row
-/// as a prop. freya replaces a scope's props only when they compare unequal, so a key
-/// left out of a row's `PartialEq` was never handed on: the row re-rendered for the new
-/// row height, asked its floor under the old key, and was laid out as wide as the larger
-/// font had made it -- a sideways scroll over empty space.
+/// The floor is held under a key that carries the font's size, and the key is the list's
+/// (`Listing`, written every render): a row asks its floor under the key of the listing
+/// being drawn now, as it renders -- which a font change is what re-renders it for. A row
+/// left asking under the key the larger font made was laid out as wide as that font had
+/// made it: a sideways scroll over empty space.
 #[test]
 fn a_smaller_fixed_font_gives_up_the_width_the_larger_one_measured() {
     set_fonts(fixed_fonts(9.0, 18.0));
@@ -18083,6 +18083,8 @@ fn sweeping_harness() -> impl IntoElement {
     let controller = use_scroll_controller(ScrollConfig::default);
     let nudge = use_nudge();
     let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
+    // Every render, as each list tells its own.
+    listing_ctx.drawing(listing);
     let bounds = listing_ctx.bounds.clone();
 
     // What a row of the arriving listing reports as it is laid out. The app's rows report
@@ -18104,7 +18106,6 @@ fn sweeping_harness() -> impl IntoElement {
             listing_ctx.clone(),
             nudge,
             4,
-            listing,
         ))
 }
 
@@ -18178,7 +18179,6 @@ struct LentTo(Rc<RefCell<Option<Listing>>>);
 #[derive(Clone, PartialEq)]
 struct LentRow {
     row: usize,
-    widest: Widest,
     key: DiffKey,
 }
 
@@ -18197,8 +18197,6 @@ impl Component for LentRow {
                 file: None,
                 paired: None,
                 wash: Wash::None,
-                widest: self.widest,
-                listing: 1,
                 measured: true,
             },
             Vec::new(),
@@ -18236,7 +18234,6 @@ fn lending_harness() -> impl IntoElement {
             .map(|row| {
                 LentRow {
                     row,
-                    widest,
                     key: DiffKey::None,
                 }
                 .key(row)

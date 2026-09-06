@@ -324,10 +324,13 @@ the row plus its gutter and the widest would grow by a gutter every layout witho
 the identity of what outlives the rows** (the disassembly, the highlighted file, the *object* for
 the section view, whose `Built` is rebuilt every generation) hashed with the mono font's size; a key
 that no longer matches is a floor of nothing, which is the reset, made without an effect: the old
-listing's rows drop to the pane's width on the new one's first render and report again. The key
-reaches a row as a prop and is **compared** there, the handle beside it not: freya replaces a
-scope's props only when they compare unequal, so a row left with the mount's key went on asking its
-floor under the font that is gone. The extent
+listing's rows drop to the pane's width on the new one's first render and report again. The key is
+**the list's and not the row's**: it lives in the `Listing` the list provides, in a cell every
+render of the list writes (`Listing::drawing`) and every row reads as it draws, so the one fact has
+the one place. It was a prop on each of the five row types once, and compared there because freya
+replaces a scope's props only when they compare unequal and a row left with the mount's key went on
+asking its floor under the font that is gone; a row is drawn again on a font change either way,
+the fonts being what it asks for its height and its spans. The extent
 is therefore the widest row **drawn so far**, as the scratchpad's run output's is: a wide row
 further down is reached once the reader has scrolled to it. The editor's own estimate (the most
 characters on a line times a `W`) was not taken: it needs Skia on the UI thread, is wrong for tabs
@@ -847,14 +850,14 @@ height sideways, the sideways extent being the widest row, `Widest::extent`) and
 to what came in, for as long as the button is down and the pointer stays past an edge. The pointer's
 last place is kept in a cell, since nothing arrives from a pointer that is not moving
 (`use_sweep_beyond`, a hook so the cells outlive the handler a render remakes; one task at a time).
-**The rows and the key the extent is asked under are the render's**, handed to the hook beside the
-`Listing` and not held in it: a list is not mounted again when its listing changes -- a link
-followed in place, a symbol previewed into the temporal tab, a companion file switching, the worker
-answering -- and `Listing` is made once, so a key kept there named a listing that was gone, `Widest`
-answered nothing for it, and every tick put the pane back at its left edge instead of scrolling
-right. They go in a cell each render writes and the task reads, and not into the task: a task
-outlives the render that spawned it and a sweep outlives the listing it began on, so a task holding
-what it started with is the same bug one gesture later. The release is the root's
+**The rows and the key the extent is asked under are the render's**, and neither is carried by the
+task: the row count goes in a cell the hook keeps and each render writes, and the key is the
+`Listing`'s own cell, written by every render of the list. A list is not mounted again when its
+listing changes -- a link followed in place, a symbol previewed into the temporal tab, a companion
+file switching, the worker answering -- and a task outlives the render that spawned it and the
+sweep that started it. So a key made once, at the mount or in the task, named a listing that was
+gone: `Widest` answered nothing for it, and every tick put the pane back at its left edge instead
+of scrolling right. The release is the root's
 `on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar thumb
 cancels. **A control the sweep passes over does not answer the pointer**: the companion header
 and the symbol bar's names are `interactive(false)` while a sweep is under way (`sweeping`), since
