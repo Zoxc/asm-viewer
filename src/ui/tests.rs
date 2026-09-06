@@ -21852,6 +21852,27 @@ fn finder_selected(test: &TestingRunner) -> Option<String> {
         .map(|(text, _)| text)
 }
 
+/// Type into the finder's box, and wait for the worker to answer what was typed.
+///
+/// The list is the worker's now and lands a pass or two behind the keystroke, so a test
+/// that settled and read the rows read the answer to the query before it.
+fn type_into_finder(test: &mut TestingRunner, finder: State<Finder>, text: &str) {
+    test.write_text(text);
+    finder_answered(test, finder);
+}
+
+/// Wait for the worker to answer what the box says, and for the panel to draw it.
+fn finder_answered(test: &mut TestingRunner, finder: State<Finder>) {
+    pump(test, || {
+        let typed = finder.peek().typed.clone();
+        finder.peek().listed.answers(&typed)
+    });
+    // The panel's list is a `VirtualScrollView`, which builds its rows from the height it
+    // was last measured at: the pass that grows it is one row behind the pass that draws
+    // the rest.
+    settle(test);
+}
+
 /// Ctrl+P through the root's one key handler, which is where it is answered: not through
 /// the focused node, since the chord works from wherever the keyboard is.
 fn press_finder_chord(
@@ -21889,8 +21910,7 @@ fn the_chord_opens_the_finder_over_the_project_files() {
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("s");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "s");
 
     let rows = finder_rows(&test);
     assert!(
@@ -21957,8 +21977,7 @@ fn a_row_is_the_name_and_then_the_directories_above_it() {
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("s");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "s");
 
     let rows = finder_rows(&test);
     assert!(
@@ -21982,8 +22001,7 @@ fn typing_narrows_the_list_to_the_characters_in_order() {
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("srcuivw");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "srcuivw");
 
     let rows = finder_rows(&test);
     assert!(
@@ -22017,8 +22035,7 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
     pump(&mut test, || !finder.peek().walking);
     // Typed, so the list is the walk's and not the places visited. Which of the two rows
     // is first is the matcher's business and pinned in its own tests; this reads it.
-    test.write_text("rs");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "rs");
     let rows = finder_rows(&test);
     assert_eq!(rows.len(), 2, "{rows:?}");
 
@@ -22036,8 +22053,7 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
     // The row under it, in a tab of its own.
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("rs");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "rs");
     key_with(
         &mut test,
         Key::Named(NamedKey::ArrowDown),
@@ -22070,8 +22086,7 @@ fn down_stops_at_the_last_row_so_up_moves_at_once() {
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("rs");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "rs");
     let rows = finder_rows(&test);
     assert_eq!(rows.len(), 3, "{rows:?}");
 
@@ -22115,8 +22130,7 @@ fn the_list_scrolls_to_the_row_the_keyboard_is_on() {
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("rs");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "rs");
     let first = finder_rows(&test);
     assert!(
         first.len() <= FINDER_ROWS + 1,
@@ -22159,8 +22173,7 @@ fn escape_closes_the_finder_and_keeps_nothing_typed() {
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("first");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "first");
     assert_eq!(finder.peek().typed, "first");
 
     key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
@@ -22192,8 +22205,7 @@ fn the_second_open_shows_the_files_the_first_walk_found() {
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("kept");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "kept");
     assert!(finder_rows(&test).iter().any(|row| row == "kept.rs"));
 
     key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
@@ -22202,8 +22214,7 @@ fn the_second_open_shows_the_files_the_first_walk_found() {
 
     press_finder_chord(&states, finder, keys, dock);
     settle(&mut test);
-    test.write_text("kept");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "kept");
     assert!(
         finder_rows(&test).iter().any(|row| row == "kept.rs"),
         "the second open walked again instead of showing what it had"
@@ -22371,8 +22382,7 @@ fn pressing_a_row_opens_its_file() {
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
-    test.write_text("kept");
-    settle(&mut test);
+    type_into_finder(&mut test, finder, "kept");
 
     // The row's second span: the first is the marked run, which the box's own text also
     // reads, and the box is drawn above the list.
@@ -22390,25 +22400,20 @@ fn pressing_a_row_opens_its_file() {
     );
 }
 
-/// The row the keyboard is on is not one of the things the list is ranked from. It sits
+/// The row the keyboard is on is not one of the things the list is drawn from. It sits
 /// in `Finder` beside the box, and a subscription is to a whole state and not to a field
-/// of one, so a list ranked straight off that state was ranked again by every arrow
-/// press -- one pass of the query over every walked path per press, at the keyboard's
-/// repeat rate, which is what froze the overlay under a held Down.
+/// of one, so a list worked out straight off that state was worked out again by every
+/// arrow press -- which, while the ranking was still here, was a pass of the query over
+/// every walked path per press at the keyboard's repeat rate.
 #[test]
 fn moving_the_row_is_not_a_new_question_for_the_list() {
-    let root = PathBuf::from("/project");
-    let files: Vec<crate::walk::Found> = ["one.rs", "two.rs", "three.rs"]
-        .iter()
-        .map(|name| crate::walk::found_under(&root, &root.join(name)).expect("a path with a name"))
-        .collect();
     let state = Finder {
         open: true,
         typed: "rs".to_owned(),
         at: 0,
         at_for: "rs".to_owned(),
-        files: Arc::new(files),
-        root: Some(root),
+        listed: Listed::default(),
+        root: Some(PathBuf::from("/project")),
         id: 1,
         walking: false,
     };
@@ -22431,5 +22436,44 @@ fn moving_the_row_is_not_a_new_question_for_the_list() {
     assert!(
         asking(&state) != asking(&typed),
         "the box changed and the list was not asked again"
+    );
+}
+
+/// The panel says *No files match* about a query the worker has answered, and about no
+/// other. The list lags the box now, so a panel that read the row count alone said it of
+/// every query for the frame before its answer landed -- of a query that matches, in the
+/// middle of a reader typing one.
+#[test]
+fn nothing_is_said_of_a_query_the_worker_has_not_answered() {
+    // Enough files that ranking them takes longer than the passes below: the point is the
+    // frame between the keystroke and the answer, and with a handful there is none.
+    let walked: Vec<String> = (0..5000).map(|n| format!("src/f{n:04}.rs")).collect();
+    let (mut test, states, finder, keys, _directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            for name in &walked {
+                let _ = emit(walked_file(root, name));
+            }
+            let _ = emit(WalkEvent::Finished);
+        });
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+
+    // The walk is over, so nothing is being read; the query is simply not answered yet.
+    test.write_text("zzz");
+    settle(&mut test);
+    assert!(
+        !finder.peek().listed.answers("zzz"),
+        "the worker answered before the panel could be asked what it says meanwhile"
+    );
+    assert!(
+        !labels(&test).contains(&"No files match.".to_owned()),
+        "the panel said a query nobody had answered matches nothing"
+    );
+
+    finder_answered(&mut test, finder);
+    assert!(
+        labels(&test).contains(&"No files match.".to_owned()),
+        "the answer landed and the panel did not say the query matches nothing"
     );
 }

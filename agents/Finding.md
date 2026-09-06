@@ -10,8 +10,9 @@ one project. `require_git(false)`, the source pane's size bound and the order a 
 entries come back in are settled once, and `search::search` and `walk::walk_files` both take
 them. `Found` — the path, the path written from the project's directory with `/` separators, and
 where the name starts in it — is built on the walking thread, because it is what every keystroke
-is matched against and taking a path apart per file per character is the one cost worth moving
-off the UI thread here.
+is matched against and taking a path apart per file per character is work the match should not
+be doing. It never leaves that side: the finder's worker holds the walk, and only the rows a
+query picked out cross to the UI.
 
 **Characters in order, not a regex.** `fuzzy.rs` is its own module and not a fourth toggle on
 `filter.rs`: a filter bar asks whether a name *contains* a pattern and compiles to one
@@ -27,14 +28,40 @@ directory the reader was typing. `Score` compares in the order the spec ranks th
 own name, then runs, then a word's start, then the shorter path — and is a plain `Ord` struct,
 `filter::Rank`'s shape, so the order is in the field order and nowhere else.
 
+**The walked files never reach the UI thread.** They are the worker's, and what crosses is the
+rows it picked out for a query. Both of the things that used to be done with the list here were
+paid for a frame at a time. Appending a batch of a walk to a shared `Arc` copies the whole list,
+so the first Ctrl+P of a run copied tens of thousands of paths once per batch -- and a real walk
+delivers in handfuls, not in the channel's whole 512, so it is thousands of copies of a growing
+list, on the thread that draws. That is the freeze a reader met while moving the pointer over the
+list, and why the second open was the better one. Matching the box against the list was the other:
+one pass over every walked path per keystroke.
+
+**One worker, told of the walk and of the box on one channel.** Two would mean a thread that
+polls or a runtime to select on them, where one lets it block. Every message carries the walk it
+belongs to and the worker drops the rest, `Searched`'s own rule. It drains what is waiting before
+it answers, so a burst of a walk is one ranking and not one per file, and while a walk is still
+streaming it answers at most every `WALK_REFRESH`: a rank of everything found so far is worth no
+more per file than it is per tenth of a second. What stops a walk nobody is waiting for is an
+`AtomicU64` the next open bumps, not a full channel -- the channel has to be unbounded, because
+the UI sends the box into it and a UI thread parked in a send is the freeze this exists to
+prevent.
+
 **The list is kept between opens.** A walk of a project's directory costs the same every time and
 answers almost the same thing, so a finder that walked afresh on each Ctrl+P would make a reader
-wait for what it already knew. `Finder` lives at the root, not in the overlay, and the walk is
-started from `app()` for the same reason: it has to go on after the overlay it was opened from is
-closed, since the list it is filling is what the next open draws. An open shows what it has at
-once and walks again behind it. Only the **first** walk, with nothing to show, streams into the
-list as it goes; a later one accumulates and swaps at the end, or rows would move under a reader
-already typing against them.
+wait for what it already knew. What keeps it is the worker, which lives as long as the app: an
+open walks again behind what the worker already has, and a reader who types before that walk ends
+is answered from it. Only the **first** walk, with nothing to show, goes into the list as it
+finds; a later one accumulates and swaps at the end, or rows would move under a reader already
+typing against them.
+
+**The list lags the box, by an answer.** About 12 ms over 20,000 paths in a release build, which
+is shorter than the gap between two keystrokes, but it is a lag and the rows say which query they
+were picked out for. Two things follow. The panel says *No files match* only about a query that
+has been answered; under one that has not, it draws the rows it has and, having none, only its
+box. And Enter opens the row the panel **drew** -- the row the reader is looking at -- rather than
+waiting for the answer to the box, which would drop the keystroke of a reader who typed and
+pressed Enter in one movement.
 
 **Not freya's `Popup`.** `RescuedPopup` gets its overlay layer, its press-outside and its
 Escape from `Popup` for free. The finder cannot: `PopupBackground` `.center()`s its content down
@@ -69,7 +96,7 @@ the query it belongs to. The row is **clamped where it is moved**, not only wher
 counting on past the last row left it above the list, and the reader who held Down then spent an
 Up per overshoot before the highlight moved at all. The count that clamps it is the drawn list's:
 the key handler is handed the memo, so a press reads the list the panel is showing rather than
-ranking one of its own -- and Enter opens the row the reader is looking at for the same reason.
+working one out for itself.
 
 **The list follows that row.** The panel is `FINDER_ROWS` tall and the arrows walk past it, so the
 list is given a `ScrollController` and each move ends in `reveal_caret` -- the code panes' own
@@ -77,24 +104,18 @@ rule, which takes the row height because a list row and a code row are measured 
 fonts. Without it the highlight went under the panel's edge at the thirteenth press while Enter
 went on opening the row it was on: a file the reader never saw named.
 
-**Ranking is on the UI thread**, in a memo over the typed text and the walked files, as a sidebar
-list's own filter is. It is one pass over a string per file with no allocation for the paths that
-do not match. If a directory ever turns up where that shows, the ranking moves onto the worker
-beside the walk; nothing else would have to change, the memo being the only reader.
+**The empty box is the UI's own.** What it lists is the source files visited most recently, which
+is not the walk's answer at all -- there are as many of them as the reader has been places, and a
+file opened before the walk finished is listed. It is worked out in the memo, on the branch that
+lists it: reading the visits is what subscribes the memo to them, and a memo subscribed to them
+while the box had text would be woken by every file the reader opens.
 
-**What the list is ranked from is a memo of its own**, `Asking`, between `Finder` and the
-ranking. A subscription is to a whole state and not to a field of one, and the row the keyboard is
-on lives in `Finder` beside the box, so a memo reading that state was dirtied by every arrow
-press: a held Down ranked the walk at the keyboard's repeat rate, and the overlay froze. `Asking`
-carries only the four things the answer depends on and compares the walked files by
-`Arc::ptr_eq`, so it does run per press and hands back what it handed back before. Over 20,000
-walked paths, ten Downs went from twenty passes of the query to none.
-
-The chain costs one thing: the ranking reads a value a step behind the state. That is why the
-empty box's list is taken *inside* the ranking memo rather than passed in. Reading the visits is
-what subscribes the memo to them, and while the box had text that subscription had a file being
-opened -- which writes the visits, in the same breath as the write that closes the finder -- rank
-the whole walk once more on the way out.
+**What the list is drawn from is a memo of its own**, `Asking`, between `Finder` and the list. A
+subscription is to a whole state and not to a field of one, and the row the keyboard is on lives
+in `Finder` beside the box, so a memo reading that state was woken by every arrow press: while
+the ranking was still here, a held Down ranked the walk at the keyboard's repeat rate and the
+overlay froze. `Asking` carries only the four things the list depends on, so it does run per
+press and hands back what it handed back before, and `set_if_modified` stops there.
 
 **The chord is answered at the root**, in `root_key_down`, which stays the window's one
 `on_global_key_down` — a second one would replace it and take the modifier tracking with it,

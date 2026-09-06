@@ -192,7 +192,8 @@ command.
 - `src/ui/state.rs` — the contexts provided once at the root and read with `use_consume`.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
 - `src/ui/finder.rs` — the file finder: the box Ctrl+P opens over the app, the files of the
-  project's directory under it, and the one worker that walks them.
+  project's directory under it, and the one worker that walks them and picks them out. The
+  walked files never reach the UI thread; the rows a query picked out are what cross.
 - `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes, and
   where each side of a tab was left.
 - `src/ui/follow.rs` — following a name in the source to what it names: the question put to

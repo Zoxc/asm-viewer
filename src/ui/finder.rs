@@ -1,14 +1,20 @@
 //! The file finder: the box Ctrl+P opens over the app, the files of the project's
-//! directory under it, and the one worker that walks them.
+//! directory under it, and the one worker that walks them and picks them out.
 //!
 //! `SearchTab`'s shape over `src/walk.rs`'s walk -- a question, one answer that stands
-//! until the next replaces it, and a thread of the app's own that answers it -- with two
-//! differences the reader can see.
+//! until the next replaces it, and a thread of the app's own that answers it -- with three
+//! things settled differently.
+//!
+//! **The walked files never reach the UI thread.** They are the worker's, and what
+//! crosses is the rows it picked out for a query. A list of a project's files is tens of
+//! thousands of paths, and both the things that were done with it here were paid for a
+//! frame at a time: appending a batch of a walk to a shared `Arc` copied the whole list
+//! per batch, and matching the box against it was a pass over every path per keystroke.
 //!
 //! **The list is kept.** A walk of a project's directory costs the same every time and
 //! answers the same thing, so a finder that walked afresh on each Ctrl+P would make the
-//! reader wait for what it already knew. The list stands between opens, and an open shows
-//! it at once and walks again behind it; that walk replaces the list when it ends rather
+//! reader wait for what it already knew. The worker holds what it found between opens,
+//! and an open walks again behind it; that walk replaces the list when it ends rather
 //! than streaming into one the reader is already typing against. Only the first walk,
 //! with nothing to show, streams as it goes.
 //!
@@ -21,6 +27,8 @@
 use super::*;
 use crate::fuzzy;
 use crate::walk::{found_under, Found, WalkEvent};
+use std::sync::atomic::{self, AtomicU64};
+use std::time::Instant;
 
 /// The finder's state, shared through context.
 #[derive(Clone, Copy)]
@@ -46,10 +54,10 @@ pub(crate) struct Finder {
     /// Down after a query.
     pub(crate) at: usize,
     pub(crate) at_for: String,
-    /// The files the last walk found, kept between opens.
-    pub(crate) files: Arc<Vec<Found>>,
-    /// The directory they were walked from, so another project's files are never offered:
-    /// a directory that does not match the one asked for empties the list.
+    /// The rows the worker last picked out, and the query it picked them for.
+    pub(crate) listed: Listed,
+    /// The directory the walk is of, so another project's files are never offered: a
+    /// directory that does not match the one asked for empties what the worker holds.
     pub(crate) root: Option<PathBuf>,
     /// Which walk is on.
     pub(crate) id: u64,
@@ -76,24 +84,17 @@ impl Finder {
 /// state and nothing else.
 pub(crate) fn open_finder(mut finder: State<Finder>, root: Option<PathBuf>) {
     // Bound before the write, so the read guard is gone by then.
-    let (id, files) = {
-        let state = finder.peek();
-        let kept = state.root == root;
-        (
-            state.id.wrapping_add(1),
-            if kept {
-                state.files.clone()
-            } else {
-                Arc::default()
-            },
-        )
-    };
+    let id = finder.peek().id.wrapping_add(1);
     finder.set(Finder {
         open: true,
         typed: String::new(),
         at: 0,
         at_for: String::new(),
-        files,
+        // Nothing, and not the last open's rows: the box opens empty and lists the visits
+        // instead, so there is nothing for them to be shown as until the reader types --
+        // by which time the worker, which is what keeps the walk between opens, has
+        // answered.
+        listed: Listed::default(),
         walking: root.is_some(),
         root,
         id,
@@ -108,8 +109,171 @@ pub(crate) fn close_finder(mut finder: State<Finder>) {
     finder.write().open = false;
 }
 
-/// Walk the directory the finder is asked about, on a thread of the app's own, and take
-/// the files back into [`Finder`] as they arrive.
+/// What the finder's worker is told: the walk it is to make, what that walk found, and
+/// what the box says.
+///
+/// One channel and not two, so that the worker can block on it: a walk answers in
+/// thousands while a reader types in ones, and a thread reading two channels at once
+/// either polls or needs a runtime. Every message carries the walk it belongs to, and the
+/// worker drops the ones that are not the walk it is on -- `Searched`'s own rule, an
+/// answer arriving long after the question.
+enum Told {
+    /// A walk of `root` is starting, under `id`.
+    Walking { id: u64, root: PathBuf },
+    /// It found a file.
+    Found { id: u64, file: Found },
+    /// It ended.
+    Walked { id: u64 },
+    /// The box says this.
+    Asked { id: u64, query: String },
+}
+
+/// What the worker answers with: the rows it picked out, the query it picked them for,
+/// and whether the walk behind them is still going.
+struct Answered {
+    id: u64,
+    query: String,
+    rows: Arc<Vec<Row>>,
+    walking: bool,
+}
+
+/// How often the worker answers while a walk is still streaming into it. A walk of a
+/// large tree finds files far faster than a window draws them, and a rank of everything
+/// found so far is worth no more per file than it is per tenth of a second.
+const WALK_REFRESH: Duration = Duration::from_millis(100);
+
+/// What the worker holds: the walk it is on, the files it found, and the query.
+#[derive(Default)]
+struct Held {
+    id: u64,
+    root: Option<PathBuf>,
+    /// The last complete walk's files, which is what the ranking reads.
+    files: Vec<Found>,
+    /// The walk on now, held back until it ends. Only the first walk, with nothing to
+    /// show, goes straight into `files`: rows must not move under a reader who is
+    /// already typing against them.
+    building: Vec<Found>,
+    streams: bool,
+    walking: bool,
+    query: String,
+}
+
+/// Whether a message changed the answer, and whether it can wait for the next one.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Change {
+    None,
+    /// More of a walk. The reader is not waiting on any one of these.
+    Files,
+    /// The box, or the end of a walk.
+    Now,
+}
+
+impl Held {
+    /// Take one message. Hands back what it changed.
+    fn take(&mut self, told: Told) -> Change {
+        match told {
+            Told::Walking { id, root } => {
+                self.id = id;
+                // Another project's files are never offered.
+                if self.root.as_deref() != Some(&*root) {
+                    self.files.clear();
+                }
+                self.root = Some(root);
+                self.building.clear();
+                self.streams = self.files.is_empty();
+                self.walking = true;
+                // Every open empties the box, so the query the last one ended on is not
+                // one to rank the files against again.
+                self.query.clear();
+                Change::Files
+            }
+            Told::Found { id, file } if id == self.id => {
+                if self.streams {
+                    self.files.push(file);
+                } else {
+                    self.building.push(file);
+                }
+                Change::Files
+            }
+            Told::Walked { id } if id == self.id => {
+                if !self.streams {
+                    self.files = std::mem::take(&mut self.building);
+                }
+                self.walking = false;
+                Change::Now
+            }
+            Told::Asked { id, query } if id == self.id => {
+                self.query = query;
+                Change::Now
+            }
+            _ => Change::None,
+        }
+    }
+
+    /// The rows the box picked out, best first.
+    ///
+    /// A query is asked of every walked path, which is one pass over a string per file
+    /// and no allocation for the paths that do not match. An empty box picks out nothing
+    /// here: what it lists is the files visited most recently, which is the UI's own to
+    /// work out and cheap enough to be.
+    fn answer(&self) -> Answered {
+        let typed = self.query.trim();
+        let mut hits: Vec<(fuzzy::Score, Row)> = Vec::new();
+        if !typed.is_empty() {
+            hits = self
+                .files
+                .iter()
+                .filter_map(|file| {
+                    let hit = fuzzy::find(typed, &file.shown, file.name_at)?;
+                    Some((
+                        hit.score,
+                        Row {
+                            file: file.clone(),
+                            marks: hit.marks,
+                        },
+                    ))
+                })
+                .collect();
+            // Stable, so files that scored the same keep the order the walk found them in.
+            hits.sort_by_key(|hit| hit.0);
+        }
+        Answered {
+            id: self.id,
+            query: self.query.clone(),
+            rows: Arc::new(hits.into_iter().map(|(_, row)| row).collect()),
+            walking: self.walking,
+        }
+    }
+}
+
+/// The worker: told of a walk and of the box, answering with the rows to draw.
+fn rank_files(told: async_channel::Receiver<Told>, answers: async_channel::Sender<Answered>) {
+    let mut held = Held::default();
+    let mut answered: Option<Instant> = None;
+
+    while let Ok(first) = told.recv_blocking() {
+        // Drained to the end of what is waiting, so a burst of a walk is one ranking and
+        // not one per file: `take_hits`' own rule, a batch per wake.
+        let mut change = held.take(first);
+        while let Ok(next) = told.try_recv() {
+            change = change.max(held.take(next));
+        }
+        if change == Change::None {
+            continue;
+        }
+        if change == Change::Files && answered.is_some_and(|at| at.elapsed() < WALK_REFRESH) {
+            continue;
+        }
+        answered = Some(Instant::now());
+        if answers.send_blocking(held.answer()).is_err() {
+            // The app is closing.
+            return;
+        }
+    }
+}
+
+/// Start the finder's worker, walk the directory it is asked about on a thread of the
+/// app's own, and take the rows it picks out back into [`Finder`].
 ///
 /// The work is an argument so that a test can put its own files in the walk's place: a
 /// walk that answers as fast as it is asked can say nothing about batching, superseding
@@ -118,162 +282,194 @@ pub(crate) fn use_finder_with(
     finder: State<Finder>,
     work: impl Fn(&Path, &mut dyn FnMut(WalkEvent) -> ControlFlow<()>) + Send + Clone + 'static,
 ) {
-    // A memo and not a read: every batch of files is a write to this state, and an effect
-    // reading it would start a walk for each batch of its own answer.
+    // One worker for the app's lifetime, as `use_analysis`' is: what it holds is the
+    // project's files, and a thread per open would walk them again for every Ctrl+P.
+    // Unbounded, because the UI sends into it too and a UI thread parked in a send is the
+    // freeze this exists to prevent; what stops a walk nobody is waiting for is `current`
+    // rather than a full channel.
+    let (tells, current) = use_hook(|| {
+        let (tells, told) = async_channel::unbounded::<Told>();
+        let (sends, answers) = async_channel::unbounded::<Answered>();
+        // A `std::thread` and not a task: this walks a directory and ranks a project's
+        // worth of paths, and freya's executor is the UI thread. Named, so a panic on it
+        // says which worker died (`crate::panics`).
+        let started = std::thread::Builder::new()
+            .name("the file finder's worker".to_owned())
+            .spawn(move || rank_files(told, sends));
+        if let Err(error) = started {
+            log::warn!("the file finder's worker could not be started: {error}");
+        }
+        spawn(take_rows(finder, answers));
+        (tells, Arc::new(AtomicU64::new(0)))
+    });
+
+    // A memo and not a read: the state is written for every answer, and an effect reading
+    // it would start a walk for each answer to its own question.
     let asked = use_memo(move || {
         let state = finder.read();
         (state.id, state.root.clone())
     });
+    let typed = use_memo(move || {
+        let state = finder.read();
+        (state.id, state.typed.clone())
+    });
+
+    use_side_effect({
+        let tells = tells.clone();
+        let current = current.clone();
+        move || {
+            // Reading the memo subscribes this to the question; the state it writes is
+            // peeked.
+            let (id, root) = asked.read().clone();
+            let Some(root) = root else {
+                return;
+            };
+            if id == 0 {
+                return;
+            }
+            // Bumped before the walk is told of, so a walk already running reads it and
+            // stops where it stands.
+            current.store(id, atomic::Ordering::Relaxed);
+            if tells
+                .send_blocking(Told::Walking {
+                    id,
+                    root: root.clone(),
+                })
+                .is_err()
+            {
+                return;
+            }
+
+            let work = work.clone();
+            let tells = tells.clone();
+            let current = current.clone();
+            let started = std::thread::Builder::new()
+                .name("the file finder's walk".to_owned())
+                .spawn(move || {
+                    work(&root, &mut |event| {
+                        let told = match event {
+                            WalkEvent::File(file) => Told::Found { id, file },
+                            WalkEvent::Finished => Told::Walked { id },
+                        };
+                        if tells.send_blocking(told).is_err() {
+                            return ControlFlow::Break(());
+                        }
+                        // This walk has been replaced, and nobody is waiting for the
+                        // rest of it.
+                        if current.load(atomic::Ordering::Relaxed) == id {
+                            ControlFlow::Continue(())
+                        } else {
+                            ControlFlow::Break(())
+                        }
+                    });
+                });
+            if let Err(error) = started {
+                log::warn!("the file finder's walk could not be started: {error}");
+            }
+        }
+    });
 
     use_side_effect(move || {
-        // Reading the memo subscribes this to the question; the state it writes is peeked.
-        let (id, root) = asked.read().clone();
-        let Some(root) = root else {
-            return;
-        };
+        let (id, query) = typed.read().clone();
         if id == 0 {
             return;
         }
-
-        // Bounded, and small: a walk finds files far faster than a window draws them, and
-        // a worker parked in a send is one that learns the moment the reader has moved on.
-        let (files, events) = async_channel::bounded::<WalkEvent>(512);
-        let work = work.clone();
-        // A `std::thread` and not a task: this walks a directory, and freya's executor is
-        // the UI thread. Named, so a panic on it says which worker died (`crate::panics`).
-        let started = std::thread::Builder::new()
-            .name("the file finder's worker".to_owned())
-            .spawn(move || {
-                work(&root, &mut |event| match files.send_blocking(event) {
-                    Ok(()) => ControlFlow::Continue(()),
-                    // The receiver is gone: this walk has been replaced or the app is
-                    // closing, and either way nobody is waiting for the rest of it.
-                    Err(_) => ControlFlow::Break(()),
-                });
-            });
-        if let Err(error) = started {
-            log::warn!("the file finder's worker could not be started: {error}");
-        }
-
-        spawn(take_files(finder, id, events));
+        let _ = tells.send_blocking(Told::Asked { id, query });
     });
 }
 
-/// Take the files of walk `id` as they arrive, until they stop or the walk is replaced.
-///
-/// A batch per wake and not a write per file, `take_hits`' own rule: each write is a
-/// render, and a walk over a large tree answers in thousands. The batch is dropped whole
-/// when the walk is no longer the one asked for, checked before the write.
-async fn take_files(
-    mut finder: State<Finder>,
-    id: u64,
-    events: async_channel::Receiver<WalkEvent>,
-) {
-    // What this walk has found. Written through as it grows only while there is nothing
-    // listed yet; with a list already on screen it is held and put in place at the end,
-    // so rows never move under a reader who is typing.
-    let mut building: Vec<Found> = Vec::new();
-    let streams = finder.peek().files.is_empty();
-
-    while let Ok(first) = events.recv().await {
-        let batch: Vec<WalkEvent> = std::iter::once(first)
-            .chain(std::iter::from_fn(|| events.try_recv().ok()))
-            .collect();
-
+/// Take the worker's answers into [`Finder`], dropping the ones belonging to a walk the
+/// reader has moved on from. An answer is written whole, so the rows and the query they
+/// were picked out for are never two different questions'.
+async fn take_rows(mut finder: State<Finder>, answers: async_channel::Receiver<Answered>) {
+    while let Ok(answered) = answers.recv().await {
         // Bound in a statement of its own: the read guard is gone before the write.
-        let mine = finder.peek().id == id;
+        let mine = finder.peek().id == answered.id;
         if !mine {
-            // Returning drops the receiver, which is what stops the walk behind it.
-            return;
+            continue;
         }
-
-        let mut ended = false;
-        for event in batch {
-            match event {
-                WalkEvent::File(file) => building.push(file),
-                WalkEvent::Finished => ended = true,
-            }
-        }
-
         let mut state = finder.write();
-        if streams {
-            Arc::make_mut(&mut state.files).append(&mut building);
-        } else if ended {
-            state.files = Arc::new(std::mem::take(&mut building));
-        }
-        if ended {
-            state.walking = false;
-        }
+        state.listed = Listed {
+            rows: answered.rows,
+            for_query: answered.query,
+        };
+        state.walking = answered.walking;
     }
 }
 
-/// What the list is ranked from: whether the finder is drawn at all, what is in the box,
-/// the files the walk found, and where they were walked from.
+/// What the list is drawn from: whether the finder is drawn at all, what is in the box,
+/// where the walk is of, and the worker's last answer.
 ///
 /// A memo of its own between [`Finder`] and the list, because a subscription is to a
 /// whole state and not to a field of one. The row the keyboard is on lives in `Finder`
-/// too, so a list ranked straight off the state was ranked again by every arrow press --
-/// one pass of the query over every walked path per press, at the keyboard's repeat rate,
-/// which is what froze the overlay under a held Down. This memo does run per press; it
-/// hands back what it handed back last time, and `set_if_modified` stops there.
+/// too, so a list worked out straight off the state was worked out again by every arrow
+/// press. This memo does run per press; it hands back what it handed back last time, and
+/// `set_if_modified` stops there.
 pub(crate) struct Asking {
     open: bool,
     typed: String,
-    files: Arc<Vec<Found>>,
     root: Option<PathBuf>,
+    listed: Listed,
 }
 
 impl PartialEq for Asking {
     fn eq(&self, other: &Self) -> bool {
         self.open == other.open
             && self.typed == other.typed
-            && Arc::ptr_eq(&self.files, &other.files)
             && self.root == other.root
+            && self.listed == other.listed
     }
 }
 
-/// What the finder is asking of the walk, as the state stands.
+/// What the finder is asking for, as the state stands.
 pub(crate) fn asking(state: &Finder) -> Asking {
     Asking {
         open: state.open,
         typed: state.typed.clone(),
-        files: state.files.clone(),
         root: state.root.clone(),
+        listed: state.listed.clone(),
     }
 }
 
-/// The rows the finder draws: the files they are, and which of them the box picked out.
+/// The rows the finder draws, and the query they were picked out for.
 ///
-/// The files are held whole and the hits index into them, so a query that lets everything
-/// through allocates a mark list per row and not a path per row.
+/// The query is kept beside them because the worker answers a question the box has often
+/// moved on from -- by a frame, which is what a rank of a large project costs. The panel
+/// goes on drawing the rows it has meanwhile, `Analyzed`'s own rule; what the query is
+/// for is the panel not saying *No files match* about a query nobody has answered yet.
 #[derive(Clone, Default)]
 pub(crate) struct Listed {
-    files: Arc<Vec<Found>>,
-    hits: Arc<Vec<Picked>>,
+    rows: Arc<Vec<Row>>,
+    for_query: String,
 }
 
-/// One file the box picked out: which, and where the query hit it.
+/// One file the box picked out: the file, and where the query hit its path.
 #[derive(Clone)]
-struct Picked {
-    at: usize,
+struct Row {
+    file: Found,
     marks: Vec<Range<usize>>,
 }
 
 impl PartialEq for Listed {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.files, &other.files) && Arc::ptr_eq(&self.hits, &other.hits)
+        Arc::ptr_eq(&self.rows, &other.rows) && self.for_query == other.for_query
     }
 }
 
 impl Listed {
     pub(crate) fn len(&self) -> usize {
-        self.hits.len()
+        self.rows.len()
+    }
+
+    /// Whether these rows are the answer to what the box says.
+    pub(crate) fn answers(&self, typed: &str) -> bool {
+        self.for_query.trim() == typed.trim()
     }
 
     /// The `index`th row: the file, and the runs of its path that matched.
     fn row(&self, index: usize) -> Option<(&Found, &[Range<usize>])> {
-        let hit = self.hits.get(index)?;
-        Some((self.files.get(hit.at)?, &hit.marks))
+        let row = self.rows.get(index)?;
+        Some((&row.file, &row.marks))
     }
 
     /// What opening the `index`th row opens.
@@ -282,64 +478,32 @@ impl Listed {
     }
 }
 
-/// What the box is asking of the walk, answered: the files it picked out, best first.
-///
-/// On the UI thread, as a sidebar list's own filter is. A query is asked of every walked
-/// path per keystroke, which is one pass over a string per file and no allocation for the
-/// paths that do not match.
-fn ranked(asking: &Asking) -> Listed {
-    let typed = asking.typed.trim();
-
-    let mut hits: Vec<(fuzzy::Score, Picked)> = asking
-        .files
-        .iter()
-        .enumerate()
-        .filter_map(|(at, file)| {
-            let hit = fuzzy::find(typed, &file.shown, file.name_at)?;
-            Some((
-                hit.score,
-                Picked {
-                    at,
-                    marks: hit.marks,
-                },
-            ))
-        })
-        .collect();
-    // Stable, so files that scored the same keep the order the walk found them in.
-    hits.sort_by_key(|hit| hit.0);
-
-    Listed {
-        files: asking.files.clone(),
-        hits: Arc::new(hits.into_iter().map(|(_, hit)| hit).collect()),
-    }
-}
-
 /// The source files visited most recently, newest first: what an empty box lists.
 ///
-/// Built from the visits and not from the walk, so a file opened before the walk finished
-/// is listed. Only the ones under the project's directory: a reader following debug info
-/// into a binary lands in sources that are nobody's project -- the standard library's,
-/// and a dependency's out of the registry -- and the finder is the project's files.
+/// The UI's own and not the worker's, because it is not the walk's answer: a file opened
+/// before the walk finished is listed, and there are as many of these as the reader has
+/// been places. Only the ones under the project's directory: a reader following debug
+/// info into a binary lands in sources that are nobody's project -- the standard
+/// library's, and a dependency's out of the registry -- and the finder is the project's
+/// files.
 fn recent(asking: &Asking, visits: &Visits) -> Listed {
     let Some(root) = asking.root.clone() else {
         return Listed::default();
     };
-    let files: Vec<Found> = visits
+    let rows: Vec<Row> = visits
         .recent()
         .filter_map(|document| match document {
             Document::Source(path) => found_under(&root, Path::new(&**path)),
             _ => None,
         })
-        .collect();
-    let hits = (0..files.len())
-        .map(|at| Picked {
-            at,
+        .map(|file| Row {
+            file,
             marks: Vec::new(),
         })
         .collect();
     Listed {
-        files: Arc::new(files),
-        hits: Arc::new(hits),
+        rows: Arc::new(rows),
+        for_query: String::new(),
     }
 }
 
@@ -370,12 +534,11 @@ impl Component for FinderOverlay {
             }
             // The visits are read on this branch alone, because reading a state is what
             // subscribes this memo to it: a file being opened writes the visits, and a
-            // memo subscribed to them while the box had text ranked the whole walk once
-            // more on the way out of the finder.
+            // memo subscribed to them while the box had text would be woken by every one.
             if asking.typed.trim().is_empty() {
                 return recent(&asking, &visits.read());
             }
-            ranked(&asking)
+            asking.listed.clone()
         });
 
         let state = finder.read().clone();
@@ -403,6 +566,10 @@ impl Component for FinderOverlay {
             (Some(_), 0) if state.typed.trim().is_empty() => {
                 note("No files opened yet. Type to find one.")
             }
+            // The worker is a frame behind the box. Nothing is said about a query it has
+            // not answered: *No files match* under a query that does match is worse than
+            // a panel with only its box in it for the frame it takes.
+            (Some(_), 0) if !drawn.answers(&state.typed) => rect().into_element(),
             (Some(_), 0) => note("No files match."),
             (Some(_), _) => rect()
                 .width(Size::fill())

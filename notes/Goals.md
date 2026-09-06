@@ -248,16 +248,15 @@ leaves this list when it is. That is a move made on request, like everything els
   split view*. None of those four is measured, which is where this starts: the rule is worth
   keeping, and an atomic write of a few hundred bytes may still be cheaper than the channel it
   would take to move it.
-- [ ] Rank the finder's list on the worker beside the walk, not on the UI thread. What is left of
-  the freeze under Ctrl+P after the arrows stopped ranking: one pass of the query over every
-  walked path per keystroke, in a memo in `FinderOverlay`. Measured over 20,000 walked paths, that
-  pass is about 6 ms in a release build and 60-120 ms in a debug one, so it is `cargo run` the
-  reader feels it in first. The shape is the app's usual -- one `std::thread` for the app's
-  lifetime fed an `async_channel`, requests superseding, the panel drawing what it has until the
-  answer lands -- and the walk's own worker is already that thread. It carries a decision the
-  arrows did not: a list that lags the box has to say which query it was ranked for, as
-  `Finder::at_for` already does for the row, so that Enter never opens a file the reader has
-  stopped asking for.
+- [x] Rank the finder's list on the worker beside the walk, not on the UI thread. The walked
+  files are the worker's now, and what crosses to the UI is the rows it picked out for a query,
+  which took the two things the UI thread was doing per project with them. Matching the box
+  against every walked path was one; the other was worse and was the reported freeze: appending
+  a batch of the first walk to a shared `Arc` copied the whole list, once per batch, on the
+  thread that draws. Measured over 20,000 walked paths in a release build, a keystroke costs
+  0.2 ms of UI thread where the ranking alone cost about 6, and the worker answers about 12 ms
+  later. The list that lag leaves on screen says which query it was picked out for, so the panel
+  never says *No files match* about a query nobody has answered yet.
 - [ ] Make the line-number gutter gray, in the scratchpad's editor and in the Source pane alike,
   so the numbers read as a margin beside the code and not as a column of it.
 - [ ] No text cursor over a scroll bar. The I-beam a code row sets follows the pointer onto the
