@@ -11511,6 +11511,49 @@ fn a_new_pad_is_written_and_shown_at_once() {
     );
 }
 
+/// Why a New or a Delete did not happen is kept by the app, and the newer answer replaces
+/// the older sentence: the pane it is drawn in is a dock tab that is unmounted while the
+/// reader is elsewhere, so a refusal that arrived meanwhile still has to be there when
+/// they come back.
+#[test]
+fn a_refusal_is_kept_and_the_next_one_replaces_it() {
+    let (mut test, _states, pad, text, asking, _marked, _asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one")]),
+            PadJob::New => PadAnswer::Created(Err(Failure::Write("no room".to_owned()))),
+            PadJob::Delete(_) => PadAnswer::Deleted(Some(Failure::Delete("busy".to_owned()))),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad: pad_on_disk(scratchpad),
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_new_pad(&jobs);
+    pump(&mut test, || pad.peek().refused.is_some());
+    let said = pad.peek().refused.clone().expect("a sentence");
+    assert!(said.starts_with("Not made:"), "{said}");
+
+    // The pad is let go of here whatever the worker answers, so what the refusal says is
+    // that the package is still on the disk and not that the pad came back.
+    request_delete_pad(pad, text, &jobs, pad_id("one"));
+    pump(&mut test, || {
+        pad.peek()
+            .refused
+            .as_deref()
+            .is_some_and(|said| said.starts_with("Not deleted:"))
+    });
+    assert!(pad.peek().get(&pad_id("one")).is_none());
+}
+
 /// A rename is a keystroke and nothing more: the name is a value in the pad's own package
 /// and nothing is filed under it, so the ordinary save writes it out and the row beside the
 /// box follows. Nothing moves, nothing can be refused, and two pads may be called the same
@@ -13102,6 +13145,121 @@ fn a_run_that_cannot_start_says_why() {
     let (text, bad) = pad.peek().state().run_status().expect("a status");
     assert!(text.contains("No such file or directory"), "{text}");
     assert!(bad);
+}
+
+/// Every line of a pad's own output, oldest first.
+fn output_lines(pad: State<Pads>) -> Vec<String> {
+    let pads = pad.peek();
+    let output = &pads.state().output;
+    (0..output.len())
+        .filter_map(|index| output.line(index).map(|line| line.text.to_string()))
+        .collect()
+}
+
+/// One line as a running program's pipe would hand it over.
+fn run_line(text: &str) -> RunEvent {
+    RunEvent::Wrote(crate::scratchpad::OutputLine {
+        stream: Stream::Out,
+        text: text.into(),
+    })
+}
+
+/// A running program's lines land in the pad they belong to, and the run before this one
+/// writes nowhere: its lines are dropped and its ending is not this run's.
+///
+/// Headless because the whole path is the app's own -- the callback the worker is handed,
+/// the event channel, the batch the task takes off it in one go, and the write that puts a
+/// line in that pad's deque. The output pane's own test pushes into a list it holds
+/// itself, so it reaches none of it.
+#[test]
+fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
+    // What each run was handed to write its lines with. There is no `Running` a test can
+    // answer a run with -- it is a real process -- so nothing here answers for the handle
+    // and the pad stays `Starting`; the lines are the other channel and are the point.
+    let emitters: Arc<Mutex<Vec<Box<dyn FnMut(RunEvent) + Send>>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let handed = emitters.clone();
+    let (mut test, _states, pad, _text, asking, _marked, _asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run {
+                scratchpad, emit, ..
+            } => {
+                handed.lock().expect("the emitters").push(emit);
+                // No `Started`, for the reason above: this answers as a save does,
+                // which says nothing about the run and leaves the pad `Starting`.
+                PadAnswer::Saved {
+                    pad: scratchpad.id().clone(),
+                    failure: None,
+                }
+            }
+        });
+
+    pump(&mut test, || pad.peek().state().opened);
+    already_built(pad, fixture_artifact());
+    test.sync_and_update();
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_run(pad, &jobs);
+    pump(&mut test, || {
+        !emitters.lock().expect("the emitters").is_empty()
+    });
+
+    let mut first = emitters.lock().expect("the emitters").remove(0);
+    first(run_line("one"));
+    first(run_line("two"));
+    pump(&mut test, || pad.peek().state().output.len() == 2);
+    assert_eq!(output_lines(pad), ["one", "two"]);
+
+    // The next run: the number moves on and the output starts empty, so what the run
+    // before it goes on writing is for nobody.
+    request_run(pad, &jobs);
+    pump(&mut test, || {
+        emitters.lock().expect("the emitters").len() == 1
+    });
+    assert!(output_lines(pad).is_empty(), "the run did not start afresh");
+
+    first(run_line("late"));
+    first(RunEvent::Ended(Ended::Exited(Some(0))));
+    for _ in 0..8 {
+        test.sync_and_update();
+    }
+    assert!(
+        output_lines(pad).is_empty(),
+        "a left run's line landed in the run after it"
+    );
+    let left = matches!(pad.peek().state().run_state, RunState::Starting);
+    assert!(left, "a left run's ending stopped the run after it");
+
+    // The two runs writing at once, which is one batch: nothing polls the task between
+    // these, so both lines are taken off the channel together and the older run's has to
+    // be told from the live one inside the loop rather than before it.
+    let mut second = emitters.lock().expect("the emitters").remove(0);
+    first(run_line("later still"));
+    second(run_line("after"));
+    pump(&mut test, || pad.peek().state().output.len() == 1);
+    assert_eq!(output_lines(pad), ["after"]);
+
+    // And this run's own ending is its own.
+    second(RunEvent::Ended(Ended::Exited(Some(0))));
+    pump(&mut test, || {
+        matches!(pad.peek().state().run_state, RunState::Over(_))
+    });
+    assert_eq!(output_lines(pad), ["after"]);
+    let (status, bad) = pad.peek().state().run_status().expect("a status");
+    assert_eq!(status, "Exited");
+    assert!(!bad);
 }
 
 /// The lines a run has written, for [`output_harness`] to draw and a test to push into.

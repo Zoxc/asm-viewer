@@ -502,6 +502,15 @@ wears: stderr is not an error, it is the other stream, so it takes the palette's
 Between the two streams there is no order to preserve and none is claimed: two pipes read by two
 threads, which is all a terminal has either.
 
+**A line arriving is written into the table and not over it.** The task takes everything already
+queued in one go, so a batch is one render however many lines it holds, and it writes through the
+state's own guard. `Pads` holds every pad's source, dependencies, diagnostics and output, so
+replacing the table to push one line would copy all of it -- and copy the deque of lines a second
+time inside `Arc::make_mut`, the `Arc` over them having just been cloned with the table. What is
+left is the one copy the pane's own hold on those lines forces. The guard is taken only when the
+batch holds something for a pad that is still there and still on the run it names, a write notifying
+whether or not it changed anything.
+
 **The list follows the newest line, and the reader takes it back by scrolling away.** Arriving lines
 keep the pane pinned to the bottom while the reader is at the bottom; a wheel away from there
 releases it and leaves them exactly where they are however much arrives after; coming back to the
