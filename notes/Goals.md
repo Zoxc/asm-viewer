@@ -293,6 +293,18 @@ leaves this list when it is. That is a move made on request, like everything els
   wash a visible step from the ground it sits on, and those grounds are what this moves; and
   `text_select_bg` is translucent on purpose, so a row wash over `pane_bg` is not the colour
   the same field draws over a code pane.
+- [ ] Draw the disclosure triangles as icons, not as glyphs. Every list that folds spells
+  its triangle as a character in the interface font -- `\u{25b8}` shut and `\u{25be}` open --
+  in the Objects tree's archive rows (`src/ui/sidebar.rs`), the Files tree
+  (`src/ui/files_view.rs`), the Search and Locations panels, and the symbol bar's section
+  (`src/ui/symbol_bar.rs`). So the shape is the font's rather than the app's: it is sized and
+  coloured as text, it sits on the text baseline instead of in the row's middle, and it
+  changes with whatever interface font the desktop or the settings page names. The rest
+  of the app's small marks are already lucide icons through `icons-lucide`, `chevron_right`
+  and `chevron_down` among them, so the fix is those five sites drawing one of those in the
+  `CHEVRON_WIDTH` column they already keep. The decisions are what size an icon is against
+  `list_row_height`, and that the headless tests find a triangle by its label text
+  (`triangle_of`, `src/ui/tests.rs`), so each has to be given another way to point at one.
 
 - [ ] Count a column in UTF-8 bytes, not UTF-16 units. `src/chars.rs` measures a place as a row
   and a column in UTF-16 units, and every consumer follows: the language server's places, a
