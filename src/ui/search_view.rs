@@ -183,7 +183,7 @@ impl KeyExt for HitRow {
 
 impl Component for HitRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         // Consumed in the render and peeked in the handler, where no hook may run.
         let states = use_project_states();
         let ctrl = use_consume::<Ctrl>().0;
@@ -191,12 +191,6 @@ impl Component for HitRow {
         let plant = use_consume::<Plant>().0;
         let marked = use_consume::<Marked>().0;
         let mut searched = self.searched;
-
-        let background = if hovering() {
-            palette().object_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
 
         let row = self.row.clone();
         let pressed = row.clone();
@@ -207,18 +201,7 @@ impl Component for HitRow {
 
         row_tooltip(
             tooltip,
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 5.0))
-                .spacing(5.0)
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            list_row(hovering, false)
                 .on_press(move |_| match &pressed {
                     SearchRow::File { path, .. } => {
                         searched.write().hits.toggle(path);

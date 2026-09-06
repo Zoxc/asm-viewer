@@ -29,7 +29,7 @@ impl KeyExt for BookmarkRow {
 
 impl Component for BookmarkRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let open = use_open();
         // Consumed and not read: a row hands the list an index back and draws nothing of
         // it that the tab has not already handed it.
@@ -37,8 +37,7 @@ impl Component for BookmarkRow {
         let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let index = self.index;
-        let live = self.live.clone();
-        let dead = live.is_none();
+        let dead = self.live.is_none();
 
         // Drawn from the bookmark whether or not the place is live, so a row does not
         // change its spelling when its binary is closed.
@@ -53,40 +52,26 @@ impl Component for BookmarkRow {
             _ => label.to_string(),
         };
 
-        let background = match hovering() && !dead {
-            true => palette().symbol_hover_bg,
-            false => Color::TRANSPARENT,
+        // A dead row has no handlers at all, like a dimmed history button: nothing to go
+        // to, so nothing to light up for. Nothing is picked out in this list either -- a
+        // bookmark is a place, not a selection.
+        let row = match &self.live {
+            Some(live) => {
+                let live = live.clone();
+                list_row(hovering, false).on_press(move |_| {
+                    open_document(open, visits, live.clone(), reach(ctrl));
+                })
+            }
+            None => dead_list_row(),
         };
 
         row_tooltip(
             tooltip,
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 5.0))
-                .spacing(5.0)
-                .background(background)
-                .overflow(Overflow::Clip)
-                // A dead row has no handlers at all, like a dimmed history button: nothing
-                // to go to, so nothing to light up for.
-                .maybe(!dead, move |row| {
-                    let live = live.clone();
-                    row.on_pointer_over(move |_| hovering.set_if_modified(true))
-                        .on_pointer_out(move |_| hovering.set_if_modified(false))
-                        .on_press(move |_| {
-                            if let Some(live) = live.clone() {
-                                open_document(open, visits, live, reach(ctrl));
-                            }
-                        })
-                })
-                .on_secondary_down(move |e: Event<PressEventData>| {
-                    ContextMenu::open_from_event(&e, remove_menu(bookmarked, index));
-                })
-                .child(saved_icon(&self.bookmark.document))
-                .child(tree_name(text, dead)),
+            row.on_secondary_down(move |e: Event<PressEventData>| {
+                ContextMenu::open_from_event(&e, remove_menu(bookmarked, index));
+            })
+            .child(saved_icon(&self.bookmark.document))
+            .child(tree_name(text, dead)),
         )
     }
 

@@ -74,6 +74,55 @@ pub(crate) fn info_line_in(text: String, color: Color) -> impl IntoElement {
     rect().padding(5.0).child(label().text(text).color(color))
 }
 
+/// The frame every sidebar-style row is drawn in: the height a list's rows are, the
+/// padding and the spacing their columns are laid on, and the three-way background --
+/// picked out, under the pointer, or nothing. The caller appends its own press, its menu
+/// and its children, and hands the result to [`row_tooltip`].
+///
+/// **The hover state stays the caller's.** There is no `.hover()` pseudo-state, so a row
+/// that lights under the pointer holds a `use_state` of its own, and a hook may only run
+/// while a component renders, which this is not. Reading it here is what subscribes the
+/// row being rendered to it, exactly as asking for a colour is.
+///
+/// The height is [`list_row_height`] and nothing else: a row and the `VirtualScrollView`
+/// over it must agree about `item_size`, or scrolling misaligns. [`dead_list_row`] is the
+/// same frame with nothing to answer the pointer with.
+pub(crate) fn list_row(mut hovering: State<bool>, selected: bool) -> Rect {
+    let background = if selected {
+        palette().selected_bg
+    } else if hovering() {
+        palette().object_hover_bg
+    } else {
+        Color::TRANSPARENT
+    };
+    row_frame(background)
+        .on_pointer_over(move |_| hovering.set_if_modified(true))
+        .on_pointer_out(move |_| hovering.set_if_modified(false))
+}
+
+/// A list row that answers the pointer with nothing: a bookmark whose place does not
+/// resolve, which is drawn dimmed and goes nowhere, so it has no hover to light.
+pub(crate) fn dead_list_row() -> Rect {
+    row_frame(Color::TRANSPARENT)
+}
+
+/// What the two share: the frame, and the one padding and the one spacing every list row
+/// lays its columns out on.
+fn row_frame(background: Color) -> Rect {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        // A row's name is the `flex` child taking what the fixed columns leave, which
+        // torin only works out under `Content::Flex`.
+        .content(Content::Flex)
+        .width(Size::fill())
+        .height(Size::px(list_row_height()))
+        .padding(Gaps::new_symmetric(0.0, 5.0))
+        .spacing(5.0)
+        .background(background)
+        .overflow(Overflow::Clip)
+}
+
 /// A row's or a chip's own text, shown in full where the row could only show part of it.
 /// Used rather than `TooltipContainer` directly so that [`TOOLTIP_DELAY`] is decided once.
 pub(crate) fn row_tooltip(text: String, row: impl IntoElement) -> TooltipContainer {

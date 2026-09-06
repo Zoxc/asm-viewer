@@ -20,9 +20,13 @@ pub(crate) struct Palette {
     pub(crate) header_bg: Color,
     pub(crate) hairline: Color,
     pub(crate) selected_bg: Color,
+    /// The wash a row takes under the pointer, in every list in the app and on either of
+    /// the two grounds a list is drawn on -- named for the Objects list it started in.
+    /// One colour and not one per pane: a row that lights says the same thing wherever it
+    /// is, and this green is a step from the pane's white and from the symbol pane's
+    /// cream alike, where a wash mixed for the cream is barely a step from the white.
     pub(crate) object_hover_bg: Color,
     pub(crate) symbol_pane_bg: Color,
-    pub(crate) symbol_hover_bg: Color,
     pub(crate) asm_pane_bg: Color,
     /// The pair: the rows of this pane that are the same place as the run picked out in
     /// the other one -- the instructions a selected source line was compiled from, the
@@ -150,7 +154,6 @@ impl Palette {
         selected_bg: Color::from_rgb(211, 211, 211),
         object_hover_bg: Color::from_rgb(144, 238, 144), // LIGHT_GREEN
         symbol_pane_bg: Color::from_rgb(243, 243, 228),
-        symbol_hover_bg: Color::from_rgb(226, 226, 205),
         asm_pane_bg: Color::from_rgb(248, 248, 248),
         pair_bg: Color::from_argb(160, 228, 237, 216),
         pair_selected_bg: Color::from_argb(190, 197, 214, 184),
@@ -199,7 +202,6 @@ impl Palette {
         selected_bg: Color::from_rgb(66, 66, 72),
         object_hover_bg: Color::from_rgb(48, 92, 52),
         symbol_pane_bg: Color::from_rgb(38, 38, 33),
-        symbol_hover_bg: Color::from_rgb(52, 52, 44),
         asm_pane_bg: Color::from_rgb(34, 34, 36),
         // The three translucent ones, each stated as what it should come out as over the
         // pane rather than as the light value flipped: `blend` puts 30/30/32 under them.

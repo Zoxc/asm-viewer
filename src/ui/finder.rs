@@ -837,7 +837,7 @@ impl KeyExt for FoundRow {
 
 impl Component for FoundRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         // Consumed in the render, because the handler that uses them runs no hook.
         let states = use_project_states();
         let finder = self.finder;
@@ -847,27 +847,10 @@ impl Component for FoundRow {
         };
         let pressed = file.path.clone();
 
-        let background = if self.on_row {
-            palette().selected_bg
-        } else if hovering() {
-            palette().object_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
-
         row_tooltip(
             file.path.display().to_string(),
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 5.0))
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            // The keyboard's row is what is picked out here; the pointer's is the hover.
+            list_row(hovering, self.on_row)
                 .on_press(move |_| {
                     open_found(states, &pressed);
                     close_finder(finder);

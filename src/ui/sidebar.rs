@@ -4,8 +4,9 @@
 //! The Objects list is a **tree that is a shape in the data and never in the element
 //! tree** -- a `VirtualScrollView` is told a length and asked for row *n*, so `tree.rs`
 //! flattens the fold state into rows and this file only draws them. Each row is a
-//! `Component` with its own hover state, there being no `.hover()` pseudo-state, and a row
-//! and the view over it must agree about [`list_row_height`], or scrolling misaligns.
+//! `Component` with its own hover state, there being no `.hover()` pseudo-state, and each
+//! is framed by [`list_row`] -- which is where a row and the view over it agree about
+//! [`list_row_height`], as they must or scrolling misaligns.
 
 use super::*;
 
@@ -48,7 +49,7 @@ impl KeyExt for ArchiveRow {
 
 impl Component for ArchiveRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let mut expanded = self.expanded;
         let group = self.group;
         let expansion = self.expansion;
@@ -56,12 +57,6 @@ impl Component for ArchiveRow {
         // hook.
         let states = use_project_states();
         let path = self.path.clone();
-
-        let background = if hovering() {
-            palette().object_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
 
         // `Forced` draws no triangle, only the space one would have taken: the filter is
         // holding the file open and folding it would hide the rows the filter put on
@@ -81,19 +76,8 @@ impl Component for ArchiveRow {
 
         row_tooltip(
             self.path.display().to_string(),
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                // The name is the `flex` child taking what the fixed columns leave, which
-                // torin only works out under `Content::Flex`.
-                .content(Content::Flex)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 5.0))
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            // Nothing is ever picked out here: an archive row has no object behind it.
+            list_row(hovering, false)
                 .on_press(move |_| {
                     // A file that has contributed no object yet has nothing to fold.
                     let Some(group) = group else {
@@ -182,20 +166,12 @@ impl KeyExt for ObjectRow {
 
 impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let states = use_project_states();
         let (open, visits) = (states.open, states.visits);
         let ctrl = use_consume::<Ctrl>().0;
         let object = self.object.clone();
         let path = self.object.path.clone();
-
-        let background = if self.selected {
-            palette().selected_bg
-        } else if hovering() {
-            palette().object_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
 
         let tooltip = if self.member {
             self.object.name.clone()
@@ -205,17 +181,7 @@ impl Component for ObjectRow {
 
         row_tooltip(
             tooltip,
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 5.0))
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            list_row(hovering, self.selected)
                 // What pressing an object opens is all of its code as one listing --
                 // the one thing an object has to show that a symbol does not. A row is
                 // a click from outside the panes: a preview, or a tab of its own with
@@ -272,7 +238,7 @@ impl KeyExt for SymbolRow {
 
 impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let ctrl = use_consume::<Ctrl>().0;
@@ -289,24 +255,9 @@ impl Component for SymbolRow {
             .clone();
         let document = Document::Assembly(Selection::Symbol(symbol.clone()));
 
-        let background = if self.selected {
-            palette().selected_bg
-        } else if hovering() {
-            palette().symbol_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
-
         row_tooltip(
             text.clone(),
-            rect()
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(5.0)
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            list_row(hovering, self.selected)
                 .on_press(move |_| {
                     open_document(
                         open,
@@ -355,7 +306,7 @@ impl KeyExt for HistoryRow {
 
 impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let open = use_open();
         // Consuming does not subscribe -- only reading would, and this row only records
         // into it.
@@ -367,27 +318,9 @@ impl Component for HistoryRow {
         let entry = self.entry.clone();
         let target = self.entry.clone();
 
-        let background = if self.current {
-            palette().selected_bg
-        } else if hovering() {
-            palette().symbol_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
-
         row_tooltip(
             entry_tooltip(&self.entry),
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 5.0))
-                .spacing(5.0)
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            list_row(hovering, self.current)
                 .on_press(move |_| {
                     open_document(open, visits, target.clone(), reach(ctrl));
                 })

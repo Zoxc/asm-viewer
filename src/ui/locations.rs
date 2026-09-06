@@ -672,7 +672,7 @@ impl KeyExt for ReferencesRow {
 
 impl Component for ReferencesRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let mut located = use_consume::<Locations>().0;
         let open = use_open();
         let visits = use_consume::<Visited>().0;
@@ -691,26 +691,9 @@ impl Component for ReferencesRow {
             }
         };
 
-        let background = if hovering() {
-            palette().object_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
-
         row_tooltip(
             tooltip,
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 5.0))
-                .spacing(5.0)
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            list_row(hovering, false)
                 .on_press(move |_| match &pressed {
                     // Bound to a `let` of its own, so the guard the read hands back is
                     // gone before the write.
@@ -820,7 +803,7 @@ impl KeyExt for LocationRow {
 
 impl Component for LocationRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let ctrl = use_consume::<Ctrl>().0;
@@ -835,28 +818,9 @@ impl Component for LocationRow {
         let name = symbol.data.display().to_owned();
         let object = symbol.object.name.clone();
 
-        let background = if self.selected {
-            palette().selected_bg
-        } else if hovering() {
-            palette().symbol_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
-
         row_tooltip(
             format!("{name} \u{2014} {object}"),
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(5.0)
-                .spacing(5.0)
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            list_row(hovering, self.selected)
                 .on_press(move |_| {
                     let symbol_tab = Document::Assembly(Selection::Symbol(symbol.clone()));
                     // The line is the answer's own, peeked when the row was built: a row

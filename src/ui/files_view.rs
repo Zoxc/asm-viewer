@@ -28,7 +28,7 @@ impl KeyExt for EntryRow {
 
 impl Component for EntryRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let mut tree = self.tree;
         // Consumed here, in the render, because the handlers that use them may not run a
         // hook.
@@ -40,12 +40,6 @@ impl Component for EntryRow {
         let fold = self.row.fold;
         let path = self.row.path.clone();
         let pressed = path.clone();
-
-        let background = if hovering() {
-            palette().object_hover_bg
-        } else {
-            Color::TRANSPARENT
-        };
 
         // A failed directory keeps its triangle: pressing it tries the read again.
         let chevron = match fold {
@@ -62,18 +56,9 @@ impl Component for EntryRow {
 
         row_tooltip(
             self.row.path.display().to_string(),
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .padding(Gaps::new_symmetric(0.0, 5.0))
-                .spacing(5.0)
-                .background(background)
-                .overflow(Overflow::Clip)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            // A file the reader has open is not picked out here: this list is the
+            // directory, not what is on screen.
+            list_row(hovering, false)
                 .on_press(move |_| match fold {
                     Some(_) => {
                         if let Some(tree) = tree.write().as_mut() {
