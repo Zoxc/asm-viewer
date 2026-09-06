@@ -20648,6 +20648,90 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
         .any(|object| object.path == artifact));
 }
 
+/// **A keyed row's own state goes with its key, not with the slot it was drawn in.** The
+/// Project view's artifact rows are keyed by the file each names, so a build that reorders
+/// or drops a target leaves each row's hover with the file it belongs to.
+///
+/// The claim is about `Component::render_key`, which is what reads the key a row was built
+/// with: a component implementing `KeyExt` without overriding it is unkeyed however it is
+/// built, since the default key is a hash of the type id alone and so the same for every
+/// row of the list. The hover then stays behind in the slot, on whatever file the reorder
+/// put there.
+#[test]
+fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
+    let (mut test, states, _language, _asking, _asks) = mount_project!(|_job: BuildJob| {
+        BuildAnswer::Read {
+            manifest: None,
+            profiles: None,
+            debug_lines: true,
+        }
+    });
+
+    // A target of its own per artifact, because the row draws its target beside the path
+    // and the path is also the tooltip's text: the target is the one label that names a
+    // row and is drawn nowhere else.
+    let one = PathBuf::from("/work/app/target/debug/one");
+    let two = PathBuf::from("/work/app/target/debug/two");
+    let run = |paths: [&Path; 2]| cargo::Run::Built {
+        artifacts: paths
+            .iter()
+            .map(|path| cargo::Artifact {
+                path: path.to_path_buf(),
+                target: path.to_string_lossy().into_owned(),
+                kind: "bin".to_owned(),
+            })
+            .collect(),
+        diagnostics: Vec::new(),
+    };
+    // What a row draws to the right of the path, and what one is found by below.
+    let about = |path: &Path| format!("{} bin", path.display());
+
+    // No directory, so nothing is read and the build state is what is written here: a
+    // manifest, which is what puts the artifact rows on screen, and the two targets.
+    let mut build = states.build;
+    {
+        let mut held = build.write();
+        held.manifest = Some(PathBuf::from("/work/app/Cargo.toml"));
+        held.built = Some(run([&one, &two]));
+    }
+    settle(&mut test);
+
+    // Whether the row holding `text` is the one wearing the hover wash.
+    let hovered = |test: &TestingRunner, text: &str| {
+        let area = label_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn"));
+        let middle = area.origin.y + area.height() / 2.0;
+        test.find_many(|node, element| {
+            (element.style().background == Fill::Color(palette().object_hover_bg))
+                .then(|| node.layout().area)
+        })
+        .into_iter()
+        .any(|row| row.origin.y <= middle && middle <= row.origin.y + row.height())
+    };
+
+    let second = centre_of(&test, &about(&two));
+    test.move_cursor(second);
+    test.sync_and_update();
+    assert!(hovered(&test, &about(&two)), "the pointer lit no row");
+    assert!(!hovered(&test, &about(&one)), "the wrong row lit");
+
+    // The same two targets the other way around, as a build that reordered them would
+    // hand them over. The pointer has not moved.
+    build.write().built = Some(run([&two, &one]));
+    settle(&mut test);
+    let (first_row, second_row) = (
+        label_area(&test, &about(&two)).expect("the reordered row is drawn"),
+        label_area(&test, &about(&one)).expect("the other row is drawn"),
+    );
+    assert!(
+        first_row.origin.y < second_row.origin.y,
+        "the rows were not reordered, so nothing was asked"
+    );
+    assert!(
+        hovered(&test, &about(&two)),
+        "the hover stayed in the slot instead of going with the row's key"
+    );
+}
+
 /// **An artifact's load outlives the view that asked for it.** The row is drawn only while
 /// the Project page is the tab on screen, and the runner renders before it polls a new
 /// task, so a load tied to that scope is dropped before it reads a byte -- leaving a row in

@@ -228,6 +228,10 @@ impl Component for HitRow {
                 .children(row_children(&row)),
         )
     }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
 }
 
 /// What a row draws: a file row is its fold, its name and its count; a match row is its

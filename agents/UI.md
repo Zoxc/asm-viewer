@@ -32,12 +32,19 @@ describes the older API and does not apply.
 only when its key or its props changed (`runner.rs:812`). So every sibling of one type answers with
 the same key, and a list of them gives the diff nothing to tell two rows apart by. `.key(..)` comes
 from `KeyExt`, which the built-in elements implement and a component does not, so a component takes
-a key only where it is given somewhere to put one. The twelve keyed components here
+a key only where it is given somewhere to put one. The keyed components here
 (`InstructionRow`, `SourceRow`, `SymbolRow`, `PadRow` and the rest) each hold a `DiffKey` field,
 implement `KeyExt::write_key` over it, and answer `render_key` with
 `self.key.clone().or(self.default_key())`: `.key(..)` writes the field and the `or` leaves the
 type's own key standing where a call site gives none. What goes into it is whatever identifies
 *that* row: an `Arc::as_ptr(..).addr()`, an instruction's address, an index.
+
+**All three parts are needed, and only `render_key` is read.** `KeyExt` alone takes the `.key(..)`
+call and stores it, so a component that leaves `render_key` out compiles, reads as keyed, and is
+not: freya asks for the key and gets `default_key`, the same one for every row of the list. Three
+components were written that way, and each row's `use_state` then stayed with the slot rather than
+with the file, the hit or the path it was drawn for. `an_artifact_rows_hover_goes_with_its_key_and_not_its_slot`
+is that mechanism pinned.
 
 **A `Writable<T>` compares equal to every other one.** Its `eq` returns `true` outright
 (`freya-core`'s `lifecycle/writable.rs`), there being nothing to compare in the four closures it is.

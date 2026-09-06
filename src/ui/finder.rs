@@ -882,6 +882,10 @@ impl Component for FoundRow {
         )
         .into_element()
     }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
 }
 
 /// A row's one paragraph: the file's name, then the directories above it dimmed, with

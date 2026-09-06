@@ -126,6 +126,10 @@ impl Component for ArtifactRow {
             ),
         )
     }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
 }
 
 /// The place a diagnostic points at, drawn as a **target** where this pane can reach it:
