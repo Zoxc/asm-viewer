@@ -67,8 +67,9 @@ catches: a deps effect runs a render late, so a Down pressed in the same pass as
 undone by the reset arriving after it. Nothing here needs an effect at all once the row carries
 the query it belongs to. The row is **clamped where it is moved**, not only where it is drawn:
 counting on past the last row left it above the list, and the reader who held Down then spent an
-Up per overshoot before the highlight moved at all. `moved` works the list out for itself, which
-is the pass the memo already makes per keystroke made once more per press.
+Up per overshoot before the highlight moved at all. The count that clamps it is the drawn list's:
+the key handler is handed the memo, so a press reads the list the panel is showing rather than
+ranking one of its own -- and Enter opens the row the reader is looking at for the same reason.
 
 **The list follows that row.** The panel is `FINDER_ROWS` tall and the arrows walk past it, so the
 list is given a `ScrollController` and each move ends in `reveal_caret` -- the code panes' own
@@ -80,6 +81,20 @@ went on opening the row it was on: a file the reader never saw named.
 list's own filter is. It is one pass over a string per file with no allocation for the paths that
 do not match. If a directory ever turns up where that shows, the ranking moves onto the worker
 beside the walk; nothing else would have to change, the memo being the only reader.
+
+**What the list is ranked from is a memo of its own**, `Asking`, between `Finder` and the
+ranking. A subscription is to a whole state and not to a field of one, and the row the keyboard is
+on lives in `Finder` beside the box, so a memo reading that state was dirtied by every arrow
+press: a held Down ranked the walk at the keyboard's repeat rate, and the overlay froze. `Asking`
+carries only the four things the answer depends on and compares the walked files by
+`Arc::ptr_eq`, so it does run per press and hands back what it handed back before. Over 20,000
+walked paths, ten Downs went from twenty passes of the query to none.
+
+The chain costs one thing: the ranking reads a value a step behind the state. That is why the
+empty box's list is taken *inside* the ranking memo rather than passed in. Reading the visits is
+what subscribes the memo to them, and while the box had text that subscription had a file being
+opened -- which writes the visits, in the same breath as the write that closes the finder -- rank
+the whole walk once more on the way out.
 
 **The chord is answered at the root**, in `root_key_down`, which stays the window's one
 `on_global_key_down` — a second one would replace it and take the modifier tracking with it,

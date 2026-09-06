@@ -34,7 +34,9 @@ leaves this list when it is. That is a move made on request, like everything els
   the UI thread already; the source side is not. `source_text` reads the file off disk
   (`source::load`) and runs the whole tree-sitter parse (`Highlighted::new`, twice: the
   highlighter's and the one the function spans are read off) inside a render, so
-  the frame that first shows a file pays for both, and a large file pays for them visibly. Two
+  the frame that first shows a file pays for both, and a large file pays for them visibly. It is
+  what a reader feels on picking a file out of Ctrl+P: the finder ranks nothing on the way out, so
+  the pause between the press and the pane is this. Two
   caches keep it to once per file — `source.rs`'s own and `HIGHLIGHTED` — but that once is a
   frame, and one of them is emptied deliberately: the spans carry the palette's colours baked
   into them, so `set_appearance` clears `HIGHLIGHTED` and a theme switch re-parses every file on
@@ -246,18 +248,14 @@ leaves this list when it is. That is a move made on request, like everything els
   split view*. None of those four is measured, which is where this starts: the rule is worth
   keeping, and an atomic write of a few hundred bytes may still be cheaper than the channel it
   would take to move it.
-- [ ] Rank the finder's list once per query, not once per keypress. Holding Down through Ctrl+P's
-  list freezes the overlay, and it is not the disk: nothing on that path reads one, the walk
-  being on a thread of its own already. `moved` calls `listed` for the row count alone -- the
-  count is what clamps the row, Down held past the end having counted on above the list -- and
-  the write it then makes re-runs the `listed` memo behind it, so one arrow press is two passes
-  of the query over every walked path, at the keyboard's repeat rate. The count a press wants is
-  the one the memo has just worked out, the box being unchanged, so handing the memo to the key
-  handler is most of this; it rewrites the paragraph in `agents/Finding.md` that has `moved`
-  making the memo's pass once more per press. What is left after that is typing rather than
-  selecting -- one ranking per keystroke, still on the UI thread -- which the same note says
-  moves onto the worker beside the walk. That half wants measuring first, and carries a decision
-  the cheap half does not: a list that lags the box has to say which query it was ranked for, as
+- [ ] Rank the finder's list on the worker beside the walk, not on the UI thread. What is left of
+  the freeze under Ctrl+P after the arrows stopped ranking: one pass of the query over every
+  walked path per keystroke, in a memo in `FinderOverlay`. Measured over 20,000 walked paths, that
+  pass is about 6 ms in a release build and 60-120 ms in a debug one, so it is `cargo run` the
+  reader feels it in first. The shape is the app's usual -- one `std::thread` for the app's
+  lifetime fed an `async_channel`, requests superseding, the panel drawing what it has until the
+  answer lands -- and the walk's own worker is already that thread. It carries a decision the
+  arrows did not: a list that lags the box has to say which query it was ranked for, as
   `Finder::at_for` already does for the row, so that Enter never opens a file the reader has
   stopped asking for.
 - [ ] Make the line-number gutter gray, in the scratchpad's editor and in the Source pane alike,

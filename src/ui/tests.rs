@@ -22389,3 +22389,47 @@ fn pressing_a_row_opens_its_file() {
         "a row opens in the temporal tab, as a Files row does"
     );
 }
+
+/// The row the keyboard is on is not one of the things the list is ranked from. It sits
+/// in `Finder` beside the box, and a subscription is to a whole state and not to a field
+/// of one, so a list ranked straight off that state was ranked again by every arrow
+/// press -- one pass of the query over every walked path per press, at the keyboard's
+/// repeat rate, which is what froze the overlay under a held Down.
+#[test]
+fn moving_the_row_is_not_a_new_question_for_the_list() {
+    let root = PathBuf::from("/project");
+    let files: Vec<crate::walk::Found> = ["one.rs", "two.rs", "three.rs"]
+        .iter()
+        .map(|name| crate::walk::found_under(&root, &root.join(name)).expect("a path with a name"))
+        .collect();
+    let state = Finder {
+        open: true,
+        typed: "rs".to_owned(),
+        at: 0,
+        at_for: "rs".to_owned(),
+        files: Arc::new(files),
+        root: Some(root),
+        id: 1,
+        walking: false,
+    };
+
+    let moved = Finder {
+        at: 2,
+        at_for: "rs".to_owned(),
+        ..state.clone()
+    };
+    assert!(
+        asking(&state) == asking(&moved),
+        "an arrow press asks the list a question it has already answered"
+    );
+
+    // What a keystroke changes, on the other hand, is a question of its own.
+    let typed = Finder {
+        typed: "rst".to_owned(),
+        ..state.clone()
+    };
+    assert!(
+        asking(&state) != asking(&typed),
+        "the box changed and the list was not asked again"
+    );
+}

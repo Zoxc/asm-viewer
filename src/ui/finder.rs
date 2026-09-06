@@ -207,6 +207,41 @@ async fn take_files(
     }
 }
 
+/// What the list is ranked from: whether the finder is drawn at all, what is in the box,
+/// the files the walk found, and where they were walked from.
+///
+/// A memo of its own between [`Finder`] and the list, because a subscription is to a
+/// whole state and not to a field of one. The row the keyboard is on lives in `Finder`
+/// too, so a list ranked straight off the state was ranked again by every arrow press --
+/// one pass of the query over every walked path per press, at the keyboard's repeat rate,
+/// which is what froze the overlay under a held Down. This memo does run per press; it
+/// hands back what it handed back last time, and `set_if_modified` stops there.
+pub(crate) struct Asking {
+    open: bool,
+    typed: String,
+    files: Arc<Vec<Found>>,
+    root: Option<PathBuf>,
+}
+
+impl PartialEq for Asking {
+    fn eq(&self, other: &Self) -> bool {
+        self.open == other.open
+            && self.typed == other.typed
+            && Arc::ptr_eq(&self.files, &other.files)
+            && self.root == other.root
+    }
+}
+
+/// What the finder is asking of the walk, as the state stands.
+pub(crate) fn asking(state: &Finder) -> Asking {
+    Asking {
+        open: state.open,
+        typed: state.typed.clone(),
+        files: state.files.clone(),
+        root: state.root.clone(),
+    }
+}
+
 /// The rows the finder draws: the files they are, and which of them the box picked out.
 ///
 /// The files are held whole and the hits index into them, so a query that lets everything
@@ -247,19 +282,15 @@ impl Listed {
     }
 }
 
-/// What the box is asking for, answered: the files it picked out, best first, or the
-/// files opened most recently where nothing is typed.
+/// What the box is asking of the walk, answered: the files it picked out, best first.
 ///
 /// On the UI thread, as a sidebar list's own filter is. A query is asked of every walked
 /// path per keystroke, which is one pass over a string per file and no allocation for the
 /// paths that do not match.
-fn listed(state: &Finder, visits: &Visits) -> Listed {
-    let typed = state.typed.trim();
-    if typed.is_empty() {
-        return recent(state, visits);
-    }
+fn ranked(asking: &Asking) -> Listed {
+    let typed = asking.typed.trim();
 
-    let mut hits: Vec<(fuzzy::Score, Picked)> = state
+    let mut hits: Vec<(fuzzy::Score, Picked)> = asking
         .files
         .iter()
         .enumerate()
@@ -278,7 +309,7 @@ fn listed(state: &Finder, visits: &Visits) -> Listed {
     hits.sort_by_key(|hit| hit.0);
 
     Listed {
-        files: state.files.clone(),
+        files: asking.files.clone(),
         hits: Arc::new(hits.into_iter().map(|(_, hit)| hit).collect()),
     }
 }
@@ -289,8 +320,8 @@ fn listed(state: &Finder, visits: &Visits) -> Listed {
 /// is listed. Only the ones under the project's directory: a reader following debug info
 /// into a binary lands in sources that are nobody's project -- the standard library's,
 /// and a dependency's out of the registry -- and the finder is the project's files.
-fn recent(state: &Finder, visits: &Visits) -> Listed {
-    let Some(root) = state.root.clone() else {
+fn recent(asking: &Asking, visits: &Visits) -> Listed {
+    let Some(root) = asking.root.clone() else {
         return Listed::default();
     };
     let files: Vec<Found> = visits
@@ -331,12 +362,20 @@ impl Component for FinderOverlay {
         // Every hook first and the early return below them: the overlay is drawn for a
         // fraction of the run, and a hook it skipped would be a hook the next render has
         // in a different place.
+        let asking = use_memo(move || asking(&finder.read()));
         let listed = use_memo(move || {
-            let state = finder.read();
-            if !state.open {
+            let asking = asking.read();
+            if !asking.open {
                 return Listed::default();
             }
-            listed(&state, &visits.read())
+            // The visits are read on this branch alone, because reading a state is what
+            // subscribes this memo to it: a file being opened writes the visits, and a
+            // memo subscribed to them while the box had text ranked the whole walk once
+            // more on the way out of the finder.
+            if asking.typed.trim().is_empty() {
+                return recent(&asking, &visits.read());
+            }
+            ranked(&asking)
         });
 
         let state = finder.read().clone();
@@ -352,8 +391,10 @@ impl Component for FinderOverlay {
             return rect().into_element();
         }
 
-        let listed = listed.read().clone();
-        let rows = listed.len();
+        // The list as the panel is about to draw it. The memo itself goes to the key
+        // handler below, which wants the same list and not a ranking of its own.
+        let drawn = listed.read().clone();
+        let rows = drawn.len();
         let at = state.selected().min(rows.saturating_sub(1));
 
         let body: Element = match (&state.root, rows) {
@@ -368,10 +409,10 @@ impl Component for FinderOverlay {
                 .height(Size::px(rows.min(FINDER_ROWS) as f32 * list_row_height()))
                 .child(
                     VirtualScrollView::new_with_data_controlled(
-                        (listed, at, finder),
-                        |index, (listed, at, finder): &(Listed, usize, State<Finder>)| {
+                        (drawn, at, finder),
+                        |index, (drawn, at, finder): &(Listed, usize, State<Finder>)| {
                             FoundRow {
-                                listed: listed.clone(),
+                                listed: drawn.clone(),
                                 index,
                                 on_row: index == *at,
                                 finder: *finder,
@@ -441,7 +482,7 @@ impl Component for FinderOverlay {
                             // declines them so that they arrive here at all.
                             .on_global_key_down(move |e: Event<KeyboardEventData>| {
                                 let ctrl = e.modifiers.contains(Modifiers::ctrl_or_meta());
-                                finder_key(finder, states, list, &e.key, ctrl);
+                                finder_key(finder, states, list, listed, &e.key, ctrl);
                             })
                             .child(FinderBox {
                                 finder,
@@ -468,23 +509,27 @@ fn note(text: &str) -> Element {
 
 /// The keys the finder answers: the list moved through, a file opened, and the overlay
 /// closed. Every read is bound before any write.
+///
+/// The list is the memo's, not a ranking of its own: it is the one the panel drew, so
+/// Enter opens the row the reader is looking at, and neither arrow asks the query of
+/// every walked path again.
 fn finder_key(
     finder: State<Finder>,
     states: ProjectStates,
     list: ScrollController,
+    listed: Memo<Listed>,
     key: &Key,
     ctrl: bool,
 ) {
+    let rows = listed.peek().len();
     match key {
         Key::Named(NamedKey::Escape) => close_finder(finder),
-        Key::Named(NamedKey::ArrowDown) => followed(list, moved(finder, states, 1)),
-        Key::Named(NamedKey::ArrowUp) => followed(list, moved(finder, states, -1)),
+        Key::Named(NamedKey::ArrowDown) => followed(list, moved(finder, rows, 1)),
+        Key::Named(NamedKey::ArrowUp) => followed(list, moved(finder, rows, -1)),
         Key::Named(NamedKey::Enter) => {
             let opened = {
-                let state = finder.peek();
-                let listed = listed(&state, &states.visits.peek());
-                let at = state.selected().min(listed.len().saturating_sub(1));
-                listed.path(at)
+                let at = finder.peek().selected().min(rows.saturating_sub(1));
+                listed.peek().path(at)
             };
             if let Some(path) = opened {
                 open_found(states, &path, ctrl);
@@ -495,25 +540,23 @@ fn finder_key(
     }
 }
 
-/// Move the keyboard `by` rows, and remember what the box said when it was moved: the row
-/// is the list's as the query stands, and the list changes under it.
+/// Move the keyboard `by` rows of `rows`, and remember what the box said when it was
+/// moved: the row is the list's as the query stands, and the list changes under it.
 ///
-/// Both ends stop at the list, which is why the list is worked out here: unclamped, Down
+/// Both ends stop at the list, which is why the count is wanted at all: unclamped, Down
 /// held past the last row counted on above it, and every Up after that was spent coming
-/// back before the highlight moved at all. `listed` is the pass the memo makes per
-/// keystroke, made once more per press.
+/// back before the highlight moved at all. The count is the drawn list's and not a
+/// ranking made here for it.
 ///
 /// Hands back the row it moved to and how many there are, which is what the scroll
 /// follows.
-fn moved(mut finder: State<Finder>, states: ProjectStates, by: isize) -> (usize, usize) {
+fn moved(mut finder: State<Finder>, rows: usize, by: isize) -> (usize, usize) {
     // Bound before the write, so the read guard is gone by then.
-    let (at, typed, rows) = {
+    let (at, typed) = {
         let state = finder.peek();
-        let rows = listed(&state, &states.visits.peek()).len();
         (
             state.selected().min(rows.saturating_sub(1)),
             state.typed.clone(),
-            rows,
         )
     };
     let mut state = finder.write();
