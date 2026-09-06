@@ -293,8 +293,10 @@ The stop **takes** the process out from under the lock, so the second stop of a 
 the no-op the first made it, and a killed server is waited for exactly once -- that wait is
 what keeps it out of the process table until the app ends. `Server`'s own `Drop` stops it,
 because `Child`'s neither waits nor kills, and every handle is in a process-global list so
-the window's close hook -- a `Send` callback that can read no UI state -- can reach one the
-UI has lost.
+`stop_all` can reach one the UI has lost. Both ways down call it, through
+`shutdown::before_exit`: the window's close hook -- a `Send` callback that can read no UI
+state -- and the panic hook's shutdown thread, which used to leave a server running behind
+a crash.
 
 A stop is also how a worker parked in a read is let go: the pipes close with the process,
 so the read ends instead of waiting on a server that will never answer. That is why the

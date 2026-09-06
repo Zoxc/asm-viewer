@@ -16,8 +16,9 @@
 //!
 //! **It must not take a lock the panicking thread might hold.** The guard the panic is
 //! unwinding out of is still alive while the hook runs, and a `std::sync::Mutex` is not
-//! reentrant, so the shutdown -- which saves the projects, and takes that lock -- goes on
-//! a thread of its own and only reaches the lock once the unwind has let it go.
+//! reentrant, so the shutdown -- `crate::shutdown::before_exit`, which saves the projects
+//! and takes that lock -- goes on a thread of its own and only reaches the lock once the
+//! unwind has let it go.
 //!
 //! **It must not panic itself**, which aborts. Everything here is best-effort: a store
 //! that cannot be written is one the reader is told about anyway, and the line put on
@@ -30,7 +31,7 @@
 //! that one's place, so the app says the same thing in both builds -- and a guarded panic
 //! stops being fatal in a release build, which it was.
 
-use crate::{project, reveal, scratchpad};
+use crate::{project, reveal, shutdown};
 use std::{
     backtrace::Backtrace,
     fs::{self, OpenOptions},
@@ -515,8 +516,8 @@ fn is_runtime(frame: &str) -> bool {
     RUNTIME.iter().any(|name| frame.contains(name))
 }
 
-/// Bring the app down the way closing the window does -- the projects saved, the
-/// scratchpads' children stopped -- and leave.
+/// Bring the app down the way closing the window does -- [`shutdown::before_exit`] and
+/// then leave.
 ///
 /// On a thread of its own, and this is the whole reason: the panicking thread has not
 /// unwound yet, so any lock it holds is still held, and `project::flush` takes one.
@@ -526,8 +527,7 @@ fn shut_down() {
     let _ = std::thread::Builder::new()
         .name("shutdown".to_owned())
         .spawn(|| {
-            project::flush();
-            scratchpad::stop_all();
+            shutdown::before_exit();
             std::process::exit(1);
         });
 }

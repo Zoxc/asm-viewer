@@ -133,6 +133,8 @@ command.
   programs each platform is asked with, in the order they are tried, and the thread they
   are run on.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
+- `src/shutdown.rs` — everything that has to happen before the process ends, in the one
+  order both the window's close hook and the panic hook's shutdown thread run it in.
 - `src/source.rs` — source files read off disk and cached by path, failures included; and
   `Language`, the one list of extensions the app knows, which says what compiles. `Seeded` is
   the test-only other way into that cache: a file with nothing on the disk behind it.

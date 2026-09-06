@@ -25,6 +25,7 @@ mod scratchpad;
 mod search;
 mod section;
 mod settings;
+mod shutdown;
 mod source;
 mod tabs;
 #[cfg(test)]
@@ -62,9 +63,7 @@ fn main() {
                 // window being closed normally, not a kill or a crash; the periodic flush
                 // bounds the loss there.
                 .with_on_close(|_, _| {
-                    project::flush();
-                    scratchpad::stop_all();
-                    lsp::stop_all();
+                    shutdown::before_exit();
                     CloseDecision::Close
                 }),
         ),

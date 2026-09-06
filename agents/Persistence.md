@@ -435,9 +435,9 @@ Three things the hook's own position decides. It runs **before the unwind**, so 
 `analysis::guard::guarded()` whether the panic is one the crate catches on purpose: those are
 written down and nothing else happens, since nothing has gone wrong with the app. It runs on the
 panicking thread while that thread still holds whatever it held, and `std::sync::Mutex` is not
-reentrant, so the shutdown -- `project::flush`, then `scratchpad::stop_all` -- goes on **a thread
-of its own** and reaches the lock only once the unwind has let it go. And it is installed from
-`ui::app`'s first render rather than from `main`, which is freya's doing (`notes/upstream/freya.md`):
-a hook set before `launch` is the inner one, and freya's box would be up and the process gone
-before ours ran. The app's workers are named (`thread::Builder::name`) for the one reason that
-the box then says which of them died.
+reentrant, so the shutdown -- `shutdown::before_exit`, the projects flushed and then every child
+the app started stopped -- goes on **a thread of its own** and reaches the lock only once the
+unwind has let it go. And it is installed from `ui::app`'s first render rather than from `main`,
+which is freya's doing (`notes/upstream/freya.md`): a hook set before `launch` is the inner one,
+and freya's box would be up and the process gone before ours ran. The app's workers are named
+(`thread::Builder::name`) for the one reason that the box then says which of them died.
