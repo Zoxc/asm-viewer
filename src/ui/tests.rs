@@ -6839,7 +6839,7 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
             _ => Ok(calling_links()),
         }
     };
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (told, channel) = async_channel::unbounded();
     let (mut test, states, language, _location, _driven, asking, asks) = mount_linking!(
         classifying: classify,
@@ -13174,7 +13174,7 @@ fn output_lines(pad: State<Pads>) -> Vec<String> {
 
 /// One line as a running program's pipe would hand it over.
 fn run_line(text: &str) -> RunEvent {
-    RunEvent::Wrote(crate::scratchpad::OutputLine {
+    RunEvent::Wrote(OutputLine {
         stream: Stream::Out,
         text: text.into(),
     })
@@ -13299,7 +13299,7 @@ fn output_harness() -> impl IntoElement {
 
 /// One more line, exactly as an arriving [`RunEvent::Wrote`] adds it.
 fn wrote(mut lines: State<Arc<RunOutput>>, text: &str) {
-    Arc::make_mut(&mut lines.write()).push(crate::scratchpad::OutputLine {
+    Arc::make_mut(&mut lines.write()).push(OutputLine {
         stream: Stream::Out,
         text: text.into(),
     });
@@ -20503,7 +20503,7 @@ fn project_view_harness() -> Element {
             }),
             LspJob::Start { run, .. } => Some(LspAnswer::Started {
                 run,
-                server: Ok(lsp::Handle::to_nothing()),
+                server: Ok(process::Handle::to_nothing()),
             }),
             _ => None,
         },
@@ -21349,7 +21349,7 @@ fn with_a_directory(test: &mut TestingRunner, states: &ProjectStates, directory:
 /// project's own directory, and the control lights when the answer comes back.
 #[test]
 fn the_control_starts_a_server_and_lights_when_it_answers() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, asks) = mount_server!({
         let handle = handle.clone();
         move |job: LspJob| match job {
@@ -21427,7 +21427,7 @@ fn the_control_is_named_and_bordered_in_the_state_it_is_in() {
 /// and the worker is told to let go of what it was talking to.
 #[test]
 fn the_next_press_stops_the_server() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, asks) = mount_server!({
         let handle = handle.clone();
         move |job: LspJob| match job {
@@ -21504,7 +21504,7 @@ fn a_server_that_will_not_start_leaves_the_reason_on_the_control() {
 /// carries is stopped rather than dropped, this being the first moment the app holds it.
 #[test]
 fn an_answer_for_a_server_that_was_stopped_is_dropped() {
-    let late = lsp::Handle::to_nothing();
+    let late = process::Handle::to_nothing();
     let (mut test, states, language, _asking, _asks) = mount_server!({
         let late = late.clone();
         move |job: LspJob| match job {
@@ -21549,7 +21549,7 @@ fn an_answer_for_a_server_that_was_stopped_is_dropped() {
 /// app.
 #[test]
 fn a_stop_while_it_is_starting_still_kills_the_process() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, _asks) = mount_server!({
         let handle = handle.clone();
         move |job: LspJob| match job {
@@ -21597,7 +21597,7 @@ fn a_stop_while_it_is_starting_still_kills_the_process() {
 /// project is not what it read.
 #[test]
 fn changing_the_project_stops_the_server() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, asks) = mount_server!({
         let handle = handle.clone();
         move |job: LspJob| match job {
@@ -21874,7 +21874,7 @@ fn the_project_views_button_starts_and_stops_the_language_server() {
 /// the control and the Project view both say it is working rather than that it is idle.
 #[test]
 fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, _asks) = mount_server!({
         let handle = handle.clone();
         move |job: LspJob| match job {
@@ -21972,7 +21972,7 @@ fn a_start_carries_the_projects_own_settings() {
                 let _ = sent.send_blocking(settings.options().to_string());
                 Some(LspAnswer::Started {
                     run,
-                    server: Ok(lsp::Handle::to_nothing()),
+                    server: Ok(process::Handle::to_nothing()),
                 })
             }
             _ => None,
@@ -22003,7 +22003,7 @@ fn a_settings_file_that_could_not_be_read_starts_nothing() {
         }),
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
-            server: Ok(lsp::Handle::to_nothing()),
+            server: Ok(process::Handle::to_nothing()),
         }),
         _ => None,
     });
@@ -22151,7 +22151,7 @@ fn a_press_over_a_directory_nobody_agreed_to_asks_before_it_starts() {
     let (mut test, states, language, _asking, asks) = mount_server!(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
-            server: Ok(lsp::Handle::to_nothing()),
+            server: Ok(process::Handle::to_nothing()),
         }),
         _ => None,
     });
@@ -22178,7 +22178,7 @@ fn a_press_over_a_directory_nobody_agreed_to_asks_before_it_starts() {
 /// name and the directory are.
 #[test]
 fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, asks) = mount_server!({
         let handle = handle.clone();
         move |job: LspJob| match job {
@@ -22219,7 +22219,7 @@ fn declining_starts_nothing_and_is_not_remembered() {
     let (mut test, states, language, _asking, asks) = mount_server!(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
-            server: Ok(lsp::Handle::to_nothing()),
+            server: Ok(process::Handle::to_nothing()),
         }),
         _ => None,
     });
@@ -22254,7 +22254,7 @@ fn declining_starts_nothing_and_is_not_remembered() {
 /// mount as one.
 #[test]
 fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, asks) = mount_server!(
         {
             let handle = handle.clone();
@@ -22298,7 +22298,7 @@ fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
 /// stops and the next press asks about the new one.
 #[test]
 fn changing_the_directory_asks_about_the_new_one() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, _asks) = mount_server!({
         let handle = handle.clone();
         move |job: LspJob| match job {
@@ -22376,7 +22376,7 @@ fn the_project_view_shows_the_agreement_and_takes_it_back() {
 /// it was just read from. The server still stops: it was the other project's.
 #[test]
 fn switching_projects_keeps_the_answer_the_new_one_brought() {
-    let handle = lsp::Handle::to_nothing();
+    let handle = process::Handle::to_nothing();
     let (mut test, states, language, _asking, _asks) = mount_server!({
         let handle = handle.clone();
         move |job: LspJob| match job {

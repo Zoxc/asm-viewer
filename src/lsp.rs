@@ -31,11 +31,11 @@
 //! by [`settings_in`] and laid over it, since some trees -- `rust-lang/rust` is the one
 //! the notes use -- cannot be read by a server that was told nothing.
 //!
-//! The process is owned the way a scratchpad's run is (`src/scratchpad.rs`): a
-//! [`Group`] arranged before the spawn, and a stop that kills the group rather than asking
-//! the server to leave. A `shutdown` request is what the specification offers, and a
-//! server that is indexing may take seconds to answer it; a stop must be over when it
-//! returns, and rust-analyzer has nothing to lose by being killed.
+//! The process is started and ended the way every program this app runs is
+//! (`src/process.rs`): in a group of its own, and stopped by killing that group rather
+//! than by asking the server to leave. A `shutdown` request is what the specification
+//! offers, and a server that is indexing may take seconds to answer it; a stop must be
+//! over when it returns, and rust-analyzer has nothing to lose by being killed.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -43,14 +43,13 @@ use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::process::Group;
+use crate::process::{self, Handle};
 
 /// The largest message that will be read, so a server that says it is about to send a
 /// gigabyte is a broken conversation and not an allocation.
@@ -190,7 +189,8 @@ pub struct Token {
 /// A started server: the conversation, and the process it is with.
 pub struct Server {
     talk: Talk<ChildStdin>,
-    process: Arc<Process>,
+    /// What ends it, which is also what says whether it has ended by itself.
+    handle: Handle,
     /// What it wrote to stderr, which is where a program that will not run says why.
     /// Bytes, and decoded once when they are read: a `read` of a pipe returns whatever is
     /// there, so a character decoded chunk by chunk is two replacement characters
@@ -204,8 +204,9 @@ pub struct Server {
 /// Start rust-analyzer over `directory` and hand back the conversation and a handle that
 /// can end it.
 ///
-/// The handle is registered here, so [`stop_all`] reaches a server whose [`Server`] has
-/// been lost -- the window's close hook can read no UI state and has only this.
+/// The handle is registered by [`process::start`], so [`process::stop_all`] reaches a
+/// server whose [`Server`] has been lost -- the window's close hook can read no UI state
+/// and has only this.
 pub fn start_in(
     program: &str,
     directory: &Path,
@@ -231,38 +232,22 @@ fn start_program_in(
         // writes there is the only account of why. `rust-analyzer` is often a rustup
         // proxy, and a toolchain without the component is a line on stderr and an exit.
         .stderr(Stdio::piped());
-    Group::arrange(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|error| Failure::NoServer(error.to_string()))?;
-    let group = Group::of(&child);
+    let (handle, pipes) =
+        process::start(&mut command).map_err(|error| Failure::NoServer(error.to_string()))?;
 
-    // Taken before the child goes behind the mutex: the conversation owns its two pipes
-    // outright and must never need the lock a stop is waiting on.
-    let (to, from) = (child.stdin.take(), child.stdout.take());
     let said = Arc::new(Mutex::new(Vec::new()));
-    let stderr = keep_stderr(child.stderr.take(), &said);
-    let process = Arc::new(Process {
-        child: Mutex::new(Some((child, group))),
-        over: AtomicBool::new(false),
-    });
-    let handle = Handle(process.clone());
-    {
-        let mut list = SERVERS.lock().unwrap_or_else(|held| held.into_inner());
-        list.retain(|other| !other.finished());
-        list.push(handle.clone());
-    }
+    let stderr = keep_stderr(pipes.stderr, &said);
 
     // `Stdio::piped()` was asked for above, so both are there; a server started without
     // them could not be talked to at all.
-    let (Some(to), Some(from)) = (to, from) else {
+    let (Some(to), Some(from)) = (pipes.stdin, pipes.stdout) else {
         handle.stop();
         return Err(Failure::NoServer("it has no pipes".to_owned()));
     };
 
     let server = Server {
         talk: Talk::over(to, BufReader::new(from), told),
-        process,
+        handle: handle.clone(),
         said,
         stderr,
     };
@@ -278,9 +263,9 @@ fn keep_stderr(
     pipe: Option<impl Read + Send + 'static>,
     said: &Arc<Mutex<Vec<u8>>>,
 ) -> Option<std::thread::JoinHandle<()>> {
-    let mut pipe = pipe?;
+    let pipe = pipe?;
     let said = said.clone();
-    Some(std::thread::spawn(move || {
+    process::read_on_thread("the language server's stderr", pipe, move |mut pipe| {
         let mut buffer = [0; 1024];
         loop {
             let Ok(read) = pipe.read(&mut buffer) else {
@@ -294,7 +279,9 @@ fn keep_stderr(
                 said.extend_from_slice(&buffer[..read]);
             }
         }
-    }))
+    })
+    .map_err(|error| log::warn!("the language server's stderr could not be read: {error}"))
+    .ok()
 }
 
 /// Wait for the stderr thread to reach EOF, up to [`ENDING`], and let it go either way.
@@ -326,7 +313,7 @@ impl Server {
             // -- and holding its lock over the wait -- is a race the stderr thread loses
             // about half the time. What it costs is the one line saying why the program
             // would not run, which is what this path is here to carry.
-            let ended = self.process.ending();
+            let ended = self.handle.ending(ENDING);
             if ended.is_some() {
                 if let Some(reader) = self.stderr.take() {
                     all_said(reader);
@@ -416,105 +403,7 @@ impl Drop for Server {
     /// Kill it and reap it. `Child`'s own `Drop` neither waits nor kills, so a server
     /// merely dropped would go on running with nothing left that could find it.
     fn drop(&mut self) {
-        Handle(self.process.clone()).stop();
-    }
-}
-
-/// A started server, as anything that is not the worker holds it: enough to end it, and
-/// nothing to talk with.
-#[derive(Clone)]
-pub struct Handle(Arc<Process>);
-
-impl Handle {
-    /// Kill the server and everything it started, and wait for it to be gone.
-    ///
-    /// Also how a worker parked in a read is let go: the pipes close with the process, so
-    /// the read it is blocked in ends instead of waiting for a server that will never
-    /// answer.
-    ///
-    /// The second stop of a server does nothing: the first took the process out from under
-    /// the lock, so no stop can name a pid the system has since given to somebody else.
-    pub fn stop(&self) {
-        self.0.over.store(true, Ordering::SeqCst);
-        let mut held = self.0.child.lock().unwrap_or_else(|held| held.into_inner());
-        let Some((mut child, group)) = held.take() else {
-            return;
-        };
-        group.kill();
-        // The child's own kill after the group's: it is what a platform with no group, or
-        // a job object the system refused, still gets.
-        let _ = child.kill();
-        // It has been killed, so this returns at once, and it is what keeps a stopped
-        // server from sitting in the process table until the app ends.
-        let _ = child.wait();
-    }
-
-    /// Whether it has been stopped.
-    pub fn finished(&self) -> bool {
-        self.0.over.load(Ordering::SeqCst)
-    }
-
-    /// A handle with no process behind it, for the tests: everything a handle is asked
-    /// about a server it has stopped is bookkeeping, and only the killing needs one.
-    #[cfg(test)]
-    pub fn to_nothing() -> Handle {
-        Handle(Arc::new(Process {
-            child: Mutex::new(None),
-            over: AtomicBool::new(false),
-        }))
-    }
-}
-
-impl Process {
-    /// How it ended, if it has, waiting [`ENDING`] for it to finish doing so.
-    ///
-    /// Asked only of a conversation that has already failed, so the wait is the price of
-    /// telling a program that would not start from a server that stopped answering.
-    fn ending(&self) -> Option<String> {
-        let until = std::time::Instant::now() + ENDING;
-        loop {
-            {
-                let mut held = self.child.lock().unwrap_or_else(|held| held.into_inner());
-                let (child, _) = held.as_mut()?;
-                match child.try_wait() {
-                    Ok(Some(status)) => return Some(status.to_string()),
-                    Ok(None) => {}
-                    Err(error) => return Some(error.to_string()),
-                }
-            }
-            if std::time::Instant::now() >= until {
-                return None;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-
-/// The process behind a [`Server`], shared by the conversation and by every [`Handle`].
-struct Process {
-    /// The process and the group it was started in -- what a stop kills, and what makes it
-    /// reach further than [`Child::kill`] would. Behind a `Mutex` because two stops, and a
-    /// stop and a drop, race by construction; **taken** by the stop that kills it, so the
-    /// second stop is the no-op the first made it and a killed server is not waited for
-    /// twice.
-    child: Mutex<Option<(Child, Group)>>,
-    over: AtomicBool,
-}
-
-/// Every server started in this run of the app that has not been stopped.
-static SERVERS: Mutex<Vec<Handle>> = Mutex::new(Vec::new());
-
-/// Stop every language server this app started.
-///
-/// For the window's close hook, which is a `Send` callback that can read no `State` --
-/// `scratchpad::stop_all` is there for the same reason.
-pub fn stop_all() {
-    let servers = {
-        let mut list = SERVERS.lock().unwrap_or_else(|held| held.into_inner());
-        std::mem::take(&mut *list)
-    };
-    for server in servers {
-        server.stop();
+        self.handle.stop();
     }
 }
 
@@ -781,48 +670,56 @@ fn write_to(to: &Mutex<Option<impl Write>>, body: &Value) -> Result<(), Failure>
 /// thread ends when the server's output does, and the closed channel is what tells a
 /// waiting request that the conversation is over.
 fn read_from<W: Write + Send + 'static>(
-    mut from: impl BufRead + Send + 'static,
+    from: impl BufRead + Send + 'static,
     to: Arc<Mutex<Option<W>>>,
     answered: std::sync::mpsc::Sender<Result<Value, Failure>>,
     mut told: impl FnMut(Note) + Send + 'static,
 ) {
-    std::thread::spawn(move || {
-        let mut working = std::collections::HashSet::new();
-        loop {
-            let message = match read_message(&mut from) {
-                Ok(message) => message,
-                // The last word: whoever is waiting is told, and whoever asks next finds
-                // the channel closed.
-                Err(failure) => {
-                    let _ = answered.send(Err(failure));
-                    return;
+    let closed = answered.clone();
+    let reading =
+        process::read_on_thread("the language server's answers", from, move |mut from| {
+            let mut working = std::collections::HashSet::new();
+            loop {
+                let message = match read_message(&mut from) {
+                    Ok(message) => message,
+                    // The last word: whoever is waiting is told, and whoever asks next finds
+                    // the channel closed.
+                    Err(failure) => {
+                        let _ = answered.send(Err(failure));
+                        return;
+                    }
+                };
+                let method = message
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                match method {
+                    // A request of us if it carries an id, a notification if it does not.
+                    Some(method) => match message.get("id") {
+                        Some(asked) => {
+                            let answer = answer_to(&method, &message);
+                            if write_to(&to, &reply(asked.clone(), answer)).is_err() {
+                                return;
+                            }
+                        }
+                        None => {
+                            if let Some(busy) = busy_after(&method, &message, &mut working) {
+                                told(Note::Busy(busy));
+                            }
+                        }
+                    },
+                    // An answer, for whoever is waiting on one.
+                    None if answered.send(Ok(message)).is_err() => return,
+                    None => {}
                 }
-            };
-            let method = message
-                .get("method")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            match method {
-                // A request of us if it carries an id, a notification if it does not.
-                Some(method) => match message.get("id") {
-                    Some(asked) => {
-                        let answer = answer_to(&method, &message);
-                        if write_to(&to, &reply(asked.clone(), answer)).is_err() {
-                            return;
-                        }
-                    }
-                    None => {
-                        if let Some(busy) = busy_after(&method, &message, &mut working) {
-                            told(Note::Busy(busy));
-                        }
-                    }
-                },
-                // An answer, for whoever is waiting on one.
-                None if answered.send(Ok(message)).is_err() => return,
-                None => {}
             }
-        }
-    });
+        });
+    if let Err(error) = reading {
+        log::warn!("the language server could not be read: {error}");
+        // Nobody will read the server, so the conversation is over before it began: what
+        // asks first finds a closed channel rather than a wait with no end to it.
+        let _ = closed.send(Err(Failure::Broken(error.to_string())));
+    }
 }
 
 /// Whether the server is working, if this notification changed the answer.

@@ -113,36 +113,9 @@ redo resolution to arrive back at that same path, or could arrive at a *differen
 has usually typed since, so what ran would not be what the diagnostics describe). It would
 interleave cargo's progress into the stream the reader is reading as their program's output, and it
 would make stopping meaningless, since killing a `cargo run` kills cargo and leaves its child with
-nothing holding it. What the app is handed back is a `Running`, whose one job is `stop`, since
-`Child`'s own `Drop` neither waits nor kills, so a run abandoned rather than stopped goes on running
-with nothing that could ever find it again. `stop_all` is the same thing for every run at once, off
-a `static`, because the window's close hook can read no state, `Saves`' reason exactly, and it sits
-beside `flush` in `main.rs`.
-
-**A run is a process group, so the stop reaches the grandchildren too.** A scratchpad is a buffer
-someone is experimenting in and `Command::new` is an ordinary thing to experiment with. A stop that
-killed only the process this app holds a handle for would leave the rest running with nothing that
-could ever find them: the grandchild's pid was never anywhere but inside the program that is now
-gone. `Group` is that one idea with two implementations and the same three moments: something before
-the spawn, something taking hold of what was spawned, and a kill. It lives in `src/process.rs`,
-having moved there when the language server needed the same thing for the same reason
-(`agents/Lsp.md`). On Unix it is `Command::process_group(0)`, std's own, so only the kill needs a
-crate, and `libc::kill(-pgid, SIGKILL)`, the group being the child's own pid and the negative
-guarded, since `-1` is every process this user may signal. On Windows it is a **kill-on-close job
-object**, created and assigned right after the spawn, and closing the app's only handle to it is the
-kill. The sliver between the spawn and the assignment is accepted rather than bought back with
-`CREATE_SUSPENDED` and a `ResumeThread`, for a window a scratchpad's program does not use, and a job
-the system refuses leaves the stop exactly what it was. The child's own kill stays, under the same
-lock and after the group's, as what a refused job or a third platform still gets. **Whether the run
-is already over is read under that same lock**, the one the reap sets it under: a stop that read it
-first and then waited for the lock would go on to signal a group the reap has just taken the last
-member of, and the system is free to have handed that pid on -- to a group leader of its own, which
-every scratchpad's run is. Stop pressed as a program exits by itself is the ordinary way into that
-window. The **reap is untouched**, since the group changes who dies, not how the end is noticed, and
-every other way a run is stopped (`stop_all`, the rebuild, the next run, the window closing) goes
-through the same `stop` and inherits it. None of this is tested. Nothing short of a real program
-says whether a stop killed anything, and building one means running cargo, which no test here does;
-the group and what a stop reaches are judged by hand.
+nothing holding it. What the app is handed back is a `process::Handle`, whose one job is to stop the
+program and everything it forked; how a program is started, stopped and reaped, and why a stop is a
+group's kill, is `agents/Process.md`.
 
 **Output is streamed, not collected**, which is the whole difference from `build_in`'s
 run-it-and-return-the-output shape: a program that prints and then loops for ever has said
@@ -152,24 +125,10 @@ line to a callback as it arrives; whichever finishes last reaps the process and 
 that hands its output to a grandchild outliving it shows as still running, which is the honest
 answer, since the output is still coming. The reap `try_wait`s on a poll rather than `wait`ing,
 because holding the `Child` is exactly what would make a stop wait for the process it is killing.
-**A reader that will not start is a reader that has finished.** The count that says both pipes are
-at their end has to reach zero however a thread ends, or the process is never reaped, the one
-`Ended` is never said, and the pad reads "Running" for ever over a zombie. The pipe went with the
-closure that could not be spawned, so nothing would read that stream either: the run is killed
-rather than left half-read, which also bounds the reap when the failing side is the last one. Only a
-real run reaches that path, so it is judged by hand. **Three bounds, and each is a
-different failure.** `MAX_LINE` (4 KiB) cuts a line with no newline in it, so a program writing
-megabytes in one line is still *delivered* rather than accumulated. That cut falls **between
-characters**: a byte count lands wherever it lands, and a multi-byte character straddling it would
-be a replacement character on each of the two rows with the character itself on neither, so what is
-left of one is carried to the front of the next read. Only an incomplete sequence at the end is
-carried -- bytes that are genuinely invalid go through lossily, as what a program writes is not this
-app's to reject. `MAX_OUTPUT_LINES` (5000) is what is kept, oldest first out, with
-`RunOutput::dropped` so the view can say the story is missing its beginning; it is a line cap and
-not a byte cap, because the view is a list of rows and a byte budget would make the row count depend
-on how long the lines happened to be. And the app's own `RUN_EVENTS`-bounded channel is backpressure
-that reaches the program itself: a full channel blocks the pipe thread, which fills the pipe, which
-blocks the writer.
+**A reader that will not start is a reader that has finished**, and the two bounds on what a
+program writes are `agents/Process.md`'s along with the rest of the reading. The third bound is the
+app's own: a `RUN_EVENTS`-bounded channel, which is backpressure that reaches the program itself,
+since a full channel blocks the pipe thread, which fills the pipe, which blocks the writer.
 
 
 ## The Scratchpad view
@@ -356,8 +315,8 @@ site grows an `Option`. **Runs are per pad**: an event carries the pad beside th
 program started in one pad goes on running and goes on writing into *its own* list while another pad
 is on screen, and its `Ended` stops the pad it belongs to rather than the one being looked at. What
 stops a run is unchanged and per pad (its Stop, its pad's rebuild, its pad's next run), and the
-window closing still stops every run everywhere, `stop_all` walking a `static` that never knew about
-pads in the first place. **Buffers are per pad too**: `PadText` is a `CodeEditorData` each rather
+window closing still stops every run everywhere, `process::stop_all` walking a list that never knew
+about pads in the first place. **Buffers are per pad too**: `PadText` is a `CodeEditorData` each rather
 than one replaced on every switch, so a pad comes back with the cursor, the selection and the undo
 history it was left with, and a rename moves its buffer with it. The editor is mounted only for a
 pad the table holds a buffer for, and that is *not* what makes its mapped `Writable` safe. Two

@@ -81,7 +81,7 @@ pub(crate) struct Language {
     pub(crate) run: u64,
     /// What ends the server. Held from the moment the worker says the process is there,
     /// which is before the handshake: a stop while it is starting has to reach it too.
-    server: Option<lsp::Handle>,
+    server: Option<process::Handle>,
 }
 
 impl PartialEq for Language {
@@ -261,10 +261,10 @@ pub(crate) enum LspAnswer {
     /// The process exists. Sent from inside the `Start` job and before the handshake,
     /// which is what puts the handle where a stop can reach it: until this the worker is
     /// in a read that only the pipes closing ends, and the pipes close with the process.
-    Spawned { run: u64, handle: lsp::Handle },
+    Spawned { run: u64, handle: process::Handle },
     Started {
         run: u64,
-        server: Result<lsp::Handle, lsp::Failure>,
+        server: Result<process::Handle, lsp::Failure>,
     },
     /// What one question came back with, and which question it was. `id` is the
     /// [`LspJob::Ask`]'s, carried through untouched.

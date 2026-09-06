@@ -8,23 +8,21 @@
 //! thread.
 
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashSet},
     fmt, fs,
-    io::{self, BufRead, BufReader, Read},
+    io::{self, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     },
-    thread,
-    time::Duration,
 };
 
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cargo::{self, Diagnostic};
-use crate::process::Group;
+use crate::process::{self, RunEvent, Stream};
 use crate::project::{base, write_atomically, write_toml};
 
 const SCRATCHPADS_DIR: &str = "scratchpads";
@@ -137,21 +135,6 @@ const RECENTS_FILE: &str = "recents.toml";
 /// band. It is the file's bound and not [`PadOrder`]'s, since the list a reader picks a pad
 /// from is that listing, and a pad the panel does not draw cannot be opened at all.
 pub const MAX_PAD_RECENTS: usize = 50;
-
-/// How much of one line of a program's output is kept before it is cut and continued on
-/// the next: a program writing megabytes with no newline in them is still *delivered*
-/// rather than accumulated into a string nobody ever sees.
-const MAX_LINE: u64 = 4096;
-
-/// How many lines of a program's output are kept, oldest first out. A line cap and not a
-/// byte cap, because the view is a list of rows; [`RunOutput::dropped`] is what lets it
-/// say the story is missing its beginning.
-const MAX_OUTPUT_LINES: usize = 5000;
-
-/// How often a program whose output has ended is asked whether it has exited. Polled
-/// rather than waited on: a blocking `wait` needs the `Child`, and holding it is what
-/// would make [`Running::stop`] wait for the process it is trying to kill.
-const REAP_POLL: Duration = Duration::from_millis(20);
 
 /// The id of the pad a first run opens, and so the directory it lives in. Checked against
 /// [`check_name`] by a test, which is what lets [`Scratchpad::default`] hand it out without
@@ -834,50 +817,29 @@ fn delete_pad_in(base: &Path, id: &PadId) -> Result<(), Failure> {
 ///
 /// The artifact is run, not `cargo run`: re-entering cargo would rebuild to a path that
 /// may differ from the one the diagnostics on screen are about, interleave cargo's own
-/// progress into the program's output, and make stopping meaningless — killing a
+/// progress into the program's output, and make stopping meaningless -- killing a
 /// `cargo run` leaves its child running. Not blocking: it forks, wires up two threads to
 /// the process's two pipes, and returns.
+///
+/// What comes back is a [`process::Handle`], whose one job is to stop the program and
+/// everything it forked (`agents/Process.md`).
 pub fn run_in(
     executable: &Path,
     directory: &Path,
     emit: impl FnMut(RunEvent) + Send + 'static,
-) -> Result<Running, Failure> {
+) -> Result<process::Handle, Failure> {
     let mut command = Command::new(executable);
     command
         .current_dir(directory)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    Group::arrange(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|error| Failure::NoProgram(error.to_string()))?;
-    // The group is claimed here and never again: everything the program forks from now on
-    // is born into it, so a stop reaches the whole tree and not only the process this app
-    // has a handle for.
-    let group = Group::of(&child);
-
-    // Taken before the child goes behind the mutex, since a reader thread owns its pipe
-    // outright and must never need the lock a stop is waiting on.
-    let out = child.stdout.take();
-    let err = child.stderr.take();
-
-    let process = Arc::new(Process {
-        child: Mutex::new(child),
-        group,
-        over: AtomicBool::new(false),
-        stopped: AtomicBool::new(false),
-    });
-    let running = Running(process.clone());
-    {
-        let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
-        list.retain(|other| !other.finished());
-        list.push(running.clone());
-    }
+    let (running, pipes) =
+        process::start(&mut command).map_err(|error| Failure::NoProgram(error.to_string()))?;
 
     // One `emit` behind one lock, so the two streams interleave in the order the program
     // wrote them. Holding it across the call is deliberate: a consumer that has fallen
-    // behind blocks a reader thread, which fills a pipe, which blocks the program itself —
+    // behind blocks a reader thread, which fills a pipe, which blocks the program itself --
     // the only backpressure there is against a program printing in a tight loop.
     let emit: Emit = Arc::new(Mutex::new(Box::new(emit)));
 
@@ -886,178 +848,10 @@ pub fn run_in(
     // grandchild outliving it therefore reads as still running, which is honest: the
     // output is still coming.
     let unfinished = Arc::new(AtomicUsize::new(2));
-    pipe_thread(out, Stream::Out, &emit, &unfinished, &process);
-    pipe_thread(err, Stream::Err, &emit, &unfinished, &process);
+    pipe_thread(pipes.stdout, Stream::Out, &emit, &unfinished, &running);
+    pipe_thread(pipes.stderr, Stream::Err, &emit, &unfinished, &running);
 
     Ok(running)
-}
-
-/// Stop every program any scratchpad has started and that has not ended by itself.
-///
-/// For the window's close hook, which is a `Send` callback that can read no `State` —
-/// `project.rs`'s `flush` is there for the same reason. A child outliving the app holds a
-/// terminal, a port or a file the next run will want, with nothing able to find it again.
-pub fn stop_all() {
-    let running = {
-        let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
-        std::mem::take(&mut *list)
-    };
-    for running in running {
-        running.stop();
-    }
-}
-
-/// Which of a program's two output streams a line came from. `stderr` is not an error, it
-/// is the other stream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stream {
-    Out,
-    Err,
-}
-
-/// One line a running program wrote. The text is an `Arc<str>` because the app keeps
-/// thousands of these in a value it clones whenever a line is added.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OutputLine {
-    pub stream: Stream,
-    pub text: Arc<str>,
-}
-
-/// What a running program has written, bounded by [`MAX_OUTPUT_LINES`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RunOutput {
-    lines: VecDeque<OutputLine>,
-    dropped: usize,
-}
-
-impl RunOutput {
-    /// Keep one more line, letting the oldest go if that is what it costs.
-    pub fn push(&mut self, line: OutputLine) {
-        if self.lines.len() >= MAX_OUTPUT_LINES {
-            self.lines.pop_front();
-            self.dropped += 1;
-        }
-        self.lines.push_back(line);
-    }
-
-    pub fn len(&self) -> usize {
-        self.lines.len()
-    }
-
-    /// The line at `index`, counting from the oldest one still kept.
-    pub fn line(&self, index: usize) -> Option<&OutputLine> {
-        self.lines.get(index)
-    }
-
-    /// How many lines were let go to make room, so the view can say the story is missing
-    /// its beginning.
-    pub fn dropped(&self) -> usize {
-        self.dropped
-    }
-}
-
-/// What a run says as it goes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RunEvent {
-    Wrote(OutputLine),
-    /// The last thing any run says, and it is said exactly once.
-    Ended(Ended),
-}
-
-/// How a run finished.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Ended {
-    /// The program returned by itself. `None` where the system ended it without a code.
-    Exited(Option<i32>),
-    /// [`Running::stop`] was asked for.
-    Stopped,
-    /// It could not be waited for.
-    Failed(String),
-}
-
-/// A program that was started, and the only thing that can stop it. Cloneable and cheap:
-/// the app holds one in a state it clones on every render and [`stop_all`] holds another.
-#[derive(Clone)]
-pub struct Running(Arc<Process>);
-
-impl Running {
-    /// Kill the whole run — the program and everything it forked, since [`run_in`] put it
-    /// in a [`Group`] of its own.
-    ///
-    /// Dropping the handle would do nothing: `Child`'s own `Drop` neither waits nor kills,
-    /// so a run abandoned rather than stopped goes on running with nothing left that could
-    /// find it, and a grandchild is worse still — nothing but the group ever knew its pid.
-    ///
-    /// A run that is already over is left alone, so a stop that races an exit cannot name
-    /// a pid the system has since given to somebody else. [`Process::kill`] is where that
-    /// is decided, under the lock the reap sets `over` under.
-    pub fn stop(&self) {
-        self.0.stopped.store(true, Ordering::SeqCst);
-        self.0.kill();
-    }
-
-    /// Whether it has ended and been reaped.
-    pub fn finished(&self) -> bool {
-        self.0.over.load(Ordering::SeqCst)
-    }
-}
-
-/// The process behind a [`Running`], shared by the handle, the two pipe threads and the
-/// list [`stop_all`] walks.
-struct Process {
-    /// Behind a `Mutex` because a stop and the reap race by construction; every operation
-    /// taken under it is a syscall that returns at once (see [`REAP_POLL`]).
-    child: Mutex<Child>,
-    /// What a stop kills, and what makes it reach further than [`Child::kill`] would.
-    group: Group,
-    over: AtomicBool,
-    stopped: AtomicBool,
-}
-
-impl Process {
-    /// End the program and everything it forked, unless it is already over.
-    ///
-    /// `over` is read **under the lock the reap sets it under**, since that is the whole
-    /// of the guard: a caller that read it first and then waited here would go on to
-    /// signal a group the reap has since taken the last member of, and the system may
-    /// have given that pid to somebody else -- to a group leader of its own, which is
-    /// exactly what another scratchpad's run is.
-    ///
-    /// The child's own kill stays under the same lock and after the group's: it is what a
-    /// platform with no group, or a job object the system refused, still gets.
-    fn kill(&self) {
-        let mut child = self.child.lock().unwrap_or_else(|held| held.into_inner());
-        if self.over.load(Ordering::SeqCst) {
-            return;
-        }
-
-        self.group.kill();
-        let _ = child.kill();
-    }
-
-    /// Wait for the process to be gone, and say how it went.
-    fn reap(&self) -> Ended {
-        loop {
-            {
-                let mut child = self.child.lock().unwrap_or_else(|held| held.into_inner());
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        self.over.store(true, Ordering::SeqCst);
-                        return match self.stopped.load(Ordering::SeqCst) {
-                            true => Ended::Stopped,
-                            false => Ended::Exited(status.code()),
-                        };
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        self.over.store(true, Ordering::SeqCst);
-                        return Ended::Failed(error.to_string());
-                    }
-                }
-            }
-            thread::sleep(REAP_POLL);
-        }
-    }
 }
 
 /// One boxed callback behind one lock: what both pipe threads write a line through.
@@ -1065,29 +859,41 @@ type Emit = Arc<Mutex<Box<dyn FnMut(RunEvent) + Send>>>;
 
 /// Read one of the process's pipes on a thread of its own, and let the last of the two to
 /// finish say the run is over.
-///
-/// A thread that will not start is a reader that has finished with nothing, and the run is
-/// killed rather than left with a stream nobody is reading.
 fn pipe_thread<R: Read + Send + 'static>(
     pipe: Option<R>,
     stream: Stream,
     emit: &Emit,
     unfinished: &Arc<AtomicUsize>,
-    process: &Arc<Process>,
+    running: &process::Handle,
 ) {
-    let started = spawn_reader({
-        let (emit, unfinished, process) = (emit.clone(), unfinished.clone(), process.clone());
-        move || {
-            // A pipe that is not there is a pipe with nothing on it, which keeps the
-            // two-must-finish count honest either way.
-            if let Some(pipe) = pipe {
-                stream_lines(BufReader::new(pipe), stream, |line| {
-                    let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
-                    emit(RunEvent::Wrote(line));
-                });
-            }
+    match pipe {
+        Some(pipe) => reading(pipe, stream, emit, unfinished, running),
+        // A pipe that is not there is a pipe with nothing on it. Still a thread of its
+        // own, so the count reaches zero and the reap happens off the caller's.
+        None => reading(io::empty(), stream, emit, unfinished, running),
+    }
+}
 
-            reader_finished(&emit, &unfinished, &process);
+/// The whole of the above with a pipe in hand.
+///
+/// A thread that will not start is a reader that has finished with nothing, and the run is
+/// stopped rather than left with a stream nobody is reading.
+fn reading<R: Read + Send + 'static>(
+    pipe: R,
+    stream: Stream,
+    emit: &Emit,
+    unfinished: &Arc<AtomicUsize>,
+    running: &process::Handle,
+) {
+    let started = process::read_on_thread("a scratchpad's output reader", pipe, {
+        let (emit, unfinished, running) = (emit.clone(), unfinished.clone(), running.clone());
+        move |pipe| {
+            process::stream_lines(BufReader::new(pipe), stream, |line| {
+                let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
+                emit(RunEvent::Wrote(line));
+            });
+
+            reader_finished(&emit, &unfinished, &running);
         }
     });
     if let Err(error) = started {
@@ -1096,95 +902,29 @@ fn pipe_thread<R: Read + Send + 'static>(
         // that stream and the program's own writes to it can only fail. End the run: the
         // count has to reach zero however a reader ends, or the process is never reaped,
         // the one `Ended` is never said, and the pad reads "Running" for ever over a
-        // zombie. The kill also bounds the reap below, which is this thread's when the
+        // zombie. The stop also bounds the reap below, which is this thread's when the
         // other reader has already finished.
-        process.kill();
-        reader_finished(emit, unfinished, process);
+        running.stop();
+        reader_finished(emit, unfinished, running);
     }
 }
 
-/// Start a reader thread, named so that a panic on it says which thread died
-/// (`crate::panics`).
-fn spawn_reader(body: impl FnOnce() + Send + 'static) -> io::Result<thread::JoinHandle<()>> {
-    thread::Builder::new()
-        .name("a scratchpad's output reader".to_owned())
-        .spawn(body)
-}
-
-/// One reader is done with its pipe. The last of the two reaps the process, takes the run
-/// off the list [`stop_all`] walks, and says how it ended.
-fn reader_finished(emit: &Emit, unfinished: &AtomicUsize, process: &Arc<Process>) {
+/// One reader is done with its pipe. The last of the two reaps the process and says how it
+/// ended.
+///
+/// A process no longer under its lock was taken by a stop, which waited for it, so that is
+/// what [`process::Handle::ended`] reads as [`process::Ended::Stopped`] -- and the reap
+/// is also
+/// what takes the run off the list a shutdown walks.
+fn reader_finished(emit: &Emit, unfinished: &AtomicUsize, running: &process::Handle) {
     if unfinished.fetch_sub(1, Ordering::SeqCst) != 1 {
         return;
     }
 
-    let ended = process.reap();
-    {
-        let mut list = RUNNING.lock().unwrap_or_else(|held| held.into_inner());
-        list.retain(|other| !Arc::ptr_eq(&other.0, process));
-    }
+    let ended = running.ended();
     let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
     emit(RunEvent::Ended(ended));
 }
-
-/// Split what a program writes into lines and hand each one over as it arrives, cut at
-/// [`MAX_LINE`]. Invalid UTF-8 is taken lossily: what a program writes is not this app's
-/// to reject.
-///
-/// **The cut falls between characters**, not between bytes. `take` stops after a byte
-/// count wherever that lands, and a multi-byte character straddling it would arrive as a
-/// replacement character on each of the two rows with the character itself on neither, so
-/// what is left of one is carried to the front of the next read.
-fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(OutputLine)) {
-    let mut carry = Vec::new();
-    loop {
-        let mut buffer = std::mem::take(&mut carry);
-        let room = MAX_LINE - buffer.len() as u64;
-        match reader.by_ref().take(room).read_until(b'\n', &mut buffer) {
-            // The end of the pipe, or a pipe that will not read: what the last cut fell
-            // inside of is the last thing there is to say, and it is said lossily, the
-            // rest of that character never having been written.
-            Ok(0) | Err(_) => {
-                if !buffer.is_empty() {
-                    emit(output_line(stream, &buffer));
-                }
-                return;
-            }
-            Ok(_) => {}
-        }
-
-        // `error_len() == None` is exactly "an incomplete sequence at the end", so bytes
-        // that are genuinely invalid still go through lossily below.
-        carry = match std::str::from_utf8(&buffer) {
-            Err(error) if error.error_len().is_none() => buffer.split_off(error.valid_up_to()),
-            _ => Vec::new(),
-        };
-        // The read was that character's first bytes and nothing else: no row yet.
-        if buffer.is_empty() {
-            continue;
-        }
-
-        // The terminator, and a `\r` in front of it: the rows are drawn one line each, so
-        // a carriage return left in would be a control character in the middle of a label.
-        while matches!(buffer.last(), Some(b'\n' | b'\r')) {
-            buffer.pop();
-        }
-
-        emit(output_line(stream, &buffer));
-    }
-}
-
-/// One row out of the bytes it was read as.
-fn output_line(stream: Stream, text: &[u8]) -> OutputLine {
-    OutputLine {
-        stream,
-        text: Arc::from(String::from_utf8_lossy(text).as_ref()),
-    }
-}
-
-/// Everything started and not yet ended, so that [`stop_all`] can reach it without a
-/// handle. A `static` because the window's close hook can be handed nothing.
-static RUNNING: Mutex<Vec<Running>> = Mutex::new(Vec::new());
 
 /// The generated manifest, as a serializable shape. **Field order is load-bearing**: TOML
 /// cannot reopen a table once a later one has begun, so every plain value of a table must

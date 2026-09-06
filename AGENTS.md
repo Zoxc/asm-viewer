@@ -134,7 +134,8 @@ command.
   are run on.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
 - `src/shutdown.rs` — everything that has to happen before the process ends, in the one
-  order both the window's close hook and the panic hook's shutdown thread run it in.
+  order both the window's close hook and the panic hook's shutdown thread run it in: the
+  projects flushed, then every program the app started stopped.
 - `src/source.rs` — source files read off disk and cached by path, failures included; and
   `Language`, the one list of extensions the app knows and the one place a per-language fact
   is decided: what compiles, which tree-sitter grammar colours it, how its functions are
@@ -162,8 +163,9 @@ command.
   file each is in and with the text of the line each is on: what the Locations panel draws.
 - `src/links.rs` — which names in a source file are links, out of what a language server
   calls them: the rule, and which of two questions following one asks.
-- `src/process.rs` — the process group a child is started in, so a stop reaches what it
-  started; a scratchpad's run and the language server both have one.
+- `src/process.rs` — every program the app starts and must be able to end outright: the
+  group each is started in, the handle that stops it, the one list a shutdown walks, the
+  pipes read on threads of their own, and a run's output cut into rows.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
 - `src/rows.rs` — the run of rows a reader selects to copy.
 - `src/chars.rs` — the run of characters a sweep over a row's text selects: a place is a row
@@ -297,6 +299,8 @@ invalidates in the same commit**: these are the record of why things are the way
   the disassembler seam, relocations, branch edges, and the never-panic testing.
 - `agents/Persistence.md` — projects and their two files, the session restore, `Saves`, recents,
   and `settings.toml`.
+- `agents/Process.md` — starting a program and ending it: the handle, the group, the two reaps,
+  the one list a shutdown walks, and the named threads its pipes are read on.
 - `agents/Scratchpad.md` — a scratchpad as a generated cargo package, its id and name, building,
   running, and the view with its one worker thread.
 - `agents/UI.md` — freya 0.4, the root contexts, documents and the dock, per-tab positions,

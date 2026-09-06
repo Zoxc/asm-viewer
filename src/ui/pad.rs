@@ -339,7 +339,7 @@ pub(crate) enum RunState {
     Idle,
     /// Asked for; the worker has not come back with a handle yet.
     Starting,
-    Going(Running),
+    Going(process::Handle),
     Over(Ended),
 }
 
@@ -551,7 +551,7 @@ pub(crate) enum PadAnswer {
     Started {
         pad: PadId,
         run: u64,
-        started: Result<Running, Failure>,
+        started: Result<process::Handle, Failure>,
     },
 }
 

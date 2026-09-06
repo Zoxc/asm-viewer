@@ -45,6 +45,7 @@ pub(crate) use crate::links;
 pub(crate) use crate::lsp;
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
+pub(crate) use crate::process::{self, Ended, OutputLine, RunEvent, RunOutput, Stream};
 pub(crate) use crate::project::{
     self, Cargo, Details, Document, OnScreen, Project, Recent, RestoredTab, SavedDock,
     SavedDocument, SavedUi, SavingTab, Selection, Session,
@@ -54,8 +55,8 @@ pub(crate) use crate::rescue;
 pub(crate) use crate::reveal;
 pub(crate) use crate::rows::RowSelection;
 pub(crate) use crate::scratchpad::{
-    is_source_file, own_source, run_in, Build, Dependency, Ended, Failure, Half, PadId, PadListing,
-    PadOrder, Problem, RunEvent, RunOutput, Running, Scratchpad, Stream, SOURCE_FILE,
+    is_source_file, own_source, run_in, Build, Dependency, Failure, Half, PadId, PadListing,
+    PadOrder, Problem, Scratchpad, SOURCE_FILE,
 };
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};

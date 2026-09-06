@@ -283,27 +283,26 @@ asks for one a keystroke.
 
 ## The process
 
-Owned the way a scratchpad's run is, and `Group` moved to `src/process.rs` so both can have
-it: arranged before the spawn, claimed after it, and killed as a group, since rust-analyzer
-forks `cargo`, `rustc` and a proc-macro server of its own. A stop **kills** rather than
-sending `shutdown`: a server that is indexing can take seconds to answer that request, and
-a stop has to be over when it returns. rust-analyzer ignores the client's `processId`, so
-nothing about the app dying would end it by itself.
+Started and ended the way every program this app runs is, `agents/Process.md`: in a group of its
+own, because rust-analyzer forks `cargo`, `rustc` and a proc-macro server of its own; stopped by
+killing that group, taken out from under one lock so a second stop is a no-op; and every handle on
+the one list `shutdown::before_exit` walks, so a server the UI has lost is still stopped when the
+app comes down.
 
-The stop **takes** the process out from under the lock, so the second stop of a server is
-the no-op the first made it, and a killed server is waited for exactly once -- that wait is
-what keeps it out of the process table until the app ends. `Server`'s own `Drop` stops it,
-because `Child`'s neither waits nor kills, and every handle is in a process-global list so
-`stop_all` can reach one the UI has lost. Both ways down call it, through
-`shutdown::before_exit`: the window's close hook -- a `Send` callback that can read no UI
-state -- and the panic hook's shutdown thread, which used to leave a server running behind
-a crash.
+A stop **kills** rather than sending `shutdown`: a server that is indexing can take seconds to
+answer that request, and a stop has to be over when it returns. rust-analyzer ignores the client's
+`processId`, so nothing about the app dying would end it by itself. `Server`'s own `Drop` stops it,
+`Child`'s neither waiting nor killing.
 
-A stop is also how a worker parked in a read is let go: the pipes close with the process,
-so the read ends instead of waiting on a server that will never answer. That is why the
-kill happens on the UI thread and the worker is only told afterwards -- and why the handle
-reaches the app at the spawn rather than at the handshake, the handshake being one of the
-reads a worker can be parked in.
+The stop is also how a worker parked in a read is let go: the pipes close with the process, so the
+read ends instead of waiting on a server that will never answer. That is why the kill happens on the
+UI thread and the worker is only told afterwards -- and why the handle reaches the app at the spawn
+rather than at the handshake, the handshake being one of the reads a worker can be parked in.
+
+A handshake that failed asks the process how it ended, waiting `ENDING` for it to finish doing so,
+and that is what tells a program that would not start from a server that stopped answering. A
+process this app stopped answers "not ended by itself", which is the same answer as a server still
+running: the app killing it is not the program refusing to run.
 
 ## The worker and what an answer is about
 

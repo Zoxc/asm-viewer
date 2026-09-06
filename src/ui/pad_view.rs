@@ -336,7 +336,7 @@ impl PartialEq for OutputRows {
 /// is the whole of why this row cannot wrap the way a diagnostic does: a wrapped row is a
 /// row whose height depends on its text, and a virtual list has to know every row's height
 /// before it has built one.
-fn output_row(line: &crate::scratchpad::OutputLine) -> Element {
+fn output_row(line: &OutputLine) -> Element {
     let color = match line.stream {
         Stream::Out => palette().text_fg,
         Stream::Err => palette().string_fg,
