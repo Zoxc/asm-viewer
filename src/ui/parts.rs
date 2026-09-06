@@ -131,7 +131,7 @@ pub(crate) fn cut_tooltip(cut: bool, text: String, row: impl IntoElement) -> Ele
     match cut {
         false => row,
         true => TooltipContainer::new(Tooltip::new(text))
-            .delay(TOOLTIP_DELAY)
+            .delay(CUT_TOOLTIP_DELAY)
             .child(row)
             .into_element(),
     }
@@ -139,10 +139,10 @@ pub(crate) fn cut_tooltip(cut: bool, text: String, row: impl IntoElement) -> Ele
 
 /// A tooltip saying what the thing under it does not: a file's path where its name is
 /// drawn, where a matched line is, what a button does. Shown whatever fitted, since what
-/// it says is not on screen either way.
+/// it says is not on screen either way -- and it **waits**, freya's own half second,
+/// being a second thought rather than the rest of what is being read.
 pub(crate) fn extra_tooltip(text: String, row: impl IntoElement) -> Element {
     TooltipContainer::new(Tooltip::new(text))
-        .delay(TOOLTIP_DELAY)
         .child(row.into_element())
         .into_element()
 }

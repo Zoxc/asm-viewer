@@ -152,11 +152,15 @@ pub(crate) const TAG_FONT_SIZE: f32 = 10.0;
 /// narrow runs the ellipsis straight into the digits.
 pub(crate) const COUNT_GUTTER: f32 = 6.0;
 
-/// How long a list row's tooltip waits before it appears. Zero, against
-/// `TooltipContainer`'s 500ms default: a truncated name is read by sweeping the pointer
-/// down the list. The filter toggles and the toolbar's two history buttons keep the
-/// default: neither says anything the eye has already read off the control.
-pub(crate) const TOOLTIP_DELAY: Duration = Duration::ZERO;
+/// How long the tooltip saying the rest of a cut text waits before it appears. Zero,
+/// against `TooltipContainer`'s 500ms default: what it holds is the rest of what the
+/// reader is already reading, and it is read by sweeping the pointer down a list.
+///
+/// Every other tooltip keeps freya's own wait, which is what `extra_tooltip` not setting
+/// one means. Those say something the reader is not looking at -- a file's path under its
+/// name, what a button does -- and one arriving the moment the pointer crosses a control
+/// is noise.
+pub(crate) const CUT_TOOLTIP_DELAY: Duration = Duration::ZERO;
 
 /// How wide the hover box is: enough for a signature and a paragraph of a doc comment,
 /// and narrow enough to leave the code beside it readable. A fixed width, so what the
@@ -170,10 +174,10 @@ pub(crate) const HOVER_WIDTH: f32 = 520.0;
 /// on is the pointer being still, and a pointer travelling slowly along a line is still on
 /// its way somewhere. So a hover is asked for by stopping, and by nothing else.
 ///
-/// A hover's own wait, and not `TOOLTIP_DELAY`'s zero: a list row's tooltip says what the
-/// row already draws, where this is a round trip to another process about whatever the
-/// pointer stopped on. Shorter than freya's own half second all the same, since a pointer
-/// that has stopped has asked already.
+/// A hover's own wait, and not [`CUT_TOOLTIP_DELAY`]'s zero: that one says the rest of a
+/// text the row is already showing, where this is a round trip to another process about
+/// whatever the pointer stopped on. Shorter than freya's own half second all the same,
+/// since a pointer that has stopped has asked already.
 pub(crate) const HOVER_DELAY: Duration = Duration::from_millis(300);
 
 /// How tall the hover box may be: a dozen lines of what a doc comment is written in, and
