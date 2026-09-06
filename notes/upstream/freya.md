@@ -255,6 +255,22 @@ consumes contexts in the component and hands the states down (`Arrangement`,
 `src/ui/state.rs`), and `AGENTS.md`'s UI gotchas carry the rule. Naming the hook's index, or
 the type found against the type expected, would have said it outright.
 
+## An ellipsis costs a text its measured width
+
+A `label` or a `paragraph` of one line is laid out at `f32::MAX` and measures
+`longest_line()` -- its natural width -- but **only** with `max_lines(1)`, the default
+alignment and no ellipsis; ask for `TextOverflow::Ellipsis` and it is laid out at
+`area_size.width + 1.0` instead, so what it measures is the ellipsised line, which is the
+box again (`freya-core-0.4.3/src/elements/label.rs:262-280`, `paragraph.rs:306-333`).
+Nothing outside torin sees the difference: `inner_sizes` on a text node is its padding and
+nothing else, `should_measure_inner_children` being false for a label (`label.rs:288-290`).
+
+So the code panes' horizontal scroll rests on those three conditions holding: a row reports
+its content width through `inner_sizes` (`ui/width.rs`), which is the paragraph's natural
+width only because the paragraph asks for no ellipsis and no alignment. **A
+`.text_overflow(..)` added to a code row would collapse that to the pane's own width**, and
+the pane would scroll over nothing, with nothing failing anywhere else.
+
 ## Wanted
 
 **A `SubMenu` that says it is one.** It renders a `MenuItem` around `rect().horizontal()`
@@ -420,3 +436,16 @@ half of why the scratchpad's listing follows the editor and nothing goes the oth
 instruction that named a line could neither light it nor bring it into view. An overlay of ours
 is no way round it: it cannot read the scroll it would have to follow. A `ScrollController` the
 editor accepts, or a scroll to its own cursor, would do it.
+
+**A text that says it did not fit.** There is no truncation flag and no event for one:
+`SizedEventData` is `area`, `visible_area` and `inner_sizes` and nothing more, and the
+natural width is gone before anything outside torin can see it wherever a text asks for an
+ellipsis (above). What the app does instead: a row's name is a `paragraph`, whose
+`ParagraphHolder` hands back skia's own paragraph, and that answers `did_exceed_max_lines()`
+off the layout freya already did -- measured headlessly in a 100px box as `false` for `ab`
+and `true` for a name whose `max_intrinsic_width` was 422px (`Fitted`, `ui/parts.rs`).
+**Cost:** a name is a paragraph and not a label, which is one `Rc<RefCell<..>>` and one
+`on_sized` per row and the accessibility role of a paragraph; and the answer is a render
+behind the measurement, so a row is drawn once before it knows. 0.5.0-rc.4 changes none of
+it -- the same three fields, and `Label` still has no holder. A flag on `SizedEventData`, or
+a `Label::holder`, would do it.

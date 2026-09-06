@@ -35,3 +35,12 @@ menu's ways to open a project, with the recent projects under them.
 
 The bar keeps its menu, without Project, and the rest of it is dim. Settings and the
 Scratchpad open as tabs, so the tab bar comes back for them and goes when the last one closes.
+
+## Tooltips
+
+Text too long for where it is drawn is cut with `…`; hovering shows the whole.
+Text that fits has no tooltip.
+Some tooltips say more than the text — a file's path where its name is drawn, a symbol's whole
+name where two parts of it are, where a matched line is — and are always shown.
+A button's tooltip says what the button does.
+A tooltip over cut text appears at once; every other one waits.

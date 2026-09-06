@@ -155,9 +155,11 @@ own, so the header runs the full width of the pane. The four answers the pane ca
 Each name is **one line however long the name is**, ellipsised, never wrapped. This repo's own
 samples reach 1038 bytes mangled, which is fifteen wrapped lines at this pane's width, and a bar
 tall enough for the worst name is a bar that is that tall for every other one. So the tooltip and
-the clipboard are between them the whole of how a reader gets at the rest: **pressing a name copies
-it**, failing silently the way the listing's own Ctrl+C does, since a platform whose display handle
-gave freya-winit no clipboard has none and a header has nowhere to say so. The row lights with
+the clipboard are between them the whole of how a reader gets at the rest -- the tooltip where the
+name was cut and there alone (`Fitted`, `ui/parts.rs`), a name that fitted having no rest to get at:
+**pressing a name copies it**, failing silently the way the listing's own Ctrl+C does, since a
+platform whose display handle gave freya-winit no clipboard has none and a header has nowhere to
+say so. The row lights with
 `toggle_hover_bg`, the grey a chrome control takes under the pointer, and deliberately not the
 relocation label's `link_hover_bg`: that one is a translucent white, and over the header's own grey
 it moves the surface six levels and says nothing, which is what the wash test now holds, beside a

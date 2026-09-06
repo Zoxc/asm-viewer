@@ -79,5 +79,5 @@ shortened is shown as it is.
 A name the app made up is shown as it is too. Those are written whole in angle brackets,
 `<entry point>` and `<function 0x…>`; no name out of a file is.
 
-History items use the same name. The tooltip shows the whole name and the History filter matches
-it. A name still long is cut at 40 characters.
+History items use the same name. The whole name is what a tooltip shows and what the History
+filter matches. A name still long is cut at 40 characters.

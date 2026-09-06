@@ -445,9 +445,9 @@ framework-free with its own `tests.rs`, written against names taken out of that 
 the app rather than beside the demangling in `analysis`, because the crate has no use for it: it
 hands out the name the file states and the name the demangler made of it, and *how much of one to
 draw* is a question only a view has. `entry_text` is where it is applied and is the one spelling a
-document tab and a History row share; `entry_name` beside it is the whole name, which is what the
-tooltip says and what the History filter matches, so a generic argument no tab draws is still
-something a reader can search for.
+document tab and a History row share; `entry_name` beside it is the whole name, which is what a
+tooltip says where the two differ and what the History filter matches, so a generic argument no
+tab draws is still something a reader can search for.
 
 **Nothing in that scanner recurses.** A name is file input, and reading a `<Type as Trait>`
 qualifier used to be one call per group: a symbol of a hundred thousand `<` -- which a string table

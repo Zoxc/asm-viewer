@@ -409,6 +409,10 @@ So one wash lights a row wherever it is drawn, and it is the green: a step from 
 from the symbol pane's cream alike, where the cream is barely a step from the white.
 `dead_list_row` is the same frame with no hover, for the bookmark whose place does not resolve.
 
-**Tooltips** are how a truncated row is read, so `row_tooltip` sets the delay to `Duration::ZERO`;
-freya's 500ms default makes sweeping down a list useless. The filter toggles keep the default (their
-tooltip explains what `\b` means), and the code rows have none.
+**Tooltips** are how a cut row is read, so `cut_tooltip` mounts nothing where the name fitted: a
+tooltip repeating what is already on screen is noise the pointer drags down the list. What decides
+it is the row's own answer to whether it fit -- `Fitted`, which the name paragraph writes and the
+row reads as it renders (`ui/parts.rs`). It is instant, `CUT_TOOLTIP_DELAY`; freya's 500ms makes
+sweeping down a list useless. `extra_tooltip` is the other kind, always there and keeping that half
+second: a file row's path where the row draws its name, the filter toggles' words for `\b`. The
+code rows have neither.

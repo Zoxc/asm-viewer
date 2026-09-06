@@ -12,11 +12,6 @@ Each list panel has its own filter bar: Objects, Symbols, History, Bookmarks, Lo
 Its three toggles are written as the regex they turn on: `Aa` for case, `\b` for whole word,
 `.*` for regex. A pattern that does not compile shows its error under the bar.
 
-## Tooltips
-
-Every list item shows its whole text in a tooltip, with no delay. The filter toggles' tooltips
-keep the usual delay.
-
 ## Bookmarks
 
 A bookmark is a symbol the user saved, listed in the Bookmarks panel in the order added and
