@@ -1,6 +1,7 @@
-//! The run of characters a reader has picked out of a listing, beside the run of rows in
-//! `rows.rs`: where it started, where it has got to, where the keyboard moves it, what
-//! each row draws of it and what it copies.
+//! The run a reader has picked out of a listing: where it started, where it has got to,
+//! where the keyboard moves it, what each row draws of it and what it copies. It is the
+//! run of **characters**, and the rows it touches are the run of rows -- the place the two
+//! panes point at each other through ([`CharSelection::rows`]).
 //!
 //! A column is a **UTF-16 unit** into the row's text as the row draws it, which is the
 //! unit the text engine answers a pointer in and takes a highlight in; nothing here
@@ -9,6 +10,7 @@
 //! as the whole name it shows.
 
 use std::fmt;
+use std::ops::RangeInclusive;
 
 /// A place in a listing: a row, and a column in UTF-16 units of that row's text. Ordered
 /// by row first, which is what puts the two ends of a selection in listing order.
@@ -19,8 +21,8 @@ pub struct Caret {
 }
 
 /// A run of characters: where the reader started and where they have got to. The gesture
-/// itself -- whether the button is still down -- is the row run's `dragging`, since a sweep
-/// moves both at once.
+/// itself -- whether the button is still down -- is the run's `dragging` in `ui/marks.rs`,
+/// since a sweep moves the caret and the rows at once.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CharSelection {
     /// The end that stays put while the other moves.
@@ -229,6 +231,11 @@ impl CharSelection {
         self.lead
     }
 
+    /// Where it started: the end that stays put while the lead moves.
+    pub fn anchor(self) -> Caret {
+        self.anchor
+    }
+
     /// The two ends in listing order, whichever way round they were picked.
     pub fn ends(self) -> (Caret, Caret) {
         if self.lead < self.anchor {
@@ -236,6 +243,19 @@ impl CharSelection {
         } else {
             (self.anchor, self.lead)
         }
+    }
+
+    /// The rows the run touches, in listing order whichever way round it was swept: what
+    /// the pair on the other side is lit for, and what a copy with nothing selected
+    /// takes. A run within one row is that row alone.
+    pub fn rows(self) -> RangeInclusive<usize> {
+        let (first, last) = self.ends();
+        first.row..=last.row
+    }
+
+    /// Whether `row` is one of them.
+    pub fn contains_row(self, row: usize) -> bool {
+        self.rows().contains(&row)
     }
 
     /// What row `row` draws of the run, as the range of its `units` to highlight: from the

@@ -167,9 +167,9 @@ command.
   group each is started in, the handle that stops it, the one list a shutdown walks, the
   pipes read on threads of their own, and a run's output cut into rows.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
-- `src/rows.rs` — the run of rows a reader selects to copy.
-- `src/chars.rs` — the run of characters a sweep over a row's text selects: a place is a row
-  and a column in UTF-16 units, a row's text is pieces, and what each row draws and copies.
+- `src/chars.rs` — the run a sweep over a listing selects: a place is a row and a column in
+  UTF-16 units, a row's text is pieces, and what each row draws, what the rows it touches
+  are, and what it copies.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
 - `src/docs.rs` — `Docs`, the table mapping a document tab's `DocId` to the trail behind it: every

@@ -53,7 +53,6 @@ pub(crate) use crate::project::{
 pub(crate) use crate::references::{self, ReferenceRow, ReferenceRows};
 pub(crate) use crate::rescue;
 pub(crate) use crate::reveal;
-pub(crate) use crate::rows::RowSelection;
 pub(crate) use crate::scratchpad::{
     is_source_file, own_source, run_in, Build, Dependency, Failure, Half, PadId, PadListing,
     PadOrder, Problem, Scratchpad, SOURCE_FILE,

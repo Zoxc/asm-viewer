@@ -92,8 +92,8 @@ struct SectionRows {
     /// The edges starting or ending at a picked-out instruction, by the stretch they
     /// are in, for the gutter of every row those run through.
     touching: Vec<(usize, Vec<PlacedEdge>)>,
-    marks: Option<RowSelection>,
-    /// The characters picked out here, for each row to draw its part of.
+    /// The run picked out here -- the caret, the characters, and so the rows -- for each
+    /// row to draw its part of, or `None` when there is none.
     chars: Option<CharSelection>,
 }
 
@@ -108,11 +108,10 @@ impl PartialEq for SectionRows {
             && Arc::ptr_eq(&self.object, &other.object)
             && self.pair == other.pair
             && self.touching == other.touching
-            && self.marks == other.marks
-            // The caret and the selection too: a key that moves the caret along a row
-            // changes no row of the run, and rows compared without it drew the caret
-            // where it had been -- which read, in the unified view alone, as Left, Right,
-            // Home and End doing nothing.
+            // The caret and the columns, and not only the rows the run touches: a key
+            // that moves the caret along a row changes no row of it, and rows compared
+            // without the caret drew it where it had been -- which read, in the unified
+            // view alone, as Left, Right, Home and End doing nothing.
             && self.chars == other.chars
     }
 }
@@ -523,7 +522,6 @@ impl Component for SectionList {
         // Reading it is what redraws the listing as answers land.
         let reading = reading_state.read().clone();
         let marked = use_consume::<Marked>().0;
-        let marks = marked_rows(marked, Pane::Assembly);
         let chars = chars_of(marked, Pane::Assembly);
         let pair = pair_of(marked, Pane::Assembly);
         let docs = use_consume::<OpenDocs>().0;
@@ -592,7 +590,7 @@ impl Component for SectionList {
             move |controller: &mut ScrollController, built: &Built| {
                 let row = match owed_reveal(marked, Pane::Assembly) {
                     None => return false,
-                    Some(Owing::Own(rows)) => *rows.rows().start(),
+                    Some(Owing::Own(rows)) => *rows.start(),
                     Some(Owing::Pair(pair)) => {
                         let Some(row) = row_compiled_from(built, &built.reading, &pair) else {
                             return false;
@@ -624,7 +622,7 @@ impl Component for SectionList {
 
         // The branches touching a picked-out instruction, stretch by held stretch: the
         // run is listing rows and each stretch's lanes speak its own instructions.
-        let touching: Vec<(usize, Vec<PlacedEdge>)> = match (&built, marks) {
+        let touching: Vec<(usize, Vec<PlacedEdge>)> = match (&built, chars) {
             (Some(built), Some(run)) => built
                 .reading
                 .held
@@ -679,7 +677,6 @@ impl Component for SectionList {
                 object,
                 pair,
                 touching,
-                marks,
                 chars,
             },
             build_row,
@@ -1056,7 +1053,7 @@ fn use_kept_place(
                 .assembly
                 .as_ref()
                 .filter(|picked| picked.file.is_none())
-                .map(|picked| picked.rows.anchor);
+                .map(|picked| picked.chars.anchor().row);
             if let Some(anchor) = unnamed {
                 if let Some(file) = file_at(&built, anchor) {
                     let named = marked.peek().assembly.as_ref().map(|picked| Picked {
@@ -1285,7 +1282,7 @@ fn row_compiled_from(rows: &Rows, reading: &Reading, pair: &Picked) -> Option<us
                 pair.file.as_ref() == Some(&at.file)
                     && (at.line as usize)
                         .checked_sub(1)
-                        .is_some_and(|row| pair.rows.contains(row))
+                        .is_some_and(|row| pair.chars.contains_row(row))
             })
         })?;
         Some(rows.body_start(flat)? + studied.lanes.row_of(index))

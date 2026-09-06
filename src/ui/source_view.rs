@@ -28,9 +28,8 @@ struct SourceData {
     /// The lines of this file the listing beside it has instructions for at all: what the
     /// gutter marks.
     compiled: Arc<HashSet<u32>>,
-    /// The run of rows picked out here, or `None` when there is none.
-    rows: Option<RowSelection>,
-    /// The characters picked out here, for each row to draw its part of.
+    /// The run picked out here -- the caret, the characters, and so the rows -- for each
+    /// row to draw its part of, or `None` when there is none.
     chars: Option<CharSelection>,
     /// The tab these rows *drive*, for a source-driven tab, where a click also says which
     /// assembly the other side shows -- and `None` for the companion file beside a
@@ -54,7 +53,6 @@ impl PartialEq for SourceData {
             // most of those leave it as it was.
             && self.pairs == other.pairs
             && self.compiled == other.compiled
-            && self.rows == other.rows
             && self.chars == other.chars
             && self.drives == other.drives
             && self.links == other.links
@@ -479,7 +477,6 @@ impl PartialEq for SourceList {
 impl Component for SourceList {
     fn render(&self) -> impl IntoElement {
         let marked = use_consume::<Marked>().0;
-        let rows = marked_rows(marked, Pane::Source);
         let chars = chars_of(marked, Pane::Source);
         // The assembly pane's run, and the lines of this file it was compiled from.
         let pair = pair_of(marked, Pane::Source);
@@ -536,7 +533,7 @@ impl Component for SourceList {
                 move |controller: &mut ScrollController| {
                     let index = match owed_reveal(marked, Pane::Source) {
                         None => return false,
-                        Some(Owing::Own(rows)) => *rows.rows().start(),
+                        Some(Owing::Own(rows)) => *rows.start(),
                         // The line the run's first placed instruction came from. Nothing
                         // to scroll to when that is a file this pane is not showing --
                         // an inlined header's line 42 is not line 42 of the file on
@@ -652,7 +649,6 @@ impl Component for SourceList {
                     file: self.file.clone(),
                     pairs,
                     compiled,
-                    rows,
                     chars,
                     // A source-driven tab's subject is the file its own document names;
                     // a companion's tab is a symbol's.
@@ -755,11 +751,11 @@ fn places_of(
     built: Option<&Built>,
 ) -> Vec<LinePos> {
     match document {
-        Document::Code(_) => code_places(built, pair.rows.rows()),
+        Document::Code(_) => code_places(built, pair.chars.rows()),
         _ => analysis
             .shown
             .as_ref()
-            .map(|shown| shown.studied.places(pair.rows.rows(), 0))
+            .map(|shown| shown.studied.places(pair.chars.rows(), 0))
             .unwrap_or_default(),
     }
 }
@@ -1054,7 +1050,7 @@ impl Component for SourcePane {
                     .assembly
                     .as_ref()
                     .and_then(|picked| {
-                        let anchor = picked.rows.anchor;
+                        let anchor = picked.chars.anchor().row;
                         code_places(code_rows.peek().as_deref(), anchor..=anchor)
                             .into_iter()
                             .next()

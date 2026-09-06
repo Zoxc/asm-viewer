@@ -876,7 +876,7 @@ fn dragging(marked: State<Marks>, pane: Pane) -> bool {
         .peek()
         .of(pane)
         .as_ref()
-        .is_some_and(|picked| picked.rows.dragging)
+        .is_some_and(|picked| picked.dragging)
 }
 
 /// Where a sweep at `at`, a window location, reaches once it has left the rows of

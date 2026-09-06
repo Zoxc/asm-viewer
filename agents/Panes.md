@@ -295,7 +295,9 @@ neither to light a set of lines nor to be scrolled from outside (`notes/upstream
 `agents/Scratchpad.md`). `Marked` holds one run per pane (`Marks`, two `Picked`s, `ui/marks.rs`), and what a pane draws
 in green is the *pair*: the rows of it that are the same place as the other pane's run, the
 instructions a selected line was compiled from, the line a selected instruction came from, every one
-of them and not the first. A run is a `RowSelection` of listing rows plus the file it is a run of.
+of them and not the first. A run is a `CharSelection` -- a caret pair over the listing's rows and
+columns -- plus the file it is a run of, and the rows lit are the rows that pair touches
+(`CharSelection::rows`); there is no second copy of them to keep in step.
 So the assembly side pairs a row by asking the row's own `AsmData::position` against the run's file
 and lines, and the source side pairs a line by turning the run's rows into positions
 (`Studied::places` for a symbol's listing, `code_places` over the held stretches for an object's
@@ -802,8 +804,8 @@ operand), the rope's own line for source, tabs and all, and, in an object's code
 as it draws (`row_line`), a separator and an empty row as the blank line they are. That listing's
 run **survives its rows being counted afresh under it**, though a run is listing rows. The section
 view's own rebuild (`use_kept_place`, which produces the new `Built` in the one run that moves the
-controller) carries it across through `carry_assembly`: each row of it (the rows' two ends and the
-caret's) is put through the address it stood for in the old rows (`spot_at`) and back to a row of
+controller) carries it across through `carry_assembly`: each end of it is put through the address it
+stood for in the old rows (`spot_at`) and back to a row of
 the new (`row_for`), the way the reader's place is kept across the same recount, and a run any end
 of which has no row any more goes. Across a *switch* the old rows are gone with the reading, and the
 run comes back through the places kept for it instead (`Kept::spots`, the paragraph on navigating
@@ -840,10 +842,10 @@ against text**: the mark, the arrow gutter, the address column, the line number,
 empty row are gutter. A press there puts the caret at the row's start and makes the sweep go **by rows**
 (`Picked::by_rows`, `CharSelection::by_rows`): whole ones from the anchor's row to the pointer's, as
 a sweep down an editor's line numbers goes, and back on the anchor's own row the caret the press
-left. A press on the text anchors the caret at the column, and the sweep moves both leads, the rows'
-to the row under the pointer and the characters' to the column, which is 0 left of the text and the
-end right of it. Every pick is therefore a caret and a selection, and `Picked::chars` is not
-optional. The column is the pointer's row-relative x less the paragraph's x within the row, both
+left. A press on the text anchors the caret at the column, and the sweep moves the lead to the row
+under the pointer at the column there, which is 0 left of the text and the end right of it. Every
+pick is therefore a caret and a selection: `Picked::chars` is not optional, and it is the whole of
+the run, the rows lit being the rows it touches. The column is the pointer's row-relative x less the paragraph's x within the row, both
 taken from `on_sized` into cells (scroll-invariant, and no font's advance assumed). **A sweep
 carries on beyond the rows**, outside the listing's box, the pane, the window, because the platform
 keeps reporting a held button's pointer wherever it goes and freya sends its global move to every
@@ -903,7 +905,7 @@ them (`get_word_boundary`), three the row's text, and a sweep after either goes 
 Ctrl+C copies the characters where any are selected and otherwise the rows: the caret's row as its
 own line, address and all, as an editor copies the line under a caret with nothing selected
 (`copy_text`, pure, so the rule is tested without a clipboard). Escape collapses the selection to
-its caret, the rows to the caret's row with it, and drops the run on a second press (`peel`);
+its caret, and so the lit rows to the caret's row, and drops the run on a second press (`peel`);
 everything that drops a run drops its caret with it. Each row is handed its own `highlight` by its
 list (`highlight_of`, unclamped at the end so a row's prop changes only when an end moves on it),
 which is the reason `selected` is a row prop. The tests press on the ends of a row's text so none
@@ -926,9 +928,10 @@ the first of a run of them, so moving down through a short row and on comes back
 press, a sweep, a sideways key) clears it, and those are all `CharSelection`'s own constructors. The
 lead is clamped to the listing and the row's text first, because a sweep beyond the rows leaves it
 at `END`. The UI half decodes the key on the pane's own box, as Ctrl+C is, and does three things the
-model cannot. **The rows follow the caret**: a one-row run at its row, or with Shift the run reached
-out to it, `dragging` false, because the rows are the place the panes point at each other through
-and a caret on row 12 with the pair lit for row 3 would be two places at once. **No scroll is owed**
+model cannot. **The rows follow the caret** because they are the caret pair's own: a key
+that moves it moves what the other pane lights with it, and the gesture is over (`dragging` false).
+A caret on row 12 with the pair lit for row 3 would be two places at once, and there is no second
+run left behind to be one. **No scroll is owed**
 to the other pane (`Owed::default()`), since a held key repeats and every repeat would yank the
 other pane about while the reader walks this one. And the pane reveals the caret's row through
 `reveal_caret`, handed in as a closure by each list, **not** the `reveal_row` a click uses, whose

@@ -27,6 +27,39 @@ fn the_ends_are_in_listing_order_whichever_way_they_were_swept() {
     assert_eq!(back.of_row(1, 10), Some((2, 7)));
 }
 
+/// The rows a run touches come out in listing order whichever way round it was swept, so
+/// a sweep upwards lights what one downwards does. They are the run the two panes point
+/// at each other through, and there is no second copy of them.
+#[test]
+fn the_rows_are_in_listing_order_whichever_way_they_were_picked() {
+    let forwards = CharSelection::at(caret(2, 6)).extended(caret(4, 1));
+    let backwards = CharSelection::at(caret(4, 1)).extended(caret(2, 6));
+
+    assert_eq!(forwards.rows(), 2..=4);
+    assert_eq!(backwards.rows(), 2..=4);
+    assert!(backwards.contains_row(3));
+    assert!(!backwards.contains_row(5));
+
+    // A run within one row is that row alone, which is what a press leaves.
+    let pressed = CharSelection::at(caret(7, 3));
+    assert_eq!(pressed.rows(), 7..=7);
+    assert!(pressed.contains_row(7));
+    assert!(!pressed.contains_row(6));
+}
+
+/// Reaching out moves the lead and leaves the anchor, so a second shift-click the other
+/// side of the anchor corrects the first rather than running on from where it ended.
+#[test]
+fn extending_moves_the_lead_and_leaves_the_anchor() {
+    let selection = CharSelection::at(caret(5, 0))
+        .extended(caret(9, 2))
+        .extended(caret(2, 4));
+
+    assert_eq!(selection.rows(), 2..=5);
+    assert_eq!(selection.anchor(), caret(5, 0));
+    assert_eq!(selection.lead(), caret(2, 4));
+}
+
 /// The first row is drawn from the first end's column to its end, the last from its
 /// start to the second end's column, and every row between whole. Rows outside get
 /// nothing.

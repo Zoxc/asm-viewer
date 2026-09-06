@@ -227,7 +227,7 @@ impl AsmData {
         pair.file.as_ref() == Some(&at.file)
             && (at.line as usize)
                 .checked_sub(1)
-                .is_some_and(|row| pair.rows.contains(row))
+                .is_some_and(|row| pair.chars.contains_row(row))
     }
 }
 
@@ -243,9 +243,8 @@ struct AsmRows {
     /// The edges starting or ending at a picked-out row, which every row the gutter
     /// draws them through has to know about. Worked out once here rather than per row.
     touching: Vec<PlacedEdge>,
-    /// The run of rows picked out here, or `None` when there is none.
-    rows: Option<RowSelection>,
-    /// The characters picked out here, for each row to draw its part of.
+    /// The run picked out here -- the caret, the characters, and so the rows -- for each
+    /// row to draw its part of, or `None` when there is none.
     chars: Option<CharSelection>,
 }
 
@@ -1137,7 +1136,6 @@ impl PartialEq for InstructionList {
 impl Component for InstructionList {
     fn render(&self) -> impl IntoElement {
         let marked = use_consume::<Marked>().0;
-        let rows = marked_rows(marked, Pane::Assembly);
         let chars = chars_of(marked, Pane::Assembly);
         // The source pane's run, whose pair these rows light.
         let pair = pair_of(marked, Pane::Assembly);
@@ -1190,7 +1188,7 @@ impl Component for InstructionList {
                 move |controller: &mut ScrollController| {
                     let row = match owed_reveal(marked, Pane::Assembly) {
                         None => return false,
-                        Some(Owing::Own(rows)) => *rows.rows().start(),
+                        Some(Owing::Own(rows)) => *rows.start(),
                         // The first instruction compiled from a line of the source
                         // pane's run. Nothing at all when the lines produced no
                         // instruction here -- ones the optimiser folded away, or
@@ -1265,7 +1263,7 @@ impl Component for InstructionList {
         });
         // The picked-out run is listing rows, and `touching` speaks instructions: a run
         // that is one separator lights nothing.
-        let touching = rows
+        let touching = chars
             .and_then(|run| data.lanes.instructions_in(run.rows()))
             .map(|indices| data.lanes.touching_any(indices))
             .unwrap_or_default();
@@ -1312,7 +1310,6 @@ impl Component for InstructionList {
                 data,
                 pair,
                 touching,
-                rows,
                 chars,
             },
             move |i, rows: &AsmRows| {

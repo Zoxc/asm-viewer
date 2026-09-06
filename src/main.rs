@@ -20,7 +20,6 @@ mod project;
 mod references;
 mod rescue;
 mod reveal;
-mod rows;
 mod scratchpad;
 mod search;
 mod section;

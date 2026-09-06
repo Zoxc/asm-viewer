@@ -1,21 +1,26 @@
-//! The run of rows picked out in each of the two code panes, and what each run means to
-//! the other pane: the rows there that are the same place are lit, and a scroll to the
-//! first of them is owed once. One run per pane, independent of the other's; nothing
-//! here answers to the pointer. Beside the rows, the run of **characters** a sweep over a
-//! row's text makes and the keyboard moves, which is what Ctrl+C copies when there is one.
+//! The run picked out in each of the two code panes, and what each run means to the
+//! other pane: the rows there that are the same place are lit, and a scroll to the first
+//! of them is owed once. One run per pane, independent of the other's; nothing here
+//! answers to the pointer. A run is the **characters** a sweep over a row's text makes
+//! and the keyboard moves, which is what Ctrl+C copies; the rows it touches are what the
+//! panes light in each other ([`CharSelection::rows`]).
 
 use freya::engine::prelude::{RectHeightStyle, RectWidthStyle};
 
 use super::*;
 
-/// The run of rows a reader has picked out in one pane.
+/// The run a reader has picked out in one pane.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Picked {
-    pub(crate) rows: RowSelection,
     /// The caret, and the characters picked out: anchored by the press -- at the column
     /// pressed on the text, at the row's start from the gutter or from outside the panes
-    /// -- and swept with the rows. Empty until swept, and then it is the selection.
+    /// -- and swept from there. Empty until swept, and then it is the selection. The rows
+    /// it touches are the run the two panes point at each other through, so there is no
+    /// second copy of them: `chars.rows()` is what is lit.
     pub(crate) chars: CharSelection,
+    /// Whether the button is still down, which is what tells a row entered under the
+    /// pointer from the pointer merely passing over it.
+    pub(crate) dragging: bool,
     /// Whether a sweep of this run goes **by rows**, whole ones from the anchor's to the
     /// pointer's: a run started in the gutter does, as a sweep down an editor's line
     /// numbers does; one started on the text goes by character.
@@ -36,7 +41,7 @@ impl Picked {
     /// may be at a column, where a line alone says only the row.
     pub(crate) fn is_line(&self, file: &Arc<str>, line: u32) -> bool {
         let row = (line as usize).saturating_sub(1);
-        self.file.as_ref() == Some(file) && self.rows.anchor == row && self.rows.lead == row
+        self.file.as_ref() == Some(file) && self.chars.rows() == (row..=row)
     }
 }
 
@@ -119,10 +124,7 @@ impl Marks {
     fn settled(&self) -> Marks {
         let settle = |picked: &Option<Picked>| {
             picked.as_ref().map(|picked| Picked {
-                rows: RowSelection {
-                    dragging: false,
-                    ..picked.rows
-                },
+                dragging: false,
                 owed: Owed::default(),
                 ..picked.clone()
             })
@@ -145,8 +147,8 @@ impl Marks {
 #[derive(Clone, PartialEq, Default)]
 pub(crate) struct Kept {
     pub(crate) marks: Marks,
-    /// For each row the assembly run holds -- the rows' two ends and the caret's -- the
-    /// place it stood for. Empty except in an object's code.
+    /// For each row the assembly run holds -- its two ends -- the place it stood for.
+    /// Empty except in an object's code.
     pub(crate) spots: Vec<(usize, Spot)>,
     /// The reading generation `spots` were taken against, under which the run's rows
     /// are still its rows.
@@ -154,8 +156,8 @@ pub(crate) struct Kept {
 }
 
 impl Kept {
-    /// The place of every row `picked` holds, through `spot_at`; a row with no place is
-    /// left out, and the carry drops a run any row of which is missing.
+    /// The place of each end of `picked`, through `spot_at`; an end with no place is
+    /// left out, and the carry drops a run either end of which is missing.
     pub(crate) fn spots_of(
         picked: Option<&Picked>,
         spot_at: impl Fn(usize) -> Option<Spot>,
@@ -163,9 +165,8 @@ impl Kept {
         let Some(picked) = picked else {
             return Vec::new();
         };
-        let (anchor, lead) = picked.chars.ends();
-        let mut rows = vec![picked.rows.anchor, picked.rows.lead, anchor.row, lead.row];
-        rows.sort_unstable();
+        let (first, last) = picked.chars.ends();
+        let mut rows = vec![first.row, last.row];
         rows.dedup();
         rows.into_iter()
             .filter_map(|row| Some((row, spot_at(row)?)))
@@ -180,9 +181,9 @@ impl Kept {
             .map(|(_, spot)| *spot)
     }
 
-    /// The assembly run carried to rows counted afresh: every row of it put through the
+    /// The assembly run carried to rows counted afresh: each end of it put through the
     /// place kept for it and `row_of`, which answers the row that place has now. `None`
-    /// for no run, and for a run any row of which has no place or no row any more.
+    /// for no run, and for a run either end of which has no place or no row any more.
     pub(crate) fn carry(&self, row_of: impl Fn(Spot) -> Option<usize>) -> Option<Picked> {
         let picked = self.marks.assembly.as_ref()?;
         carried(picked, |row| row_of(self.spot_of(row)?))
@@ -388,14 +389,24 @@ fn other(pane: Pane) -> Pane {
     }
 }
 
-/// The rows picked out in `pane`. Reads rather than peeks: this is the subscription that
-/// repaints as the run grows.
-pub(crate) fn marked_rows(marked: State<Marks>, pane: Pane) -> Option<RowSelection> {
-    marked.read().of(pane).as_ref().map(|picked| picked.rows)
+/// Change the two runs: the current [`Marks`] cloned, `edit` applied to that, and the
+/// result put back only where it differs -- a write that changes nothing would draw both
+/// lists again.
+///
+/// Every writer here goes through this so the guard rule is followed in one place: a
+/// `peek` hands back a guard, and an `if let` holds its scrutinee's temporary until the
+/// end of its *body*, so a write made inside one would be a mutable borrow taken while
+/// the guard was still out, which panics. The clone is a statement of its own, so the
+/// guard is gone before `edit` -- which is handed a plain `&mut Marks` and can write it
+/// however it likes.
+fn update(mut marked: State<Marks>, edit: impl FnOnce(&mut Marks)) {
+    let mut marks = marked.peek().clone();
+    edit(&mut marks);
+    marked.set_if_modified(marks);
 }
 
 /// The run picked out in the *other* pane from `pane`, which is what `pane` lights the
-/// pair of. Reads, for the same reason [`marked_rows`] does.
+/// pair of. Reads, for the same reason [`chars_of`] does.
 pub(crate) fn pair_of(marked: State<Marks>, pane: Pane) -> Option<Picked> {
     marked.read().of(other(pane)).clone()
 }
@@ -407,12 +418,13 @@ pub(crate) fn pair_of(marked: State<Marks>, pane: Pane) -> Option<Picked> {
 /// control re-renders as a sweep starts and ends.
 pub(crate) fn sweeping(marked: State<Marks>) -> bool {
     let marks = marked.read();
-    let dragging = |picked: &Option<Picked>| picked.as_ref().is_some_and(|p| p.rows.dragging);
+    let dragging = |picked: &Option<Picked>| picked.as_ref().is_some_and(|p| p.dragging);
     dragging(&marks.assembly) || dragging(&marks.source)
 }
 
-/// The caret and characters `pane`'s run holds, for the rows to draw their part of, and
-/// `None` with no run. Reads, for the reason [`marked_rows`] does.
+/// The run `pane` holds -- the caret, the characters picked out, and so the rows lit --
+/// for its rows to draw their part of, and `None` with no run. Reads rather than peeks:
+/// this is the subscription that repaints as the run grows.
 pub(crate) fn chars_of(marked: State<Marks>, pane: Pane) -> Option<CharSelection> {
     marked.read().of(pane).as_ref().map(|picked| picked.chars)
 }
@@ -425,7 +437,7 @@ pub(crate) fn chars_of(marked: State<Marks>, pane: Pane) -> Option<CharSelection
 ///
 /// The other pane's run is left alone: the two are independent.
 pub(crate) fn mark_press(
-    mut marked: State<Marks>,
+    marked: State<Marks>,
     shift: bool,
     pane: Pane,
     file: Option<Arc<str>>,
@@ -435,10 +447,10 @@ pub(crate) fn mark_press(
     let current = marked.peek().of(pane).clone();
     let picked = match current {
         Some(picked) if shift => Picked {
-            rows: picked.rows.extended(row),
-            // The reach moves the characters' lead with the rows': to the column pressed
-            // on the text, and from the gutter to the row's far end, whole rows being
-            // what the gutter reaches.
+            // The reach moves the lead to the column pressed on the text, and from the
+            // gutter to the row's far end, whole rows being what the gutter reaches. It
+            // arms the drag as well, so holding the button after a shift-click and
+            // sweeping on carries the run out from there.
             chars: match press {
                 Some(Press::At(col)) | Some(Press::Span(_, col)) => {
                     picked.chars.extended(Caret { row, col })
@@ -452,17 +464,13 @@ pub(crate) fn mark_press(
                     },
                 }),
             },
+            dragging: true,
             ..picked
         },
         // The one-row run a press starts, which is a drag until the button comes up. The
         // other pane owes it a scroll: a click here asks the other side to show the
         // same place.
         _ => Picked {
-            rows: RowSelection {
-                anchor: row,
-                lead: row,
-                dragging: true,
-            },
             chars: match press {
                 Some(Press::At(col)) => CharSelection::at(Caret { row, col }),
                 Some(Press::Span(from, to)) => {
@@ -470,15 +478,14 @@ pub(crate) fn mark_press(
                 }
                 None => CharSelection::at(Caret { row, col: 0 }),
             },
+            dragging: true,
             by_rows: press.is_none(),
             file,
             owed: Owed::by(other(pane)),
         },
     };
 
-    let mut marks = marked.peek().clone();
-    *marks.of_mut(pane) = Some(picked);
-    marked.set_if_modified(marks);
+    update(marked, |marks| *marks.of_mut(pane) = Some(picked));
 }
 
 /// Pick out `row` of the assembly pane alone, replacing whatever was picked out there.
@@ -487,10 +494,10 @@ pub(crate) fn mark_press(
 /// the reader on a row they never pressed -- following a jump -- where the button is back
 /// up by the time the answer is known and a sweep from here would be a sweep nobody began.
 /// The source pane owes the scroll; the assembly pane has just been given one.
-pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: usize) {
-    let mut marks = marked.peek().clone();
-    marks.assembly = Some(row_pick(file, row, Owed::by(Pane::Source)));
-    marked.set_if_modified(marks);
+pub(crate) fn mark_row(marked: State<Marks>, file: Option<Arc<str>>, row: usize) {
+    update(marked, |marks| {
+        marks.assembly = Some(row_pick(file, row, Owed::by(Pane::Source)));
+    });
 }
 
 /// Put the assembly pane's caret on `row`, at its start, as a [`Planting`] lands: the
@@ -503,25 +510,21 @@ pub(crate) fn mark_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: us
 /// The source pane's run, where the same door left one, stops owing this pane a scroll
 /// to its pair: the caret **is** that pair, and one scroll to it is this pane's own or
 /// its place's.
-pub(crate) fn land_row(mut marked: State<Marks>, file: Option<Arc<str>>, row: usize, owed: Owed) {
-    let mut marks = marked.peek().clone();
-    marks.assembly = Some(row_pick(file, row, owed));
-    if let Some(source) = marks.source.as_mut() {
-        source.owed.paid(Pane::Assembly);
-    }
-    marked.set_if_modified(marks);
+pub(crate) fn land_row(marked: State<Marks>, file: Option<Arc<str>>, row: usize, owed: Owed) {
+    update(marked, |marks| {
+        marks.assembly = Some(row_pick(file, row, owed));
+        if let Some(source) = marks.source.as_mut() {
+            source.owed.paid(Pane::Assembly);
+        }
+    });
 }
 
 /// The one-row run [`mark_row`] and [`land_row`] make of `row`: the row, and a caret at
 /// its start.
 fn row_pick(file: Option<Arc<str>>, row: usize, owed: Owed) -> Picked {
     Picked {
-        rows: RowSelection {
-            anchor: row,
-            lead: row,
-            dragging: false,
-        },
         chars: CharSelection::at(Caret { row, col: 0 }),
+        dragging: false,
         by_rows: false,
         file,
         owed,
@@ -532,15 +535,15 @@ fn row_pick(file: Option<Arc<str>>, row: usize, owed: Owed) -> Picked {
 /// panes does: a [`Landing`], or the line a source-driven tab is driven from. `owed`
 /// says which panes have yet to scroll to it.
 pub(crate) fn mark_line(
-    mut marked: State<Marks>,
+    marked: State<Marks>,
     file: Arc<str>,
     line: u32,
     columns: Option<Range<usize>>,
     owed: Owed,
 ) {
-    let mut marks = marked.peek().clone();
-    marks.source = Some(line_pick(file, line, columns, owed));
-    marked.set_if_modified(marks);
+    update(marked, |marks| {
+        marks.source = Some(line_pick(file, line, columns, owed));
+    });
 }
 
 /// The one-row run [`mark_line`] makes of `line`: the row, and a caret at its start --
@@ -564,12 +567,8 @@ fn line_pick(file: Arc<str>, line: u32, columns: Option<Range<usize>>, owed: Owe
         None => CharSelection::at(Caret { row, col: 0 }),
     };
     Picked {
-        rows: RowSelection {
-            anchor: row,
-            lead: row,
-            dragging: false,
-        },
         chars,
+        dragging: false,
         by_rows: false,
         file: Some(file),
         owed,
@@ -580,63 +579,56 @@ fn line_pick(file: Arc<str>, line: u32, columns: Option<Range<usize>>, owed: Owe
 /// `col` is the column under the pointer where the row has text, and the characters
 /// follow it; a row with no text, or a gutter, is column 0. A run started in the gutter
 /// sweeps by rows instead, whole ones, and the column is not asked.
-pub(crate) fn mark_drag(mut marked: State<Marks>, pane: Pane, row: usize, col: Option<usize>) {
+pub(crate) fn mark_drag(marked: State<Marks>, pane: Pane, row: usize, col: Option<usize>) {
     let Some(picked) = marked.peek().of(pane).clone() else {
         return;
     };
     // Only while the button is down: a row entered with no button held is the pointer
     // merely passing over it.
-    if !picked.rows.dragging {
+    if !picked.dragging {
         return;
     }
 
-    let mut marks = marked.peek().clone();
-    *marks.of_mut(pane) = Some(Picked {
-        rows: picked.rows.extended(row),
-        chars: if picked.by_rows {
-            picked.chars.by_rows(row)
-        } else {
-            picked.chars.extended(Caret {
-                row,
-                col: col.unwrap_or(0),
-            })
-        },
-        ..picked
+    update(marked, |marks| {
+        *marks.of_mut(pane) = Some(Picked {
+            chars: if picked.by_rows {
+                picked.chars.by_rows(row)
+            } else {
+                picked.chars.extended(Caret {
+                    row,
+                    col: col.unwrap_or(0),
+                })
+            },
+            ..picked
+        });
     });
-    marked.set_if_modified(marks);
 }
 
 /// End the gesture, in whichever pane it was made. The run stays: letting go ends the
 /// drag, not the selection.
-///
-/// The read is a `let` of its own and **not** the scrutinee of an `if let`: an `if let`
-/// holds its temporary until the end of its *body*, so the write inside would be a
-/// mutable borrow taken while the `peek` guard was still out, which panics.
-pub(crate) fn mark_release(mut marked: State<Marks>) {
-    let mut marks = marked.peek().clone();
-    if let Some(picked) = marks.assembly.as_mut() {
-        picked.rows.dragging = false;
-    }
-    if let Some(picked) = marks.source.as_mut() {
-        picked.rows.dragging = false;
-    }
-    marked.set_if_modified(marks);
+pub(crate) fn mark_release(marked: State<Marks>) {
+    update(marked, |marks| {
+        if let Some(picked) = marks.assembly.as_mut() {
+            picked.dragging = false;
+        }
+        if let Some(picked) = marks.source.as_mut() {
+            picked.dragging = false;
+        }
+    });
 }
 
 /// Drop `pane`'s run, and leave the other pane's alone.
-fn unmark(mut marked: State<Marks>, pane: Pane) {
+fn unmark(marked: State<Marks>, pane: Pane) {
     if marked.peek().of(pane).is_none() {
         return;
     }
-    let mut marks = marked.peek().clone();
-    *marks.of_mut(pane) = None;
-    marked.set(marks);
+    update(marked, |marks| *marks.of_mut(pane) = None);
 }
 
 /// What `pane` still owes a scroll to.
 pub(crate) enum Owing {
     /// Its own run, picked from outside the panes, whose first row it has yet to show.
-    Own(RowSelection),
+    Own(RangeInclusive<usize>),
     /// The other pane's run, whose pair here it has yet to bring into view.
     Pair(Picked),
 }
@@ -655,7 +647,7 @@ pub(crate) fn owed_reveal(marked: State<Marks>, pane: Pane) -> Option<Owing> {
     // the next click, so it has to happen before any early return.
     let marks = marked.read();
     if let Some(own) = marks.of(pane).as_ref().filter(|own| own.owed.owes(pane)) {
-        return Some(Owing::Own(own.rows));
+        return Some(Owing::Own(own.chars.rows()));
     }
     marks
         .of(other(pane))
@@ -687,11 +679,9 @@ pub(crate) fn reveal_made(mut marked: State<Marks>, pane: Pane) {
 }
 
 /// What Ctrl+C takes from `pane`'s run: the characters, where any are selected, and
-/// otherwise the rows -- the caret's row as its own `line`, address and all, as an editor
-/// copies the line under a caret with nothing selected; a run of rows wider than the
-/// caret's is the keyboard's and the pair's and copies the same way, each row's own
-/// `line` in listing order, newline-separated. `text` is a row's text as it is drawn,
-/// which is what the characters are columns of. `None` with no run at all.
+/// otherwise the caret's row whole -- its own `line`, address and all, as an editor
+/// copies the line under a caret with nothing selected. `text` is a row's text as it is
+/// drawn, which is what the characters are columns of. `None` with no run at all.
 pub(crate) fn copy_text(
     marks: &Marks,
     pane: Pane,
@@ -700,7 +690,8 @@ pub(crate) fn copy_text(
 ) -> Option<String> {
     let picked = marks.of(pane).as_ref()?;
     if picked.chars.is_empty() {
-        Some(picked.rows.rows().map(line).collect::<Vec<_>>().join("\n"))
+        // Nothing selected is a caret, and the run of a caret is its own row.
+        Some(line(picked.chars.lead().row))
     } else {
         Some(picked.chars.copy(text))
     }
@@ -732,8 +723,6 @@ pub(crate) fn on_listing_key(
     text: impl Fn(usize) -> Line + 'static,
     mut reveal: impl FnMut(usize) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
-    let mut marked = marked;
-
     move |e: Event<KeyboardEventData>| {
         let command = e.modifiers.contains(Modifiers::ctrl_or_meta());
         let shift = e.modifiers.contains(Modifiers::SHIFT);
@@ -778,30 +767,27 @@ pub(crate) fn on_listing_key(
                 // or the listing's own where there is no run yet, and no scroll is owed:
                 // the whole listing names no one place to go to.
                 if let Some(last) = rows.checked_sub(1) {
-                    let mut marks = marked.peek().clone();
-                    let file = marks
+                    let file = marked
+                        .peek()
                         .of(pane)
                         .as_ref()
                         .and_then(|picked| picked.file.clone())
                         .or_else(|| file.clone());
-                    *marks.of_mut(pane) = Some(Picked {
-                        rows: RowSelection {
-                            anchor: 0,
-                            lead: last,
+                    update(marked, |marks| {
+                        *marks.of_mut(pane) = Some(Picked {
+                            chars: CharSelection::between(
+                                Caret { row: 0, col: 0 },
+                                Caret {
+                                    row: last,
+                                    col: crate::chars::END,
+                                },
+                            ),
                             dragging: false,
-                        },
-                        chars: CharSelection::between(
-                            Caret { row: 0, col: 0 },
-                            Caret {
-                                row: last,
-                                col: crate::chars::END,
-                            },
-                        ),
-                        by_rows: false,
-                        file,
-                        owed: Owed::default(),
+                            by_rows: false,
+                            file,
+                            owed: Owed::default(),
+                        });
                     });
-                    marked.set(marks);
                 }
             }
             Key::Named(NamedKey::Escape) => peel(marked, pane),
@@ -821,7 +807,7 @@ pub(crate) fn on_listing_key(
 /// repeat of a held key, yanking the other pane about while the reader walks this one.
 /// The file stays what the run's was.
 fn move_caret(
-    mut marked: State<Marks>,
+    marked: State<Marks>,
     pane: Pane,
     motion: Motion,
     extend: bool,
@@ -833,36 +819,22 @@ fn move_caret(
     length.checked_sub(1)?;
     let moved = picked.chars.moved(motion, extend, text, length, page);
     let row = moved.lead().row;
-    let rows = if extend {
-        RowSelection {
-            lead: row,
+    update(marked, |marks| {
+        *marks.of_mut(pane) = Some(Picked {
+            chars: moved,
             dragging: false,
-            ..picked.rows
-        }
-    } else {
-        RowSelection {
-            anchor: row,
-            lead: row,
-            dragging: false,
-        }
-    };
-
-    let mut marks = marked.peek().clone();
-    *marks.of_mut(pane) = Some(Picked {
-        rows,
-        chars: moved,
-        by_rows: false,
-        owed: Owed::default(),
-        ..picked
+            by_rows: false,
+            owed: Owed::default(),
+            ..picked
+        });
     });
-    marked.set_if_modified(marks);
     Some(row)
 }
 
-/// Carry the assembly pane's run to the rows a recount gave it: every row it holds --
-/// the rows' two ends and the caret's -- put through `map`, which answers a row of the
-/// old count with the row of the new; a run any end of which has no row any more is
-/// dropped. The columns stay: a row's text is the same text wherever its row is now.
+/// Carry the assembly pane's run to the rows a recount gave it: each end of it put
+/// through `map`, which answers a row of the old count with the row of the new; a run
+/// either end of which has no row any more is dropped. The columns stay: a row's text is
+/// the same text wherever its row is now.
 pub(crate) fn carry_assembly(marked: State<Marks>, map: impl Fn(usize) -> Option<usize>) {
     let Some(picked) = marked.peek().assembly.clone() else {
         return;
@@ -871,23 +843,15 @@ pub(crate) fn carry_assembly(marked: State<Marks>, map: impl Fn(usize) -> Option
 }
 
 /// Put `picked` in the assembly pane, in place of whatever run was there.
-pub(crate) fn set_assembly(mut marked: State<Marks>, picked: Option<Picked>) {
-    let mut marks = marked.peek().clone();
-    marks.assembly = picked;
-    marked.set_if_modified(marks);
+pub(crate) fn set_assembly(marked: State<Marks>, picked: Option<Picked>) {
+    update(marked, |marks| marks.assembly = picked);
 }
 
-/// `picked` with every row it holds put through `map`; `None` where any row has no
-/// answer. The columns stay: a row's text is the same text wherever its row is now, and
-/// so does which end is the caret: a run swept upwards keeps its lead at the top.
+/// `picked` with each end put through `map`; `None` where either has no answer. The
+/// columns stay: a row's text is the same text wherever its row is now, and so does which
+/// end is the caret: a run swept upwards keeps its lead at the top.
 fn carried(picked: &Picked, map: impl Fn(usize) -> Option<usize>) -> Option<Picked> {
-    let rows = RowSelection {
-        anchor: map(picked.rows.anchor)?,
-        lead: map(picked.rows.lead)?,
-        ..picked.rows
-    };
     Some(Picked {
-        rows,
         chars: picked.chars.mapped(&map)?,
         ..picked.clone()
     })
@@ -897,27 +861,22 @@ fn carried(picked: &Picked, map: impl Fn(usize) -> Option<usize>) -> Option<Pick
 /// caret's row with it, and otherwise drop the run: Escape peels the selection back a
 /// layer at a time, as an editor's does, and the second press takes the place the panes
 /// point at each other through.
-fn peel(mut marked: State<Marks>, pane: Pane) {
+fn peel(marked: State<Marks>, pane: Pane) {
     let Some(picked) = marked.peek().of(pane).clone() else {
         return;
     };
-    let mut marks = marked.peek().clone();
-    *marks.of_mut(pane) = if picked.chars.is_empty() {
-        None
-    } else {
-        let row = picked.chars.lead().row;
-        Some(Picked {
-            chars: picked.chars.collapsed(),
-            rows: RowSelection {
-                anchor: row,
-                lead: row,
+    update(marked, |marks| {
+        *marks.of_mut(pane) = if picked.chars.is_empty() {
+            None
+        } else {
+            Some(Picked {
+                chars: picked.chars.collapsed(),
                 dragging: false,
-            },
-            by_rows: false,
-            ..picked
-        })
-    };
-    marked.set(marks);
+                by_rows: false,
+                ..picked
+            })
+        };
+    });
 }
 
 /// Drop a pane's picked-out rows when the listing they index into is replaced: the

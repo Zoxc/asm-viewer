@@ -247,7 +247,7 @@ fn revealing_harness() -> impl IntoElement {
         move |controller: &mut ScrollController| {
             let row = match owed_reveal(marked, Pane::Assembly) {
                 None => return false,
-                Some(Owing::Own(rows)) => *rows.rows().start(),
+                Some(Owing::Own(rows)) => *rows.start(),
                 // Only the listing the pair has a row in can pay it; every other leaves
                 // it owed, as the assembly pane's reveal does. Peeked, so the arrival of
                 // a listing is not itself what wakes the effect.
@@ -255,7 +255,7 @@ fn revealing_harness() -> impl IntoElement {
                     if *listing.peek() != PAIRED_LISTING {
                         return false;
                     }
-                    *pair.rows.rows().start()
+                    *pair.chars.rows().start()
                 }
             };
             let measured = seen.map_or(VIEWPORT, |kept| *kept.read());
@@ -3667,12 +3667,8 @@ fn a_line_of(symbol: &Symbol) -> LinePos {
 /// scroll to it.
 fn picked_row(row: usize, file: &str, owed: Owed) -> Picked {
     Picked {
-        rows: RowSelection {
-            anchor: row,
-            lead: row,
-            dragging: false,
-        },
         chars: CharSelection::at(Caret { row, col: 0 }),
+        dragging: false,
         by_rows: false,
         file: Some(file.into()),
         owed,
@@ -3690,7 +3686,7 @@ fn source_line(marked: State<Marks>) -> Option<LinePos> {
     let picked = marks.source.as_ref()?;
     Some(LinePos {
         file: picked.file.clone()?,
-        line: picked.rows.anchor as u32 + 1,
+        line: picked.chars.anchor().row as u32 + 1,
     })
 }
 
@@ -5137,7 +5133,8 @@ fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
     let (_, source) = runs_of(location.marked);
     let source = source.expect("the place came back with no run");
     assert_eq!(
-        source.rows.anchor, 19,
+        source.chars.anchor().row,
+        19,
         "Back came back holding the line it left for"
     );
 }
@@ -6112,7 +6109,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
             .peek()
             .source
             .as_ref()
-            .map(|picked| picked.rows.anchor),
+            .map(|picked| picked.chars.anchor().row),
         Some(0),
         "the definition's line was not picked out"
     );
@@ -8672,7 +8669,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
         .clone()
         .expect("following a jump picked out no row");
     assert_eq!(
-        picked.rows.rows().collect::<Vec<_>>(),
+        picked.chars.rows().collect::<Vec<_>>(),
         vec![landing_row],
         "the row picked out is not the one the jump lands on"
     );
@@ -8708,12 +8705,12 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
         .clone()
         .expect("the backward jump picked out no row");
     assert_eq!(
-        picked.rows.rows().collect::<Vec<_>>(),
+        picked.chars.rows().collect::<Vec<_>>(),
         vec![backward_lands_on],
         "the row picked out is not the one the backward jump lands on"
     );
     assert!(
-        !picked.rows.contains(backward_row),
+        !picked.chars.contains_row(backward_row),
         "the press bubbled into the row and picked out where it started"
     );
 
@@ -10910,18 +10907,18 @@ fn a_swept_run_survives_the_button_coming_up() {
     test.press_cursor((10., 10.));
     test.move_cursor((10., 30.));
     test.sync_and_update();
-    assert_eq!(marked.peek().assembly.as_ref().unwrap().rows.rows(), 0..=1);
+    assert_eq!(marked.peek().assembly.as_ref().unwrap().chars.rows(), 0..=1);
 
     // The line that panicked, and the assertion that it no longer does is the test
     // getting this far at all.
     test.release_cursor((10., 30.));
-    assert_eq!(marked.peek().assembly.as_ref().unwrap().rows.rows(), 0..=1);
+    assert_eq!(marked.peek().assembly.as_ref().unwrap().chars.rows(), 0..=1);
 
     // And the gesture really is over: a row entered afterwards is the pointer passing
     // over it, which is the panes' hover and not a sweep.
     test.move_cursor((10., 50.));
     test.sync_and_update();
-    assert_eq!(marked.peek().assembly.as_ref().unwrap().rows.rows(), 0..=1);
+    assert_eq!(marked.peek().assembly.as_ref().unwrap().chars.rows(), 0..=1);
 }
 
 /// The scratchpad worker's work, handed in through a context so a test can answer without
@@ -12486,7 +12483,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
             .peek()
             .source
             .as_ref()
-            .map(|run| (run.file.clone(), run.rows.rows()))
+            .map(|run| (run.file.clone(), run.chars.rows()))
     );
 }
 
@@ -13655,8 +13652,8 @@ fn a_press_in_one_pane_leaves_the_others_run_alone() {
         .assembly
         .as_ref()
         .expect("the assembly run was not started");
-    assert_eq!(source.rows.rows(), 3..=3);
-    assert_eq!(assembly.rows.rows(), 7..=7);
+    assert_eq!(source.chars.rows(), 3..=3);
+    assert_eq!(assembly.chars.rows(), 7..=7);
     assert!(source.file.as_deref() == Some("a.c"));
     // Each asks the other pane for the scroll, and neither its own.
     assert!(source.owed == Owed::by(Pane::Assembly));
@@ -13665,14 +13662,14 @@ fn a_press_in_one_pane_leaves_the_others_run_alone() {
     // A reach in one pane is a reach in that pane alone.
     mark_press(marked, true, Pane::Assembly, None, 9, None);
     let marks = marked.peek().clone();
-    assert_eq!(marks.assembly.as_ref().unwrap().rows.rows(), 7..=9);
-    assert_eq!(marks.source.as_ref().unwrap().rows.rows(), 3..=3);
+    assert_eq!(marks.assembly.as_ref().unwrap().chars.rows(), 7..=9);
+    assert_eq!(marks.source.as_ref().unwrap().chars.rows(), 3..=3);
 
     mark_release(marked);
     let marks = marked.peek().clone();
-    assert!(!marks.assembly.as_ref().unwrap().rows.dragging);
-    assert!(!marks.source.as_ref().unwrap().rows.dragging);
-    assert_eq!(marks.source.as_ref().unwrap().rows.rows(), 3..=3);
+    assert!(!marks.assembly.as_ref().unwrap().dragging);
+    assert!(!marks.source.as_ref().unwrap().dragging);
+    assert_eq!(marks.source.as_ref().unwrap().chars.rows(), 3..=3);
 }
 
 /// A line picked out in the source pane lights, in the listing, every instruction it was
@@ -14728,24 +14725,20 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
         .clone()
         .expect("the rows changed under the run and it went");
     assert_eq!(picked.chars.lead(), Caret { row: now, col: 0 });
-    assert_eq!(picked.rows.rows(), now..=now);
+    assert_eq!(picked.chars.rows(), now..=now);
 }
 
-/// A run carried across a recount keeps the caret at the end it was swept to. The carry
-/// used to rebuild the characters out of `ends()`, which answers the two ends in listing
-/// order and says nothing about which is the lead, so a selection swept upwards came back
-/// with its caret at the bottom -- while the row run beside it, mapped end for end, still
-/// said the top. Escape then collapsed to the wrong row and the next key moved from it.
+/// A run carried across a recount keeps the caret at the end it was swept to, and the
+/// rows it lights with it. The carry used to rebuild the characters out of `ends()`,
+/// which answers the two ends in listing order and says nothing about which is the lead,
+/// so a selection swept upwards came back with its caret at the bottom; Escape then
+/// collapsed to the wrong row and the next key moved from it.
 #[test]
 fn a_carried_run_keeps_the_caret_at_the_end_it_was_swept_to() {
     // Pressed on row 40, swept up to row 20.
     let swept = Picked {
-        rows: RowSelection {
-            anchor: 40,
-            lead: 20,
-            dragging: false,
-        },
         chars: CharSelection::at(Caret { row: 40, col: 7 }).extended(Caret { row: 20, col: 3 }),
+        dragging: false,
         by_rows: false,
         file: None,
         owed: Owed::default(),
@@ -14783,8 +14776,7 @@ fn a_carried_run_keeps_the_caret_at_the_end_it_was_swept_to() {
         carried.chars.ends(),
         (Caret { row: 0x21, col: 3 }, Caret { row: 0x41, col: 7 })
     );
-    assert_eq!(carried.rows.anchor, 0x41);
-    assert_eq!(carried.rows.lead, 0x21);
+    assert_eq!(carried.chars.rows(), 0x21..=0x41);
 
     // An end with no row any more takes the run with it.
     assert!(kept
@@ -15403,7 +15395,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target_with_ctrl() {
         .assembly
         .clone()
         .expect("the press picked the row out");
-    assert_eq!(picked.rows.rows(), 0..=0);
+    assert_eq!(picked.chars.rows(), 0..=0);
     let code = Document::Code(object.clone());
     assert!(states.open.active() == Some(symbol.clone()));
     assert!(tab_showing(&states, &code).is_none(), "the code tab opened");
@@ -15505,7 +15497,7 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
         .assembly
         .clone()
         .expect("the caret was not planted");
-    assert_eq!(picked.rows.rows(), landed..=landed);
+    assert_eq!(picked.chars.rows(), landed..=landed);
     assert_eq!(
         states
             .code_at
@@ -15876,7 +15868,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
         .clone()
         .expect("the caret was not planted on the target's row");
     assert_eq!(picked.chars.lead(), Caret { row: guess, col: 0 });
-    assert_eq!(picked.rows.rows(), guess..=guess);
+    assert_eq!(picked.chars.rows(), guess..=guess);
     assert!(picked.owed == Owed::default());
 
     // `g` decodes, and the view is on the instruction holding the byte -- the caret
@@ -16434,7 +16426,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .clone()
         .expect("the caret was not planted once there were rows");
     assert_eq!(picked.chars.lead(), Caret { row: guess, col: 0 });
-    assert_eq!(picked.rows.rows(), guess..=guess);
+    assert_eq!(picked.chars.rows(), guess..=guess);
     assert!(
         picked.owed == Owed::default(),
         "a scroll is owed beside the place"
@@ -16454,7 +16446,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .clone()
         .expect("the caret went with the decode");
     assert_eq!(picked.chars.lead(), Caret { row, col: 0 });
-    assert_eq!(picked.rows.rows(), row..=row);
+    assert_eq!(picked.chars.rows(), row..=row);
     // On screen and not at the top of it: the door reveals the instruction, which keeps
     // the rows before it in view where the pane is tall enough to hold them. What must
     // hold in every pane is that the instruction is drawn at all -- this one is two rows
@@ -16567,7 +16559,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     let (assembly, source) = runs_of(doors.marked);
     let picked = assembly.expect("the caret was not planted once the listing was drawn");
     assert_eq!(picked.chars.lead(), Caret { row, col: 0 });
-    assert_eq!(picked.rows.rows(), row..=row);
+    assert_eq!(picked.chars.rows(), row..=row);
     assert!(doors.plant.peek().is_none(), "the planting was left lying");
     let source = source.expect("the row's line was not landed");
     assert!(
@@ -17620,7 +17612,7 @@ fn a_sweep_along_the_text_picks_characters_out() {
         .assembly
         .clone()
         .expect("the press picked the row out");
-    assert_eq!(picked.rows.rows(), 0..=0);
+    assert_eq!(picked.chars.rows(), 0..=0);
     let chars = picked.chars;
     assert!(chars.is_empty(), "nothing is swept yet: {chars:?}");
     let caret = carets(&test);
@@ -17676,7 +17668,7 @@ fn a_sweep_along_the_text_picks_characters_out() {
     );
     let picked = marked.peek().assembly.clone().expect("the run stays");
     assert_eq!(
-        picked.rows.rows(),
+        picked.chars.rows(),
         0..=1,
         "the rows swept with the characters"
     );
@@ -17727,7 +17719,7 @@ fn a_press_in_the_gutter_places_the_caret_and_a_sweep_takes_whole_rows() {
         .assembly
         .clone()
         .expect("the press picked the row out");
-    assert_eq!(picked.rows.rows(), 0..=0);
+    assert_eq!(picked.chars.rows(), 0..=0);
     assert_eq!(picked.chars, CharSelection::at(Caret { row: 0, col: 0 }));
     assert_eq!(rects_with(&test, palette().cursor_row_bg).len(), 1);
     assert!(rects_with(&test, palette().text_select_bg).is_empty());
@@ -17738,7 +17730,7 @@ fn a_press_in_the_gutter_places_the_caret_and_a_sweep_takes_whole_rows() {
     test.move_cursor(centre(second));
     settle(&mut test);
     let picked = marked.peek().assembly.clone().unwrap();
-    assert_eq!(picked.rows.rows(), 0..=1);
+    assert_eq!(picked.chars.rows(), 0..=1);
     assert_eq!(
         picked.chars.ends(),
         (
@@ -17772,24 +17764,19 @@ fn a_press_in_the_gutter_places_the_caret_and_a_sweep_takes_whole_rows() {
     settle(&mut test);
     let picked = marked.peek().assembly.clone().unwrap();
     assert_eq!(picked.chars, CharSelection::at(Caret { row: 0, col: 0 }));
-    assert_eq!(picked.rows.rows(), 0..=0);
+    assert_eq!(picked.chars.rows(), 0..=0);
 }
 
-/// Ctrl+C takes the characters where any are selected, and the rows otherwise -- the
-/// caret's row, or the keyboard's run of rows, as each row's own line; and Escape peels
-/// the selection back to the caret first and drops the run on a second press.
+/// Ctrl+C takes the characters where any are selected, and the caret's row whole
+/// otherwise -- its own line, as an editor copies the line under a caret; and Escape
+/// peels the selection back to the caret first and drops the run on a second press.
 #[test]
 fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
     let line = |row: usize| format!("row {row}");
     let text = |row: usize| Line::text(format!("text {row}"));
-    let rows = RowSelection {
-        anchor: 0,
-        lead: 1,
-        dragging: false,
-    };
     let picked = |chars: CharSelection| Picked {
-        rows,
         chars,
+        dragging: false,
         by_rows: false,
         file: None,
         owed: Owed::default(),
@@ -17804,27 +17791,16 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
         copy_text(&marks, Pane::Assembly, line, text).as_deref(),
         Some("0\ntext")
     );
+    // A caret alone copies its row, as an editor copies the line under one.
     assert_eq!(
         copy_text(&marks, Pane::Source, line, text).as_deref(),
-        Some("row 0\nrow 1")
-    );
-    // A caret alone copies its row, as an editor copies the line under one.
-    let pressed = Marks {
-        assembly: Some(Picked {
-            rows: RowSelection {
-                anchor: 1,
-                lead: 1,
-                dragging: false,
-            },
-            ..picked(CharSelection::at(Caret { row: 1, col: 5 }))
-        }),
-        source: None,
-    };
-    assert_eq!(
-        copy_text(&pressed, Pane::Assembly, line, text).as_deref(),
         Some("row 1")
     );
-    assert_eq!(copy_text(&pressed, Pane::Source, line, text), None);
+    // A pane with no run at all copies nothing.
+    assert_eq!(
+        copy_text(&Marks::default(), Pane::Assembly, line, text),
+        None
+    );
 
     // Escape, through the pane's own key handler: the box has to have the keyboard,
     // which a press in it asks for.
@@ -17855,7 +17831,7 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
         .expect("the run survives the first Escape");
     assert!(picked.chars.is_empty(), "{:?}", picked.chars);
     assert_eq!(picked.chars.lead(), Caret { row: 1, col: 4 });
-    assert_eq!(picked.rows.rows(), 1..=1, "the rows follow the caret");
+    assert_eq!(picked.chars.rows(), 1..=1, "the rows follow the caret");
     assert!(paragraphs(&test)[0].2.is_none());
     assert!(rects_with(&test, palette().text_select_bg).is_empty());
     assert_eq!(rects_with(&test, palette().cursor_row_bg).len(), 1);
@@ -17919,7 +17895,7 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
         .assembly
         .clone()
         .expect("the press picked the row out");
-    assert_eq!(picked.rows.rows(), row..=row);
+    assert_eq!(picked.chars.rows(), row..=row);
     let chars = picked.chars;
     assert_eq!(
         chars.ends(),
@@ -18010,7 +17986,7 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
         .assembly
         .clone()
         .expect("the press picked the row out");
-    assert_eq!(picked.rows.rows(), row..=row);
+    assert_eq!(picked.chars.rows(), row..=row);
     let (from, to) = picked.chars.ends();
     assert!(
         from.row == row && to.row == row && to.col > from.col,
@@ -18255,7 +18231,7 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
     assert!(rows > 3, "a listing of {rows} rows proves nothing");
     let lead = picked.chars.lead();
     assert_eq!(lead.row, rows - 1, "the sweep did not reach the last row");
-    assert_eq!(picked.rows.rows(), 0..=lead.row);
+    assert_eq!(picked.chars.rows(), 0..=lead.row);
 
     // Above the window: the first row on screen, at the column under the pointer's x --
     // inside the row's text, so a run along the anchor's own row.
@@ -18560,11 +18536,11 @@ fn the_arrow_keys_move_the_caret_and_the_run_of_rows_with_it() {
     let picked = marked.peek().assembly.clone().unwrap();
     assert_eq!(picked.chars.lead(), Caret { row: 1, col: 1 });
     assert_eq!(
-        picked.rows.rows(),
+        picked.chars.rows(),
         1..=1,
         "the rows did not follow the caret"
     );
-    assert!(!picked.rows.dragging);
+    assert!(!picked.dragging);
     assert!(picked.owed == Owed::default(), "a key move owed a scroll");
     let washes = rects_with(&test, palette().cursor_row_bg);
     assert_eq!(washes.len(), 1, "{washes:?}");
@@ -18592,7 +18568,7 @@ fn the_arrow_keys_move_the_caret_and_the_run_of_rows_with_it() {
         "{caret:?} against {first:?}"
     );
     let picked = marked.peek().assembly.clone().unwrap();
-    assert_eq!(picked.rows.rows(), 0..=0);
+    assert_eq!(picked.chars.rows(), 0..=0);
 }
 
 /// With Shift held a key reaches the run out from its anchor, characters and rows both,
@@ -18627,8 +18603,8 @@ fn shift_and_a_key_reach_the_run_out_and_a_key_alone_collapses_it() {
         picked.chars.ends(),
         (Caret { row: 0, col: 0 }, Caret { row: 1, col: 0 })
     );
-    assert_eq!(picked.rows.rows(), 0..=1);
-    assert!(!picked.rows.dragging);
+    assert_eq!(picked.chars.rows(), 0..=1);
+    assert!(!picked.dragging);
     assert_eq!(
         carets(&test).len(),
         1,
@@ -18651,12 +18627,12 @@ fn shift_and_a_key_reach_the_run_out_and_a_key_alone_collapses_it() {
         "{drawn:?}"
     );
     let picked = marked.peek().assembly.clone().unwrap();
-    assert_eq!(picked.rows.rows(), 0..=2);
+    assert_eq!(picked.chars.rows(), 0..=2);
     assert_eq!(picked.chars.ends().0, Caret { row: 0, col: 0 });
     // Shift+Up: back off the third row, the anchor still where the press was.
     key_with(&mut test, Key::Named(NamedKey::ArrowUp), Modifiers::SHIFT);
     let picked = marked.peek().assembly.clone().unwrap();
-    assert_eq!(picked.rows.rows(), 0..=1);
+    assert_eq!(picked.chars.rows(), 0..=1);
     assert_eq!(picked.chars.ends().0, Caret { row: 0, col: 0 });
 
     // Down alone: collapsed to the caret, on the row below the lead's, no highlight.
@@ -18666,7 +18642,7 @@ fn shift_and_a_key_reach_the_run_out_and_a_key_alone_collapses_it() {
     let chars = picked.chars;
     assert!(chars.is_empty(), "{chars:?}");
     assert_eq!(chars.lead().row, 2);
-    assert_eq!(picked.rows.rows(), 2..=2);
+    assert_eq!(picked.chars.rows(), 2..=2);
     assert!(paragraphs(&test).iter().all(|(_, _, h)| h.is_none()));
     assert_eq!(carets(&test).len(), 1);
 }
@@ -18709,7 +18685,7 @@ fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
     let picked = marked.peek().assembly.clone().unwrap();
     let lead = picked.chars.lead();
     assert_eq!(lead.row, length - 1);
-    assert_eq!(picked.rows.rows(), length - 1..=length - 1);
+    assert_eq!(picked.chars.rows(), length - 1..=length - 1);
     let drawn = paragraphs(&test);
     let last = drawn.last().unwrap().0;
     let caret = carets(&test);
@@ -18725,7 +18701,7 @@ fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
     assert!(labels(&test).contains(&first_address));
     let picked = marked.peek().assembly.clone().unwrap();
     assert_eq!(picked.chars.lead(), Caret { row: 0, col: 0 });
-    assert_eq!(picked.rows.rows(), 0..=0);
+    assert_eq!(picked.chars.rows(), 0..=0);
 }
 
 /// Ctrl+A in the Source pane with nothing picked out yet makes a run **of the file the
@@ -18760,7 +18736,7 @@ fn select_all_with_no_run_is_a_run_of_the_file_the_pane_shows() {
         .source
         .clone()
         .expect("Ctrl+A picked the file out");
-    assert_eq!(picked.rows.rows(), 0..=1);
+    assert_eq!(picked.chars.rows(), 0..=1);
     assert_eq!(
         picked.file.as_deref(),
         Some(&*file),
@@ -18878,7 +18854,7 @@ fn a_sweep_held_past_the_panes_edge_scrolls_the_view() {
     let grown = marked.peek().assembly.clone().unwrap().chars.lead().row;
     assert!(grown > reached, "{grown} against {reached}");
     assert_eq!(
-        marked.peek().assembly.clone().unwrap().rows.rows(),
+        marked.peek().assembly.clone().unwrap().chars.rows(),
         0..=grown
     );
 
@@ -19465,8 +19441,8 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
     let (assembly, source) = runs_of(marked);
     let assembly = assembly.expect("the sweep picked the instructions out");
     let source = source.expect("the sweep picked the lines out");
-    assert_eq!(assembly.rows.rows(), 0..=1);
-    assert_eq!(source.rows.rows(), 2..=3);
+    assert_eq!(assembly.chars.rows(), 0..=1);
+    assert_eq!(source.chars.rows(), 2..=3);
     assert!(!assembly.chars.is_empty() && !source.chars.is_empty());
     assert!(source.file.as_deref() == Some(&*file));
     assert_eq!(carets(&test).len(), 2, "a caret per pane");
@@ -19482,8 +19458,8 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
         .peek()
         .at(&(id, Stop::whole(sum_to.clone())))
         .expect("the runs of the place left were not kept");
-    assert!(kept.marks.assembly.as_ref().map(|p| p.rows) == Some(assembly.rows));
-    assert!(kept.marks.source.as_ref().map(|p| p.rows) == Some(source.rows));
+    assert!(kept.marks.assembly.as_ref().map(|p| p.chars) == Some(assembly.chars));
+    assert!(kept.marks.source.as_ref().map(|p| p.chars) == Some(source.chars));
     let (now_assembly, now_source) = runs_of(marked);
     assert!(
         now_assembly.is_none() && now_source.is_none(),
@@ -19494,7 +19470,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
     sweep(&mut test, marked, Pane::Assembly, 5, 5);
     let (theirs, _) = runs_of(marked);
     let theirs = theirs.expect("the press picked the row out");
-    assert_eq!(theirs.rows.rows(), 5..=5);
+    assert_eq!(theirs.chars.rows(), 5..=5);
 
     // Back: both runs and both carets are where they were left, and nothing is owed.
     navigate(states.open, Nav::Back);
@@ -19504,16 +19480,16 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
     let (back_assembly, back_source) = runs_of(marked);
     let back_assembly = back_assembly.expect("the assembly run did not come back");
     let back_source = back_source.expect("the source run did not come back");
-    assert_eq!(back_assembly.rows.rows(), assembly.rows.rows());
+    assert_eq!(back_assembly.chars.rows(), assembly.chars.rows());
     assert_eq!(back_assembly.chars, assembly.chars);
-    assert_eq!(back_source.rows.rows(), source.rows.rows());
+    assert_eq!(back_source.chars.rows(), source.chars.rows());
     assert_eq!(back_source.chars, source.chars);
     assert!(back_source.file == source.file);
     assert!(
         back_assembly.owed == Owed::default() && back_source.owed == Owed::default(),
         "a restored run owes a scroll"
     );
-    assert!(!back_assembly.rows.dragging && !back_source.rows.dragging);
+    assert!(!back_assembly.dragging && !back_source.dragging);
     assert!(owed_reveal(marked, Pane::Assembly).is_none());
     assert!(owed_reveal(marked, Pane::Source).is_none());
     assert_eq!(carets(&test).len(), 2, "a caret per pane, drawn again");
@@ -19524,7 +19500,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
     settle(&mut test);
     let (forward_assembly, forward_source) = runs_of(marked);
     let forward_assembly = forward_assembly.expect("the next place's run did not come back");
-    assert_eq!(forward_assembly.rows.rows(), theirs.rows.rows());
+    assert_eq!(forward_assembly.chars.rows(), theirs.chars.rows());
     assert!(
         forward_source.is_none(),
         "a run was made up for the source pane"
@@ -19808,7 +19784,7 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
         .clone()
         .expect("the run did not come back");
     assert_eq!(picked.chars.lead(), Caret { row: now, col: 0 });
-    assert_eq!(picked.rows.rows(), now..=now);
+    assert_eq!(picked.chars.rows(), now..=now);
     assert!(picked.owed == Owed::default());
 }
 
@@ -20346,7 +20322,7 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
         .source
         .clone()
         .expect("the hit picked out its line");
-    assert!(picked.rows.anchor == 1 && picked.rows.lead == 1);
+    assert!(picked.chars.anchor().row == 1 && picked.chars.lead().row == 1);
     assert!(!picked.chars.is_empty(), "the match is selected");
     let copied = picked.chars.copy(|row| {
         assert!(row == 1);
