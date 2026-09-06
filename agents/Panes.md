@@ -627,23 +627,23 @@ stop looking lighter than the run they point along. Only their pivot is snapped,
 own end. A corner's half-stroke now ends at the *far* edge of that run rather than on its centre
 line, so the joint is filled to the pixel instead of stopping inside the run behind an antialiased
 edge. All of it is relative to the gutter's own origin, which nothing inside a row can see, and
-**that origin is put on the grid by the list** (`Nudge`, `src/ui/code_row.rs`): the box around a
-listing's rows learns where it was laid out from its own `on_sized` and pads its top by the rest of
-the device pixel, so whatever fraction the bars, tabs and fonts above it add up to, its rows start
-on a pixel edge and, their height being whole pixels, stay on one. What that buys is the washes: two
-rows' backgrounds meeting on a fraction each fade into the other over the pixel they share, and a
-translucent wash fading twice looks like a light seam between every pair of selected rows. The
-scroll offset is whole logical pixels, so at 1× and 2× the rows stay on the grid as they scroll; at
-1.5× they do not, and nothing here pretends otherwise. The caret is a stroke of the row's own on the
-same grid (`caret_x` off the laid-out paragraph, `Grid::span` from the column rightward, two logical
-pixels wide as most editors draw theirs, `caret_fg`), where the engine's own would sit on the
-glyph's fractional edge. **So is the highlight**: a rect from the first column's x to the last's,
-the row's whole height, `Grid::span`, painted before the paragraph in the tree so the text sits over
-it. The engine's own highlight is the glyphs' tight box, which is shorter than the row by whatever
-the line's fonts and the link's placeholder add to it, and left a seam between one row's and the
-next's. Both are drawn from the render after the paragraph's first layout, which is when the holder
-can say where a column is; an empty row inside a run shows a stub a quarter of a row wide, or the
-run would look broken there. Both marks are `interactive(false)`, and **both slots are always
+**that origin is put on the grid by the list** (`Listing::padding`, `src/ui/code_row.rs`): the box
+around a listing's rows learns where it was laid out from its own `on_sized` and pads its top by the
+rest of the device pixel, so whatever fraction the bars, tabs and fonts above it add up to, its rows
+start on a pixel edge and, their height being whole pixels, stay on one. What that buys is the
+washes: two rows' backgrounds meeting on a fraction each fade into the other over the pixel they
+share, and a translucent wash fading twice looks like a light seam between every pair of selected
+rows. The scroll offset is whole logical pixels, so at 1× and 2× the rows stay on the grid as they
+scroll; at 1.5× they do not, and nothing here pretends otherwise. The caret is a stroke of the row's
+own on the same grid (`caret_x` off the laid-out paragraph, `Grid::span` from the column rightward,
+two logical pixels wide as most editors draw theirs, `caret_fg`), where the engine's own would sit
+on the glyph's fractional edge. **So is the highlight**: a rect from the first column's x to the
+last's, the row's whole height, `Grid::span`, painted before the paragraph in the tree so the text
+sits over it. The engine's own highlight is the glyphs' tight box, which is shorter than the row by
+whatever the line's fonts and the link's placeholder add to it, and left a seam between one row's
+and the next's. Both are drawn from the render after the paragraph's first layout, which is when the
+holder can say where a column is; an empty row inside a run shows a stub a quarter of a row wide, or
+the run would look broken there. Both marks are `interactive(false)`, and **both slots are always
 there**, empty rects when there is nothing to mark: freya matches siblings by position
 (`notes/upstream/freya.md`), so a highlight appearing before the paragraph on the press would move
 the paragraph along one and remount it, link and all, between the down and the up, and the press
@@ -810,6 +810,14 @@ run comes back through the places kept for it instead (`Kept::spots`, the paragr
 above). It used to be dropped on every answer that landed, and with up to 64 stretches asked for and
 8 answered a chunk, answers kept landing after the reader had clicked: the caret vanished and the
 companion file with it.
+
+**All three lists are held in one box** (`ListBox`, `src/ui/list_box.rs`), whatever their rows are:
+the focusable box the keyboard reaches the pane through, the `on_sized` the viewport and the nudge
+come out of, the sweep that carries a run past the edge, and the `VirtualScrollView` itself, one
+`code_row_height()` a row. Every line of it is load-bearing -- the order that handler writes in,
+the padding, the focus a press asks for -- so it is written once and a list is its own hooks (the
+position it puts back, the caret a door planted, the window it asks the worker for) and one call
+handing in its pane, its rows and its builder.
 
 **A sweep along a row's text selects characters**, beside the rows and not instead of them
 (`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `code_row`

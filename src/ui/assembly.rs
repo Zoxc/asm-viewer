@@ -1141,21 +1141,13 @@ impl Component for InstructionList {
         let chars = chars_of(marked, Pane::Assembly);
         // The source pane's run, whose pair these rows light.
         let pair = pair_of(marked, Pane::Assembly);
-        // The box the keyboard reaches this pane through: a `pointer_down` anywhere inside
-        // it bubbles to here and asks for focus, which is what makes Ctrl+C mean this
-        // listing.
-        let a11y = use_a11y();
-        use_tab_keyboard(a11y);
-
-        let controller = use_scroll_controller(ScrollConfig::default);
-        // How tall the list is, which `reveal_row` needs to know whether the row it was
-        // asked for is on screen already. `VirtualScrollView` measures itself but keeps
-        // the answer, so the rect wrapping it is measured here instead.
-        let mut viewport = use_state(|| 0.0f32);
-        // The widest row drawn, under this disassembly's identity: what every row is at
-        // least as wide as, so the list scrolls sideways over a stable extent.
-        let widest = use_widest();
+        // The listing these rows are of, which is this disassembly: what its widest row
+        // and its kept position are held under.
         let listing = Widest::key(Arc::as_ptr(&self.assembly).addr());
+        // The box the rows are drawn in, and the scroll and the measurement that come
+        // with it.
+        let list = use_list_box(Pane::Assembly, listing);
+        let (controller, viewport) = (list.controller, list.viewport);
 
         let data = AsmData {
             assembly: self.assembly.clone(),
@@ -1312,107 +1304,71 @@ impl Component for InstructionList {
             )
         };
 
-        let nudge = use_nudge();
-        let grid = pixel_grid();
-        // The list as its rows and a sweep past its edge know it: its scroll, its box,
-        // the paragraphs the rows lend it, and its widest row.
-        let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
-        // Every render, since the context is made once and this pane is handed another
-        // disassembly without being mounted again.
-        listing_ctx.drawing(listing);
-        let bounds = listing_ctx.bounds.clone();
+        list.render(
+            marked,
+            length,
+            on_key_down,
+            AsmRows {
+                data,
+                pair,
+                touching,
+                rows,
+                chars,
+            },
+            move |i, rows: &AsmRows| {
+                let wash = wash_of(rows.chars, i);
+                let Some(index) = rows.data.lanes.instruction_at(i) else {
+                    // A separator, which belongs to the instruction below it: the lanes it
+                    // carries are that row's, and it lights with them but never draws their
+                    // corner.
+                    let below = rows.data.lanes.instruction_at(i + 1).unwrap_or(0);
+                    let mut lit = lanes::lit(&rows.touching, below);
+                    lit.corner = false;
 
-        rect()
-            .expanded()
-            .a11y_id(a11y)
-            .a11y_focusable(true)
-            .on_pointer_down(move |_| a11y.request_focus())
-            .on_key_down(on_key_down)
-            .on_sized({
-                let bounds = bounds.clone();
-                move |e: Event<SizedEventData>| {
-                    viewport.set_if_modified(e.area.height());
-                    nudge.measured(grid, e.area.min_y());
-                    bounds.set(e.area);
+                    // Keyed by the row it opens, in a key space of its own: see `SeparatorRow`.
+                    let address = rows.data.assembly.instructions[below].address;
+                    return SeparatorRow {
+                        row: i,
+                        wash,
+                        width: rows.data.width,
+                        arrows: RowArrows {
+                            lanes: rows.data.lanes.boundary(below),
+                            lit,
+                        },
+                        key: DiffKey::None,
+                    }
+                    .key((true, address))
+                    .into();
+                };
+
+                // Paired, and if so whether the rows either side are too: the listing's rows,
+                // a separator being nobody's pair.
+                let paired_at = |row: usize| {
+                    rows.data
+                        .lanes
+                        .instruction_at(row)
+                        .is_some_and(|index| rows.data.paired(index, rows.pair.as_ref()))
+                };
+                let paired = paired_at(i).then(|| Edges::of(i, paired_at));
+                InstructionRow {
+                    paired,
+                    data: rows.data.clone(),
+                    index,
+                    row: i,
+                    wash,
+                    chars: RowChars::of(rows.chars, i),
+                    arrows: RowArrows {
+                        lanes: rows.data.lanes.row(index),
+                        lit: lanes::lit(&rows.touching, index),
+                    },
+                    key: DiffKey::None,
                 }
-            })
-            .on_global_pointer_move(use_sweep_beyond(
-                marked,
-                Pane::Assembly,
-                listing_ctx.clone(),
-                nudge,
-                length,
-            ))
-            // On the grid: see `Nudge`.
-            .padding(nudge.padding())
-            .child(
-                VirtualScrollView::new_with_data_controlled(
-                    AsmRows {
-                        data,
-                        pair,
-                        touching,
-                        rows,
-                        chars,
-                    },
-                    move |i, rows: &AsmRows| {
-                        let wash = wash_of(rows.chars, i);
-                        let Some(index) = rows.data.lanes.instruction_at(i) else {
-                            // A separator, which belongs to the instruction below it: the
-                            // lanes it carries are that row's, and it lights with them
-                            // but never draws their corner.
-                            let below = rows.data.lanes.instruction_at(i + 1).unwrap_or(0);
-                            let mut lit = lanes::lit(&rows.touching, below);
-                            lit.corner = false;
-
-                            // Keyed by the row it opens, in a key space of its own:
-                            // see `SeparatorRow`.
-                            let address = rows.data.assembly.instructions[below].address;
-                            return SeparatorRow {
-                                row: i,
-                                wash,
-                                width: rows.data.width,
-                                arrows: RowArrows {
-                                    lanes: rows.data.lanes.boundary(below),
-                                    lit,
-                                },
-                                key: DiffKey::None,
-                            }
-                            .key((true, address))
-                            .into();
-                        };
-
-                        // Paired, and if so whether the rows either side are too:
-                        // the listing's rows, a separator being nobody's pair.
-                        let paired_at = |row: usize| {
-                            rows.data
-                                .lanes
-                                .instruction_at(row)
-                                .is_some_and(|index| rows.data.paired(index, rows.pair.as_ref()))
-                        };
-                        let paired = paired_at(i).then(|| Edges::of(i, paired_at));
-                        InstructionRow {
-                            paired,
-                            data: rows.data.clone(),
-                            index,
-                            row: i,
-                            wash,
-                            chars: RowChars::of(rows.chars, i),
-                            arrows: RowArrows {
-                                lanes: rows.data.lanes.row(index),
-                                lit: lanes::lit(&rows.touching, index),
-                            },
-                            key: DiffKey::None,
-                        }
-                        // Tagged, for the separators' sake: an address alone could be
-                        // any separator's too.
-                        .key((false, rows.data.assembly.instructions[index].address))
-                        .into()
-                    },
-                    controller,
-                )
-                .length(length)
-                .item_size(code_row_height()),
-            )
+                // Tagged, for the separators' sake: an address alone could be any
+                // separator's too.
+                .key((false, rows.data.assembly.instructions[index].address))
+                .into()
+            },
+        )
     }
 }
 

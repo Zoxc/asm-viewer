@@ -238,8 +238,8 @@ impl RowChars {
 /// a row that draws the caret out of the pane's sight to bring it sideways into it -- the
 /// box and not the row's own `visible_area`, which freya reports unclipped, the whole row
 /// wide -- the paragraphs its rows have lent it, for a sweep that has left the rows to ask
-/// a row where a column is, and the widest row drawn, which every row is floored to and
-/// which is the sideways extent.
+/// a row where a column is, the widest row drawn, which every row is floored to and which
+/// is the sideways extent, and the nudge that puts the rows on the device pixel grid.
 ///
 /// The listing that width is held under is a **cell**, written by every render of the
 /// list ([`Listing::drawing`]) and read where it is wanted. A list is not mounted again
@@ -254,6 +254,9 @@ pub(crate) struct Listing {
     pub(crate) texts: Rc<RefCell<HashMap<usize, RowText>>>,
     pub(crate) widest: Widest,
     key: Rc<Cell<u64>>,
+    /// How far down the rows are pushed to sit on the device pixel grid: see
+    /// [`Listing::padding`].
+    nudge: State<f32>,
 }
 
 /// A row's laid-out paragraph and where it starts, lent to the list by the row as it
@@ -269,15 +272,39 @@ pub(crate) struct RowText {
 }
 
 impl Listing {
-    /// A fresh list, with nothing lent yet and no listing drawn.
-    pub(crate) fn new(controller: ScrollController, widest: Widest) -> Self {
+    /// A fresh list, with nothing lent yet and no listing drawn. The nudge is handed in
+    /// rather than made here, this being called once from inside a hook's closure.
+    pub(crate) fn new(controller: ScrollController, widest: Widest, nudge: State<f32>) -> Self {
         Listing {
             controller,
             bounds: Rc::new(Cell::new(Area::zero())),
             texts: Rc::new(RefCell::new(HashMap::new())),
             widest,
             key: Rc::new(Cell::new(0)),
+            nudge,
         }
+    }
+
+    /// The box was laid out with its top at `top`, which is what the rows are pushed off.
+    /// The grid is taken at the render and not here, so the handler asks nothing of the
+    /// runtime.
+    pub(crate) fn measured(&self, grid: Grid, top: f32) {
+        let mut nudge = self.nudge;
+        nudge.set_if_modified(grid.nudge(top));
+    }
+
+    /// The padding that puts the rows on the device pixel grid, read as the box's top
+    /// padding: whatever fraction the bars, tabs and fonts above a listing add up to, its
+    /// rows are washed and highlighted as whole pixels, so two rows' washes meet on an
+    /// edge instead of each fading into the other over the pixel they share. A read: the
+    /// box re-renders as it lands.
+    pub(crate) fn padding(&self) -> Gaps {
+        Gaps::new(*self.nudge.read(), 0.0, 0.0, 0.0)
+    }
+
+    /// That padding as it is, for a handler, which subscribes nothing.
+    fn nudge(&self) -> f32 {
+        *self.nudge.peek()
     }
 
     /// The listing the list is drawing, told to this by every render of the list: what
@@ -839,37 +866,6 @@ fn nothing() -> Rect {
         .height(Size::px(0.0))
 }
 
-/// The padding that puts a listing's rows on the device pixel grid, from where the box
-/// around them was laid out: whatever fraction the bars, tabs and fonts above a listing
-/// add up to, its rows are washed and highlighted as whole pixels, so two rows' washes
-/// meet on an edge instead of each fading into the other over the pixel they share.
-/// Handed the box's area as its `on_sized` reports it; read as the box's top padding.
-#[derive(Clone, Copy)]
-pub(crate) struct Nudge(State<f32>);
-
-pub(crate) fn use_nudge() -> Nudge {
-    Nudge(use_state(|| 0.0f32))
-}
-
-impl Nudge {
-    /// The box was laid out with its top at `top`. The grid is taken at the render and
-    /// not here, so the handler asks nothing of the runtime.
-    pub(crate) fn measured(self, grid: Grid, top: f32) {
-        let mut nudge = self.0;
-        nudge.set_if_modified(grid.nudge(top));
-    }
-
-    /// The padding to put on the box's top. A read: the box re-renders as it lands.
-    pub(crate) fn padding(self) -> Gaps {
-        Gaps::new(*self.0.read(), 0.0, 0.0, 0.0)
-    }
-
-    /// The padding as it is, for a handler.
-    pub(crate) fn value(self) -> f32 {
-        *self.0.peek()
-    }
-}
-
 /// How often the view moves while a sweep is held past an edge: a row up or down, and
 /// a row's height sideways, each time.
 const AUTOSCROLL_TICK: Duration = Duration::from_millis(40);
@@ -887,10 +883,10 @@ fn dragging(marked: State<Marks>, pane: Pane) -> bool {
 /// `listing`: [`beyond`], with the rows' top worked out from the list's scroll and its
 /// nudge, and the column off the paragraph the row lent. `None` while the pointer is over
 /// a row, which answers for itself.
-fn reach(listing: &Listing, nudge: Nudge, length: usize, at: CursorPoint) -> Option<Caret> {
+fn reach(listing: &Listing, length: usize, at: CursorPoint) -> Option<Caret> {
     let area = listing.bounds.get();
     let (_, scrolled) = <(i32, i32)>::from(listing.controller);
-    let rows_top = nudge.value() + scrolled as f32;
+    let rows_top = listing.nudge() + scrolled as f32;
     let bounds = Bounds {
         left: area.min_x(),
         top: area.min_y(),
@@ -938,7 +934,6 @@ pub(crate) fn use_sweep_beyond(
     marked: State<Marks>,
     pane: Pane,
     listing: Listing,
-    nudge: Nudge,
     length: usize,
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let last = use_hook(|| Rc::new(Cell::new(None::<CursorPoint>)));
@@ -949,7 +944,7 @@ pub(crate) fn use_sweep_beyond(
     move |e: Event<PointerEventData>| {
         let at = e.global_location();
         last.set(Some(at));
-        if let Some(caret) = reach(&listing, nudge, length, at) {
+        if let Some(caret) = reach(&listing, length, at) {
             mark_drag(marked, pane, caret.row, Some(caret.col));
         }
 
@@ -1005,7 +1000,7 @@ pub(crate) fn use_sweep_beyond(
                         controller.scroll_to_x(target);
                     }
                 }
-                if let Some(caret) = reach(&listing, nudge, length, at) {
+                if let Some(caret) = reach(&listing, length, at) {
                     mark_drag(marked, pane, caret.row, Some(caret.col));
                 }
             }

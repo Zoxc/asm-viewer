@@ -530,14 +530,14 @@ impl Component for SectionList {
         let code_at = use_consume::<CodeAt>().0;
         let marks_at = use_consume::<MarksAt>().0;
         let plant = use_consume::<Plant>().0;
-        let a11y = use_a11y();
-        use_tab_keyboard(a11y);
-        let controller = use_scroll_controller(ScrollConfig::default);
-        let mut viewport = use_state(|| 0.0f32);
-        // The widest row drawn, under the object's identity and not the rows': `Built`
-        // is made afresh as every stretch lands, and the listing is the same one.
-        let widest = use_widest();
+        // The listing these rows are of, held under the object's identity and not the
+        // rows': `Built` is made afresh as every stretch lands, and the listing is the
+        // same one.
         let listing = Widest::key(Arc::as_ptr(&self.object).addr());
+        // The box the rows are drawn in, and the scroll and the measurement that come
+        // with it.
+        let list = use_list_box(Pane::Assembly, listing);
+        let (controller, viewport) = (list.controller, list.viewport);
         // The rows, produced by the place-keeping effect and rendered from here, so that
         // new rows and the offset that keeps the reader's place under them land together.
         let rows = use_consume::<CodeRows>().0;
@@ -670,56 +670,20 @@ impl Component for SectionList {
             )
         };
 
-        let nudge = use_nudge();
-        let grid = pixel_grid();
-        // The list as its rows and a sweep past its edge know it: its scroll, its box,
-        // the paragraphs the rows lend it, and its widest row.
-        let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
-        // Every render, since the context is made once and this pane is handed another
-        // object's code without being mounted again.
-        listing_ctx.drawing(listing);
-        let bounds = listing_ctx.bounds.clone();
-
-        rect()
-            .expanded()
-            .a11y_id(a11y)
-            .a11y_focusable(true)
-            .on_pointer_down(move |_| a11y.request_focus())
-            .on_key_down(on_key_down)
-            .on_sized({
-                let bounds = bounds.clone();
-                move |e: Event<SizedEventData>| {
-                    viewport.set_if_modified(e.area.height());
-                    nudge.measured(grid, e.area.min_y());
-                    bounds.set(e.area);
-                }
-            })
-            .on_global_pointer_move(use_sweep_beyond(
-                marked,
-                Pane::Assembly,
-                listing_ctx.clone(),
-                nudge,
-                length,
-            ))
-            // On the grid: see `Nudge`.
-            .padding(nudge.padding())
-            .child(
-                VirtualScrollView::new_with_data_controlled(
-                    SectionRows {
-                        rows: built,
-                        object,
-                        pair,
-                        touching,
-                        marks,
-                        chars,
-                    },
-                    move |i, data: &SectionRows| build_row(i, data),
-                    controller,
-                )
-                .length(length)
-                .item_size(code_row_height()),
-            )
-            .into_element()
+        list.render(
+            marked,
+            length,
+            on_key_down,
+            SectionRows {
+                rows: built,
+                object,
+                pair,
+                touching,
+                marks,
+                chars,
+            },
+            build_row,
+        )
     }
 }
 

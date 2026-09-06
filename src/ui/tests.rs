@@ -18295,8 +18295,8 @@ fn sweeping_harness() -> impl IntoElement {
 
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
-    let nudge = use_nudge();
-    let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
+    let nudge = use_state(|| 0.0f32);
+    let listing_ctx = use_provide_context(|| Listing::new(controller, widest, nudge));
     // Every render, as each list tells its own.
     listing_ctx.drawing(listing);
     let bounds = listing_ctx.bounds.clone();
@@ -18318,7 +18318,6 @@ fn sweeping_harness() -> impl IntoElement {
             marked,
             Pane::Assembly,
             listing_ctx.clone(),
-            nudge,
             4,
         ))
 }
@@ -18436,7 +18435,8 @@ fn lending_harness() -> impl IntoElement {
     let rows = *use_consume::<LentRows>().0.read();
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
-    let listing = use_provide_context(|| Listing::new(controller, widest));
+    let nudge = use_state(|| 0.0f32);
+    let listing = use_provide_context(|| Listing::new(controller, widest, nudge));
     let out = use_consume::<LentTo>().0;
     use_hook(|| *out.borrow_mut() = Some(listing.clone()));
 

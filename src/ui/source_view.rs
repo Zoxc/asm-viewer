@@ -501,14 +501,13 @@ impl Component for SourceList {
             .lines_in(&self.file)
             .cloned()
             .unwrap_or_default();
-        let a11y = use_a11y();
-        use_tab_keyboard(a11y);
-
-        let controller = use_scroll_controller(ScrollConfig::default);
-        let mut viewport = use_state(|| 0.0f32);
-        // The widest row drawn, under the highlighted file's identity.
-        let widest = use_widest();
+        // The listing these rows are of, which is the highlighted file: what its widest
+        // row and its kept position are held under.
         let listing = Widest::key(Arc::as_ptr(&self.source.0).addr());
+        // The box the rows are drawn in, and the scroll and the measurement that come
+        // with it.
+        let list = use_list_box(Pane::Source, listing);
+        let (controller, viewport) = (list.controller, list.viewport);
 
         // Which of this file's names are links, which is the server's to say and not the
         // pane's to guess. Nothing until it has said so -- so no link is ever drawn that
@@ -605,15 +604,6 @@ impl Component for SourceList {
             self.opening,
         );
 
-        let nudge = use_nudge();
-        let grid = pixel_grid();
-        // The list as its rows and a sweep past its edge know it: its scroll, its box,
-        // the paragraphs the rows lend it, and its widest row.
-        let listing_ctx = use_provide_context(|| Listing::new(controller, widest));
-        // Every render, since the context is made once and this pane is handed another
-        // file without being mounted again.
-        listing_ctx.drawing(listing);
-        let bounds = listing_ctx.bounds.clone();
         let on_key_down = {
             let source = self.source.clone();
             let drawn = self.source.clone();
@@ -653,68 +643,40 @@ impl Component for SourceList {
             .width(Size::fill())
             .height(Size::flex(1.0))
             .padding(5.0)
-            .child(
-                rect()
-                    .expanded()
-                    .a11y_id(a11y)
-                    .a11y_focusable(true)
-                    .on_pointer_down(move |_| a11y.request_focus())
-                    .on_key_down(on_key_down)
-                    .on_sized({
-                        let bounds = bounds.clone();
-                        move |e: Event<SizedEventData>| {
-                            viewport.set_if_modified(e.area.height());
-                            nudge.measured(grid, e.area.min_y());
-                            bounds.set(e.area);
-                        }
-                    })
-                    .on_global_pointer_move(use_sweep_beyond(
-                        marked,
-                        Pane::Source,
-                        listing_ctx.clone(),
-                        nudge,
-                        length,
-                    ))
-                    // On the grid: see `Nudge`.
-                    .padding(nudge.padding())
-                    .child(
-                        VirtualScrollView::new_with_data_controlled(
-                            SourceData {
-                                source: self.source.clone(),
-                                file: self.file.clone(),
-                                pairs,
-                                compiled,
-                                rows,
-                                chars,
-                                // A source-driven tab's subject is the file its own
-                                // document names; a companion's tab is a symbol's.
-                                drives: matches!(self.document, Document::Source(_))
-                                    .then_some(self.tab),
-                                links,
-                            },
-                            |i, data: &SourceData| {
-                                let paired_at = |row: usize| data.pairs.contains(&(row as u32 + 1));
-                                SourceRow {
-                                    source: data.source.clone(),
-                                    file: data.file.clone(),
-                                    index: i,
-                                    paired: paired_at(i).then(|| Edges::of(i, paired_at)),
-                                    compiled: data.compiled.contains(&(i as u32 + 1)),
-                                    wash: wash_of(data.chars, i),
-                                    chars: RowChars::of(data.chars, i),
-                                    drives: data.drives,
-                                    links: data.links.clone(),
-                                    key: DiffKey::None,
-                                }
-                                .key(i)
-                                .into()
-                            },
-                            controller,
-                        )
-                        .length(length)
-                        .item_size(code_row_height()),
-                    ),
-            )
+            .child(list.render(
+                marked,
+                length,
+                on_key_down,
+                SourceData {
+                    source: self.source.clone(),
+                    file: self.file.clone(),
+                    pairs,
+                    compiled,
+                    rows,
+                    chars,
+                    // A source-driven tab's subject is the file its own document names;
+                    // a companion's tab is a symbol's.
+                    drives: matches!(self.document, Document::Source(_)).then_some(self.tab),
+                    links,
+                },
+                |i, data: &SourceData| {
+                    let paired_at = |row: usize| data.pairs.contains(&(row as u32 + 1));
+                    SourceRow {
+                        source: data.source.clone(),
+                        file: data.file.clone(),
+                        index: i,
+                        paired: paired_at(i).then(|| Edges::of(i, paired_at)),
+                        compiled: data.compiled.contains(&(i as u32 + 1)),
+                        wash: wash_of(data.chars, i),
+                        chars: RowChars::of(data.chars, i),
+                        drives: data.drives,
+                        links: data.links.clone(),
+                        key: DiffKey::None,
+                    }
+                    .key(i)
+                    .into()
+                },
+            ))
     }
 }
 

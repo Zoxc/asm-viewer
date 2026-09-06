@@ -236,6 +236,8 @@ command.
   opening it as source and its menu offering it as a binary.
 - `src/ui/code_row.rs` — one row of a code listing as all three listings draw theirs: the
   shared width, wash and pointer handlers, and the one paragraph a row's text is.
+- `src/ui/list_box.rs` — the box a code listing is drawn in, one box for all three of them:
+  the hooks a list opens with and the rect it closes around its rows.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
 - `src/ui/source_view.rs` — the source side of one, the bar over it, which file it is showing,
