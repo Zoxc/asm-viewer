@@ -435,6 +435,12 @@ leaves this list when it is. That is a move made on request, like everything els
 
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
+- [ ] Offer a new, empty project where a reader looks for one: the pages menu and the screen
+  with nothing open. `project::start_new` is there and is what the Project view's "New project"
+  button calls, but that button is inside the project a reader has not got yet -- the menu offers
+  only the two "Open ... as a project" items, and the empty screen offers Project file, Directory
+  and Binary, all of which want something that already exists. One menu row and one button, both
+  calling what the Recents section calls.
 - [ ] A build never replaces an open binary; it marks the outdated ones. Today a finished build
   closes and reopens the binaries it wrote, which takes the reader's place in them with it. A
   build should instead open every artifact it produced that is not open already, and leave the
