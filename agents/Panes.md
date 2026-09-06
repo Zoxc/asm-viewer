@@ -433,7 +433,9 @@ And when the rows are rebuilt under a view that was at the map's place as well a
 tell, the map's place is re-applied and not the derived one, so a target in a stretch the worker had
 not reached lands on its own instruction once the stretch is decoded, not on the row its guess was
 nearest (`agents/UI.md`). A plain press on the number is a press on the row's text; the label lights
-as a link, and the row shows the hand over it (`Text::door`), only while Ctrl is held. **In the
+as a link, and the row shows the hand over it, only while Ctrl is held. Both ask the one rule
+(`target_is_door`): the label reaches the row as an `InlineLink`, whose `is_link` is what the
+pointer's icon is picked by, so the hand is over exactly what is drawn as a link. **In the
 unified view a link does not leave it.** The rows a target is in are rows of the listing already, so
 a plain press on a name or on a bare address is `show_in_code` at the target's placed address, which
 `documents::land` turns into a plant in the tab that is already showing that document: a scroll and
@@ -473,10 +475,11 @@ paragraph takes one inline child, and an inline is one *unit* to the text engine
 (`src/chars.rs`), so a name made into an element would stop a source row's columns being the
 file's own -- which is the whole reason a press on one can say where it was in the terms the
 language server takes, with nothing converted. So the door is decided from the pressed
-column instead: `Text::links` carries the columns of every link in the row, `code_row` hit-
-tests the pointer against them for the hand and for the press, and lighting one changes a
-span's style and never where the spans are cut. A boundary that moved with the pointer would
-re-shape the row, and the widest row a listing has drawn only ever grows.
+column instead: the row's `TextLinks` carries the columns of every link in it and what a press
+on one follows, `code_row` hit-tests the pointer against them for the hand and for the press,
+and lighting one changes a span's style and never where the spans are cut. A boundary that
+moved with the pointer would re-shape the row, and the widest row a listing has drawn only
+ever grows.
 
 **The spans are cut at the links before the row is drawn** (`cut_at`), which is what keeps
 that true now the columns are the language server's and not the highlighting's. A link used

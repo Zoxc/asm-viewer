@@ -408,6 +408,15 @@ impl PartialEq for TargetLabel {
     }
 }
 
+/// Whether a press on the address is a door: with **Ctrl** held, and always in the
+/// listing the address is a row of, where a plain press moves to it. Asked twice of every
+/// such row -- read by the label, which lights itself with it and is drawn again as Ctrl
+/// goes down, and peeked by the closure the row is handed for the pointer's icon
+/// ([`InlineLink`]) -- and one rule, so the hand and the light cannot disagree.
+fn target_is_door(ctrl: bool, code_tab: bool) -> bool {
+    ctrl || code_tab
+}
+
 impl Component for TargetLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
@@ -423,10 +432,9 @@ impl Component for TargetLabel {
         let address = self.address;
         let text = self.text.clone();
         let code_tab = self.code_tab;
-        // A link while Ctrl is held, and always in the listing the address is a row of:
-        // the cue is the name's colour and the box a relocation link wears, since that
+        // The cue is the name's colour and the box a relocation link wears, since that
         // is the door it is.
-        let link = hovering() && (ctrl() || code_tab);
+        let link = hovering() && target_is_door(ctrl(), code_tab);
 
         rect()
             .maybe(link, |rect| {
@@ -758,7 +766,7 @@ impl Component for SeparatorRow {
             std::iter::once(code_mark(false))
                 .chain((width > 0).then(|| gutter(width, self.arrows).into_element()))
                 .collect(),
-            None,
+            None::<Text<NoLinks>>,
             None,
         )
         .child(block_rule())
@@ -877,14 +885,21 @@ impl Component for InstructionRow {
         // of the row's one paragraph, so it is one unit of the row's text to the engine
         // and the row's columns are the clipboard's (`instruction_line`).
         let (head, link, tail) = split(instruction, linked(&self.data.assembly, self.index));
-        let inline: Option<Element> = match link {
+        // Ctrl as the row's icon asks it: peeked from a handler, where the labels below
+        // read it and are drawn again as it changes. Optional, a row being drawn without
+        // it in a harness that has no modifiers.
+        let ctrl = try_consume_context::<Ctrl>().map(|ctrl| ctrl.0);
+        let code_tab = self.data.code_tab;
+        let inline: Option<InlineLink> = match link {
             Some(Link::Relocation) => instruction.relocation.as_ref().map(|target| {
-                RelocationLabel {
-                    object: self.data.object.clone(),
-                    target: target.clone(),
-                    code_tab: self.data.code_tab,
-                }
-                .into_element()
+                InlineLink::always(
+                    RelocationLabel {
+                        object: self.data.object.clone(),
+                        target: target.clone(),
+                        code_tab: self.data.code_tab,
+                    }
+                    .into_element(),
+                )
             }),
             // A branch's displacement is the other way to follow it: the row it lands
             // on, and the run a press on that row would have made.
@@ -894,12 +909,14 @@ impl Component for InstructionRow {
                     .branch_span
                     .and_then(|i| instruction.format.get(i));
                 edge.zip(span).map(|(edge, (text, _))| {
-                    BranchLabel {
-                        text: text.clone(),
-                        to: self.data.base + self.data.lanes.row_of(edge.to),
-                        at: self.data.position(edge.to),
-                    }
-                    .into_element()
+                    InlineLink::always(
+                        BranchLabel {
+                            text: text.clone(),
+                            to: self.data.base + self.data.lanes.row_of(edge.to),
+                            at: self.data.position(edge.to),
+                        }
+                        .into_element(),
+                    )
                 })
             }
             // Where the instruction goes, with no name and no row here: the door into the
@@ -909,24 +926,35 @@ impl Component for InstructionRow {
                 let span = instruction
                     .target_span
                     .and_then(|i| instruction.format.get(i));
-                instruction.target.zip(span).map(|(target, (text, _))| {
-                    TargetLabel {
-                        text: text.clone(),
-                        object: self.data.object.clone(),
-                        address: self.data.placed(target),
-                        code_tab: self.data.code_tab,
-                    }
-                    .into_element()
-                })
+                instruction
+                    .target
+                    .zip(span)
+                    .map(|(target, (text, _))| InlineLink {
+                        element: TargetLabel {
+                            text: text.clone(),
+                            object: self.data.object.clone(),
+                            address: self.data.placed(target),
+                            code_tab: self.data.code_tab,
+                        }
+                        .into_element(),
+                        // The rule the label lights itself by, so the hand is shown over
+                        // exactly what is drawn as a link -- in the unified view included,
+                        // where a plain press on the address is the door.
+                        is_link: Rc::new(move || {
+                            target_is_door(ctrl.is_some_and(|ctrl| *ctrl.peek()), code_tab)
+                        }),
+                    })
             }
             // The formatter offered no operand to put the name in: appended.
             None => instruction.relocation.as_ref().map(|target| {
-                RelocationLabel {
-                    object: self.data.object.clone(),
-                    target: target.clone(),
-                    code_tab: self.data.code_tab,
-                }
-                .into_element()
+                InlineLink::always(
+                    RelocationLabel {
+                        object: self.data.object.clone(),
+                        target: target.clone(),
+                        code_tab: self.data.code_tab,
+                    }
+                    .into_element(),
+                )
             }),
         };
         let appended = link.is_none() && inline.is_some();
@@ -972,12 +1000,9 @@ impl Component for InstructionRow {
         let text = Text {
             line: instruction_line(&self.data.assembly, self.index),
             head,
-            inline,
             tail: spans(tail, false),
             chars: self.chars,
-            door: link == Some(Link::Target),
-            links: Vec::new(),
-            on_link: None,
+            links: inline,
         };
 
         // The menu: the line's locations, where the debug info gives the row a line; the

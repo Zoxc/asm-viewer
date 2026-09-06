@@ -217,25 +217,18 @@ impl Component for SourceRow {
                 .into_iter()
                 .map(|(color, text)| Span::new(text).color(color).assembly_font())
                 .collect(),
-            inline: None,
             tail: Vec::new(),
             chars: self.chars,
-            door: false,
             // The names in this row the server placed, and what a press on one does: ask
             // it where that name is, and go to what it answers. Nothing is a link until
-            // the server has said so, and a press with Ctrl held opens what it names in a
-            // tab of its own -- the rule every door inside a pane follows.
-            links: self
-                .links
-                .followed_on(self.index as u32 + 1)
-                .into_iter()
-                .map(|columns| columns.start as usize..columns.end as usize)
-                .collect(),
-            on_link: following.clone().map(|(language, follow, jobs)| {
+            // the server has said so -- and none at all with nobody to ask, so no link is
+            // ever drawn that could not be followed. A press with Ctrl held opens what it
+            // names in a tab of its own, the rule every door inside a pane follows.
+            links: following.clone().map(|(language, follow, jobs)| {
                 let file = self.file.clone();
                 let row = self.index as u32;
                 let links = self.links.clone();
-                Rc::new(move |columns: Range<usize>| {
+                let follow_link = move |columns: Range<usize>| {
                     let reach = match *ctrl.peek() {
                         true => Reach::NewTab,
                         false => Reach::InPlace,
@@ -263,7 +256,16 @@ impl Component for SourceRow {
                         want,
                         reach,
                     );
-                }) as Rc<dyn Fn(Range<usize>)>
+                };
+                TextLinks {
+                    columns: self
+                        .links
+                        .followed_on(self.index as u32 + 1)
+                        .into_iter()
+                        .map(|columns| columns.start as usize..columns.end as usize)
+                        .collect(),
+                    follow: Rc::new(follow_link),
+                }
             }),
         };
 

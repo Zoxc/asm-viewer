@@ -15,10 +15,12 @@
 //! is the glyphs' tight box and leaves a seam between one row's and the next's.
 //!
 //! The pointer's icon is the row's to set, in one place: an I-beam over the text and to
-//! the right of it, the hand over a link inside it (which says so through `over_link`),
-//! and the arrow over the gutter and on leaving the row. Set only when it changes, since
-//! each set is a message to the platform, and kept in one cell for the whole thread: a
-//! row's own memory of it would be wrong the moment the row beside it set something else.
+//! the right of it, the hand over a link inside it -- which says it is under the pointer
+//! through `over_link`, and whether it is a link at all through the answer it lights
+//! itself by ([`InlineLink`]) -- and the arrow over the gutter and on leaving the row.
+//! Set only when it changes, since each set is a message to the platform, and kept in one
+//! cell for the whole thread: a row's own memory of it would be wrong the moment the row
+//! beside it set something else.
 //!
 //! **Nothing inside a row may listen to `pointer_down`.** A bubbling event is measured
 //! once, against the deepest listener, and every ancestor's handler is handed the same
@@ -42,6 +44,14 @@ thread_local! {
 /// row is inside: a caret placed at a column is placed from the padding's inner edge.
 const ROW_PAD: f32 = 3.0;
 
+/// The icon a row last set, for a test to ask what the pointer over something is. The
+/// cell is the thread's and a test runs the app on its own thread, so this is what that
+/// test's own pointer left behind.
+#[cfg(test)]
+pub(crate) fn icon_now() -> CursorIcon {
+    ICON.with(|last| last.get())
+}
+
 /// Set the pointer's icon, if it is not that already.
 fn set_icon(icon: CursorIcon) {
     ICON.with(|last| {
@@ -53,32 +63,138 @@ fn set_icon(icon: CursorIcon) {
 }
 
 /// What a row's text is: the pieces the clipboard sees, the spans the paragraph draws,
-/// and the part of the pane's character selection this row draws.
-pub(crate) struct Text {
+/// the part of the pane's character selection this row draws, and what of it is a link.
+///
+/// `L` is what this row kind's links are, and the two kinds are two types: [`InlineLink`],
+/// one element inside the paragraph, and [`TextLinks`], runs of the row's own text. A kind
+/// whose link is there or not says `Option<..>`, one that never has any says [`NoLinks`].
+/// So the half a row used to fill with nothing is gone, and with it the row holding one
+/// kind's element beside the other's columns -- which no row ever wanted and every reader
+/// of this had to rule out.
+pub(crate) struct Text<L> {
     /// The row's text as it is drawn, which is what the columns count and the copy takes.
     pub(crate) line: Line,
-    /// The spans before the inline element, and after it; all of them when there is none.
+    /// The spans before an inline link, and after it; all of them where there is none.
     pub(crate) head: Vec<Span<'static>>,
-    pub(crate) inline: Option<Element>,
     pub(crate) tail: Vec<Span<'static>>,
     /// What this row draws of the character selection.
     pub(crate) chars: RowChars,
-    /// Whether the inline element is a link only while Ctrl is held -- a door into the
-    /// object's code -- which is when the hand is shown over it; a link that is one
-    /// always shows the hand always.
-    pub(crate) door: bool,
-    /// The columns of the runs of this row's own text that are links, in the order they
-    /// are drawn. A door that is text and not an element: the row's columns stay the
-    /// file's own, which is what lets a press on one say where it was in the terms
-    /// everything else speaks (`src/chars.rs`).
-    ///
-    /// `head` is cut at their edges before it is drawn ([`cut_at`]), so lighting a link
-    /// changes a span's style and never where the spans are cut -- a boundary that moved
-    /// with the pointer would re-shape the row and widen the listing for good.
-    pub(crate) links: Vec<Range<usize>>,
-    /// What a press on one of them does, given its columns. Built per row, as the menu
-    /// is.
-    pub(crate) on_link: Option<Rc<dyn Fn(Range<usize>)>>,
+    /// What of this row is a link.
+    pub(crate) links: L,
+}
+
+/// What a row kind's links are, asked of it as the row is drawn. Every kind answers in
+/// the one shape [`Drawn`], which is what keeps the drawing one function rather than a
+/// copy of it per kind.
+pub(crate) trait RowLinks: Sized {
+    fn drawn(self) -> Drawn;
+}
+
+/// A row's links as the drawing reads them: **either** an element inside the paragraph,
+/// with the answer it lights itself by, **or** runs of the row's own text, with what a
+/// press on one follows. The fields are this module's and the two constructors are the
+/// only way to one, so what the type parameter keeps apart stays apart here: nothing can
+/// hand the drawing both, or half of either.
+#[derive(Default)]
+pub(crate) struct Drawn {
+    inline: Option<(Element, Rc<dyn Fn() -> bool>)>,
+    runs: Option<(Vec<Range<usize>>, Rc<dyn Fn(Range<usize>)>)>,
+}
+
+impl Drawn {
+    /// One element inside the paragraph, and whether a press on it is a door now.
+    fn element(element: Element, is_link: Rc<dyn Fn() -> bool>) -> Self {
+        Drawn {
+            inline: Some((element, is_link)),
+            runs: None,
+        }
+    }
+
+    /// Runs of the row's own text, and what a press on one follows.
+    fn runs(columns: Vec<Range<usize>>, follow: Rc<dyn Fn(Range<usize>)>) -> Self {
+        Drawn {
+            inline: None,
+            runs: Some((columns, follow)),
+        }
+    }
+}
+
+/// A row whose text is text: no links of either kind.
+pub(crate) struct NoLinks;
+
+impl RowLinks for NoLinks {
+    fn drawn(self) -> Drawn {
+        Drawn::default()
+    }
+}
+
+/// A row kind whose link is there or not, which the assembly rows' is: an instruction
+/// naming nothing has none.
+impl<L: RowLinks> RowLinks for Option<L> {
+    fn drawn(self) -> Drawn {
+        self.map_or_else(Drawn::default, RowLinks::drawn)
+    }
+}
+
+/// One element drawn inside the row's paragraph, between [`Text`]'s `head` and its
+/// `tail`: a relocation target's name, a branch's displacement, the address an unnamed
+/// call goes to. The element keeps its own hover, press and colour; what the row needs of
+/// it is `is_link` -- whether a press on it is a door **now** -- which is what the
+/// pointer's icon is picked by. That is the element's own rule and not a second copy of
+/// it, so the hand and the light cannot disagree.
+pub(crate) struct InlineLink {
+    pub(crate) element: Element,
+    pub(crate) is_link: Rc<dyn Fn() -> bool>,
+}
+
+impl InlineLink {
+    /// An element that is a link whenever the pointer is over it.
+    pub(crate) fn always(element: Element) -> Self {
+        InlineLink {
+            element,
+            is_link: Rc::new(|| true),
+        }
+    }
+}
+
+impl RowLinks for InlineLink {
+    fn drawn(self) -> Drawn {
+        Drawn::element(self.element, self.is_link)
+    }
+}
+
+/// The columns of the runs of a row's own text that are links, in the order they are
+/// drawn, and what a press on one follows. A door that is text and not an element: the
+/// row's columns stay the file's own, which is what lets a press on one say where it was
+/// in the terms everything else speaks (`src/chars.rs`).
+///
+/// [`Text::head`] is cut at their edges before it is drawn ([`cut_at`]), so lighting a
+/// link changes a span's style and never where the spans are cut -- a boundary that moved
+/// with the pointer would re-shape the row and widen the listing for good.
+pub(crate) struct TextLinks {
+    pub(crate) columns: Vec<Range<usize>>,
+    /// Built per row, as the menu is.
+    pub(crate) follow: Rc<dyn Fn(Range<usize>)>,
+}
+
+impl RowLinks for TextLinks {
+    fn drawn(self) -> Drawn {
+        Drawn::runs(self.columns, self.follow)
+    }
+}
+
+impl<L: RowLinks> Text<L> {
+    /// This text with its links asked what they are: where the row kind's own type ends
+    /// and the one drawing begins.
+    fn asked(self) -> Text<Drawn> {
+        Text {
+            line: self.line,
+            head: self.head,
+            tail: self.tail,
+            chars: self.chars,
+            links: self.links.drawn(),
+        }
+    }
 }
 
 /// What one row draws of the pane's character selection, as the list tells it: its
@@ -223,10 +339,23 @@ pub(crate) struct Chrome {
 /// The menu is handed the column the pointer was over, which is what a question about the
 /// name under it needs and only this knows: `None` in the gutter, and on a row with no
 /// text at all.
-pub(crate) fn code_row(
+pub(crate) fn code_row<L: RowLinks>(
     chrome: Chrome,
     before: Vec<Element>,
-    text: Option<Text>,
+    text: Option<Text<L>>,
+    menu: Option<Rc<dyn Fn(Event<PressEventData>, Option<usize>)>>,
+) -> Rect {
+    // The row kind's links asked what they are, and then the drawing, which is one
+    // function whatever the kind: a drawing generic in the kind would be a whole copy of
+    // itself per kind, for the two questions the four lines below ask.
+    row(chrome, before, text.map(Text::asked), menu)
+}
+
+/// The drawing, which every row kind's [`Text`] has come to the one shape for.
+fn row(
+    chrome: Chrome,
+    before: Vec<Element>,
+    mut text: Option<Text<Drawn>>,
     menu: Option<Rc<dyn Fn(Event<PressEventData>, Option<usize>)>>,
 ) -> Rect {
     let marked = use_consume::<Marked>().0;
@@ -242,19 +371,27 @@ pub(crate) fn code_row(
     let text_x = use_hook(|| Rc::new(Cell::new(0.0f32)));
     // Whether the pointer is over the link inside the text, which the link's box says.
     let over_link = use_hook(|| Rc::new(Cell::new(false)));
-    // Whether the link is one now: always, or only while Ctrl is held, for a door. Asked
-    // at the pointer's move and not subscribed to, the icon being set from handlers.
-    let ctrl = try_consume_context::<Ctrl>().map(|ctrl| ctrl.0);
     let alt = try_consume_context::<Alt>().map(|alt| alt.0);
-    let door = text.as_ref().is_some_and(|text| text.door);
-    let hand = move || !door || ctrl.is_some_and(|ctrl| *ctrl.peek());
-    // The links in the row's own text, and what a press on one does. Taken out of `text`
-    // before it is moved into the paragraph below, since the handlers need them.
-    let links: Vec<Range<usize>> = text
-        .as_ref()
-        .map(|text| text.links.clone())
+    // The row's links, taken out of `text` before its spans are moved into the paragraph
+    // below, since the handlers need them.
+    let Drawn { inline, runs } = text
+        .as_mut()
+        .map(|text| std::mem::take(&mut text.links))
         .unwrap_or_default();
-    let on_link = text.as_ref().and_then(|text| text.on_link.clone());
+    // Whether the element inside the text is a link *now*: the element's own answer, the
+    // one it lights itself by, so the hand is shown over exactly what is drawn as a link.
+    // Asked at the pointer's move and not subscribed to, the icon being set from
+    // handlers.
+    let hand: Rc<dyn Fn() -> bool> = match &inline {
+        Some((_, is_link)) => is_link.clone(),
+        None => Rc::new(|| false),
+    };
+    let inline = inline.map(|(element, _)| element);
+    // The links in the row's own text, and what a press on one follows.
+    let (links, follow) = match runs {
+        Some((columns, follow)) => (columns, Some(follow)),
+        None => (Vec::new(), None),
+    };
     // Which of them the pointer is over, or `None`. Written with `set_if_modified`, so a
     // row is drawn again when the pointer crosses a link's edge and not as it moves along
     // one.
@@ -404,8 +541,9 @@ pub(crate) fn code_row(
         });
         // The link, in a box that says when the pointer is over it: the hand is the
         // link's and the I-beam the text's, and the row sets both (`set_icon`).
-        let inline = text.inline.map(|inline| {
+        let inline = inline.map(|inline| {
             let (entered, left) = (over_link.clone(), over_link.clone());
+            let hand = hand.clone();
             rect()
                 .on_pointer_over(move |_| {
                     entered.set(true);
@@ -498,7 +636,7 @@ pub(crate) fn code_row(
                     // door.
                     let link = at_link(at)
                         .filter(|_| presses == PressEventType::Single && !held())
-                        .zip(on_link.clone());
+                        .zip(follow.clone());
                     if let Some((link, follow)) = link {
                         // And it picks no line out: the press is the question and not a
                         // place in the file.

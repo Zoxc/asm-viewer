@@ -353,12 +353,9 @@ impl Component for TextRow {
         let text = Text {
             line: text_line(self.mark, &self.text),
             head,
-            inline: None,
             tail: Vec::new(),
             chars: self.chars,
-            door: false,
-            links: Vec::new(),
-            on_link: None,
+            links: NoLinks,
         };
 
         // The mark's column and the gutter's width, so both the address column and the
@@ -464,7 +461,7 @@ impl Component for EmptyRow {
                 measured: false,
             },
             vec![code_mark(false)],
-            None,
+            None::<Text<NoLinks>>,
             None,
         )
         .maybe(self.rule, |row| row.child(block_rule()))

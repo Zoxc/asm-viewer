@@ -15757,6 +15757,46 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     );
 }
 
+/// **The hand is shown over what a press would follow.** In the unified view a bare
+/// address is a door on a plain press and is drawn as one, so the pointer over it is the
+/// hand with nothing held: the icon and the light ask the link its own answer, and cannot
+/// be told apart.
+#[test]
+fn the_hand_is_shown_over_a_bare_target_in_the_unified_view() {
+    let (object, _target) = calling_into_the_middle();
+    let f = Symbol {
+        object: object.clone(),
+        data: object.symbols_sorted[0].clone(),
+    };
+    let operand = call_operand(&f);
+    let reading = reading_of(&object, &[0]);
+    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 6.0 * code_row_height()).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    let area = label_area(&test, &operand).expect("the operand is drawn");
+    let y = (area.origin.y + area.height() / 2.0) as f64;
+    // The row's own text first, just left of the address: the I-beam, so that what the
+    // move onto the address does is the whole of the question.
+    test.move_cursor(((area.origin.x - 4.0) as f64, y));
+    settle(&mut test);
+    assert_eq!(icon_now(), CursorIcon::Text, "the text is not the I-beam");
+
+    test.move_cursor(((area.origin.x + area.width() / 2.0) as f64, y));
+    settle(&mut test);
+    assert_eq!(
+        icon_now(),
+        CursorIcon::Pointer,
+        "the pointer over the door is not the hand"
+    );
+}
+
 /// The code opened at a call's target lands on the row **at or below** the address: on
 /// the guessed row of the stretch while nothing there is decoded, and on the instruction
 /// holding the byte once it is -- the exact place the door asked for, not the row the
@@ -18377,12 +18417,9 @@ impl Component for LentRow {
             Some(Text {
                 line: Line::text(LENT_TEXT),
                 head: vec![Span::new(LENT_TEXT).assembly_font()],
-                inline: None,
                 tail: Vec::new(),
                 chars: RowChars::default(),
-                door: false,
-                links: Vec::new(),
-                on_link: None,
+                links: NoLinks,
             }),
             None,
         )
