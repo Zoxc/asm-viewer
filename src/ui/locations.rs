@@ -604,7 +604,7 @@ impl Component for LocationsPanel {
                 rect()
                     .expanded()
                     .content(Content::Flex)
-                    .child(row_tooltip(
+                    .child(extra_tooltip(
                         query.tooltip(),
                         section_heading(&heading, None),
                     ))
@@ -637,7 +637,7 @@ impl Component for LocationsPanel {
                 rect()
                     .expanded()
                     .content(Content::Flex)
-                    .child(row_tooltip(
+                    .child(extra_tooltip(
                         query.tooltip(),
                         section_heading(&heading, None),
                     ))
@@ -722,7 +722,7 @@ impl Component for ReferencesRow {
             }
         };
 
-        row_tooltip(
+        extra_tooltip(
             tooltip,
             list_row(hovering, false)
                 .on_press(move |_| match &pressed {
@@ -835,6 +835,9 @@ impl KeyExt for LocationRow {
 impl Component for LocationRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
+        // The two texts a row draws, each measured: the symbol's name and the object it
+        // is in.
+        let (named, about) = (use_fitted(), use_fitted());
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let ctrl = use_consume::<Ctrl>().0;
@@ -849,7 +852,9 @@ impl Component for LocationRow {
         let name = symbol.data.display().to_owned();
         let object = symbol.object.name.clone();
 
-        row_tooltip(
+        // One tooltip over two texts, so it is shown where either of them was cut.
+        cut_tooltip(
+            named.cut() || about.cut(),
             format!("{name} \u{2014} {object}"),
             list_row(hovering, self.selected)
                 .on_press(move |_| {
@@ -905,20 +910,14 @@ impl Component for LocationRow {
                         }
                     }
                 })
-                .child(tree_name(name, false))
+                .child(tree_name_fitted(named, name, false))
                 // Capped rather than measured, or a long member name would take the row
                 // and leave the symbol it is about with nothing.
                 .child(
                     rect()
                         .max_width(Size::percent(45.0))
                         .overflow(Overflow::Clip)
-                        .child(
-                            label()
-                                .text(object)
-                                .max_lines(1)
-                                .color(palette().address_fg)
-                                .text_overflow(TextOverflow::Ellipsis),
-                        ),
+                        .child(one_line_fitted(about, object).color(palette().address_fg)),
                 ),
         )
     }

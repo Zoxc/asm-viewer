@@ -47,7 +47,7 @@ impl Component for ChipButton {
 
         let side = toggle_size();
         let glyph = icon_size();
-        row_tooltip(
+        extra_tooltip(
             tooltip.to_owned(),
             rect()
                 .width(Size::px(side))
@@ -109,7 +109,7 @@ impl Component for ProjectChip {
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(2.0)
-            .child(row_tooltip(
+            .child(extra_tooltip(
                 file.to_string_lossy().into_owned(),
                 rect()
                     .height(Size::px(toggle_size()))

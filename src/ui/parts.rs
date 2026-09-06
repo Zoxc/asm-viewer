@@ -123,12 +123,38 @@ fn row_frame(background: Color) -> Rect {
         .overflow(Overflow::Clip)
 }
 
-/// A row's or a chip's own text, shown in full where the row could only show part of it.
-/// Used rather than `TooltipContainer` directly so that [`TOOLTIP_DELAY`] is decided once.
-pub(crate) fn row_tooltip(text: String, row: impl IntoElement) -> TooltipContainer {
+/// The rest of a text the row had only room for part of, **mounted only where the text
+/// was cut**: a tooltip repeating a name already whole on screen is noise the pointer
+/// drags down a list.
+pub(crate) fn cut_tooltip(cut: bool, text: String, row: impl IntoElement) -> Element {
+    let row = row.into_element();
+    match cut {
+        false => row,
+        true => TooltipContainer::new(Tooltip::new(text))
+            .delay(TOOLTIP_DELAY)
+            .child(row)
+            .into_element(),
+    }
+}
+
+/// A tooltip saying what the thing under it does not: a file's path where its name is
+/// drawn, where a matched line is, what a button does. Shown whatever fitted, since what
+/// it says is not on screen either way.
+pub(crate) fn extra_tooltip(text: String, row: impl IntoElement) -> Element {
     TooltipContainer::new(Tooltip::new(text))
         .delay(TOOLTIP_DELAY)
         .child(row.into_element())
+        .into_element()
+}
+
+/// A row drawn by `text` where the whole of what it names is `whole`: the rest of a cut
+/// text where the two are the same, and something more where they differ. The History and
+/// Bookmarks rows and the tab chips are one row for a symbol and the other for a file.
+pub(crate) fn name_tooltip(cut: bool, text: &str, whole: String, row: impl IntoElement) -> Element {
+    match whole == text {
+        true => cut_tooltip(cut, whole, row),
+        false => extra_tooltip(whole, row),
+    }
 }
 
 /// The short tag saying what kind of file a row is, in the column every row of the objects
@@ -140,6 +166,59 @@ pub(crate) fn tag_label(tag: &str) -> impl IntoElement {
         .font_size(TAG_FONT_SIZE)
         .color(palette().address_fg)
         .max_lines(1)
+}
+
+/// Whether the one line of text a row draws fitted the room it was given.
+///
+/// **freya cannot be asked this of a `label`.** It reports the box a text was laid out in
+/// and never the width the text wanted, and a label asked for an ellipsis is laid out at
+/// the width of its own box -- so what it measures is the ellipsised line, which is the
+/// box again. A `paragraph` hands back the paragraph skia drew (`ParagraphHolder`), and
+/// that answers it outright: `did_exceed_max_lines` is false for a line that fitted and
+/// true for one that was cut, off the paragraph freya built anyway.
+///
+/// The answer lands in a state the row reads as it renders, since what it decides -- a
+/// tooltip mounted or not -- is a render's decision. torin emits `Sized` every time it
+/// measures the node and not only when the box changed, so a row handed new text at the
+/// width it already had answers again.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct Fitted {
+    holder: State<ParagraphHolder>,
+    cut: State<bool>,
+}
+
+/// A hook, so it is called in the row's own render and handed down from there.
+pub(crate) fn use_fitted() -> Fitted {
+    Fitted {
+        holder: use_state(ParagraphHolder::default),
+        cut: use_state(|| false),
+    }
+}
+
+impl Fitted {
+    /// Whether the text was cut. Reading it is what subscribes the row to it.
+    pub(crate) fn cut(self) -> bool {
+        (self.cut)()
+    }
+
+    /// The line freya draws, told to answer.
+    pub(crate) fn measuring(self, line: Paragraph) -> Paragraph {
+        let Fitted { holder, mut cut } = self;
+        line.holder(holder.read().clone())
+            .on_sized(move |_: Event<SizedEventData>| {
+                // Bound to a `let` of its own before the write: the borrow of the holder
+                // ends with the statement, and a read held across a `set` panics.
+                let answer = holder
+                    .peek()
+                    .0
+                    .borrow()
+                    .as_ref()
+                    .map(|laid| laid.paragraph.did_exceed_max_lines());
+                if let Some(answer) = answer {
+                    cut.set_if_modified(answer);
+                }
+            })
+    }
 }
 
 /// One line of text, cut with an ellipsis where the room ran out.
@@ -159,6 +238,16 @@ pub(crate) fn tree_name(text: String, dim: bool) -> impl IntoElement {
     name_box(one_line(text), dim)
 }
 
+/// The same line, measured: `fitted` is told whether it was cut.
+pub(crate) fn one_line_fitted(fitted: Fitted, text: String) -> Paragraph {
+    fitted.measuring(one_line(text))
+}
+
+/// The same, measured, for a row whose tooltip is only shown where the name was cut.
+pub(crate) fn tree_name_fitted(fitted: Fitted, text: String, dim: bool) -> impl IntoElement {
+    name_box(one_line_fitted(fitted, text), dim)
+}
+
 fn name_box(line: Paragraph, dim: bool) -> impl IntoElement {
     rect()
         .width(Size::flex(1.0))
@@ -169,6 +258,12 @@ fn name_box(line: Paragraph, dim: bool) -> impl IntoElement {
                 // inheriting the interface colour from the root the way it always did.
                 .maybe(dim, |name| name.color(palette().address_fg)),
         )
+}
+
+/// Whether [`elide`] would cut `text`: what a chip asks instead of measuring, its text
+/// being cut by the count and never by the room.
+pub(crate) fn elided(text: &str) -> bool {
+    text.chars().count() > CHIP_NAME_CHARS
 }
 
 /// `text` cut down to [`CHIP_NAME_CHARS`], with an ellipsis where the rest was. On a

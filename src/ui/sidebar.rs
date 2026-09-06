@@ -74,7 +74,7 @@ impl Component for ArchiveRow {
             ARCHIVE_TAG
         };
 
-        row_tooltip(
+        extra_tooltip(
             self.path.display().to_string(),
             // Nothing is ever picked out here: an archive row has no object behind it.
             list_row(hovering, false)
@@ -167,6 +167,7 @@ impl KeyExt for ObjectRow {
 impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
+        let fitted = use_fitted();
         let states = use_project_states();
         let (open, visits) = (states.open, states.visits);
         let ctrl = use_consume::<Ctrl>().0;
@@ -179,7 +180,9 @@ impl Component for ObjectRow {
             self.object.path.display().to_string()
         };
 
-        row_tooltip(
+        name_tooltip(
+            fitted.cut(),
+            &self.object.name,
             tooltip,
             list_row(hovering, self.selected)
                 // What pressing an object opens is all of its code as one listing --
@@ -205,7 +208,7 @@ impl Component for ObjectRow {
                     CHEVRON_WIDTH
                 })))
                 .child(tag_label(format_tag(self.object.format)))
-                .child(tree_name(self.object.name.clone(), false)),
+                .child(tree_name_fitted(fitted, self.object.name.clone(), false)),
         )
     }
 
@@ -239,6 +242,7 @@ impl KeyExt for SymbolRow {
 impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
+        let fitted = use_fitted();
         let open = use_open();
         let visits = use_consume::<Visited>().0;
         let ctrl = use_consume::<Ctrl>().0;
@@ -255,7 +259,8 @@ impl Component for SymbolRow {
             .clone();
         let document = Document::Assembly(Selection::Symbol(symbol.clone()));
 
-        row_tooltip(
+        cut_tooltip(
+            fitted.cut(),
             text.clone(),
             list_row(hovering, self.selected)
                 .on_press(move |_| {
@@ -272,7 +277,7 @@ impl Component for SymbolRow {
                         bookmark_menu(bookmarked, objects, document.clone()),
                     );
                 })
-                .child(tree_name(text, false)),
+                .child(tree_name_fitted(fitted, text, false)),
         )
     }
 
@@ -307,6 +312,7 @@ impl KeyExt for HistoryRow {
 impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
+        let fitted = use_fitted();
         let open = use_open();
         // Consuming does not subscribe -- only reading would, and this row only records
         // into it.
@@ -318,7 +324,11 @@ impl Component for HistoryRow {
         let entry = self.entry.clone();
         let target = self.entry.clone();
 
-        row_tooltip(
+        let drawn = text.clone();
+
+        name_tooltip(
+            fitted.cut(),
+            &drawn,
             entry_tooltip(&self.entry),
             list_row(hovering, self.current)
                 .on_press(move |_| {
@@ -331,7 +341,7 @@ impl Component for HistoryRow {
                     );
                 })
                 .child(entry_icon(&self.entry))
-                .child(tree_name(text, false)),
+                .child(tree_name_fitted(fitted, text, false)),
         )
     }
 

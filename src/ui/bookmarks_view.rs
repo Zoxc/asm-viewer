@@ -30,6 +30,7 @@ impl KeyExt for BookmarkRow {
 impl Component for BookmarkRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
+        let fitted = use_fitted();
         let open = use_open();
         // Consumed and not read: a row hands the list an index back and draws nothing of
         // it that the tab has not already handed it.
@@ -65,13 +66,15 @@ impl Component for BookmarkRow {
             None => dead_list_row(),
         };
 
-        row_tooltip(
+        name_tooltip(
+            fitted.cut(),
+            &text.clone(),
             tooltip,
             row.on_secondary_down(move |e: Event<PressEventData>| {
                 ContextMenu::open_from_event(&e, remove_menu(bookmarked, index));
             })
             .child(saved_icon(&self.bookmark.document))
-            .child(tree_name(text, dead)),
+            .child(tree_name_fitted(fitted, text, dead)),
         )
     }
 

@@ -18381,10 +18381,13 @@ fn a_compiled_language_with_no_grammar_is_still_compiled() {
     }
 }
 
-/// Every paragraph on screen, top to bottom: its box, its text -- the spans joined, an
-/// inline child counting for nothing here -- and the highlight its row drew for the
-/// character selection, which is the rect in the selection's colour level with it and
+/// Every row of a listing on screen, top to bottom: its box, its text -- the spans
+/// joined, an inline child counting for nothing here -- and the highlight its row drew for
+/// the character selection, which is the rect in the selection's colour level with it and
 /// starting at or after its left edge (a row selected whole starts at the row's).
+///
+/// A listing's rows are the paragraphs as tall as a code row: every name the app draws is
+/// a paragraph too, the bar over this pane included, and those are a different height.
 fn paragraphs(test: &TestingRunner) -> Vec<(Area, String, Option<Area>)> {
     use freya::elements::paragraph::ParagraphElement;
     use std::any::Any;
@@ -18394,13 +18397,16 @@ fn paragraphs(test: &TestingRunner) -> Vec<(Area, String, Option<Area>)> {
         let element = node.element();
         (element.as_ref() as &dyn Any)
             .downcast_ref::<ParagraphElement>()
-            .map(|paragraph| {
+            .and_then(|paragraph| {
                 let text: String = paragraph
                     .spans
                     .iter()
                     .map(|span| span.text.to_string())
                     .collect();
                 let area = node.layout().area;
+                if (area.height() - code_row_height()).abs() > 0.5 {
+                    return None;
+                }
                 let highlight = washes
                     .iter()
                     .find(|wash| {
@@ -18408,7 +18414,7 @@ fn paragraphs(test: &TestingRunner) -> Vec<(Area, String, Option<Area>)> {
                             && wash.min_x() >= area.min_x() - 1.0
                     })
                     .copied();
-                (area, text, highlight)
+                Some((area, text, highlight))
             })
     });
     found.sort_by(|a, b| a.0.origin.y.total_cmp(&b.0.origin.y));
@@ -24549,4 +24555,113 @@ fn each_kind_of_row_of_an_objects_code_copies_the_same_text_both_ways() {
             (false, None) => assert_eq!(copied, swept),
         }
     }
+}
+
+/// How wide the box in [`fitting_harness`] is: room for a short name and nothing like
+/// enough for the long one, whatever font the machine resolved.
+const FIT_WIDTH: f32 = 100.0;
+
+/// The text [`fitting_harness`] draws, which a test changes without the box changing.
+#[derive(Clone, Copy)]
+struct FittedText(State<String>);
+/// Whether that text was cut, mirrored out of the row for the test to read.
+#[derive(Clone, Copy)]
+struct WasCut(State<bool>);
+
+/// A row of the shape every list's is: a box of a fixed width, one line of text in it,
+/// and the tooltip that says the rest of the text where the line was cut.
+fn fitting_harness() -> impl IntoElement {
+    let text = use_consume::<FittedText>().0;
+    let mut was = use_consume::<WasCut>().0;
+    let fitted = use_fitted();
+    let drawn = text.read().clone();
+    // Read here, as a row reads it, so the answer is this render's.
+    was.set_if_modified(fitted.cut());
+
+    cut_tooltip(
+        fitted.cut(),
+        drawn.clone(),
+        rect()
+            .width(Size::px(FIT_WIDTH))
+            .height(Size::px(list_row_height()))
+            .overflow(Overflow::Clip)
+            .child(one_line_fitted(fitted, drawn).width(Size::fill())),
+    )
+}
+
+/// The two states [`fitting_harness`] is wired to.
+macro_rules! fitting_states {
+    ($runner:ident) => {
+        (
+            $runner
+                .provide_root_context(|| FittedText(State::create(LONG_NAME.to_owned())))
+                .0,
+            $runner
+                .provide_root_context(|| WasCut(State::create(false)))
+                .0,
+        )
+    };
+}
+
+/// A name no box a hundred pixels wide can hold, in any font.
+const LONG_NAME: &str = "a name far too long to fit in a hundred pixels of anything at all";
+
+/// A line of text says whether it was cut, and says it again when the text changes under
+/// a box that did not.
+///
+/// freya answers this of nothing: it reports the box a text was laid out in and never the
+/// width the text wanted, and a label asked for an ellipsis is laid out at its own box's
+/// width, so what it measures is the ellipsis. The answer comes off the paragraph skia
+/// drew, and this is what pins that it is the right answer -- and that a row handed new
+/// text at the width it already had is measured again, torin emitting `Sized` for every
+/// measurement and not only for a box that changed.
+#[test]
+fn a_line_of_text_says_whether_it_was_cut() {
+    let (mut test, (text, cut)) = TestingRunner::new(
+        fitting_harness,
+        (400., 200.).into(),
+        |runner| fitting_states!(runner),
+        1.,
+    );
+    settle(&mut test);
+    assert!(*cut.peek(), "a name far wider than its box was cut");
+
+    // The same box, a name that fits in it.
+    let mut text = text;
+    text.set("ab".to_owned());
+    settle(&mut test);
+    assert!(!*cut.peek(), "a name that fits was not cut");
+}
+
+/// A row's tooltip is the rest of what it could not show, so a row showing all of its
+/// text has none at all: the whole name is on screen once, in the row, and hovering adds
+/// nothing to it.
+#[test]
+fn a_row_whose_text_fits_has_no_tooltip() {
+    let (mut test, (text, _cut)) = TestingRunner::new(
+        fitting_harness,
+        (400., 200.).into(),
+        |runner| fitting_states!(runner),
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = |test: &TestingRunner, text: &str| {
+        labels(test)
+            .into_iter()
+            .filter(|drawn| drawn == text)
+            .count()
+    };
+
+    // The tooltip's delay is zero for a cut name, so hovering the row is enough.
+    test.move_cursor((10., 10.));
+    test.poll_n(Duration::from_millis(20), 4);
+    assert_eq!(drawn(&test, LONG_NAME), 2, "the row and its tooltip");
+
+    let mut text = text;
+    text.set("ab".to_owned());
+    settle(&mut test);
+    test.move_cursor((11., 11.));
+    test.poll_n(Duration::from_millis(20), 4);
+    assert_eq!(drawn(&test, "ab"), 1, "the row alone");
 }

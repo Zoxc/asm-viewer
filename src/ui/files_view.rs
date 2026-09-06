@@ -54,7 +54,7 @@ impl Component for EntryRow {
         };
         let failed = fold == Some(Fold::Failed);
 
-        row_tooltip(
+        extra_tooltip(
             self.row.path.display().to_string(),
             // A file the reader has open is not picked out here: this list is the
             // directory, not what is on screen.

@@ -206,7 +206,7 @@ impl Component for HitRow {
             SearchRow::Match(hit) => format!("{}:{}", hit.path.display(), hit.line),
         };
 
-        row_tooltip(
+        extra_tooltip(
             tooltip,
             list_row(hovering, false)
                 .on_press(move |_| match &pressed {

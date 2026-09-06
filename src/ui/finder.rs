@@ -835,6 +835,7 @@ impl KeyExt for FoundRow {
 impl Component for FoundRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
+        let fitted = use_fitted();
         // Consumed in the render, because the handler that uses them runs no hook.
         let states = use_project_states();
         let finder = self.finder;
@@ -844,7 +845,10 @@ impl Component for FoundRow {
         };
         let pressed = file.path.clone();
 
-        row_tooltip(
+        // Cut and not extra, though the strings differ: the row draws every part of the
+        // path the tooltip holds, the name first and the directories after it.
+        cut_tooltip(
+            fitted.cut(),
             file.path.display().to_string(),
             // The keyboard's row is what is picked out here; the pointer's is the hover.
             list_row(hovering, self.on_row)
@@ -853,14 +857,15 @@ impl Component for FoundRow {
                     close_finder(finder);
                 })
                 .child(
-                    paragraph()
-                        .width(Size::fill())
-                        .max_lines(1)
-                        .text_overflow(TextOverflow::Ellipsis)
-                        .spans_iter(row_spans(file, marks).into_iter()),
+                    fitted.measuring(
+                        paragraph()
+                            .width(Size::fill())
+                            .max_lines(1)
+                            .text_overflow(TextOverflow::Ellipsis)
+                            .spans_iter(row_spans(file, marks).into_iter()),
+                    ),
                 ),
         )
-        .into_element()
     }
 
     fn render_key(&self) -> DiffKey {

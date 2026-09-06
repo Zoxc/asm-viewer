@@ -693,6 +693,7 @@ impl KeyExt for PadRow {
 impl Component for PadRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
+        let fitted = use_fitted();
         let pad = use_consume::<Pad>().0;
         let jobs = use_consume::<PadJobs>();
         let (id, deleting) = (self.id.clone(), self.id.clone());
@@ -706,7 +707,8 @@ impl Component for PadRow {
         let unnamed = self.name.trim().is_empty();
         let label = pad_label(&self.id, &self.name);
 
-        row_tooltip(
+        cut_tooltip(
+            fitted.cut(),
             label.clone(),
             rect()
                 .width(Size::fill())
@@ -726,7 +728,7 @@ impl Component for PadRow {
                 })
                 // Dimmed when it is the placeholder and not something the reader wrote,
                 // which is how the recent-projects list draws a project with no name.
-                .child(tree_name(label, unnamed)),
+                .child(tree_name_fitted(fitted, label, unnamed)),
         )
     }
 
@@ -909,6 +911,8 @@ pub(crate) struct ScratchpadTab;
 
 impl Component for ScratchpadTab {
     fn render(&self) -> impl IntoElement {
+        // The one line of this pane that is a path and so can outrun its column.
+        let packaged = use_fitted();
         let mut pad = use_consume::<Pad>().0;
         let store = use_consume::<Storage>().0;
         let jobs = use_consume::<PadJobs>();
@@ -1213,11 +1217,12 @@ impl Component for ScratchpadTab {
                     ))
                     // Where it is on disk: the package cargo is handed *is* the storage. In
                     // a tooltip too, a state directory being longer than any pane.
-                    .child(row_tooltip(
+                    .child(cut_tooltip(
+                        packaged.cut(),
                         package.clone(),
                         field_row(
                             "Package",
-                            one_line(package)
+                            one_line_fitted(packaged, package)
                                 .width(Size::flex(1.0))
                                 .color(palette().address_fg),
                         ),

@@ -3,29 +3,56 @@
 
 use super::*;
 
-fn binary_row(path: &Path, objects: usize) -> Element {
-    let text = path.to_string_lossy().into_owned();
-    row_tooltip(
-        text.clone(),
-        rect()
-            .width(Size::fill())
-            .height(Size::px(list_row_height()))
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .spacing(8.0)
-            .content(Content::Flex)
-            .child(tree_name(text, false))
-            .child(
-                label()
-                    .text(match objects {
-                        1 => "1 object".to_owned(),
-                        many => format!("{many} objects"),
-                    })
-                    .color(palette().address_fg)
-                    .max_lines(1),
-            ),
-    )
-    .into_element()
+/// One binary the project holds, by the path it was opened from, with how many objects
+/// came out of it.
+///
+/// A component and not a function of the pane's render: the row's tooltip is the path it
+/// already draws, so it is shown only where the path was cut, and asking that needs a
+/// hook -- which a function called once per binary cannot hold.
+#[derive(Clone, PartialEq)]
+struct BinaryRow {
+    path: PathBuf,
+    objects: usize,
+    key: DiffKey,
+}
+
+impl KeyExt for BinaryRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for BinaryRow {
+    fn render(&self) -> impl IntoElement {
+        let fitted = use_fitted();
+        let text = self.path.to_string_lossy().into_owned();
+
+        cut_tooltip(
+            fitted.cut(),
+            text.clone(),
+            rect()
+                .width(Size::fill())
+                .height(Size::px(list_row_height()))
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(8.0)
+                .content(Content::Flex)
+                .child(tree_name_fitted(fitted, text, false))
+                .child(
+                    label()
+                        .text(match self.objects {
+                            1 => "1 object".to_owned(),
+                            many => format!("{many} objects"),
+                        })
+                        .color(palette().address_fg)
+                        .max_lines(1),
+                ),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
 }
 
 /// One setting the project's own `.vscode/settings.json` gave the language server: the
@@ -76,6 +103,7 @@ impl KeyExt for ArtifactRow {
 impl Component for ArtifactRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
+        let fitted = use_fitted();
         let states = use_project_states();
         let path = self.artifact.path.clone();
         let text = path.to_string_lossy().into_owned();
@@ -83,7 +111,8 @@ impl Component for ArtifactRow {
         // row from another when the file names are hashes.
         let about = format!("{} {}", self.artifact.target, self.artifact.kind);
 
-        row_tooltip(
+        cut_tooltip(
+            fitted.cut(),
             text.clone(),
             CursorArea::new().child(
                 rect()
@@ -121,7 +150,7 @@ impl Component for ArtifactRow {
                             open_binaries(objects, loading, vec![path]).await;
                         });
                     })
-                    .child(tree_name(text, false))
+                    .child(tree_name_fitted(fitted, text, false))
                     .child(label().text(about).color(palette().address_fg).max_lines(1)),
             ),
         )
@@ -261,7 +290,7 @@ impl Component for RecentRow {
             },
         };
 
-        row_tooltip(
+        extra_tooltip(
             recent.path.to_string_lossy().into_owned(),
             rect()
                 .width(Size::fill())
@@ -315,7 +344,13 @@ impl Component for ProjectTab {
                 .into_iter()
                 .map(|path| {
                     let count = objects.iter().filter(|object| object.path == path).count();
-                    binary_row(&path, count)
+                    BinaryRow {
+                        key: DiffKey::None,
+                        objects: count,
+                        path: path.clone(),
+                    }
+                    .key(path.to_string_lossy().into_owned())
+                    .into()
                 })
                 .collect()
         };

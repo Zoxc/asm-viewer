@@ -96,7 +96,11 @@ fn chip(
             })
     });
 
-    row_tooltip(
+    // A chip is cut by the count and never by the room it has: `elide` is what shortened
+    // it, and the bar scrolls rather than squeezing a chip (`metrics.rs`).
+    name_tooltip(
+        elided(&text),
+        &text,
         tooltip,
         rect()
             .horizontal()
@@ -226,7 +230,7 @@ impl Component for TabListButton {
             return rect().into_element();
         }
 
-        let button = row_tooltip(
+        let button = extra_tooltip(
             "Open tabs".to_owned(),
             rect()
                 .width(Size::px(TAB_LIST_WIDTH))
@@ -421,7 +425,7 @@ impl Component for PagesButton {
         };
 
         let side = toggle_size();
-        let button = row_tooltip(
+        let button = extra_tooltip(
             "Projects, Settings and the Scratchpad".to_owned(),
             rect()
                 .width(Size::px(side))

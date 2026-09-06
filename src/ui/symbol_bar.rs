@@ -49,6 +49,7 @@ struct NameRow {
 impl Component for NameRow {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
+        let fitted = use_fitted();
         let copying = self.text.clone();
         // Not hit while a sweep is under way: the pointer dragging a selection up past
         // the bar would otherwise arm the name's tooltip, and light it.
@@ -57,7 +58,8 @@ impl Component for NameRow {
         rect()
             .width(Size::fill())
             .interactive(!sweeping)
-            .child(row_tooltip(
+            .child(cut_tooltip(
+                fitted.cut(),
                 self.text.clone(),
                 CursorArea::new().child(
                     rect()
@@ -80,11 +82,8 @@ impl Component for NameRow {
                             Clipboard::set(copying.clone()).ok();
                         })
                         .child(
-                            label()
-                                .text(self.text.clone())
+                            one_line_fitted(fitted, self.text.clone())
                                 .width(Size::fill())
-                                .max_lines(1)
-                                .text_overflow(TextOverflow::Ellipsis)
                                 // Unset rather than `text_fg` when it is not dimmed, so the
                                 // name goes on inheriting the interface colour from the root.
                                 .maybe(self.dim, |name| name.color(palette().address_fg)),

@@ -105,7 +105,7 @@ impl Component for PaneToggle {
             .height(Size::px(list_row_height()))
             .main_align(Alignment::Center)
             .interactive(!sweeping)
-            .child(row_tooltip(
+            .child(extra_tooltip(
                 tip,
                 CursorArea::new().child(
                     rect()

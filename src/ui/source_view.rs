@@ -993,7 +993,7 @@ fn source_bar(
                 // Not hit while a sweep is under way: the pointer dragging a selection up
                 // past the bar would otherwise arm its tooltip, and light it.
                 .interactive(!sweeping)
-                .child(row_tooltip(
+                .child(extra_tooltip(
                     file.to_string(),
                     rect()
                         .horizontal()
