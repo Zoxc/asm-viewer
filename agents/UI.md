@@ -110,7 +110,13 @@ there with no project at all. **Open recent is different**: it stays, drawn dim,
 reader looking for a project they had open should be told the list is empty rather than left
 to wonder where the item went, which is what its absence would say. Dim is a bare `rect` and
 not a `MenuItem`, laid out at the same width and padding freya gives one (pinned by a test):
-a dead row that still lit under the pointer would be saying it can be pressed.
+a dead row that still lit under the pointer would be saying it can be pressed. Both spellings of
+the row carry the **arrow**, the same `\u{25b8}` the Files tree folds with, because freya's
+`SubMenu` draws no mark at all and a row that opens a list is otherwise the twin of one that
+acts. It sits after the name rather than out at the row's end: a row is a `MenuItem`, which is
+`fill_minimum` inside a container that fits its content, so a child asking to fill takes the
+window and drags the whole menu out to it, and nothing in the row can learn what the widest row
+made the menu (`notes/upstream/freya.md`).
 
 **With no project the pages are still ordinary tabs.** They went through a state of their own for
 a while, shown in place of the screen with no bar at all, and that was a second way for a page to

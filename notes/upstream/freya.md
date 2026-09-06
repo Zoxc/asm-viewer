@@ -146,6 +146,22 @@ that as a `Size::Fn` **width** instead and report their content through `on_size
 `a_picked_rows_wash_runs_as_wide_as_the_widest_row` would catch the minimum coming back. Not
 reported yet.
 
+## A child of a `MenuItem` cannot fill the row, and asking takes the window
+
+A `MenuItem` is `min_width(105)`, `width(fill_minimum)`, `content(fit())`
+(`menu.rs:438-440`), inside a `MenuContainer` whose two rects are `content(fit())` as well
+(`:248`, `:269`) -- the idiom that makes every row of a menu as wide as its widest. What it
+does **not** do is let a row's own child have that width: a `fill` or a `fill_minimum` child
+resolves against the available area, which is the overlay the container is drawn in, so the
+child comes out the width of the **window** and drags the menu out to it. Measured with an
+arrow put at the end of one row: the row came back 452 px wide inside a menu whose other rows
+were 233, with the arrow at x=474 in a 500 px window. Nothing in a row can learn what the
+widest row made the menu, there being no size to read and no second pass to read it in.
+
+**Cost:** the submenu arrow sits after the name with a gap rather than out at the row's own
+end, where a desktop menu puts it (`submenu_label`, `src/ui/strip.rs`; the feature it
+substitutes for is under **Wanted**). Not reported yet.
+
 ## A `ScrollView` inside a box sized from its content hangs the app
 
 `ScrollView` is `width: fill, height: fill` by default (`scrollview.rs:96-98`), and a `fill`
@@ -240,6 +256,14 @@ consumes contexts in the component and hands the states down (`Arrangement`,
 the type found against the type expected, would have said it outright.
 
 ## Wanted
+
+**A `SubMenu` that says it is one.** It renders a `MenuItem` around `rect().horizontal()`
+and the label it was given, and nothing else (`menu.rs:600-603`): no arrow, no marker of any
+kind, so a row that opens a list looks exactly like a row that acts. What the app does
+instead: `submenu_label` (`src/ui/strip.rs`) draws the arrow itself -- the glyph the Files
+tree folds with -- on the live "Open recent" row and on the dim one that stands in for it.
+It goes after the name and not at the row's end, which is a second thing the crate lacks:
+see **A child of a `MenuItem` cannot fill the row** above.
 
 **Markdown code blocks that follow the app's own syntax colours.**
 `freya-markdown`'s `code-editor` feature draws a fenced block with the `CodeEditor`

@@ -489,6 +489,43 @@ pub(crate) fn menu_row(
 const MENU_ROW_WIDTH: f32 = 105.0;
 const MENU_ROW_PADDING: (f32, f32) = (6.0, 12.0);
 
+/// The mark on a row that opens a submenu: freya's `SubMenu` draws none, so such a row is
+/// otherwise the twin of one that acts. The glyph the Files tree folds with, so the app
+/// points one way everywhere.
+const SUBMENU_ARROW: &str = "\u{25b8}";
+
+/// One of those rows: the name, and the arrow after it.
+///
+/// **After the name and not out at the row's own end**, which is where a desktop menu puts
+/// it. A row here is a `MenuItem` -- `fill_minimum` inside a container that fits its
+/// content -- so a child asking to fill takes the *window* and drags the menu out to it,
+/// and nothing in the row can learn how wide the widest row made the menu
+/// (`notes/upstream/freya.md`). The gap is what keeps the mark from reading as part of the
+/// word.
+///
+/// `colour` is the dim row's, which is drawn in place of the live one and has to look like
+/// it; a live row inherits the menu's own and is handed `None`. The arrow is a step back
+/// from the name either way, being a mark about the row rather than part of what it says.
+fn submenu_label(text: &str, colour: Option<Color>) -> Element {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .spacing(10.0)
+        .child(
+            label()
+                .text(text.to_owned())
+                .max_lines(1)
+                .map(colour, |name, colour| name.color(colour)),
+        )
+        .child(
+            label()
+                .text(SUBMENU_ARROW.to_owned())
+                .max_lines(1)
+                .color(colour.unwrap_or_else(|| palette().address_fg)),
+        )
+        .into_element()
+}
+
 /// A line between two groups of the menu. freya has no separator, and a `Menu` takes any
 /// child, so it is a rect a pixel high in the colour the panes are divided by.
 fn menu_rule() -> Element {
@@ -599,12 +636,10 @@ pub(crate) fn recents_submenu(
             .cross_align(Alignment::Center)
             .min_width(Size::px(MENU_ROW_WIDTH))
             .padding(MENU_ROW_PADDING)
-            .child(
-                label()
-                    .text("Open recent")
-                    .color(dimmed(palette().text_fg, palette().pane_bg))
-                    .max_lines(1),
-            )
+            .child(submenu_label(
+                "Open recent",
+                Some(dimmed(palette().text_fg, palette().pane_bg)),
+            ))
             .into_element();
     }
 
@@ -621,7 +656,7 @@ pub(crate) fn recents_submenu(
         .collect();
 
     SubMenu::new()
-        .label(label().text("Open recent").max_lines(1))
+        .label(submenu_label("Open recent", None))
         .children(rows)
         .key(recents.len())
         .into_element()
