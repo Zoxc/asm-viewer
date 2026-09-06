@@ -1,10 +1,11 @@
 //! Building the project's own workspace: what the app holds about it, and the one worker
 //! thread that runs cargo and edits its manifest.
 //!
-//! `use_scratchpad_with`'s shape, and for its reasons (`src/ui/pad.rs`): the work is
-//! blocking so it goes to a thread of its own, and it is **one** thread so that the
-//! project's directory has a single writer — the debug-lines edit cannot land inside the
-//! build that is reading the same manifest.
+//! [`use_worker`]'s shape (`src/ui/worker.rs`), for the scratchpad's reasons
+//! (`src/ui/pad.rs`): the work is blocking so it goes to a thread of its own, and it is
+//! **one** thread so that the project's directory has a single writer — the debug-lines
+//! edit cannot land inside the build that is reading the same manifest. It is the one
+//! worker of the four that supersedes nothing.
 //!
 //! The state is a root context and not the Project tab's own, because a tab that is not on
 //! screen is unmounted: a build has to survive the reader looking at something else while
@@ -174,18 +175,7 @@ fn read(directory: &Path, profile: Profile) -> BuildAnswer {
 }
 
 /// How the view reaches the worker.
-#[derive(Clone)]
-pub(crate) struct BuildJobs {
-    jobs: async_channel::Sender<BuildJob>,
-}
-
-impl BuildJobs {
-    pub(crate) fn send(&self, job: BuildJob) {
-        // A full queue is impossible (it is unbounded) and a closed one is the app going
-        // down, so there is nothing here to tell anybody about.
-        let _ = self.jobs.try_send(job);
-    }
-}
+pub(crate) type BuildJobs = Requests<BuildJob>;
 
 /// Start the worker and keep the state in step with it. Called once, at the root.
 pub(crate) fn use_building_with(
@@ -193,50 +183,27 @@ pub(crate) fn use_building_with(
     states: ProjectStates,
     work: impl Fn(BuildJob) -> BuildAnswer + Send + 'static,
 ) -> BuildJobs {
-    let jobs = use_hook(move || {
-        let (requests, jobs) = async_channel::unbounded::<BuildJob>();
-        let (answered, answers) = async_channel::unbounded::<BuildAnswer>();
-
-        // Named, so that a panic on it says which worker died (`crate::panics`).
-        let started = std::thread::Builder::new()
-            .name("the build worker".to_owned())
-            .spawn(move || {
-                // Nothing supersedes: a build takes seconds and is asked for by a press, and
-                // the two manifest jobs are cheap and each of them is the answer to the one
-                // after it.
-                while let Ok(job) = jobs.recv_blocking() {
-                    // A send that fails is the app shutting down and taking the receiver with
-                    // it.
-                    if answered.send_blocking(work(job)).is_err() {
-                        return;
-                    }
-                }
-            });
-        if let Err(error) = started {
-            log::warn!("the build worker could not be started: {error}");
-        }
-
-        spawn(async move {
-            while let Ok(answer) = answers.recv().await {
-                match answer {
-                    BuildAnswer::Read {
-                        manifest,
-                        profiles,
-                        debug_lines,
-                    } => {
-                        let mut next = build.peek().clone();
-                        next.manifest = manifest;
-                        next.profiles = profiles;
-                        next.debug_lines = debug_lines;
-                        build.set(next);
-                    }
-                    BuildAnswer::Done(run) => finished(build, states, run),
-                }
+    let jobs = use_worker(
+        "the build worker",
+        // Nothing supersedes: a build takes seconds and is asked for by a press, and the
+        // two manifest jobs are cheap and each of them is the answer to the one after it.
+        |job, _, _| vec![job],
+        move |job| Some(work(job)),
+        move |answer, _| match answer {
+            BuildAnswer::Read {
+                manifest,
+                profiles,
+                debug_lines,
+            } => {
+                let mut next = build.peek().clone();
+                next.manifest = manifest;
+                next.profiles = profiles;
+                next.debug_lines = debug_lines;
+                build.set(next);
             }
-        });
-
-        BuildJobs { jobs: requests }
-    });
+            BuildAnswer::Done(run) => finished(build, states, run),
+        },
+    );
 
     // A context, because the button that asks is inside a tab that is handed
     // nothing; returned as well, so a test can ask directly.

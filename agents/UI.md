@@ -603,8 +603,7 @@ the reader's own scroll and written over the place they asked for.
 **Opening a binary is the one path in, and it streams.** `open_binaries` is `close_binary`'s
 opposite number and the only thing that ever adds to `Objects`. The toolbar's Open, a session
 restore and a scratchpad's rebuild all go through it, so they cannot differ about what opening a
-file means. It is a `std::thread` and an `async_channel`, `use_analysis`' shape, but the answers
-come back one at a time: `Loads::begin` registers the paths **before a byte is read**, so the
+file means. It is a `stream` (`agents/Worker.md`), but the answers come back one at a time: `Loads::begin` registers the paths **before a byte is read**, so the
 sidebar has a row for the whole of the wait rather than from whenever the first answer lands, and
 `take_load` writes each batch of objects in as it arrives. The channel is **unbounded and drained in
 batches**: unbounded because backpressure is exactly wrong here (the worker is the thing that should

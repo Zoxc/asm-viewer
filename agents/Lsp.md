@@ -306,8 +306,11 @@ running: the app killing it is not the program refusing to run.
 
 ## The worker and what an answer is about
 
-`use_building_with`'s shape: one `std::thread`, two `async_channel`s, one `spawn` draining
-answers, and the blocking half handed in so the headless tests never touch rust-analyzer.
+`use_worker`'s shape (`agents/Worker.md`): one named thread, two `async_channel`s, one
+`spawn` draining answers, and the blocking half handed in so the headless tests never touch
+rust-analyzer. It is the one worker that also keeps the **answer sender**
+(`use_worker_answering`), because starting a server has to say the process is there from
+inside the handshake it is still in the middle of.
 Unlike the other three workers this one keeps something between jobs -- the conversation --
 so `language_work` is a closure holding it. A `Mutex` and not `FnMut`, so the seam stays
 the `Fn` the others are and the test harness fits unchanged; one thread calls it, so the

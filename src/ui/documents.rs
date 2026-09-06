@@ -639,22 +639,13 @@ pub(crate) async fn open_binaries(
         loading.write().begin(&paths)
     };
 
-    let (sender, events) = async_channel::unbounded::<Progress>();
-    // Named, so that a panic on it says which worker died (`crate::panics`).
-    let started = std::thread::Builder::new()
-        .name("the binary reader".to_owned())
-        .spawn(move || {
-            open_files_streaming(paths, |progress| match sender.send_blocking(progress) {
-                Ok(()) => ControlFlow::Continue(()),
-                // The receiver has gone, which is `take_load` deciding that nothing more from
-                // this load is wanted. Stopping here is what keeps a closed 331 MB file from
-                // being parsed to the end into a value that will be dropped.
-                Err(_) => ControlFlow::Break(()),
-            });
-        });
-    if let Err(error) = started {
-        log::warn!("the binary reader could not be started: {error}");
-    }
+    // Unbounded: the worker should run flat out. What stops it is the receiver going,
+    // which is `take_load` deciding that nothing more from this load is wanted -- and is
+    // what keeps a closed 331 MB file from being parsed to the end into a value that will
+    // be dropped.
+    let events = stream("the binary reader", None, move |emit| {
+        open_files_streaming(paths, emit)
+    });
 
     take_load(objects, loading, id, events).await;
 }
@@ -673,13 +664,8 @@ pub(crate) async fn take_load(
     id: LoadId,
     events: async_channel::Receiver<Progress>,
 ) {
-    while let Ok(first) = events.recv().await {
-        // Whatever else has arrived, taken in the same pass so a burst costs one write.
-        let mut batch = vec![first];
-        while let Ok(more) = events.try_recv() {
-            batch.push(more);
-        }
-
+    // A batch per wake, so a burst costs one write.
+    while let Some(batch) = next_batch(&events).await {
         // Both lists are worked out under one read guard and the guard is gone before
         // anything writes.
         let (parsed, finished) = {

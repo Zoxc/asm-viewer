@@ -6,12 +6,13 @@
 //! that decides in one place whether the pane says nothing was searched for, that a search
 //! is running, that it found nothing, or draws the rows.
 //!
-//! The search itself is a thread of the app's own, started by the effect in
+//! The search itself is a [`stream`] (`src/ui/worker.rs`), started by the effect in
 //! [`use_search_with`] rather than by the press, and its hits come back over a channel
 //! [`take_hits`] drains in batches. **Cancellation is the receiver going**: a task whose
 //! search has been replaced returns, the channel's other end fails on its next send, and
 //! the walk breaks where it stands -- which is a second search, a project left, and the
-//! app closing, all through one rule. That is `take_load`'s own (`ui/documents.rs`).
+//! app closing, all through one rule. It is the shape's rule and not this file's: the
+//! binary loader (`take_load`, `ui/documents.rs`) is stopped by the same line.
 
 use super::*;
 use crate::search::{Hit, SearchEvent, SearchHits, SearchQuery, SearchRow, SearchRows};
@@ -103,26 +104,17 @@ pub(crate) fn use_search_with(
             return;
         };
 
-        // Bounded, and small: a grep finds hits far faster than a window draws them, and a
-        // worker parked in a send is one that learns the moment the reader has moved on.
-        let (hits, events) = async_channel::bounded::<SearchEvent>(512);
-        let work = work.clone();
         // A `std::thread` and not a task: this walks a directory and reads every file in
-        // it, and freya's executor is the UI thread.
-        // Named, so that a panic on it says which worker died (`crate::panics`).
-        let started = std::thread::Builder::new()
-            .name("the search worker".to_owned())
-            .spawn(move || {
-                work(&query, &mut |event| match hits.send_blocking(event) {
-                    Ok(()) => ControlFlow::Continue(()),
-                    // The receiver is gone: this search has been replaced or the app is
-                    // closing, and either way nobody is waiting for the rest of it.
-                    Err(_) => ControlFlow::Break(()),
-                });
-            });
-        if let Err(error) = started {
-            log::warn!("the search worker could not be started: {error}");
-        }
+        // it, and freya's executor is the UI thread. What stops one search when the next
+        // is asked for is [`take_hits`] letting go of the receiver.
+        //
+        // 512, and bounded, because a grep finds hits far faster than a window draws them
+        // and a worker parked in a send is one that learns the moment the reader has
+        // moved on.
+        let work = work.clone();
+        let events = stream("the search worker", Some(512), move |emit| {
+            work(&query, emit)
+        });
 
         spawn(take_hits(searched, id, events));
     });
@@ -139,11 +131,7 @@ async fn take_hits(
     id: u64,
     events: async_channel::Receiver<SearchEvent>,
 ) {
-    while let Ok(first) = events.recv().await {
-        let batch: Vec<SearchEvent> = std::iter::once(first)
-            .chain(std::iter::from_fn(|| events.try_recv().ok()))
-            .collect();
-
+    while let Some(batch) = next_batch(&events).await {
         // Bound in a statement of its own: the read guard is gone before the write.
         let mine = searched.peek().id == id;
         if !mine {

@@ -144,6 +144,8 @@ mod symbol_bar;
 pub(crate) use symbol_bar::*;
 mod width;
 pub(crate) use width::*;
+mod worker;
+pub(crate) use worker::*;
 
 /// One of the two history buttons at the left of the toolbar: the step it makes along
 /// the trail of the tab on screen, drawn as the chevron pointing that way, with the entry

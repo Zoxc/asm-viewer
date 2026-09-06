@@ -1,12 +1,13 @@
 //! The scratchpad itself: the model the app holds, the jobs its worker does, and what a
 //! build, a run and a stop each mean. The drawing of it is the file beside this one.
 //!
-//! **One worker thread**, so every pad's directory has a single writer and a save cannot
-//! land inside the build that is reading what it writes. **Saves supersede, per pad, and
-//! builds never do**: a save may be dropped only for a job that writes the same pad's
-//! package, or that pad's disk copy goes quietly stale. **A run does not sit on that
-//! worker and a stop does not go near it**: a run has no bound on how long it takes, and a
-//! stop queued behind a build would arrive after the thing it was meant to interrupt.
+//! **One worker thread** ([`use_worker`], `src/ui/worker.rs`), so every pad's directory has
+//! a single writer and a save cannot land inside the build that is reading what it writes.
+//! **Saves supersede, per pad, and builds never do**: a save may be dropped only for a job
+//! that writes the same pad's package, or that pad's disk copy goes quietly stale. **A run
+//! does not sit on that worker and a stop does not go near it**: a run has no bound on how
+//! long it takes, and a stop queued behind a build would arrive after the thing it was meant
+//! to interrupt.
 //!
 //! **Everything here is per pad.** [`Pads`] is the table of them and which one is shown;
 //! [`PadState`] is one pad's own, and every field of it — what was read, what is being
@@ -103,7 +104,7 @@ impl PadBuffers {
 /// app rather than one per pad, so an event says which pad it is about.
 #[derive(Clone)]
 pub(crate) struct PadJobs {
-    jobs: async_channel::Sender<PadJob>,
+    jobs: Requests<PadJob>,
     events: async_channel::Sender<(PadId, u64, RunEvent)>,
     /// What the worker was last handed for each pad, and so what that pad's disk copy
     /// says. It travels with the way to ask because a flush is "send a save unless the
@@ -684,303 +685,259 @@ pub(crate) fn use_scratchpad_with(
     // The baseline the saves are compared against. See [`PadJobs::sent`].
     let sent = use_hook(|| Rc::new(RefCell::new(HashMap::<PadId, Scratchpad>::new())));
 
-    let requests = use_hook({
-        let sent = sent.clone();
-        move || {
-            let (requests, jobs) = async_channel::unbounded::<PadJob>();
-            // The answers task asks for more work of its own -- a listing names the pad to
-            // open, and a pad just made is opened at once -- so it keeps the sender too.
-            let sending = requests.clone();
-            let (answered, answers) = async_channel::unbounded::<PadAnswer>();
-            // One channel for the app's lifetime rather than one per run, which is what
-            // makes the run number on each event both necessary and enough.
-            // 512: how many of a running program's lines may sit between the pipe and
-            // the pane.
-            let (emitted, events) = async_channel::bounded::<(PadId, u64, RunEvent)>(512);
-
-            // Named, so that a panic on it says which worker died (`crate::panics`).
-            let started = std::thread::Builder::new()
-                .name("the scratchpad worker".to_owned())
-                .spawn(move || {
-                    // Jobs taken off the queue and not done yet, because they were behind a
-                    // save of another pad and the supersede rule may not step over them.
-                    let mut held = VecDeque::<PadJob>::new();
-                    loop {
-                        let Some(job) = held.pop_front().or_else(|| jobs.recv_blocking().ok())
-                        else {
-                            return;
-                        };
-                        let job =
-                            superseded(job, || jobs.try_recv().ok(), |newer| held.push_back(newer));
-
-                        // A send that fails is the app shutting down and taking the receiver
-                        // with it.
-                        if answered.send_blocking(work(job)).is_err() {
-                            return;
-                        }
-                    }
-                });
-            if let Err(error) = started {
-                log::warn!("the scratchpad worker could not be started: {error}");
-            }
-
-            let answering = sent.clone();
-            spawn(async move {
-                while let Ok(answer) = answers.recv().await {
-                    match answer {
-                        PadAnswer::Listed(listing) => {
-                            let mut pads = pad.write();
-                            pads.listed = true;
-                            // The order as the disk has it. An empty answer keeps the one
-                            // row the app booted with, which is the pad a first run is
-                            // about to open; anything else replaces it outright, that pad
-                            // being a placeholder and not a pad that exists.
-                            if !listing.is_empty() {
-                                pads.order = PadOrder::of(&listing);
-                                for listed in &listing {
-                                    pads.hold(listed);
-                                }
-                            }
-                            // The front of the order is what a restart comes back to. An
-                            // empty list leaves the pad the app booted holding, which is
-                            // opened below like any other -- `opened_in` answers what was
-                            // handed in when there is nothing there, so the baseline is
-                            // seeded and nothing is written until there is something to say.
-                            if let Some(front) = listing.first() {
-                                pads.show(front.id.clone());
-                            }
-                            let opening = pads.state().scratchpad.clone();
-                            drop(pads);
-
-                            let _ = requests.try_send(PadJob::Open(opening));
-                        }
-                        PadAnswer::Created(made) => match made {
-                            // Written already, so there is nothing to read: it is shown
-                            // and opened at once, which is what seeds its baseline.
-                            Ok(scratchpad) => {
-                                let mut pads = pad.write();
-                                pads.show(scratchpad.id().clone());
-                                pads.state_mut().scratchpad = scratchpad.clone();
-                                drop(pads);
-                                let _ = requests.try_send(PadJob::Open(scratchpad));
-                            }
-                            Err(failure) => {
-                                pad.write().refused = Some(format!("Not made: {failure}"));
-                            }
-                        },
-                        PadAnswer::Deleted(failure) => {
-                            pad.write().refused =
-                                failure.map(|failure| format!("Not deleted: {failure}"));
-                        }
-                        PadAnswer::Opened {
-                            scratchpad,
-                            program,
-                        } => {
-                            // A pad shown, left and shown again before its first answer
-                            // arrived was asked for twice, `show_pad` going by `opened`
-                            // and `opened` being what this arm sets. The second answer is
-                            // the disk as it was read *before* any save of what has been
-                            // typed since, so taking it would put the older text back on
-                            // screen and make it the baseline -- leaving the disk ahead of
-                            // the screen with no save owing, until the next keystroke
-                            // wrote the older text over it. A pad that is open is read
-                            // once and never again.
-                            let already = pad
-                                .peek()
-                                .get(scratchpad.id())
-                                .is_some_and(|state| state.opened);
-                            if already {
-                                continue;
-                            }
-
-                            // The pad's own buffer, built once when its source arrives:
-                            // this is the first thing that happens to it, so there is no
-                            // cursor and no undo history to preserve. A later switch away
-                            // and back leaves it exactly as it is here.
-                            let mut editor = CodeEditorData::new(
-                                Rope::from_str(&scratchpad.source),
-                                language(Path::new(SOURCE_FILE)),
-                            );
-                            editor.set_theme(palette().syntax());
-                            // Without this the editor has no blocks at all and draws no
-                            // lines: `CodeEditorData::new` never runs the highlighter.
-                            editor.parse();
-                            text.write().put(scratchpad.id().clone(), editor);
-
-                            // The baseline, seeded by the answer rather than at mount.
-                            answering
-                                .borrow_mut()
-                                .insert(scratchpad.id().clone(), scratchpad.clone());
-
-                            let pad_id = scratchpad.id().clone();
-                            let mut pads = pad.write();
-                            if let Some(state) = pads.get_mut(&pad_id) {
-                                state.scratchpad = scratchpad;
-                                state.opened = true;
-                                state.program = program;
-                            }
-                        }
-                        PadAnswer::Unopened { pad: name, failure } => {
-                            // `opened` stays false, so nothing here is ever written back:
-                            // the reason is all the app does with it.
-                            let mut pads = pad.write();
-                            if let Some(state) = pads.get_mut(&name) {
-                                state.unsaved = Some(failure);
-                            }
-                        }
-                        PadAnswer::Saved { pad: name, failure } => {
-                            let mut pads = pad.write();
-                            if let Some(state) = pads.get_mut(&name) {
-                                state.unsaved = failure;
-                            }
-                        }
-                        PadAnswer::Built {
-                            pad: name,
-                            build,
-                            program,
-                        } => {
-                            let mut pads = pad.write();
-                            let mut directory = None;
-                            // A pad that asked for no build: its id was handed out again
-                            // after a delete -- `Pads::forget` comes back to the default
-                            // pad -- and this answer belongs to the one that has gone.
-                            if let Some(state) = pads.get_mut(&name).filter(|state| state.building)
-                            {
-                                state.building = false;
-                                // What the build made, written into the package so a later
-                                // run opens the pad on its program rather than on nothing.
-                                // Only a build that produced one replaces it, which is what
-                                // leaves a failed build showing the program before it -- and
-                                // what keeps the package naming an artifact that is still
-                                // there.
-                                if let (Build::Built { executable, .. }, Some(program)) =
-                                    (&build, &program)
-                                {
-                                    state.scratchpad.built = Some(crate::scratchpad::Built {
-                                        path: executable.clone(),
-                                        digest: program.built_from.clone(),
-                                    });
-                                }
-                                state.built = Some(build);
-                                if program.is_some() {
-                                    state.program = program;
-                                }
-                                // A build writes the package on its way.
-                                if !matches!(
-                                    state.built,
-                                    Some(Build::Unavailable(Failure::Dependencies(_)))
-                                ) {
-                                    state.unsaved = None;
-                                }
-                                directory = state.scratchpad.directory();
-                            }
-                            drop(pads);
-
-                            // The build wrote the package on its way, to the same
-                            // `src/main.rs` as last time, so what a pane has read of
-                            // this pad is the version before it.
-                            if let Some(directory) = directory {
-                                forget_source_under(&directory);
-                            }
-                        }
-                        PadAnswer::Started {
-                            pad: name,
-                            run,
-                            started,
-                        } => {
-                            let mut pads = pad.write();
-                            let state = pads.get_mut(&name);
-                            // A handle for a run the reader has already left. Stopped here
-                            // and nowhere else, this being the first moment anything in the
-                            // app is holding it: dropping it would leave a process running
-                            // that nothing could ever name again.
-                            let mine = state.as_ref().is_some_and(|state| {
-                                state.run == run && matches!(state.run_state, RunState::Starting)
-                            });
-                            match (started, state) {
-                                (Ok(running), Some(state)) if mine => {
-                                    state.run_state = RunState::Going(running)
-                                }
-                                (Ok(running), _) => running.stop(),
-                                (Err(failure), Some(state)) if mine => {
-                                    state.run_state =
-                                        RunState::Over(Ended::Failed(failure.to_string()))
-                                }
-                                (Err(_), _) => {}
-                            }
-                        }
-                    }
+    // What a running program is saying, on a channel of the app's own and taken by a task
+    // of its own: a program that never ends would otherwise share a loop with every save.
+    // Bounded, which is the app's half of the backpressure -- a full channel blocks the
+    // pipe thread, which blocks the program. One channel for the app's lifetime rather than
+    // one per run, which is what makes the run number on each event both necessary and
+    // enough.
+    //
+    // 512: how many of a running program's lines may sit between the pipe and the pane.
+    let emitted = use_hook(move || {
+        let (emitted, events) = async_channel::bounded::<(PadId, u64, RunEvent)>(512);
+        spawn(async move {
+            while let Some(batch) = next_batch(&events).await {
+                // Whether anything in the batch is for a pad that is still there and
+                // still on the run it names, asked before the guard is taken: a write
+                // notifies whether or not it changed anything, so a batch that is all a
+                // deleted pad's or a left run's would cost a render for nothing. Bound to
+                // a `let` and dropped, the write below being of this state.
+                let pads = pad.peek();
+                let wanted = batch
+                    .iter()
+                    .any(|(name, run, _)| pads.get(name).is_some_and(|state| state.run == *run));
+                drop(pads);
+                if !wanted {
+                    continue;
                 }
-            });
 
-            // What a running program is saying. A task of its own, since a program that
-            // never ends would otherwise share a loop with every save.
-            spawn(async move {
-                while let Ok(first) = events.recv().await {
-                    // Everything else already queued, taken in one go: each wake is a state
-                    // write and so a render, so coalescing makes it one render per batch.
-                    let mut batch = vec![first];
-                    while let Ok(more) = events.try_recv() {
-                        batch.push(more);
-                    }
-
-                    // Whether anything in the batch is for a pad that is still there and
-                    // still on the run it names, asked before the guard is taken: a write
-                    // notifies whether or not it changed anything, so a batch that is all
-                    // a deleted pad's or a left run's would cost a render for nothing.
-                    // Bound to a `let` and dropped, the write below being of this state.
-                    let pads = pad.peek();
-                    let wanted = batch.iter().any(|(name, run, _)| {
-                        pads.get(name).is_some_and(|state| state.run == *run)
-                    });
-                    drop(pads);
-                    if !wanted {
+                // Through the guard, so a line lands in the deque the app is holding
+                // rather than in a copy of every pad's source, diagnostics and output
+                // taken to push it -- and so `Arc::make_mut` copies the lines once per
+                // batch, for the pane's own hold on them, rather than twice.
+                let mut pads = pad.write();
+                for (name, run, event) in batch {
+                    // Into the pad the program belongs to, which is very often not the
+                    // pad on screen: leaving a pad does not stop what is running in it.
+                    let Some(state) = pads.get_mut(&name) else {
+                        continue;
+                    };
+                    // A run the reader has left: not this run's output, not its ending.
+                    if run != state.run {
                         continue;
                     }
-
-                    // Through the guard, so a line lands in the deque the app is holding
-                    // rather than in a copy of every pad's source, diagnostics and output
-                    // taken to push it -- and so `Arc::make_mut` copies the lines once per
-                    // batch, for the pane's own hold on them, rather than twice.
-                    let mut pads = pad.write();
-                    for (name, run, event) in batch {
-                        // Into the pad the program belongs to, which is very often not the
-                        // pad on screen: leaving a pad does not stop what is running in it.
-                        let Some(state) = pads.get_mut(&name) else {
-                            continue;
-                        };
-                        // A run the reader has left: not this run's output, not its ending.
-                        if run != state.run {
-                            continue;
-                        }
-                        match event {
-                            RunEvent::Wrote(line) => Arc::make_mut(&mut state.output).push(line),
-                            RunEvent::Ended(ended) => state.run_state = RunState::Over(ended),
-                        }
+                    match event {
+                        RunEvent::Wrote(line) => Arc::make_mut(&mut state.output).push(line),
+                        RunEvent::Ended(ended) => state.run_state = RunState::Over(ended),
                     }
                 }
-            });
-
-            PadJobs {
-                jobs: sending,
-                events: emitted,
-                sent: sent.clone(),
             }
-        }
+        });
+        emitted
     });
+
+    // The worker itself. See this file's header for why it is one thread and why saves
+    // supersede; the answers task asks for more work of its own -- a listing names the
+    // pad to open, and a pad just made is opened at once -- which is what the taker's
+    // second argument is.
+    let answering = sent.clone();
+    let requests = use_worker(
+        "the scratchpad worker",
+        // A job the supersede rule may not step over -- a save of another pad -- is
+        // handed back rather than dropped, and is done in its turn.
+        |job, take, hold| vec![superseded(job, take, hold)],
+        move |job| Some(work(job)),
+        move |answer, requests| match answer {
+            PadAnswer::Listed(listing) => {
+                let mut pads = pad.write();
+                pads.listed = true;
+                // The order as the disk has it. An empty answer keeps the one row the app
+                // booted with, which is the pad a first run is about to open; anything
+                // else replaces it outright, that pad being a placeholder and not a pad
+                // that exists.
+                if !listing.is_empty() {
+                    pads.order = PadOrder::of(&listing);
+                    for listed in &listing {
+                        pads.hold(listed);
+                    }
+                }
+                // The front of the order is what a restart comes back to. An empty list
+                // leaves the pad the app booted holding, which is opened below like any
+                // other -- `opened_in` answers what was handed in when there is nothing
+                // there, so the baseline is seeded and nothing is written until there is
+                // something to say.
+                if let Some(front) = listing.first() {
+                    pads.show(front.id.clone());
+                }
+                let opening = pads.state().scratchpad.clone();
+                drop(pads);
+
+                requests.send(PadJob::Open(opening));
+            }
+            PadAnswer::Created(made) => match made {
+                // Written already, so there is nothing to read: it is shown and opened at
+                // once, which is what seeds its baseline.
+                Ok(scratchpad) => {
+                    let mut pads = pad.write();
+                    pads.show(scratchpad.id().clone());
+                    pads.state_mut().scratchpad = scratchpad.clone();
+                    drop(pads);
+                    requests.send(PadJob::Open(scratchpad));
+                }
+                Err(failure) => {
+                    pad.write().refused = Some(format!("Not made: {failure}"));
+                }
+            },
+            PadAnswer::Deleted(failure) => {
+                pad.write().refused = failure.map(|failure| format!("Not deleted: {failure}"));
+            }
+            PadAnswer::Opened {
+                scratchpad,
+                program,
+            } => {
+                // A pad shown, left and shown again before its first answer arrived was
+                // asked for twice, `show_pad` going by `opened` and `opened` being what
+                // this arm sets. The second answer is the disk as it was read *before*
+                // any save of what has been typed since, so taking it would put the older
+                // text back on screen and make it the baseline -- leaving the disk ahead
+                // of the screen with no save owing, until the next keystroke wrote the
+                // older text over it. A pad that is open is read once and never again.
+                let already = pad
+                    .peek()
+                    .get(scratchpad.id())
+                    .is_some_and(|state| state.opened);
+                if already {
+                    return;
+                }
+
+                // The pad's own buffer, built once when its source arrives: this is the
+                // first thing that happens to it, so there is no cursor and no undo
+                // history to preserve. A later switch away and back leaves it exactly as
+                // it is here.
+                let mut editor = CodeEditorData::new(
+                    Rope::from_str(&scratchpad.source),
+                    language(Path::new(SOURCE_FILE)),
+                );
+                editor.set_theme(palette().syntax());
+                // Without this the editor has no blocks at all and draws no lines:
+                // `CodeEditorData::new` never runs the highlighter.
+                editor.parse();
+                text.write().put(scratchpad.id().clone(), editor);
+
+                // The baseline, seeded by the answer rather than at mount.
+                answering
+                    .borrow_mut()
+                    .insert(scratchpad.id().clone(), scratchpad.clone());
+
+                let pad_id = scratchpad.id().clone();
+                let mut pads = pad.write();
+                if let Some(state) = pads.get_mut(&pad_id) {
+                    state.scratchpad = scratchpad;
+                    state.opened = true;
+                    state.program = program;
+                }
+            }
+            PadAnswer::Unopened { pad: name, failure } => {
+                // `opened` stays false, so nothing here is ever written back: the reason
+                // is all the app does with it.
+                let mut pads = pad.write();
+                if let Some(state) = pads.get_mut(&name) {
+                    state.unsaved = Some(failure);
+                }
+            }
+            PadAnswer::Saved { pad: name, failure } => {
+                let mut pads = pad.write();
+                if let Some(state) = pads.get_mut(&name) {
+                    state.unsaved = failure;
+                }
+            }
+            PadAnswer::Built {
+                pad: name,
+                build,
+                program,
+            } => {
+                let mut pads = pad.write();
+                let mut directory = None;
+                // A pad that asked for no build: its id was handed out again after a
+                // delete -- `Pads::forget` comes back to the default pad -- and this
+                // answer belongs to the one that has gone.
+                if let Some(state) = pads.get_mut(&name).filter(|state| state.building) {
+                    state.building = false;
+                    // What the build made, written into the package so a later run opens
+                    // the pad on its program rather than on nothing. Only a build that
+                    // produced one replaces it, which is what leaves a failed build
+                    // showing the program before it -- and what keeps the package naming
+                    // an artifact that is still there.
+                    if let (Build::Built { executable, .. }, Some(program)) = (&build, &program) {
+                        state.scratchpad.built = Some(crate::scratchpad::Built {
+                            path: executable.clone(),
+                            digest: program.built_from.clone(),
+                        });
+                    }
+                    state.built = Some(build);
+                    if program.is_some() {
+                        state.program = program;
+                    }
+                    // A build writes the package on its way.
+                    if !matches!(
+                        state.built,
+                        Some(Build::Unavailable(Failure::Dependencies(_)))
+                    ) {
+                        state.unsaved = None;
+                    }
+                    directory = state.scratchpad.directory();
+                }
+                drop(pads);
+
+                // The build wrote the package on its way, to the same `src/main.rs` as
+                // last time, so what a pane has read of this pad is the version before
+                // it.
+                if let Some(directory) = directory {
+                    forget_source_under(&directory);
+                }
+            }
+            PadAnswer::Started {
+                pad: name,
+                run,
+                started,
+            } => {
+                let mut pads = pad.write();
+                let state = pads.get_mut(&name);
+                // A handle for a run the reader has already left. Stopped here and
+                // nowhere else, this being the first moment anything in the app is
+                // holding it: dropping it would leave a process running that nothing
+                // could ever name again.
+                let mine = state.as_ref().is_some_and(|state| {
+                    state.run == run && matches!(state.run_state, RunState::Starting)
+                });
+                match (started, state) {
+                    (Ok(running), Some(state)) if mine => {
+                        state.run_state = RunState::Going(running)
+                    }
+                    (Ok(running), _) => running.stop(),
+                    (Err(failure), Some(state)) if mine => {
+                        state.run_state = RunState::Over(Ended::Failed(failure.to_string()))
+                    }
+                    (Err(_), _) => {}
+                }
+            }
+        },
+    );
 
     // How the pane asks for a build. A context, because the button that asks is inside a
     // dockable view that is handed nothing; returned as well, so a test can ask directly.
-    let jobs = use_provide_context(|| requests.clone());
+    let jobs = use_provide_context(move || PadJobs {
+        jobs: requests,
+        events: emitted,
+        sent,
+    });
 
     // What pads there are, asked for once: `use_hook` runs on mount and never again. The
     // answer says which one to open, so the whole of startup is that one question -- the
     // front of the order, or the pad the app boots holding when there is no order.
     use_hook({
-        let requests = requests.clone();
-        move || {
-            let _ = requests.jobs.try_send(PadJob::List);
-        }
+        let jobs = jobs.clone();
+        move || jobs.jobs.send(PadJob::List)
     });
 
     // The editor's text into the model. Reading the buffers subscribes this to every edit;
@@ -1004,11 +961,14 @@ pub(crate) fn use_scratchpad_with(
 
     // The model onto the disk. The shown pad for the same reason: nothing else can change
     // under a keystroke, and a switch flushes the pad it is leaving on its way out.
-    use_side_effect(move || {
-        let pads = pad.read();
-        let shown = pads.shown().clone();
-        drop(pads);
-        save_if_changed(pad, &shown, &requests);
+    use_side_effect({
+        let jobs = jobs.clone();
+        move || {
+            let pads = pad.read();
+            let shown = pads.shown().clone();
+            drop(pads);
+            save_if_changed(pad, &shown, &jobs);
+        }
     });
 
     // The theme, carried into every editor's own blocks: a `SyntaxBlocks` holds colours
@@ -1044,7 +1004,7 @@ fn save_if_changed(pad: State<Pads>, name: &PadId, jobs: &PadJobs) {
     let mut sent = jobs.sent.borrow_mut();
     if sent.get(name) != Some(&scratchpad) {
         sent.insert(name.clone(), scratchpad.clone());
-        let _ = jobs.jobs.try_send(PadJob::Save(scratchpad));
+        jobs.jobs.send(PadJob::Save(scratchpad));
     }
 }
 
@@ -1069,7 +1029,7 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
     drop(pads);
 
     if !opened {
-        let _ = jobs.jobs.try_send(PadJob::Open(arriving));
+        jobs.jobs.send(PadJob::Open(arriving));
     }
 }
 
@@ -1110,7 +1070,7 @@ pub(crate) fn jump_to_span(mut text: State<PadBuffers>, pad: &PadId, span: &carg
 /// Ask for a pad nobody has named yet. What comes back is shown, this being a deliberate
 /// act and not something that happens behind the reader.
 pub(crate) fn request_new_pad(jobs: &PadJobs) {
-    let _ = jobs.jobs.try_send(PadJob::New);
+    jobs.jobs.send(PadJob::New);
 }
 
 /// Delete `name`: let go of it here, then ask the worker to take its package off the disk.
@@ -1144,12 +1104,12 @@ pub(crate) fn request_delete_pad(
     // written, exactly as a pad the app has never seen is.
     jobs.sent.borrow_mut().remove(&name);
 
-    let _ = jobs.jobs.try_send(PadJob::Delete(name));
+    jobs.jobs.send(PadJob::Delete(name));
     // Behind the delete, so a pad that has to be read is read after the directory has gone
     // rather than before -- which matters for the one id this can arrive at twice, the
     // default pad the last delete comes back to.
     if let Some(arriving) = arriving {
-        let _ = jobs.jobs.try_send(PadJob::Open(arriving));
+        jobs.jobs.send(PadJob::Open(arriving));
     }
 }
 
@@ -1211,7 +1171,7 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     stop_run(pad);
 
     pad.write().state_mut().building = true;
-    let _ = jobs.jobs.try_send(PadJob::Build(state.scratchpad));
+    jobs.jobs.send(PadJob::Build(state.scratchpad));
 }
 
 /// Run what the last build made. Nothing happens without an executable, which is why the
@@ -1239,7 +1199,7 @@ pub(crate) fn request_run(mut pad: State<Pads>, jobs: &PadJobs) {
     drop(pads);
 
     let events = jobs.events.clone();
-    let _ = jobs.jobs.try_send(PadJob::Run {
+    jobs.jobs.send(PadJob::Run {
         run,
         scratchpad: state.scratchpad,
         executable,

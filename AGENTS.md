@@ -258,6 +258,9 @@ command.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes.
 - `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
   it takes from that: what lets the code panes scroll sideways with their wash whole.
+- `src/ui/worker.rs` — how anything is asked of a thread: the named thread, the job sender,
+  the drain policy that supersedes and the task that takes the answers, in the two shapes
+  every worker in the app is one of.
 
 Twelve `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
 `project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`,

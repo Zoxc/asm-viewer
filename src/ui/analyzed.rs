@@ -607,136 +607,112 @@ pub(crate) fn use_analysis_with(
     work: impl Fn(Question) -> Answer + Send + 'static,
 ) {
     // The worker and the task that listens to it, started once and never restarted.
-    let requests = use_hook(move || {
-        let (requests, jobs) = async_channel::unbounded::<Question>();
-        let (answered, answers) = async_channel::unbounded::<Answer>();
-
-        // A `std::thread` and not a spawned task: this is seconds of decoding, DWARF
-        // parsing and index building, and freya's executor is the UI thread.
-        // Named, so that a panic on it says which worker died (`crate::panics`).
-        let started = std::thread::Builder::new()
-            .name("the analysis worker".to_owned())
-            .spawn(move || {
-                while let Ok(question) = jobs.recv_blocking() {
-                    // Everything the reader clicked past while the last job ran, dropped
-                    // without being started rather than after the fact.
-                    let questions = newest(question, std::iter::from_fn(|| jobs.try_recv().ok()));
-
-                    for question in questions {
-                        // A send that fails is the app shutting down.
-                        if answered.send_blocking(work(question)).is_err() {
-                            return;
-                        }
+    //
+    // A `std::thread` and not a spawned task: this is seconds of decoding, DWARF parsing
+    // and index building, and freya's executor is the UI thread.
+    let requests = use_worker(
+        "the analysis worker",
+        // Everything the reader clicked past while the last job ran, dropped without
+        // being started rather than after the fact.
+        |question, queued, _| newest(question, std::iter::from_fn(queued)),
+        move |question| Some(work(question)),
+        move |answer, _| {
+            let (ask, studied) = match answer {
+                Answer::Listing { ask, studied } => (ask, studied),
+                Answer::Code { ask, code, decoded } => {
+                    // Taken whenever it is about the object on screen -- a decoded
+                    // stretch is never stale, see `Reading::take` -- and never out of a
+                    // binary closed since it was asked for, `Shown::still_open`'s rule
+                    // once more. Held by the app and not open in the project: a pad's
+                    // program is neither, and `holding` is the one rule for the two.
+                    if !holding(&objects.peek(), &beside.peek(), &ask.object) {
+                        return;
                     }
+                    let mut next = reading.peek().clone();
+                    if next.take(&ask, code, decoded) {
+                        reading.set(next);
+                    }
+                    return;
                 }
-            });
-        if let Err(error) = started {
-            log::warn!("the analysis worker could not be started: {error}");
-        }
-
-        spawn(async move {
-            let mut analysis = analysis;
-            while let Ok(answer) = answers.recv().await {
-                let (ask, studied) = match answer {
-                    Answer::Listing { ask, studied } => (ask, studied),
-                    Answer::Code { ask, code, decoded } => {
-                        // Taken whenever it is about the object on screen -- a decoded
-                        // stretch is never stale, see `Reading::take` -- and never out
-                        // of a binary closed since it was asked for, `Shown::still_open`'s
-                        // rule once more. Held by the app and not open in the project: a
-                        // pad's program is neither, and `holding` is the one rule for the
-                        // two.
-                        if !holding(&objects.peek(), &beside.peek(), &ask.object) {
-                            continue;
-                        }
-                        let mut next = reading.peek().clone();
-                        if next.take(&ask, code, decoded) {
-                            reading.set(next);
-                        }
-                        continue;
+                Answer::Marked { file, lines, over } => {
+                    // The same rule as the locate's, against the file the pane is showing
+                    // now: a reader who moved on while the index built is not given the
+                    // file they left. No per-object sweep, the answer being lines and not
+                    // symbols -- a binary closed since is the effect that clears this and
+                    // asks again.
+                    if coded.peek().wanted.as_ref() != Some(&file) {
+                        return;
                     }
-                    Answer::Marked { file, lines, over } => {
-                        // The same rule as the locate's, against the file the pane is
-                        // showing now: a reader who moved on while the index built is
-                        // not given the file they left. No per-object sweep, the answer
-                        // being lines and not symbols -- a binary closed since is the
-                        // effect that clears this and asks again.
-                        if coded.peek().wanted.as_ref() != Some(&file) {
-                            continue;
-                        }
-                        let mut next = coded.peek().clone();
-                        next.found = Some((file, lines));
-                        next.over = over;
-                        coded.set(next);
-                        continue;
-                    }
-                    Answer::Located { query, symbols } => {
-                        // The same rule as below, against the question the panel is
-                        // asking now; and the same rule as `Shown::still_open`, applied
-                        // per symbol, so a binary closed while the worker ran is not put
-                        // back by its answer.
-                        if located.peek().asked.as_ref() != Some(&query) {
-                            continue;
-                        }
-                        let mut found = Found::new(query, symbols);
-                        found.retain_open(&objects.peek());
-                        let mut next = located.peek().clone();
-                        next.found = Some(found);
-                        located.set(next);
-                        continue;
-                    }
-                };
-
-                // **The supersession rule**: an answer is kept only if its question is
-                // the one being asked *now* -- a comparison and not a generation counter,
-                // since an `Ask` already compares by identity, and since the answer for
-                // the first A of an A -> B -> A is a perfectly good answer for the third.
-                // A dropped answer is what clicking twice quickly means, so nothing logs
-                // or retries. Cloned out of the guard first, since everything below
-                // writes.
-                if asked.peek_ask().as_ref() != Some(&ask) {
-                    continue;
+                    let mut next = coded.peek().clone();
+                    next.found = Some((file, lines));
+                    next.over = over;
+                    coded.set(next);
+                    return;
                 }
-                // And an answer out of a binary that has been closed since it was asked
-                // for is not taken either. `Shown::still_open` -- the same rule the effect
-                // applies to the listing that is up, so the two cannot drift.
-                let landed = studied.map(|studied| Shown {
-                    ask: ask.clone(),
-                    studied,
-                });
-                let landed = landed.filter(|shown| shown.still_open(&objects.peek()));
-
-                let mut next = analysis.peek().clone();
-                if next.pending.as_ref() == Some(&ask) {
-                    next.pending = None;
-                    next.slow = false;
-                }
-                next.answered = Some(ask.clone());
-
-                match landed {
-                    Some(shown) => next.shown = Some(shown),
-                    // A question that named no symbol leaves the listing that is up --
-                    // the click lights no pair in it and nothing else, which is what
-                    // says it landed nowhere -- but **only when that listing is this
-                    // tab's own**, or a source line holding no code would leave another
-                    // tab's function on screen for good.
-                    None => {
-                        let mine = next
-                            .shown
-                            .as_ref()
-                            .is_some_and(|shown| asked_of(&shown.ask) == asked_of(&ask));
-                        if !mine {
-                            next.shown = None;
-                        }
+                Answer::Located { query, symbols } => {
+                    // The same rule as below, against the question the panel is asking
+                    // now; and the same rule as `Shown::still_open`, applied per symbol,
+                    // so a binary closed while the worker ran is not put back by its
+                    // answer.
+                    if located.peek().asked.as_ref() != Some(&query) {
+                        return;
                     }
+                    let mut found = Found::new(query, symbols);
+                    found.retain_open(&objects.peek());
+                    let mut next = located.peek().clone();
+                    next.found = Some(found);
+                    located.set(next);
+                    return;
                 }
+            };
 
-                analysis.set_if_modified(next);
+            // **The supersession rule**: an answer is kept only if its question is
+            // the one being asked *now* -- a comparison and not a generation counter,
+            // since an `Ask` already compares by identity, and since the answer for
+            // the first A of an A -> B -> A is a perfectly good answer for the third.
+            // A dropped answer is what clicking twice quickly means, so nothing logs
+            // or retries. Cloned out of the guard first, since everything below
+            // writes.
+            if asked.peek_ask().as_ref() != Some(&ask) {
+                return;
             }
-        });
+            // And an answer out of a binary that has been closed since it was asked for
+            // is not taken either. `Shown::still_open` -- the same rule the effect
+            // applies to the listing that is up, so the two cannot drift.
+            let landed = studied.map(|studied| Shown {
+                ask: ask.clone(),
+                studied,
+            });
+            let landed = landed.filter(|shown| shown.still_open(&objects.peek()));
 
-        requests
-    });
+            let mut next = analysis.peek().clone();
+            if next.pending.as_ref() == Some(&ask) {
+                next.pending = None;
+                next.slow = false;
+            }
+            next.answered = Some(ask.clone());
+
+            match landed {
+                Some(shown) => next.shown = Some(shown),
+                // A question that named no symbol leaves the listing that is up -- the
+                // click lights no pair in it and nothing else, which is what says it
+                // landed nowhere -- but **only when that listing is this tab's own**, or
+                // a source line holding no code would leave another tab's function on
+                // screen for good.
+                None => {
+                    let mine = next
+                        .shown
+                        .as_ref()
+                        .is_some_and(|shown| asked_of(&shown.ask) == asked_of(&ask));
+                    if !mine {
+                        next.shown = None;
+                    }
+                }
+            }
+
+            analysis.set_if_modified(next);
+        },
+    );
 
     // The window question: what the section view wants next, asked once. Reading the
     // window subscribes this to it; the reading it writes is peeked, so it cannot wake
@@ -754,7 +730,7 @@ pub(crate) fn use_analysis_with(
         }
         next.pending = Some(ask.clone());
         reading.set(next);
-        let _ = requests_for_code.try_send(Question::Code(ask));
+        requests_for_code.send(Question::Code(ask));
     });
 
     let requests_for_locate = requests.clone();
@@ -831,7 +807,7 @@ pub(crate) fn use_analysis_with(
         next.pending = Some(ask.clone());
         next.slow = false;
         analysis.set(next);
-        let _ = requests.try_send(question);
+        requests.send(question);
 
         // The wait, started by the request and never polled.
         spawn(async move {
@@ -870,7 +846,7 @@ pub(crate) fn use_analysis_with(
         let Some(query) = locating.read().clone() else {
             return;
         };
-        let _ = requests_for_locate.try_send(Question::Locate {
+        requests_for_locate.send(Question::Locate {
             query,
             objects: objects.peek().clone(),
         });
@@ -890,7 +866,7 @@ pub(crate) fn use_analysis_with(
         let Some(file) = pending else {
             return;
         };
-        let _ = requests_for_marks.try_send(Question::Marks {
+        requests_for_marks.send(Question::Marks {
             file,
             objects: open,
         });

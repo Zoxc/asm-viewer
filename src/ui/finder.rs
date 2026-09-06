@@ -291,14 +291,8 @@ pub(crate) fn use_finder_with(
         let (tells, told) = async_channel::unbounded::<Told>();
         let (sends, answers) = async_channel::unbounded::<Answered>();
         // A `std::thread` and not a task: this walks a directory and ranks a project's
-        // worth of paths, and freya's executor is the UI thread. Named, so a panic on it
-        // says which worker died (`crate::panics`).
-        let started = std::thread::Builder::new()
-            .name("the file finder's worker".to_owned())
-            .spawn(move || rank_files(told, sends));
-        if let Err(error) = started {
-            log::warn!("the file finder's worker could not be started: {error}");
-        }
+        // worth of paths, and freya's executor is the UI thread.
+        thread("the file finder's worker", move || rank_files(told, sends));
         spawn(take_rows(finder, answers));
         (tells, Arc::new(AtomicU64::new(0)))
     });
@@ -340,32 +334,31 @@ pub(crate) fn use_finder_with(
                 return;
             }
 
+            // Not a [`stream`]: what a walk finds goes to the worker above and never to
+            // the UI thread, over the one channel that worker blocks on, so there is no
+            // receiver here for the walk to be stopped by dropping. `current` is what
+            // stops it instead.
             let work = work.clone();
             let tells = tells.clone();
             let current = current.clone();
-            let started = std::thread::Builder::new()
-                .name("the file finder's walk".to_owned())
-                .spawn(move || {
-                    work(&root, &mut |event| {
-                        let told = match event {
-                            WalkEvent::File(file) => Told::Found { id, file },
-                            WalkEvent::Finished => Told::Walked { id },
-                        };
-                        if tells.send_blocking(told).is_err() {
-                            return ControlFlow::Break(());
-                        }
-                        // This walk has been replaced, and nobody is waiting for the
-                        // rest of it.
-                        if current.load(atomic::Ordering::Relaxed) == id {
-                            ControlFlow::Continue(())
-                        } else {
-                            ControlFlow::Break(())
-                        }
-                    });
+            thread("the file finder's walk", move || {
+                work(&root, &mut |event| {
+                    let told = match event {
+                        WalkEvent::File(file) => Told::Found { id, file },
+                        WalkEvent::Finished => Told::Walked { id },
+                    };
+                    if tells.send_blocking(told).is_err() {
+                        return ControlFlow::Break(());
+                    }
+                    // This walk has been replaced, and nobody is waiting for the rest of
+                    // it.
+                    if current.load(atomic::Ordering::Relaxed) == id {
+                        ControlFlow::Continue(())
+                    } else {
+                        ControlFlow::Break(())
+                    }
                 });
-            if let Err(error) = started {
-                log::warn!("the file finder's walk could not be started: {error}");
-            }
+            });
         }
     });
 

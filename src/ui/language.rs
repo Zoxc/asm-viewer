@@ -1,9 +1,9 @@
 //! The language server as the app holds it: whether one is running, the worker that talks
 //! to it, and the control in the top bar that starts and stops it.
 //!
-//! `use_building_with`'s shape (`src/ui/building.rs`), and for its reasons: talking to a
-//! server blocks, so it goes to a thread of its own, and it is **one** thread because
-//! there is one server and one conversation with it.
+//! [`use_worker`]'s shape (`src/ui/worker.rs`), and for the reasons every worker has one:
+//! talking to a server blocks, so it goes to a thread of its own, and it is **one** thread
+//! because there is one server and one conversation with it.
 //!
 //! Nothing starts it by itself. A language server reads a whole project and keeps it in
 //! memory, and most of what this app is for -- reading a binary somebody else built -- has
@@ -451,7 +451,7 @@ pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -
 /// How the control reaches the worker, and how the server reaches the control.
 #[derive(Clone)]
 pub(crate) struct LspJobs {
-    jobs: async_channel::Sender<LspJob>,
+    jobs: Requests<LspJob>,
     /// Handed to each server started, so what it says while nothing was asked arrives
     /// under the run it was started in.
     notes: async_channel::Sender<(u64, lsp::Note)>,
@@ -471,9 +471,7 @@ impl LspJobs {
     }
 
     pub(crate) fn send(&self, job: LspJob) {
-        // A full queue is impossible (it is unbounded) and a closed one is the app going
-        // down, so there is nothing here to tell anybody about.
-        let _ = self.jobs.try_send(job);
+        self.jobs.send(job);
     }
 }
 
@@ -490,209 +488,12 @@ pub(crate) fn use_language_with(
     mut proj: State<OpenProject>,
     work: impl Fn(LspJob) -> Option<LspAnswer> + Send + 'static,
 ) -> LspJobs {
-    let jobs = use_hook(move || {
-        let (requests, jobs) = async_channel::unbounded::<LspJob>();
-        let (answered, answers) = async_channel::unbounded::<LspAnswer>();
-        // The same channel, for the one answer a job sends before it is finished.
-        let spawning = answered.clone();
-        // Bounded: a server that reports progress in a tight loop is one the app can fall
-        // behind, and the reader thread waiting is the only backpressure there is.
+    // What a server says while nothing was asked, under the run it was started in. A
+    // channel and a task of their own beside the worker's answers, and bounded: a server
+    // that reports progress in a tight loop is one the app can fall behind, and the
+    // reader thread waiting is the only backpressure there is.
+    let told = use_hook(move || {
         let (told, notes) = async_channel::bounded::<(u64, lsp::Note)>(64);
-
-        // A `std::thread` and not a spawned task: a server that is reading a project can
-        // take a minute to answer, and freya's executor is the UI thread.
-        std::thread::spawn(move || {
-            while let Ok(job) = jobs.recv_blocking() {
-                for job in worth_doing(job, std::iter::from_fn(|| jobs.try_recv().ok())) {
-                    let Some(answer) = work(job) else {
-                        continue;
-                    };
-                    // A send that fails is the app shutting down and taking the receiver
-                    // with it.
-                    if answered.send_blocking(answer).is_err() {
-                        return;
-                    }
-                }
-            }
-        });
-
-        spawn(async move {
-            while let Ok(answer) = answers.recv().await {
-                match answer {
-                    LspAnswer::Spawned { run, handle } => {
-                        // Bound before the write below, as ever.
-                        let held = language.peek().clone();
-                        if held.run != run {
-                            // Stopped while it was starting, which is what this answer is
-                            // for: the stop found nothing to kill, so the kill is here.
-                            // The worker is in the handshake and the pipes closing is
-                            // what lets it out.
-                            handle.stop();
-                            continue;
-                        }
-                        language.set(Language {
-                            server: Some(handle),
-                            ..held
-                        });
-                    }
-                    LspAnswer::Started { run, server } => {
-                        let held = language.peek().clone();
-                        if held.run != run {
-                            // Stopped, or restarted, while it was starting. This is the
-                            // first moment anything in the app holds the handle, so
-                            // dropping it would leave a server running that nothing could
-                            // ever name again.
-                            if let Ok(handle) = server {
-                                handle.stop();
-                            }
-                            continue;
-                        }
-                        let (state, server) = match server {
-                            Ok(handle) => (Lsp::Running, Some(handle)),
-                            Err(failure) => (Lsp::Failed(failure.to_string()), None),
-                        };
-                        language.set(Language {
-                            // Whatever the server has already said about itself: the
-                            // handshake's answer and its first `$/progress` are two
-                            // messages, and either can be taken first.
-                            working: held.working,
-                            asking: held.asking,
-                            settings: held.settings,
-                            state,
-                            run,
-                            server,
-                        });
-                    }
-                    LspAnswer::Settings {
-                        directory,
-                        settings,
-                    } => {
-                        // A file read for a project that has since been left says nothing
-                        // about the one that is open now.
-                        let open = workspace(&proj.peek());
-                        if open.as_deref() != Some(directory.as_path()) {
-                            continue;
-                        }
-                        let held = language.peek().clone();
-                        language.set(Language {
-                            settings: Some(settings),
-                            ..held
-                        });
-                    }
-                    LspAnswer::Linked { run, file, links } => {
-                        let held = language.peek().clone();
-                        if held.run != run {
-                            continue;
-                        }
-                        // Nothing found and a server that refused both leave the pane
-                        // with no links, which is what it draws with no server either:
-                        // there is nothing to say about a name nobody classified. The two
-                        // are still told apart: a refusal is a question to put again, and
-                        // an empty answer is the answer.
-                        let why = match links {
-                            Ok(links) => {
-                                let mut waiting = linked.peek().clone();
-                                if waiting.answer(run, file, links) {
-                                    linked.set(waiting);
-                                }
-                                continue;
-                            }
-                            Err(failure @ lsp::Failure::Refused { .. }) => {
-                                log::warn!("the language server refused a question: {failure}");
-                                let mut waiting = linked.peek().clone();
-                                if waiting.answer_refused(run, file) {
-                                    linked.set(waiting);
-                                }
-                                continue;
-                            }
-                            Err(failure) => failure,
-                        };
-                        let held = language.peek().clone();
-                        language.set(Language {
-                            state: Lsp::Failed(why.to_string()),
-                            working: false,
-                            asking: held.asking,
-                            settings: held.settings,
-                            run,
-                            server: None,
-                        });
-                    }
-                    LspAnswer::Answered {
-                        run,
-                        id,
-                        want,
-                        reply,
-                    } => {
-                        let held = language.peek().clone();
-                        if held.run != run {
-                            continue;
-                        }
-                        // Whichever question it was, whoever asked it takes the answer,
-                        // and gives up on it where there is none. Bound before the write,
-                        // as ever.
-                        let mut take = |reply: Option<Reply>| match want {
-                            Wanted::Definition | Wanted::Declaration => {
-                                let places = match &reply {
-                                    Some(Reply::Defined(places)) => places.as_slice(),
-                                    _ => &[],
-                                };
-                                let mut waiting = follow.peek().clone();
-                                let moved = match reply.is_some() {
-                                    true => waiting.answer(run, id, places),
-                                    false => waiting.give_up(run, id),
-                                };
-                                if moved {
-                                    follow.set(waiting);
-                                }
-                            }
-                            Wanted::Implementations | Wanted::References => {
-                                let found = match reply {
-                                    Some(Reply::Referenced(found)) => found,
-                                    _ => references::References::default(),
-                                };
-                                let mut waiting = located.peek().clone();
-                                // Nothing found and nothing to be found both leave the
-                                // panel saying so: a question that stayed pending would
-                                // say it was still looking for ever.
-                                if waiting.answer_places(run, id, found) {
-                                    located.set(waiting);
-                                }
-                            }
-                        };
-                        let why = match reply {
-                            Ok(reply) => {
-                                // An answer naming nowhere is an answer: the click was a
-                                // question, not a promise.
-                                take(Some(reply));
-                                continue;
-                            }
-                            // The server refused the question -- it is still reading the
-                            // project, or has no such file of its own. Nothing found, and
-                            // not a server to say anything about: it is answering.
-                            Err(failure @ lsp::Failure::Refused { .. }) => {
-                                log::warn!("the language server refused a question: {failure}");
-                                take(None);
-                                continue;
-                            }
-                            Err(failure) => failure,
-                        };
-                        // What is left is a server that stopped answering, which is the
-                        // one thing the control has to show.
-                        take(None);
-                        let held = language.peek().clone();
-                        language.set(Language {
-                            state: Lsp::Failed(why.to_string()),
-                            working: false,
-                            asking: held.asking,
-                            settings: held.settings,
-                            run,
-                            server: None,
-                        });
-                    }
-                }
-            }
-        });
-
         spawn(async move {
             while let Ok((run, note)) = notes.recv().await {
                 let held = language.peek().clone();
@@ -718,13 +519,195 @@ pub(crate) fn use_language_with(
                 }
             }
         });
+        told
+    });
 
-        LspJobs {
-            jobs: requests,
-            notes: told,
-            spawned: spawning,
-            asked: Arc::new(AtomicU64::new(0)),
-        }
+    // A `std::thread` and not a spawned task: a server that is reading a project can take
+    // a minute to answer, and freya's executor is the UI thread. The answer sender comes
+    // back with the way to ask, for the one answer a job sends before it is finished.
+    let (requests, spawning) = use_worker_answering(
+        "the language server's worker",
+        // Only the last question of each consumer, which is what `worth_doing` is.
+        |job, queued, _| worth_doing(job, std::iter::from_fn(queued)),
+        work,
+        move |answer, _| match answer {
+            LspAnswer::Spawned { run, handle } => {
+                // Bound before the write below, as ever.
+                let held = language.peek().clone();
+                if held.run != run {
+                    // Stopped while it was starting, which is what this answer is for:
+                    // the stop found nothing to kill, so the kill is here. The worker is
+                    // in the handshake and the pipes closing is what lets it out.
+                    handle.stop();
+                    return;
+                }
+                language.set(Language {
+                    server: Some(handle),
+                    ..held
+                });
+            }
+            LspAnswer::Started { run, server } => {
+                let held = language.peek().clone();
+                if held.run != run {
+                    // Stopped, or restarted, while it was starting. This is the first
+                    // moment anything in the app holds the handle, so dropping it would
+                    // leave a server running that nothing could ever name again.
+                    if let Ok(handle) = server {
+                        handle.stop();
+                    }
+                    return;
+                }
+                let (state, server) = match server {
+                    Ok(handle) => (Lsp::Running, Some(handle)),
+                    Err(failure) => (Lsp::Failed(failure.to_string()), None),
+                };
+                language.set(Language {
+                    // Whatever the server has already said about itself: the handshake's
+                    // answer and its first `$/progress` are two messages, and either can
+                    // be taken first.
+                    working: held.working,
+                    asking: held.asking,
+                    settings: held.settings,
+                    state,
+                    run,
+                    server,
+                });
+            }
+            LspAnswer::Settings {
+                directory,
+                settings,
+            } => {
+                // A file read for a project that has since been left says nothing about
+                // the one that is open now.
+                let open = workspace(&proj.peek());
+                if open.as_deref() != Some(directory.as_path()) {
+                    return;
+                }
+                let held = language.peek().clone();
+                language.set(Language {
+                    settings: Some(settings),
+                    ..held
+                });
+            }
+            LspAnswer::Linked { run, file, links } => {
+                let held = language.peek().clone();
+                if held.run != run {
+                    return;
+                }
+                // Nothing found and a server that refused both leave the pane with no
+                // links, which is what it draws with no server either: there is nothing
+                // to say about a name nobody classified. The two are still told apart: a
+                // refusal is a question to put again, and an empty answer is the answer.
+                let why = match links {
+                    Ok(links) => {
+                        let mut waiting = linked.peek().clone();
+                        if waiting.answer(run, file, links) {
+                            linked.set(waiting);
+                        }
+                        return;
+                    }
+                    Err(failure @ lsp::Failure::Refused { .. }) => {
+                        log::warn!("the language server refused a question: {failure}");
+                        let mut waiting = linked.peek().clone();
+                        if waiting.answer_refused(run, file) {
+                            linked.set(waiting);
+                        }
+                        return;
+                    }
+                    Err(failure) => failure,
+                };
+                let held = language.peek().clone();
+                language.set(Language {
+                    state: Lsp::Failed(why.to_string()),
+                    working: false,
+                    asking: held.asking,
+                    settings: held.settings,
+                    run,
+                    server: None,
+                });
+            }
+            LspAnswer::Answered {
+                run,
+                id,
+                want,
+                reply,
+            } => {
+                let held = language.peek().clone();
+                if held.run != run {
+                    return;
+                }
+                // Whichever question it was, whoever asked it takes the answer, and gives
+                // up on it where there is none. Bound before the write, as ever.
+                let mut take = |reply: Option<Reply>| match want {
+                    Wanted::Definition | Wanted::Declaration => {
+                        let places = match &reply {
+                            Some(Reply::Defined(places)) => places.as_slice(),
+                            _ => &[],
+                        };
+                        let mut waiting = follow.peek().clone();
+                        let moved = match reply.is_some() {
+                            true => waiting.answer(run, id, places),
+                            false => waiting.give_up(run, id),
+                        };
+                        if moved {
+                            follow.set(waiting);
+                        }
+                    }
+                    Wanted::Implementations | Wanted::References => {
+                        let found = match reply {
+                            Some(Reply::Referenced(found)) => found,
+                            _ => references::References::default(),
+                        };
+                        let mut waiting = located.peek().clone();
+                        // Nothing found and nothing to be found both leave the panel
+                        // saying so: a question that stayed pending would say it was
+                        // still looking for ever.
+                        if waiting.answer_places(run, id, found) {
+                            located.set(waiting);
+                        }
+                    }
+                };
+                let why = match reply {
+                    Ok(reply) => {
+                        // An answer naming nowhere is an answer: the click was a
+                        // question, not a promise.
+                        take(Some(reply));
+                        return;
+                    }
+                    // The server refused the question -- it is still reading the project,
+                    // or has no such file of its own. Nothing found, and not a server to
+                    // say anything about: it is answering.
+                    Err(failure @ lsp::Failure::Refused { .. }) => {
+                        log::warn!("the language server refused a question: {failure}");
+                        take(None);
+                        return;
+                    }
+                    Err(failure) => failure,
+                };
+                // What is left is a server that stopped answering, which is the one thing
+                // the control has to show.
+                take(None);
+                let held = language.peek().clone();
+                language.set(Language {
+                    state: Lsp::Failed(why.to_string()),
+                    working: false,
+                    asking: held.asking,
+                    settings: held.settings,
+                    run,
+                    server: None,
+                });
+            }
+        },
+    );
+
+    // A context, because the control that presses it is drawn from a component that is
+    // handed nothing; returned as well, so a test can ask directly. The counter is made
+    // here, and once: no two questions may go out under one id.
+    let jobs = use_provide_context(move || LspJobs {
+        jobs: requests,
+        notes: told,
+        spawned: spawning,
+        asked: Arc::new(AtomicU64::new(0)),
     });
 
     // Leaving a project ends its server and takes the reader's agreement with it: it is
@@ -768,9 +751,7 @@ pub(crate) fn use_language_with(
         }
     });
 
-    // A context, because the control that presses it is drawn from a component that is
-    // handed nothing; returned as well, so a test can ask directly.
-    use_provide_context(|| jobs.clone())
+    jobs
 }
 
 /// Start the project's server over the project's directory -- or, where the reader has

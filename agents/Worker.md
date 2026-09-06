@@ -18,6 +18,26 @@ through the most expensive call in the crate at once for one useful answer, and 
 a `OnceLock`, so the losers would block on the winner instead of running in parallel. (The
 parallelism `notes/Goals.md` asks for is parsing many objects at once, a different job.)
 
+**The thread, the two channels and the task taking the answers are not this worker's own**
+(`src/ui/worker.rs`). `use_worker` is the shape the four request/answer workers are started in --
+this one, the build, the scratchpad and the language server, which takes the answer sender back
+with it -- and `stream` the shape of the two one-shot ones, the search and the binary loader,
+worked once for one question and stopped by the receiver going. What differs stays with each
+worker: the drain policy (`newest` here), the work, and the `match` that judges an answer as it
+lands. The work is an argument on every one of them, which is the seam the headless tests
+substitute a worker of their own through. Naming the thread belongs to the mechanism now, and that
+is what it is for: the scaffolding was written out seven times before it was written once, and by
+then two of the seven had drifted to a thread with no name, which `crate::panics` can only report
+anonymously.
+
+Two things the shape does not swallow. A drain policy may hand a job **back** rather than drop it,
+which is the scratchpad's rule -- a save may not be stepped over by a job for another pad -- so the
+queue of what has been taken off the channel and not done is the mechanism's, and the policy stays
+a closure over it. And the finder's walk is a named thread of its own rather than a `stream`: what
+it finds goes to the finder's own ranking worker, over the one channel that worker blocks on, so
+there is no receiver here whose dropping could stop it and the walk number does that instead
+(`agents/Finding.md`).
+
 **A third kind of question is a window of an object's code** (`src/ui/reading.rs`), for the section
 view. `Question::Code(CodeAsk)` carries an object, its skeleton once the view has one, and the
 stretches wanted by flat index, **nearest the reader first**. The skeleton (`CodeListing`, free to
@@ -163,7 +183,8 @@ here because of what this worker's queue holds: a listing is seconds of DWARF, a
 behind one would arrive long after the tab it belongs to -- where the two questions a source
 document opens with, its text and which of its lines have code, are asked at the same moment and
 answered by two threads at once. Nothing crosses between them: the reader touches no `Analyzed` and
-the analysis touches no file. The reader's answer goes into a cache rather than into the state it
+the analysis touches no file. It is the one worker still written out where it stands, and what it
+is written out as is `use_worker`'s shape. The reader's answer goes into a cache rather than into the state it
 is asked through, which is what keeps a file already read instant; the rest is in `agents/Panes.md`.
 
 **`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at

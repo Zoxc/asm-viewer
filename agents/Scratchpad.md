@@ -288,7 +288,7 @@ colours resolved in at parse time, and `set_appearance`'s clear cannot reach ins
 
 **One worker thread owns every pad's directory.** Reading a scratchpad back, writing the package,
 listing the pads, claiming a new one, moving a renamed one and `cargo build` are all blocking, so
-all of them go to one `std::thread` fed an `async_channel`, `use_analysis`'s shape. It is one thread
+all of them go to one `use_worker` (`agents/Worker.md`), the shape every worker here has. It is one thread
 and not several because the point is not only that the UI thread stays free but that a directory has
 a single writer, so a save cannot land inside the build that is reading what it writes. **Saves
 supersede, per pad, and builds never do**: a keystroke is a save, so the loop drains its queue while
