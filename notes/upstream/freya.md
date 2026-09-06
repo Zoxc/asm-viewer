@@ -314,6 +314,19 @@ to freya's default is missed here.
 **`SyntaxHighlighter::tree()`**, so the function spans the source rows' menu needs are not a
 second parse of the file (above, and `ui/highlight.rs`).
 
+**A grammar's highlights query compiled once per language.** `set_language` throws away the
+configuration it holds and builds another (`syntax.rs:144-150`), and building one is a `Query::new`
+over the grammar's whole query text plus a colour resolved for every capture name in it
+(`lang_config`, `:427-441`). What it costs has nothing to do with the file: for Rust it is 80 ms of
+the 121 ms a 23 KB file takes in a debug build, paid again for every file opened and again for all
+of them when the theme changes. Nothing out here can hold the result -- `Query` is not `Clone`
+(`tree-sitter-0.26.13/binding_rust/lib.rs:322-326`), and the capture colours are resolved against
+the one query, so what would be kept is a config per language *and* appearance, and only the
+highlighter can keep it. **Cost:** paid, once per file. The parse is a worker's
+(`ui/highlight.rs`), so it is a wait before the file draws and not a freeze; the way round it is to
+drop the highlighter for tree-sitter itself, which is writing the component again. A cache inside
+it, keyed by language and theme, or a `LangConfig` the caller makes once and hands in, would do it.
+
 **A mark of our own in a `CodeEditor` gutter.** Its gutter is the line number and nothing may
 join it: every row is an `EditorLineUI` built inside `CodeEditor::render`
 (`editor_ui.rs:279-296`) with `pub(crate)` fields (`editor_line.rs:21-32`), and the gutter it

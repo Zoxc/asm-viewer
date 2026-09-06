@@ -244,9 +244,12 @@ phantom line after a trailing newline (hence `Highlighted::lines`).
 
 **Reading a file and parsing it are a worker thread's**, `use_source_reading`'s, for what they cost:
 in a release build, 27 ms for a 23 KB file and 333 ms for an 850 KB one, of which the read off disk
-is under 5 ms and the rest is tree-sitter (six times that in a debug build). Both used to run in the
-Source pane's `render`, so the frame that first drew a file paid for them -- which is what a reader
-felt between picking a file out of Ctrl+P and seeing it. The shape is `use_analysis`'s: one thread
+is under 5 ms and the rest is tree-sitter (six times that in a debug build). Not all of that is the
+parse: `set_language` compiles the grammar's highlights query afresh on every call, which for Rust
+is 80 ms of a debug build's 121 ms for the 23 KB file however small the file is, and nothing out
+here can hold it (`notes/upstream/freya.md`). Both used to run in the Source pane's `render`, so
+the frame that first drew a file paid for them -- which is what a reader felt between picking a
+file out of Ctrl+P and seeing it. The shape is `use_analysis`'s: one thread
 for the app's lifetime, an `async_channel` drained to its newest question, and a pane that draws
 what it has meanwhile. **A worker of its own and not the analysis one**, whose queue a click can put
 seconds of DWARF into (`agents/Worker.md`); which is also what has the pane's three questions -- the

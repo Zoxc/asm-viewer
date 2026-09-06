@@ -49,16 +49,6 @@ leaves this list when it is. That is a move made on request, like everything els
   rows, which are drawn out of the first answer and so could only have asked for the second once
   it had landed; the links the language server places are asked for in the same breath, being the
   same file (`asks_for`, `src/ui/source_view.rs`).
-- [ ] Compile a grammar's highlights query once per language, not once per file.
-  `SyntaxHighlighter::set_language` builds a `tree_sitter::Query` out of `EditorLanguage`'s query
-  text on every call, and for Rust that is 80 ms of the 121 ms a 23 KB file costs in a debug
-  build: a cost per file that has nothing to do with the file's size, paid again for every file
-  opened and every theme switch. A `Query` is not `Clone` and the capture colours are resolved
-  against it, so what could be held is one per language *and* appearance. The call is freya's, so
-  holding it means going to tree-sitter ourselves rather than through the editor's highlighter --
-  which the function spans already do for C and C++. Off the UI thread it is a wait and not a
-  freeze, which is why this is a want and not a fix.
-
 - [ ] Deal with the code the compiler inlined. Both backends answer with the innermost location
   and nothing else -- `find_location_range` gives the line table's rows, and a row inside an
   inlined body names the callee's file and line -- so nothing says an instruction is there
