@@ -1,16 +1,15 @@
-# object 0.32.2
+# object 0.40.0
 
-The object-file reader the whole crate is built on; see `crates/analysis/Cargo.toml` for why
-0.32 and not a newer one.
+The object-file reader the whole crate is built on.
 
 **A zstd section's declared size is a hint, not a bound.** `CompressedData::decompress`
-(`read/mod.rs`) reserves the size the compression header declares and then hands the frame to
-`ruzstd`'s `read_to_end`, which grows the vector to whatever the frame produces. The zlib path
-of the same function does bound it — `flate2`'s `decompress_vec` never grows the vector it is
-given — so a check on the declared size, which is what `section_data` had, holds for one
-format and not the other. An ELF with `SHF_COMPRESSED`, `ELFCOMPRESS_ZSTD`, `ch_size = 1` and
-a 64 KiB frame of RLE blocks decompresses to about 2 GiB. Never a panic, so no guard catches
-it; an allocation failure is an abort.
+(`read/mod.rs`) reserves the size the compression header declares, decodes the whole of the
+frame into that vector — `ruzstd`'s `decode_all_to_vec` grows it — and only then compares the
+length and rejects a frame that disagreed. The rejection is after the allocation, so an ELF
+with `SHF_COMPRESSED`, `ELFCOMPRESS_ZSTD`, `ch_size = 1` and a 64 KiB frame of RLE blocks
+still allocates about 2 GiB before being turned down. The zlib path of the same function does
+bound it: `flate2`'s `decompress_vec` never grows the vector it is given. Never a panic, so no
+guard catches it; an allocation failure is an abort.
 
 **What it cost**: `zstd_data` in `crates/analysis/src/lib.rs`, ten lines that inflate the
 frame with `ruzstd` directly and read it through a `take` one byte past the declared size, so
@@ -20,28 +19,7 @@ building that version. Pinned by `robustness.rs`'
 `a_zstd_frame_producing_more_than_its_header_declares_is_dropped`, which the mutation sweep
 cannot reach: it writes poison values into headers and does not synthesize a zstd frame.
 
-Not reported, and not fixed by moving: 0.36 through 0.39 compare the length afterwards and
-reject a frame that disagreed, but still read the whole of it into the vector first, which is
-the allocation. Like 0.32, they also read one frame per section, which is what `zstd_data`
-does; a section written as several frames would decode short, and short is dropped.
-
-## Wanted
-
-**A Mach-O section kind read from the section's flags, and not from a list of names.**
-`MachOSectionInternal::parse` (`read/macho/section.rs:225`) matches on the segment and section
-name, and the one code section it knows is `__TEXT,__text`. Every other section of `__TEXT` --
-`__StaticInit`, `__textcoal_nt`, one a compiler names itself -- comes back
-`SectionKind::Unknown`, and a Mach-O symbol's kind is its section's
-(`read/macho/symbol.rs:315`), so a function in one of them is `SymbolKind::Unknown` too. The
-flags that say a section holds code are parsed but not read for this:
-`S_ATTR_PURE_INSTRUCTIONS` and `S_ATTR_SOME_INSTRUCTIONS` are in `macho.rs`, and the same
-function is marked `// TODO: we don't validate flags, should we?`.
-
-**What the app does instead**: nothing. `parse_object` keeps the sections whose kind is
-`SectionKind::Text` and the symbols whose kind is `SymbolKind::Text`
-(`crates/analysis/src/lib.rs`), so a function outside `__TEXT,__text` is not listed and none of
-its bytes are disassembled. Reading the flags here would mean this crate deciding what counts
-as code, for one format only, which is the job `SectionKind` does for the other two.
-
-Not reported, and not fixed by moving: 0.36 through 0.39 match the same list of names, name
-for name.
+Not reported, and unchanged from 0.32 through 0.40. One difference to keep in mind: 0.40
+decodes *every* frame in the section, where `zstd_data` reads one, `ruzstd`'s
+`StreamingDecoder` still ending at the first frame's end. A section written as several frames
+therefore decodes short here, and short is dropped.

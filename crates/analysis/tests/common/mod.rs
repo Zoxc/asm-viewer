@@ -6,8 +6,8 @@
 use analysis::{parse_object, CodeListing, Instruction, Listing, Object, Place, SymbolData};
 use object::write;
 use object::{
-    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
-    SymbolFlags, SymbolKind, SymbolScope,
+    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags, RelocationKind,
+    SectionKind, SymbolFlags, SymbolKind, SymbolScope,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -330,11 +330,13 @@ pub fn elf_text_padded(
             text,
             write::Relocation {
                 offset: offsets[relocation.in_symbol] + relocation.offset,
-                size: 32,
-                kind: RelocationKind::Relative,
-                encoding: RelocationEncoding::X86Branch,
                 symbol: ids[relocation.target],
                 addend: -4,
+                flags: RelocationFlags::Generic {
+                    kind: RelocationKind::Relative,
+                    encoding: RelocationEncoding::X86Branch,
+                    size: 32,
+                },
             },
         )
         .expect("adding a relocation to .text");
@@ -595,11 +597,13 @@ pub fn branch_to_data() -> Vec<u8> {
         text,
         write::Relocation {
             offset: offset + 1,
-            size: 32,
-            kind: RelocationKind::Relative,
-            encoding: RelocationEncoding::X86Branch,
             symbol: counter,
             addend: -4,
+            flags: RelocationFlags::Generic {
+                kind: RelocationKind::Relative,
+                encoding: RelocationEncoding::X86Branch,
+                size: 32,
+            },
         },
     )
     .expect("adding a relocation to .text");
@@ -744,6 +748,7 @@ pub fn elf_x86_64_with_dwarf_declaring(fixture: DwarfFixture, declared: &[u64]) 
         encoding,
         gimli::LineEncoding::default(),
         LineString::String(fixture.comp_dir.as_bytes().to_vec()),
+        None,
         LineString::String(fixture.files[0].as_bytes().to_vec()),
         None,
     );
@@ -761,6 +766,16 @@ pub fn elf_x86_64_with_dwarf_declaring(fixture: DwarfFixture, declared: &[u64]) 
         .collect();
 
     let mut ranges = Vec::new();
+    // The base the offset pairs below are from, stated in the list itself as well as on the
+    // unit. `gimli`'s writer does not count a `DW_AT_low_pc` of 0 as a base and rejects a
+    // pair without one, and a base-address entry is the other spelling of the same thing —
+    // both say 0 and neither is relocated, which is what leaves the list behind when the
+    // bias moves the code.
+    if fixture.unit_ranges == UnitRanges::OffsetPairs {
+        ranges.push(Range::BaseAddress {
+            address: Address::Constant(0),
+        });
+    }
     for (index, section) in fixture.sections.iter().enumerate() {
         program.begin_sequence(Some(address(index)));
         for row in section.rows {
@@ -863,11 +878,13 @@ pub fn elf_x86_64_with_dwarf_declaring(fixture: DwarfFixture, declared: &[u64]) 
                     section,
                     write::Relocation {
                         offset: relocation.offset,
-                        size: relocation.size * 8,
-                        kind: RelocationKind::Absolute,
-                        encoding: RelocationEncoding::Generic,
                         symbol: symbols[relocation.symbol],
                         addend: relocation.addend,
+                        flags: RelocationFlags::Generic {
+                            kind: RelocationKind::Absolute,
+                            encoding: RelocationEncoding::Generic,
+                            size: relocation.size * 8,
+                        },
                     },
                 )
                 .expect("adding a relocation to a debug section");
@@ -967,6 +984,7 @@ pub fn elf_i386_linked_with_relocations() -> Vec<u8> {
         encoding,
         gimli::LineEncoding::default(),
         LineString::String(b"/src".to_vec()),
+        None,
         LineString::String(b"main.c".to_vec()),
         None,
     );
@@ -1025,11 +1043,13 @@ pub fn elf_i386_linked_with_relocations() -> Vec<u8> {
                     section,
                     write::Relocation {
                         offset: relocation.offset,
-                        size: relocation.size * 8,
-                        kind: RelocationKind::Absolute,
-                        encoding: RelocationEncoding::Generic,
                         symbol: only,
                         addend: START as i64 + relocation.addend,
+                        flags: RelocationFlags::Generic {
+                            kind: RelocationKind::Absolute,
+                            encoding: RelocationEncoding::Generic,
+                            size: relocation.size * 8,
+                        },
                     },
                 )
                 .expect("adding a relocation to a debug section");
@@ -1040,7 +1060,7 @@ pub fn elf_i386_linked_with_relocations() -> Vec<u8> {
 
     let mut data = obj.write().expect("writing the fixture object");
     // `write::Object` writes `ET_REL` and nothing else; this file is linked.
-    data[16..18].copy_from_slice(&object::elf::ET_EXEC.to_le_bytes());
+    data[16..18].copy_from_slice(&object::elf::ET_EXEC.0.to_le_bytes());
     data
 }
 
@@ -1166,6 +1186,7 @@ pub fn elf_x86_64_two_sequences() -> Vec<u8> {
         encoding,
         gimli::LineEncoding::default(),
         LineString::String(b"/src".to_vec()),
+        None,
         LineString::String(b"main.c".to_vec()),
         None,
     );
@@ -1219,11 +1240,13 @@ pub fn elf_x86_64_two_sequences() -> Vec<u8> {
                     section,
                     write::Relocation {
                         offset: relocation.offset,
-                        size: relocation.size * 8,
-                        kind: RelocationKind::Absolute,
-                        encoding: RelocationEncoding::Generic,
                         symbol: symbols[relocation.symbol],
                         addend: relocation.addend,
+                        flags: RelocationFlags::Generic {
+                            kind: RelocationKind::Absolute,
+                            encoding: RelocationEncoding::Generic,
+                            size: relocation.size * 8,
+                        },
                     },
                 )
                 .expect("adding a relocation to a debug section");
@@ -1290,11 +1313,13 @@ pub fn rip_relative_store_to_data(displacement: i32) -> Vec<u8> {
         text,
         write::Relocation {
             offset: offset + 2,
-            size: 32,
-            kind: RelocationKind::Relative,
-            encoding: RelocationEncoding::Generic,
             symbol: counter,
             addend: -4,
+            flags: RelocationFlags::Generic {
+                kind: RelocationKind::Relative,
+                encoding: RelocationEncoding::Generic,
+                size: 32,
+            },
         },
     )
     .expect("adding a relocation to .text");
@@ -1338,11 +1363,13 @@ pub fn elf_x86_64_absolute(code: &[u8], offset: u64) -> Vec<u8> {
         text,
         write::Relocation {
             offset: probe + offset,
-            size: 32,
-            kind: RelocationKind::Absolute,
-            encoding: RelocationEncoding::Generic,
             symbol: g,
             addend: 0,
+            flags: RelocationFlags::Generic {
+                kind: RelocationKind::Absolute,
+                encoding: RelocationEncoding::Generic,
+                size: 32,
+            },
         },
     )
     .expect("adding a relocation to .text");

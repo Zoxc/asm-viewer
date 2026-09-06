@@ -230,12 +230,16 @@ fn elf_with_compressed_section(payload: &[u8], declared_size: u64) -> Vec<u8> {
 
 /// The same, over any compression format: `stream` as it sits in the section, under a header
 /// naming `ch_type` and declaring `declared_size` bytes of output.
-fn elf_with_compression(ch_type: u32, stream: &[u8], declared_size: u64) -> Vec<u8> {
+fn elf_with_compression(
+    ch_type: object::elf::CompressionType,
+    stream: &[u8],
+    declared_size: u64,
+) -> Vec<u8> {
     use object::{write, Architecture, BinaryFormat, Endianness, SectionFlags, SectionKind};
 
     let mut contents = Vec::new();
     // Elf64_Chdr: ch_type, ch_reserved, ch_size, ch_addralign.
-    contents.extend_from_slice(&ch_type.to_le_bytes());
+    contents.extend_from_slice(&ch_type.0.to_le_bytes());
     contents.extend_from_slice(&0u32.to_le_bytes());
     contents.extend_from_slice(&declared_size.to_le_bytes());
     contents.extend_from_slice(&1u64.to_le_bytes());
@@ -245,6 +249,7 @@ fn elf_with_compression(ch_type: u32, stream: &[u8], declared_size: u64) -> Vec<
     let id = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
     obj.append_section_data(id, &contents, 1);
     obj.section_mut(id).flags = SectionFlags::Elf {
+        sh_type: object::elf::SHT_PROGBITS,
         sh_flags: object::elf::SHF_COMPRESSED.into(),
     };
     obj.write().expect("writing the fixture object")
@@ -482,7 +487,7 @@ fn a_lying_compressed_debug_section_costs_nothing() {
     }
 }
 
-/// Defect: `addr2line` 0.21 computes a row's length as `next.address - row.address`
+/// Defect: `addr2line` computes a row's length as `next.address - row.address`
 /// unchecked, and a line program may legally move its address backwards — a
 /// subtract-with-overflow panic on a file the app merely opened. Caught by
 /// `without_panicking` in `src/line.rs`, so the panic message the run prints is expected.
@@ -746,9 +751,11 @@ fn elf_with_names(names: &[Vec<u8>]) -> Vec<u8> {
 /// Defect: a section header may say its bytes live at the end of the address space, and
 /// the debug info may then claim a function running off the end of it. Four independent
 /// bounds have to hold at once, and this is the one input in the suite that walks all of
-/// them: `estimate_size`'s and the DWARF backend's checked adds, the caught panic from
-/// `addr2line` 0.21's unchecked `low_pc + high_pc`, and `assembly` declining to decode a
-/// symbol with no extent rather than one decoded from an address that wrapped.
+/// them: `estimate_size`'s and the DWARF backend's checked adds, `extent` declining a
+/// length that runs off the end of the address space whichever of its sources stated it —
+/// the debug info does here, and `addr2line` hands that number over rather than checking
+/// it — and `assembly` declining to decode a symbol with no extent rather than one decoded
+/// from an address that wrapped.
 #[test]
 fn a_function_at_the_end_of_the_address_space_does_not_panic() {
     // Six single-byte instructions from three below the top of the address space: the
@@ -810,6 +817,7 @@ fn elf_at_the_end_of_the_address_space(base: u64) -> Vec<u8> {
         encoding,
         gimli::LineEncoding::default(),
         LineString::String(b"/src".to_vec()),
+        None,
         LineString::String(b"edge.c".to_vec()),
         None,
     );

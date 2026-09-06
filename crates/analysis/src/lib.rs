@@ -1,6 +1,6 @@
 use object::{
-    read::archive::ArchiveFile, CompressionFormat, Object as _, ObjectKind, ObjectSection,
-    ObjectSymbol, Relocation, SectionKind, SymbolKind,
+    read::archive::ArchiveFile, CompressionFormat, ExportTarget, Object as _, ObjectKind,
+    ObjectSection, ObjectSymbol, Relocation, SectionKind, SymbolKind,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -473,7 +473,17 @@ impl SymbolData {
     ///
     /// A zero estimate is treated as no estimate: a symbol placed exactly at the section's
     /// end has no bytes to derive from, and the debug info may still know its extent.
+    ///
+    /// Whichever answers, an extent running off the end of the address space is no extent:
+    /// a table stating one describes a range that does not exist, and every caller here
+    /// reads `address..address + extent`.
     pub fn extent(&self, object: &Object) -> Option<u64> {
+        let extent = self.stated_extent(object)?;
+        self.address.checked_add(extent).map(|_| extent)
+    }
+
+    /// The three answers [`extent`](Self::extent) chooses among, before it bounds them.
+    fn stated_extent(&self, object: &Object) -> Option<u64> {
         if let Some(stated) = self.unwind_extent() {
             return Some(stated);
         }
@@ -584,7 +594,7 @@ fn zstd_data(data: &[u8], size: u64) -> Option<Vec<u8>> {
 
     let capacity: usize = size.try_into().ok()?;
     let mut out = Vec::with_capacity(capacity);
-    let decoder = ruzstd::StreamingDecoder::new(data).ok()?;
+    let decoder = ruzstd::decoding::StreamingDecoder::new(data).ok()?;
     decoder
         .take(size.saturating_add(1))
         .read_to_end(&mut out)
@@ -704,13 +714,23 @@ fn declared_code(
         );
     }
 
-    for export in file.exports().unwrap_or_default() {
-        if export.name().is_empty() {
+    // `exports` reports one entry at a time, so a malformed one is skipped rather than
+    // taken as the end of the table. An export names a place in this image only when it
+    // has a name and an address: one identified by ordinal has nothing to draw, and a
+    // forwarder or a re-export names a place in another image.
+    for export in file.exports().into_iter().flatten().flatten() {
+        let ExportTarget::Address { address } = export.target() else {
+            continue;
+        };
+        let Some(name) = export.name().into_name() else {
+            continue;
+        };
+        if name.is_empty() {
             continue;
         }
         take(
-            (String::from_utf8_lossy(export.name()).into_owned(), true),
-            export.address(),
+            (String::from_utf8_lossy(name).into_owned(), true),
+            address,
             0,
         );
     }

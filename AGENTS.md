@@ -72,12 +72,13 @@ The first build compiles Skia (via `freya-engine` -> `freya-skia-safe`) and take
 Fedora it needs `freetype-devel fontconfig-devel libglvnd-devel wayland-devel` to link, and `mold`
 is not a supported linker.
 
-Dependency versions are pinned by compatibility, not taste. The `tree-sitter-*` grammars must sit
-on the `tree-sitter-language` ABI of the one `tree-sitter` the app and `freya-code-editor` share
-(`cargo tree -p viewer -d`). `addr2line` 0.21 / `gimli` 0.28 / `object` 0.32 must stay one copy
-each (check with `cargo tree -p analysis -d` after touching any of them), as must
-`fallible-iterator` 0.3, which `gimli` and `pdb2` share, and `digest` 0.10, which the three hash
-crates share. The reasoning is in the `Cargo.toml` comments; keep them current.
+Dependency versions are pinned by compatibility, not taste. `tree-sitter` declares
+`links = "tree-sitter"`, so cargo allows the graph exactly one copy of it whatever the
+semver: it can move only when `freya-code-editor` does, and the `tree-sitter-*` grammars must
+sit on that copy's `tree-sitter-language` ABI (`cargo tree -p viewer -d`). `addr2line` /
+`gimli` / `object` / `ruzstd` move as a set, each naming the next by exact minor, and must
+stay one copy each — check with `cargo tree -p analysis -d` after touching any of them, which
+should report nothing. The reasoning is in the `Cargo.toml` comments; keep them current.
 
 ### Test fixtures
 

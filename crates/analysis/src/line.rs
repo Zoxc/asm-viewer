@@ -162,14 +162,15 @@ impl DebugInfo {
 ///
 /// Not general defensiveness: known, reachable bugs in the dependencies behind the seam, all
 /// unchecked arithmetic on numbers a debug section states and none of them something this
-/// crate can validate without parsing the debug info twice. In `addr2line` 0.21, a line-table
+/// crate can validate without parsing the debug info twice. In `addr2line` 0.27, a line-table
 /// row's length is `next.address - row.address`, and nothing stops a line program from moving
-/// its address backwards; and a range is `low_pc + high_pc` wherever `high_pc` is a length,
-/// which overflows for a length running off the end of the address space — that one while the
-/// context is being *built*, which is why the guard is around [`DebugInfo::load`] too. In
-/// `pdb2` 0.10, a module's line data is sliced out of its stream at `start..start + size`
-/// unchecked, a line block's size has its header subtracted unchecked, and a section offset
-/// plus a length is a plain `+` (`notes/upstream/pdb2.md`).
+/// its address backwards. In `pdb2` 0.10, a module's line data is sliced out of its stream at
+/// `start..start + size` unchecked, a line block's size has its header subtracted unchecked,
+/// and a section offset plus a length is a plain `+` (`notes/upstream/pdb2.md`).
+///
+/// The guard is around [`DebugInfo::load`] as well as the queries, since a backend reads the
+/// file to build itself: the PDB's eager open is there, and `addr2line`'s context walks every
+/// unit's ranges.
 ///
 /// Sound because a panic leaves nothing half-written: a backend is only ever read, and the
 /// lock a panic poisons is recovered explicitly.
@@ -249,7 +250,8 @@ impl RowCollector {
     }
 
     /// One row, in the address space the caller's answer is in. A row covering nothing is
-    /// dropped here, so no backend has to check.
+    /// dropped here, and a column of 0 — which both formats write for "no column" — is taken
+    /// as none, so no backend has to check either.
     pub(super) fn push(
         &mut self,
         range: Range<u64>,
@@ -264,7 +266,7 @@ impl RowCollector {
             range,
             file,
             line,
-            column,
+            column: column.filter(|&column| column != 0),
         });
     }
 

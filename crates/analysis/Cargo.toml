@@ -4,40 +4,38 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-object = "0.32.1"
+object = "0.40.0"
 symbolic-demangle = "12.4.1"
 symbolic-common = "12.4.1"
 iced-x86 = "1.20.0"
-# DWARF line info. 0.21 is the `addr2line` release that pairs with `object` 0.32 and
-# `gimli` 0.28, which is what keeps one `object` and one `gimli` in the tree — check with
-# `cargo tree -p analysis -d` after touching either. `default-features = false` drops
-# `addr2line`'s own `object`, `memmap2` and demangler dependencies: sections are loaded
-# here (see `src/line.rs`), not by `Context::new`, and names are demangled by
-# `symbolic-demangle` as they already were. `gimli` is named directly for `Dwarf::load`
-# and `EndianArcSlice`, at the same version `addr2line` asks for.
-# What staying here costs is in `notes/upstream/addr2line.md`: 0.21 answers nothing for a
-# unit when the query starts in a gap between two of its sequences, which 0.24 fixed and
-# which wants `gimli` 0.31 — the move above, not a bump. The version is spelled out because
-# that note is written against this one.
-addr2line = { version = "0.21.0", default-features = false, features = ["std"] }
-gimli = { version = "0.28", default-features = false, features = ["read", "std", "endian-reader"] }
+# DWARF line info. 0.27 is the `addr2line` release that pairs with `object` 0.40 and
+# `gimli` 0.34, and the four move together: `addr2line` names `gimli` and `object` by exact
+# minor, and `object` names `ruzstd`. Check with `cargo tree -p analysis -d` after touching
+# any of them. `default-features = false` drops `addr2line`'s own `object`, `memmap2` and
+# demangler dependencies: sections are loaded here (see `src/line.rs`), not by
+# `Context::new`, and names are demangled by `symbolic-demangle` as they already were.
+# `gimli` is named directly for `Dwarf::load` and `EndianArcSlice`, at the same version
+# `addr2line` asks for. What the crate still gets wrong is in
+# `notes/upstream/addr2line.md`.
+addr2line = { version = "0.27.0", default-features = false, features = ["std"] }
+gimli = { version = "0.34", default-features = false, features = ["read", "std", "endian-reader"] }
 # The file digest (`FileDigest`), and no new crate in the build: `object` already pulls
 # this exact version in through `ruzstd`, so naming it here compiles nothing extra.
-# `default-features = false` keeps it that way — the default `std` feature exists only to
-# add `rand` for a randomly seeded hasher, which would be the one crate this does add and
-# is the opposite of what a digest compared across runs needs.
-twox-hash = { version = "1.6.3", default-features = false }
+# `default-features = false` keeps it that way — the default features include `random`,
+# which adds `rand` for a randomly seeded hasher, the opposite of what a digest compared
+# across runs needs. `xxhash64` is asked for rather than left to `ruzstd`'s own request for
+# it, so the build does not rest on a feature another crate happens to turn on.
+twox-hash = { version = "2.1.4", default-features = false, features = ["xxhash64"] }
 # The zstd decoder, named here for the same reason `twox-hash` is: `object` already builds
 # this exact version, so nothing new is compiled. A zstd section is inflated with it
 # directly (`section_data`) because `object`'s own `decompress()` reads the frame to its end
 # and bounds it by nothing — see `notes/upstream/object.md`.
-ruzstd = "0.5"
+ruzstd = "0.9"
 # PDB line info (`src/line/pdb.rs`). `pdb2` is the maintained fork of `pdb` 0.8 with the
-# same API; chosen over `pdb` itself because that one wants `fallible-iterator` 0.2 beside
-# the 0.3 `gimli` already brings, and over `pdb-addr2line` because it answers one address at
-# a time with no column and would add six crates. This adds exactly one, `scroll`: its
-# `fallible-iterator` 0.3 and `uuid` 1 are already in the tree. `cargo tree -p analysis -d`
-# reported the same two `hashbrown`s before and after, and nothing else.
+# same API; chosen over `pdb` itself, which is on an abandoned `fallible-iterator` 0.2, and
+# over `pdb-addr2line` because that one answers one address at a time with no column and
+# would add six crates. It adds two, `scroll` and `fallible-iterator` 0.3; `uuid` 1 was
+# already in the tree. `cargo tree -p analysis -d` reports nothing doubled.
 pdb2 = "0.10"
 # The digests a PDB records per source file (`SourceDigests`), so the app can tell a file it
 # opened apart from the one the binary was built from. All three share `digest` 0.10;
@@ -53,5 +51,5 @@ sha2 = "0.10"
 # Test fixtures are built in memory with the writers rather than committed as blobs:
 # `object` writes the container, `gimli::write` the DWARF inside it. Both are the same
 # versions the crate itself depends on, so no second copy enters the tree.
-object = { version = "0.32", features = ["write"] }
-gimli = { version = "0.28", features = ["write"] }
+object = { version = "0.40", features = ["write"] }
+gimli = { version = "0.34", features = ["write"] }

@@ -152,7 +152,10 @@ to cost a DIE walk for an answer its symbol table had already stated. **Else the
 extent the debug info declares (a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc`, or a PDB
 procedure's length) and the estimate. The estimate over-reaches into padding, but the debug info's
 extent describes the *function*, so a second symbol inside one function (an alias, an assembler
-label, a split cold part) would otherwise swallow the next function. The derivation is capped at
+label, a split cold part) would otherwise swallow the next function. Whichever of the three
+answered, an extent whose end runs off the top of the address space is dropped: `addr2line` hands a
+subprogram's declared length back as it was written, and every caller here reads
+`address..address + extent`. The derivation is capped at
 `MAX_DERIVED_SIZE` (1 MiB). That is not a claim about how long a function can be, but the point past
 which it is certainly describing something else: a stripped PE's export table is sparse, so nine of
 the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which was 772 302 instructions
@@ -432,13 +435,14 @@ row against the 64 allowed.
 `without_panicking` (a `catch_unwind`) is `DebugInfo`'s and wraps the backend build and every
 question at the seam, one net whichever backend is under it, for known reachable bugs in the
 dependencies behind it. All are unchecked arithmetic on numbers a debug section states, and none is
-something this crate can validate without parsing the debug info twice. In `addr2line` 0.21: a row's
+something this crate can validate without parsing the debug info twice. In `addr2line` 0.27: a row's
 length is `next.address - row.address`, so a line program that moves its address backwards is a
-subtract-with-overflow panic on a file the user merely opened; and a unit's range is
-`low_pc + high_pc`, which overflows for a unit whose length runs off the end of the address space.
-That one panics while the context is being *built*, which is why the guard is around the build too.
-What is *not* left to the guard is the third one: `find_units` asks about `probe + 1` unchecked, so
-the DWARF backend's `extent` declines `u64::MAX` outright rather than catching the panic afterwards.
+subtract-with-overflow panic on a file the user merely opened. The guard is around the backend build
+as well as the questions, since a backend reads the file to build itself. What is *not* left to the
+guard is `find_units`, which asks about `probe + 1` unchecked, so the DWARF backend's `extent`
+declines `u64::MAX` outright rather than catching the panic afterwards; nor is a subprogram's own
+declared length, which the crate hands back as written, so `Symbol::extent` drops one that would run
+off the end of the address space.
 `pdb2` 0.10 has four of the same kind (a module's line data sliced at `start + size` unchecked, a
 line block's size less its header, `section:offset + length` as a plain `+`, a string-table name at
 a declared offset), all under the same net (`notes/upstream/pdb2.md`); and one that no guard

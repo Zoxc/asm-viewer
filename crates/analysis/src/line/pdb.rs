@@ -465,10 +465,11 @@ impl Pdb {
                     };
                     Some(rows.file(&name, hash))
                 });
-                // CodeView's line 0 is DWARF's: instructions belonging to no line. Column 0 is
-                // the "no column" it writes when asked for none.
+                // CodeView's line 0 is DWARF's: instructions belonging to no line. Column 0
+                // is the "no column" it writes when asked for none, which the collector
+                // takes as none.
                 let line_number = (line.line_start != 0).then_some(line.line_start);
-                let column = line.column_start.filter(|&column| column != 0);
+                let column = line.column_start;
                 for range in self.address_map.rva_ranges(start..PdbInternalRva(end)) {
                     let (Some(start), Some(end)) = (
                         self.image_base.checked_add(u64::from(range.start.0)),

@@ -619,7 +619,7 @@ fn procedures_are_symbols_where_the_image_names_none() {
     let bytes = committed_fixture(NOEXPORT_DLL);
     let file = object::File::parse(bytes.as_slice()).expect("a PE image");
     assert_eq!(file.symbols().count(), 0);
-    assert_eq!(file.exports().unwrap().len(), 0, "no /EXPORT");
+    assert_eq!(file.exports().unwrap().count(), 0, "no /EXPORT");
     assert_eq!(
         file.entry(),
         file.relative_address_base(),
@@ -710,7 +710,7 @@ fn a_public_names_the_function_no_module_describes() {
     let bytes = committed_fixture(PUBLIC_DLL);
     let file = object::File::parse(bytes.as_slice()).expect("a PE image");
     assert_eq!(file.symbols().count(), 0);
-    assert_eq!(file.exports().unwrap().len(), 0, "no /EXPORT");
+    assert_eq!(file.exports().unwrap().count(), 0, "no /EXPORT");
 
     let alone = parse_at(&bytes, scratch("public_alone").join("alone.dll"));
     assert_eq!(names(&alone), unwind_names());

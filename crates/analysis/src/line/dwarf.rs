@@ -137,8 +137,9 @@ impl Dwarf {
                 continue;
             };
 
-            // DWARF 5 can record a file's MD5 too, but `addr2line` 0.21 renders the name
-            // without handing the entry back, so no hash travels with it for now.
+            // DWARF 5 can record a file's MD5 too, but `addr2line` renders the name and
+            // keeps nothing of the entry behind it, so no hash travels with it for now
+            // (`notes/upstream/addr2line.md`).
             let file = location.file.map(|file| rows.file(file, None));
             rows.push(range, file, location.line, location.column);
         }
@@ -152,9 +153,9 @@ impl Dwarf {
     /// covers the address or the subprogram that does begins elsewhere.
     pub(super) fn extent(&self, bias: u64, address: u64) -> Option<u64> {
         let probe = address.checked_add(bias)?;
-        // `addr2line` 0.21's `Context::find_units` asks its range index about `probe + 1`
-        // with a plain addition, so the very last address in the space panics. Declined here
-        // rather than left to the guard: this one is ours to see coming.
+        // `addr2line`'s `Context::find_units` asks its range index about `probe + 1` with a
+        // plain addition, so the very last address in the space panics. Declined here rather
+        // than left to the guard: this one is ours to see coming.
         if probe == u64::MAX {
             return None;
         }
@@ -163,8 +164,9 @@ impl Dwarf {
 
         // `skip_all_loads` declines to fetch split DWARF, which this crate does not read
         // anywhere else either.
-        let (sections, unit) = context.find_dwarf_and_unit(probe).skip_all_loads()?;
-        let key = unit.header.offset().as_debug_info_offset()?.0 as u64;
+        let unit = context.find_dwarf_and_unit(probe).skip_all_loads()?;
+        let (sections, unit) = (unit.dwarf, unit.unit);
+        let key = unit.header.offset().to_debug_info_offset(&unit.header)?.0 as u64;
 
         // Nested under the context's lock, and only ever in that order — this is the one
         // place either is taken.
@@ -243,29 +245,29 @@ fn subprogram_extents(
     let mut entries = unit.entries();
     // A malformed unit stops the walk where it goes wrong rather than discarding what was
     // read before it.
-    while let Ok(Some((_, entry))) = entries.next_dfs() {
+    while let Ok(Some(entry)) = entries.next_dfs() {
         if entry.tag() != gimli::DW_TAG_subprogram {
             continue;
         }
 
         let low = match entry.attr_value(gimli::DW_AT_low_pc) {
-            Ok(Some(value)) => match sections.attr_address(unit, value) {
+            Some(value) => match sections.attr_address(unit, value) {
                 Ok(Some(low)) => low,
                 _ => continue,
             },
-            _ => continue,
+            None => continue,
         };
 
         let size = match entry.attr_value(gimli::DW_AT_high_pc) {
-            Ok(Some(gimli::AttributeValue::Udata(length))) => length,
-            Ok(Some(value)) => match sections.attr_address(unit, value) {
+            Some(gimli::AttributeValue::Udata(length)) => length,
+            Some(value) => match sections.attr_address(unit, value) {
                 Ok(Some(high)) => match high.checked_sub(low) {
                     Some(size) => size,
                     None => continue,
                 },
                 _ => continue,
             },
-            _ => continue,
+            None => continue,
         };
 
         if size == 0 {
@@ -344,14 +346,14 @@ fn stale_range_lists(
             continue;
         };
         let mut entries = header.entries(&abbreviations);
-        let Ok(Some((_, root))) = entries.next_dfs() else {
+        let Ok(Some(root)) = entries.next_dfs() else {
             continue;
         };
         // An index into the section's offset table (`DW_FORM_rnglistx`) is declined rather
         // than resolved: the table itself would have to be trusted to find the list.
         let offset = match root.attr_value(gimli::DW_AT_ranges) {
-            Ok(Some(gimli::AttributeValue::SecOffset(offset))) => offset,
-            Ok(Some(gimli::AttributeValue::RangeListsRef(offset))) => offset.0,
+            Some(gimli::AttributeValue::SecOffset(offset)) => offset,
+            Some(gimli::AttributeValue::RangeListsRef(offset)) => offset.0,
             _ => continue,
         };
 

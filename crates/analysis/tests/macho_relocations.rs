@@ -3,16 +3,16 @@
 //! A code section that is not at 0 is where the two differ, and where a lookup by address
 //! finds nothing unless the parse has converted the keys.
 //!
-//! `object` 0.32 calls only `__TEXT,__text` code, so the object that reaches a disassembly
-//! with this to answer is one whose `__text` is not its first section -- what an assembler
-//! writes for a file that names a data section before its first instruction.
+//! The object that reaches a disassembly with this to answer is one whose `__text` is not
+//! its first section -- what an assembler writes for a file that names a data section
+//! before its first instruction.
 
 mod common;
 
 use common::{parse, symbol, text};
 use object::{
-    write, Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
-    SymbolFlags, SymbolKind, SymbolScope,
+    write, Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
+    RelocationKind, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
 };
 use std::sync::Arc;
 
@@ -65,11 +65,13 @@ fn text_after_const() -> Vec<u8> {
         text,
         write::Relocation {
             offset: 1,
-            size: 32,
-            kind: RelocationKind::Relative,
-            encoding: RelocationEncoding::X86Branch,
             symbol: target.expect("the fixture declares target"),
             addend: -4,
+            flags: RelocationFlags::Generic {
+                kind: RelocationKind::Relative,
+                encoding: RelocationEncoding::X86Branch,
+                size: 32,
+            },
         },
     )
     .expect("adding the branch relocation");
@@ -112,4 +114,46 @@ fn a_call_in_a_section_that_is_not_at_zero_resolves_through_its_relocation() {
     // A placeholder names nowhere, so the row is no door and the gutter draws no arrow.
     assert_eq!(call.target, None);
     assert_eq!(call.branch, None);
+}
+
+/// A code section that is not `__TEXT,__text`. `object` decided a section's kind from its
+/// segment and section name until 0.40 and knew that one, so a function in any other came
+/// back `SectionKind::Unknown` -- and a Mach-O symbol's kind is its section's, so the
+/// function was neither listed nor disassembled. 0.40 reads the instruction attributes the
+/// section header carries instead, which is what says a section holds code.
+#[test]
+fn a_code_section_that_is_not_called_text_is_still_code() {
+    let mut obj = write::Object::new(
+        BinaryFormat::MachO,
+        Architecture::X86_64,
+        Endianness::Little,
+    );
+    obj.mangling = write::Mangling::None;
+
+    let coalesced = obj.add_section(
+        b"__TEXT".to_vec(),
+        b"__textcoal_nt".to_vec(),
+        SectionKind::Text,
+    );
+    obj.append_section_data(coalesced, &[0xC3], 1);
+    obj.add_symbol(write::Symbol {
+        name: b"inline_copy".to_vec(),
+        value: 0,
+        size: 1,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(coalesced),
+        flags: SymbolFlags::None,
+    });
+
+    let data = obj.write().expect("writing the fixture object");
+    let object = parse(&data);
+
+    let symbol = symbol(&object, "inline_copy");
+    let section = symbol.section.as_ref().expect("inline_copy has a section");
+    assert_eq!(section.name, "__textcoal_nt");
+
+    let assembly = symbol.assembly(&object).expect("inline_copy disassembles");
+    assert_eq!(text(&assembly.instructions[0]).trim_end(), "ret");
 }

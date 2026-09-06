@@ -463,14 +463,13 @@ fn a_section_that_would_not_read_keeps_its_rows_off_another() {
     assert_eq!(info.rows()[1].range, 3..6);
 }
 
-/// An `addr2line` 0.21 defect, pinned rather than worked around
-/// (`notes/upstream/addr2line.md`): `LocationRangeUnitIter::new` maps every miss but a probe
-/// below the unit's first sequence to "past the last one", so a query starting in the gap
-/// between two sequences of a unit is answered with nothing — while the reverse index, which
-/// walks the unit from 0, sees the very rows the query cannot. Delete this test with the
-/// note, when the crate moves.
+/// A unit whose declared range spans several sequences, with a symbol beginning in a gap
+/// between two of them: the query starts where no sequence does, and the rows of the later
+/// one it reaches are the answer. `addr2line` read a miss here as "past the last sequence"
+/// until 0.24 and answered nothing — while the reverse index, which walks each unit from 0,
+/// named the symbol for the very lines its pane would not show.
 #[test]
-fn a_query_starting_between_two_sequences_of_a_unit_is_answered_with_nothing() {
+fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_one() {
     let data = common::elf_x86_64_two_sequences();
     let object = parse(&data);
 
@@ -502,8 +501,11 @@ fn a_query_starting_between_two_sequences_of_a_unit_is_answered_with_nothing() {
         [Arc::from("/src/main.c"), Arc::from("/src/other.c")]
     );
 
-    assert!(
-        middle.line_info(&object).is_none(),
-        "0.21 answers this; the note is out of date"
-    );
+    // The point: `middle` starts in the gap, and is answered with the second sequence's
+    // one row rather than with nothing.
+    let info = middle.line_info(&object).expect("middle has line info");
+    assert_eq!(info.files(), [Arc::from("/src/other.c")]);
+    assert_eq!(info.rows().len(), 1);
+    assert_eq!(info.rows()[0].range, 0x10..0x16);
+    assert_eq!(info.rows()[0].line, Some(42));
 }

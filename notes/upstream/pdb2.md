@@ -3,7 +3,7 @@
 The PDB reader behind `crates/analysis/src/line/pdb.rs`. A maintained fork of `pdb` 0.8
 with the same API; see the `Cargo.toml` comment for why it and not `pdb` or `pdb-addr2line`.
 
-**Unchecked arithmetic on numbers the file states**, the same class as `addr2line` 0.21's
+**Unchecked arithmetic on numbers the file states**, the same class as `addr2line`'s
 (`agents/Analysis.md`). Found by reading the source before the sweep reached them, and all
 four reachable from a `.pdb` a user merely opened:
 
