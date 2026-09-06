@@ -299,3 +299,96 @@ fn the_index_is_usable_from_several_threads_at_once() {
         assert_eq!(found, ["first", "second"]);
     }
 }
+
+/// The index's third question: which files there are at all -- what a caller holding an
+/// object and wanting one file of it by name has to ask before it can ask anything else.
+#[test]
+fn an_object_names_every_file_its_code_came_from() {
+    let object = parse(&shared_line());
+
+    // Both files, and each said once however many symbols it names.
+    assert_eq!(
+        object.source_files(),
+        [Arc::<str>::from(MAIN), Arc::from(OTHER)]
+    );
+
+    // Every name it hands out answers the questions beside it.
+    for file in object.source_files() {
+        assert!(
+            !object.lines_from_source(&file).is_empty(),
+            "{file} names no line"
+        );
+    }
+
+    // An object with no debug info says nothing rather than guessing.
+    assert!(parse(&common::caller_and_target())
+        .source_files()
+        .is_empty());
+}
+
+/// **The fact a caller matching a file by name rests on.** A producer records the file as it
+/// was handed to it -- `main.c`, relative -- and the name the index is keyed by is that
+/// joined onto the unit's `DW_AT_comp_dir`, which is the directory the compiler ran in. So a
+/// caller may neither compare against the relative name nor build the path out of the
+/// directory it thinks the source is in, and has to take the spelling from the object.
+#[test]
+fn a_files_name_is_the_comp_dir_joined_onto_it() {
+    let object = parse(&shared_line());
+
+    // `files: &["main.c", "other.c"]` under `comp_dir: "/src"`.
+    assert_eq!(object.source_files()[0], Arc::<str>::from("/src/main.c"));
+    // And the joined name is the only one the questions answer to.
+    assert_eq!(at(&object, "/src/main.c", 10), ["first", "second"]);
+    assert!(object.symbols_at_line("main.c", 10).is_empty());
+}
+
+/// In the file's order and not the map's, which is a hash seed's: `RandomState` reseeds per
+/// process, so an answer that came back in the map's order would differ between runs.
+#[test]
+fn the_files_are_in_name_order() {
+    let object = parse(&elf_x86_64_with_dwarf(DwarfFixture {
+        comp_dir: "/src",
+        // Added out of order, and neither is the order they are asked for in.
+        files: &["m.c", "z.c", "a.c"],
+        sections: &[DwarfSection {
+            name: None,
+            symbols: &[TextSymbol {
+                name: "only",
+                bytes: &[0x90, 0x90, 0xC3],
+            }],
+            rows: &[
+                DwarfRow {
+                    address: 0,
+                    file: 0,
+                    line: 1,
+                    column: 0,
+                },
+                DwarfRow {
+                    address: 1,
+                    file: 1,
+                    line: 2,
+                    column: 0,
+                },
+                DwarfRow {
+                    address: 2,
+                    file: 2,
+                    line: 3,
+                    column: 0,
+                },
+            ],
+            length: 3,
+            subprograms: &[],
+            base_symbol: None,
+        }],
+        unit_ranges: UnitRanges::Relocated,
+    }));
+
+    assert_eq!(
+        object.source_files(),
+        [
+            Arc::<str>::from("/src/a.c"),
+            Arc::from("/src/m.c"),
+            Arc::from("/src/z.c")
+        ]
+    );
+}

@@ -11,9 +11,10 @@
 //!
 //! * **A file is matched exactly, on the string the backend renders.** That is by construction
 //!   the string [`LineInfo::files`](super::LineInfo::files) spells, so a caller holding a file
-//!   name out of the forward direction can hand it straight back. Nothing here normalises a
-//!   path or asks the filesystem about one: a path in debug info is what the producer said,
-//!   not a place. Two objects whose `DW_AT_comp_dir` disagree therefore do not join, which is
+//!   name out of the forward direction can hand it straight back -- and which names there are
+//!   at all is a question of its own ([`Object::source_files`]), for a caller that holds an
+//!   object and wants one file of it. Nothing here normalises a path or asks the filesystem
+//!   about one: a path in debug info is what the producer said, not a place. Two objects whose `DW_AT_comp_dir` disagree therefore do not join, which is
 //!   a cross-object question and not this crate's to answer.
 //! * **The answer is symbols, not ranges.** Where inside a symbol the line's code sits is the
 //!   forward direction's question and is already answered, so a caller wanting the ranges asks
@@ -327,5 +328,29 @@ impl Object {
             .collect();
         lines.dedup();
         lines
+    }
+
+    /// Every source file this object has code compiled from, in name order and without
+    /// repeats.
+    ///
+    /// The keys of the index the questions above are asked of, so a name out of here can be
+    /// handed straight back to either. It is the files that produced **code** and not every
+    /// file the line program names: an entry no row landed in is never added.
+    ///
+    /// Sorted, because the index is a `HashMap` and the order it iterates in is a hash seed's
+    /// rather than the file's -- an answer that changed between runs of one binary is not one
+    /// a caller can pick from.
+    ///
+    /// Empty for [`symbols_from_lines`](Self::symbols_from_lines)'s reasons, and worker-thread
+    /// work for its reason too: the first call against an object builds the index.
+    pub fn source_files(&self) -> Vec<Arc<str>> {
+        let Some(debug) = self.debug_info() else {
+            return Vec::new();
+        };
+        let index = debug.index.get_or_init(|| SourceIndex::build(self, debug));
+
+        let mut files: Vec<Arc<str>> = index.files.keys().cloned().collect();
+        files.sort_unstable();
+        files
     }
 }

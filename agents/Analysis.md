@@ -400,7 +400,11 @@ fixture, the two committed gcc objects included. **A file is matched exactly**, 
 backend renders, which is by construction the string `LineInfo::files` spells, so a name out of the
 forward direction can be handed straight back. Nothing here normalises a path or asks the filesystem
 about one; two objects whose `DW_AT_comp_dir` disagree do not join, and that is a cross-object
-question for whoever asks one.
+question for whoever asks one. Which names there are at all is the index's third question, its own
+keys (`source_files`), for a caller holding an object and wanting one file of it: the scratchpad,
+which has to learn how its program spells its own source before it can ask anything about it
+(`agents/Scratchpad.md`). Sorted, because the map's order is a hash seed's and an answer that
+differed between runs is not one anybody can pick from.
 
 Measured, release, first ask: the 331 MB binary **0.43 s** (2.2 s before `.eh_frame` stated 115 096
 of its 115 577 extents, 2.0 s of that the extent pass). The 0.23 s line-program walk is now most of
