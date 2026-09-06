@@ -54,6 +54,23 @@ A name's context menu — a link, or the name where it is defined — has three 
 server. "Go to definition" does what clicking a link does. "Find references to `foo`" and
 "Find implementations" answer in the Locations panel. A question with no answer says so.
 
+## What a name is
+
+While a language server is running, resting the pointer on a name in the source pane asks
+what it is and shows the answer in a box.
+
+The answer is the server's own: the name's path and signature as code, and the doc comment
+above it.
+Code in it is coloured as the source pane is, the rest as written, headings, lists, emphasis
+and rules included.
+
+The box sits at the name's left edge above its row, under it where it does not fit, and
+inside the window.
+The pointer can move into it, where an answer too tall for it scrolls.
+It goes when the pointer leaves both it and the name, on a press or a key, and when the code
+under it scrolls.
+Nothing is shown while a menu is open or text is being selected.
+
 ## Selection
 
 A drag selects text; Shift+click extends the selection to the clicked place. A drag in the

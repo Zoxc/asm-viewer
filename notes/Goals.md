@@ -14,6 +14,21 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Source / assembly split view
 
+- [ ] Colour the code in a hover box as the source pane colours it, which is what
+  `notes/specs/Split View.md` says and what the app does not do. The box draws the server's
+  answer as markdown, and the fenced blocks in it -- the name's path and its signature,
+  which is most of what a reader hovers for -- come out as plain monospace text in one
+  colour. The crate that draws the markdown can highlight them and cannot be told what
+  with: its code blocks are built on an editor whose syntax theme is freya's own light one
+  whatever the app's appearance is, and nothing outside the crate reaches it
+  (`notes/upstream/freya.md`), so the feature is off and the blocks are plain. What is left
+  is for the app to draw them itself: cut the answer into fenced blocks and the prose
+  between them, put each block through the `SyntaxHighlighter` and `palette().syntax()` the
+  pane already uses, with the grammar taken from the fence's word through the one list of
+  extensions (`src/source.rs`), and hand only the prose to the markdown viewer. The
+  decisions are what a fence's word means where the app has no grammar for it, and whether
+  a block keeps a ground of its own.
+
 - [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain, the
   many `source::Language` now names for the pane split's sake included; each language is a
   `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and

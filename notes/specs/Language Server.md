@@ -3,6 +3,11 @@
 What a name in the source means is a question for a language server, run over the open
 project's directory. It is rust-analyzer unless the project names another program.
 
+The server is told which files the reader has open and when they close, which is what makes
+it answer about them.
+Only the files it is for: Rust's, or the extensions the project named.
+A file that changes in a tab is handed over again.
+
 Nothing starts one by itself. A control at the right of the top bar, left of the chevrons,
 starts and stops it. It is marked `LSP` and drawn as its state: text alone when it is off, a
 border under the pointer and while a server is there, a colour of its own while one runs, a
@@ -42,11 +47,12 @@ a name given both a value and a table. An error stops the server from starting.
 ## In the Project view
 
 A section of the view holds the program to run, empty for the usual one and saved with the
-project; a button that starts and stops the server; whether this directory has been agreed
-to, with a button to take that back, which also stops the server it was given for; and what
-the project's settings gave the server, one line per setting, running or not. A line says how
-it is going: running, still reading the project, or why it would not start. A project with no
-directory says that instead.
+project; which of its files it is for, as extensions, empty for the default and saved the
+same way; a button that starts and stops the server; whether this directory has been
+agreed to, with a button to take that back, which also stops the server it was given for;
+and what the project's settings gave the server, one line per setting, running or not. A
+line says how it is going: running, still reading the project, or why it would not start. A
+project with no directory says that instead.
 
 ## When there is no answer
 

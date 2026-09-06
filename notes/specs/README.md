@@ -8,5 +8,7 @@ A spec says what the app does. Usually moved from `notes/Goals.md`.
 - Simple English. Short, direct sentences and plain words: "has", not "offers". Prefer it over
   the repo's own terms: "selected", not "picked out".
 - Leave out what is implied, such as the count of a list.
+- Prefer a sentence on a line of its own, wrapped where it is too long for one. A diff then
+  shows the sentence that changed rather than the paragraph reflowed around it.
 - Match the writing style of the spec files here.
 - Before presenting edits, make one final pass and cut what can go without losing precision.
