@@ -758,12 +758,17 @@ viewport that are not held, nearest the middle of the viewport first and at most
 them. The worker answers a chunk, the rows change, the effect wakes on them and asks for the rest,
 so the buffer fills from the viewport outwards and a page up or down lands on rows already decoded.
 Before there is a skeleton it asks for that, with nothing decoded. What a row copies is what it
-draws: `section .text` for a header, `<name>:` after its address for a label, the instruction's own
-line for an instruction, and for a gap row a data directive (`dq` for a row that divides into
-quadwords, down to `db` for one that does not, the values little-endian as x86 reads them) followed
-by the same bytes as characters between bars. That is a hex dump's shape, which is how a row of data
-is told from a row of assembly, in its shape and not in a colour. Nothing for an empty row or a
-separator.
+draws, and it is worked out **once**: `text_of` says what a row that is text is -- its address, its
+text, the data directive in front of it, its colour -- and the row drawn, the characters swept
+(`code_line`) and the run of rows copied (`row_line`, the address column then `code_line`) are all
+that one answer. An instruction is the one row read out of the reading instead, and its own tab's
+line (`instruction_line`). So: `section .text` for a header and `<name>:` for a label, each after
+its address, the instruction's own line for an instruction, and for a gap row a data directive
+(`dq` for a row that divides into quadwords, down to `db` for one that does not, the values
+little-endian as x86 reads them) followed by the same bytes as characters between bars. That is a
+hex dump's shape, which is how a row of data is told from a row of assembly, in its shape and not
+in a colour. Nothing for an empty row or a separator -- no address either, a row that draws nothing
+copying nothing.
 
 **A branch's displacement is the other way to follow it**, drawn as a `BranchLabel` exactly where a
 call's resolved target is drawn as a `RelocationLabel`: `Instruction::branch_span` says which span

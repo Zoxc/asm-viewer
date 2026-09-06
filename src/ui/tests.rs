@@ -14890,9 +14890,9 @@ fn a_caret_walked_past_the_panes_edge_brings_the_pane_sideways_to_it() {
 }
 
 /// A run copied out of an object's code spells each kind of row as it is drawn: the
-/// section's header, a symbol's label after its address, an instruction as its own tab
-/// copies it, and a blank row -- the space over a stretch as much as an undecoded one --
-/// as the blank line it is.
+/// section's header and a symbol's label, each after its address, an instruction as its
+/// own tab copies it, and a blank row -- the space over a stretch as much as an undecoded
+/// one -- as the blank line it is.
 #[test]
 fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
     let (_path, objects) = fixture_objects(1);
@@ -14903,7 +14903,7 @@ fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
     let lines: Vec<String> = (0..rows.len())
         .map(|row| row_line(&rows, &reading, row))
         .collect();
-    assert_eq!(lines[0], "section .text");
+    assert_eq!(lines[0], "0000000000000000 section .text");
     assert_eq!(lines[1], "", "the blank under the header");
     assert_eq!(lines[2], "0000000000000000 add:");
     let add = fixture_symbols()
@@ -23554,4 +23554,110 @@ fn nothing_is_said_of_a_query_the_worker_has_not_answered() {
         labels(&test).contains(&"No files match.".to_owned()),
         "the answer landed and the panel did not say the query matches nothing"
     );
+}
+
+/// What every kind of row in an object's code copies, both ways: whole rows (`row_line`,
+/// which Ctrl+C takes with nothing selected) and a character sweep (`code_line`). The two
+/// are the same text either side of the address column -- a row that draws an address
+/// copies it, and a row that is blank copies as the blank line it is -- which is what
+/// makes what a row copies what it draws.
+#[test]
+fn each_kind_of_row_of_an_objects_code_copies_the_same_text_both_ways() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let rows = rows_of(&reading);
+    let both = |row: usize| {
+        (
+            row_line(&rows, &reading, row),
+            code_line(&rows, &reading, row).to_string(),
+        )
+    };
+
+    // The header, with the address the section starts at.
+    assert_eq!(
+        both(0),
+        (
+            "0000000000000000 section .text".to_owned(),
+            "section .text".to_owned()
+        )
+    );
+    // The blank under it.
+    assert_eq!(both(1), (String::new(), String::new()));
+    assert_eq!(
+        both(2),
+        ("0000000000000000 add:".to_owned(), "add:".to_owned())
+    );
+    assert_eq!(
+        both(3),
+        (
+            "0000000000000000 push      rbp".to_owned(),
+            "push      rbp".to_owned()
+        )
+    );
+    // An instruction whose operand is a relocation's target, the name being what the row
+    // draws in the placeholder's place.
+    let call = (0..rows.len())
+        .find(|&row| code_line(&rows, &reading, row).to_string().contains("call"))
+        .expect("the fixture calls");
+    let at = rows
+        .address_of(call)
+        .expect("an instruction has an address");
+    assert_eq!(
+        both(call),
+        (
+            format!("{at:016X} call      add"),
+            "call      add".to_owned()
+        )
+    );
+
+    // A stretch decoded as sixteen bytes of gap and no code, put in by hand: the
+    // fixture's own functions leave no padding between them.
+    let mut gapped = reading_of(&object, &[]);
+    let code = gapped.code.clone().expect("the skeleton");
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: Some(code.clone()),
+        window: vec![0],
+    };
+    assert!(gapped.take(
+        &ask,
+        code,
+        vec![(
+            0,
+            Stretched {
+                code: None,
+                gap: Some(analysis::Gap {
+                    range: 0..16,
+                    kind: analysis::GapKind::Bytes,
+                }),
+            }
+        )]
+    ));
+    let gap_rows = rows_of(&gapped);
+    let gap = (0..gap_rows.len())
+        .find(|&row| matches!(gap_rows.row(row), Some(Row::Gap { .. })))
+        .expect("the stretch has a gap row");
+    let swept = code_line(&gap_rows, &gapped, gap).to_string();
+    // The data directive, the values, then the bytes as characters between bars.
+    assert!(
+        swept.starts_with("dq ") && swept.ends_with('|'),
+        "{swept:?}"
+    );
+    let address = gap_rows.address_of(gap).expect("a gap row has an address");
+    assert_eq!(
+        row_line(&gap_rows, &gapped, gap),
+        format!("{address:016X} {swept}")
+    );
+
+    // And the rule every row of every listing follows: the address column, then what a
+    // sweep would copy -- and nothing at all for a row that draws nothing.
+    for row in 0..rows.len() {
+        let (copied, swept) = both(row);
+        match (swept.is_empty(), rows.address_of(row)) {
+            (true, _) => assert_eq!(copied, "", "row {row} is blank and copied {copied:?}"),
+            (false, Some(address)) => assert_eq!(copied, format!("{address:016X} {swept}")),
+            (false, None) => assert_eq!(copied, swept),
+        }
+    }
 }

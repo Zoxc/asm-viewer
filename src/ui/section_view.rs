@@ -138,54 +138,93 @@ impl SectionRows {
     }
 }
 
-/// The text a row copies as: what it draws, one line.
-pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
-    match rows.row(row) {
-        Some(Row::Header { section }) => rows
-            .code()
-            .sections()
-            .get(section)
-            .map(|placed| format!("section {}", placed.listing.section().name))
-            .unwrap_or_default(),
-        Some(Row::Label { stretch, index }) => {
-            let address = rows.address_of(row).unwrap_or(0);
-            let name = label_of(rows, stretch, index)
-                .map(|symbol| symbol.display().to_owned())
-                .unwrap_or_default();
-            format!("{address:016X} {name}:")
-        }
-        Some(Row::Instruction { stretch, index }) => reading
-            .held
-            .get(&stretch)
-            .and_then(|s| s.code.as_ref())
-            .and_then(|studied| studied.assembly.as_ref())
-            .and_then(|assembly| assembly.instructions.get(index))
-            .map(|instruction| asm_line(instruction, rows.bias(stretch).unwrap_or(0)))
-            .unwrap_or_default(),
-        Some(Row::Gap { stretch, index }) => gap_bytes(rows, stretch, index)
-            .map(|(address, bytes)| {
-                let (mark, values) = dump_line(&bytes);
-                format!("{address:016X} {mark} {values}")
+/// A row that is text and nothing else: the header, a label, a gap's bytes. **One
+/// answer for the three of them**, so that what the row draws, what a run of rows copies
+/// and what a sweep of characters copies cannot drift apart: [`build_row`] draws this,
+/// [`code_line`] is this as a line, and [`row_line`] is that after the address column.
+///
+/// The colour and the weight are in it because the row draws them from nothing else.
+/// They come from [`palette`], and asking it is what subscribes to the theme: the render
+/// that draws the row, and nothing at all in the copying paths, which run under no
+/// reactive context.
+struct TextOf {
+    /// The address column, or none for a row that stands for no address of its own.
+    address: Option<u64>,
+    /// The data directive a row of bytes wears in front of its values, and none for
+    /// anything else ([`dump_line`]).
+    mark: Option<&'static str>,
+    text: String,
+    color: Color,
+    bold: bool,
+    /// The symbol a label names, which a **Ctrl**-press on the row opens as a tab of its
+    /// own.
+    opens: Option<Arc<SymbolData>>,
+}
+
+/// What text row `row` says -- and [`None`] for a row that is not text: an instruction, a
+/// blank, a separator, or one whose section or bytes are not there to be read, which
+/// draws and copies nothing.
+///
+/// The rows alone answer this: an instruction is the one row that is read out of the
+/// reading.
+fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
+    match rows.row(row)? {
+        Row::Header { section } => {
+            let placed = rows.code().sections().get(section)?;
+            Some(TextOf {
+                address: Some(placed.range().start),
+                mark: None,
+                text: format!("section {}", placed.listing.section().name),
+                color: palette().text_fg,
+                bold: true,
+                opens: None,
             })
-            .unwrap_or_default(),
-        Some(Row::Rule { .. } | Row::Space { .. } | Row::Empty { .. } | Row::Separator { .. })
-        | None => String::new(),
+        }
+        Row::Label { stretch, index } => {
+            let symbol = label_of(rows, stretch, index)?;
+            Some(TextOf {
+                address: Some(rows.address_of(row).unwrap_or(0)),
+                mark: None,
+                text: format!("{}:", symbol.display()),
+                color: palette().name_fg,
+                bold: true,
+                opens: Some(symbol),
+            })
+        }
+        Row::Gap { stretch, index } => {
+            let (address, bytes) = gap_bytes(rows, stretch, index)?;
+            let (mark, values) = dump_line(&bytes);
+            Some(TextOf {
+                address: Some(address),
+                mark: Some(mark),
+                text: values,
+                color: palette().operand_fg,
+                bold: false,
+                opens: None,
+            })
+        }
+        Row::Instruction { .. }
+        | Row::Rule { .. }
+        | Row::Space { .. }
+        | Row::Empty { .. }
+        | Row::Separator { .. } => None,
+    }
+}
+
+/// The text a row copies as: what it draws, one line -- the address column, then
+/// [`code_line`]. A row that draws nothing copies nothing, address or no address.
+pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
+    let line = code_line(rows, reading, row).to_string();
+    match rows.address_of(row) {
+        Some(address) if !line.is_empty() => format!("{address:016X} {line}"),
+        _ => line,
     }
 }
 
 /// The text row `row` draws after its address, as a character selection copies it:
-/// [`row_line`] without the address column, for the rows that have one.
+/// [`row_line`] without the address column.
 pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
     match rows.row(row) {
-        Some(Row::Header { section }) => rows
-            .code()
-            .sections()
-            .get(section)
-            .map(|placed| Line::text(format!("section {}", placed.listing.section().name)))
-            .unwrap_or_default(),
-        Some(Row::Label { stretch, index }) => label_of(rows, stretch, index)
-            .map(|symbol| Line::text(format!("{}:", symbol.display())))
-            .unwrap_or_default(),
         Some(Row::Instruction { stretch, index }) => reading
             .held
             .get(&stretch)
@@ -194,14 +233,9 @@ pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
             .filter(|assembly| index < assembly.instructions.len())
             .map(|assembly| instruction_line(assembly, index))
             .unwrap_or_default(),
-        Some(Row::Gap { stretch, index }) => gap_bytes(rows, stretch, index)
-            .map(|(_, bytes)| {
-                let (mark, values) = dump_line(&bytes);
-                text_line(Some(mark), &values)
-            })
+        _ => text_of(rows, row)
+            .map(|text| text_line(text.mark, &text.text))
             .unwrap_or_default(),
-        Some(Row::Rule { .. } | Row::Space { .. } | Row::Empty { .. } | Row::Separator { .. })
-        | None => Line::default(),
     }
 }
 
@@ -241,8 +275,9 @@ fn gap_bytes(rows: &Rows, flat: usize, index: usize) -> Option<(u64, Vec<u8>)> {
     Some((placed.place(start), bytes))
 }
 
-/// A row that is text and nothing else: a section's header, a symbol's label, a gap's
-/// bytes. Takes the mark handlers so a sweep down the listing is not cut at every one.
+/// A row that is text and nothing else -- a section's header, a symbol's label, a gap's
+/// bytes -- drawn as [`text_of`] says it. Takes the mark handlers so a sweep down the
+/// listing is not cut at every one.
 #[derive(Clone, PartialEq)]
 struct TextRow {
     row: usize,
@@ -331,7 +366,7 @@ impl Component for TextRow {
         };
 
         // The text: the data directive, where the row has one, then what the row says --
-        // one paragraph, as `row_line` spells it after the address.
+        // one paragraph, and the same one `code_line` copies.
         let mut head = Vec::new();
         if let Some(mark) = self.mark {
             // Non-breaking, so the engine cannot trim it: it is one unit of the text
@@ -699,61 +734,38 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             .find(|(flat, _)| *flat == stretch)
             .map_or(&[][..], |(_, edges)| edges.as_slice())
     };
-    let text = |address: Option<u64>,
-                text: String,
-                color: Color,
-                bold: bool,
-                opens: Option<Symbol>,
-                mark: Option<&'static str>,
-                key: RowKey| {
-        TextRow {
-            row: i,
-            address,
-            text,
-            color,
-            bold,
-            wash,
-            opens,
-            mark,
-            chars,
-            key: DiffKey::None,
-        }
-        .key(key)
-        .into_element()
-    };
-
     match rows.row(i) {
-        Some(Row::Header { section }) => {
-            let placed = &rows.code().sections()[section];
-            text(
-                Some(placed.range().start),
-                format!("section {}", placed.listing.section().name),
-                palette().text_fg,
-                true,
-                None,
-                None,
-                RowKey::Header(section),
-            )
-        }
-        Some(Row::Label { stretch, index }) => {
-            let address = rows.address_of(i).unwrap_or(0);
-            let symbol = label_of(rows, stretch, index);
-            let name = symbol
-                .as_ref()
-                .map(|symbol| format!("{}:", symbol.display()))
-                .unwrap_or_default();
-            text(
-                Some(address),
-                name,
-                palette().name_fg,
-                true,
-                symbol.map(|symbol| Symbol {
+        // The three rows that are text and nothing else, drawn from the one answer they
+        // are copied from ([`text_of`]); a row whose section or bytes could not be read
+        // draws the blank it copies as.
+        Some(row @ (Row::Header { .. } | Row::Label { .. } | Row::Gap { .. })) => {
+            let Some(text) = text_of(rows, i) else {
+                return rect().height(Size::px(code_row_height())).into_element();
+            };
+            let key = match row {
+                Row::Header { section } => RowKey::Header(section),
+                Row::Label { index, .. } => RowKey::Label(rows.address_of(i).unwrap_or(0), index),
+                // By the row's own address and never the bytes': a row whose bytes could
+                // not be found would otherwise share a key with every other such row.
+                _ => RowKey::Gap(rows.address_of(i).or(text.address).unwrap_or(0)),
+            };
+            TextRow {
+                row: i,
+                address: text.address,
+                text: text.text,
+                color: text.color,
+                bold: text.bold,
+                wash,
+                opens: text.opens.map(|symbol| Symbol {
                     object: data.object.clone(),
                     data: symbol,
                 }),
-                None,
-                RowKey::Label(address, index),
-            )
+                mark: text.mark,
+                chars,
+                key: DiffKey::None,
+            }
+            .key(key)
+            .into_element()
         }
         // The rule over a stretch, and the two blanks: drawn as an empty row is, washed
         // and swept across. Told apart by their kind, the three of one stretch standing
@@ -782,21 +794,6 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
         }
         .key(RowKey::Empty(rows.start_of(stretch).unwrap_or(0), index))
         .into_element(),
-        Some(Row::Gap { stretch, index }) => {
-            let (address, bytes) = gap_bytes(rows, stretch, index).unwrap_or((0, Vec::new()));
-            let (mark, values) = dump_line(&bytes);
-            text(
-                Some(address),
-                values,
-                palette().operand_fg,
-                false,
-                None,
-                Some(mark),
-                // By the row's own address and never the bytes': a row whose bytes could
-                // not be found would otherwise share a key with every other such row.
-                RowKey::Gap(rows.address_of(i).unwrap_or(address)),
-            )
-        }
         Some(Row::Instruction { stretch, index }) => {
             let Some(asm) = data.asm_data(stretch) else {
                 return rect().height(Size::px(code_row_height())).into_element();
