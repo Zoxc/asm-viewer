@@ -4797,6 +4797,7 @@ dependencies = [
  "tree-sitter-c",
  "tree-sitter-cpp",
  "tree-sitter-json",
+ "tree-sitter-language",
  "tree-sitter-rust",
  "tree-sitter-toml-ng",
  "windows-sys 0.61.2",

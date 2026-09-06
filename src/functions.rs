@@ -23,7 +23,8 @@
 
 use std::ops::RangeInclusive;
 
-use tree_sitter::{Node, Tree};
+use tree_sitter::{Node, Parser, Tree};
+use tree_sitter_language::LanguageFn;
 
 pub mod rust;
 
@@ -34,6 +35,27 @@ pub mod rust;
 pub struct Function {
     pub name: String,
     pub lines: RangeInclusive<u32>,
+}
+
+/// Every function `text` defines, found by a parse of it with `grammar`: how
+/// [`source::Language::functions`] answers for C and C++, which is where the grammar
+/// comes from.
+///
+/// A parse of its own, since the highlighter keeps its tree private and what is wanted of
+/// one is a few hundred bytes against a tree that would be most of the file again
+/// (`agents/Panes.md`). A grammar the parser will not take and a text it could not parse
+/// are both no functions rather than a panic.
+///
+/// [`source::Language::functions`]: crate::source::Language::functions
+pub fn parsed(grammar: LanguageFn, text: &str) -> Vec<Function> {
+    let mut parser = Parser::new();
+    if parser.set_language(&grammar.into()).is_err() {
+        return Vec::new();
+    }
+    match parser.parse(text, None) {
+        Some(tree) => functions(&tree, text.as_bytes()),
+        None => Vec::new(),
+    }
 }
 
 /// Every function `tree` defines, in the order they begin -- an enclosing function
@@ -78,13 +100,13 @@ pub fn enclosing(functions: &[Function], line: u32) -> Option<&Function> {
         .find(|function| function.lines.contains(&line))
 }
 
-/// `node` as a [`Function`], if it is one.
+/// `node` as a [`Function`], if it is one: a C or C++ `function_definition`, this walk
+/// being the C and C++ answer alone (Rust is [`rust::functions`]).
 fn function_of(node: Node, text: &[u8]) -> Option<Function> {
-    let named = match node.kind() {
-        "function_item" => node.child_by_field_name("name")?,
-        "function_definition" => innermost_declarator(node)?,
-        _ => return None,
-    };
+    if node.kind() != "function_definition" {
+        return None;
+    }
+    let named = innermost_declarator(node)?;
     let name = named.utf8_text(text).ok()?.to_owned();
     let line = |row: usize| u32::try_from(row).ok()?.checked_add(1);
     let first = line(node.start_position().row)?;

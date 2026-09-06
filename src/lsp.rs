@@ -52,11 +52,6 @@ use serde_json::{json, Value};
 
 use crate::process::Group;
 
-/// The program a project that has not said otherwise is read with. A project on a
-/// toolchain of its own says (`Project::language_server`), since nothing here could guess
-/// where such a thing lives.
-pub const SERVER: &str = "rust-analyzer";
-
 /// The largest message that will be read, so a server that says it is about to send a
 /// gigabyte is a broken conversation and not an allocation.
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;

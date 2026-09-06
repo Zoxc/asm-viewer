@@ -624,7 +624,7 @@ impl Component for ProjectTab {
                                 |open| &open.language_server,
                                 |open| &mut open.language_server,
                             ))
-                            .placeholder(lsp::SERVER)
+                            .placeholder(source::Language::Rust.server().unwrap_or_default())
                             .width(Size::fill()),
                         ))
                         // Whether the reader has agreed to a server reading this

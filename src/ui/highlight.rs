@@ -79,26 +79,12 @@ impl Highlighted {
             .len()
             .saturating_sub(usize::from(file.text().ends_with('\n')));
 
-        // The function spans: Rust by the scanner of its own (`functions::rust`, the
-        // grammar being behind the compiler), C and C++ parsed a second time with the
-        // same grammar -- `SyntaxHighlighter` keeps its tree private, and what is wanted
-        // of it is a few hundred bytes kept against a tree that would be most of the
-        // file again. Milliseconds, once per file, beside the highlighting and on the
-        // same thread.
-        let functions = match source::Language::of(file.path()) {
-            Some(source::Language::Rust) => functions::rust::functions(file.text()),
-            // A configuration file defines no functions, so the second parse is not made.
-            Some(source::Language::Toml | source::Language::Json) => Vec::new(),
-            _ => language
-                .as_ref()
-                .and_then(|language| {
-                    let mut parser = tree_sitter::Parser::new();
-                    parser.set_language(&language.language).ok()?;
-                    let tree = parser.parse(file.text(), None)?;
-                    Some(functions::functions(&tree, file.text().as_bytes()))
-                })
-                .unwrap_or_default(),
-        };
+        // The function spans, which the language decides and not this
+        // (`source::Language::functions`): a scanner of its own for Rust, a second parse
+        // with the same grammar for C and C++, nothing for the rest. Milliseconds, once
+        // per file, beside the highlighting and on the same thread.
+        let functions = source::Language::of(file.path())
+            .map_or_else(Vec::new, |language| language.functions(file.text()));
 
         Highlighted {
             file,
@@ -111,47 +97,15 @@ impl Highlighted {
     }
 }
 
-/// The tree-sitter grammar to parse a file with, where there is one, [`source::Language`]
-/// being where the extensions are read.
+/// The tree-sitter grammar to parse a file with, where there is one: what
+/// [`source::Language::grammar`] answers, in freya's type.
 ///
-/// The match is exhaustive on purpose: a language added there is a language this has to
-/// answer for, and the answer for most of them is that a grammar costs a dependency and a
-/// parser generator's worth of generated C, so they render plain (`notes/Goals.md`).
+/// The wrapping is the whole of it. Which grammar a file gets is a per-language fact and
+/// is decided in `source.rs` with the rest of them; `EditorLanguage` is the editor's, so
+/// putting one together is the one part that has to be up here.
 pub(crate) fn language(path: &Path) -> Option<EditorLanguage> {
-    let (language, query) = match source::Language::of(path)? {
-        source::Language::Rust => (
-            tree_sitter_rust::LANGUAGE,
-            tree_sitter_rust::HIGHLIGHTS_QUERY,
-        ),
-        source::Language::C => (tree_sitter_c::LANGUAGE, tree_sitter_c::HIGHLIGHT_QUERY),
-        source::Language::Cpp => (tree_sitter_cpp::LANGUAGE, tree_sitter_cpp::HIGHLIGHT_QUERY),
-        source::Language::Toml => (
-            tree_sitter_toml_ng::LANGUAGE,
-            tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
-        ),
-        source::Language::Json => (
-            tree_sitter_json::LANGUAGE,
-            tree_sitter_json::HIGHLIGHTS_QUERY,
-        ),
-        // Named for what they compile to and not for how they are drawn.
-        source::Language::ObjC
-        | source::Language::Assembly
-        | source::Language::Go
-        | source::Language::Zig
-        | source::Language::D
-        | source::Language::Swift
-        | source::Language::Nim
-        | source::Language::Odin
-        | source::Language::Fortran
-        | source::Language::Ada
-        | source::Language::Pascal
-        | source::Language::Haskell
-        | source::Language::OCaml
-        | source::Language::Crystal
-        | source::Language::Cuda => return None,
-    };
-
-    Some(EditorLanguage::new(language, query))
+    let (grammar, query) = source::Language::of(path)?.grammar()?;
+    Some(EditorLanguage::new(grammar, query))
 }
 
 /// Every file read so far and what came back, `None` included.

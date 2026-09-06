@@ -221,23 +221,25 @@ does have is its tree-sitter pipeline, public on its own: `SyntaxHighlighter` + 
 `EditorSyntaxTheme` turn a `Rope` into one list of `(Color, TextNode)` spans per line. The theme is
 the app's own (`Palette::syntax`), and the grammars are ours: Rust, C and C++, and the TOML and JSON
 a project directory is full of, which the Files view opens and which get no function pass, a
-configuration file defining none. Which extension is which language is `source::Language`, the one
-list, so the grammar, the function pass and the pane split cannot disagree about what a file is; it
-sits in `source.rs` and not in the UI because the split asks it too, and it answers `.h` with C, a
-header the C grammar misparses being coloured oddly rather than dropped. **It names far more
-languages than it colours**, because the two cost different things: a grammar is a dependency and a
-parser generator's worth of generated C, where knowing a `.zig` or a `.f90` becomes machine code is
-one arm and is what the pane split turns on. So Go, Zig, D, Swift, Objective-C, assembly and the
-rest are named, `language()` answers `None` for them, and they render plain -- as does an extension
-the list does not name at all, one plain span per line either way. That match is exhaustive on
-purpose: a language added to the enum is one the grammar question has to be answered for. A file is
-read and parsed whole, since parsing is stateful across lines and so cannot be per row, and both are
-**the source reader's** and not the render's (`ui/highlight.rs`, below). It is parsed **twice**:
-`SyntaxHighlighter` keeps its tree private, and the function spans the source row's menu needs
-(`src/functions.rs`, "the function this line is inside") are read off a second parse with the same
-grammar for C and C++, and for Rust off a scanner of our own (`functions/rust.rs`), the grammar
-losing whole files of the standard library to
-`const impl` (`notes/upstream/tree-sitter-rust.md`). Either way a few hundred bytes are kept against
+configuration file defining none. Which grammar is `source::Language::grammar`, off the same
+extension list, so the colouring, the function pass and the pane split cannot disagree about what a
+file is; `ui/highlight.rs`'s `language()` is that pair wrapped in an `EditorLanguage` and nothing
+else, freya's type being the one part of the question that has to be up here. The list sits in
+`source.rs` and not in the UI because the split and the language server ask it too, and it answers
+`.h` with C, a header the C grammar misparses being coloured oddly rather than dropped. **It names
+far more languages than it colours**, because the two cost different things: a grammar is a
+dependency and a parser generator's worth of generated C, where knowing a `.zig` or a `.f90` becomes
+machine code is one arm and is what the pane split turns on. So Go, Zig, D, Swift, Objective-C,
+assembly and the rest are named, `grammar()` answers `None` for them, and they render plain -- as
+does an extension the list does not name at all, one plain span per line either way. That match is
+exhaustive on purpose: a language added to the enum is one the grammar question has to be answered
+for. A file is read and parsed whole, since parsing is stateful across lines and so cannot be per
+row, and both are **the source reader's** and not the render's (`ui/highlight.rs`, below). It is
+parsed **twice**: `SyntaxHighlighter` keeps its tree private, and the function spans the source
+row's menu needs (`src/functions.rs`, "the function this line is inside") are read off a second
+parse with the same grammar for C and C++, and for Rust off a scanner of our own
+(`functions/rust.rs`), the grammar losing whole files of the standard library to `const impl`
+(`notes/upstream/tree-sitter-rust.md`). Either way a few hundred bytes are kept against
 a tree that would be most of the file again. Two things about `SyntaxBlocks` bite: `get_line`
 unwraps rather than answering `None`, and it holds one block per `Rope::len_lines()`, which counts a
 phantom line after a trailing newline (hence `Highlighted::lines`).

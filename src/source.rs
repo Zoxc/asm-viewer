@@ -6,8 +6,10 @@
 //! every render, and caching only the successes would make a path that is not on this
 //! machine the expensive case.
 //!
-//! [`Language`] is here too: the one list of extensions the app knows, which the
-//! highlighter and the panes both ask.
+//! [`Language`] is here too: the one list of extensions the app knows, and the one place
+//! a per-language fact is decided -- what compiles, which grammar colours it, how its
+//! functions are found, which language server reads it. The panes, the highlighter and
+//! the Project view all ask it rather than matching on it again.
 
 use analysis::{SourceDigests, SourceHash};
 use std::{
@@ -16,24 +18,29 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, MutexGuard},
 };
+use tree_sitter_language::LanguageFn;
+
+use crate::functions::{self, Function};
 
 /// The largest file this will read into memory. A bound on what a bad path can cost, not a
 /// guess at what source looks like: a debug-info string that happens to name a disk image
 /// must not be loaded to find that out.
 pub const MAX_SIZE: u64 = 16 * 1024 * 1024;
 
-/// The language a file is written in, going by its extension: which grammar colours it,
-/// and whether a compiler turns it into machine code.
+/// The language a file is written in, going by its extension, and every per-language
+/// question the app asks: whether a compiler turns it into machine code, which grammar
+/// colours it, how its functions are found, and which language server reads it.
 ///
 /// **The one extension list.** `.h` is C and not C++, a header the C grammar misparses
 /// being coloured oddly rather than dropped.
 ///
-/// Most of these have no grammar here and are never coloured. Naming them is still worth
-/// the lines: a grammar costs a dependency and a parser generator's worth of generated C
-/// in the binary (`notes/Goals.md`), where knowing that a `.zig` becomes machine code
-/// costs one arm and is what decides whether a tab opens with an assembly side. So the
-/// list is generous about languages and stays narrow about grammars, and a language that
-/// grows one later changes an arm rather than joining the enum.
+/// Most of these have no grammar here ([`grammar`](Language::grammar)) and are never
+/// coloured. Naming them is still worth the lines: a grammar costs a dependency and a
+/// parser generator's worth of generated C in the binary (`notes/Goals.md`), where
+/// knowing that a `.zig` becomes machine code costs one arm and is what decides whether
+/// a tab opens with an assembly side. So the list is generous about languages and stays
+/// narrow about grammars, and a language that grows one later changes an arm rather than
+/// joining the enum.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Language {
     Rust,
@@ -127,6 +134,81 @@ impl Language {
             | Language::Crystal
             | Language::Cuda => true,
             Language::Toml | Language::Json => false,
+        }
+    }
+
+    /// The tree-sitter grammar this is parsed with and the query that colours it, for the
+    /// five that have one. [`None`] is not a failure: a file no grammar knows is drawn as
+    /// one plain span per line.
+    ///
+    /// The match is exhaustive on purpose: a language added above is a language this has
+    /// to answer for, and the answer for most of them is that a grammar costs a
+    /// dependency and a parser generator's worth of generated C (`notes/Goals.md`).
+    ///
+    /// The type is tree-sitter's own and not the editor's, so that nothing here has to
+    /// know the UI: `ui/highlight.rs` wraps the pair in freya's `EditorLanguage`.
+    pub fn grammar(self) -> Option<(LanguageFn, &'static str)> {
+        Some(match self {
+            Language::Rust => (
+                tree_sitter_rust::LANGUAGE,
+                tree_sitter_rust::HIGHLIGHTS_QUERY,
+            ),
+            Language::C => (tree_sitter_c::LANGUAGE, tree_sitter_c::HIGHLIGHT_QUERY),
+            Language::Cpp => (tree_sitter_cpp::LANGUAGE, tree_sitter_cpp::HIGHLIGHT_QUERY),
+            Language::Toml => (
+                tree_sitter_toml_ng::LANGUAGE,
+                tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+            ),
+            Language::Json => (
+                tree_sitter_json::LANGUAGE,
+                tree_sitter_json::HIGHLIGHTS_QUERY,
+            ),
+            // Named for what they compile to and not for how they are drawn.
+            Language::ObjC
+            | Language::Assembly
+            | Language::Go
+            | Language::Zig
+            | Language::D
+            | Language::Swift
+            | Language::Nim
+            | Language::Odin
+            | Language::Fortran
+            | Language::Ada
+            | Language::Pascal
+            | Language::Haskell
+            | Language::OCaml
+            | Language::Crystal
+            | Language::Cuda => return None,
+        })
+    }
+
+    /// The functions a file of this language defines, by the lines each spans: Rust by
+    /// the scanner of its own (`functions::rust`, the grammar being behind the compiler),
+    /// C and C++ by a parse with [`grammar`].
+    ///
+    /// A grammar is not an answer on its own. TOML and JSON have one and define no
+    /// functions, and the rest have no grammar to parse with, so both are no functions
+    /// rather than a parse made to find that out.
+    ///
+    /// [`grammar`]: Language::grammar
+    pub fn functions(self, text: &str) -> Vec<Function> {
+        match self {
+            Language::Rust => functions::rust::functions(text),
+            Language::C | Language::Cpp => self
+                .grammar()
+                .map_or_else(Vec::new, |(grammar, _)| functions::parsed(grammar, text)),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The program a project written in this is read with, where this app knows of one.
+    ///
+    /// Rust alone: rust-analyzer is the one such program named here, and a project on
+    /// another toolchain says which to run instead (`Project::language_server`).
+    pub fn server(self) -> Option<&'static str> {
+        match self {
+            Language::Rust => Some("rust-analyzer"),
+            _ => None,
         }
     }
 }

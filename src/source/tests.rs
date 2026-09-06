@@ -243,3 +243,71 @@ fn only_a_named_compiled_language_is_compiled() {
     assert!(!compiled(Path::new("Makefile")));
     assert!(!compiled(Path::new("notes.md")));
 }
+
+/// The narrow half of the policy above: five of the twenty are coloured, and every other
+/// one is answered plainly rather than left out of the match.
+#[test]
+fn only_five_languages_have_a_grammar() {
+    for coloured in [
+        Language::Rust,
+        Language::C,
+        Language::Cpp,
+        Language::Toml,
+        Language::Json,
+    ] {
+        assert!(coloured.grammar().is_some(), "{coloured:?}");
+    }
+
+    for plain in [
+        Language::ObjC,
+        Language::Assembly,
+        Language::Go,
+        Language::Zig,
+        Language::D,
+        Language::Swift,
+        Language::Nim,
+        Language::Odin,
+        Language::Fortran,
+        Language::Ada,
+        Language::Pascal,
+        Language::Haskell,
+        Language::OCaml,
+        Language::Crystal,
+        Language::Cuda,
+    ] {
+        assert!(plain.grammar().is_none(), "{plain:?}");
+    }
+}
+
+/// Which of the three answers a language gets: Rust its own scanner, C and C++ a parse
+/// with the grammar, and everything else nothing -- **including** a language that has a
+/// grammar, since colouring a file is not finding functions in it.
+#[test]
+fn functions_follow_the_language_and_not_the_grammar() {
+    let names = |found: Vec<Function>| {
+        found
+            .into_iter()
+            .map(|function| function.name)
+            .collect::<Vec<_>>()
+    };
+
+    assert!(names(Language::Rust.functions("fn one() {}\n")) == ["one"]);
+    assert!(names(Language::C.functions("int two(void) { return 2; }\n")) == ["two"]);
+    assert!(names(Language::Cpp.functions("struct S { void three() {} };\n")) == ["three"]);
+
+    // Both have a grammar, and a configuration file defines no functions.
+    assert!(Language::Toml
+        .functions("[package]\nname = \"one\"\n")
+        .is_empty());
+    assert!(Language::Json.functions("{ \"one\": 1 }\n").is_empty());
+    // And a language with no grammar has nothing to parse with.
+    assert!(Language::Zig.functions("fn one() void {}\n").is_empty());
+}
+
+/// The one language server this app can name, and the one place it is named.
+#[test]
+fn rust_is_the_only_language_with_a_server() {
+    assert!(Language::Rust.server() == Some("rust-analyzer"));
+    assert!(Language::C.server().is_none());
+    assert!(Language::Toml.server().is_none());
+}

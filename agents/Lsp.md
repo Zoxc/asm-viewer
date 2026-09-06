@@ -8,8 +8,9 @@ the client, `src/ui/language.rs` is the state, the worker and the control in the
 rust-analyzer). A project on a toolchain of its own is read by a server this app cannot
 guess at, and the same box is where a wrapper like `ra-multiplex` goes; it is a plain value
 in `project.toml` beside the name and the directory, and the Project view is where it is
-typed. Nothing in `lsp.rs` names a program except the default, and the failures it reports
-say "the language server" rather than a name this app did not choose.
+typed. Nothing in `lsp.rs` names a program at all -- the default is
+`source::Language::Rust.server()`, with the rest of the per-language facts -- and the
+failures it reports say "the language server" rather than a name this app did not choose.
 
 ## Why it is a control and not a lazy start
 

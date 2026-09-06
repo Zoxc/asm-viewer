@@ -277,10 +277,12 @@ impl OpenProject {
         }
     }
 
-    /// The program to read this project with: what the reader named, or the usual one.
+    /// The program to read this project with: what the reader named, or the one the
+    /// language this app is written for is read with (`source::Language::server`).
     pub(crate) fn server(&self) -> String {
         given(&self.language_server)
-            .unwrap_or(lsp::SERVER)
+            .or_else(|| source::Language::Rust.server())
+            .unwrap_or_default()
             .to_owned()
     }
 

@@ -21789,7 +21789,10 @@ fn the_project_names_the_language_server_it_is_read_with() {
     let mut proj = states.proj;
 
     // Unsaid, it is the usual one, and nothing is written into the file about it.
-    assert_eq!(proj.read().server(), lsp::SERVER);
+    assert_eq!(
+        proj.read().server(),
+        source::Language::Rust.server().expect("rust has a server")
+    );
     assert_eq!(proj.read().details().language_server, None);
 
     proj.write().language_server = "  ra-multiplex  ".to_owned();
