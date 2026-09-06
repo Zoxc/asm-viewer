@@ -100,7 +100,8 @@ part marked; a long line is cut. Above the list the panel says how many matches 
 files, and says while it is still searching.
 
 Pressing a match opens its file as a source-driven tab on that line, as pressing a Files item
-opens one. The matched text is selected there, so copying copies the match. Nothing else moves.
+opens one. The matched text is selected there, so copying copies the match, and the assembly
+side follows the line as it does a clicked one.
 
 The search reads only what the app can show. It skips what git is told to ignore, hidden files,
 files it finds to be binary, and files too big for the source pane. It does not follow symbolic
