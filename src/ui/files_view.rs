@@ -67,12 +67,10 @@ impl Component for EntryRow {
                     }
                     // Anything the pane could show opens; what the file *is* is not
                     // judged. A file past the source cache's bound is left alone rather
-                    // than opened into a tab that would only say so.
+                    // than opened into a tab that would only say so, which is
+                    // `open_source_file`'s own guard.
                     None => {
-                        if shows_as_source(&pressed) {
-                            let file = Document::Source(Arc::from(&*pressed.to_string_lossy()));
-                            open_document(states.open, states.visits, file, reach(ctrl));
-                        }
+                        open_source_file(states, &pressed, reach(ctrl));
                     }
                 })
                 // Every row's menu. A file's opens with the binary item: opening a

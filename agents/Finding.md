@@ -121,7 +121,9 @@ press and hands back what it handed back before, and `set_if_modified` stops the
 every sidebar row uses. A sidebar row is browsing -- walking a list to see what each one is, which
 is what the preview tab is for -- but typing a path out and picking it off the list is choosing
 that file, and the next row clicked would take a preview tab back. Ctrl says nothing here that a
-plain press does not, so the finder no longer reads it.
+plain press does not, so the finder no longer reads it. Otherwise it is the Files row's door
+exactly, `open_source_file` (`ui/documents.rs`): the same guard on what the source pane would
+refuse, and the same uncanonicalised spelling of the path.
 
 **The chord is answered at the root**, in `root_key_down`, which stays the window's one
 `on_global_key_down` — a second one would replace it and take the modifier tracking with it,

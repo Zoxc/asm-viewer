@@ -134,8 +134,9 @@ list having changed. A **dead row is drawn, dimmed, and does nothing**: `tree_na
 loading-file-row idiom, with no press or hover handler at all, the way a history button with nowhere
 to go has none. Dropping it would be the history's rule, and a reader's own list must not shrink
 behind their back. And a live row's press is `open_document` like a Symbols row's, a `Preview` into
-the temporal tab and a `NewTab` with Ctrl (`reach`, the one rule every sidebar row reads), never
-`navigate`, since a bookmark is a place and not a position on a trail. The row draws
+the temporal tab and a `NewTab` with Ctrl (`reach`, the one rule every row outside the panes reads,
+in `ui/documents.rs` beside `Reach` and not with any one list), never `navigate`, since a bookmark
+is a place and not a position on a trail. The row draws
 `Bookmark::label` even when live, `short_name` of it for a symbol with the whole in the tooltip and
 under the filter, as a History row does, so a row does not change its spelling when its binary
 goes. That is the **stored name**, except for a symbol the app named rather than the file, which
@@ -231,11 +232,14 @@ end. The filter matches the file's
 path, applied where the rows are built rather than through `Filtered`'s memo -- that is for the
 thousands a line's symbols can be, and a name's references are tens.
 
-**A hit row is `land`, the Locations row's door**, with the file spelled exactly as the Files view
-spells it -- the entry's own path, never canonicalised -- since a `LinePos` is compared by text.
-`shows_as_source` guards it, so a row cannot open a tab the pane would refuse. It lands on the
-**match** and not just its line: a `Landing` carries the columns to select, and `line_pick` makes
-them the row's `CharSelection` where a door naming no columns leaves a caret at column 0. So
+**A hit row is the Locations row's door itself** -- `open_source_place` (`agents/Panes.md`), so a
+hit opens the same way a reference does, down to the tab's assembly side being driven from the line
+it landed on. `shows_as_source` guards the press in front of that call, so a row cannot open a tab
+the pane would refuse: this path came off a walk of the directory, where the guard is the Files
+row's own, and the other doors into that arrival take a path a server or the debug info named, for
+which opening the file and letting the pane say what is wrong with it is the honest answer. It lands
+on the **match** and not just its line: a `Landing` carries the columns to select, and `line_pick`
+makes them the row's `CharSelection` where a door naming no columns leaves a caret at column 0. So
 Ctrl+C there copies the match, `copy_text` preferring characters to rows. The columns are the
 *file's* line in UTF-16 units, counted before the line is trimmed for drawing and counted in units
 rather than bytes, or a multi-byte character ahead of the match would move it. The matched parts of
@@ -258,8 +262,10 @@ an object is, and the parser already has the one that counts. So a press opens a
 cache would read (`files::shows_as_source`: a regular file within `source::MAX_SIZE`, asked of the
 metadata, the one bound so a press cannot open a tab the pane would refuse), as `open_document` on a
 `Document::Source` spelled as **the project directory joined with each entry's own name, never
-canonicalised**. `compiled_from` matches a file on the exact string `addr2line` renders,
-`DW_AT_comp_dir` joined with the file entry, so a tree-opened file matches the debug info's, and
+canonicalised**. Both of those rules live in `open_source_file` (`ui/documents.rs`) and are written
+nowhere else: the finder's Enter and its rows are the same door (`agents/Finding.md`).
+`compiled_from` matches a file on the exact string `addr2line` renders, `DW_AT_comp_dir` joined
+with the file entry, so a tree-opened file matches the debug info's, and
 shares a tab with a companion-opened one, exactly when the project directory is the directory the
 build ran in. Opening a binary is a deliberate act, so it is every file row's right-click, whose one
 item is **Open file**: `open_binaries` on that path, the toolbar's call, where `object` decides

@@ -294,13 +294,19 @@ pub(crate) fn marked_spans_in(
     spans
 }
 
-/// Open a hit: its file as a source-driven tab, landed on the line it was found at, in
+/// Open a hit: its file as a source-driven tab, landed on the match it was found at, in
 /// the temporal tab or a new one as `reach` says.
 ///
-/// The path is spelled the way the Files view spells one -- the entry's own path, never
-/// canonicalised -- since a `LinePos` is compared by text and the line would otherwise be
-/// picked out in nothing. A file the source pane would refuse opens nothing at all, the
-/// Files view's own bound.
+/// [`open_source_place`], the arrival every door into a place in a source file makes, so a
+/// hit opened here drives the tab's assembly side from its line exactly as the same row
+/// opened from the Locations panel does.
+///
+/// The guard is in front of that call and not inside it: this path came off a walk of the
+/// project's directory, where a file the source pane would refuse is a row a press should
+/// do nothing with, and the panel's other doors take a path a language server or the debug
+/// info named -- for those, opening the file and letting the pane say what is wrong with it
+/// is the honest answer, and a `stat` in the way would silently swallow a move inside a tab
+/// already open.
 fn open_hit(
     states: ProjectStates,
     land_at: State<Option<Landing>>,
@@ -312,22 +318,16 @@ fn open_hit(
     if !shows_as_source(&hit.path) {
         return;
     }
-    let file: Arc<str> = Arc::from(&*hit.path.to_string_lossy());
-    land(
+    open_source_place(
         states.open,
         states.visits,
         marked,
         land_at,
         plant,
-        Landing {
-            tab: Document::Source(file.clone()),
-            at: Some(LinePos {
-                file,
-                line: hit.line,
-            }),
-            address: None,
-            columns: hit.columns.clone(),
-        },
+        states.driven,
+        &hit.path,
+        hit.line,
+        hit.columns.clone(),
         reach(ctrl),
     );
 }

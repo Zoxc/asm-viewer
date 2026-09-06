@@ -20331,6 +20331,41 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
     assert!(copied == "y", "{copied:?}");
 }
 
+/// A hit opened from the Search panel drives the tab's assembly side from the line it was
+/// found at, the way the same row opened from the Locations panel does: both doors are
+/// `open_source_place`. Fails on an `open_hit` that only lands, which leaves the assembly
+/// side with no line to follow and nothing to draw.
+#[test]
+fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
+    let (mut test, states, directory, _, _, _, _) =
+        search_and_modifiers(line!(), |_query, _emit| {});
+    let path = directory.join("x.c");
+    std::fs::write(&path, "int x;\nint y;\nint z;\n").expect("writing the source");
+
+    let mut searched = states.searched;
+    searched.write().asked = Some(SearchQuery {
+        root: directory.to_path_buf(),
+        filter: Filter {
+            pattern: "y".to_owned(),
+            ..Filter::default()
+        },
+    });
+    searched.write().hits.push(hit_at(&path, 2, "int y;"));
+    settle(&mut test);
+
+    let at = centre_of(&test, "int y;");
+    press_at(&mut test, at);
+    settle(&mut test);
+
+    let document = Document::Source(Arc::from(&*path.to_string_lossy()));
+    let id = states.open.active_id().expect("the hit opened a tab");
+    assert_eq!(
+        states.driven.peek().line(&(id, Stop::on(document, 2))),
+        Some(2),
+        "the assembly side follows no line"
+    );
+}
+
 /// Enter in the box searches for what is in it, over the project's directory. The box is
 /// reached by pressing it, as a reader reaches it.
 #[test]

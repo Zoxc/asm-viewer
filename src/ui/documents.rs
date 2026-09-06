@@ -30,6 +30,42 @@ pub(crate) enum Reach {
     Preview,
 }
 
+/// How a click outside the panes opens its place: a preview in the temporal tab, or, with
+/// Ctrl held, a tab of its own that stays. Peeked, this being asked in a press handler.
+///
+/// Beside [`Reach`] and not with any one list, because it is the rule for every row that
+/// opens something -- the three sidebar lists, the Files view, the Bookmarks, the Search
+/// and Locations panels -- and none of them owns it.
+pub(crate) fn reach(ctrl: State<bool>) -> Reach {
+    if *ctrl.peek() {
+        Reach::NewTab
+    } else {
+        Reach::Preview
+    }
+}
+
+/// Open the file at `path` as a source tab, the way `reach` says. Whether anything opened.
+///
+/// The one door for a path taken off a listing of the filesystem -- a Files row, a finder
+/// row -- where there is no line to land on. Two rules live here and are written nowhere
+/// else. **A file the source pane would refuse opens nothing at all**
+/// (`files::shows_as_source`: a regular file within the bound the source cache reads), so a
+/// press cannot make a tab that only says why it is empty. And the document is named by
+/// `path`'s own spelling, **never canonicalised**, since a [`Document::Source`] and a
+/// [`LinePos`] are compared as text: reduced here, a line the debug info names would be
+/// picked out in nothing (`src/project.rs`).
+///
+/// A path that names a *place* -- a hit, a reference, a definition -- goes through
+/// [`open_source_place`] instead, which lands on the line and drives the assembly side
+/// from it.
+pub(crate) fn open_source_file(states: ProjectStates, path: &Path, reach: Reach) -> bool {
+    if !shows_as_source(path) {
+        return false;
+    }
+    let file = Document::Source(Arc::from(&*path.to_string_lossy()));
+    open_document(states.open, states.visits, file, reach).is_some()
+}
+
 /// Open `target` the way `reach` says, make the tab it lands in the active one, and
 /// record the visit. The one path by which a document is ever opened.
 ///

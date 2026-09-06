@@ -598,13 +598,3 @@ impl Component for HistoryPanel {
         )
     }
 }
-
-/// How a row in a sidebar list opens its place: a preview in the temporal tab, or, with
-/// Ctrl held, a tab of its own that stays. Peeked, this being asked in a press handler.
-pub(crate) fn reach(ctrl: State<bool>) -> Reach {
-    if *ctrl.peek() {
-        Reach::NewTab
-    } else {
-        Reach::Preview
-    }
-}

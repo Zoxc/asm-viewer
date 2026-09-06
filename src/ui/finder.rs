@@ -736,14 +736,10 @@ fn followed(mut list: ScrollController, (at, rows): (usize, usize)) {
 
 /// Open a file the finder listed: a source-driven tab of its own that stays, since a
 /// reader who typed the path out and picked it off the list has chosen the file. A tab
-/// already showing it is raised. The same guard as a Files item: a file the source pane
-/// would refuse opens nothing at all.
+/// already showing it is raised. The Files row's own door, so it carries that guard too:
+/// a file the source pane would refuse opens nothing at all.
 fn open_found(states: ProjectStates, path: &Path) {
-    if !shows_as_source(path) {
-        return;
-    }
-    let file = Document::Source(Arc::from(&*path.to_string_lossy()));
-    open_document(states.open, states.visits, file, Reach::NewTab);
+    open_source_file(states, path, Reach::NewTab);
 }
 
 /// The box at the top of the overlay.

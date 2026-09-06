@@ -211,8 +211,10 @@ pub(crate) fn use_follow(
 /// assembly side follows, so the drive is written here -- under the place the tab is
 /// **at**, which the landing has just made, and not under the file.
 ///
-/// Both doors into a source file go through this: the definition an answer named, and a
-/// row of the references the Locations panel lists.
+/// Every door into a *place* in a source file goes through this: the definition an answer
+/// named, a row of the references the Locations panel lists, a hit the Search panel found,
+/// and the companion a source row's menu offers. A path with no line to land on -- a Files
+/// row, a finder row -- is [`open_source_file`]'s instead.
 pub(crate) fn open_source_place(
     open: Open,
     visits: State<Visits>,
