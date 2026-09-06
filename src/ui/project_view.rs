@@ -278,7 +278,7 @@ impl Component for RecentRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| switch_project(states, rescued, unopened, path.clone()))
-                .child(label().text(text).width(Size::flex(1.0)).max_lines(1))
+                .child(one_line(text).width(Size::flex(1.0)))
                 .child(label().text(about).color(palette().address_fg).max_lines(1)),
         )
     }

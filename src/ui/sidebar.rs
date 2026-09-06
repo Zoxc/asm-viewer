@@ -272,7 +272,7 @@ impl Component for SymbolRow {
                         bookmark_menu(bookmarked, objects, document.clone()),
                     );
                 })
-                .child(label().text(text).max_lines(1)),
+                .child(tree_name(text, false)),
         )
     }
 
@@ -331,7 +331,7 @@ impl Component for HistoryRow {
                     );
                 })
                 .child(entry_icon(&self.entry))
-                .child(label().text(text).max_lines(1)),
+                .child(tree_name(text, false)),
         )
     }
 

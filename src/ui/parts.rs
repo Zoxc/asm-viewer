@@ -142,24 +142,32 @@ pub(crate) fn tag_label(tag: &str) -> impl IntoElement {
         .max_lines(1)
 }
 
+/// One line of text, cut with an ellipsis where the room ran out.
+pub(crate) fn one_line(text: String) -> Paragraph {
+    paragraph()
+        .max_lines(1)
+        .text_overflow(TextOverflow::Ellipsis)
+        .span(Span::new(text))
+}
+
 /// What a row is called, taking whatever width the columns beside it left.
 ///
-/// The label sits in a box of its own rather than being the `flex` child itself: a `flex`
-/// child is measured from its content first, so a label placed there directly takes the
+/// The text sits in a box of its own rather than being the `flex` child itself: a `flex`
+/// child is measured from its content first, so a line placed there directly takes the
 /// width of its whole name and pushes the count off the row.
 pub(crate) fn tree_name(text: String, dim: bool) -> impl IntoElement {
+    name_box(one_line(text), dim)
+}
+
+fn name_box(line: Paragraph, dim: bool) -> impl IntoElement {
     rect()
         .width(Size::flex(1.0))
         .overflow(Overflow::Clip)
         .child(
-            label()
-                .text(text)
-                .width(Size::fill())
-                .max_lines(1)
+            line.width(Size::fill())
                 // Unset rather than `text_fg` when it is not dimmed, so the row goes on
                 // inheriting the interface colour from the root the way it always did.
-                .maybe(dim, |name| name.color(palette().address_fg))
-                .text_overflow(TextOverflow::Ellipsis),
+                .maybe(dim, |name| name.color(palette().address_fg)),
         )
 }
 
@@ -194,11 +202,9 @@ pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoE
         .content(Content::Flex)
         .border(bottom_hairline())
         .child(
-            label()
-                .text(text.to_owned())
+            one_line(text.to_owned())
                 .width(Size::flex(1.0))
-                .font_weight(FontWeight::BOLD)
-                .max_lines(1),
+                .font_weight(FontWeight::BOLD),
         )
         .maybe_child(action)
 }
@@ -225,12 +231,9 @@ pub(crate) fn field_row(name: &str, value: impl IntoElement) -> impl IntoElement
                 .width(Size::px(field_label_width()))
                 .overflow(Overflow::Clip)
                 .child(
-                    label()
-                        .text(name.to_owned())
+                    one_line(name.to_owned())
                         .width(Size::fill())
-                        .color(palette().address_fg)
-                        .max_lines(1)
-                        .text_overflow(TextOverflow::Ellipsis),
+                        .color(palette().address_fg),
                 ),
         )
         .child(value)

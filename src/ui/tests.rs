@@ -5843,14 +5843,11 @@ fn the_row_lit_is_the_symbol_drawn_and_not_the_active_document() {
     settle(&mut test);
 
     // Where the two rows are, by the labels they carry, in the answer's order.
-    let rows: Vec<Area> = test.find_many(|node, _element| {
-        use freya::elements::label::LabelElement;
-        use std::any::Any;
-        (node.element().as_ref() as &dyn Any)
-            .downcast_ref::<LabelElement>()
-            .filter(|label| label.text == "sum_to")
-            .map(|_| node.layout().area)
-    });
+    let rows: Vec<Area> = labels_with_areas(&test)
+        .into_iter()
+        .filter(|(text, _)| text == "sum_to")
+        .map(|(_, area)| area)
+        .collect();
     assert_eq!(rows.len(), 2, "two rows are drawn");
     let lit = |test: &TestingRunner| -> Vec<f32> {
         test.find_many(|node, element| {
@@ -15008,13 +15005,20 @@ fn marked_addresses(test: &TestingRunner) -> Vec<(u64, bool)> {
 }
 
 fn labels_with_areas(test: &TestingRunner) -> Vec<(String, Area)> {
-    use freya::elements::label::LabelElement;
+    use freya::elements::{label::LabelElement, paragraph::ParagraphElement};
     use std::any::Any;
 
     test.find_many(|node, _element| {
-        (node.element().as_ref() as &dyn Any)
-            .downcast_ref::<LabelElement>()
-            .map(|label| (label.text.to_string(), node.layout().area))
+        let element = node.element();
+        let element = element.as_ref() as &dyn Any;
+        if let Some(label) = element.downcast_ref::<LabelElement>() {
+            return Some((label.text.to_string(), node.layout().area));
+        }
+        // A row's name is a paragraph of one span, so that it can say whether it fit.
+        element.downcast_ref::<ParagraphElement>().map(|paragraph| {
+            let text: String = paragraph.spans.iter().map(|span| &*span.text).collect();
+            (text, node.layout().area)
+        })
     })
 }
 

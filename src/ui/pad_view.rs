@@ -1217,11 +1217,9 @@ impl Component for ScratchpadTab {
                         package.clone(),
                         field_row(
                             "Package",
-                            label()
-                                .text(package)
+                            one_line(package)
                                 .width(Size::flex(1.0))
-                                .color(palette().address_fg)
-                                .max_lines(1),
+                                .color(palette().address_fg),
                         ),
                     ))
                     .maybe_child(state.status().map(|(text, bad)| {
