@@ -203,8 +203,8 @@ command.
   ready.
 - `src/ui/marks.rs` — the run of rows selected in each pane, the pair it lights on the other
   side, the scroll it owes, and what Ctrl+C copies.
-- `src/ui/highlight.rs` — a source file parsed when loaded, its spans and its functions, and the
-  cache holding it.
+- `src/ui/highlight.rs` — a source file read and parsed off the UI thread: the reader's worker
+  thread, the cache its answers land in, and what the pane draws until one does.
 - `src/ui/locations.rs` — every symbol a line, or the function around it, was compiled into: the
   question, the answer, the panel.
 - `src/ui/reading.rs` — what the worker has decoded of an object's code for the section view,
@@ -296,7 +296,8 @@ invalidates in the same commit**: these are the record of why things are the way
   running, and the view with its one worker thread.
 - `agents/UI.md` — freya 0.4, the root contexts, documents and the dock, per-tab positions,
   opening a binary, and how the UI is tested.
-- `agents/Worker.md` — the one analysis worker: asks, locates, supersession, what shows meanwhile.
+- `agents/Worker.md` — the analysis worker: asks, locates, supersession, what shows meanwhile, and
+  why reading a source file is a worker of its own.
 - `agents/Panes.md` — the Source and Assembly panes: companion files, `Driven`, the two runs and
   the pair, landing, the arrow gutter, copying rows.
 - `agents/Sidebar.md` — the filtered lists, the Objects tree, closing a binary, the Project view.

@@ -468,6 +468,12 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // After the analysis: the file the Source pane draws is what the analysis says it is.
     use_clear_marks(active, asked, analysis, marked);
 
+    // The reader: the file the Source pane is showing, read off disk and parsed on a
+    // thread of its own. Not the analysis worker's queue, which a click can put seconds
+    // of DWARF into (`agents/Worker.md`).
+    let sourced = use_provide_context(|| Sourcing(State::create(Sourced::default()))).0;
+    use_source_reading(sourced);
+
     // The search's own worker, beside the analysis one and for its reasons: the walk reads
     // every file under the project directory, which is not the UI thread's to do.
     use_search_with(searched, |query, emit| crate::search::search(query, emit));

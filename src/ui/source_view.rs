@@ -506,27 +506,14 @@ impl Component for SourceList {
             code_rows.read().as_deref(),
         ));
         // The gutter's marks: which lines of this file produced code at all, whether
-        // anything is picked out and whether or not a listing is up. Asking is the
-        // effect below; this reads whatever has been answered.
+        // anything is picked out and whether or not a listing is up. Asking is the pane's
+        // ([`asks_for`]); this reads whatever has been answered.
         let coded = use_consume::<Coding>().0;
         let compiled = coded
             .read()
             .lines_in(&self.file)
             .cloned()
             .unwrap_or_default();
-        // Asking for them: the file this pane is drawing, written where the worker's
-        // effect will see it. On the *file* as its dependency and not on every render,
-        // and written only when it changed, so a pane redrawn for any of the dozen other
-        // reasons does not wake the worker.
-        use_side_effect_with_deps(&self.file, {
-            let mut coded = coded;
-            move |file: &Arc<str>| {
-                let wanted = coded.peek().wanted.clone();
-                if wanted.as_deref() != Some(&**file) {
-                    coded.write().wanted = Some(file.clone());
-                }
-            }
-        });
         let a11y = use_a11y();
         use_tab_keyboard(a11y);
 
@@ -539,25 +526,13 @@ impl Component for SourceList {
         // Which of this file's names are links, which is the server's to say and not the
         // pane's to guess. Nothing until it has said so -- so no link is ever drawn that
         // could not be followed, where a pane that lit them as soon as a server *started*
-        // drew them through the minute it spends reading the project. Asked through
-        // `try_consume_context`, a pane mounted without one having no links; the answer
-        // is an `Arc` inside, so carrying it to the rows is a pointer compare.
-        let linking = try_consume_context::<Linking>().map(|linking| linking.0);
-        let links = linking
-            .and_then(|held| held.read().links_in(&self.file).cloned())
+        // drew them through the minute it spends reading the project. Asked for by the
+        // pane ([`asks_for`]) and read here through `try_consume_context`, a pane mounted
+        // without one having no links; the answer is an `Arc` inside, so carrying it to
+        // the rows is a pointer compare.
+        let links = try_consume_context::<Linking>()
+            .and_then(|held| held.0.read().links_in(&self.file).cloned())
             .unwrap_or_default();
-        // Asking for them: the same shape as the gutter's marks above, on the *file* as
-        // its dependency. Unconditional, as every hook is: a pane mounted with no server
-        // context writes nothing, inside the closure and not around it.
-        use_side_effect_with_deps(&self.file, move |file: &Arc<str>| {
-            let Some(mut held) = linking else {
-                return;
-            };
-            let wanted = held.peek().wanted.clone();
-            if wanted.as_deref() != Some(&**file) {
-                held.write().wanted = Some(file.clone());
-            }
-        });
 
         let length = self.source.0.lines;
         // The tab's entry and not the file: see `SourceList::document`.
@@ -861,6 +836,25 @@ fn paired_lines(
         .collect()
 }
 
+/// Write `file` into the `wanted` of one of the three states a pane asks through, and
+/// only when it is not what is already being asked for: a pane redrawn for any of the
+/// dozen other reasons must not wake a worker.
+///
+/// `None` is written too, so that a pane which has stopped drawing a file stops asking
+/// about one.
+fn asks_for<T: Clone + PartialEq + 'static>(
+    mut state: State<T>,
+    wanted: impl Fn(&mut T) -> &mut Option<Arc<str>>,
+    file: &Option<Arc<str>>,
+) {
+    let mut next = state.peek().clone();
+    if wanted(&mut next) == file {
+        return;
+    }
+    *wanted(&mut next) = file.clone();
+    state.set(next);
+}
+
 /// The gutter's marks, shared through context: the Source pane writes the file it is
 /// showing and the analysis worker writes the lines back.
 #[derive(Clone, Copy)]
@@ -1061,6 +1055,27 @@ impl Component for SourcePane {
         let code_rows = use_consume::<CodeRows>().0;
         let side = source_side(Some(&self.document), &analysis, &marks);
 
+        // **The three questions about the file this pane is showing, asked together.**
+        // Its text, the lines of it anything open has code from, and which of its names
+        // the language server calls links: none is the other's to wait for, and they are
+        // answered by the reader, the analysis worker and the server, which are three
+        // threads. Asked here rather than by the rows, which are drawn out of the first
+        // answer and so could ask for the other two only once it had landed; and
+        // **before the early return below**, a hook having to run on every render.
+        let sourced = use_consume::<Sourcing>().0;
+        let coded = use_consume::<Coding>().0;
+        let linking = try_consume_context::<Linking>().map(|linking| linking.0);
+        let showing = side.as_ref().map(|side| side.file().clone());
+        use_side_effect_with_deps(&showing, move |file: &Option<Arc<str>>| {
+            asks_for(sourced, |sourced| &mut sourced.wanted, file);
+            asks_for(coded, |coded| &mut coded.wanted, file);
+            // Unconditional, as every hook is: a pane mounted with no server context
+            // writes nothing, inside the closure and not around it.
+            if let Some(linking) = linking {
+                asks_for(linking, |linked| &mut linked.wanted, file);
+            }
+        });
+
         let Some(side) = side else {
             // The same answer the assembly pane gives, from the same place, plus one case
             // of its own: a symbol can be analysed and still name no file.
@@ -1110,16 +1125,26 @@ impl Component for SourcePane {
             },
         };
 
+        // The file itself, out of what the reader has answered -- and nothing until it
+        // has, which is what keeps the read off this thread.
+        let drawing = sourced.read().drawing(Path::new(&*file));
+        let text = match &drawing {
+            Drawing::Text(text) => Some(text.0.clone()),
+            Drawing::Missing | Drawing::Waiting => None,
+        };
+
         // Whether the file on disk is the one the binary was built from, by the checksum
         // the debug info recorded for it — where it recorded one, and where the file
         // opened at all. Compared against the *drawn* symbol's line info, for a subject
-        // and a companion alike: it is the one place a recorded checksum comes from.
+        // and a companion alike: it is the one place a recorded checksum comes from. The
+        // bytes are the ones the parse was made from, so nothing here reads a file to
+        // find out.
         let stale = analysis
             .shown
             .as_ref()
             .and_then(|shown| shown.studied.lines.hash_for(&file))
-            .zip(source::load(Path::new(&*file)))
-            .is_some_and(|(recorded, opened)| !opened.matches(recorded));
+            .zip(text)
+            .is_some_and(|(recorded, opened)| !opened.file.matches(recorded));
 
         rect()
             .expanded()
@@ -1135,8 +1160,8 @@ impl Component for SourcePane {
                     .height(Size::flex(1.0))
                     // The path is named in the message because it is the only clue to
                     // *why*: built elsewhere, moved and deleted all look alike from here.
-                    .child(match source_text(Path::new(&*file)) {
-                        Some(source) => SourceList {
+                    .child(match drawing {
+                        Drawing::Text(source) => SourceList {
                             source,
                             file,
                             tab: self.tab,
@@ -1144,7 +1169,8 @@ impl Component for SourcePane {
                             opening,
                         }
                         .into_element(),
-                        None => placeholder(format!("Source file not found: {file}")),
+                        Drawing::Missing => placeholder(format!("Source file not found: {file}")),
+                        Drawing::Waiting => rect().expanded().into(),
                     }),
             )
             .into()

@@ -84,11 +84,14 @@ freya marks a child dirty only when its props change (`freya-core`'s `runner.rs`
 here is a unit `Component`, so forcing it means a `key` that remounts the tree and throws away the
 three filters, the objects tree's folds and every scroll controller. The cost of what was chosen is
 that `palette()` is a thread-local lookup and a subscribe rather than a constant: tens of
-nanoseconds against perhaps a thousand calls per full render. **`set_appearance` is the only way to
-change it**, because the switch also has to `HIGHLIGHTED.clear()`: that cache holds `SyntaxBlocks`
-with colours already resolved into them, so its entries are not stale but the wrong theme, and
-nothing a re-render does would repaint them. The clear is inside the setter
-(`set_if_modified_and_then`) rather than at a call site, so it cannot be routed around. The
+nanoseconds against perhaps a thousand calls per full render. **`set_appearance` is the only
+writer**, and what it does *not* do is empty `HIGHLIGHTED`: that cache holds `SyntaxBlocks` with
+colours already resolved into them, so its entries are not stale but the wrong theme, and nothing a
+re-render does would repaint them. Each entry says which appearance it was parsed in instead, which
+is both what has the source reader read the file again and what lets the pane go on drawing the
+entry it has meanwhile (`agents/Panes.md`); a clear here would blank every source pane for as long
+as the reading took. `colours(appearance)` is the palette handed the theme rather than asking for
+it, which is how a parse made on a thread resolves its spans at all. The
 appearance is resolved by `use_theme` at the root of `app()` from two inputs, through the pure
 `resolve_appearance`: the stored choice (`settings.rs`, read once: it is a file) and
 `Platform::preferred_theme`, which freya keeps from winit's `Window::theme()` and re-sets on the

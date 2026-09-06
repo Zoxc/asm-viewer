@@ -230,16 +230,45 @@ parser generator's worth of generated C, where knowing a `.zig` or a `.f90` beco
 one arm and is what the pane split turns on. So Go, Zig, D, Swift, Objective-C, assembly and the
 rest are named, `language()` answers `None` for them, and they render plain -- as does an extension
 the list does not name at all, one plain span per line either way. That match is exhaustive on
-purpose: a language added to the enum is one the grammar question has to be answered for. A file is parsed when loaded and cached in a `static` in
-`ui/highlight.rs`, since parsing is stateful
-across lines and so cannot be per row. It is parsed **twice**: `SyntaxHighlighter` keeps its tree
-private, and the function spans the source row's menu needs (`src/functions.rs`, "the function this
-line is inside") are read off a second parse with the same grammar for C and C++, and for Rust off a
-scanner of our own (`functions/rust.rs`), the grammar losing whole files of the standard library to
+purpose: a language added to the enum is one the grammar question has to be answered for. A file is
+read and parsed whole, since parsing is stateful across lines and so cannot be per row, and both are
+**the source reader's** and not the render's (`ui/highlight.rs`, below). It is parsed **twice**:
+`SyntaxHighlighter` keeps its tree private, and the function spans the source row's menu needs
+(`src/functions.rs`, "the function this line is inside") are read off a second parse with the same
+grammar for C and C++, and for Rust off a scanner of our own (`functions/rust.rs`), the grammar
+losing whole files of the standard library to
 `const impl` (`notes/upstream/tree-sitter-rust.md`). Either way a few hundred bytes are kept against
 a tree that would be most of the file again. Two things about `SyntaxBlocks` bite: `get_line`
 unwraps rather than answering `None`, and it holds one block per `Rope::len_lines()`, which counts a
 phantom line after a trailing newline (hence `Highlighted::lines`).
+
+**Reading a file and parsing it are a worker thread's**, `use_source_reading`'s, for what they cost:
+in a release build, 27 ms for a 23 KB file and 333 ms for an 850 KB one, of which the read off disk
+is under 5 ms and the rest is tree-sitter (six times that in a debug build). Both used to run in the
+Source pane's `render`, so the frame that first drew a file paid for them -- which is what a reader
+felt between picking a file out of Ctrl+P and seeing it. The shape is `use_analysis`'s: one thread
+for the app's lifetime, an `async_channel` drained to its newest question, and a pane that draws
+what it has meanwhile. **A worker of its own and not the analysis one**, whose queue a click can put
+seconds of DWARF into (`agents/Worker.md`); which is also what has the pane's three questions -- the
+text, the gutter's marks and the links -- asked at once rather than each behind the last.
+
+**The answer is the cache and the state is the knock on the door.** The parse lands in
+`HIGHLIGHTED`, misses included, and `Sourced` carries the file the pane wants and a count of the
+answers, nothing being re-rendered for a write to a `static`. So a file the reader has seen before
+is found as the pane renders, with no question asked and no frame lost, and only a file that is new
+to the app is waited for. What the pane draws while it waits is its own background and no message:
+`Drawing::Waiting`, which is not `Drawing::Missing` -- "not read yet" and "not there" are different
+answers and only the second is a sentence. The cost is a door into a file the app has never read,
+which draws nothing for as long as the read takes and then the file from its top before the landing
+moves it, both of them passes the door into a file already in hand does not have (`notes/Goals.md`,
+under Navigation).
+
+**A parse holds the theme's colours**, `SyntaxBlocks` keeping a `Color` per span rather than a name
+for one, so an entry parsed in the other appearance is not stale but wrong. Each says which
+appearance it was made in and `set_appearance` empties nothing: the pane goes on drawing the entry
+it has, in colours half a theme old, until the reader answers with the other -- where a clear would
+blank every source pane on a switch. That is also what makes a theme switch a file to read again
+(`Sourced::pending`).
 
 **Neither that cache nor the text under it is ever checked against the disk**, both being keyed by
 path alone: a `stat` on the way in would be a `stat` per render, since the pane asks on every one.
@@ -247,7 +276,10 @@ So a **build** forgets them. A finished build of the project's workspace or of a
 every entry under the directory it built (`forget_source_under`, `ui/building.rs`, `ui/pad.rs`),
 whatever the build came to -- a build that failed is as much a sign the files have changed as one
 that did not, and a build is the only word the app gets that they have. Nothing else re-reads a
-file for the life of the process. Until this, a rebuilt scratchpad drew the text from before the
+file for the life of the process. Since the reading is a thread's, a build can now finish *during*
+one: `source::forgotten` counts the forgets and names the last sixteen directories, and a read
+whose file was forgotten under it is made again rather than filed, so the pane cannot be left
+drawing the text from before the build. Until this, a rebuilt scratchpad drew the text from before the
 build under the new build's line numbers, with the checksum row above saying the file differed from
 the one it was built from when it was exactly that file.
 

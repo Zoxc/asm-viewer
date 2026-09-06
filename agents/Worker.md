@@ -1,7 +1,8 @@
 # The analysis worker
 
-The one worker thread the panes ask: what a question is, how requests supersede one another, how an
-answer is judged when it lands, and what is drawn meanwhile.
+The worker thread the panes ask about a binary: what a question is, how requests supersede one
+another, how an answer is judged when it lands, and what is drawn meanwhile. The source reader is a
+second one, for the file beside the binary, and a section below says why it is not this one.
 
 **Nothing is analysed on the UI thread.** `SymbolData::assembly` decodes and formats the whole
 symbol. `SymbolData::line_info` builds the object's entire DWARF context on the first query against
@@ -141,6 +142,17 @@ that has closed, and a state holding the objects to notice would be the state st
 closing — so `Coded` records which objects the answer was worked out over, by pointer
 (`object_ids`), and the effect asks again whenever those differ from what is open. A load finishing
 is such a difference, which is what puts marks in a gutter drawn before its binary had been read.
+
+**The source reader is a second worker, and deliberately not this one** (`ui/highlight.rs`). The
+file the Source pane is showing is read off disk and parsed for its spans on a thread of its own,
+fed by the pane the way the marks question is: the pane writes the file it is drawing into
+`Sourced::wanted` and an effect turns that into the question. It is not a fifth kind of question
+here because of what this worker's queue holds: a listing is seconds of DWARF, and a file queued
+behind one would arrive long after the tab it belongs to -- where the two questions a source
+document opens with, its text and which of its lines have code, are asked at the same moment and
+answered by two threads at once. Nothing crosses between them: the reader touches no `Analyzed` and
+the analysis touches no file. The reader's answer goes into a cache rather than into the state it
+is asked through, which is what keeps a file already read instant; the rest is in `agents/Panes.md`.
 
 **`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at
 its head.** The head is the load-bearing part: nothing is recorded between two clicks in one

@@ -397,7 +397,16 @@ The shape every test in `ui.rs` follows:
 A note on process-wide state: `palette()` and `fonts()` read thread-locals, so two runners on two
 cargo test threads do not interfere, but `HIGHLIGHTED` is a `static` and does. `SWITCHING` is the
 mutex that serialises the tests that switch appearance, and anything new that calls `set_appearance`
-needs to take it.
+needs to take it. That cache is also where every source pane's file comes from now, so a test takes
+what it read with it through `forget_source_under(&directory)` and **never**
+`highlighted().clear()`, which would empty the cache another test's pane is drawing out of.
+
+A source pane in a test needs a reader behind it: `use_source_reading_now`, which answers where it
+stands rather than on a thread, so a test about what a pane draws settles rather than pumps. The
+chain is longer than it looks -- the pane asks, the reader answers, the rows are drawn from what it
+filed -- which is why `settle` is eight passes and a couple of tests want two of them. The tests
+that are about the reading itself mount the real `use_source_reading_with` with the read gated, and
+pump.
 
 ## Verdict
 

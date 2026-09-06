@@ -301,13 +301,22 @@ thread_local! {
     /// subscribes the running reactive context, so **asking for a colour is what subscribes
     /// a component to the theme** -- exactly once, wherever in the tree it sits. Thread-local
     /// and global because `State` is `!Send` and it must outlive every scope that reads it;
-    /// nothing off the UI thread may ask for a colour.
+    /// nothing off the UI thread may ask *this* for a colour, and [`colours`] is what it
+    /// asks instead.
     static APPEARANCE: State<Appearance> = State::create_global(Appearance::Light);
 }
 
 /// The colours to draw with, and a subscription to the theme for whoever asks.
 pub(crate) fn palette() -> &'static Palette {
-    match appearance() {
+    colours(appearance())
+}
+
+/// The colours of `appearance`, handed the theme rather than asking for it -- and so
+/// **the one way to a colour off the UI thread**, where the state above cannot be read
+/// at all. The source reader resolves a file's spans against it (`ui/highlight.rs`);
+/// everything drawing anything asks [`palette`] and is subscribed by the asking.
+pub(crate) fn colours(appearance: Appearance) -> &'static Palette {
+    match appearance {
         Appearance::Light => &Palette::LIGHT,
         Appearance::Dark => &Palette::DARK,
     }
@@ -318,13 +327,17 @@ pub(crate) fn appearance() -> Appearance {
     APPEARANCE.with(|appearance| *appearance.read())
 }
 
-/// Draw in this appearance from now on -- **the only way to change it**: the source pane's
-/// spans are cached with the palette's colours resolved into them, so a switch has to empty
-/// `HIGHLIGHTED` too, and that clear lives here rather than at a call site.
+/// Draw in this appearance from now on -- the only writer.
+///
+/// A switch does **not** empty `HIGHLIGHTED`, though its entries hold the palette's
+/// colours resolved into them: each says which appearance it was parsed in, and one that
+/// says the wrong thing is read again by the source reader off the UI thread. Emptying
+/// the cache here would leave the pane with nothing to draw for as long as that takes
+/// (`ui/highlight.rs`).
 pub(crate) fn set_appearance(next: Appearance) {
     APPEARANCE.with(|appearance| {
         let mut appearance = *appearance;
-        appearance.set_if_modified_and_then(next, || highlighted().clear());
+        appearance.set_if_modified(next);
     });
 }
 

@@ -30,33 +30,34 @@ leaves this list when it is. That is a move made on request, like everything els
   the capture kind carried through beside the colour, or the bold dropped from the assembly
   side instead. Deferred at the Goals → Steps split: either fix is real plumbing for an
   emphasis nit, and neither is wanted yet.
-- [ ] Read and highlight source files on a background thread. Everything a *binary* costs is off
-  the UI thread already; the source side is not. `source_text` reads the file off disk
-  (`source::load`) and runs the whole tree-sitter parse (`Highlighted::new`, twice: the
-  highlighter's and the one the function spans are read off) inside a render, so
-  the frame that first shows a file pays for both, and a large file pays for them visibly. It is
-  what a reader feels on picking a file out of Ctrl+P: the finder ranks nothing on the way out, so
-  the pause between the press and the pane is this. Two
-  caches keep it to once per file — `source.rs`'s own and `HIGHLIGHTED` — but that once is a
-  frame, and one of them is emptied deliberately: the spans carry the palette's colours baked
-  into them, so `set_appearance` clears `HIGHLIGHTED` and a theme switch re-parses every file on
-  screen at the moment the window is repainting. `use_analysis`'s shape is what this wants — one
-  worker for the app's lifetime, a channel, and a pane that goes on drawing what it has until the
-  answer lands. Two things to check before starting, since neither is a move: whether what
-  crosses is `Send` at all (a `Highlighted` is a `Rope`, a `SyntaxBlocks` and the function
-  spans, and the highlighter
-  is `freya-code-editor`'s), and which palette a parse off the thread resolves its colours
-  against, the answer having to be the one the rows are drawn in when it arrives.
-- [ ] Read and parse a source file *alongside* working out which of its lines have code, not
-  after it. The two are independent questions about the same file -- the text and its spans off
-  disk, and `Question::Marks` over the open objects -- and a source document wants both the
-  moment it opens. There is one analysis worker for the app's lifetime and it answers one
-  question at a time (`agents/Worker.md`), so a read put on it queues the file behind whatever
-  a pane is asking for, and the supersession rule has the two kinds dropping each other. The
-  decision is where the read runs: a thread of its own, which is a second worker for one job,
-  or a worker that can hold more than one job in flight, which is a change to the mechanism
-  every pane asks through. Only worth doing once the read is off the UI thread at all -- the
-  item above.
+- [x] Read and highlight source files on a background thread. Both are the source reader's now
+  (`use_source_reading`, `src/ui/highlight.rs`): one thread for the app's lifetime, a channel
+  drained to its newest question, and the Source pane writing the file it is drawing where the
+  effect that asks will see it. In a release build the parse it takes off the frame is 27 ms for
+  a 23 KB file and 333 ms for an 850 KB one, six times that in a debug build, against under 5 ms
+  for the read off disk. The answer goes into `HIGHLIGHTED`, misses included, and the state the
+  pane asks through carries only the file wanted and a count of the answers, so a file already
+  read is found as the pane renders and only one new to the app is waited for -- drawn as the
+  pane's own background meanwhile, which is not the sentence a file that is not there gets. What
+  crosses was already proved `Send` by the cache being a `static`; the palette is handed to the
+  parse rather than asked for (`colours`), each entry says which appearance it was made in, and
+  a switch no longer empties the cache -- the pane draws what it has in colours half a theme old
+  until the reader answers with the other.
+- [x] Read and parse a source file *alongside* working out which of its lines have code, not
+  after it. The decision was a thread of its own, so the reader and the analysis worker run at
+  once and neither queues behind the other. Both questions are asked by the pane and not by its
+  rows, which are drawn out of the first answer and so could only have asked for the second once
+  it had landed; the links the language server places are asked for in the same breath, being the
+  same file (`asks_for`, `src/ui/source_view.rs`).
+- [ ] Compile a grammar's highlights query once per language, not once per file.
+  `SyntaxHighlighter::set_language` builds a `tree_sitter::Query` out of `EditorLanguage`'s query
+  text on every call, and for Rust that is 80 ms of the 121 ms a 23 KB file costs in a debug
+  build: a cost per file that has nothing to do with the file's size, paid again for every file
+  opened and every theme switch. A `Query` is not `Clone` and the capture colours are resolved
+  against it, so what could be held is one per language *and* appearance. The call is freya's, so
+  holding it means going to tree-sitter ourselves rather than through the editor's highlighter --
+  which the function spans already do for C and C++. Off the UI thread it is a wait and not a
+  freeze, which is why this is a want and not a fix.
 
 - [ ] Deal with the code the compiler inlined. Both backends answer with the innermost location
   and nothing else -- `find_location_range` gives the line table's rows, and a row inside an
@@ -98,9 +99,10 @@ leaves this list when it is. That is a move made on request, like everything els
   part-way down a file is not moved without being asked, and the reload is `source::forget`
   with the highlight cache's, the pair a build already takes. Two things to keep apart from
   it: this is not the `STALE_SOURCE` banner, which says the file is not the one the binary was
-  built from and goes on being true after a reload; and reading a file to hash it is a
-  thread's work and not a render's, `source::load` being called in the render body today,
-  which is the *UI* item about keeping expensive things off the UI thread. Undecided: whether
+  built from and goes on being true after a reload; and reading a file to hash it is the source
+  reader's work and not a render's, which is where a file is read at all now
+  (`src/ui/highlight.rs`), so what is wanted here is a question put to it rather than a `stat`
+  in a pane. Undecided: whether
   freya 0.4 reports the window regaining focus at all, and what the panel says about a file
   that has since been deleted.
 
@@ -114,7 +116,12 @@ leaves this list when it is. That is a move made on request, like everything els
   since a pane's offset is decided in an effect and the render that first draws a document
   draws it unscrolled. Removing it means a listing deciding its own offset as it renders,
   which is a change to how everything here scrolls rather than to the doors, so the decision
-  is what a `VirtualScrollView` can be told before its first layout.
+  is what a `VirtualScrollView` can be told before its first layout. **A door into a file the
+  app has never read is the worst of it** now that reading one is a thread's: the pane draws
+  nothing until the reader answers, and then mounts its rows afresh -- a new scroll controller
+  with no measured viewport, so the file shows from its top for the passes it takes the reveal
+  to be made. A door into a file already in hand has neither, the pane finding it in the cache
+  as it renders (`agents/Panes.md`), which is what the two tests about this pin.
 - [ ] Hold a question the server answered with nothing, and ask it again once the server is
   ready. rust-analyzer answers `null` to every question while it is still loading the project,
   which is the same answer as a name it cannot place (`notes/upstream/rust-analyzer.md`), so a
@@ -237,17 +244,16 @@ leaves this list when it is. That is a move made on request, like everything els
   UI thread, so a `spawn` is not the answer: what is expensive goes onto a `std::thread` fed an
   `async_channel`, the shape `use_analysis`, `open_binaries` and the scratchpad's worker already
   share — one thread for the app's lifetime, a queue drained to its newest entry where requests
-  supersede, and a pane that goes on drawing what it has until an answer lands. Three things are
-  across already: binary inspection, reading and parsing a binary, and the scratchpad's build and
-  run. What is known not to be — `project::flush` writes both TOML files from a timer task on the
-  executor every thirty seconds, and again from the window's close hook; `fonts::resolve` spawns
-  `kreadconfig`/`gsettings` subprocesses, on the first frame and again on a settings change (the
-  answer is cached per process, so it is the first call that costs); startup reads
-  `settings.toml`, `recents.toml` and the open project's two files synchronously inside `app()`;
-  and reading and highlighting a source file, which is its own item under *Source / assembly
-  split view*. None of those four is measured, which is where this starts: the rule is worth
-  keeping, and an atomic write of a few hundred bytes may still be cheaper than the channel it
-  would take to move it.
+  supersede, and a pane that goes on drawing what it has until an answer lands. Four things are
+  across already: binary inspection, reading and parsing a binary, reading and parsing a source
+  file, and the scratchpad's build and run. What is known not to be — `project::flush` writes
+  both TOML files from a timer task on the executor every thirty seconds, and again from the
+  window's close hook; `fonts::resolve` spawns `kreadconfig`/`gsettings` subprocesses, on the
+  first frame and again on a settings change (the answer is cached per process, so it is the
+  first call that costs); and startup reads `settings.toml`, `recents.toml` and the open
+  project's two files synchronously inside `app()`. None of those three is measured, which is
+  where this starts: the rule is worth keeping, and an atomic write of a few hundred bytes may
+  still be cheaper than the channel it would take to move it.
 - [x] Rank the finder's list on the worker beside the walk, not on the UI thread. The walked
   files are the worker's now, and what crosses to the UI is the rows it picked out for a query,
   which took the two things the UI thread was doing per project with them. Matching the box

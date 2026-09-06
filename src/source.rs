@@ -11,7 +11,7 @@
 
 use analysis::{SourceDigests, SourceHash};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, MutexGuard},
@@ -204,6 +204,66 @@ fn cache() -> MutexGuard<'static, HashMap<PathBuf, Option<Arc<SourceFile>>>> {
     CACHE.lock().unwrap_or_else(|error| error.into_inner())
 }
 
+/// What has been forgotten so far: how many times, and the last few directories it was.
+///
+/// Read before a file is and asked again before what was read is filed, so that a read
+/// which began before a [`forget_under`] and finished after it is not put back as what is
+/// on disk now. The reading is a worker thread's (`src/ui/highlight.rs`) and the
+/// forgetting is a finished build's, on the UI thread, so the two do interleave: the file
+/// is read, the build writes it and says so, and the copy from before the build is then
+/// filed under the path nothing will ask about again.
+///
+/// **The directories and not the count alone**, since a forget is about one of them: a
+/// file read while some other directory was being forgotten is a file nothing has said
+/// anything about, and dropping it would cost a read for every build in a window the
+/// reader is not even looking at. Only the last [`KEPT`] are held -- a bound on what this
+/// costs, the answer for a read that has been outlived by that many forgets being that it
+/// may well have been forgotten.
+///
+/// One record for both caches, since neither can be forgotten without the other.
+static FORGOTTEN: LazyLock<Mutex<Forgets>> = LazyLock::new(Mutex::default);
+
+/// How many directories back [`FORGOTTEN`] remembers.
+const KEPT: usize = 16;
+
+#[derive(Default)]
+struct Forgets {
+    /// How many times anything has been forgotten.
+    count: u64,
+    /// The roots of the last [`KEPT`] of them, oldest first.
+    roots: VecDeque<PathBuf>,
+}
+
+fn forgets() -> MutexGuard<'static, Forgets> {
+    FORGOTTEN.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// How many times anything has been forgotten so far.
+pub fn forgotten() -> u64 {
+    forgets().count
+}
+
+/// Whether anything forgotten since `at` covers `path`, which is what says a copy read
+/// then must not be filed now.
+pub fn forgotten_since(at: u64, path: &Path) -> bool {
+    let forgets = forgets();
+    let since = forgets.count.saturating_sub(at);
+    if since == 0 {
+        return false;
+    }
+    // More forgets than are remembered: the ones this cannot answer for are answered as
+    // if they were about this file.
+    if since > forgets.roots.len() as u64 {
+        return true;
+    }
+    forgets
+        .roots
+        .iter()
+        .rev()
+        .take(since as usize)
+        .any(|root| path.starts_with(root))
+}
+
 /// The contents of `path`, read on the first call and answered from memory afterwards.
 /// [`None`] means the file cannot be shown — missing, unreadable, not a file, or past
 /// [`MAX_SIZE`] — and is remembered as such.
@@ -217,9 +277,18 @@ pub fn load(path: &Path) -> Option<Arc<SourceFile>> {
     // Read outside the lock: holding it across the read would make every other pane wait
     // on this file. The cost is that two callers racing for one path may both read it, and
     // the second's copy is dropped when it loses the insert.
+    let at = forgotten();
     let file = SourceFile::read(path, MAX_SIZE).map(Arc::new);
 
-    cache().entry(path.to_path_buf()).or_insert(file).clone()
+    let mut cache = cache();
+    // Forgotten while it was being read: what came back is the file as it was before
+    // whatever said so, and is handed to the caller that asked for it rather than filed
+    // for everyone after. Asked under this cache's lock, which [`forget_under`] takes
+    // too, so a forget is either counted here or has yet to empty anything.
+    if forgotten_since(at, path) {
+        return file;
+    }
+    cache.entry(path.to_path_buf()).or_insert(file).clone()
 }
 
 /// Forget every file read from under `root`, misses included, so the next call reads them
@@ -230,6 +299,16 @@ pub fn load(path: &Path) -> Option<Arc<SourceFile>> {
 /// files have changed. The parsed copies above these go with them
 /// (`src/ui/highlight.rs`).
 pub fn forget_under(root: &Path) {
+    let mut forgets = forgets();
+    forgets.count += 1;
+    forgets.roots.push_back(root.to_path_buf());
+    if forgets.roots.len() > KEPT {
+        forgets.roots.pop_front();
+    }
+    // Written down and let go of before the cache is taken. A reader takes the two the
+    // other way round -- the cache, then this, to ask what happened while it was reading
+    // -- so holding both here is the one thing that would deadlock.
+    drop(forgets);
     cache().retain(|path, _| !path.starts_with(root));
 }
 

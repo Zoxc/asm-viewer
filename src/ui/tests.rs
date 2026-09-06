@@ -586,6 +586,9 @@ macro_rules! project_states {
         // Likewise: both panes' bars read it, and `DocumentBody` asks it which panes
         // there are.
         $runner.provide_root_context(|| Follows(State::create(HashMap::new())));
+        // Likewise: the Source pane writes the file it is drawing into it, and every
+        // harness that mounts one reads the parse back out with `use_source_reading_now`.
+        $runner.provide_root_context(|| Sourcing(State::create(Sourced::default())));
         // Likewise: every row and link asks it whether a press opens a tab of its own.
         $runner.provide_root_context(|| Ctrl(State::create(false)));
         // And whether it is a door at all: Alt held says it is not.
@@ -3455,6 +3458,16 @@ macro_rules! analysis_states {
     }};
 }
 
+/// One file read and parsed where the test stands, which is what the reader's worker
+/// thread does with it: the tests that call this are about what comes out of a parse and
+/// not about where it was made.
+fn source_text(path: &Path) -> Option<SourceText> {
+    read(&SourceAsk {
+        file: path.to_path_buf(),
+        appearance: appearance(),
+    })
+}
+
 /// Run the test runner until `ready` answers, and then a little further so that whatever
 /// the answer woke has run too. A worker thread and two channels sit between a state
 /// change and the state it ends in, so how many turns that takes is not something a test
@@ -4869,7 +4882,7 @@ fn serving(test: &mut TestingRunner, language: &mut State<Language>) {
 }
 
 fn settle(test: &mut TestingRunner) {
-    for _ in 0..4 {
+    for _ in 0..8 {
         test.sync_and_update();
     }
 }
@@ -5844,6 +5857,9 @@ struct Subject(Arc<str>);
 /// The Source pane over a source-driven tab, with the viewer a context menu needs in an
 /// ancestor scope -- which `app()` mounts on the root and no other harness here does.
 fn source_menu_harness() -> impl IntoElement {
+    // The file the pane draws, read where this stands rather than on the reader's own
+    // thread: what these tests are about is what the pane makes of a file it has.
+    use_source_reading_now(use_consume::<Sourcing>().0);
     let file = use_consume::<Subject>().0;
     rect().expanded().child(ContextMenuViewer::new()).child({
         let document = Document::Source(file);
@@ -5857,6 +5873,9 @@ fn source_menu_harness() -> impl IntoElement {
 /// The Source pane over a source-driven tab with a language server behind it: what a
 /// press on a call in the text reaches, and what its answer opens.
 fn linking_harness() -> impl IntoElement {
+    // The file the pane draws, read where this stands rather than on the reader's own
+    // thread: what these tests are about is what the pane makes of a file it has.
+    use_source_reading_now(use_consume::<Sourcing>().0);
     let states = use_project_states();
     let language = use_consume::<Talking>().0;
     let follow = use_consume::<Following>().0;
@@ -7373,6 +7392,9 @@ macro_rules! companion_states {
 /// the analysis, as [`listing_harness`]'s does, so the same harness draws a subject when
 /// the answer is a source-driven tab's.
 fn companion_menu_harness() -> impl IntoElement {
+    // The file the pane draws, read where this stands rather than on the reader's own
+    // thread: what these tests are about is what the pane makes of a file it has.
+    use_source_reading_now(use_consume::<Sourcing>().0);
     let analysis = use_consume::<Analysis>().0;
     let document = analysis
         .read()
@@ -8263,6 +8285,9 @@ struct Showing(State<Arc<str>>);
 
 /// The Source pane over whatever file [`Showing`] names.
 fn showing_harness() -> impl IntoElement {
+    // The file the pane draws, read where this stands rather than on the reader's own
+    // thread: what these tests are about is what the pane makes of a file it has.
+    use_source_reading_now(use_consume::<Sourcing>().0);
     let showing = use_consume::<Showing>().0;
     rect().expanded().child({
         let document = Document::Source(showing.read().clone());
@@ -8312,8 +8337,128 @@ fn source_file_harness(
         Document::Source(file.clone()),
         Reach::NewTab,
     );
+    // Twice: the pane asks the reader for the file, the reader answers, the rows are
+    // drawn from what it filed and their measured width is written down a pass after
+    // that -- more hops than one settle covers.
+    settle(&mut test);
     settle(&mut test);
     (test, states, showing, marked)
+}
+
+/// The reader's work, handed in so that a test can hold a read still: what the pane draws
+/// while a file is being read cannot be asserted against a reader that answers as fast as
+/// it is asked.
+#[derive(Clone)]
+struct SourceWork(Arc<dyn Fn(&SourceAsk) + Send + Sync>);
+
+/// The Source pane over [`Showing`]'s file with the **real** reader behind it -- a thread
+/// and two channels -- doing whatever [`SourceWork`] says.
+fn reading_harness() -> impl IntoElement {
+    let work = use_consume::<SourceWork>().0;
+    use_source_reading_with(use_consume::<Sourcing>().0, move |ask| work(ask));
+    let showing = use_consume::<Showing>().0;
+    rect().expanded().child({
+        let document = Document::Source(showing.read().clone());
+        SourcePane {
+            tab: pane_tab(&document),
+            document,
+        }
+    })
+}
+
+/// [`source_file_harness`]'s contexts under [`reading_harness`], with the read gated: the
+/// returned sender lets one read through per `send`.
+fn reading_file_harness(file: &Arc<str>) -> (TestingRunner, async_channel::Sender<()>) {
+    let (gate, letting) = async_channel::unbounded::<()>();
+    let (mut test, states) = TestingRunner::new(
+        reading_harness,
+        (400., 300.).into(),
+        {
+            let file = file.clone();
+            move |runner| {
+                runner.provide_root_context(move || {
+                    SourceWork(Arc::new(move |ask: &SourceAsk| {
+                        // The gate, on the reader's own thread: a read that has not been
+                        // let through is a read that has not happened, which is the only
+                        // way to be sure the pane was asked while one was outstanding.
+                        if letting.recv_blocking().is_ok() {
+                            read(ask);
+                        }
+                    }))
+                });
+                let states = project_states!(runner);
+                runner.provide_root_context(|| Marked(State::create(Marks::default())));
+                runner.provide_root_context(|| Shift(State::create(false)));
+                runner.provide_root_context(|| CodeRows(State::create(None)));
+                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
+                runner.provide_root_context(|| Locations(State::create(Located::default())));
+                runner.provide_root_context(|| Coding(State::create(Coded::default())));
+                runner.provide_root_context(|| Land(State::create(None)));
+                runner.provide_root_context(|| Plant(State::create(None)));
+                runner.provide_root_context(|| Showing(State::create(file.clone())));
+                states
+            }
+        },
+        1.,
+    );
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    (test, gate)
+}
+
+/// **The pane draws nothing until the file has been read**, and its rows the moment it
+/// has. The read is a worker thread's, so what is on screen in between is what the pane
+/// has, which for a file it has never seen is nothing at all -- not the placeholder that
+/// says the file is missing, which is an answer.
+#[test]
+fn the_source_pane_waits_for_the_file_to_be_read() {
+    let directory = Seeded::directory("waiting");
+    let file = directory.named("waited.rs", "fn main() {}\nfn other() {}\n");
+    let path = PathBuf::from(&*file);
+    let (mut test, gate) = reading_file_harness(&file);
+
+    assert!(
+        gutter_lines(&test).is_empty(),
+        "the pane drew the file before the reader had answered for it: {:?}",
+        labels(&test)
+    );
+    assert!(
+        !labels(&test).contains(&format!("Source file not found: {file}")),
+        "a file that has not been read yet was drawn as one that is not there"
+    );
+
+    gate.send_blocking(()).expect("the reader is waiting");
+    pump(&mut test, || highlighted().contains_key(&path));
+    assert_eq!(gutter_lines(&test), vec![1, 2]);
+
+    // What this test read, and not the cache: it is the process's, and another test's
+    // pane is drawing out of it while this one runs.
+    forget_source_under(&directory);
+}
+
+/// A file the reader has already answered for is drawn as the pane renders, with no
+/// question asked: the parse is in the cache and the cache is what the pane reads. Held
+/// still by never letting a read through, so rows drawn here are rows drawn without one.
+#[test]
+fn a_file_already_read_is_drawn_with_no_question_asked() {
+    let directory = Seeded::directory("in-hand");
+    let file = directory.named("held.rs", "fn main() {}\nfn other() {}\n");
+    source_text(Path::new(&*file)).expect("the file");
+
+    let (test, _gate) = reading_file_harness(&file);
+    assert_eq!(
+        gutter_lines(&test),
+        vec![1, 2],
+        "the file in hand was not drawn: {:?}",
+        labels(&test)
+    );
+
+    forget_source_under(&directory);
 }
 
 /// The widest row is the widest row **of this listing**: a pane moved from a file with a
@@ -9051,6 +9196,9 @@ struct Mounted(State<bool>);
 /// between the two, mounted on demand. The document it draws is the tab the listing
 /// belongs to, which is what `app()` hands it.
 fn source_pane_harness() -> impl IntoElement {
+    // The file the pane draws, read where this stands rather than on the reader's own
+    // thread: what these tests are about is what the pane makes of a file it has.
+    use_source_reading_now(use_consume::<Sourcing>().0);
     let analysis = use_consume::<Analysis>().0;
     let mounted = use_consume::<Mounted>().0;
     let document = analysis
@@ -9211,8 +9359,11 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
     // which is what the second half of this test leans on.
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
 
+    // Long enough for the whole chain: the pane asks the reader for the file, the reader
+    // answers, the list is mounted over what it filed, and only then is there a row to
+    // reveal.
     let land = |test: &mut TestingRunner| {
-        for _ in 0..8 {
+        for _ in 0..20 {
             test.sync_and_update();
         }
         gutter_lines(test)
@@ -9406,6 +9557,9 @@ fn the_gutter_puts_its_strokes_on_whole_device_pixels() {
 /// vote in which pane is which -- but the two states the split is held in are not, being
 /// what the panels are sized from.
 fn panes_harness() -> impl IntoElement {
+    // The file the pane draws, read where this stands rather than on the reader's own
+    // thread: what these tests are about is what the pane makes of a file it has.
+    use_source_reading_now(use_consume::<Sourcing>().0);
     let open = use_open();
     // Read and not peeked: this is the harness's whole subscription to a tab being
     // activated, and `Active` is a memo and a beat behind.
@@ -9883,37 +10037,49 @@ fn a_theme_switch_repaints_a_component_nothing_else_woke() {
     assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
 }
 
-/// The other half: the source pane's spans are cached with the palette resolved into them,
-/// so a switch has to throw the cache away and parse again. Nothing re-renders a
-/// `SyntaxBlocks`, which is why the reactivity above cannot cover it.
+/// The other half: the source pane's spans are cached with the palette resolved into
+/// them, so a switch is a file to read again. Nothing re-renders a `SyntaxBlocks`, which
+/// is why the reactivity above cannot cover it.
+///
+/// The cache is **not** emptied for the switch -- the pane draws the entry it has while
+/// the reader works, and an entry in the wrong theme is what says a read is owed.
 #[test]
-fn a_theme_switch_empties_the_highlighted_cache() {
+fn a_theme_switch_has_the_file_read_again() {
     let _switching = SWITCHING.lock().unwrap_or_else(|error| error.into_inner());
     set_appearance(Appearance::Light);
 
     let directory = Seeded::directory("theme");
-    let path = directory.file("themed.rs", "fn main() {}\n");
+    let file = directory.named("themed.rs", "fn main() {}\n");
+    let path = PathBuf::from(&*file);
 
     // A keyword, which is the one span whose colour is a palette entry rather than the
     // text colour -- and the reason this is a `.rs` file and not any file at all.
     let keyword = |path: &Path| {
-        let text = source_text(path).expect("the file");
-        let line = text.0.blocks.get_line(0);
+        let cache = highlighted();
+        let text = cache.get(path).expect("the file was read").clone();
+        let text = text.expect("the file is there");
+        let line = text.blocks.get_line(0);
         line.first().expect("a first span").0
     };
 
+    let (mut test, _states, _showing, _marked) = source_file_harness(&file, (400., 300.));
     assert_eq!(keyword(&path), Palette::LIGHT.keyword_fg);
-    assert!(!highlighted().is_empty());
 
     set_appearance(Appearance::Dark);
     assert!(
-        highlighted().is_empty(),
-        "the switch left the old theme's spans behind"
+        highlighted().contains_key(&path),
+        "the switch emptied the cache instead of leaving the pane something to draw"
     );
-    assert_eq!(keyword(&path), Palette::DARK.keyword_fg);
+    settle(&mut test);
+    settle(&mut test);
+    assert_eq!(
+        keyword(&path),
+        Palette::DARK.keyword_fg,
+        "the file was left in the theme it was read in"
+    );
 
     set_appearance(Appearance::Light);
-    highlighted().clear();
+    forget_source_under(&directory);
 }
 
 /// Neither cache is checked against the disk, so a file rewritten under the app's nose is
@@ -11987,7 +12153,7 @@ fn a_finished_pad_build_forgets_the_pad_package() {
         .directory()
         .expect("a directory to keep pads in");
     let source = package.join("src").join("main.rs");
-    highlighted().insert(source.clone(), stand_in.0.clone());
+    highlighted().insert(source.clone(), Some(stand_in.0.clone()));
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
@@ -13675,6 +13841,9 @@ fn closing_a_code_tab_forgets_its_address() {
 
 /// The Source pane beside an object's code, the reading seeded by the test.
 fn code_source_harness() -> impl IntoElement {
+    // The file the pane draws, read where this stands rather than on the reader's own
+    // thread: what these tests are about is what the pane makes of a file it has.
+    use_source_reading_now(use_consume::<Sourcing>().0);
     let reading = use_consume::<Sections>().0;
     let object = reading.read().object.clone();
     match object {
@@ -16534,7 +16703,7 @@ fn toml_and_json_files_are_highlighted() {
     assert_eq!(colour(&json, 1), theme.string_special);
     assert_ne!(theme.string_special, theme.text);
 
-    highlighted().clear();
+    forget_source_under(&directory);
 }
 
 /// A language named for what it compiles to, with no grammar behind it, opens with an
@@ -21570,6 +21739,11 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
     };
     let opened = seed("first.rs", "one");
     let landed = seed("second.rs", "two");
+    // Both files read before the doors, which is what the reader does for a file the
+    // pane has drawn once: what is under test is where the pane goes and not what it
+    // draws while a file it has never seen is being read.
+    source_text(Path::new(&*opened)).expect("the first file");
+    source_text(Path::new(&*landed)).expect("the second file");
 
     let (mut test, states, location) = landing_panes();
     open_document(
@@ -21663,6 +21837,11 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
     };
     let opened = seed("first.rs", "one");
     let landed = seed("second.rs", "two");
+    // Both files read before the doors, which is what the reader does for a file the
+    // pane has drawn once: what is under test is where the pane goes and not what it
+    // draws while a file it has never seen is being read.
+    source_text(Path::new(&*opened)).expect("the first file");
+    source_text(Path::new(&*landed)).expect("the second file");
 
     let (mut test, states, location) = landing_panes();
     open_document(
