@@ -13,9 +13,8 @@ out, the start of a name before inside it, the shorter path on a tie. A row is t
 with its directory after it, dimmed. With nothing typed it lists the project's files opened
 recently, newest first.
 
-The list is moved through and opened from the keyboard, or a row is clicked. Opening one is
-pressing a Files item, with Ctrl a new tab. The finder closes and keeps nothing of what was
-typed.
+The list is moved through and opened from the keyboard, or a row is clicked. A file opens in an
+existing tab if present. The finder closes and keeps nothing of what was typed.
 
 It lists what the source pane can show, skipping what git is told to ignore, hidden files and
 files too big, as the Search panel does. The first walk fills the list; after that the finder

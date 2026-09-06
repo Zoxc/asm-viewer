@@ -117,6 +117,12 @@ the ranking was still here, a held Down ranked the walk at the keyboard's repeat
 overlay froze. `Asking` carries only the four things the list depends on, so it does run per
 press and hands back what it handed back before, and `set_if_modified` stops there.
 
+**A file picked out of the finder opens in a tab that stays**, `NewTab` rather than the `Preview`
+every sidebar row uses. A sidebar row is browsing -- walking a list to see what each one is, which
+is what the preview tab is for -- but typing a path out and picking it off the list is choosing
+that file, and the next row clicked would take a preview tab back. Ctrl says nothing here that a
+plain press does not, so the finder no longer reads it.
+
 **The chord is answered at the root**, in `root_key_down`, which stays the window's one
 `on_global_key_down` — a second one would replace it and take the modifier tracking with it,
 silently. Every text box has to **decline** Ctrl+P in its `on_pre_key_down`: the `_` arm there

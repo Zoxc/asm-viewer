@@ -648,8 +648,7 @@ impl Component for FinderOverlay {
                             // below move a list the box does not hold, and the box
                             // declines them so that they arrive here at all.
                             .on_global_key_down(move |e: Event<KeyboardEventData>| {
-                                let ctrl = e.modifiers.contains(Modifiers::ctrl_or_meta());
-                                finder_key(finder, states, list, listed, &e.key, ctrl);
+                                finder_key(finder, states, list, listed, &e.key);
                             })
                             .child(FinderBox {
                                 finder,
@@ -686,7 +685,6 @@ fn finder_key(
     list: ScrollController,
     listed: Memo<Listed>,
     key: &Key,
-    ctrl: bool,
 ) {
     let rows = listed.peek().len();
     match key {
@@ -699,7 +697,7 @@ fn finder_key(
                 listed.peek().path(at)
             };
             if let Some(path) = opened {
-                open_found(states, &path, ctrl);
+                open_found(states, &path);
                 close_finder(finder);
             }
         }
@@ -743,16 +741,16 @@ fn followed(mut list: ScrollController, (at, rows): (usize, usize)) {
     reveal_caret(&mut list, rows.min(FINDER_ROWS) as f32 * height, height, at);
 }
 
-/// Open a file the finder listed: a source-driven tab, in the temporal one or a new one
-/// as Ctrl says. What pressing a Files item does, and the same guard: a file the source
-/// pane would refuse opens nothing at all.
-fn open_found(states: ProjectStates, path: &Path, ctrl: bool) {
+/// Open a file the finder listed: a source-driven tab of its own that stays, since a
+/// reader who typed the path out and picked it off the list has chosen the file. A tab
+/// already showing it is raised. The same guard as a Files item: a file the source pane
+/// would refuse opens nothing at all.
+fn open_found(states: ProjectStates, path: &Path) {
     if !shows_as_source(path) {
         return;
     }
     let file = Document::Source(Arc::from(&*path.to_string_lossy()));
-    let reach = if ctrl { Reach::NewTab } else { Reach::Preview };
-    open_document(states.open, states.visits, file, reach);
+    open_document(states.open, states.visits, file, Reach::NewTab);
 }
 
 /// The box at the top of the overlay.
@@ -842,7 +840,6 @@ impl Component for FoundRow {
         let mut hovering = use_state(|| false);
         // Consumed in the render, because the handler that uses them runs no hook.
         let states = use_project_states();
-        let ctrl = use_consume::<Ctrl>().0;
         let finder = self.finder;
 
         let Some((file, marks)) = self.listed.row(self.index) else {
@@ -872,7 +869,7 @@ impl Component for FoundRow {
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |_| {
-                    open_found(states, &pressed, *ctrl.peek());
+                    open_found(states, &pressed);
                     close_finder(finder);
                 })
                 .child(

@@ -22015,10 +22015,10 @@ fn typing_narrows_the_list_to_the_characters_in_order() {
     );
 }
 
-/// Enter opens the row the keyboard is on, as pressing a Files item does: the temporal
-/// tab, or a new one with Ctrl held. And the finder closes behind it.
+/// Enter opens the row the keyboard is on in a tab that stays, and the finder closes
+/// behind it: a file picked off the list is chosen, not previewed.
 #[test]
-fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
+fn enter_opens_the_selected_file_in_a_tab_that_stays() {
     let (mut test, states, finder, keys, directory, dock) =
         finder_over(line!(), move |root, emit| {
             let _ = emit(walked_file(root, "first.rs"));
@@ -22044,13 +22044,14 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
 
     let first = tab_showing(&states, &opened(&rows[0])).expect("the first row's file opened");
     assert!(!finder.peek().open, "the finder closes behind the file");
-    assert_eq!(
+    assert_ne!(
         states.open.docs.peek().temporal(),
         Some(first),
-        "a row opens in the temporal tab, as a Files row does"
+        "a file picked out of the finder opens in a tab that stays"
     );
 
-    // The row under it, in a tab of its own.
+    // The row under it, opened the same way: a tab of its own, with the first still open
+    // because no preview tab was there to be taken back.
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
@@ -22060,14 +22061,20 @@ fn enter_opens_the_selected_file_and_ctrl_enter_opens_it_in_a_new_tab() {
         Modifiers::empty(),
     );
     settle(&mut test);
-    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::CONTROL);
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
     settle(&mut test);
 
     let second = tab_showing(&states, &opened(&rows[1])).expect("the second row's file opened");
-    assert_ne!(
+    assert_ne!(second, first, "the second file opened in a tab of its own");
+    assert_eq!(
+        tab_showing(&states, &opened(&rows[0])),
+        Some(first),
+        "the first file's tab stayed"
+    );
+    assert_eq!(
         states.open.docs.peek().temporal(),
-        Some(second),
-        "Ctrl+Enter opens a tab that stays"
+        None,
+        "neither is the preview tab"
     );
 }
 
@@ -22393,10 +22400,10 @@ fn pressing_a_row_opens_its_file() {
     let file = Document::Source(Arc::from(&*directory.join("kept.rs").to_string_lossy()));
     let opened = tab_showing(&states, &file).expect("the pressed file opened");
     assert!(!finder.peek().open, "the finder closes behind the file");
-    assert_eq!(
+    assert_ne!(
         states.open.docs.peek().temporal(),
         Some(opened),
-        "a row opens in the temporal tab, as a Files row does"
+        "a row opens in a tab that stays, as Enter on it does"
     );
 }
 
