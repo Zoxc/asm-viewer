@@ -167,6 +167,12 @@ cannot see row 400 at all.
   asked for. That distinction is the whole of
   `a_font_change_repaints_and_resizes_a_component_nothing_else_woke`: a row-height function
   returning a new number proves nothing if the component was never re-rendered.
+  **`area` counts a node's margin in**; `visible_area()` is that box without it
+  (`torin-0.4.3/src/tree_adapter.rs:62`), and the second is what is painted and what a press is
+  tested against. So a test that finds a node *by its size* has to ask for the one it means: the ×
+  on a tab keeps two pixels of margin between itself and the end of what it is drawn in, and the
+  three finders looking for a `close_target()` square stopped seeing it the moment the first of
+  them arrived.
 - **State, effects, hooks, memos**, including the ordering hazards. A `State::read` guard held
   across a write is a runtime panic and nothing else in this repo can catch it, which is why
   `leaving_a_project_leaves_nothing_of_it_behind` mounts a runner to assert about states rather than

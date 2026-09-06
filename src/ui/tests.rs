@@ -1744,7 +1744,9 @@ fn the_tab_list_closes_a_tab_from_its_own_row() {
     let name = label_area(&test, "one.rs").expect("the row for the first tab");
     let close = test
         .find_many(|node, _| {
-            let area = node.layout().area;
+            // What is drawn and not the laid-out box: the × carries a margin, which torin
+            // counts into `area` and leaves out of `visible_area`.
+            let area = node.layout().visible_area();
             let centre = area.origin.y + area.height() / 2.0;
             (area.width() == close_target()
                 && area.height() == close_target()
@@ -2240,7 +2242,7 @@ fn closing_a_page_lands_on_its_neighbour_and_keeps_what_it_held() {
     let name = label_area(&test, "Settings").expect("the page's chip");
     let close = test
         .find_many(|node, _| {
-            let area = node.layout().area;
+            let area = node.layout().visible_area();
             (area.width() == close_target()
                 && area.height() == close_target()
                 && area.origin.x > name.max_x())
@@ -2637,7 +2639,10 @@ fn one_close_target(test: &mut TestingRunner, states: &ProjectStates) -> Area {
 
     let target = test
         .find(|node, _| {
-            let area = node.layout().area;
+            // The square that is drawn, which is the area **less its margin**: the pixel
+            // the × keeps between itself and the end of whatever it is drawn in is torin's
+            // `margin`, and a node's `area` counts that in (`agents/Headless.md`).
+            let area = node.layout().visible_area();
             (area.width() == close_target() && area.height() == close_target()).then_some(area)
         })
         .expect("the × is a target of its own");
@@ -2660,6 +2665,28 @@ fn one_close_target(test: &mut TestingRunner, states: &ProjectStates) -> Area {
     );
 
     target
+}
+
+/// **The air around the × is the control**, and it is the cap that takes it away: capped at
+/// a list row -- ten pixels shorter than the chip the × sits in -- the square loses air at
+/// every font bigger than this app's own default, which the reader's desktop font usually
+/// is. The metrics and not a laid-out area: what went wrong was the number, and how the
+/// control lays out is the test below.
+#[test]
+fn the_close_target_is_the_glyph_and_its_air() {
+    let (mut test, _states) =
+        TestingRunner::new(close_harness, (200., 100.).into(), project_states!(), 1.);
+    test.sync_and_update();
+
+    assert_eq!(
+        close_target() - close_glyph(),
+        6.0,
+        "a {} glyph in a {} square",
+        close_glyph(),
+        close_target()
+    );
+    // And it still fits the chip, which is the whole of what the cap is for.
+    assert!(close_target() <= tab_row_height() - 2.0);
 }
 
 /// A press that lands in the target but nowhere near the glyph still closes the tab: the

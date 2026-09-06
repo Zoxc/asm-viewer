@@ -160,6 +160,11 @@ impl Component for TabClose {
         rect()
             .width(Size::px(close_target()))
             .height(Size::px(close_target()))
+            // Two pixels between the wash and whatever the × is drawn at the end of:
+            // the chip's own right padding is two, which is not enough room for a square
+            // that lights up. The control's own and not the chip's, so the × carries them
+            // into the tab list's rows as well.
+            .margin(Gaps::new(0.0, 2.0, 0.0, 0.0))
             .center()
             .corner_radius(4.0)
             .background(if hovering() {

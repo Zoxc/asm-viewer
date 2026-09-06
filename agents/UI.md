@@ -324,9 +324,17 @@ for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state,
 with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper. That is why the × reaches
 `chip` as an element already built rather than as an `on_close` handler. Two things follow from its
 being a control. It is **a target you hit rather than one you aim at**: a `close_target()` square
-centred on the glyph, four pixels of air on every side, capped at the row so the close never decides
-how tall the bar is. The square is written as `close_glyph() + 8` rather than as a share of the row,
-so the air is what stays fixed when the font or the row moves. The × is drawn a third larger than
+centred on the glyph, three pixels of air on every side, capped at the **tab** row so the close
+never decides how tall the bar is. Three and not the four it was drawn at first -- what the square
+has past it is the two pixels of margin the control carries and the chip's own two, so a fourth
+inside it put the mark too far in from the tab's own right edge. The margin is `TabClose`'s and not
+the chip's padding, so the × keeps those pixels wherever it is drawn, the tab list's rows
+included. The square is written as `close_glyph() + 6` rather than as a
+share of the row, so the air is what stays fixed when the font or the row moves. The cap was a
+*list* row for a while, ten pixels shorter than the chip the target sits in, so it ate that air at
+every font bigger than the app's own default, which the reader's desktop font usually is;
+`the_close_target_is_the_glyph_and_its_air` pins the square against the glyph rather than against
+any absolute width. The × is drawn a third larger than
 the interface font it sits beside: it is a mark and not a letter, and at the text's own size the
 multiplication sign looks like a scratch on the tab. And it says under the pointer that it is the ×
 and not the tab: `close_hover_bg` behind it and the glyph up from `address_fg` to the interface

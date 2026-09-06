@@ -73,12 +73,21 @@ pub(crate) fn toggle_size() -> f32 {
 /// The side of the square the × on a document's tab is centred in.
 ///
 /// **This is what makes the close a target you hit rather than one you aim at**: the air
-/// around the glyph, four pixels of it on every side, is what a press that misses the mark
-/// still lands in. It is written as the glyph plus that air rather than as a share of the
-/// row, so growing one grows the other; the row is only the cap, since a target taller than
-/// the bar it sits in would decide how tall the bar is.
+/// around the glyph, three pixels of it on every side, is what a press that misses the mark
+/// still lands in. Three and not the four it was drawn at first: what the square has past
+/// it is the two pixels of margin the control carries and the chip's own two (`TabClose`
+/// and `chip`, `src/ui/strip.rs`), so a fourth inside it puts the mark too far in from the
+/// tab's own right edge. It is
+/// written as the glyph plus that air rather than as a share of the row, so growing one
+/// grows the other; the row is only the cap, since a target taller than the chip it sits in
+/// would decide how tall the bar is.
+///
+/// The cap is the **tab** row and not a list row. A chip is ten pixels taller than a list
+/// row ([`tab_row_height`]), and the × outgrows the shorter of the two as soon as the font
+/// is bigger than this app's own default -- which the reader's desktop font usually is -- so
+/// capping there ate the air at the sizes most readers see it at.
 pub(crate) fn close_target() -> f32 {
-    (close_glyph() + 8.0).min(list_row_height() - 2.0)
+    (close_glyph() + 6.0).min(tab_row_height() - 2.0)
 }
 
 /// The size the × on a tab is drawn at: the interface font, a third bigger.
