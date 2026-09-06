@@ -428,6 +428,13 @@ leaves this list when it is. That is a move made on request, like everything els
 
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?
 - [?] Snapshots of projects where binaries and source can be embedded (compressed?) and different versions of projects can be compared.
+- [ ] A build never replaces an open binary; it marks the outdated ones. Today a finished build
+  closes and reopens the binaries it wrote, which takes the reader's place in them with it. A
+  build should instead open every artifact it produced that is not open already, and leave the
+  open ones where they are with a mark on their row in the Objects list saying the file on disk
+  is no longer what is loaded. Outdated means the content differs: the digest taken when the
+  binary was opened against the file the build named. The reader reopens one when they choose
+  to, and that is what clears the mark.
 
 ## Startup
 
