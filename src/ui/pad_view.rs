@@ -23,21 +23,6 @@
 use super::*;
 use std::cell::Cell;
 
-/// The file a scratchpad's source is, as cargo and rustc spell it.
-pub(crate) const SOURCE_FILE: &str = "src/main.rs";
-
-/// Whether the file a diagnostic names is the pad's own source.
-///
-/// **Either separator, on every platform.** cargo hands rustc the path it built with
-/// `Path::join` and rustc echoes it back as it was given, so on Windows the span says
-/// `src\main.rs` and a comparison against the string above makes every diagnostic in the
-/// pad's own file look like a dependency's. Nothing on Unix names a built file with a
-/// backslash in it, so accepting both costs nothing and leaves the rule one function a
-/// test can put Windows' spelling to wherever it runs.
-fn is_source_file(file: &str) -> bool {
-    file.split(['/', '\\']).eq(SOURCE_FILE.split('/'))
-}
-
 /// How wide the delete question is: a pad's name over the path its package is at, which is
 /// the longest thing it draws.
 const DELETE_WIDTH: f32 = 520.0;
@@ -748,6 +733,172 @@ impl Component for PadRow {
     }
 }
 
+/// One row over the listing saying [`STALE_PROGRAM`], drawn only when it is so, in the
+/// header's own colours -- the Source pane's stale banner exactly.
+fn stale_program() -> Element {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .width(Size::fill())
+        .height(Size::px(list_row_height()))
+        .padding(Gaps::new_symmetric(0.0, 8.0))
+        .background(palette().header_bg)
+        .child(label().text(STALE_PROGRAM).color(palette().text_fg))
+        .into()
+}
+
+/// What the pane says over the listing once the reader has typed since the build. The
+/// Source pane's checksum row in a second place, and exact where that one is a guess: the
+/// app wrote the source this program was built from and kept it.
+pub(crate) const STALE_PROGRAM: &str = "Edited since this was built";
+
+/// The Scratchpad's assembly side: the program the pad last built, drawn as the unified
+/// view of an object's whole code.
+///
+/// Its own component, and mounted only where there **is** a program, so the claim on the
+/// reading (`use_code_beside`) and the drive off the editor's cursor are hooks that exist
+/// exactly while the listing does, rather than hooks in `ScratchpadTab` that would have to
+/// answer for a pad with nothing built.
+#[derive(Clone)]
+pub(crate) struct PadAssembly {
+    pub(crate) object: Arc<Object>,
+    /// Where the listing opens: the lowest placed address the pad's own code sits at.
+    pub(crate) opening: Option<u64>,
+    /// The pad's own source as this program spells it, which is what the run the cursor
+    /// writes is a run *of*. `None` leaves the listing undriven: there is no name to
+    /// compare a row's own against.
+    pub(crate) file: Option<Arc<str>>,
+    /// Which pad's buffer the cursor is read from.
+    pub(crate) pad: PadId,
+    /// Whether what is on screen has moved on from the program under it.
+    pub(crate) stale: bool,
+}
+
+impl PartialEq for PadAssembly {
+    /// By pointer for the object and by value for the rest. Every field is one the pane
+    /// behaves differently for -- the file is what the drive writes a run *of* -- so a
+    /// hand-written `PartialEq` that compared the object alone would be a program
+    /// described differently and drawn the same.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.object, &other.object)
+            && self.pad == other.pad
+            && self.file == other.file
+            && self.opening == other.opening
+            && self.stale == other.stale
+    }
+}
+
+/// Drive the listing from the editor's own cursor: the line it is on is the pad's source
+/// run, which is what the listing lights the pair of and owes a scroll to.
+///
+/// `mark_line` is the same door a click on a source row goes through, so the editor and a
+/// Source pane say the same thing to the same listing -- and `Owed::by(Pane::Assembly)`
+/// because only that side can answer: freya's editor can neither light a set of lines nor
+/// be scrolled from outside (`notes/upstream/freya.md`), so the pad's two panes point at
+/// each other one way only.
+///
+/// **Compared against the run on screen and never against a line remembered here.**
+/// `use_land` puts `Marks::default()` back on every change of the active entry, and the
+/// Scratchpad page becoming the tab on screen is one, so a drive that remembered would be
+/// wiped a beat after the page arrived and would never say it again. The comparison is
+/// also what makes typing along one line write nothing.
+fn use_driving_cursor(
+    text: State<PadBuffers>,
+    marked: State<Marks>,
+    pad: PadId,
+    file: Option<Arc<str>>,
+) {
+    // With deps, and not a bare effect: its closure is built once, so one built over the
+    // pad and the file it first mounted with would go on driving those.
+    use_side_effect_with_deps(
+        &(pad, file),
+        move |(pad, file): &(PadId, Option<Arc<str>>)| {
+            // A program whose debug info names the pad's file nowhere is a listing nothing can
+            // drive: there is no name to compare a row's own against.
+            let Some(file) = file else {
+                return;
+            };
+            // Reading the buffers is what subscribes this to the cursor: the editor writes
+            // through its `Writable` for a bare move as much as for an edit.
+            let buffers = text.read();
+            if !buffers.holds(pad) {
+                return;
+            }
+            let line = buffers.get(pad).cursor_row() as u32 + 1;
+            drop(buffers);
+
+            // Bound to a `let` of its own before the write below, the read's guard living to
+            // the end of the statement it is in.
+            let standing = marked
+                .read()
+                .source
+                .as_ref()
+                .is_some_and(|run| run.is_line(file, line));
+            if !standing {
+                mark_line(marked, file.clone(), line, None, Owed::by(Pane::Assembly));
+            }
+        },
+    );
+}
+
+impl Component for PadAssembly {
+    /// Keyed by the program, so a rebuild takes this and its listing down and builds them
+    /// against the new one -- which is what makes the claim, the opening place and the
+    /// listing's own hooks start again rather than carry a number that names nothing in
+    /// the new program.
+    fn render_key(&self) -> DiffKey {
+        DiffKey::from(&Arc::as_ptr(&self.object).addr())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let beside = use_consume::<Beside>().0;
+        use_code_beside(beside, &self.object);
+
+        // Open on the pad's own code rather than at the top, which for a linked Rust
+        // program is the runtime's. A `Planting` and not a place in `CodeAt`: the listing
+        // keeps no place of its own, and an entry there would hold this program's bytes
+        // with nothing that would ever forget them -- where a planting is taken once by
+        // the pane below and put back to `None`. Written from the render, which is the
+        // parent's and so runs before the listing's first.
+        // The drive: the editor's cursor line is the run the listing lights the pair of.
+        // Unconditional, as a hook must be -- the effect inside declines a program whose
+        // debug info names the pad's file nowhere.
+        let text = use_consume::<PadText>().0;
+        let marked = use_consume::<Marked>().0;
+        use_driving_cursor(text, marked, self.pad.clone(), self.file.clone());
+
+        let mut plant = use_consume::<Plant>().0;
+        let opening = self.opening.map(|address| Planting {
+            tab: Document::Code(self.object.clone()),
+            address,
+        });
+        use_hook(move || {
+            if opening.is_some() {
+                plant.set(opening);
+            }
+        });
+
+        rect()
+            .expanded()
+            .content(Content::Flex)
+            .background(palette().asm_pane_bg)
+            // Over the listing and not inside it: a notice about the whole program, where
+            // the bar naming what a document's pane is drawing would be.
+            .maybe_child(self.stale.then(stale_program))
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.0))
+                    // The listing's own inset, the assembly pane's exactly.
+                    .padding(5.0)
+                    .child(SectionList {
+                        place: Placing::Pad,
+                        object: self.object.clone(),
+                    }),
+            )
+    }
+}
+
 /// The Scratchpad pane: the pads there are down one side, and beside it the shown one --
 /// a source file the reader edits, the crates it asks for, a build, and what the compiler
 /// said about it. What it *builds* goes through `open_files` like any other binary.
@@ -791,6 +942,23 @@ impl Component for ScratchpadTab {
 
         let text = use_consume::<PadText>().0;
         let editing = text.read().holds(&shown).then(|| shown.clone());
+
+        let mut ratio = use_consume::<PadSplit>().0;
+        let splits = use_consume::<PadSplits>().0;
+        let following = *use_consume::<PadFollows>().0.read();
+        // Where the reader left the handle, written back as they drag it, exactly as a
+        // document's split does it (`DocumentBody`).
+        use_side_effect(move || {
+            let live = splits.read().panels.first().map(|panel| panel.size);
+            if let Some(live) = live {
+                ratio.set_if_modified(live);
+            }
+        });
+        // `peek` and not `read`: `initial_size` is consulted once, in the panel's own
+        // `use_hook` at mount, so subscribing here would be a subscription to nothing --
+        // and a loop with the effect above.
+        let leading = ratio.peek().clamp(1.0, 99.0);
+        let program = state.program.clone();
 
         let problems: HashMap<usize, Problem> = state.scratchpad.problems().into_iter().collect();
         let rows: Vec<Element> = state
@@ -899,6 +1067,90 @@ impl Component for ScratchpadTab {
                     )
             }));
 
+        // The reader's own side of the split: the file, then what the compiler said about
+        // the file directly above it, then what the program it built printed.
+        let source_column = rect()
+            .width(Size::fill())
+            .height(Size::fill())
+            .content(Content::Flex)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(2.0))
+                    .border(bottom_hairline())
+                    // Only once the pad's source has arrived and its buffer has been made:
+                    // the editor indexes that buffer, and there is nothing yet to type into
+                    // while the worker is still reading the disk.
+                    .maybe_child(editing.map(|pad| SourceEditor { pad }.into_element())),
+            )
+            // A plain `ScrollView` and never a virtual one, which is what lets the blocks
+            // in it wrap: a virtual list steps by one `item_size`, and a row that wraps is
+            // a row whose height is not known until it has been laid out. A build says
+            // dozens of things, so there is nothing to virtualise away.
+            .maybe_child((!diagnostics.is_empty()).then(|| {
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.0))
+                    .background(palette().asm_pane_bg)
+                    .child(
+                        ScrollView::new().child(
+                            rect()
+                                .width(Size::fill())
+                                .padding(Gaps::new_symmetric(4.0, 12.0))
+                                .children(diagnostics)
+                                .into_element(),
+                        ),
+                    )
+                    .into_element()
+            }))
+            // Under the diagnostics rather than over them: what the compiler said is about
+            // the source directly above it, and what the program said is the newest thing
+            // in the pane.
+            .maybe_child(output)
+            .into_element();
+
+        // What the split's other side draws: the program the pad built, or the one line
+        // saying why there is none. Always something while the listing is up, so the
+        // handle does not jump when a build lands.
+        let assembly = match (&program, state.building) {
+            (Some(program), _) => PadAssembly {
+                object: program.object.clone(),
+                opening: program.opening,
+                file: program.file.clone(),
+                pad: shown.clone(),
+                stale: state.out_of_date(),
+            }
+            .into_element(),
+            (None, true) => placeholder("Building..."),
+            (None, false) => placeholder("Nothing built yet"),
+        };
+
+        // The split takes everything under the block above: the listing is a whole
+        // program's code and wants the height, and the Build and Run buttons must not move
+        // when the handle does.
+        let split = rect()
+            .width(Size::fill())
+            .height(Size::flex(1.0))
+            .child(match following {
+                false => source_column,
+                true => ResizableContainer::new()
+                    .direction(Direction::Horizontal)
+                    .controller(splits)
+                    .panel(
+                        // The editor leads, as a source-driven tab's own side does -- and
+                        // because the keyboard goes to the first box a tab registers.
+                        ResizablePanel::new(PanelSize::percent(leading))
+                            .min_size(10.0)
+                            .child(source_column),
+                    )
+                    .panel(
+                        ResizablePanel::new(PanelSize::percent(100.0 - leading))
+                            .min_size(10.0)
+                            .child(assembly),
+                    )
+                    .into_element(),
+            });
+
         let body = rect()
             .width(Size::flex(1.0))
             .height(Size::fill())
@@ -929,6 +1181,11 @@ impl Component for ScratchpadTab {
                                         }),
                                 )
                                 .child(run)
+                                // The control that puts the listing away, where a
+                                // document's sits on the leading pane's bar: this heading
+                                // row is the pad's own strip of controls and the one
+                                // thing here that is always up, the editor having no bar.
+                                .child(PaneToggle { of: Toggling::Pad })
                                 .into_element(),
                         ),
                     ))
@@ -1011,40 +1268,7 @@ impl Component for ScratchpadTab {
                     }))
                     .maybe_child(refusal),
             )
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(2.0))
-                    .border(bottom_hairline())
-                    // Only once the pad's source has arrived and its buffer has been made:
-                    // the editor indexes that buffer, and there is nothing yet to type into
-                    // while the worker is still reading the disk.
-                    .maybe_child(editing.map(|pad| SourceEditor { pad }.into_element())),
-            )
-            // A plain `ScrollView` and never a virtual one, which is what lets the blocks
-            // in it wrap: a virtual list steps by one `item_size`, and a row that wraps is
-            // a row whose height is not known until it has been laid out. A build says
-            // dozens of things, so there is nothing to virtualise away.
-            .maybe_child((!diagnostics.is_empty()).then(|| {
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(1.0))
-                    .background(palette().asm_pane_bg)
-                    .child(
-                        ScrollView::new().child(
-                            rect()
-                                .width(Size::fill())
-                                .padding(Gaps::new_symmetric(4.0, 12.0))
-                                .children(diagnostics)
-                                .into_element(),
-                        ),
-                    )
-                    .into_element()
-            }))
-            // Under the diagnostics rather than over them: what the compiler said is about
-            // the source directly above it, and what the program said is the newest thing
-            // in the pane.
-            .maybe_child(output);
+            .child(split);
 
         rect()
             .expanded()

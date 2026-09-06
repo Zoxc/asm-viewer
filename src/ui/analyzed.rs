@@ -597,6 +597,7 @@ fn recent_symbols(shown: Option<&Shown>, visits: &Visits) -> Vec<Symbol> {
 pub(crate) fn use_analysis_with(
     asked: impl ReadsAsk,
     objects: State<Vec<Arc<Object>>>,
+    beside: State<Option<Arc<Object>>>,
     visits: State<Visits>,
     mut analysis: State<Analyzed>,
     mut located: State<Located>,
@@ -642,12 +643,10 @@ pub(crate) fn use_analysis_with(
                         // Taken whenever it is about the object on screen -- a decoded
                         // stretch is never stale, see `Reading::take` -- and never out
                         // of a binary closed since it was asked for, `Shown::still_open`'s
-                        // rule once more.
-                        let open = objects
-                            .peek()
-                            .iter()
-                            .any(|object| Arc::ptr_eq(object, &ask.object));
-                        if !open {
+                        // rule once more. Held by the app and not open in the project: a
+                        // pad's program is neither, and `holding` is the one rule for the
+                        // two.
+                        if !holding(&objects.peek(), &beside.peek(), &ask.object) {
                             continue;
                         }
                         let mut next = reading.peek().clone();

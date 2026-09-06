@@ -284,7 +284,10 @@ build under the new build's line numbers, with the checksum row above saying the
 the one it was built from when it was exactly that file.
 
 **The two panes point at each other through their selected runs**, and through nothing the pointer
-does. `Marked` holds one run per pane (`Marks`, two `Picked`s, `ui/marks.rs`), and what a pane draws
+does. In the Scratchpad they point one way only: the editor's cursor line is written as the source
+run and the listing beside it lights the pair, and nothing comes back, freya's editor being able
+neither to light a set of lines nor to be scrolled from outside (`notes/upstream/freya.md`,
+`agents/Scratchpad.md`). `Marked` holds one run per pane (`Marks`, two `Picked`s, `ui/marks.rs`), and what a pane draws
 in green is the *pair*: the rows of it that are the same place as the other pane's run, the
 instructions a selected line was compiled from, the line a selected instruction came from, every one
 of them and not the first. A run is a `RowSelection` of listing rows plus the file it is a run of.
@@ -718,7 +721,13 @@ them are keyed in a key space per kind over the placed address they stand for, t
 lesson in six places. Two effects do the rest. `use_kept_place` keeps the reader's place
 (`agents/UI.md`, `CodeAt`), plants a door's caret once there are rows to plant it in (the planting
 paragraph above), and rebuilds the rows whenever the reading's generation changes, in the one run
-that also moves the controller to where the place now is. What it produces is the rows **and the
+that also moves the controller to where the place now is. **Which place, and whether it is kept at
+all, is the listing's `Placing`**: a tab's is an entry on its trail, and the Scratchpad's is an
+entry nothing is ever filed under -- the page has no `DocId`, and an entry under a made-up one
+would hold the `Arc<Object>` its document points into with none of the three closers to forget it.
+Nothing is lost by that: what carries the reader's place across a recount is the place derived from
+the offset, which is the hook's own and not the map's, and the pad's listing opens where a planting
+puts it (`agents/Scratchpad.md`). What it produces is the rows **and the
 reading they were counted from**, as one `Built`, because the effect runs a pass after the answer
 and for that pass the reading the pane can read is newer than the rows on screen: a stretch the
 answer let go of, drawn from the old rows against the new reading, found no bytes, and every one of

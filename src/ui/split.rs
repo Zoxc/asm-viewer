@@ -27,6 +27,18 @@ pub(crate) fn following(tab: DocId, document: &Document, said: &HashMap<DocId, b
     }
 }
 
+/// What a [`PaneToggle`] is the toggle of: a document's following pane, or the
+/// Scratchpad's listing.
+///
+/// One control and not two, so the icon, the tooltip, the hover box and the rule about
+/// where it sits are written once. What differs is only where the flag lives -- under a
+/// `DocId` for a tab, and at the root for the page, which has none.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Toggling {
+    Tab(DocId),
+    Pad,
+}
+
 /// The control on the leading pane's bar that puts the pane the tab is not driven from
 /// away, and brings it back.
 ///
@@ -41,29 +53,38 @@ pub(crate) fn following(tab: DocId, document: &Document, said: &HashMap<DocId, b
 /// an `Arc<Object>` in a control that every open tab draws.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct PaneToggle {
-    pub(crate) tab: DocId,
+    pub(crate) of: Toggling,
 }
 
 impl Component for PaneToggle {
     fn render(&self) -> impl IntoElement {
         let docs = use_consume::<OpenDocs>().0;
         let mut said = use_consume::<Follows>().0;
+        let mut pad_said = use_consume::<PadFollows>().0;
         let mut hovering = use_state(|| false);
-        let tab = self.tab;
         // Not hit while a sweep is under way, as the names beside it are not: the pointer
         // dragging a selection up past the bar would otherwise arm this tooltip.
         let sweeping = try_consume_context::<Marked>().is_some_and(|marked| sweeping(marked.0));
 
-        // Nothing to toggle behind a stray id: a harness that mounts a pane on no tab.
-        let Some(document) = docs.read().get(tab).cloned() else {
-            return rect().into_element();
+        // Which pane it is that follows, for the tooltip to say what the press does, and
+        // whether it is up.
+        let (name, up) = match self.of {
+            Toggling::Tab(tab) => {
+                // Nothing to toggle behind an unfiled id: a harness that mounts a pane on
+                // no tab.
+                let Some(document) = docs.read().get(tab).cloned() else {
+                    return rect().into_element();
+                };
+                let name = match &document {
+                    Document::Source(_) => "assembly",
+                    Document::Assembly(_) | Document::Code(_) => "source",
+                };
+                (name, following(tab, &document, &said.read()))
+            }
+            // The pad's editor is the side it is driven from, so the side that follows is
+            // always the assembly.
+            Toggling::Pad => ("assembly", *pad_said.read()),
         };
-        // Which pane it is that follows, for the tooltip to say what the press does.
-        let name = match &document {
-            Document::Source(_) => "assembly",
-            Document::Assembly(_) | Document::Code(_) => "source",
-        };
-        let up = following(tab, &document, &said.read());
         let (icon, tip) = match up {
             true => (
                 ("panel-right-close", lucide::panel_right_close()),
@@ -75,6 +96,7 @@ impl Component for PaneToggle {
             ),
         };
         let (side, glyph) = (toggle_size(), icon_size());
+        let of = self.of;
 
         // A box of the bar's own row height around the square, so the control sits beside
         // the first name in a bar that has grown a section rather than down the middle of
@@ -96,8 +118,11 @@ impl Component for PaneToggle {
                         })
                         .on_pointer_over(move |_| hovering.set_if_modified(true))
                         .on_pointer_out(move |_| hovering.set_if_modified(false))
-                        .on_press(move |_| {
-                            said.write().insert(tab, !up);
+                        .on_press(move |_| match of {
+                            Toggling::Tab(tab) => {
+                                said.write().insert(tab, !up);
+                            }
+                            Toggling::Pad => pad_said.set(!up),
                         })
                         .child(
                             SvgViewer::new(icon)

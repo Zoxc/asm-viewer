@@ -1472,8 +1472,7 @@ impl AssemblyPane {
                 .expanded()
                 .padding(5.0)
                 .child(SectionList {
-                    tab: self.tab,
-                    document: self.document.clone(),
+                    place: Placing::Tab(self.tab),
                     object: object.clone(),
                 })
                 .into();

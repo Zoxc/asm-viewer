@@ -834,32 +834,6 @@ pub(crate) fn entry_key(entry: &Document) -> EntryKey<'_> {
     }
 }
 
-/// Open the binary at `path` in place of whatever the app already had from it:
-/// [`close_binary`] and then what the toolbar's Open does, in one handler.
-///
-/// A binary is a **path** throughout the app, so two generations of one file must not be
-/// in the objects list together. The close is therefore first and unconditional -- whether
-/// or not the new build parses, the objects in hand describe bytes that are gone -- and it
-/// takes that file's tabs, their positions and its visits with it.
-pub(crate) fn reopen_binary(states: ProjectStates, path: PathBuf) {
-    close_binary(
-        states.objects,
-        states.loading,
-        states.open,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        states.marks_at,
-        states.visits,
-        &path,
-    );
-
-    spawn(async move {
-        open_binaries(states.objects, states.loading, vec![path]).await;
-    });
-}
-
 /// A step along the trail of the tab on screen: the mouse's back and forward buttons, and
 /// the toolbar's two chevrons.
 #[derive(Clone, Copy)]

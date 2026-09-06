@@ -500,20 +500,33 @@ enum RowKey {
     Gap(u64),
 }
 
+/// Where a listing of an object's code keeps its place, its runs and its caret -- and
+/// whether that place is one anything is filed under at all.
+///
+/// **A tab's is an entry on its trail**, and `CodeAt` and `MarksAt` are forgotten with the
+/// tab by the three closers. A listing that is **no tab** has no `DocId` to be filed under,
+/// and an entry under a made-up one would hold the `Arc<Object>` its document points into
+/// with nothing that would ever forget it -- so it names an entry nothing is ever written
+/// under, and what keeps the reader's place across a recount is the place derived from the
+/// offset, which is the hook's own and not the map's.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Placing {
+    Tab(DocId),
+    /// The Scratchpad's listing of the program its pad built.
+    Pad,
+}
+
 /// The listing of one object's code.
 #[derive(Clone)]
 pub(crate) struct SectionList {
-    /// The tab this listing is in, which with `document` is what its place is kept under.
-    pub(crate) tab: DocId,
-    pub(crate) document: Document,
+    /// Where this listing is drawn, which is what its place is kept under -- or not kept.
+    pub(crate) place: Placing,
     pub(crate) object: Arc<Object>,
 }
 
 impl PartialEq for SectionList {
     fn eq(&self, other: &Self) -> bool {
-        self.tab == other.tab
-            && self.document == other.document
-            && Arc::ptr_eq(&self.object, &other.object)
+        self.place == other.place && Arc::ptr_eq(&self.object, &other.object)
     }
 }
 
@@ -567,15 +580,25 @@ impl Component for SectionList {
         // its runs are kept under: two stops in one object's code are two places, and
         // stepping between them is what Back does inside a listing. Read and not peeked,
         // so a step re-renders this pane and the hook sees the switch.
-        let stop = docs
-            .read()
-            .current(self.tab)
-            .cloned()
-            .unwrap_or_else(|| Stop::whole(self.document.clone()));
-        let entry = (self.tab, stop);
+        let document = Document::Code(self.object.clone());
+        let place = self.place;
+        let entry = match place {
+            Placing::Tab(tab) => (
+                tab,
+                docs.read()
+                    .current(tab)
+                    .cloned()
+                    .unwrap_or_else(|| Stop::whole(document.clone())),
+            ),
+            // An entry nothing is filed under, so nothing has to forget it.
+            Placing::Pad => (DocId::unfiled(), Stop::whole(document.clone())),
+        };
         use_kept_place(
             code_at,
-            move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),
+            move |(tab, stop): &Entry| match place {
+                Placing::Tab(_) => docs.peek().contains(*tab, stop),
+                Placing::Pad => false,
+            },
             // The scroll this pane owes: to the source pane's run, the row of the first
             // instruction compiled from one of its lines, in whichever held stretch has
             // one. Left owed while none does -- the stretch may not be decoded yet, and

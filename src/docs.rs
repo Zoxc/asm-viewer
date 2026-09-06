@@ -152,10 +152,13 @@ impl Docs {
     }
 }
 
-#[cfg(test)]
 impl DocId {
-    /// An id no tab has ever had, for a pane a test mounts with no tab behind it.
-    pub fn stray() -> DocId {
+    /// An id no tab is ever given: `next` counts up from 0 and a table this large is a
+    /// table no run reaches. What it is for is a pane that is **not** a tab -- the
+    /// Scratchpad's listing -- and a pane a test mounts with no tab behind it. Nothing is
+    /// ever filed under it: `Docs::contains` answers false for an id it does not hold, so
+    /// a place named by one is a place nothing keeps.
+    pub fn unfiled() -> DocId {
         DocId(u32::MAX)
     }
 }

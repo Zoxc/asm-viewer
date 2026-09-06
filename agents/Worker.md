@@ -35,10 +35,22 @@ moves on. So an answer is taken whenever it is about the object and the skeleton
 whichever window asked for it, and only `pending` is judged against the ask; what a scroll
 superseded is exactly what the next window asks for again. Two things bound it. A stretch farther
 than `KEEP` (512) from the last window is dropped as the answer lands. The whole reading is dropped
-when the active document stops being that object's code or the object closes under it
-(`use_reading_of`, an effect reading `Active` and `Objects`). It is an effect and not part of
-`close_binary` because the skeleton holds every section's bytes, and the effect makes a rebuild and
-a project switch drop it by the same line. The window is a state of its own, `Window`, and not a
+when what is on screen stops being that object's code or the object closes under it
+(`use_reading_of`, an effect reading `Active`, `Objects` and `Beside`). It is an effect and not part
+of `close_binary` because the skeleton holds every section's bytes, and the effect makes a rebuild
+and a project switch drop it by the same line.
+
+**A listing need not be a document tab, and one is not.** The Scratchpad is a page and has no
+`Document` at all, so a reading that followed the active document alone would leave the pad's
+listing undecoded for ever. `Beside` is the other way in: the object a listing that is no tab is
+drawing, **claimed by the pane that draws it** while it is mounted and let go of on the way out,
+the way a pane registers its focusable box. A claim and not a question asked of the pads, because
+the pane is the only thing that knows there is a listing: a mechanism that asked would have to know
+about pages and pads, and would hold a skeleton for a pad's program while the reader sat on the
+Settings page. One `Reading` still does for both, because only one tab is ever on screen and a code
+tab and that pane are never mounted at once. `holding` is what an arriving answer is judged by --
+the open binaries *or* that claim -- since a pad's program is deliberately in neither `Objects` nor
+the paths a project saves (`agents/Scratchpad.md`). The window is a state of its own, `Window`, and not a
 field of the reading, because the effect that works out the next window reads what is held and would
 wake itself if it wrote beside it.
 

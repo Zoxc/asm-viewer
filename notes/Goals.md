@@ -458,14 +458,10 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## Scratchpad
 
-- [ ] The unified assembly view for a scratchpad's own build. A pad compiles to an artifact
-  the app can already parse and list, but reading it means finding it on disk and opening it
-  as a binary by hand -- so the one place where the source and the assembly beside it are
-  both the reader's own is the one place the app does not join them. What it needs is the
-  built artifact opened as an object when the build ends, and the pad's pane offering its
-  code the way pressing an Objects row does. The decisions are whether the artifact's
-  objects join the Objects list or are the pad's alone, and what happens to them and their
-  tabs when the pad is rebuilt or closed.
+- [x] The unified assembly view for a scratchpad's own build, beside the editor, driven by
+  the editor's cursor. The program is the pad's alone: not in the Objects list, not among
+  the project's binaries, so a rebuild replaces a value and costs the reader no tabs. Moved
+  to `notes/specs/Scratchpad.md`.
 - [ ] Run a language server over a scratchpad's package, so a pad's editor gets what the Source
   pane has: a name followed to what it names, its references, and what the server sees wrong
   before a build does. Two things are in the way, both because the pad is the one place the app

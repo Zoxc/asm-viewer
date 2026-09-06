@@ -329,12 +329,11 @@ an archive this app opens like any other, and the most interesting thing a works
 it. The `.rmeta` beside it is dropped, the one place here a file is judged by its name, because
 it holds no code and a row for it could only ever fail to parse.
 
-**A build replaces the artifacts of the build before it, and nothing else.** `reopen_binary`'s rule
--- a binary is a path, so two generations of one file cannot both be in the objects list -- but
-narrowed: a file the reader opened by hand is theirs even where a build has just written the same
-path. So the set replaced is the *previous* build's list intersected with what is open, closed one
-by one and reopened in a single `open_binaries`, rather than a `reopen_binary` each, which would be
-one spawn and one load per artifact. That list is saved with the session, which is what makes the
+**A build replaces the artifacts of the build before it, and nothing else.** A binary is a path, so
+two generations of one file cannot both be in the objects list -- but narrowed: a file the reader
+opened by hand is theirs even where a build has just written the same path. So the set replaced is
+the *previous* build's list intersected with what is open, closed one by one and reopened in a
+single `open_binaries` rather than a close and a spawn each. That list is saved with the session, which is what makes the
 rule survive a restart (`agents/Persistence.md`). A finished build also forgets everything read of
 the sources under the project's directory, which nothing else in the app ever re-reads
 (`forget_source_under`, `agents/Panes.md`).

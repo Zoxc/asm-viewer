@@ -313,3 +313,35 @@ to freya's default is missed here.
 
 **`SyntaxHighlighter::tree()`**, so the function spans the source rows' menu needs are not a
 second parse of the file (above, and `ui/highlight.rs`).
+
+**A mark of our own in a `CodeEditor` gutter.** Its gutter is the line number and nothing may
+join it: every row is an `EditorLineUI` built inside `CodeEditor::render`
+(`editor_ui.rs:279-296`) with `pub(crate)` fields (`editor_line.rs:21-32`), and the gutter it
+draws is one label of the number in a box `font_size * 5` wide (`:60`, `:127-140`); the
+builder's `gutter(bool)` turns that on and off and says nothing else (`editor_ui.rs:65-114`).
+**Cost:** the scratchpad's editor is that component, so a pad's lines carry no dot for the ones
+that produced code -- the round mark the Source pane's gutter draws in `compiled_fg`
+(`code_mark`, `ui/parts.rs`; `agents/Panes.md`) -- and a reader finds out that a line compiled
+to something by putting the cursor on it and watching the listing beside it light. A slot beside
+the number, or public fields on `EditorLineUI`, would do it.
+
+**A background for a set of `CodeEditor` lines.** The one background a line gets is
+`line_selected_background`, painted for the cursor's row alone and only while nothing is
+selected (`editor_line.rs:116-121`); there is no per-line colour on the builder
+(`editor_ui.rs:65-114`) and `EditorLineUI`'s fields are `pub(crate)` (`:21-32`). **Cost:** the
+scratchpad's editor cannot light the pair -- the lines an instruction was compiled from, green
+on the other side of a split (`agents/Panes.md`) -- so the pad's two panes point at each other
+one way only: the cursor's line lights the instructions it compiled into, and nothing comes
+back (`src/ui/pad_view.rs`). A per-line background, or public fields on `EditorLineUI`, would
+do it.
+
+**A `CodeEditor` that can be scrolled to a line.** Its scroll is `CodeEditorData::scrolls`,
+`pub(crate)` (`editor_data.rs:33`); the controller is made inside a `use_hook`
+(`editor_ui.rs:139-168`) with no `new_controlled` to hand one in; and nothing in the crate
+moves it but PageUp and PageDown (`:207-222`), not even to its own cursor. **Cost:** the deferred
+diagnostic jump (`notes/Goals.md`): a pressed diagnostic puts the cursor on the line it names
+and leaves the pane where it was, so an error below the fold is named and not shown. It is also
+half of why the scratchpad's listing follows the editor and nothing goes the other way -- an
+instruction that named a line could neither light it nor bring it into view. An overlay of ours
+is no way round it: it cannot read the scroll it would have to follow. A `ScrollController` the
+editor accepts, or a scroll to its own cursor, would do it.

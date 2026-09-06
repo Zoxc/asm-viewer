@@ -238,6 +238,58 @@ impl Pads {
     }
 }
 
+/// How wide the editor's side of the Scratchpad's split is, and its panels' own context.
+///
+/// At the root for `SplitRatio`'s reason (`agents/UI.md`): a `ResizablePanel` registers at
+/// its `initial_size` in a `use_hook` and takes its entry out again on unmount, so a number
+/// kept in the page would come back at 50/50 every time the reader looked at another tab.
+/// **Not** `SplitRatio` itself: two containers sharing one context would carry the handle
+/// across a switch between a document and this page, and the pad's drag would be written
+/// into the project's session -- where a pad, which is outside every project, has no
+/// business being. Saved nowhere for that same reason.
+#[derive(Clone, Copy)]
+pub(crate) struct PadSplit(pub(crate) State<f32>);
+
+/// The context those two panels register into. See [`PadSplit`].
+#[derive(Clone, Copy)]
+pub(crate) struct PadSplits(pub(crate) State<ResizableContext>);
+
+/// Whether the Scratchpad's listing is up, which its toggle writes. One flag and not one
+/// per pad: the reader is arranging the window rather than saying something about a pad.
+#[derive(Clone, Copy)]
+pub(crate) struct PadFollows(pub(crate) State<bool>);
+
+/// The program a pad's build made, read.
+///
+/// **The pad's own and not the project's.** It is deliberately not in `Objects`, so it is
+/// in neither the Objects panel nor the paths a project saves: a pad lives beside
+/// `projects/` rather than inside one, and its program lives where the pad does. Nothing
+/// but the pad's own pane ever asks it anything, so nothing can open a tab into it and a
+/// rebuild costs the reader none (`agents/Scratchpad.md`).
+#[derive(Clone)]
+pub(crate) struct Program {
+    /// The parsed image. An `Arc<Object>` holds the whole file's bytes, so a pad holds its
+    /// program's until the next build replaces it or the pad is deleted.
+    pub(crate) object: Arc<Object>,
+    /// The string **this program's** debug info spells the pad's own source with, which is
+    /// the only spelling anything may compare against: every question about a file in this
+    /// app is matched exactly, on the name the debug info said. `None` for a program whose
+    /// debug info names no `src/main.rs` -- one built without debug info, or with its paths
+    /// remapped -- which is a listing nothing can drive.
+    pub(crate) file: Option<Arc<str>>,
+    /// What this build was of, as the digest the package keeps beside the artifact
+    /// ([`PadState::out_of_date`]). Taken from the scratchpad the **job** carried and never
+    /// from what is on screen when the answer lands, so a build the reader typed during
+    /// says it is out of date the moment it arrives -- and a digest rather than the value
+    /// itself, so a program read back in a later run answers the same question the same
+    /// way.
+    built_from: String,
+    /// Where the listing opens: the lowest placed address the pad's own code sits at, so
+    /// what the reader scrolls down through from there is their own code before the
+    /// runtime's. `None` with no `file`, and for a file that produced no code at all.
+    pub(crate) opening: Option<u64>,
+}
+
 /// One pad: everything the Scratchpad pane draws about it.
 #[derive(Clone, Default)]
 pub(crate) struct PadState {
@@ -254,6 +306,10 @@ pub(crate) struct PadState {
     /// What the last build came back with. Not remembered across runs: it describes bytes
     /// the next `cargo build` will replace.
     pub(crate) built: Option<Build>,
+    /// The program the last build made, read. Kept across a build that **failed**: only a
+    /// build that produced one replaces it, which is what leaves the pane showing the
+    /// program before a build that would not compile.
+    pub(crate) program: Option<Program>,
     /// Why the package on disk is not what is on screen, or `None` when it is.
     /// [`Scratchpad::write_to`] refuses outright for a bad row, so a bad row stops the
     /// *source* being written too and the pane has to say so.
@@ -362,6 +418,18 @@ impl PadState {
         }
     }
 
+    /// Whether what is on screen has moved on from the program that is: an edit since the
+    /// build, which the pane says over the listing.
+    ///
+    /// `false` for a pad with no program -- there is nothing to be out of date -- and for a
+    /// build that **failed** since, whose own program is still the one before it and still
+    /// describes the source that made it.
+    pub(crate) fn out_of_date(&self) -> bool {
+        self.program
+            .as_ref()
+            .is_some_and(|program| program.built_from != self.scratchpad.compiled().digest())
+    }
+
     /// Whether a program is on its way up or already going.
     pub(crate) fn is_running(&self) -> bool {
         matches!(self.run_state, RunState::Starting | RunState::Going(_))
@@ -452,17 +520,20 @@ pub(crate) enum PadAnswer {
     /// Why the package is still on the disk, or `None` when it is gone. Nothing waits for
     /// this: the app let the pad go when the reader said to.
     Deleted(Option<Failure>),
-    Opened(Scratchpad),
+    Opened {
+        scratchpad: Scratchpad,
+        /// The program the package says the last build made, read back off the disk.
+        /// [`None`] for a pad never built, one whose artifact has gone, and one built by
+        /// a version of this app that wrote nothing down.
+        program: Option<Program>,
+    },
     /// A pad that could not be read, and why.
     ///
     /// **It is left unopened**, which is the whole of the answer: no buffer is made for
     /// it, its baseline is never seeded, and [`save_if_changed`] steps over a pad that is
     /// not open. So a package this module cannot read stays on the disk as it is instead
     /// of being written over by the pad the app boots holding.
-    Unopened {
-        pad: PadId,
-        failure: Failure,
-    },
+    Unopened { pad: PadId, failure: Failure },
     /// Why the package could not be written, or `None` when it was.
     Saved {
         pad: PadId,
@@ -471,6 +542,9 @@ pub(crate) enum PadAnswer {
     Built {
         pad: PadId,
         build: Build,
+        /// What the build made, read on the way back. `None` for a build that made
+        /// nothing, and for one whose artifact could not be parsed.
+        program: Option<Program>,
     },
     /// The handle to a started program, or why there is none. What the program then *says*
     /// arrives on the other channel.
@@ -479,6 +553,32 @@ pub(crate) enum PadAnswer {
         run: u64,
         started: Result<Running, Failure>,
     },
+}
+
+/// The program a build made, read: the parsed image and what it was built from.
+///
+/// The scratchpad worker's, because that thread already owns the pad's directory --
+/// `target/` is inside it -- so the single writer of what cargo wrote is also its single
+/// reader. Blocking, like everything else on it.
+///
+/// `pop` and not `first`: `open_files` hands back an archive's members before the file
+/// itself, and what a build made is one executable, so the last is the image either way.
+pub(crate) fn read_program(executable: &Path, built_from: String) -> Option<Program> {
+    let object = analysis::open_files(vec![executable.to_path_buf()]).pop()?;
+    // The pad's own file as **this program** spells it, which is the only spelling
+    // anything may compare against: a name in debug info is the file as the compiler was
+    // handed it, joined onto the directory the compiler ran in.
+    let files = object.source_files();
+    let file: Option<Arc<str>> = own_source(files.iter().map(|file| &**file)).map(Arc::from);
+    let opening = file
+        .as_ref()
+        .and_then(|file| compiled::lowest_placed(&object.symbols_from_lines(file, 0..=u32::MAX)));
+    Some(Program {
+        object,
+        built_from,
+        file,
+        opening,
+    })
 }
 
 /// The blocking work itself. Split out so [`use_scratchpad_with`] can be handed something
@@ -501,13 +601,28 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
                         // file at all. Only a pad that was read: a restart may not come
                         // back to one that will not open.
                         crate::scratchpad::remember(opened.id());
-                        PadAnswer::Opened(opened)
+                        // What the last build made, if it is still where cargo put it:
+                        // read here, on the thread that owns this directory, so a pad
+                        // opened in a later run shows its program without being built
+                        // again. The digest travels with it, so a pad edited between the
+                        // build and the restart still says it is out of date.
+                        let program = opened
+                            .built
+                            .as_ref()
+                            .and_then(|built| read_program(&built.path, built.digest.clone()));
+                        PadAnswer::Opened {
+                            scratchpad: opened,
+                            program,
+                        }
                     }
                     Err(failure) => PadAnswer::Unopened { pad, failure },
                 }
             }
             // Nowhere to have been read from, so what was handed in is what there is.
-            None => PadAnswer::Opened(scratchpad),
+            None => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
         },
         PadJob::Save(scratchpad) => PadAnswer::Saved {
             pad: scratchpad.id().clone(),
@@ -516,13 +631,28 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
                 None => Some(Failure::NoDirectory),
             },
         },
-        PadJob::Build(scratchpad) => PadAnswer::Built {
-            pad: scratchpad.id().clone(),
-            build: match scratchpad.directory() {
+        PadJob::Build(scratchpad) => {
+            let build = match scratchpad.directory() {
                 Some(directory) => scratchpad.build_in(&directory),
                 None => Build::Unavailable(Failure::NoDirectory),
-            },
-        },
+            };
+            // Read here and not in a job of its own, so what the pane holds and the
+            // program it describes cannot disagree: there is no pass in which the pad has
+            // an executable it has not read. It is milliseconds against a build's seconds,
+            // behind the same flag, so it delays nothing the build was not delaying
+            // already.
+            let program = match &build {
+                Build::Built { executable, .. } => {
+                    read_program(executable, scratchpad.compiled().digest())
+                }
+                _ => None,
+            };
+            PadAnswer::Built {
+                pad: scratchpad.id().clone(),
+                build,
+                program,
+            }
+        }
         PadJob::Run {
             run,
             scratchpad,
@@ -549,7 +679,6 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
 pub(crate) fn use_scratchpad_with(
     mut pad: State<Pads>,
     mut text: State<PadBuffers>,
-    states: ProjectStates,
     work: impl Fn(PadJob) -> PadAnswer + Send + 'static,
 ) -> PadJobs {
     // The baseline the saves are compared against. See [`PadJobs::sent`].
@@ -647,7 +776,10 @@ pub(crate) fn use_scratchpad_with(
                             next.refused = failure.map(|failure| format!("Not deleted: {failure}"));
                             pad.set(next);
                         }
-                        PadAnswer::Opened(scratchpad) => {
+                        PadAnswer::Opened {
+                            scratchpad,
+                            program,
+                        } => {
                             // A pad shown, left and shown again before its first answer
                             // arrived was asked for twice, `show_pad` going by `opened`
                             // and `opened` being what this arm sets. The second answer is
@@ -689,6 +821,7 @@ pub(crate) fn use_scratchpad_with(
                             if let Some(state) = next.get_mut(&pad_id) {
                                 state.scratchpad = scratchpad;
                                 state.opened = true;
+                                state.program = program;
                             }
                             pad.set(next);
                         }
@@ -708,19 +841,37 @@ pub(crate) fn use_scratchpad_with(
                             }
                             pad.set(next);
                         }
-                        PadAnswer::Built { pad: name, build } => {
-                            let executable = match &build {
-                                Build::Built { executable, .. } => Some(executable.clone()),
-                                _ => None,
-                            };
-
+                        PadAnswer::Built {
+                            pad: name,
+                            build,
+                            program,
+                        } => {
                             let mut next = pad.peek().clone();
                             let mut directory = None;
-                            let mut held = false;
-                            if let Some(state) = next.get_mut(&name) {
-                                held = true;
+                            // A pad that asked for no build: its id was handed out again
+                            // after a delete -- `Pads::forget` comes back to the default
+                            // pad -- and this answer belongs to the one that has gone.
+                            if let Some(state) = next.get_mut(&name).filter(|state| state.building)
+                            {
                                 state.building = false;
+                                // What the build made, written into the package so a later
+                                // run opens the pad on its program rather than on nothing.
+                                // Only a build that produced one replaces it, which is what
+                                // leaves a failed build showing the program before it -- and
+                                // what keeps the package naming an artifact that is still
+                                // there.
+                                if let (Build::Built { executable, .. }, Some(program)) =
+                                    (&build, &program)
+                                {
+                                    state.scratchpad.built = Some(crate::scratchpad::Built {
+                                        path: executable.clone(),
+                                        digest: program.built_from.clone(),
+                                    });
+                                }
                                 state.built = Some(build);
+                                if program.is_some() {
+                                    state.program = program;
+                                }
                                 // A build writes the package on its way.
                                 if !matches!(
                                     state.built,
@@ -737,18 +888,6 @@ pub(crate) fn use_scratchpad_with(
                             // this pad is the version before it.
                             if let Some(directory) = directory {
                                 forget_source_under(&directory);
-                            }
-
-                            // Whichever pad built it, the artifact is an ordinary binary
-                            // and belongs to the app rather than to the pad on screen --
-                            // but only if that pad is still held. A build the reader
-                            // deleted their way out of answers while the worker is
-                            // removing the directory it wrote into, so its artifact is
-                            // either about to go or already gone.
-                            if held {
-                                if let Some(executable) = executable {
-                                    reopen_binary(states, executable);
-                                }
                             }
                         }
                         PadAnswer::Started {
@@ -1063,9 +1202,8 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     }
 
     // A rebuild stops what **this** pad started: cargo is about to write over the very file
-    // that process is running, and `reopen_binary` is about to close the objects that
-    // describe those bytes. Another pad's program is about another executable and goes on.
-    // Editing stops nothing, deliberately.
+    // that process is running. Another pad's program is about another executable and goes
+    // on. Editing stops nothing, deliberately.
     stop_run(pad);
 
     pad.write().state_mut().building = true;

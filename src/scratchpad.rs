@@ -33,6 +33,86 @@ const MANIFEST_NAME: &str = "Cargo.toml";
 const SOURCE_DIR: &str = "src";
 const SOURCE_NAME: &str = "main.rs";
 
+/// The file a scratchpad's source is, as cargo and rustc spell it: the two names above, in
+/// the order the package puts them. What a diagnostic's span says, and what the end of a
+/// program's own name for it is.
+pub const SOURCE_FILE: &str = "src/main.rs";
+
+/// Whether the file a **diagnostic** names is the pad's own source.
+///
+/// **Either separator, on every platform.** cargo hands rustc the path it built with
+/// `Path::join` and rustc echoes it back as it was given, so on Windows the span says
+/// `src\main.rs` and a comparison against the string above makes every diagnostic in the
+/// pad's own file look like a dependency's. Nothing on Unix names a built file with a
+/// backslash in it, so accepting both costs nothing and leaves the rule one function a
+/// test can put Windows' spelling to wherever it runs.
+pub fn is_source_file(file: &str) -> bool {
+    file.split(['/', '\\']).eq(SOURCE_FILE.split('/'))
+}
+
+/// Whether the file a **program's debug info** names is the pad's own source: a path
+/// *ending* in [`SOURCE_FILE`].
+///
+/// A suffix where a diagnostic's is the whole string, and that is the difference between
+/// the two spellings. rustc records the file as it was handed it and the name a reader of
+/// the debug info gets back is that joined onto the unit's `DW_AT_comp_dir` -- the
+/// directory rustc ran in, which is where the pad's own directory *resolved* to and not
+/// how this app spells it. So neither the bare name nor a path built from
+/// [`Scratchpad::directory`] matches, and the tail is what both spellings share.
+pub fn ends_in_source_file(file: &str) -> bool {
+    let mut theirs = file.rsplit(['/', '\\']);
+    SOURCE_FILE
+        .rsplit('/')
+        .all(|part| theirs.next() == Some(part))
+}
+
+/// Which of the files a program has code from is the pad's own, out of what the program
+/// says its files are. [`None`] where it names none: a build with no debug info, or one
+/// whose paths were remapped.
+///
+/// Where a program names two the first wins, and that is arbitrary and said to be
+/// arbitrary (`compiled::pick`'s tie-break in a second place): a generated package with
+/// one binary in it has one `src/main.rs`, and a dependency of the pad's that happens to
+/// have one of its own is a program the reader is not asking about.
+pub fn own_source<'a>(files: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    files.into_iter().find(|file| ends_in_source_file(file))
+}
+
+/// What a build was *of*: the parts of a scratchpad that decide the program.
+///
+/// The **name is not one of them**. It lives in `[package.metadata]`, which cargo compiles
+/// nothing from, so a rename must not make a program out of date -- the same separation of
+/// the id from the name that makes a rename a value changing and not a directory moving.
+/// The dependency rows *are*: a row changed is a different program, whatever the source
+/// says.
+///
+/// A value and not a counter, so a reader who types a character and takes it back is
+/// building the same program and is told so.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compiled {
+    source: String,
+    dependencies: Vec<Dependency>,
+}
+
+impl Compiled {
+    /// This, as the sixteen hex digits a build writes down beside its artifact.
+    ///
+    /// The bytes hashed are the source and then each row's two halves, every one of them
+    /// ended by a byte that cannot appear in what it follows, so no two different lists
+    /// hash the same by running together.
+    pub fn digest(&self) -> String {
+        let mut bytes = self.source.clone().into_bytes();
+        bytes.push(0);
+        for dependency in &self.dependencies {
+            bytes.extend_from_slice(dependency.name.as_bytes());
+            bytes.push(0);
+            bytes.extend_from_slice(dependency.version.as_bytes());
+            bytes.push(0);
+        }
+        analysis::FileDigest::of(&bytes).to_string()
+    }
+}
+
 /// Pinned rather than left to cargo's default, so a scratchpad written today still
 /// compiles the way it did when a later cargo changes what a new package gets.
 const EDITION: &str = "2021";
@@ -151,6 +231,29 @@ pub struct Scratchpad {
     /// In the order the reader put them in — the manifest sorts them, this list does not,
     /// since reordering under an edit is the one thing a list of text boxes must not do.
     pub dependencies: Vec<Dependency>,
+    /// What the last build made, so a pad opened in a later run shows its program without
+    /// being built again. [`None`] for a pad nothing has built.
+    ///
+    /// It is in the package like everything else here, under `[package.metadata]`, so
+    /// `load_from` stays the exact inverse of `write_to` and nothing describes a pad
+    /// beside its own directory. The **path** and not a derivation of it: `target/debug/`
+    /// under the package is silently wrong beneath a `CARGO_TARGET_DIR`, a config above
+    /// the directory, or an executable suffix, so what is kept is what cargo named
+    /// ([`cargo::Artifact`]).
+    pub built: Option<Built>,
+}
+
+/// What a build left behind: where cargo put it, and what it was a build *of*.
+///
+/// The digest and not the source itself: the source is already in the package a line away,
+/// and what this has to answer is only whether the two are still the same. Sixteen
+/// lowercase hex digits, [`analysis::FileDigest`]'s own written form, compared as text --
+/// text this app did not write is simply not equal, which reads as "changed", the rule the
+/// session's own digests follow.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Built {
+    pub path: PathBuf,
+    pub digest: String,
 }
 
 /// One row of the pad list: a scratchpad that can be shown, described by its own package
@@ -291,6 +394,7 @@ impl Scratchpad {
             name: String::new(),
             source: DEFAULT_SOURCE.to_owned(),
             dependencies: Vec::new(),
+            built: None,
         }
     }
 
@@ -325,6 +429,15 @@ impl Scratchpad {
         problems
     }
 
+    /// What building this scratchpad now would be a build *of*, to be compared against what
+    /// a build already made ([`Compiled`]).
+    pub fn compiled(&self) -> Compiled {
+        Compiled {
+            source: self.source.clone(),
+            dependencies: self.dependencies.clone(),
+        }
+    }
+
     /// The `Cargo.toml` this scratchpad generates, as text. The empty `[workspace]` makes
     /// the package its own workspace root wherever the state directory turns out to be.
     pub fn manifest(&self) -> Result<String, Failure> {
@@ -341,6 +454,7 @@ impl Scratchpad {
                 metadata: Metadata {
                     scratchpad: PadMetadata {
                         name: self.name().to_owned(),
+                        built: self.built.clone(),
                     },
                 },
             },
@@ -399,6 +513,7 @@ impl Scratchpad {
                 .into_iter()
                 .map(|(name, version)| Dependency { name, version })
                 .collect(),
+            built: manifest.package.metadata.scratchpad.built,
         })
     }
 
@@ -1109,6 +1224,11 @@ struct Metadata {
 struct PadMetadata {
     #[serde(default)]
     name: String,
+    /// After `name`, which is a plain value: TOML puts a table after every value of the
+    /// table it is in, so a struct written before it would take the fields under it with
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    built: Option<Built>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

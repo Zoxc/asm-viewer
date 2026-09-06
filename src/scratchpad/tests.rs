@@ -598,3 +598,148 @@ fn a_program_that_is_not_there_says_so() {
 
     assert!(matches!(failure, Failure::NoProgram(_)), "{failure:?}");
 }
+
+/// The pad's source file is the two names its package is written from, so the rule and the
+/// package cannot drift apart.
+#[test]
+fn the_source_file_is_the_two_names_it_is_made_of() {
+    assert_eq!(SOURCE_FILE, format!("{SOURCE_DIR}/{SOURCE_NAME}"));
+}
+
+/// A diagnostic names the pad's own file relatively, and on Windows with the other
+/// separator. Nothing above it and nothing beside it is that file.
+#[test]
+fn a_diagnostic_names_the_pads_own_file_by_itself() {
+    assert!(is_source_file("src/main.rs"));
+    assert!(is_source_file(r"src\main.rs"));
+
+    // A dependency's, and the pad's own file named from somewhere else: a diagnostic in
+    // the pad's file is spelled relatively and nothing else is it.
+    assert!(!is_source_file("src/lib.rs"));
+    assert!(!is_source_file("main.rs"));
+    assert!(!is_source_file("/pads/pad-1/src/main.rs"));
+}
+
+/// A program spells it with everything the compiler's own directory put in front, which is
+/// why this is a tail and the diagnostic's rule is not.
+#[test]
+fn a_program_names_the_pads_own_file_with_what_is_in_front_of_it() {
+    assert!(ends_in_source_file("/pads/pad-1/src/main.rs"));
+    assert!(ends_in_source_file(r"C:\pads\pad-1\src\main.rs"));
+    // Still the pad's own where nothing is in front of it: a producer that recorded the
+    // relative name and a unit with no `comp_dir`.
+    assert!(ends_in_source_file("src/main.rs"));
+
+    // The tail is two names and not one, so a `main.rs` in any other directory is not it.
+    assert!(!ends_in_source_file("/pads/pad-1/main.rs"));
+    assert!(!ends_in_source_file("/pads/pad-1/tests/main.rs"));
+    assert!(!ends_in_source_file("/registry/anyhow-1.0/src/lib.rs"));
+    // And it is the whole of the last name, not a prefix of it.
+    assert!(!ends_in_source_file("/pads/pad-1/src/main.rs.bak"));
+}
+
+/// Which of a program's files is the pad's, out of what a real one names: the standard
+/// library's, a crates.io dependency's, and the pad's own.
+#[test]
+fn the_pads_own_file_is_the_one_ending_in_it() {
+    let files = [
+        "/rustc/1.83.0/library/std/src/rt.rs",
+        "/registry/anyhow-1.0.95/src/lib.rs",
+        "/pads/pad-3/src/main.rs",
+    ];
+    assert_eq!(own_source(files), Some("/pads/pad-3/src/main.rs"));
+
+    // A program naming none of them, and one naming nothing at all.
+    assert_eq!(own_source(["/registry/anyhow-1.0.95/src/lib.rs"]), None);
+    assert_eq!(own_source([]), None);
+}
+
+/// What a build was of is the source and the crates, and **not** the name: cargo compiles
+/// nothing from `[package.metadata]`, so a rename must not make a program out of date.
+#[test]
+fn what_a_build_was_of_is_the_source_and_the_crates() {
+    let mut pad = Scratchpad::new("pad-1").expect("a valid id");
+    pad.source = "fn main() {}".to_owned();
+    let built = pad.compiled();
+
+    let mut renamed = pad.clone();
+    renamed.name = "something else".to_owned();
+    assert_eq!(renamed.compiled(), built, "a rename is not an edit");
+
+    let mut edited = pad.clone();
+    edited.source.push('\n');
+    assert_ne!(edited.compiled(), built, "an edit is one");
+
+    let mut crated = pad.clone();
+    crated.dependencies.push(Dependency {
+        name: "rand".to_owned(),
+        version: "0.8".to_owned(),
+    });
+    assert_ne!(crated.compiled(), built, "a crate row is one too");
+}
+
+/// What a build made goes into the package, so a later run opens the pad on its program
+/// rather than on nothing -- and comes back out of it exactly as it went in, `load_from`
+/// being `write_to`'s inverse.
+#[test]
+fn what_the_last_build_made_is_written_and_read_back() {
+    let directory = directory(line!());
+    let mut pad = Scratchpad::new("pad-1").expect("a valid id");
+    pad.built = Some(Built {
+        path: PathBuf::from("/elsewhere/target/debug/pad-1"),
+        digest: pad.compiled().digest(),
+    });
+    pad.write_to(&directory).expect("the package is written");
+
+    let read = Scratchpad::load_from(&directory).expect("the package loads");
+    assert_eq!(read.built, pad.built);
+
+    // A pad nothing has built says nothing, rather than an empty table nobody reads.
+    let mut fresh = Scratchpad::new("pad-2").expect("a valid id");
+    fresh.write_to(&directory).expect("the package is written");
+    assert_eq!(
+        Scratchpad::load_from(&directory)
+            .expect("the package loads")
+            .built,
+        None
+    );
+    assert!(
+        !fresh.manifest().expect("a manifest").contains("built"),
+        "a pad nothing has built writes an empty table"
+    );
+}
+
+/// The digest is of what a build compiles and nothing else, and it is the written form the
+/// package keeps: sixteen lowercase hex digits, compared as text.
+#[test]
+fn the_digest_says_what_a_build_was_of() {
+    let mut pad = Scratchpad::new("pad-1").expect("a valid id");
+    pad.source = "fn main() {}".to_owned();
+    let digest = pad.compiled().digest();
+    assert_eq!(digest.len(), 16);
+    assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+
+    let mut renamed = pad.clone();
+    renamed.name = "something else".to_owned();
+    assert_eq!(
+        renamed.compiled().digest(),
+        digest,
+        "a rename is not an edit"
+    );
+
+    let mut edited = pad.clone();
+    edited.source.push(' ');
+    assert_ne!(edited.compiled().digest(), digest);
+
+    // The rows are ended one by one, so two lists that would run together as one string
+    // are still two.
+    let row = |name: &str, version: &str| Dependency {
+        name: name.to_owned(),
+        version: version.to_owned(),
+    };
+    let mut one = pad.clone();
+    one.dependencies = vec![row("ab", "1"), row("c", "2")];
+    let mut other = pad.clone();
+    other.dependencies = vec![row("a", "bc"), row("1", "2")];
+    assert_ne!(one.compiled().digest(), other.compiled().digest());
+}

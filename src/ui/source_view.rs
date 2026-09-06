@@ -1021,7 +1021,11 @@ fn source_bar(
         )
         // Only where this side leads, and outside the name rather than inside it, so a
         // press on it is a press on the toggle and never a door into the file.
-        .maybe(!opens, |bar| bar.child(PaneToggle { tab }))
+        .maybe(!opens, |bar| {
+            bar.child(PaneToggle {
+                of: Toggling::Tab(tab),
+            })
+        })
         .into_element()
 }
 

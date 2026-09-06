@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use analysis::{Object, Symbol};
+use analysis::{Object, Symbol, SymbolData};
 
 /// Every symbol in `objects` holding code compiled from `file` over `lines`, object by
 /// object and, within one, in the crate's own address-then-name order. A symbol holding
@@ -71,6 +71,24 @@ pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
         .and_then(|index| candidates.get(*index))
         .or_else(|| candidates.first())
         .cloned()
+}
+
+/// The lowest **placed** address any of `symbols` starts at, or [`None`] for none of them
+/// that is in a section.
+///
+/// Placed, which is the section's bias added: that is the space the listing of a whole
+/// object's code draws in and the space `symbol_at` answers in, so a place worked out here
+/// names the row a reader would land on. `wrapping_add` for the same reason, and not
+/// `checked_add`: agreeing with those two matters more than an overflow the biases cannot
+/// produce.
+///
+/// The **lowest** and not the first: the crate answers in raw address order, so with two
+/// code sections its first entry need not be the one the listing draws first.
+pub fn lowest_placed(symbols: &[Arc<SymbolData>]) -> Option<u64> {
+    symbols
+        .iter()
+        .filter_map(|data| Some(data.address.wrapping_add(data.section.as_ref()?.bias)))
+        .min()
 }
 
 /// A symbol as a hashable key: the pair of `Arc` addresses its `PartialEq` compares.

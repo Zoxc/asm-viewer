@@ -30,3 +30,13 @@ are dropped and the pane says how many; a line with no newline is cut.
 
 The output stays at the bottom while the reader is there. Scrolling away releases the follow,
 and scrolling back to the bottom arms it again.
+
+## Assembly
+
+The editor and the listing beside it are a source-driven tab's two panes, with a source side
+the reader types in. The assembly side is the unified view of the program the pad last built,
+not the one symbol a line compiled into. The split between them can be dragged.
+
+A pad is not part of a project. It opens on the program it last built, whenever that was; until
+a pad has been built there is nothing to show, and the pane says so. A failed build leaves the
+program before it, and an edit since marks the listing out of date.

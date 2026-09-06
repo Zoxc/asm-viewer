@@ -270,6 +270,10 @@ impl Component for SymbolBar {
             // Only where this side leads, and outside the names rather than inside them,
             // so a press on it is a press on the toggle and never a copy of the name it
             // sits beside.
-            .maybe(self.leading, |bar| bar.child(PaneToggle { tab: self.tab }))
+            .maybe(self.leading, |bar| {
+                bar.child(PaneToggle {
+                    of: Toggling::Tab(self.tab),
+                })
+            })
     }
 }

@@ -42,8 +42,8 @@ it on screen is the UI's to decide. Nothing is written into the package until th
 something.
 
 The crate name being the id rather than the name has a second payoff: **a rename does not move the
-artifact**. `reopen_binary` keys on the path cargo named, so a pad renamed between builds writes the
-same executable rather than leaving the last one open beside it.
+artifact**. cargo names the same executable either way, so a pad renamed between builds rebuilds
+over what it built last rather than leaving that file on the disk under the old name.
 
 **Which pad opens is an order, `recents.toml`'s shape again**, in `scratchpads/recents.toml`. It
 sits beside the pads rather than at the top of the state directory, so it is not a second file to
@@ -179,8 +179,94 @@ beside it: its source, its crates, its build and what the compiler said. It is a
 reason the settings page is: there is one of it, it resolves against no object, and neither code
 pane could draw one. That there are many *pads* does not make it many views: the pad list is the
 Scratchpad view's own side panel, because the content area's strip is deliberately not the place for
-a second document list (a chip there is a *place in a binary*). What it **builds** needs no rule at
-all: the executable goes through `open_files` and its functions are ordinary tabs.
+a second document list (a chip there is a *place in a binary*). What it **builds** is the pad's own
+and not the project's: the program is held in the pad's state, drawn by the pad's pane, and is in
+neither the Objects panel nor the paths a project saves.
+
+**What a build made is written into the package, so a pad opens on its program.** Nothing the
+app holds about a build survives a restart, and the artifact's path may never be derived --
+`target/debug/<id>` is silently wrong beneath a `CARGO_TARGET_DIR`, a config above the directory,
+or an executable suffix -- so what cargo *named* is kept, under `[package.metadata]` beside the
+pad's own name. That keeps "the package is the storage": nothing describes a pad outside its
+directory and `load_from` is still `write_to`'s inverse. Beside the path goes the **digest** of
+what the build was of, not the source itself: the source is already in the package a line away,
+and the only question is whether the two are still the same. Sixteen lowercase hex digits,
+`analysis::FileDigest`'s written form, compared as text -- text this app did not write is simply
+not equal, which reads as "changed", the rule the session's own digests follow. So a pad edited
+between the build and the restart still says it is out of date, and `Program::built_from` is that
+digest rather than the value, since a program read back in a later run has to answer the same
+question the same way. A path whose file has gone reads back as nothing, which is the same answer
+as never having built.
+
+**The program is read on the scratchpad worker, in the same answer as the build -- and in the
+same answer as the open.** That thread
+already owns the pad's directory -- `target/` is inside it -- so the single writer of what cargo
+wrote is also its single reader, and `built` and the program it describes can never disagree: there
+is no pass in which the pad has an executable it has not read. A job of its own would be a second
+thing to supersede, to arrive out of order and to answer for a deleted pad; the parse is
+milliseconds against a build's seconds and sits behind the same `building` flag, so it delays
+nothing the build was not delaying already. `PadJob::Open` reads it back the same way, off the
+package it has just loaded, so a pad that was built in an earlier run is shown its program by the
+answer that opens it. It streams nothing, deliberately: `open_binaries`'
+streaming shape is for a 331 MB file or a 196-member archive, and this is one small file nothing
+draws until it is whole.
+
+**An answer that arrives for a pad nothing holds is dropped, and so is one for a pad that asked no
+build.** The first is `request_delete_pad`'s order -- the state is out of the table before the
+delete is queued -- and it is now the whole story: there is no `Objects` entry to undo, no `Loads`,
+no tab, no saved path, and the parsed program is dropped with the answer value. The second is the
+`building` flag, read as well as written: `Pads::forget` comes back to the default pad's id when
+the last pad goes, so an answer can arrive for a *different pad under the same id*, and a pad that
+asked for no build is not building.
+
+**The pane draws it as an object's whole code, beside the editor.** The two are a source-driven
+tab's two panes with a source side the reader types in, in a `ResizableContainer` of the pad's own
+(`PadSplit`, `PadSplits`) rather than the document split's -- two containers sharing one context
+would carry the handle across a switch between a document and this page, and the pad's drag would
+be written into the project's session, where a pad has no business being. The editor leads, as a
+driven side does and because the keyboard goes to the first box a tab registers. The listing is put
+away by the same `PaneToggle` a document's bar carries, in the heading row beside Build and Run:
+that row is the pad's own strip of controls and the one thing here that is always up, the editor
+having no bar. There is no `SymbolBar` over it, whose section and toggle are both filed under a
+`DocId` the pad has not got.
+
+**It opens on the pad's own code**, the lowest *placed* address the pad's `src/main.rs` produced
+(`compiled::lowest_placed`) -- lowest and not first, since the crate answers in raw address order
+and two code sections would put the wrong one first. Without it the pane would open at the top of a
+linked Rust program, which is the runtime's code and not the reader's, and the pair the cursor
+lights only reaches stretches that have decoded. It is written as a `Planting` and not as a place
+in `CodeAt`: the listing keeps no place of its own, and an entry there would hold that program's
+bytes with nothing that would ever forget them, where a planting is taken once by the pane and put
+back to `None`. `PadAssembly` is keyed by the program, so a rebuild takes it and its listing down
+and builds them against the new one.
+
+**The listing follows the editor's cursor, and nothing comes back.** The line the cursor is on is
+written as the source run (`mark_line`, the same door a click on a source row goes through), so
+the listing lights the instructions compiled from it and owes it a scroll -- a source-driven tab's
+two panes, with a source side the reader types in. The other direction is not written down because
+it cannot be: freya's editor can neither light a set of lines nor be scrolled from outside, so an
+instruction that named a line could do nothing with it (`notes/upstream/freya.md`). What the drive
+compares against is **the run on screen** and never a line remembered beside it: `use_land` puts
+`Marks::default()` back on every change of the active entry, and the page becoming the tab on
+screen is one, so a drive that remembered would be wiped a beat after the reader arrived and would
+never say it again. That comparison is also what makes typing along one line write nothing.
+
+**An edit since the build says so over the listing**, the Source pane's checksum row in a second
+place -- and exact where that one is a guess, since the app wrote the source this program was
+built from and kept it beside the program. What a build was *of* is the source and the dependency
+rows (`Compiled`), and deliberately **not** the name: it lives in `[package.metadata]`, which cargo
+compiles nothing from, so a rename must not make a listing out of date. A value and not a counter,
+so a reader who types a character and takes it back is building the same program and is told so.
+`built_from` is taken from the scratchpad the **job** carried, never from what is on screen when
+the answer lands, so a build the reader typed during says it is out of date the moment it arrives.
+
+**Which file is the pad's own is asked of the program and never constructed.** rustc records
+`src/main.rs` as it was handed it and the name a reader of the debug info gets back is that joined
+onto the unit's `DW_AT_comp_dir` -- the directory rustc ran in, which is where the pad's directory
+*resolved* to and not how this app spells it. So the pad asks the object what files it has code
+from (`Object::source_files`) and takes the one ending in `src/main.rs`
+(`scratchpad::own_source`). A program that names none -- no debug info, or paths remapped -- opens
+nowhere, and that is an answer rather than a failure.
 
 **A delete is asked for, and a row is where it is asked from.** A right-click on a pad's row offers
 one item, and the item deletes nothing: it writes `Pads::confirming`, and the popup that field draws
@@ -441,9 +527,9 @@ whose scrolling is worth keeping.
 
 **What stops a run**: its Stop button, its pad's rebuild, its pad's next run, its pad being deleted,
 and the window closing. The first four are per pad, since another pad's program is about another
-executable, and the last is still app-wide. A **rebuild** stops it for three separate sufficient
-reasons: cargo is about to write over the file the process *is*, `reopen_binary` is about to close
-the objects describing those bytes, and one pad has one output pane. The **next run** stops it
+executable, and the last is still app-wide. A **rebuild** stops it for two separate sufficient
+reasons: cargo is about to write over the file the process *is*, and one pad has one output pane.
+The **next run** stops it
 because two generations of output arriving into one list is a pane with no answer to "what is this".
 A **delete** stops it because the directory it was started in is about to go, and a program left
 behind by that is one nothing could ever find again. An **edit**
@@ -453,10 +539,10 @@ the pad** stops nothing either: the program goes on and its lines go on landing 
 list, which is what switching back shows. A **project switch** stops nothing either: `Pad` is not
 one of the states in `ProjectStates` (above).
 
-**A rebuild replaces rather than accumulates.** `reopen_binary` is `close_binary` followed by what
-the toolbar's Open does, in one handler. A binary is a **path** throughout this app (that is what
-`close_binary` closes by and what `project::binaries` derives the saved list from) and a rebuild
-writes the same path with different bytes, so two generations of one file cannot both be in the
-objects list. The cost is real and is the reader's: the tabs for that file's functions, their
-viewing positions and the history entries into them go with it. Keeping them would be `Rebuilt`'s
-resolve-by-name machinery pointed at a live state instead of at a session file.
+**A pad's program is the pad's own, and a rebuild costs the reader nothing.** It used to go into
+`Objects` like any other binary, and a rebuild had to close it first -- a binary is a **path**
+throughout this app, and a rebuild writes the same path with different bytes, so two generations of
+one file could not both be in the list. That close took the tabs for that file's functions, their
+viewing positions and the history entries into them with it, every time. None of it is left: a pad
+is not part of a project, so its program is in no list, nothing can open a tab into it, and a
+rebuild is a value in the pad's own state being replaced.

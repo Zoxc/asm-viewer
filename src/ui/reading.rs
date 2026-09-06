@@ -37,6 +37,60 @@ pub(crate) struct Sections(pub(crate) State<Reading>);
 #[derive(Clone, Copy)]
 pub(crate) struct Window(pub(crate) State<Option<CodeAsk>>);
 
+/// The object a listing that is **no document tab** is drawing, or `None` while there is
+/// none.
+///
+/// The Scratchpad's pane claims it while it is mounted and lets go on the way out, the way
+/// a pane registers its focusable box (`use_tab_keyboard`, `src/ui/focus.rs`). It is a
+/// claim and not a question asked of the pads, because the pane drawing the listing is the
+/// only thing that knows there is one: a general mechanism asking would have to know about
+/// pages and pads, and would hold a skeleton for a pad's program while the reader sat on
+/// the Settings page.
+#[derive(Clone, Copy)]
+pub(crate) struct Beside(pub(crate) State<Option<Arc<Object>>>);
+
+/// Claim `object` as the listing that is no tab, for as long as this scope is mounted.
+/// See [`Beside`].
+pub(crate) fn use_code_beside(mut beside: State<Option<Arc<Object>>>, object: &Arc<Object>) {
+    // By pointer identity and written from the render, so a rebuild's new object is
+    // claimed the moment the pane draws it. `set_if_modified` would compare `Option`s by
+    // value, which for an object is every byte of the file.
+    let claimed = beside
+        .peek()
+        .as_ref()
+        .is_some_and(|held| Arc::ptr_eq(held, object));
+    if !claimed {
+        beside.set(Some(object.clone()));
+    }
+    let object = object.clone();
+    use_drop(move || {
+        let mine = beside
+            .peek()
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, &object));
+        if mine {
+            beside.set(None);
+        }
+    });
+}
+
+/// Whether the app is still holding `object`: one of the open binaries, or the listing
+/// that is no tab.
+///
+/// **A pad's program is deliberately not one of the binaries** -- it is the pad's and not
+/// the project's -- so this is the one place that says the two together, and an answer
+/// about either is judged by one rule.
+pub(crate) fn holding(
+    objects: &[Arc<Object>],
+    beside: &Option<Arc<Object>>,
+    object: &Arc<Object>,
+) -> bool {
+    objects.iter().any(|open| Arc::ptr_eq(open, object))
+        || beside
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, object))
+}
+
 /// One window of an object's code to decode.
 ///
 /// `window` is the stretches wanted, by flat index over every section
@@ -174,6 +228,7 @@ impl Reading {
 pub(crate) fn use_reading_of(
     active: Memo<Option<Entry>>,
     objects: State<Vec<Arc<Object>>>,
+    beside: State<Option<Arc<Object>>>,
     mut reading: State<Reading>,
     mut window: State<Option<CodeAsk>>,
 ) {
@@ -181,9 +236,17 @@ pub(crate) fn use_reading_of(
         let active = active.read().clone().map(|(_, stop)| stop.document);
         let open = objects.read();
         let wanted = match active {
+            // One of the project's binaries, and only while it is still open: a closed one
+            // cannot be resurrected by a document that outlived it.
             Some(Document::Code(object)) if open.iter().any(|o| Arc::ptr_eq(o, &object)) => {
                 Some(object)
             }
+            // A listing that is no tab. Only one tab is ever on screen, so a code tab and
+            // the Scratchpad's pane are never mounted at once and the two cannot both
+            // answer here. Nothing checks it against `objects`: a pad's program is
+            // deliberately not one of them, and the claim is let go of when the pane that
+            // made it goes.
+            None => beside.read().clone(),
             _ => None,
         };
         let same = match (&reading.peek().object, &wanted) {

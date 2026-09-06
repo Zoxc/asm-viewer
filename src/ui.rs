@@ -54,8 +54,8 @@ pub(crate) use crate::rescue;
 pub(crate) use crate::reveal;
 pub(crate) use crate::rows::RowSelection;
 pub(crate) use crate::scratchpad::{
-    run_in, Build, Dependency, Ended, Failure, Half, PadId, PadListing, PadOrder, Problem,
-    RunEvent, RunOutput, Running, Scratchpad, Stream,
+    is_source_file, own_source, run_in, Build, Dependency, Ended, Failure, Half, PadId, PadListing,
+    PadOrder, Problem, RunEvent, RunOutput, Running, Scratchpad, Stream, SOURCE_FILE,
 };
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
@@ -458,12 +458,13 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let coded = use_provide_context(|| Coding(State::create(Coded::default()))).0;
     let reading = use_provide_context(|| Sections(State::create(Reading::default()))).0;
     let window = use_provide_context(|| Window(State::create(None))).0;
-    use_reading_of(active, objects, reading, window);
+    let beside = use_provide_context(|| Beside(State::create(None))).0;
+    use_reading_of(active, objects, beside, reading, window);
     // The question and not the active document: a source-driven tab's assembly side
     // changes when a line in it is clicked, which changes no document.
     let asked = Asked { active, driven };
     use_analysis_with(
-        asked, objects, visits, analysis, located, coded, reading, window, answer,
+        asked, objects, beside, visits, analysis, located, coded, reading, window, answer,
     );
     // After the analysis: the file the Source pane draws is what the analysis says it is.
     use_clear_marks(active, asked, analysis, marked);
@@ -484,9 +485,18 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // At the root rather than in the tab: a tab off screen is unmounted, and neither
     // a buffer being typed into nor a program that was started can live there. The buffers
     // start empty and a pad gets its own when its source arrives.
+    // 50.0: what the editor's side starts at, before anything is dragged.
+    use_provide_context(|| PadSplit(State::create(50.0)));
+    use_provide_context(|| {
+        PadSplits(State::create(ResizableContext {
+            direction: Direction::Horizontal,
+            ..Default::default()
+        }))
+    });
+    use_provide_context(|| PadFollows(State::create(true)));
     let pad = use_provide_context(|| Pad(State::create(Pads::default()))).0;
     let pad_text = use_provide_context(|| PadText(State::create(PadBuffers::default()))).0;
-    use_scratchpad_with(pad, pad_text, states, pad_work);
+    use_scratchpad_with(pad, pad_text, pad_work);
 
     use_building_with(build, states, build_work);
 
