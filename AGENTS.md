@@ -214,6 +214,9 @@ command.
   side, the scroll it owes, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file read and parsed off the UI thread: the reader's worker
   thread, the cache its answers land in, and what the pane draws until one does.
+- `src/ui/hovering.rs` — the name the pointer is on in the source, the question the server is
+  put about it, and what came back.
+- `src/ui/hover_view.rs` — the box that draws the answer: where it goes, and when it goes.
 - `src/ui/locations.rs` — every symbol a line, or the function around it, was compiled into: the
   question, the answer, the panel.
 - `src/ui/reading.rs` — what the worker has decoded of an object's code for the section view,

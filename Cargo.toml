@@ -24,6 +24,21 @@ freya = { version = "0.4", features = ["code-editor", "icons-lucide", "engine"] 
 # file with and what the function pass parses it with. Their `tree-sitter-language` must be
 # the one the `tree-sitter` below and `freya-code-editor`'s share, or the `Language` handed
 # over is a different type.
+# The hover box's answer, which is the markdown a language server writes it in
+# (`src/ui/hover_view.rs`): headings, lists, emphasis, rules and fenced code, drawn as
+# freya elements rather than shown with its marks in it. Four new packages compiled --
+# itself, `pulldown-cmark`, `pulldown-cmark-escape` and `unicase` -- and two more named in
+# the lock and never built, `getopts` and `unicode-width` being that crate's own command
+# line tool's. No second copy of anything: its `freya-components`, `freya-core` and `torin`
+# are the ones already here, and `bitflags` and `memchr` are in the lock. `cargo tree -d`
+# is how that stays true.
+#
+# **Without its `code-editor` feature**, which is what would highlight a fenced block:
+# that path builds a `CodeEditorData` and never sets a theme on it, so every block comes
+# out in freya's own light syntax colours whatever the app's are, and nothing outside the
+# crate can reach them (`notes/upstream/freya.md`). A block is drawn as plain code in the
+# palette's colours instead.
+freya-markdown = "0.4"
 tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"

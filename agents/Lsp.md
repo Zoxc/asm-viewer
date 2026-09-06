@@ -75,11 +75,12 @@ the app answers questions about its UI with tests.
 
 ## The protocol, hand-rolled
 
-Eight messages: `initialize`, `initialized`, the four questions about a place --
+Nine messages: `initialize`, `initialized`, the four questions about a place --
 `textDocument/definition`, `textDocument/declaration`, `textDocument/implementation`,
 `textDocument/references` -- one about a whole file, `textDocument/semanticTokens/full`,
-and a reply to whatever the server asks of us. A protocol crate would bring a type per
-request in the specification and a runtime to drive them, for those eight. `cargo tree -d`
+one about the name under the pointer, `textDocument/hover`, and a reply to whatever the
+server asks of us. A protocol crate would bring a type per request in the specification
+and a runtime to drive them, for those nine. `cargo tree -d`
 is unchanged by this step: `serde_json` was already in the tree, and the manifest comment
 on it already covers a protocol rather than a file.
 
@@ -88,6 +89,13 @@ waits for an answer carrying the id it asked under. The four questions about a p
 one shape -- a place in, places out -- so they share the asking and the reading of an
 answer, and what tells one from the other is a `Wanted` the job carries and the answer
 names.
+
+**A hover is a place in and contents out**, so it is none of those four: it has its own
+job, its own answer and its own parse. Not a fifth `Wanted` for a plainer reason as well --
+those are bucketed by consumer, and a hover is a third consumer. The pointer crossing a
+line asks about every name on the way, and only the last of them is worth a round trip; but
+none of them is a reader taking back the definition they clicked for, and a click is not a
+reader taking back the name under their pointer.
 
 **A kind is a consumer and not a question**, which is what `worth_doing` supersedes by:
 `ui::follow` takes a definition or a declaration, the Locations panel draws implementations
@@ -117,7 +125,7 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   anything else a malformed header, and dies.
 - `initialized` must be the very next message after the `initialize` answer. Anything else
   first and the server gives up on the conversation.
-- **The declared capabilities are one line long**, and what is left out is the decision.
+- **The declared capabilities are two lines long**, and what is left out is the decision.
   Every request rust-analyzer makes of a client -- for configuration, to register a file
   watcher -- is opt-in through a capability, so declaring none of those leaves a
   conversation this app only ever speaks first in. Nothing is said about positions or about
@@ -130,6 +138,13 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   server that asks something anyway is answered -- an empty configuration, nothing for a
   progress token, and "not a method this client has" for the rest -- because a server
   waiting on a reply is a conversation that stops.
+- **The second line is the format a hover is written in**, which is the one default not
+  worth taking. Measured against a real server, over the same name, both ways: a client
+  that names none is answered `plaintext`, with the fences gone and the doc comment's list
+  run together into one word (`one` and `two` arriving as `onetwo`); one that names
+  markdown is answered with the path and the signature each in a `rust` fence, a rule, and
+  the comment as it was written. So this is the one place where saying nothing says
+  something wrong.
 - The initialization options are `wanted()`, **one line**, and it turns the check off.
   Named rather than written into the handshake because it is also what a project's own
   settings are laid over (below). The check is
@@ -339,6 +354,7 @@ Which **question** an answer is to is a third thing, and the run cannot stand in
 run lasts as long as the server, so two questions inside one is the ordinary case.
 `ask_where` mints an id per question, the `Ask` job carries it and the answer copies it
 back, and `Follow` and `Located` each keep the id of the one they are waiting for.
+`ask_hover` is the same, for the same reason and with a `Hover` of its own to hold it.
 `worth_doing` drops the duplicates still queued; the id is what makes an answer to a
 question the worker had already taken land on nobody.
 

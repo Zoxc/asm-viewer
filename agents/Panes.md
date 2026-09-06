@@ -501,6 +501,51 @@ row depends on, an `Arc` inside so handing them down is a pointer compare. A row
 the server's state itself -- it says how far through the project it has got over and over,
 and a row that read that would be drawn again for every word of it.
 
+**Hovering a name is the same hit test and a different answer.** `Text::names` carries the
+columns of every name the server placed on the row -- links and the places where one is
+defined alike, since a hover over the name where a function is defined is its own signature
+and doc comment -- and `code_row` hit-tests the pointer against them beside the links. It is
+not fed to `cut_at`: hovering changes no span's style, so it cuts the row nowhere and cannot
+widen the listing.
+
+**The pointer holds still before anything is asked** (`HOVER_DELAY`, 300ms). A
+pointer crossing a line passes over a name every few pixels, and each one is a round trip to
+another process. **Any move puts the wait back to the beginning**, one inside the same name
+included, so what is waited on is the pointer stopping rather than the name it stopped over.
+
+Which is why a row reports every move it makes over a name where it reports leaving one
+once: the wait is a task on a deadline the moves push back, and the task wakes to read the
+time left rather than being told to start again. The pushing stops at the answer -- a box
+already drawn is not written afresh by a pointer moving about inside the name it is about --
+and a name already answered draws its box at once, the wait being for the question and not
+for the box.
+
+**What the row reports is a name and a box; what a place it is, is the pane's.** `Under`
+carries the columns and where they are drawn in the window, `caret_x` and the row's own
+`on_sized` being the only things that know either; `SourceRow` turns the columns into the
+`Lookup` a question takes, exactly as it does for a press. The row keeps **no timer and no
+state** beyond a cell saying which name it last reported: the rows are recycled by the
+scroll view, so anything that outlives one has to live above it -- the question in `Hover`
+at the root, the box in `HoverBox` beside the file finder's overlay.
+
+**The box is as tall as the answer, up to a dozen lines, and the rest of a long one
+scrolls.** Which took measuring the answer, freya's scroll view being able neither to fill a
+box sized from its content nor to size itself from its own (`notes/upstream/freya.md`): the
+answer is drawn once at the full height the box may have, a rect around it reports what that
+came to, and the view is given that height or the limit, whichever is less. Two passes, and
+the second settles -- the first drawn at nothing, since a short answer would otherwise be a
+box that flashed tall and shrank.
+
+**Above the name wherever the box fits, and not merely where there is more room.** A window
+is taller under a name than over it nearly everywhere, so "more room" put the box below
+almost always -- over the lines about to be read, and jumping from one side to the other as
+the pointer moved down the file.
+
+**A row that has moved takes the box with it.** The row's `on_sized` says so, rather than a
+wheel handler on the pane: a `VirtualScrollView` stops the wheel event it acted on, so the
+pane never sees the one that mattered, and the row moving covers the keyboard, the sweep's
+autoscroll, a resize and a font change as well.
+
 **Alt held says a press is not a door this time.** Every door in a code row acts on a plain press,
 which left no way to put the pointer down on one and sweep: the release followed the link and the
 gesture ended as a navigation. So each door -- the three inline labels and the code listing's label

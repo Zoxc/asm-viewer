@@ -121,6 +121,23 @@ pub struct Place {
     pub columns: Range<u32>,
 }
 
+/// What a name is, in the server's own words: what it wrote about it, and the columns of
+/// the name it answered about.
+///
+/// The text is **markdown**, which is what the handshake asks for and what rust-analyzer
+/// sends when it is asked: a fenced block for the path and another for the signature, a
+/// rule, and the doc comment under it. A server told nothing sends the same thing as plain
+/// text with its structure flattened, which is why the handshake names the format.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hovered {
+    pub text: String,
+    /// 1-based, as a [`Place`]'s line is and for its reason.
+    pub line: u32,
+    /// The columns of the name the answer is about, in UTF-16 units. The server need not
+    /// say, and where it does not these are the columns the question was asked at, empty.
+    pub columns: Range<u32>,
+}
+
 /// The names a server gives the semantic token types and modifiers it will send, in the
 /// order their indices count from.
 ///
@@ -376,6 +393,16 @@ impl Server {
     ) -> Result<Vec<Place>, Failure> {
         self.talk.references(file, line, column)
     }
+
+    /// What the name at `line` and `column` of `file` is, in the same units.
+    pub fn hover(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Option<Hovered>, Failure> {
+        self.talk.hover(file, line, column)
+    }
 }
 
 /// The failure a handshake really was, given what became of the program and what it said.
@@ -450,17 +477,23 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// The handshake: `initialize`, then the `initialized` notification, which the
     /// server waits for and which nothing may come before.
     ///
-    /// The capabilities are **one line long**, and what is left out is the decision. Every
+    /// The capabilities are **two lines long**, and what is left out is the decision. Every
     /// request rust-analyzer would make of a client -- for configuration, to register a
     /// watcher -- is opt-in through a capability, so declaring none of those leaves a
     /// conversation this app only ever speaks first in. Nothing is said about positions or
     /// about definitions either: UTF-16 and plain locations are the defaults, both are
     /// what is wanted, and naming them would only be a chance to name them wrongly.
     ///
-    /// The one thing asked for is progress, because it is the only way to know the server
-    /// is still reading the project -- an answer before that is done is empty and says
-    /// nothing about why. It costs the `window/workDoneProgress/create` requests the
-    /// reader answers.
+    /// The first is progress, because it is the only way to know the server is still
+    /// reading the project -- an answer before that is done is empty and says nothing
+    /// about why. It costs the `window/workDoneProgress/create` requests the reader
+    /// answers.
+    ///
+    /// The second is the format a hover is written in, which is the one default not worth
+    /// taking. A client that names none is answered in plain text, with the fences gone
+    /// and the doc comment's list run together into one word; one that names markdown is
+    /// answered with the signature fenced and the comment as it was written. Measured
+    /// against a real server both ways, over the same name.
     ///
     /// Semantic tokens are **not** declared either, though they are asked for: rust-analyzer
     /// offers them and sends its whole legend to a client that says nothing, which was
@@ -490,7 +523,10 @@ impl<W: Write + Send + 'static> Talk<W> {
                 "clientInfo": { "name": "Assembly Viewer" },
                 "rootUri": root,
                 "workspaceFolders": [{ "uri": root, "name": name }],
-                "capabilities": { "window": { "workDoneProgress": true } },
+                "capabilities": {
+                    "window": { "workDoneProgress": true },
+                    "textDocument": { "hover": { "contentFormat": ["markdown"] } },
+                },
                 "initializationOptions": options,
             }),
         )?;
@@ -553,6 +589,27 @@ impl<W: Write + Send + 'static> Talk<W> {
         let mut params = asked_at(file, line, column);
         params["context"] = json!({ "includeDeclaration": false });
         self.places_at("textDocument/references", params)
+    }
+
+    /// What the name at `line` and `column` of `file` is, in the server's own words, and
+    /// nothing where it has none to say. The units are [`Talk::definition`]'s.
+    ///
+    /// The file is not opened first, for that question's reason.
+    ///
+    /// **A refusal is an empty answer**, as it is for a place and not as it is for the
+    /// names in a file: the pointer resting on the name again is what asks anew, and it
+    /// costs nothing to wait for that.
+    pub fn hover(
+        &mut self,
+        file: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Option<Hovered>, Failure> {
+        match self.request("textDocument/hover", asked_at(file, line, column)) {
+            Ok(value) => Ok(hovered(&value, line, column)),
+            Err(Failure::Refused { code, .. }) if NOT_NOW.contains(&code) => Ok(None),
+            Err(failure) => Err(failure),
+        }
     }
 
     /// Every name in `file`, as the server classifies them.
@@ -1268,6 +1325,86 @@ fn tokens(answer: &Value) -> Vec<Token> {
     tokens
 }
 
+/// The line and the columns one `range` names: the line **1-based**, as a [`Place`]'s is
+/// and for its reason, and the columns in the UTF-16 units they came in.
+///
+/// The columns are a name's only where the range is one line's: one that ends on another
+/// names more than a name, and the empty run is what says so.
+fn spanned(range: &Value) -> Option<(u32, Range<u32>)> {
+    let start = range.get("start")?;
+    let line = start.get("line")?.as_u64()?;
+    let at = |place: &Value| -> u32 {
+        place
+            .get("character")
+            .and_then(Value::as_u64)
+            .and_then(|column| u32::try_from(column).ok())
+            .unwrap_or(0)
+    };
+    let from = at(start);
+    let ends_here = |end: &&Value| end.get("line").and_then(Value::as_u64) == Some(line);
+    let to = range.get("end").filter(ends_here).map_or(from, at);
+    // The protocol counts from zero and everything else here counts from one.
+    Some((
+        u32::try_from(line).ok()?.saturating_add(1),
+        from..to.max(from),
+    ))
+}
+
+/// What one hover answer says, and nothing for one that says nothing. `line` and `column`
+/// are the question's, in the units it was asked in.
+///
+/// The columns are the answer's own where it named a range, and the question's otherwise:
+/// a server need not say what it answered about, and what the box is drawn against has to
+/// be something either way.
+fn hovered(answer: &Value, line: u32, column: u32) -> Option<Hovered> {
+    let text = contents(answer.get("contents")?);
+    // rust-analyzer's own begins with a newline, and a box drawn around blank space is a
+    // box about nothing.
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (line, columns) = answer
+        .get("range")
+        .and_then(spanned)
+        .unwrap_or((line.saturating_add(1), column..column));
+    Some(Hovered {
+        text: text.to_owned(),
+        line,
+        columns,
+    })
+}
+
+/// One `contents`, whichever of the three shapes it came in, as the markdown the box is
+/// drawn from.
+///
+/// The handshake asks for markdown, so a `MarkupContent` is what should arrive; the bare
+/// string and the `{language, value}` pair the specification has since deprecated are
+/// read too, since a server that sends one costs a match arm here and would otherwise
+/// cost the answer. A pair naming a language becomes a fenced block: what it holds is
+/// code, and a fence is how markdown says so. An array is joined by a blank line, which
+/// is a paragraph break.
+fn contents(value: &Value) -> String {
+    match value {
+        Value::String(said) => said.clone(),
+        Value::Array(values) => values
+            .iter()
+            .map(contents)
+            .filter(|said| !said.trim().is_empty())
+            .collect::<Vec<String>>()
+            .join("\n\n"),
+        Value::Object(_) => match (
+            value.get("language").and_then(Value::as_str),
+            value.get("value").and_then(Value::as_str),
+        ) {
+            (Some(language), Some(said)) => format!("```{language}\n{said}\n```"),
+            (None, Some(said)) => said.to_owned(),
+            _ => String::new(),
+        },
+        _ => String::new(),
+    }
+}
+
 /// The places an answer names, whichever of the shapes it came in.
 ///
 /// No `linkSupport` was declared, so a list of plain locations is what should arrive; the
@@ -1280,25 +1417,11 @@ fn places(answer: &Value) -> Vec<Place> {
             .or_else(|| value.get("targetUri"))
             .and_then(Value::as_str)?;
         let range = value.get("range").or_else(|| value.get("targetRange"))?;
-        let start = range.get("start")?;
-        let line = start.get("line")?.as_u64()?;
-        let at = |place: &Value| -> u32 {
-            place
-                .get("character")
-                .and_then(Value::as_u64)
-                .and_then(|column| u32::try_from(column).ok())
-                .unwrap_or(0)
-        };
-        let from = at(start);
-        // The columns are a name's only where the range is one line's: one that ends on
-        // another names more than a name, and the empty run is what says so.
-        let ends_here = |end: &&Value| end.get("line").and_then(Value::as_u64) == Some(line);
-        let to = range.get("end").filter(ends_here).map_or(from, at);
+        let (line, columns) = spanned(range)?;
         Some(Place {
             file: path_of(uri)?,
-            // The protocol counts from zero and everything else here counts from one.
-            line: u32::try_from(line).ok()?.saturating_add(1),
-            columns: from..to.max(from),
+            line,
+            columns,
         })
     };
 

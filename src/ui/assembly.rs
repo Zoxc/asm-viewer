@@ -1001,6 +1001,11 @@ impl Component for InstructionRow {
             head,
             tail: spans(tail, false),
             chars: self.chars,
+            // Nothing in an instruction is a name a language server can place: a
+            // question is put by file, line and column, and an assembly row is in no
+            // file (`notes/Goals.md`).
+            names: Vec::new(),
+            on_hover: None,
             links: inline,
         };
 

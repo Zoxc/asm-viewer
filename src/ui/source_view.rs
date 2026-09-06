@@ -186,6 +186,9 @@ impl Component for SourceRow {
             .zip(try_consume_context::<Following>())
             .zip(try_consume_context::<LspJobs>())
             .map(|((talking, follow), jobs)| (talking.0, follow.0, jobs));
+        // Where the name under the pointer is written, for the same reason: a pane
+        // mounted without it draws its text and says nothing about a name.
+        let hover = try_consume_context::<Hovering>().map(|hovering| hovering.0);
         let dock = use_consume::<SidebarDock>().0;
         // What the door out of a companion lands through, consumed here for the same
         // reason the rest are.
@@ -264,6 +267,43 @@ impl Component for SourceRow {
                         .collect(),
                     follow: Rc::new(follow_link),
                 }
+            }),
+            // Every name the server placed on this row, links and the places where one is
+            // defined alike: what a reader hovers is a name and not a door, and a hover
+            // over the name where a function is defined is where its own signature and
+            // doc comment are.
+            names: self
+                .links
+                .on_line(self.index as u32 + 1)
+                .iter()
+                .map(|link| link.columns.start as usize..link.columns.end as usize)
+                .collect(),
+            // What the pointer on one of them says. Consumed in the render, as everything
+            // a handler here reaches for is: a handler may not run a hook.
+            on_hover: hover.map(|hover| {
+                let file = self.file.clone();
+                let row = self.index as u32;
+                Rc::new(move |under: Under| {
+                    let mut hover = hover;
+                    let mut waiting = hover.peek().clone();
+                    let moved = match under {
+                        Under::Name(columns, drawn) => waiting.enter(Pointed {
+                            at: Lookup {
+                                file: PathBuf::from(&*file),
+                                // The protocol counts lines from zero, where a row's line
+                                // is 1-based; the column is already what it takes.
+                                line: row,
+                                column: columns.start as u32,
+                            },
+                            drawn,
+                        }),
+                        Under::Off => waiting.left_name(),
+                        Under::Moved => waiting.gone(),
+                    };
+                    if moved {
+                        hover.set(waiting);
+                    }
+                }) as Rc<dyn Fn(Under)>
             }),
         };
 

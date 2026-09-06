@@ -389,6 +389,9 @@ impl Component for TextRow {
             head,
             tail: Vec::new(),
             chars: self.chars,
+            // As in the assembly pane: an instruction is in no file.
+            names: Vec::new(),
+            on_hover: None,
             links: NoLinks,
         };
 

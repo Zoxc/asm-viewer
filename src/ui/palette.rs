@@ -366,6 +366,35 @@ pub(crate) fn interface_theme(appearance: Appearance) -> Theme {
         Appearance::Dark => dark_theme(),
     };
 
+    // The hover box's answer, drawn by freya's markdown viewer, whose own default
+    // resolves its colours against freya's colour sheet rather than the palette -- so
+    // every field is stated: one left out comes back in freya's colours beside ours. The
+    // sizes are the two fonts', prose in the interface font and code in the fixed-width
+    // one, which is what the panes draw them in.
+    theme.set(
+        "markdown_viewer",
+        MarkdownViewerThemePreference {
+            color: Preference::Specific(palette().text_fg),
+            color_link: Preference::Specific(palette().name_hover_fg),
+            background_code: Preference::Specific(palette().header_bg),
+            color_code: Preference::Specific(palette().name_fg),
+            background_blockquote: Preference::Specific(palette().header_bg),
+            border_blockquote: Preference::Specific(palette().hairline),
+            background_divider: Preference::Specific(palette().hairline),
+            // A hover's headings are a doc comment's, inside a box a few lines tall: the
+            // steps are small, and the smallest is the prose it sits over.
+            heading_h1: Preference::Specific(fonts().ui.size() + 5.0),
+            heading_h2: Preference::Specific(fonts().ui.size() + 4.0),
+            heading_h3: Preference::Specific(fonts().ui.size() + 3.0),
+            heading_h4: Preference::Specific(fonts().ui.size() + 2.0),
+            heading_h5: Preference::Specific(fonts().ui.size() + 1.0),
+            heading_h6: Preference::Specific(fonts().ui.size()),
+            paragraph_size: Preference::Specific(fonts().ui.size()),
+            code_font_size: Preference::Specific(fonts().mono.size()),
+            table_font_size: Preference::Specific(fonts().ui.size()),
+        },
+    );
+
     if let Some(tooltip) = theme.get::<TooltipThemePreference>("tooltip").cloned() {
         theme.set(
             "tooltip",

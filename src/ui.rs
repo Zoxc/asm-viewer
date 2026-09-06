@@ -10,7 +10,7 @@ pub(crate) use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, LazyLock, Mutex, MutexGuard},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(crate) use async_io::Timer;
@@ -20,6 +20,9 @@ pub(crate) use freya::code_editor::{
 };
 pub(crate) use freya::icons::lucide;
 pub(crate) use freya::prelude::*;
+// The markdown the hover box draws its answer with. Its own crate rather than freya's
+// prelude, freya not re-exporting it.
+pub(crate) use freya_markdown::{MarkdownViewer, MarkdownViewerThemePreference};
 // The editor's own text trait, which the prelude does not carry: where its cursor is and
 // how to put it somewhere else.
 pub(crate) use freya::text_edit::TextEditor;
@@ -97,6 +100,10 @@ mod follow;
 pub(crate) use follow::*;
 mod highlight;
 pub(crate) use highlight::*;
+mod hover_view;
+pub(crate) use hover_view::*;
+mod hovering;
+pub(crate) use hovering::*;
 mod language;
 pub(crate) use language::*;
 mod linking;
@@ -531,10 +538,22 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // Which of a source file's names are links, which is the server's to say and so is
     // held beside the questions about a place rather than worked out in the pane.
     let linked = use_provide_context(|| Linking(State::create(Linked::default()))).0;
-    let jobs = use_language_with(language, follow, located, linked, proj, language_work());
+    // What the pointer is on and what the server says it is: at the root because the box
+    // is, the rows it is about being recycled under it.
+    let hover = use_provide_context(|| Hovering(State::create(Hover::default()))).0;
+    let jobs = use_language_with(
+        language,
+        follow,
+        located,
+        linked,
+        hover,
+        proj,
+        language_work(),
+    );
     // What a name followed in the source opens, which the answer above fills in.
     use_follow(follow, open, visits, marked, landing, plant, driven);
-    use_linking(language, linked, jobs);
+    use_linking(language, linked, jobs.clone());
+    use_hovering(language, hover, jobs);
 
     rect()
         .expanded()
@@ -547,10 +566,15 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         // Global rather than `on_pointer_down`: it is emitted with no hit test, so the
         // mouse's back/forward buttons work wherever the cursor is and no child can
         // swallow them by stopping propagation.
-        .on_global_pointer_down(move |e: Event<PointerEventData>| match e.button() {
-            Some(MouseButton::Back) => navigate(open, Nav::Back),
-            Some(MouseButton::Forward) => navigate(open, Nav::Forward),
-            _ => {}
+        .on_global_pointer_down(move |e: Event<PointerEventData>| {
+            // Inside this handler and not beside it: an element keeps one handler per
+            // event, and a second `on_global_pointer_down` would silently replace this.
+            hover_pressed(hover);
+            match e.button() {
+                Some(MouseButton::Back) => navigate(open, Nav::Back),
+                Some(MouseButton::Forward) => navigate(open, Nav::Forward),
+                _ => {}
+            }
         })
         // A sweep ends wherever the button comes up, very often not over the pane it
         // started in, so the end of the gesture is watched for here.
@@ -562,6 +586,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         // A freya pointer event carries no modifiers, so Shift and Ctrl have to be known
         // before the click that asks about them: `ModifierKeys`.
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
+            hover_struck(hover, &e.key);
             root_key_down(keys, searched, finder, proj, dock, &e.key, e.modifiers)
         })
         .on_global_key_up(move |e: Event<KeyboardEventData>| keys.up(&e.key, e.modifiers))
@@ -582,6 +607,9 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         // The same, until Ctrl+P. Over the window and not in a pane, so it is reached
         // from wherever the reader is.
         .child(FinderOverlay)
+        // Over the panes and drawn as nothing until the server has said something about
+        // the name under the pointer.
+        .child(HoverBox)
         .child(toolbar())
         // Under the bar rather than in the view that has the other Start button: the
         // control above is pressed from wherever the reader is, and a question drawn

@@ -79,6 +79,15 @@ pub(crate) struct Text<L> {
     pub(crate) tail: Vec<Span<'static>>,
     /// What this row draws of the character selection.
     pub(crate) chars: RowChars,
+    /// The columns of **every** name the server placed on this row, links and the places
+    /// where one is defined alike: what the pointer is answered about. A superset of
+    /// `links`, and not fed to [`cut_at`] -- hovering a name changes no span's style, so
+    /// it cuts the row nowhere and cannot widen the listing.
+    pub(crate) names: Vec<Range<usize>>,
+    /// What the pointer moving onto one of them, or off them all, says. Built per row,
+    /// as the two above are: the row knows where a name is drawn, and the pane knows what
+    /// place it is.
+    pub(crate) on_hover: Option<Rc<dyn Fn(Under)>>,
     /// What of this row is a link.
     pub(crate) links: L,
 }
@@ -192,9 +201,23 @@ impl<L: RowLinks> Text<L> {
             head: self.head,
             tail: self.tail,
             chars: self.chars,
+            names: self.names,
+            on_hover: self.on_hover,
             links: self.links.drawn(),
         }
     }
+}
+
+/// What a row says about the name under the pointer.
+pub(crate) enum Under {
+    /// The pointer is on the name at these columns of the row's own text, drawn at this
+    /// box in the window's own logical pixels.
+    Name(Range<usize>, Area),
+    /// It is on none of them.
+    Off,
+    /// The row has moved under it -- a scroll, a resize, a listing redrawn -- so nothing
+    /// said about it is about anything on screen any more.
+    Moved,
 }
 
 /// What one row draws of the pane's character selection, as the list tells it: its
@@ -396,6 +419,10 @@ fn row(
     // from them, and the difference between the two is scroll-invariant.
     let row_x = use_hook(|| Rc::new(Cell::new(0.0f32)));
     let text_x = use_hook(|| Rc::new(Cell::new(0.0f32)));
+    // Where the row's top is, which is what the hover box is placed against. Its own
+    // cell rather than a corner of `row_x`'s: this one moves with every scroll, and the
+    // move is what says a box drawn against it is about a place that has gone.
+    let row_y = use_hook(|| Rc::new(Cell::new(f32::NAN)));
     // Whether the pointer is over the link inside the text, which the link's box says.
     let over_link = use_hook(|| Rc::new(Cell::new(false)));
     let alt = try_consume_context::<Alt>().map(|alt| alt.0);
@@ -419,6 +446,16 @@ fn row(
         Some((columns, follow)) => (columns, Some(follow)),
         None => (Vec::new(), None),
     };
+    // Every name on the row and what to say about the one under the pointer, taken out
+    // of `text` for the same reason the links are.
+    let names: Vec<Range<usize>> = text
+        .as_ref()
+        .map(|text| text.names.clone())
+        .unwrap_or_default();
+    let on_hover = text.as_ref().and_then(|text| text.on_hover.clone());
+    // Which of them the pointer is on. A cell and not a state: hovering a name changes
+    // nothing this row draws, and only the box is redrawn for it.
+    let named = use_hook(|| Rc::new(Cell::new(None::<usize>)));
     // Which of them the pointer is over, or `None`. Written with `set_if_modified`, so a
     // row is drawn again when the pointer crosses a link's edge and not as it moves along
     // one.
@@ -432,6 +469,43 @@ fn row(
             links.iter().position(|link| link.contains(&column))
         }
     };
+    // Say which name the pointer is on, where it is drawn, and say it only when the
+    // answer has changed: a move along one name arrives many times over.
+    let tell = {
+        let (holder, text_x, row_y) = (holder.clone(), text_x.clone(), row_y.clone());
+        let (names, named, on_hover) = (names.clone(), named.clone(), on_hover.clone());
+        Rc::new(move |on: Option<usize>| {
+            // Off a name, only the crossing is worth saying: that there is nothing under
+            // the pointer stays true however far it moves. **On** one, every move is said,
+            // a move being what puts the wait for it back to the beginning
+            // (`src/ui/hovering.rs`).
+            let crossed = named.replace(on) != on;
+            if !crossed && on.is_none() {
+                return;
+            }
+            let Some(tell) = on_hover.as_ref() else {
+                return;
+            };
+            let Some(columns) = on.and_then(|on| names.get(on)).cloned() else {
+                return tell(Under::Off);
+            };
+            let holder = holder.read();
+            let edge = |column| caret_x(&holder, column).map(|x| text_x.get() + x);
+            // A row whose paragraph is not laid out yet answers no column, and a box
+            // placed against nothing would be drawn in the window's corner.
+            let (Some(left), Some(right)) = (edge(columns.start), edge(columns.end)) else {
+                return tell(Under::Off);
+            };
+            tell(Under::Name(
+                columns,
+                Area::new(
+                    (left, row_y.get()).into(),
+                    Size2D::new(right - left, code_row_height()),
+                ),
+            ));
+        })
+    };
+
     // Whether the paragraph has been laid out, which is when the holder can answer where
     // a column is: the caret is drawn from the render after that.
     let mut laid = use_state(|| false);
@@ -622,9 +696,20 @@ fn row(
         // content's, not the laid-out one: see `ui/width.rs`.
         .width(Widest::row_width(widest.floor(listing_key), listing_key))
         .on_sized({
-            let row_x = row_x.clone();
+            let (row_x, row_y) = (row_x.clone(), row_y.clone());
+            let (named, on_hover) = (named.clone(), on_hover.clone());
             move |e: Event<SizedEventData>| {
                 row_x.set(e.area.min_x());
+                // A row that has moved -- a scroll, a resize, a listing redrawn -- takes
+                // any box drawn against it with it. Watched here rather than at the
+                // wheel: a `VirtualScrollView` stops the wheel event it acted on, so the
+                // pane never sees the one that matters, and this covers the keyboard, the
+                // sweep's autoscroll and a font change as well.
+                if row_y.replace(e.area.min_y()) != e.area.min_y() && named.take().is_some() {
+                    if let Some(tell) = on_hover.as_ref() {
+                        tell(Under::Moved);
+                    }
+                }
                 if measured {
                     widest.note(listing_key, e.inner_sizes.width);
                 }
@@ -703,6 +788,7 @@ fn row(
         // it, the hand over the link, the arrow over the gutter.
         .on_pointer_move({
             let (row_x, text_x) = (row_x.clone(), text_x.clone());
+            let tell = tell.clone();
             move |e: Event<PointerEventData>| {
                 let at = e.element_location();
                 let column = column(at, false);
@@ -714,6 +800,14 @@ fn row(
                     false => at_link(column),
                 };
                 over.set_if_modified(hovered);
+                // Which name the pointer is on, followed or not: a name where one is
+                // defined is not a link and is still something to ask the server about.
+                // The same guard as the link's, for the same reason.
+                tell(match dragging(marked, pane) || held() {
+                    true => None,
+                    false => column
+                        .and_then(|column| names.iter().position(|name| name.contains(&column))),
+                });
                 let on_text = has_text && at.x as f32 >= text_x.get() - row_x.get();
                 set_icon(if (over_link.get() && hand()) || hovered.is_some() {
                     CursorIcon::Pointer
@@ -724,9 +818,13 @@ fn row(
                 });
             }
         })
-        .on_pointer_out(move |_| {
-            over.set_if_modified(None);
-            set_icon(CursorIcon::Default);
+        .on_pointer_out({
+            let tell = tell.clone();
+            move |_| {
+                over.set_if_modified(None);
+                tell(None);
+                set_icon(CursorIcon::Default);
+            }
         })
         .children(before)
         // Before the paragraph in the tree, so it is painted under the text -- and

@@ -293,12 +293,16 @@ fn the_handshake_is_initialize_and_then_initialized() {
     // itself, and a message before it ends the conversation.
     assert_eq!(methods, ["initialize", "initialized"]);
     assert_eq!(said[0]["params"]["rootUri"], json!("file:///p"));
-    // One thing is declared and nothing else: progress, which is the only way to know the
-    // server is still reading the project, and none of what would have it ask this app
-    // for configuration or for a file watcher.
+    // Two things are declared and nothing else: progress, which is the only way to know
+    // the server is still reading the project, and the format a hover is written in,
+    // which rust-analyzer flattens to plain text for a client that names none. Neither is
+    // any of what would have it ask this app for configuration or for a file watcher.
     assert_eq!(
         said[0]["params"]["capabilities"],
-        json!({ "window": { "workDoneProgress": true } })
+        json!({
+            "window": { "workDoneProgress": true },
+            "textDocument": { "hover": { "contentFormat": ["markdown"] } },
+        })
     );
     // The options are what this app asks of every server, and what a project's own
     // settings will be laid over: one line, turning off the check it would otherwise run
@@ -384,6 +388,136 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
             line: 4,
             columns: 8..14,
         }]
+    );
+}
+
+/// The answer against a fake server that replies `result` to whatever is asked.
+fn hover_of(result: Value) -> Option<Hovered> {
+    let (_said, found, _notes) = against(
+        move |fake, message| {
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": result.clone(),
+            }));
+        },
+        |talk| {
+            talk.hover(Path::new("/p/src/main.rs"), 10, 14)
+                .expect("an answer")
+        },
+    );
+    found
+}
+
+#[test]
+fn a_hover_is_asked_where_the_pointer_rested_and_answered_with_the_name_it_is_about() {
+    let (said, found, _notes) = against(
+        |fake, message| {
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": {
+                    "contents": { "kind": "markdown", "value": "```rust\npub fn helper()\n```" },
+                    "range": { "start": { "line": 10, "character": 12 },
+                               "end": { "line": 10, "character": 18 } },
+                },
+            }));
+        },
+        |talk| {
+            talk.hover(Path::new("/p/src/main.rs"), 10, 14)
+                .expect("an answer")
+        },
+    );
+
+    assert_eq!(said[0]["method"], json!("textDocument/hover"));
+    assert_eq!(
+        said[0]["params"]["position"],
+        json!({ "line": 10, "character": 14 })
+    );
+    assert_eq!(
+        found,
+        Some(Hovered {
+            text: "```rust\npub fn helper()\n```".to_owned(),
+            // The answer's own range, and its line counted from one.
+            line: 11,
+            columns: 12..18,
+        })
+    );
+}
+
+/// The shape a client that named a format is sent, the two the specification has
+/// deprecated, and a list of them.
+#[test]
+fn a_hover_answer_is_read_in_each_shape_it_may_come_in() {
+    let text = |found: Option<Hovered>| found.expect("an answer").text;
+
+    assert_eq!(
+        text(hover_of(
+            json!({ "contents": { "kind": "markdown", "value": "what it **is**" } })
+        )),
+        "what it **is**"
+    );
+    assert_eq!(
+        text(hover_of(json!({ "contents": "what it is" }))),
+        "what it is"
+    );
+    // A `MarkedString` naming a language is code, and a fence is how markdown says so.
+    assert_eq!(
+        text(hover_of(
+            json!({ "contents": { "language": "rust", "value": "fn helper()" } })
+        )),
+        "```rust\nfn helper()\n```"
+    );
+    assert_eq!(
+        text(hover_of(json!({ "contents": [
+            { "language": "rust", "value": "fn helper()" },
+            "what it is",
+        ] }))),
+        "```rust\nfn helper()\n```\n\nwhat it is"
+    );
+}
+
+/// rust-analyzer's own answer begins with a newline, and a hover over a name it has
+/// nothing to say about is an empty one.
+#[test]
+fn a_hover_that_says_nothing_is_no_answer_at_all() {
+    assert_eq!(hover_of(Value::Null), None);
+    assert_eq!(hover_of(json!({ "contents": "" })), None);
+    assert_eq!(hover_of(json!({ "contents": "\n \n" })), None);
+    assert_eq!(hover_of(json!({ "contents": [] })), None);
+}
+
+/// A server that answers without saying what it answered about: the box is drawn against
+/// the name the question was asked at.
+#[test]
+fn a_hover_with_no_range_is_about_the_column_it_was_asked_at() {
+    assert_eq!(
+        hover_of(json!({ "contents": "what it is" })),
+        Some(Hovered {
+            text: "what it is".to_owned(),
+            line: 11,
+            columns: 14..14,
+        })
+    );
+}
+
+#[test]
+fn a_server_still_reading_the_project_says_nothing_about_a_name_and_does_not_fail() {
+    let _ = against(
+        |fake, message| {
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "error": { "code": -32801, "message": "content modified" },
+            }));
+        },
+        |talk| {
+            assert_eq!(
+                talk.hover(Path::new("/p/src/main.rs"), 0, 0),
+                Ok(None),
+                "a refusal is no answer, and not a failure to report"
+            );
+        },
     );
 }
 

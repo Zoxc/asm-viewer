@@ -415,6 +415,11 @@ pub(crate) enum LspJob {
     /// a place in it. The file travels as the `Arc<str>` a document is named by, since
     /// that is what the answer has to be matched against.
     Tokens { run: u64, file: Arc<str> },
+    /// What the name under the pointer is. A question about a place like [`LspJob::Ask`]'s
+    /// four, and **not** a fifth `Wanted`: those are bucketed by consumer, of which this
+    /// is a third, and a pointer crossing a name must neither take back a definition the
+    /// reader clicked for nor be taken back by one.
+    Hover { run: u64, id: u64, at: Lookup },
     /// Let go of the server: it has been stopped already, and this is what reaps it.
     Stop,
 }
@@ -444,6 +449,13 @@ pub(crate) enum LspAnswer {
         run: u64,
         file: Arc<str>,
         links: Result<links::Links, lsp::Failure>,
+    },
+    /// What the server says the name at one place is. Its own answer and not a `Reply`,
+    /// for the reason the links are: it is contents and a range where the four are places.
+    Hovered {
+        run: u64,
+        id: u64,
+        said: Result<Option<lsp::Hovered>, lsp::Failure>,
     },
     /// What the project's own settings file said. Named by the directory it was read in
     /// and not by a run: it is about a project and not about a process.
@@ -560,6 +572,15 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 }
                 Some(LspAnswer::Linked { run, file, links })
             }
+            LspJob::Hover { run, id, at } => {
+                let talk = talking.as_mut()?;
+                let said = talk.hover(&at.file, at.line, at.column);
+                // A conversation that ended is a server that is gone, as above.
+                if matches!(said, Err(lsp::Failure::Broken(_))) {
+                    *talking = None;
+                }
+                Some(LspAnswer::Hovered { run, id, said })
+            }
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
                 settings: lsp::settings_in(&directory),
                 directory,
@@ -597,6 +618,11 @@ pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -
     // One pane shows one file, so a question about another is a question about what the
     // reader has already left.
     let linking = last(&|job| matches!(job, LspJob::Tokens { .. }));
+    // A bucket of its own, and the reason `LspJob::Hover` is not a fifth `Wanted`: the
+    // pointer crossing a line asks about every name on the way, and only the name it came
+    // to rest on is worth a round trip -- but none of them is a reader taking back the
+    // definition they clicked for.
+    let hovering = last(&|job| matches!(job, LspJob::Hover { .. }));
     jobs.into_iter()
         .enumerate()
         .filter(|(at, job)| match job {
@@ -606,6 +632,7 @@ pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -
             },
             LspJob::ReadSettings { .. } => Some(*at) == read,
             LspJob::Tokens { .. } => Some(*at) == linking,
+            LspJob::Hover { .. } => Some(*at) == hovering,
             LspJob::Start { .. } | LspJob::Stop => true,
         })
         .map(|(_, job)| job)
@@ -649,6 +676,7 @@ pub(crate) fn use_language_with(
     follow: State<Follow>,
     located: State<Located>,
     linked: State<Linked>,
+    hover: State<Hover>,
     mut proj: State<OpenProject>,
     work: impl Fn(LspJob) -> Option<LspAnswer> + Send + 'static,
 ) -> LspJobs {
@@ -724,6 +752,30 @@ pub(crate) fn use_language_with(
                     }
                     Err(failure) => failure,
                 };
+                write_if(language, |held| held.failed(run, why.to_string()));
+            }
+            LspAnswer::Hovered { run, id, said } => {
+                // Bound to a `let` of its own, the writes below being of this state.
+                let mine = language.peek().run == run;
+                if !mine {
+                    return;
+                }
+                // A refusal is already no answer by the time it is here
+                // (`lsp::Talk::hover`), so what is left is a name the server had nothing
+                // to say about -- no box, and no question to put again -- or a
+                // conversation that ended.
+                let why = match said {
+                    Ok(said) => {
+                        write_if(hover, |waiting| {
+                            waiting.answer(run, id, said.map(|said| said.text))
+                        });
+                        return;
+                    }
+                    Err(failure) => failure,
+                };
+                // The question is dropped either way: a box that stayed asked would keep
+                // the name from ever being asked about again.
+                write_if(hover, |waiting| waiting.answer(run, id, None));
                 write_if(language, |held| held.failed(run, why.to_string()));
             }
             LspAnswer::Answered {
@@ -971,6 +1023,27 @@ pub(crate) fn ask_where(
         id,
         at,
         want,
+    });
+    Some((held.run, id))
+}
+
+/// Ask what the name at `at` is. [`ask_where`]'s rules, in every respect: the answer
+/// arrives under the run it was asked in and the id minted here, there is nobody to ask
+/// with no server, and a question put while one is starting waits for it.
+pub(crate) fn ask_hover(
+    language: State<Language>,
+    jobs: &LspJobs,
+    at: Lookup,
+) -> Option<(u64, u64)> {
+    let held = language.peek().clone();
+    if !held.started() {
+        return None;
+    }
+    let id = jobs.next_question();
+    jobs.send(LspJob::Hover {
+        run: held.run,
+        id,
+        at,
     });
     Some((held.run, id))
 }

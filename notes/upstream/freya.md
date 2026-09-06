@@ -146,6 +146,28 @@ that as a `Size::Fn` **width** instead and report their content through `on_size
 `a_picked_rows_wash_runs_as_wide_as_the_widest_row` would catch the minimum coming back. Not
 reported yet.
 
+## A `ScrollView` inside a box sized from its content hangs the app
+
+`ScrollView` is `width: fill, height: fill` by default (`scrollview.rs:96-98`), and a `fill`
+child of a parent whose height is `Inner` is the two asking each other how tall they are.
+The app never settles: the hover box, whose height is the answer it holds, drew nothing at
+all with one inside it, and a test around it ran for four minutes without finishing rather
+than failing.
+
+Sizing the view from its content instead -- `height(Size::auto())` with a `max_height` --
+lays out, and does not scroll: torin clamps what a capped node reports holding, so
+`inner_sizes.height` comes back equal to the area's, `get_scroll_position_from_wheel`
+(`scrollview.rs:272-277`) sees nothing to scroll past, and the wheel does nothing. Measured
+in the tree: every node inside a 174px-tall box reported `inner 174`, with 80 paragraphs in
+it.
+
+**Cost:** the hover box measures its own answer (`src/ui/hover_view.rs`). The content is
+drawn once at the full height the box may have, a rect around it reports what that came to
+through `on_sized`, and the view is given that height or the limit, whichever is less --
+two passes, where a scroll view that could size itself would need none.
+`a_long_answer_is_capped_and_scrolls_inside_the_box` and `a_short_answer_makes_a_short_box`
+pin both directions. Not reported yet.
+
 ## The release build's own panic hook is fatal, and catches what the app catches on purpose
 
 `freya-winit 0.4.3`, `src/lib.rs:62`: `launch` installs a panic hook of its own, under
@@ -218,6 +240,22 @@ consumes contexts in the component and hands the states down (`Arrangement`,
 the type found against the type expected, would have said it outright.
 
 ## Wanted
+
+**Markdown code blocks that follow the app's own syntax colours.**
+`freya-markdown`'s `code-editor` feature draws a fenced block with the `CodeEditor`
+component, which is the highlighter this app already colours its source pane with -- but
+`CodeBlockEditor` builds a `CodeEditorData` and never calls `set_theme`
+(`freya-markdown-0.4.3/src/code_editor.rs:60-70`), and that type starts at
+`EditorSyntaxTheme::default()`, which is `light()` (`freya-code-editor-0.4.3/src/editor_data.rs:51`,
+`editor_theme.rs:182-186`). The colours are baked into the blocks by the parse, so every
+fenced block comes out in freya's light theme whatever the app's appearance is: in dark mode,
+light-mode code over a dark ground. Nothing outside the crate can reach it -- `MarkdownViewer`'s
+`theme` field is `pub(crate)`, `EditorSyntax` is declared `%[no_ext]` and is not a keyed
+component theme, and the one code hook, `code_editor_language`, picks the grammar and not the
+colours. What the app does instead: the feature is off, so the hover box's fenced blocks fall
+back to plain monospace text, in the one code colour the theme entry *can* set
+(`markdown_viewer`, `src/ui/palette.rs`). An `EditorSyntaxTheme` on `CodeBlockEditor`, or a
+`CodeEditorData` that read one from the theme sheet, would do it.
 
 **A `Popup` that need not be centred down the window.** `PopupBackground` stacks two
 window-sized global rects and `.center()`s the content in the second, and nothing on `Popup`

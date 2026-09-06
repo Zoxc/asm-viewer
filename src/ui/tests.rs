@@ -5902,10 +5902,18 @@ fn linking_harness() -> impl IntoElement {
     let located = use_consume::<Locations>().0;
     let linked = use_consume::<Linking>().0;
     let work = use_consume::<ServerWorking>().0;
-    let jobs = use_language_with(language, follow, located, linked, states.proj, move |job| {
-        work(job)
-    });
+    let hover = use_provide_root_context(|| Hovering(State::create(Hover::default()))).0;
+    let jobs = use_language_with(
+        language,
+        follow,
+        located,
+        linked,
+        hover,
+        states.proj,
+        move |job| work(job),
+    );
     use_linking(language, linked, jobs.clone());
+    use_hovering(language, hover, jobs.clone());
     // Handed out, so a test that is about the server itself can start one and be given
     // the channel its remarks come back on. The rest reach the server through the pane.
     let mut asking = use_consume::<ServerAsking>().0;
@@ -5930,7 +5938,13 @@ fn linking_harness() -> impl IntoElement {
     // right-click on a link offers is one of the things asked of this harness.
     rect()
         .expanded()
+        // As the app's root does it, and for the same reason each is one handler there.
+        .on_global_key_down(move |e: Event<KeyboardEventData>| hover_struck(hover, &e.key))
+        .on_global_pointer_down(move |_| hover_pressed(hover))
         .child(ContextMenuViewer::new())
+        // Mounted where `app` mounts it: over everything and outside the pane, and drawn
+        // as nothing at all until the server has said something about a name.
+        .child(HoverBox)
         .child(SourcePane {
             tab: pane_tab(&document),
             document,
@@ -5986,6 +6000,7 @@ macro_rules! mount_linking {
                 LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
                 LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
                 LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
+                LspJob::Hover { at, .. } => AskedOfServer::Hover(at.clone()),
                 LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
                 LspJob::Stop => AskedOfServer::Stop,
             };
@@ -6438,6 +6453,486 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
         untouched == Some(elsewhere),
         "the tab the reader moved to was replaced"
     );
+}
+
+// What the server says about the name under the pointer.
+
+/// Mount the linking harness with a server that answers every hover with `said`, and put
+/// the pointer on `word`.
+///
+/// The answer is written under the run and id the question went out with, which is what
+/// makes it the answer to *that* question: a hover the pointer has moved off is answered
+/// to nobody.
+macro_rules! hovering_over {
+    ($said:expr, $word:expr) => {{
+        let said: &str = $said;
+        let (file, directory) = calling_file("hover");
+        let (mut test, states, language, _location, _driven, asks) = mount_linking!(
+            move |job: LspJob| match job {
+                LspJob::Hover { run, id, .. } => Some(LspAnswer::Hovered {
+                    run,
+                    id,
+                    said: Ok(Some(lsp::Hovered {
+                        text: said.to_owned(),
+                        line: 2,
+                        columns: 12..18,
+                    })),
+                }),
+                _ => None,
+            },
+            file.clone()
+        );
+        let mut language = language;
+        open_document(
+            states.open,
+            states.visits,
+            Document::Source(file.clone()),
+            Reach::NewTab,
+        );
+        settle(&mut test);
+        serving(&mut test, &mut language);
+        let at = word_point(&test, $word);
+        test.move_cursor(at);
+        hovered(&mut test);
+        (test, at, asks, directory)
+    }};
+}
+
+/// The wait the pointer owes (`HOVER_DELAY`), the question after it, the worker's thread
+/// and the answer: four hops and a timer, none of them this thread's. Real time, there
+/// being no clock to turn (`agents/Headless.md`) -- so it stops as soon as the box is
+/// drawn, and a test about a box **not** appearing is the one that pays the lot.
+fn hovered(test: &mut TestingRunner) {
+    let until = std::time::Instant::now() + HOVER_DELAY + Duration::from_millis(200);
+    while std::time::Instant::now() < until {
+        settle(test);
+        if hover_box(test).is_some() {
+            // The pass that draws the box measures the answer; the one after it is the
+            // box at the height that came to (`src/ui/hover_view.rs`).
+            settle(test);
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    settle(test);
+}
+
+/// The box, by its box: the one rect drawn in the pane's own ground that is not the pane.
+fn hover_box(test: &TestingRunner) -> Option<Area> {
+    let pane = palette().pane_bg;
+    rects_with(test, pane)
+        .into_iter()
+        .find(|area| area.width() == HOVER_WIDTH)
+}
+
+/// The row `word` is drawn on, by its box.
+fn word_row(test: &TestingRunner, word: &str) -> Area {
+    paragraphs(test)
+        .into_iter()
+        .find(|(_, text, _)| text.contains(word))
+        .map(|(area, _, _)| area)
+        .unwrap_or_else(|| panic!("{word:?} is drawn"))
+}
+
+/// The box is drawn against the name's row, on the side there is room on: the file here
+/// is three lines at the top of a tall window, so it goes under the row -- and its left
+/// edge is the name's own, which is what says it is about that name and not about the row
+/// or the pane.
+#[test]
+fn the_box_sits_against_the_row_of_the_name_it_is_about() {
+    let (test, at, _asks, _directory) = hovering_over!("`helper`: fn(u32) -> u32", "helper");
+    let drawn = hover_box(&test).expect("the box is drawn");
+    let row = word_row(&test, "helper");
+    assert_eq!(
+        drawn.min_y(),
+        row.max_y(),
+        "the box does not sit against the name's row"
+    );
+    // The name's own left edge, which the pointer is in the middle of.
+    assert!(
+        drawn.min_x() <= at.0 as f32 && at.0 as f32 <= drawn.max_x(),
+        "the box is not at the name's left edge"
+    );
+}
+
+/// Placement is a rule of its own, so it is asked without a window: above the name where
+/// the box fits there, under it where it does not, and inside the window either way.
+#[test]
+fn the_box_goes_above_the_name_wherever_it_fits_and_stays_in_the_window() {
+    let window = Size2D::new(800.0, 600.0);
+    let tallest = 240.0;
+    let name = |x: f32, y: f32| Area::new((x, y).into(), Size2D::new(48.0, 20.0));
+    let place = |x: f32, y: f32| hover_place(name(x, y), window, tallest);
+
+    // Room for the whole box above, and far more below: above all the same, which is the
+    // rule. Under "more room" this one went below, and so did nearly every name.
+    let middle = place(100.0, 260.0);
+    assert!(middle.over, "a name with room above it put the box below");
+    assert_eq!(middle.left, 100.0, "the box left the name's edge");
+    assert_eq!(
+        middle.room, tallest,
+        "the box was not given the room it has"
+    );
+
+    // Not enough above and more below: under the name, with what is there.
+    let high = place(100.0, 30.0);
+    assert!(!high.over, "a name near the top put the box above it");
+    assert_eq!(high.room, tallest);
+
+    // Nothing like enough either way: the larger side, and only what it holds.
+    let squeezed = hover_place(name(100.0, 60.0), Size2D::new(800.0, 150.0), tallest);
+    assert!(!squeezed.over);
+    assert_eq!(squeezed.room, 150.0 - 80.0 - HOVER_MARGIN);
+
+    // Against the right edge: the box slides left rather than hanging off the window,
+    // and what it may hold is measured from where it ends up.
+    let edge = place(760.0, 300.0);
+    assert!(
+        edge.left + edge.width <= window.width,
+        "the box hangs off the window"
+    );
+    assert_eq!(edge.width, HOVER_WIDTH);
+
+    // A window narrower than the box: it is the window's, less the air at its edges.
+    let narrow = hover_place(name(10.0, 300.0), Size2D::new(300.0, 600.0), tallest);
+    assert_eq!(narrow.width, 300.0 - 2.0 * HOVER_MARGIN);
+}
+
+/// **Any move puts the wait back to the beginning**, one inside the name included: what is
+/// waited on is the pointer stopping, and a pointer travelling slowly along a line is on
+/// its way somewhere. Asked of the rule rather than of a runner, a wait that has to be
+/// waited out being real seconds either way.
+#[test]
+fn a_move_inside_the_name_puts_the_wait_back_to_the_beginning() {
+    let named = |column: u32| Pointed {
+        at: Lookup {
+            file: PathBuf::from("/p/src/main.rs"),
+            line: 1,
+            column,
+        },
+        drawn: Area::new((10.0, 20.0).into(), Size2D::new(40.0, 16.0)),
+    };
+    let mut hover = Hover::default();
+
+    hover.enter(named(3));
+    let first = hover.until().expect("a wait");
+    // The same name, drawn where it was: the pointer moved inside it.
+    hover.enter(named(3));
+    let again = hover.until().expect("a wait");
+    assert!(
+        again > first,
+        "a move inside the name left the wait where it was"
+    );
+
+    // And an answer stops the pushing: the box is up, and a pointer moving about inside
+    // the name it is about does not write it afresh.
+    assert!(hover.asking(1, 1, named(3).at));
+    assert!(hover.answer(1, 1, Some("what it is".to_owned())));
+    let answered = hover.until();
+    hover.enter(named(3));
+    assert_eq!(
+        hover.until(),
+        answered,
+        "the wait was put back under a box already drawn"
+    );
+}
+
+/// **The pointer rests before anything is asked.** A pointer crossing a line of code
+/// passes over a name every few pixels, and each one would be a round trip to another
+/// process; the wait is what makes a hover something the reader asked for. A sweep along
+/// the row asks about none of the names it passes.
+#[test]
+fn a_sweep_along_a_line_asks_about_none_of_the_names_it_passes() {
+    let (file, _directory) = calling_file("resting");
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+    let hovers = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<Lookup> {
+        std::iter::from_fn(|| next_job(asks))
+            .filter_map(|job| match job {
+                AskedOfServer::Hover(at) => Some(at),
+                _ => None,
+            })
+            .collect()
+    };
+    let _ = hovers(&asks);
+
+    // The pointer crosses the row, never staying anywhere: `main` and `helper` and the
+    // local between them all pass under it.
+    let (from, to) = (word_point(&test, "main"), word_point(&test, "helper"));
+    for step in 0..=20 {
+        let along = step as f64 / 20.0;
+        test.move_cursor((from.0 + (to.0 - from.0) * along, from.1));
+        settle(&mut test);
+    }
+    assert!(
+        hovers(&asks).is_empty(),
+        "a sweep along the row asked the server about what it passed over"
+    );
+
+    // And resting on the name it came to rest on asks about that one.
+    test.move_cursor(to);
+    hovered(&mut test);
+    assert_eq!(
+        hovers(&asks).last().map(|at| at.column),
+        // `    let n = helper(1);`, where the call begins.
+        Some(12),
+        "the name the pointer came to rest on was not asked about"
+    );
+}
+
+/// The answer is markdown and is drawn as markdown: the fenced signature as code, the
+/// prose as prose, and none of the marks it is written with left in the text.
+#[test]
+fn the_box_draws_the_answer_as_markdown() {
+    let said = "```rust\npub fn helper(n: u32) -> u32\n```\n\n---\n\nAdds **one** to a number.";
+    let (test, _at, _asks, _directory) = hovering_over!(said, "helper");
+    assert!(hover_box(&test).is_some(), "the box is drawn");
+
+    let drawn = labels(&test).join("\n");
+    assert!(
+        drawn.contains("pub fn helper(n: u32) -> u32"),
+        "the signature is not drawn: {drawn:?}"
+    );
+    assert!(
+        drawn.contains("one"),
+        "the doc comment is not drawn: {drawn:?}"
+    );
+    // The marks are the markdown's own and are drawn as what they mean, not as text.
+    assert!(
+        !drawn.contains("```") && !drawn.contains("**"),
+        "the answer is drawn with its marks in it: {drawn:?}"
+    );
+}
+
+/// A short answer makes a short box: it is as tall as what it holds, and only an answer
+/// with more in it than the box may be tall reaches that limit.
+#[test]
+fn a_short_answer_makes_a_short_box() {
+    let (test, _at, _asks, _directory) = hovering_over!("what it is", "helper");
+    let drawn = hover_box(&test).expect("the box is drawn");
+    assert!(
+        drawn.height() < hover_height(),
+        "one line of answer drew a box {} tall, where the limit is {}",
+        drawn.height(),
+        hover_height()
+    );
+}
+
+/// An answer with pages in it does not take the window: the box stops at its own height
+/// and what is left scrolls, which is what the pointer being able to reach it is for.
+#[test]
+fn a_long_answer_is_capped_and_scrolls_inside_the_box() {
+    let pages: &'static str = Box::leak(
+        (0..80)
+            .map(|line| format!("Line {line} of a doc comment that goes on."))
+            .collect::<Vec<String>>()
+            .join("\n\n")
+            .into_boxed_str(),
+    );
+    let (mut test, _at, _asks, _directory) = hovering_over!(pages, "helper");
+    let drawn = hover_box(&test).expect("the box is drawn");
+    assert!(
+        drawn.height() <= hover_height() + 2.0 * HOVER_PAD + 2.0,
+        "a long answer grew the box past its limit: {}",
+        drawn.height()
+    );
+
+    // The end of it is reached by scrolling the box, not by the box being that tall.
+    let inside = (
+        (drawn.min_x() + drawn.width() / 2.0) as f64,
+        (drawn.min_y() + drawn.height() / 2.0) as f64,
+    );
+    // Where the answer's first line is drawn, which is what moves when the box scrolls:
+    // every line is in the tree either way, the scroll view clipping rather than
+    // building.
+    let first_line = |test: &TestingRunner| {
+        use freya::elements::paragraph::ParagraphElement;
+        use std::any::Any;
+
+        // The markdown's prose is paragraphs of spans, where `labels_with_areas` reads
+        // only labels.
+        test.find_many(|node, _element| {
+            let element = node.element();
+            let paragraph = (element.as_ref() as &dyn Any).downcast_ref::<ParagraphElement>()?;
+            let text: String = paragraph
+                .spans
+                .iter()
+                .map(|span| span.text.to_string())
+                .collect();
+            text.starts_with("Line 0 ")
+                .then(|| node.layout().area.min_y())
+        })
+        .into_iter()
+        .next()
+        .expect("the answer's first line is drawn")
+    };
+    let was = first_line(&test);
+    // The pointer is put on the box first: a wheel is answered by what it is over.
+    test.move_cursor(inside);
+    settle(&mut test);
+    test.scroll(inside, (0., -400.));
+    settle(&mut test);
+    assert!(hover_box(&test).is_some(), "scrolling the box took it away");
+    assert!(
+        first_line(&test) < was,
+        "the box does not scroll, so the rest of a long answer cannot be read"
+    );
+}
+
+/// A name the server says nothing about draws nothing: an empty answer is an answer, and
+/// a box around it would be a box about nothing.
+#[test]
+fn a_name_the_server_says_nothing_about_draws_no_box() {
+    let (file, _directory) = calling_file("hover-nothing");
+    let (mut test, states, language, _location, _driven, _asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Hover { run, id, .. } => Some(LspAnswer::Hovered {
+                run,
+                id,
+                said: Ok(None),
+            }),
+            _ => None,
+        },
+        file.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+    test.move_cursor(word_point(&test, "helper"));
+    hovered(&mut test);
+
+    assert!(hover_box(&test).is_none(), "an empty answer drew a box");
+}
+
+/// The question is asked where the pointer is, and about a name where one is **defined**
+/// as much as about a link: `main` is a definition and no link, and hovering it is how a
+/// reader reads its own signature.
+#[test]
+fn the_name_under_the_pointer_is_asked_about_link_or_not() {
+    let (mut test, _at, asks, _directory) = hovering_over!("what it is", "main");
+    settle(&mut test);
+    let asked: Vec<Lookup> = std::iter::from_fn(|| next_job(&asks))
+        .filter_map(|job| match job {
+            AskedOfServer::Hover(at) => Some(at),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked.last().map(|at| (at.line, at.column)),
+        // `fn main() {` is the first row, and the protocol counts its lines from zero.
+        Some((0, 3)),
+        "the server was not asked about the name under the pointer"
+    );
+}
+
+/// With no server there is nobody to ask: no name is a name the server placed, nothing is
+/// asked and nothing is drawn. The second half is the control -- the same pointer, on the
+/// same word, once a server is answering -- so that a test that has stopped reaching the
+/// row cannot pass by doing nothing.
+#[test]
+fn with_no_server_there_is_no_name_to_hover_at_all() {
+    let (file, _directory) = calling_file("hover-no-server");
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    test.move_cursor(word_point(&test, "helper"));
+    hovered(&mut test);
+
+    let hovers = |asks: &async_channel::Receiver<AskedOfServer>| {
+        std::iter::from_fn(|| next_job(asks)).any(|job| matches!(job, AskedOfServer::Hover(_)))
+    };
+    assert!(
+        !hovers(&asks),
+        "a question went out with no server to answer it"
+    );
+    assert!(hover_box(&test).is_none(), "a box was drawn with no server");
+
+    // And the control: a server, and the same pointer on the same word.
+    serving(&mut test, &mut language);
+    test.move_cursor((5., 5.));
+    settle(&mut test);
+    test.move_cursor(word_point(&test, "helper"));
+    hovered(&mut test);
+    assert!(
+        hovers(&asks),
+        "the pointer asked nothing of a server either"
+    );
+}
+
+/// The pointer moving into the box keeps it: the two are flush, so the move that leaves
+/// the name is the move that reaches the box, and one flag would take it down half the
+/// time.
+#[test]
+fn the_box_stays_while_the_pointer_moves_into_it() {
+    let (mut test, _at, _asks, _directory) = hovering_over!("what it is", "helper");
+    let drawn = hover_box(&test).expect("the box is drawn");
+
+    let inside = (
+        (drawn.min_x() + drawn.width() / 2.0) as f64,
+        (drawn.min_y() + drawn.height() / 2.0) as f64,
+    );
+    test.move_cursor(inside);
+    settle(&mut test);
+    assert!(
+        hover_box(&test).is_some(),
+        "the box went as the pointer reached it"
+    );
+
+    // And off both of them, which is what takes it away.
+    test.move_cursor((5., 5.));
+    settle(&mut test);
+    assert!(
+        hover_box(&test).is_none(),
+        "the box outlived the pointer leaving it"
+    );
+}
+
+/// A press takes it down, wherever it lands: the reader is doing something else now.
+#[test]
+fn a_press_takes_the_box_down() {
+    let (mut test, at, _asks, _directory) = hovering_over!("what it is", "helper");
+    assert!(hover_box(&test).is_some(), "the box is drawn");
+    press_at(&mut test, at);
+    settle(&mut test);
+    assert!(hover_box(&test).is_none(), "a press left the box up");
+}
+
+/// A key takes it down -- but a bare modifier does not, that being what a reader holds to
+/// open the very link they are hovering in a tab of its own.
+#[test]
+fn a_key_takes_the_box_down_and_a_bare_modifier_does_not() {
+    let (mut test, _at, _asks, _directory) = hovering_over!("what it is", "helper");
+
+    key_with(&mut test, Key::Named(NamedKey::Control), Modifiers::CONTROL);
+    assert!(
+        hover_box(&test).is_some(),
+        "reaching for Ctrl took the box away"
+    );
+
+    key_with(&mut test, Key::Character("j".into()), Modifiers::empty());
+    assert!(hover_box(&test).is_none(), "a key left the box up");
 }
 
 /// A right-click on a link offers the name's uses, and asks for them where the pointer
@@ -18410,6 +18905,8 @@ impl Component for LentRow {
                 head: vec![Span::new(LENT_TEXT).assembly_font()],
                 tail: Vec::new(),
                 chars: RowChars::default(),
+                names: Vec::new(),
+                on_hover: None,
                 links: NoLinks,
             }),
             None,
@@ -20517,11 +21014,13 @@ fn project_view_harness() -> Element {
     let follow = use_provide_root_context(|| Following(State::create(Follow::default()))).0;
     let linked = use_provide_root_context(|| Linking(State::create(Linked::default()))).0;
     let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
+    let hover = use_provide_root_context(|| Hovering(State::create(Hover::default()))).0;
     use_language_with(
         language,
         follow,
         located,
         linked,
+        hover,
         states.proj,
         |job: LspJob| match job {
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
@@ -21209,6 +21708,7 @@ enum AskedOfServer {
     Start(PathBuf),
     Ask(Lookup, Wanted),
     Tokens(Arc<str>),
+    Hover(Lookup),
     Read(PathBuf),
     Stop,
 }
@@ -21222,9 +21722,16 @@ fn server_harness() -> Element {
     let follow = use_consume::<Following>().0;
     let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
     let linked = use_provide_root_context(|| Linking(State::create(Linked::default()))).0;
-    let jobs = use_language_with(language, follow, located, linked, states.proj, move |job| {
-        work(job)
-    });
+    let hover = use_provide_root_context(|| Hovering(State::create(Hover::default()))).0;
+    let jobs = use_language_with(
+        language,
+        follow,
+        located,
+        linked,
+        hover,
+        states.proj,
+        move |job| work(job),
+    );
     use_hook(move || asking.set(Some(jobs)));
     // The prompt is at the app's root, under the bar the control is in; here it is beside
     // it, which is the same thing to everything that reaches it.
@@ -21252,6 +21759,7 @@ macro_rules! mount_server {
                 LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
                 LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
                 LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
+                LspJob::Hover { at, .. } => AskedOfServer::Hover(at.clone()),
                 LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
                 LspJob::Stop => AskedOfServer::Stop,
             };
@@ -22063,6 +22571,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
                 LspJob::Start { .. } => "start".to_owned(),
                 LspJob::Ask { at, .. } => format!("ask {}", at.line),
                 LspJob::Tokens { file, .. } => format!("tokens {file}"),
+                LspJob::Hover { at, .. } => format!("hover {}", at.line),
                 LspJob::ReadSettings { directory } => format!("read {}", directory.display()),
                 LspJob::Stop => "stop".to_owned(),
             })

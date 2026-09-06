@@ -50,6 +50,20 @@ pub(crate) fn pixel_grid() -> Grid {
     Grid::new(*Platform::get().scale_factor.read())
 }
 
+/// The window, in the **logical** pixels every pointer event and every `Position` offset
+/// is measured in, and a subscription to a resize.
+///
+/// `Platform::root_size` is the window's *physical* size -- `freya-winit` writes
+/// `inner_size()` into it -- where `on_sized` divides its areas by the scale factor and
+/// torin multiplies a `Position` by it. So the two units meet here and nowhere else, and
+/// at a scale factor of one, which is what every headless test runs at, the difference is
+/// invisible.
+pub(crate) fn window_size() -> Size2D {
+    let platform = Platform::get();
+    let scale = (*platform.scale_factor.read() as f32).max(f32::EPSILON);
+    *platform.root_size.read() / scale
+}
+
 /// The side of one of the three square toggle buttons in a filter bar: a row less the air
 /// around it.
 pub(crate) fn toggle_size() -> f32 {
@@ -134,6 +148,40 @@ pub(crate) const COUNT_GUTTER: f32 = 6.0;
 /// down the list. The filter toggles and the toolbar's two history buttons keep the
 /// default: neither says anything the eye has already read off the control.
 pub(crate) const TOOLTIP_DELAY: Duration = Duration::ZERO;
+
+/// How wide the hover box is: enough for a signature and a paragraph of a doc comment,
+/// and narrow enough to leave the code beside it readable. A fixed width, so what the
+/// answer holds wraps inside the box rather than setting how wide it is -- a box as wide
+/// as its widest line is a box that jumps about as the pointer crosses a line of names.
+pub(crate) const HOVER_WIDTH: f32 = 520.0;
+
+/// How long the pointer holds still on a name before the server is asked about it.
+///
+/// **Any move puts it back to the beginning**, one inside the name included: what is waited
+/// on is the pointer being still, and a pointer travelling slowly along a line is still on
+/// its way somewhere. So a hover is asked for by stopping, and by nothing else.
+///
+/// A hover's own wait, and not `TOOLTIP_DELAY`'s zero: a list row's tooltip says what the
+/// row already draws, where this is a round trip to another process about whatever the
+/// pointer stopped on. Shorter than freya's own half second all the same, since a pointer
+/// that has stopped has asked already.
+pub(crate) const HOVER_DELAY: Duration = Duration::from_millis(300);
+
+/// How tall the hover box may be: a dozen lines of what a doc comment is written in, and
+/// no taller, so a name with pages to say about it does not take the window. What does not
+/// fit scrolls, the pointer being able to reach it.
+pub(crate) fn hover_height() -> f32 {
+    (list_row_height() * 12.0).round()
+}
+
+/// How far from the window's edges the hover box is kept, and the air inside it.
+pub(crate) const HOVER_MARGIN: f32 = 8.0;
+pub(crate) const HOVER_PAD: f32 = 10.0;
+
+/// Its corner, and the shadow that lifts it off the code under it. The finder's numbers,
+/// which are the app's only other floating panel.
+pub(crate) const HOVER_RADIUS: f32 = 6.0;
+pub(crate) const HOVER_BLUR: f32 = 16.0;
 
 /// How wide the file finder's panel is: enough for a deep path and its name beside it,
 /// and narrow enough that the window behind it is still recognisable.
@@ -247,6 +295,19 @@ pub(crate) trait FontExt: TextStyleExt + Sized {
     fn assembly_font(self) -> Self {
         self.font(&fonts().mono)
     }
+}
+
+/// The fixed-width font's first family, for the one place that takes a family and not a
+/// chain: freya's markdown viewer names one font for its code. What it is missing is the
+/// fallbacks, which the box's own font supplies -- freya appends a parent's families
+/// behind an element's own.
+pub(crate) fn mono_family() -> String {
+    fonts()
+        .mono
+        .families
+        .first()
+        .map(|family| family.to_string())
+        .unwrap_or_default()
 }
 
 impl<T: TextStyleExt + Sized> FontExt for T {}
