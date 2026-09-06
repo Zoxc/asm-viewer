@@ -494,6 +494,20 @@ fn font(setting: &FontSetting, which: Which, default: &'static str, default_poin
     resolve_font(setting, desktop, default, default_points)
 }
 
+/// The two fonts with nothing asked of anyone: the platform's own families at the app's
+/// own sizes. What [`resolve`] comes to where there are no overrides and the desktop
+/// says nothing -- but reached without reading `settings.toml` and without a
+/// subprocess, so it is what the UI starts in before the settings are loaded, and what
+/// a test lays out in unless it says otherwise.
+pub fn defaults() -> Fonts {
+    let setting = FontSetting::default();
+
+    Fonts {
+        ui: resolve_font(&setting, None, DEFAULT_UI, DEFAULT_UI_POINTS),
+        mono: resolve_font(&setting, None, DEFAULT_MONO, DEFAULT_MONO_POINTS),
+    }
+}
+
 /// The two fonts these settings and this desktop come to. Takes the settings by argument
 /// rather than reading them, so the settings page can resolve what it is editing.
 pub fn resolve(settings: &Settings) -> Fonts {

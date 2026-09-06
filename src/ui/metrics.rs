@@ -209,8 +209,14 @@ thread_local! {
     /// global rather than a context, since the readers are free functions and trait
     /// methods that may not run a hook; `State` is `!Send` and only the UI thread draws,
     /// so nothing off it may ask.
-    static FONTS: State<Arc<Fonts>> =
-        State::create_global(Arc::new(fonts::resolve(&Settings::load())));
+    ///
+    /// It starts at [`fonts::defaults`] and not at the resolved settings: an initialiser
+    /// that read `settings.toml` would do file IO and spawn `kreadconfig`/`gsettings` at
+    /// whatever moment the first `fonts()` happened to run, and in the test binary it
+    /// would lay every test out in the fonts of whoever ran it. `app` writes the real
+    /// pair in a `use_hook` of the root, before any child renders, so the first frame is
+    /// the loaded fonts either way.
+    static FONTS: State<Arc<Fonts>> = State::create_global(Arc::new(fonts::defaults()));
 }
 
 /// The fonts to draw with, and a subscription to them for whoever asks.

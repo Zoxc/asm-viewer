@@ -8583,6 +8583,9 @@ fn a_smaller_fixed_font_gives_up_the_width_the_larger_one_measured() {
 /// out, and whether a press on it reaches the row underneath.
 #[test]
 fn following_a_jump_scrolls_to_the_row_it_lands_on() {
+    // Named rather than inherited: the press has to land on the `jmp`'s own row, so how
+    // tall a row is and how many of them the pane below is a question this test asks.
+    set_fonts(fixed_fonts(9.0, 10.5));
     let sum_to = fixture_symbols()
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
@@ -8623,9 +8626,12 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // fifteenth, far enough down that a pane this tall is not showing it.
     let landing = "0000000000000061 ";
 
+    // Tall enough that the `jmp`'s row is drawn whole -- a row the pane clips is a row a
+    // press at its middle misses -- and short enough that the row it lands on is not
+    // already on screen, which the next assertion states.
     let (mut test, (states, marked, _landing)) = TestingRunner::new(
         listing_harness,
-        (500., 200.).into(),
+        (500., 220.).into(),
         |runner| listing_states!(runner, shown),
         1.,
     );
@@ -10615,6 +10621,16 @@ fn painted_height(test: &TestingRunner, fill: Color) -> f32 {
         (background == Fill::Color(fill)).then(|| node.layout().area.height())
     })
     .expect("a painted row")
+}
+
+/// **A test starts in the app's own fonts and never in the machine's.** `FONTS`
+/// initialises from `fonts::defaults`, so a developer whose `settings.toml` names a 20pt
+/// fixed font gets the same row heights here as everyone else; the file is read once, by
+/// `app`, and only a run of the real app is laid out in what it says.
+#[test]
+fn a_test_lays_out_in_the_default_fonts_whatever_the_machine_says() {
+    assert_eq!(*fonts(), fonts::defaults());
+    assert_eq!((list_row_height(), code_row_height()), (24.0, 26.0));
 }
 
 /// A font change repaints a component nothing else woke, *and* moves it, the row heights

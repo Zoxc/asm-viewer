@@ -158,6 +158,19 @@ per-tab positions saved are *rows* rather than pixel offsets. The floor (`MIN_RO
 against a hand-edited `settings.toml`, where a size of 0.1 is positive enough to pass
 `FontSetting::size` and would make `item_size` a fraction of a pixel.
 
+**`FONTS` starts at the app's own fonts, and `app` writes the real pair before anything draws.**
+The thread-local initialises from `fonts::defaults()` -- the platform families at 9pt and 10.5pt,
+asking nothing of `settings.toml` and nothing of the desktop -- and `app` calls
+`set_fonts(fonts::resolve(&settings))` in a `use_hook` beside the `Settings::load` that feeds
+`Prefs`. A `use_hook` runs in the root's first render, before any child, so the first frame is
+already in the loaded fonts, and the effect in `use_settings_with` carries every later change. The
+initialiser had resolved the settings itself, which read the file a second time and spawned
+`kreadconfig`/`gsettings` at whatever moment the first `fonts()` happened to fall. It also decided
+the row heights of the **test** binary: `use_settings_with` takes its write as an argument so that
+no test edits the settings of whoever ran it, but the read was unguarded, and a developer whose
+fixed font is 10pt laid every headless test out 1px per row away from everyone else's. Tests now
+start from the defaults on every machine, and the ones that care about a height name their fonts.
+
 **One more number the fonts drag in is the device pixel grid.** A row height is a function of a font
 and the branch gutter's strokes are drawn at fractions of a row, so where they land is whatever the
 font left behind, and freya rounds nothing between the layout and Skia. `pixel_grid()` sits beside

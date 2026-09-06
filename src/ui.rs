@@ -308,8 +308,13 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     use_hook(crate::panics::install);
     // Before everything else after that: the theme and the fonts are resolved from it and
     // both have to be right on the first frame.
-    let prefs =
-        use_provide_context(|| Prefs(State::create(EditedSettings::of(&Settings::load())))).0;
+    let settings = use_hook(Settings::load);
+    let prefs = use_provide_context(|| Prefs(State::create(EditedSettings::of(&settings)))).0;
+    // The fonts the file names, written once and here: `FONTS` starts at the defaults, and
+    // the effect in `use_settings_with` is a frame late. A `use_hook` runs in the root's
+    // first render, before any child, so the first frame is already in them; every later
+    // change is the effect's.
+    use_hook(|| set_fonts(fonts::resolve(&settings)));
     use_settings_with(prefs, |settings: &Settings| settings.save());
     // freya's own components read their colours from its `Theme` rather than from the
     // palette, and the tooltip's font size can only be set there -- so a font change has
@@ -433,8 +438,8 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // restore writes anything, so the restored session is seen as an ordinary change.
     use_restore_on_startup(states, opening);
     // After the restore, which is the last of the loads a startup makes: `Settings::load`
-    // above, the same again behind `fonts()`, and the project the line above reopened.
-    // All three are synchronous, so one ask here catches everything they moved aside.
+    // above, and the project the line above reopened. Both are synchronous, so one ask
+    // here catches everything they moved aside.
     use_provide_context(|| Rescued(State::create(rescue::moved())));
 
     let symbols = use_memo(move || {
