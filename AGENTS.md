@@ -128,7 +128,9 @@ command.
   diagnostics it reports, and the profile's debug information in the manifest being built.
 - `src/project.rs` — projects: their identity, the two files each is stored in, the save policy,
   and which language server each is read with.
-- `src/rescue.rs` — a stored file that will not parse, moved aside before a write replaces it.
+- `src/store.rs` — everything the app stores: the directory it goes in and the variable that
+  names it, the atomic write, the read that moves a file aside rather than let the next write
+  replace it, the claim of a free name, and the capped order both recent lists are.
 - `src/reveal.rs` — showing a file or a folder in the desktop's file manager: the
   programs each platform is asked with, in the order they are tried, and the thread they
   are run on.
@@ -264,9 +266,9 @@ command.
   the drain policy that supersedes and the task that takes the answers, in the two shapes
   every worker in the app is one of.
 
-Twelve `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+Eleven `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
 `project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`,
-`rescued_view`, `language`, `linking`, `strip`); `Panel` is imported by name beside the glob,
+`language`, `linking`, `strip`); `Panel` is imported by name beside the glob,
 freya's prelude having one of its own. The rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's

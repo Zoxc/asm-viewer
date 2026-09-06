@@ -8,18 +8,21 @@ There is **no published version of this app yet**, so persisted formats need no 
 compatibility: a schema change is just a schema change, a stale file is ignored rather than
 migrated, and `#[serde(default)]` is added only when it earns its place on its own merits.
 
-**Ignored, but not lost** (`src/rescue.rs`). Every one of these files is read back into a default
-when it will not parse, and the next write puts a good file over it -- so the one thing that rule
-costs is the reader's own file, taken away without a word. `rescue::parse` is what every load that
-is on the way to a *write* goes through: it reads the **bytes** (a file that is not UTF-8 will not
-parse either, and is lost the same way), and on a failure copies them to `incompatible/` under the
-path the file had, removes the original, and answers `None` -- which is what all four of these loads
-already meant by "not there", so no caller changed shape. A file the system will not hand over at
-all is left alone: nothing can be salvaged from it, and nothing is about to write over it either.
-The mirror (`incompatible/projects/1.avproj.session`) is so that a moved file keeps the shape of
-the path it had rather than being flattened into one heap, and the destination is
-claimed by `File::create_new` -- `settings.toml`, then `2-settings.toml` -- which is
-`unsaved_project`'s "a create that fails rather than opens", and for its reason: nothing there
+**Ignored, but not lost** (`Store::read`, `src/store.rs`). Every one of these files is read back
+into a default when it will not parse, and the next write puts a good file over it -- so the one
+thing that rule costs is the reader's own file, taken away without a word. `Store::read` is the
+one read the store has, and **every load on the way to a write goes through it**: it reads the
+**bytes** (a file that is not UTF-8 will not parse either, and is lost the same way), and on a
+failure copies them to `incompatible/` under the path the file had, removes the original, and
+answers `None` -- which is what every one of these loads already meant by "not there", so no caller
+changed shape. It being the store's only read is the point: the pad order used to parse its file
+itself and so let the next write destroy it, which is exactly the drift a second reader of the
+rule invites. A file the system will not hand over at all is left alone: nothing can be salvaged
+from it, and nothing is about to write over it either, and neither is one outside the store, which
+is not this app's to move. The mirror (`incompatible/projects/1.avproj.session`) is so that a moved
+file keeps the shape of the path it had rather than being flattened into one heap, and the
+destination is claimed through `Store::claim` -- `settings.toml`, then `2-settings.toml` -- which
+is `unsaved_project`'s "a create that fails rather than opens", and for its reason: nothing there
 is ever overwritten, not by an earlier rescue and not by a second copy of the app moving the same
 file at this moment. The original is **removed** rather than copied, since nothing writes over
 `settings.toml` until a setting changes and a file left in place would be rescued again on every
@@ -27,14 +30,14 @@ launch.
 
 **A project file is never moved aside, and that is now the rule and not an exception.** It may be
 the reader's own file, sitting in their tree beside the code, and the app has no business taking one
-away; so `Project::load_from`, the plain read `recent_projects_in` has always drawn its rows with,
+away; so `Project::load_from`, the plain read `recent_projects` has always drawn its rows with,
 is what `load_project` opens one with too. A project file that will not parse therefore does not
 open at all -- and since nothing opens, nothing writes over what could not be read, which is the
 whole of what the rescue was protecting. The session beside it *is* the app's own and still goes
-through `rescue::parse`.
+through `Store::read`.
 
 **And the reader is told**, which is the half that makes it a rescue at all: a file moved somewhere
-nobody hears about is a file lost politely. `rescue::moved()` hands over the destinations recorded
+nobody hears about is a file lost politely. `store::moved()` hands over the destinations recorded
 since it was last asked -- a `static Mutex<Vec<PathBuf>>`, because what fills it is a load and not a
 component -- and `RescuedPopup` (`src/ui/rescued_view.rs`) names them over freya's `Popup`, which is
 shown exactly when it has children, so the list being empty *is* the window not being there. It is
@@ -46,18 +49,29 @@ what the startup moved does not lose it when a project is switched. Neither `Pop
 `PopupContent` is used: both set a font size of their own, which would draw this in a size the reader
 never chose.
 
-Everything is written under `ASSEMBLY_VIEWER_STATE` where that names a directory, and under
-`dirs::state_dir()` (falling back to `data_local_dir()`) + `assembly-viewer/` where it does
-not. The variable is there because **more than one copy of this app otherwise shares one
-directory** -- two checkouts, or a build somebody is trying something in beside the window the
-reader actually uses -- and they do not merely take turns: one writing a file the other's
-build cannot parse is one moving the reader's file aside as unreadable, since that is what
-every load on the way to a write does. Unset and empty are one answer, so a script that meant
-to set it and did not cannot put a reader's projects in the working directory; and it is read
-on **every** call rather than cached, so nothing has to be sequenced against the first ask.
+**That directory is a `Store`** (`src/store.rs`), and it is the whole of the storage layer:
+where a file goes, how one is written, how one is read back when it may be bad, and how a free
+name under it is claimed. `Store::open` answers where -- `ASSEMBLY_VIEWER_STATE` where that names
+a directory, and `dirs::state_dir()` (falling back to `data_local_dir()`) + `assembly-viewer/`
+where it does not. The variable is there because **more than one copy of this app otherwise
+shares one directory** -- two checkouts, or a build somebody is trying something in beside the
+window the reader actually uses -- and they do not merely take turns: one writing a file the
+other's build cannot parse is one moving the reader's file aside as unreadable, since that is what
+every load on the way to a write does. Unset and empty are one answer, so a script that meant to
+set it and did not cannot put a reader's projects in the working directory.
 
-Each file under it is written atomically via `.tmp` + rename (one `write_atomically`, used by
-every file `project.rs` owns). The temporary is **synced before the rename**, because a rename is
+**One store is opened per run**, in `app()` where the settings are loaded, and handed down: no
+module looks the place up for itself, and a path given to the store is relative to it unless it is
+absolute, which is what lets a project file the reader gave a place go through the same writer as
+the app's own. `Saves` keeps the one it was pointed at when the project was opened, so the
+periodic flush and the close hook -- neither of them in the component tree -- have one without
+being handed one. `Store::at` is the other constructor and is the tests': a store under a
+directory of a test's own, which is what the `x()`/`x_in(base)` twin of every stored operation
+used to be for.
+
+Each file under it is written atomically via `.tmp` + rename (`Store::write`, over the one
+`write_atomically`; the free function is there because `cargo.rs` edits a manifest that is not the
+app's at all). The temporary is **synced before the rename**, because a rename is
 atomic against a crash of the process and not against a power loss: the directory entry can reach
 the disk ahead of the data, and the file the next launch reads is then zero bytes or a truncated
 tail -- one that will not parse, so the rescue moves the reader's project or session aside and
@@ -202,11 +216,12 @@ would be a second answer the order already gives. It is an *order* and not an in
 whose file has gone: repairing it on load would write a file on a startup where the reader did
 nothing. A path under `base` is written **relative to it** and every other path absolutely, so
 moving the state directory does not lose every unsaved project at once; in memory they are all
-absolute, the relative spelling belonging to the file and nowhere else (`Recents::stored_in`).
-`Recents::touch` answers whether anything moved, so reopening the project already at the front
-writes nothing. The recent-projects view reads each row's name out of that project's own file,
-never out of this file: a copy in here would be a second copy to keep in step with the one the
-user edits.
+absolute, the relative spelling belonging to the file and nowhere else (`write_recents`).
+`Order::touch` answers whether anything moved, so reopening the project already at the front
+writes nothing. The order itself is `store::Order<Id>`, one capped most-recent-first list that the
+projects and the scratchpads both are. The recent-projects view reads each row's name out of that
+project's own file, never out of this file: a copy in here would be a second copy to keep in step
+with the one the user edits.
 
 **Bookmarks are the project file's** (`src/bookmarks.rs`; the panel over them is
 `agents/Sidebar.md`'s). A bookmark is a place the reader chose to be able to come back to, which is
@@ -247,7 +262,7 @@ two are exclusive by construction, the bar having one tab on screen. The name wr
 `Page::stored` and never `Page::title`: a title is what the reader sees and may be reworded, where a
 stored name changing would empty every saved bar. It is a **string** and not a serde enum, because
 an unknown variant is a parse error and a session that will not parse is moved aside whole
-(`rescue`): a page this build does not have costs that one tab, where an error would cost every tab,
+(`Store::read`): a page this build lacks costs that one tab, where an error would cost every tab,
 every trail and the record of visits. **A document `tabs` entry is a whole trail**: `temporal` +
 `cursor` + `entries`, every place the tab has shown oldest first with the cursor on the one it
 showed, so that Back works across a restart. Reopening after a rebuild is this app's daily
@@ -362,8 +377,8 @@ instead of reaching the disk at once.
 `start_new()`. Both `flush` the project being left while the policy still points at it, `remember`
 the one being entered at the front of `recents.toml`, and re-point every baseline through
 `Saves::opened`, to empty, because the app is about to be emptied. Emptying it is the caller's half
-and stays in `ui/project_view.rs`, the states being the UI's. `recent_projects()` is the list a view
-draws: `recents.toml`'s order, each row described by reading *that project's own* file,
+and stays in `ui/project_view.rs`, the states being the UI's. `recent_projects(&store)` is the
+list a view draws: `recents.toml`'s order, each row described by reading *that project's own* file,
 with an id whose directory has gone dropped here. The list never prunes itself on load, and this is
 the point of use where the repair is free.
 
@@ -420,8 +435,8 @@ because an override and the value it overrides have to be the same kind of numbe
 put them beside each other. The desktop's answer is cached per process (`desktop_answer`), since the
 page re-resolves on every change and a lookup is a subprocess.
 
-**A panic is written down beside everything else the app stores** (`src/panics.rs`, `panics/`
-under `project::base`). This is a windowed program: the default hook writes a line to a stderr
+**A panic is written down beside everything else the app stores** (`src/panics.rs`,
+`Store::panics()`). This is a windowed program: the default hook writes a line to a stderr
 nobody is looking at, and the work is done on threads of its own, so a panicking worker left a
 pane waiting for an answer that was never coming and no trace anywhere. The hook writes the
 thread, the location, the message and a `Backtrace::force_capture` -- forced, so a backtrace does

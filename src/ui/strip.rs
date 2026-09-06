@@ -411,7 +411,7 @@ impl Component for PagesButton {
         // Read when the menu is opened and not per render: each row is a small read of
         // another project's own file.
         let recents = match showing() {
-            true => project::recent_projects(),
+            true => recents_of(states.store),
             false => Vec::new(),
         };
 

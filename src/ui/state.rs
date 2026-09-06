@@ -10,6 +10,25 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(crate) struct Objects(pub(crate) State<Vec<Arc<Object>>>);
 
+/// Where everything this run stores goes, opened once in `app()` and handed down rather
+/// than looked up again wherever a file is wanted. `None` on a system with no state or
+/// local data directory, which is a run that keeps nothing and says so at each write.
+///
+/// A `State` and not a plain value so that the bundle below stays `Copy`; nothing ever
+/// writes it, so it is always read with `peek`.
+#[derive(Clone, Copy)]
+pub(crate) struct Storage(pub(crate) State<Option<Store>>);
+
+/// The projects the reader has had open, out of the store this run keeps — or none, on a
+/// run that keeps nothing. The three views that draw the list ask through here.
+pub(crate) fn recents_of(store: State<Option<Store>>) -> Vec<Recent> {
+    store
+        .peek()
+        .as_ref()
+        .map(project::recent_projects)
+        .unwrap_or_default()
+}
+
 /// The files being read into [`Objects`] right now, so the sidebar can say so. A state of
 /// its own because it is about what that list has *not* got: a file appears here when it
 /// is asked for and leaves when nothing more is coming out of it, whether or not it
@@ -379,7 +398,7 @@ pub(crate) struct Prefs(pub(crate) State<EditedSettings>);
 /// [`RescuedPopup`] draws, and empty for every run in which nothing was moved.
 ///
 /// A state at the root and not one inside the popup, because what fills it is a *load*
-/// (`rescue::moved`), and the two loads a run makes are the startup's and a project
+/// (`store::moved`), and the two loads a run makes are the startup's and a project
 /// switch's -- neither of them anywhere near a component that could own this.
 #[derive(Clone, Copy)]
 pub(crate) struct Rescued(pub(crate) State<Vec<PathBuf>>);
@@ -389,6 +408,9 @@ pub(crate) struct Rescued(pub(crate) State<Vec<PathBuf>>);
 #[derive(Clone, Copy)]
 pub(crate) struct ProjectStates {
     pub(crate) proj: State<OpenProject>,
+    /// Where the project's own files go. Not a project's state either, and here for
+    /// `arranged`'s reason: everything that opens, saves or leaves a project needs it.
+    pub(crate) store: State<Option<Store>>,
     pub(crate) objects: State<Vec<Arc<Object>>>,
     /// The files on their way into `objects`. Leaving a project abandons them too,
     /// including the ones that have produced nothing yet and so are not in `objects` to be
@@ -444,6 +466,7 @@ pub(crate) fn use_open() -> Open {
 pub(crate) fn use_project_states() -> ProjectStates {
     ProjectStates {
         proj: use_consume::<Proj>().0,
+        store: use_consume::<Storage>().0,
         objects: use_consume::<Objects>().0,
         loading: use_consume::<Loading>().0,
         open: use_open(),

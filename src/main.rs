@@ -18,7 +18,6 @@ mod pixels;
 mod process;
 mod project;
 mod references;
-mod rescue;
 mod reveal;
 mod scratchpad;
 mod search;
@@ -26,6 +25,7 @@ mod section;
 mod settings;
 mod shutdown;
 mod source;
+mod store;
 mod tabs;
 #[cfg(test)]
 mod temporary;

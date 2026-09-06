@@ -302,10 +302,11 @@ impl Component for ProjectTab {
 
         // Read on mount and again when the open project changes, never per render:
         // each row is a small read of another project's own file.
-        let mut recents = use_state(project::recent_projects);
+        let store = states.store;
+        let mut recents = use_state(move || recents_of(store));
         let open = proj.read().clone();
         use_side_effect_with_deps(&open.file, move |_: &Option<PathBuf>| {
-            recents.set(project::recent_projects());
+            recents.set(recents_of(store));
         });
 
         let binaries: Vec<Element> = {
@@ -723,6 +724,9 @@ impl Component for ProjectTab {
 pub(crate) fn use_save_on_change(states: ProjectStates) {
     let ProjectStates {
         proj,
+        // Where the files go is `project::record`'s own, out of what the policy was
+        // pointed at when the project was opened.
+        store: _,
         objects,
         // What is still being read is not itself saved -- `binaries` is derived from
         // the objects -- but a list still filling in is not the app's list, so the
@@ -828,10 +832,11 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<Path
         // What the app was given beats what it was last in. A file that will not parse
         // opens nothing and is said so, the same as one picked from a menu would be: it is
         // the reader's own file and is left exactly as it is.
-        let opened = match &opening {
-            Some(path) => project::open_at(path),
-            None => project::reopen(),
-        };
+        let store = states.store.peek().clone();
+        let opened = store.as_ref().and_then(|store| match &opening {
+            Some(path) => project::open_at(store, path),
+            None => project::reopen(store),
+        });
         let Some((file, project, session)) = opened else {
             if let Some(path) = opening {
                 unopened.set(Some(path));
@@ -1090,7 +1095,11 @@ pub(crate) fn switch_project(
     mut unopened: State<Option<PathBuf>>,
     path: PathBuf,
 ) {
-    let Some((project, session)) = project::switch(&path) else {
+    let store = states.store.peek().clone();
+    let switched = store
+        .as_ref()
+        .and_then(|store| project::switch(store, &path));
+    let Some((project, session)) = switched else {
         // A project file is never moved aside and nothing is written over it, so telling
         // the reader is the whole of what is left to do.
         unopened.set(Some(path));
@@ -1099,7 +1108,7 @@ pub(crate) fn switch_project(
 
     // The other of the two loads a run makes, the startup's being `app()`'s. Added to
     // rather than set: a window still naming what the startup moved must not lose it.
-    let moved = rescue::moved();
+    let moved = store::moved();
     if !moved.is_empty() {
         let mut naming = rescued.peek().clone();
         naming.extend(moved);
@@ -1202,6 +1211,7 @@ fn restore_ui(arranged: Arrangement, ui: Option<&SavedUi>) {
 /// a file that is not there yet, and the extension is what makes it a project.
 pub(crate) fn ask_where_to_save(states: ProjectStates, put: project::Put) {
     let mut proj = states.proj;
+    let store = states.store;
     let suggested = proj
         .peek()
         .file
@@ -1224,7 +1234,8 @@ pub(crate) fn ask_where_to_save(states: ProjectStates, put: project::Put) {
             return;
         };
         let path = handle.path().to_path_buf();
-        if project::put_in(&path, put) {
+        let store = store.peek().clone();
+        if store.is_some_and(|store| project::put_in(&store, &path, put)) {
             // The only thing that changed is where the project is kept, so this is the
             // only state that moves; the save observer sees no change and writes nothing.
             proj.write().file = Some(path);
@@ -1258,7 +1269,8 @@ fn empty_the_app(states: ProjectStates) {
 
 /// Start a project the reader has not given a place and go to it.
 pub(crate) fn new_project(states: ProjectStates) {
-    let Some(path) = project::start_new() else {
+    let store = states.store.peek().clone();
+    let Some(path) = store.and_then(|store| project::start_new(&store)) else {
         return;
     };
 

@@ -358,7 +358,7 @@ impl Component for NoProject {
         let unopened = use_consume::<Unopened>().0;
         // Read on mount and never again: nothing on this screen changes the list, and the
         // one thing that would -- opening a project -- takes the screen away with it.
-        let recents = use_hook(project::recent_projects);
+        let recents = use_hook(|| recents_of(states.store));
 
         let rows: Vec<Element> = recents
             .iter()

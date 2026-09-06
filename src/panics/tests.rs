@@ -26,20 +26,21 @@ fn panic_at(at: u64, message: &str) -> Panic {
 #[test]
 fn a_run_s_panics_are_appended_to_one_file() {
     let base = base(line!());
+    let store = Store::at(&base);
     let _ = fs::remove_dir_all(&base);
     let file = Mutex::new(None);
 
-    let first = write_to(&file, &base, &panic_at(1_757_000_000, "the first")).expect("written");
+    let first = write_to(&file, &store, &panic_at(1_757_000_000, "the first")).expect("written");
     assert_eq!(
         first,
-        base.join(PANICS_DIR).join("2025-09-04-153320.txt"),
+        store.panics().join("2025-09-04-153320.txt"),
         "the file is named for the run's first panic"
     );
 
     // A second panic, later and on the other side of a minute: the same file.
-    let second = write_to(&file, &base, &panic_at(1_757_000_100, "the second")).expect("written");
+    let second = write_to(&file, &store, &panic_at(1_757_000_100, "the second")).expect("written");
     assert_eq!(second, first);
-    let directory: Vec<PathBuf> = fs::read_dir(base.join(PANICS_DIR))
+    let directory: Vec<PathBuf> = fs::read_dir(store.panics())
         .expect("the directory was made")
         .filter_map(|entry| Some(entry.ok()?.path()))
         .collect();
@@ -63,7 +64,8 @@ fn a_run_s_panics_are_appended_to_one_file() {
 #[test]
 fn the_panic_files_are_listed_newest_first_and_nothing_else_is() {
     let base = base(line!());
-    let directory = base.join(PANICS_DIR);
+    let store = Store::at(&base);
+    let directory = store.panics();
     fs::create_dir_all(&directory).expect("the temp directory is writable");
 
     // Written out of order, so what comes back is sorted and not read order.
@@ -79,7 +81,7 @@ fn the_panic_files_are_listed_newest_first_and_nothing_else_is() {
     fs::write(directory.join("no-extension"), b"not ours").expect("a stray file");
     fs::create_dir_all(directory.join("a-directory.txt")).expect("a stray directory");
 
-    let names: Vec<String> = recorded_in(&base)
+    let names: Vec<String> = recorded(&store)
         .iter()
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
@@ -98,10 +100,11 @@ fn the_panic_files_are_listed_newest_first_and_nothing_else_is() {
 #[test]
 fn a_directory_with_no_panics_in_it_lists_nothing() {
     let base = base(line!());
-    assert!(recorded_in(&base).is_empty(), "nothing was ever written");
+    let store = Store::at(&base);
+    assert!(recorded(&store).is_empty(), "nothing was ever written");
 
-    fs::create_dir_all(base.join(PANICS_DIR)).expect("the temp directory is writable");
-    assert!(recorded_in(&base).is_empty(), "the directory is empty");
+    fs::create_dir_all(store.panics()).expect("the temp directory is writable");
+    assert!(recorded(&store).is_empty(), "the directory is empty");
 }
 
 /// A panic the crate guards -- a demangler on a name out of a file -- is written down and

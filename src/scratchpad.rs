@@ -23,9 +23,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cargo::{self, Diagnostic};
 use crate::process::{self, RunEvent, Stream};
-use crate::project::{base, write_atomically, write_toml};
-
-const SCRATCHPADS_DIR: &str = "scratchpads";
+use crate::store::{write_atomically, Order, Store, RECENTS_FILE};
 
 const MANIFEST_NAME: &str = "Cargo.toml";
 const SOURCE_DIR: &str = "src";
@@ -126,15 +124,6 @@ const MAX_NAME: usize = 64;
 /// in has claimed no directory for `create_dir` to fail on. It is a crate name because
 /// [`check_name`] wants a letter first, which is why this is not `1-pad`.
 const NEW_STEM: &str = "pad";
-
-/// The file beside the pads holding the order they were last shown in.
-const RECENTS_FILE: &str = "recents.toml";
-
-/// How many names the order **file** keeps. What is lost past this is an *order*, never a
-/// pad: [`pads_in`] lists a pad the order has forgotten just as it lists one made out of
-/// band. It is the file's bound and not [`PadOrder`]'s, since the list a reader picks a pad
-/// from is that listing, and a pad the panel does not draw cannot be opened at all.
-pub const MAX_PAD_RECENTS: usize = 50;
 
 /// The id of the pad a first run opens, and so the directory it lives in. Checked against
 /// [`check_name`] by a test, which is what lets [`Scratchpad::default`] hand it out without
@@ -452,10 +441,9 @@ impl Scratchpad {
         toml::to_string_pretty(&manifest).map_err(|error| Failure::Write(error.to_string()))
     }
 
-    /// Where this scratchpad lives, or `None` on a system with no state or local data
-    /// directory to put it in.
-    pub fn directory(&self) -> Option<PathBuf> {
-        Some(pad_in(&base()?, &self.id))
+    /// Where this scratchpad lives, under the store the pads are kept in.
+    pub fn directory(&self, store: &Store) -> PathBuf {
+        pad_in(store, &self.id)
     }
 
     /// Write the package into `directory`, creating it and its `src/`.
@@ -565,14 +553,8 @@ impl Scratchpad {
     }
 }
 
-/// Where the pads are kept: one directory each, under one directory of their own beside
-/// the projects and the settings.
-fn scratchpads_in(base: &Path) -> PathBuf {
-    base.join(SCRATCHPADS_DIR)
-}
-
-fn pad_in(base: &Path, id: &PadId) -> PathBuf {
-    scratchpads_in(base).join(id.as_str())
+fn pad_in(store: &Store, id: &PadId) -> PathBuf {
+    store.scratchpads().join(id.as_str())
 }
 
 /// Whether `directory` holds either half of a package. What tells "nothing there" from
@@ -581,37 +563,21 @@ fn holds_package(directory: &Path) -> bool {
     directory.join(MANIFEST_NAME).exists() || directory.join(SOURCE_DIR).join(SOURCE_NAME).exists()
 }
 
-/// The order file sits **beside the pads** rather than at the top of the state directory,
-/// so it is not a second `recents.toml` to tell apart from the projects' one. It is a file
-/// where every sibling is a directory, so [`pads_in`] steps over it with no special case.
-fn pad_recents_in(base: &Path) -> PathBuf {
-    scratchpads_in(base).join(RECENTS_FILE)
+/// The order file sits **beside the pads** rather than at the top of the store, so it is
+/// not a second `recents.toml` to tell apart from the projects' one. It is a file where
+/// every sibling is a directory, so [`pads`] steps over it with no special case.
+fn pad_recents_in(store: &Store) -> PathBuf {
+    store.scratchpads().join(RECENTS_FILE)
 }
 
-/// The pads the reader has had open, most recently first.
+/// The pads the reader has had open, most recently first: `scratchpads/recents.toml`.
 ///
-/// `project.rs`'s `Recents` rules, for the same reasons: which pad to open is the first
-/// entry and not a field of its own, and this is an *order* rather than an index of what
-/// exists — the directories are that — which is why nothing here prunes an id whose
-/// directory has gone. [`pads_in`] repairs it at the point of use, where the repair is free.
-///
-/// Ids and never names: a name is a value the reader edits, and a copy of one here would be
-/// a second copy to keep in step with the package's.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PadOrder {
-    #[serde(default)]
-    scratchpads: Vec<PadId>,
-}
+/// Ids and never names: a name is a value the reader edits, and a copy of one here would
+/// be a second copy to keep in step with the package's. [`Order`]'s rules otherwise, the
+/// projects' order being the same list of the same shape.
+pub type PadOrder = Order<PadId>;
 
 impl PadOrder {
-    pub fn ids(&self) -> &[PadId] {
-        &self.scratchpads
-    }
-
-    pub fn first(&self) -> Option<&PadId> {
-        self.scratchpads.first()
-    }
-
     /// The order a listing states, whole and in its own order.
     ///
     /// Not a `touch` per row: this is the order being replaced by what the disk says, where
@@ -619,91 +585,47 @@ impl PadOrder {
     /// names every pad there is, the ones the order forgot included, and this is the list
     /// the panel draws — an id missing from it is a pad with no way back to it.
     pub fn of(listing: &[PadListing]) -> PadOrder {
-        PadOrder {
-            scratchpads: listing.iter().map(|listed| listed.id.clone()).collect(),
-        }
-    }
-
-    /// Put `id` at the front, and say whether that changed anything — which is what keeps a
-    /// startup that reopens the pad already at the front from writing a file.
-    ///
-    /// Nothing falls off the end here: the cap is [`PadOrder::capped`]'s, applied to what
-    /// goes to disk, so a pad this order is holding for the panel is not dropped by
-    /// someone else being shown.
-    pub fn touch(&mut self, id: &PadId) -> bool {
-        if self.first() == Some(id) {
-            return false;
-        }
-        self.scratchpads.retain(|other| other != id);
-        self.scratchpads.insert(0, id.clone());
-        true
-    }
-
-    /// The front of the order, at most [`MAX_PAD_RECENTS`] of it: what is written out.
-    ///
-    /// The bound is the file's alone. What it drops is the tail of an order and never a
-    /// pad, [`pads_in`] appending every pad the file does not name.
-    fn capped(mut self) -> PadOrder {
-        self.scratchpads.truncate(MAX_PAD_RECENTS);
-        self
-    }
-
-    /// Drop `id`, for a pad that has just been deleted.
-    ///
-    /// The list the panel draws and not the file: an id whose directory has gone is one
-    /// [`pads_in`] already steps over, so nothing goes back to disk to say so.
-    pub fn forget(&mut self, id: &PadId) {
-        self.scratchpads.retain(|other| other != id);
-    }
-
-    fn load_from(path: &Path) -> PadOrder {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|data| toml::from_str(&data).ok())
-            .unwrap_or_default()
+        listing.iter().map(|listed| listed.id.clone()).collect()
     }
 }
 
-/// Put `name` at the front of the order on disk, if there is a directory for it.
+/// Put `id` at the front of the order on disk, if there is a directory for it.
 ///
 /// The condition is what keeps the rule "nothing is written until there is something to
 /// say": the pad a first run opens is held in memory until something is typed into it, and
 /// recording it before then would leave a `recents.toml` behind on a machine where the
 /// reader never touched the scratchpad at all.
-pub fn remember(id: &PadId) {
-    if let Some(base) = base() {
-        remember_in(&base, id);
-    }
-}
-
-/// The whole of the above except finding the state directory. A read-modify-write of the
-/// whole file, and a failure is logged and swallowed: losing an order is not losing a pad.
-fn remember_in(base: &Path, id: &PadId) {
-    if !pad_in(base, id).is_dir() {
+///
+/// A read-modify-write of the whole file, and a failure is logged and swallowed: losing an
+/// order is not losing a pad.
+pub fn remember(store: &Store, id: &PadId) {
+    if !pad_in(store, id).is_dir() {
         return;
     }
 
-    let path = pad_recents_in(base);
-    let mut order = PadOrder::load_from(&path);
-    if !order.touch(id) {
+    let path = pad_recents_in(store);
+    let mut order = load_order(store);
+    if !order.touch(id.clone()) {
         return;
     }
-    if let Err(error) = write_toml(&path, &order.capped()) {
+    if let Err(error) = store.write_toml(&path, &order.capped()) {
         log::warn!("could not save {}: {error}", path.display());
     }
 }
 
+/// The order as the file has it. Through [`Store::read`] like every other load on the way
+/// to a write, so a file that will not parse is moved aside rather than written over by
+/// the next [`remember`].
+fn load_order(store: &Store) -> PadOrder {
+    store.read(pad_recents_in(store)).unwrap_or_default()
+}
+
 /// Every scratchpad there is, in the order they were last opened, then the ones the order
-/// does not name in id order — or an empty list on a system with nowhere to keep them.
+/// does not name in id order.
 ///
 /// Each row carries the name out of that pad's **own package**, read at the moment the list
 /// is asked for, which is what lets the panel draw a pad it has never opened. It is also
 /// why the order file holds ids alone: a name lives in one place, the one the reader edits.
-pub fn pads() -> Vec<PadListing> {
-    base().map(|base| pads_in(&base)).unwrap_or_default()
-}
-
-/// The whole of the above except finding the state directory.
 ///
 /// A directory [`Scratchpad::load_from`] answers for is a pad and anything else is not, so
 /// an id in the order whose directory has gone — or was never a package — is dropped here
@@ -711,15 +633,15 @@ pub fn pads() -> Vec<PadListing> {
 /// picks from and every pad has to be reachable: one that fell off the end of the order, or
 /// one made outside the app, is still a scratchpad. That is the difference from
 /// `recent_projects`, which lists the projects a reader has *opened*.
-fn pads_in(base: &Path) -> Vec<PadListing> {
-    let scratchpads = scratchpads_in(base);
+pub fn pads(store: &Store) -> Vec<PadListing> {
+    let scratchpads = store.scratchpads();
     let listing = |id: PadId| {
-        let name = Scratchpad::load_from(&pad_in(base, &id))?.name;
+        let name = Scratchpad::load_from(&pad_in(store, &id))?.name;
         Some(PadListing { id, name })
     };
 
-    let mut listed: Vec<PadListing> = PadOrder::load_from(&pad_recents_in(base))
-        .scratchpads
+    let mut listed: Vec<PadListing> = load_order(store)
+        .into_ids()
         .into_iter()
         .filter_map(listing)
         .collect();
@@ -742,39 +664,29 @@ fn pads_in(base: &Path) -> Vec<PadListing> {
 /// Claim a directory for a new pad, write the default package into it, and hand back the
 /// scratchpad. Blocking.
 ///
-/// The claim *is* the `create_dir`: one atomic operation that fails with `AlreadyExists`
-/// rather than opening what is there, so two copies of the app cannot hand out one id.
-/// Bounded at a thousand tries, so a directory refusing every `create_dir` for a reason
-/// other than collision cannot spin. The package is written **at once** rather than at the
-/// first edit: pressing New is a deliberate act, and a claimed directory with no package in
-/// it is not a pad and would be repaired away by [`pads_in`].
-pub fn new_pad() -> Result<Scratchpad, Failure> {
-    new_pad_in(&base().ok_or(Failure::NoDirectory)?)
-}
+/// [`Store::claim`]'s rules, the `create_dir` being the claim. The package is written **at
+/// once** rather than at the first edit: pressing New is a deliberate act, and a claimed
+/// directory with no package in it is not a pad and would be repaired away by [`pads`].
+pub fn new_pad(store: &Store) -> Result<Scratchpad, Failure> {
+    let scratchpads = store.scratchpads();
+    let directory = store
+        .claim(
+            &scratchpads,
+            |n| format!("{NEW_STEM}-{n}"),
+            |directory| fs::create_dir(directory),
+        )
+        .ok_or_else(|| Failure::Write(format!("no free id under {}", scratchpads.display())))?;
 
-fn new_pad_in(base: &Path) -> Result<Scratchpad, Failure> {
-    let scratchpads = scratchpads_in(base);
-    fs::create_dir_all(&scratchpads).map_err(|error| Failure::Write(error.to_string()))?;
-
-    for n in 1..=1000 {
-        let id = PadId(format!("{NEW_STEM}-{n}"));
-        let directory = scratchpads.join(id.as_str());
-        match fs::create_dir(&directory) {
-            Ok(()) => {
-                let scratchpad = Scratchpad::of(id);
-                scratchpad.write_to(&directory)?;
-                remember_in(base, scratchpad.id());
-                return Ok(scratchpad);
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(Failure::Write(error.to_string())),
-        }
-    }
-
-    Err(Failure::Write(format!(
-        "no free id under {}",
-        scratchpads.display()
-    )))
+    // The name claimed is the id: `NEW_STEM` is a crate name and `-N` keeps it one.
+    let id = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(PadId::new)
+        .ok_or_else(|| Failure::Write(format!("{} is not a pad id", directory.display())))?;
+    let scratchpad = Scratchpad::of(id);
+    scratchpad.write_to(&directory)?;
+    remember(store, scratchpad.id());
+    Ok(scratchpad)
 }
 
 /// Delete a pad: its directory and everything in it, cargo's `target/` included. Blocking,
@@ -790,12 +702,8 @@ fn new_pad_in(base: &Path) -> Result<Scratchpad, Failure> {
 ///
 /// A pad with no directory is already deleted and says so: the pad a first run holds has
 /// none until something is typed into it.
-pub fn delete_pad(id: &PadId) -> Result<(), Failure> {
-    delete_pad_in(&base().ok_or(Failure::NoDirectory)?, id)
-}
-
-fn delete_pad_in(base: &Path, id: &PadId) -> Result<(), Failure> {
-    let directory = pad_in(base, id);
+pub fn delete_pad(store: &Store, id: &PadId) -> Result<(), Failure> {
+    let directory = pad_in(store, id);
     let entry = match fs::symlink_metadata(&directory) {
         Ok(entry) => entry,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),

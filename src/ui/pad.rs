@@ -152,7 +152,7 @@ impl Default for Pads {
         let scratchpad = Scratchpad::default();
         let shown = scratchpad.id().clone();
         let mut order = PadOrder::default();
-        order.touch(&shown);
+        order.touch(shown.clone());
         Pads {
             order,
             listed: false,
@@ -209,7 +209,7 @@ impl Pads {
         self.pads
             .entry(pad.clone())
             .or_insert_with(|| PadState::of(Scratchpad::of(pad.clone())));
-        self.order.touch(&pad);
+        self.order.touch(pad.clone());
         self.shown = pad;
     }
 
@@ -583,15 +583,31 @@ pub(crate) fn read_program(executable: &Path, built_from: String) -> Option<Prog
 }
 
 /// The blocking work itself. Split out so [`use_scratchpad_with`] can be handed something
-/// that answers without a disk or a compiler. Each arm resolves the scratchpad's own
-/// directory first: without one there is nowhere to read, write, build or run in.
+/// that answers without a disk or a compiler.
 pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
+    // The store is opened here, once per job, rather than handed in: this runs on the
+    // worker's own thread, off the end of a channel that carries the job and nothing
+    // else. Every arm wants the same directory, and without one there is nowhere to
+    // read, write, build or run in.
+    let store = Store::open();
     match job {
-        PadJob::List => PadAnswer::Listed(crate::scratchpad::pads()),
-        PadJob::New => PadAnswer::Created(crate::scratchpad::new_pad()),
-        PadJob::Delete(name) => PadAnswer::Deleted(crate::scratchpad::delete_pad(&name).err()),
-        PadJob::Open(scratchpad) => match scratchpad.directory() {
-            Some(directory) => {
+        PadJob::List => PadAnswer::Listed(
+            store
+                .as_ref()
+                .map(crate::scratchpad::pads)
+                .unwrap_or_default(),
+        ),
+        PadJob::New => PadAnswer::Created(match &store {
+            Some(store) => crate::scratchpad::new_pad(store),
+            None => Err(Failure::NoDirectory),
+        }),
+        PadJob::Delete(name) => PadAnswer::Deleted(match &store {
+            Some(store) => crate::scratchpad::delete_pad(store, &name).err(),
+            None => Some(Failure::NoDirectory),
+        }),
+        PadJob::Open(scratchpad) => match &store {
+            Some(store) => {
+                let directory = scratchpad.directory(store);
                 let pad = scratchpad.id().clone();
                 match scratchpad.opened_in(&directory) {
                     Ok(opened) => {
@@ -601,7 +617,7 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
                         // startup that reopens the pad already at the front from writing a
                         // file at all. Only a pad that was read: a restart may not come
                         // back to one that will not open.
-                        crate::scratchpad::remember(opened.id());
+                        crate::scratchpad::remember(store, opened.id());
                         // What the last build made, if it is still where cargo put it:
                         // read here, on the thread that owns this directory, so a pad
                         // opened in a later run shows its program without being built
@@ -627,14 +643,14 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
         },
         PadJob::Save(scratchpad) => PadAnswer::Saved {
             pad: scratchpad.id().clone(),
-            failure: match scratchpad.directory() {
-                Some(directory) => scratchpad.write_to(&directory).err(),
+            failure: match &store {
+                Some(store) => scratchpad.write_to(&scratchpad.directory(store)).err(),
                 None => Some(Failure::NoDirectory),
             },
         },
         PadJob::Build(scratchpad) => {
-            let build = match scratchpad.directory() {
-                Some(directory) => scratchpad.build_in(&directory),
+            let build = match &store {
+                Some(store) => scratchpad.build_in(&scratchpad.directory(store)),
                 None => Build::Unavailable(Failure::NoDirectory),
             };
             // Read here and not in a job of its own, so what the pane holds and the
@@ -662,8 +678,8 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
         } => PadAnswer::Started {
             pad: scratchpad.id().clone(),
             run,
-            started: match scratchpad.directory() {
-                Some(directory) => run_in(&executable, &directory, emit),
+            started: match &store {
+                Some(store) => run_in(&executable, &scratchpad.directory(store), emit),
                 None => Err(Failure::NoDirectory),
             },
         },
@@ -675,11 +691,12 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
 /// syntax blocks. See this file's header for why the worker is one thread, why saves
 /// supersede, and why a run and a stop do not go through it.
 ///
-/// The work is handed in, so a test can drive the wiring without writing to the machine's
-/// own state directory or waiting on a compiler.
+/// The work and the store are handed in, so a test can drive the wiring without writing to
+/// the machine's own state directory or waiting on a compiler.
 pub(crate) fn use_scratchpad_with(
     mut pad: State<Pads>,
     mut text: State<PadBuffers>,
+    store: State<Option<Store>>,
     work: impl Fn(PadJob) -> PadAnswer + Send + 'static,
 ) -> PadJobs {
     // The baseline the saves are compared against. See [`PadJobs::sent`].
@@ -885,7 +902,10 @@ pub(crate) fn use_scratchpad_with(
                     ) {
                         state.unsaved = None;
                     }
-                    directory = state.scratchpad.directory();
+                    directory = store
+                        .peek()
+                        .as_ref()
+                        .map(|store| state.scratchpad.directory(store));
                 }
                 drop(pads);
 

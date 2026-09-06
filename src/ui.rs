@@ -51,7 +51,6 @@ pub(crate) use crate::project::{
     SavedDocument, SavedUi, SavingTab, Selection, Session,
 };
 pub(crate) use crate::references::{self, ReferenceRow, ReferenceRows};
-pub(crate) use crate::rescue;
 pub(crate) use crate::reveal;
 pub(crate) use crate::scratchpad::{
     is_source_file, own_source, run_in, Build, Dependency, Failure, Half, PadId, PadListing,
@@ -60,6 +59,7 @@ pub(crate) use crate::scratchpad::{
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 pub(crate) use crate::source::{self, SourceFile};
+pub(crate) use crate::store::{self, Store};
 pub(crate) use crate::tabs::{Driven, Page, Positions, Spot, Strip, Tab};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
@@ -307,19 +307,32 @@ pub(crate) fn root_key_down(
 /// one: it is opened in place of the project last open, and `main` has already answered for
 /// a path that is not a project file at all.
 pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
-    // First of all, and here rather than in `main`: freya installs a panic hook of its
-    // own inside `launch`, so this is where ours can be the outer one (`crate::panics`).
-    use_hook(crate::panics::install);
+    // The one store this run keeps its files in, opened here and handed down: no other
+    // module looks the place up for itself.
+    let store = use_provide_context(|| Storage(State::create(Store::open()))).0;
+    // Then the panic hook, and here rather than in `main`: freya installs one of its own
+    // inside `launch`, so this is where ours can be the outer one (`crate::panics`).
+    use_hook(move || crate::panics::install(store.peek().clone()));
     // Before everything else after that: the theme and the fonts are resolved from it and
     // both have to be right on the first frame.
-    let settings = use_hook(Settings::load);
+    let settings = use_hook(move || {
+        store
+            .peek()
+            .as_ref()
+            .map(Settings::load)
+            .unwrap_or_default()
+    });
     let prefs = use_provide_context(|| Prefs(State::create(EditedSettings::of(&settings)))).0;
     // The fonts the file names, written once and here: `FONTS` starts at the defaults, and
     // the effect in `use_settings_with` is a frame late. A `use_hook` runs in the root's
     // first render, before any child, so the first frame is already in them; every later
     // change is the effect's.
     use_hook(|| set_fonts(fonts::resolve(&settings)));
-    use_settings_with(prefs, |settings: &Settings| settings.save());
+    use_settings_with(prefs, move |settings: &Settings| {
+        if let Some(store) = store.peek().as_ref() {
+            settings.save(store);
+        }
+    });
     // freya's own components read their colours from its `Theme` rather than from the
     // palette, and the tooltip's font size can only be set there -- so a font change has
     // to be carried in rather than picked up by a re-render, hence the size in the deps.
@@ -415,6 +428,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let build = use_provide_context(|| Building(State::create(Builds::default()))).0;
     let states = ProjectStates {
         proj,
+        store,
         objects,
         loading,
         open,
@@ -444,7 +458,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // After the restore, which is the last of the loads a startup makes: `Settings::load`
     // above, and the project the line above reopened. Both are synchronous, so one ask
     // here catches everything they moved aside.
-    use_provide_context(|| Rescued(State::create(rescue::moved())));
+    use_provide_context(|| Rescued(State::create(store::moved())));
 
     let symbols = use_memo(move || {
         SymbolList(Arc::new(
@@ -505,7 +519,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     use_provide_context(|| PadFollows(State::create(true)));
     let pad = use_provide_context(|| Pad(State::create(Pads::default()))).0;
     let pad_text = use_provide_context(|| PadText(State::create(PadBuffers::default()))).0;
-    use_scratchpad_with(pad, pad_text, pad_work);
+    use_scratchpad_with(pad, pad_text, store, pad_work);
 
     use_building_with(build, states, build_work);
 

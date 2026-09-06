@@ -8,7 +8,7 @@ use crate::temporary::Temporary;
 /// test ends.
 fn base(line: u32) -> Temporary {
     Temporary::at(std::env::temp_dir().join(format!(
-        "assembly-viewer-rescue-test-{}-{line}",
+        "assembly-viewer-store-test-{}-{line}",
         std::process::id()
     )))
 }
@@ -34,7 +34,7 @@ fn a_file_that_parses_is_left_alone() {
     written(&path, b"name = \"a\"\n");
 
     assert_eq!(
-        parse::<Named>(&base, &path),
+        Store::at(&base).read::<Named>(&path),
         Some(Named { name: "a".into() })
     );
     assert!(path.exists());
@@ -49,7 +49,7 @@ fn a_file_that_will_not_parse_is_moved_under_the_path_it_had() {
     let path = base.join("projects").join("project-1").join("session.toml");
     written(&path, b"{ not toml");
 
-    assert_eq!(parse::<Named>(&base, &path), None);
+    assert_eq!(Store::at(&base).read::<Named>(&path), None);
 
     assert!(!path.exists(), "the original was left behind");
     let moved = base
@@ -68,7 +68,7 @@ fn a_file_of_the_wrong_shape_is_moved_too() {
     let path = base.join("settings.toml");
     written(&path, b"other = 1\n");
 
-    assert_eq!(parse::<Named>(&base, &path), None);
+    assert_eq!(Store::at(&base).read::<Named>(&path), None);
     assert!(base.join(INCOMPATIBLE_DIR).join("settings.toml").exists());
 }
 
@@ -80,7 +80,7 @@ fn a_file_that_is_not_text_is_moved() {
     let path = base.join("recents.toml");
     written(&path, &[0xFF, 0xFE, 0x00]);
 
-    assert_eq!(parse::<Named>(&base, &path), None);
+    assert_eq!(Store::at(&base).read::<Named>(&path), None);
     assert_eq!(
         fs::read(base.join(INCOMPATIBLE_DIR).join("recents.toml")).ok(),
         Some(vec![0xFF, 0xFE, 0x00])
@@ -95,11 +95,11 @@ fn a_name_already_taken_gets_a_number() {
     let moved = base.join(INCOMPATIBLE_DIR);
 
     written(&path, b"first");
-    assert_eq!(parse::<Named>(&base, &path), None);
+    assert_eq!(Store::at(&base).read::<Named>(&path), None);
     written(&path, b"second");
-    assert_eq!(parse::<Named>(&base, &path), None);
+    assert_eq!(Store::at(&base).read::<Named>(&path), None);
     written(&path, b"third");
-    assert_eq!(parse::<Named>(&base, &path), None);
+    assert_eq!(Store::at(&base).read::<Named>(&path), None);
 
     assert_eq!(
         fs::read(moved.join("settings.toml")).ok().as_deref(),
@@ -121,7 +121,10 @@ fn a_name_already_taken_gets_a_number() {
 fn a_missing_file_moves_nothing() {
     let base = base(line!());
 
-    assert_eq!(parse::<Named>(&base, &base.join("settings.toml")), None);
+    assert_eq!(
+        Store::at(&base).read::<Named>(&base.join("settings.toml")),
+        None
+    );
     assert!(!base.join(INCOMPATIBLE_DIR).exists());
 }
 
@@ -133,6 +136,23 @@ fn a_path_outside_the_base_is_left_where_it_is() {
     let outside = base.join("elsewhere").join("settings.toml");
     written(&outside, b"{ not toml");
 
-    assert_eq!(parse::<Named>(&base.join("state"), &outside), None);
+    assert_eq!(Store::at(&base.join("state")).read::<Named>(&outside), None);
     assert!(outside.exists());
+}
+
+/// The variable that points this app's storage somewhere of its own, so a second copy does
+/// not write over the first's. Its parsing is what is tested here and not the reading of it:
+/// an environment is one per process and the tests run many at once, so setting one would be
+/// a test that broke whichever others happened to be looking.
+#[test]
+fn a_state_directory_can_be_given_and_an_empty_one_is_not_given() {
+    assert_eq!(
+        given_base(Some("/tmp/somewhere".into())),
+        Some(PathBuf::from("/tmp/somewhere"))
+    );
+    // Unset and empty are the same answer: a variable set to nothing is a script that
+    // meant to set it and did not, and taking it as a path would put a reader's projects
+    // in whatever directory the app was started from.
+    assert_eq!(given_base(Some("".into())), None);
+    assert_eq!(given_base(None), None);
 }

@@ -18,15 +18,15 @@
 //!
 //! There is no published version of this app, so a schema change is just a schema change:
 //! a file that no longer parses is the default, not a migration. It is moved aside first
-//! (`rescue.rs`), the one thing owed to a reader whose file the next write would replace.
+//! ([`Store::read`]), the one thing owed to a reader whose file the next write would
+//! replace.
 
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
     fmt, fs,
-    io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -37,27 +37,9 @@ use crate::bookmarks::Bookmark;
 use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
 use crate::history::{History, Stop};
-use crate::rescue;
+use crate::store::{Order, Store, RECENTS_FILE};
 use crate::tabs::{Driven, Page, Positions, Spot};
 use crate::visits::Visits;
-
-/// The one directory everything this app stores lives under: the projects, the recent
-/// list, the settings and the scratchpads.
-const APP_DIR: &str = "assembly-viewer";
-
-/// The variable that says where all of that goes, in place of the desktop's own state
-/// directory.
-///
-/// It is there because **more than one copy of this app otherwise shares one directory**:
-/// two checkouts, or a build somebody is trying something in beside the window the reader
-/// actually uses. They do not merely take turns -- one writing a file the other's build
-/// cannot parse is one moving the reader's file aside as unreadable, since that is what
-/// every load on the way to a write does (`rescue`). Pointing a second copy somewhere of
-/// its own is the whole of the answer, and it is a variable rather than a flag because it
-/// has to reach every process the app starts.
-pub const STATE_VARIABLE: &str = "ASSEMBLY_VIEWER_STATE";
-const PROJECTS_DIR: &str = "projects";
-const RECENTS_FILE: &str = "recents.toml";
 
 /// What a project file is called. TOML inside, like everything else this app writes; the
 /// extension is its own so that a file can be recognised as a project without reading it.
@@ -67,14 +49,6 @@ pub const PROJECT_EXTENSION: &str = "avproj";
 /// this. So the files beside a project file are named after it and one ignore rule covers
 /// them.
 const SESSION_EXTENSION: &str = "session";
-
-/// How many paths [`Recents`] keeps. What is lost past this is an *order*, never a project.
-const MAX_RECENTS: usize = 50;
-
-/// How many names an unsaved project may try before giving up, so a `projects/` directory
-/// that refuses every create for a reason other than collision cannot spin. [`rescue`]'s
-/// bound and its reasoning.
-const MAX_UNSAVED: u32 = 1000;
 
 /// What is currently selected in the UI. There is no "nothing" variant: having none is an
 /// absent one, `Option<Selection>`.
@@ -361,8 +335,8 @@ impl Project {
 
     /// Read one, or `None` if it is not there or will not parse. The plain read, and the
     /// only one: it is what draws a row for a project that is **not open**
-    /// ([`recent_projects_in`]), and listing a project must not move its file aside.
-    /// [`load_project`], which opens one, goes through [`rescue`].
+    /// ([`recent_projects`]), and listing a project must not move its file aside.
+    /// [`load_project`], which opens one, goes through [`Store::read`].
     fn load_from(path: &Path) -> Option<Project> {
         let data = fs::read_to_string(path).ok()?;
         let mut project: Project = toml::from_str(&data).ok()?;
@@ -374,12 +348,12 @@ impl Project {
 
     /// The other half: written out at `path`, with its paths turned the way the file
     /// spells them. A copy, since what the app goes on holding is the absolute form.
-    fn save_to(&self, path: &Path) -> std::io::Result<()> {
+    fn save_to(&self, store: &Store, path: &Path) -> std::io::Result<()> {
         let mut stored = self.clone();
         if let Some(directory) = path.parent() {
             stored.against(directory, Spelling::Stored);
         }
-        write_toml(path, &stored)
+        store.write_toml(path, &stored)
     }
 }
 
@@ -652,72 +626,27 @@ impl SavedHistory {
 
 /// The projects the reader has had open, most recently first: `recents.toml`.
 ///
-/// Which project to reopen is the first entry and not a field of its own. This is an
-/// *order*, not an index of what exists — the project files are that — which is why
-/// nothing here prunes a path whose file has gone; `recent_projects_in` does that at
-/// the point of use.
-///
 /// A path under the app's own storage is written **relative to it** and every other path
 /// absolutely, so that moving the state directory — a different user, a restored backup —
 /// does not lose every unsaved project. In memory they are all absolute: the relative
-/// spelling belongs to the file and nowhere else.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct Recents {
-    #[serde(default)]
-    projects: Vec<PathBuf>,
-}
+/// spelling belongs to the file and nowhere else, which is what [`load_recents`] and
+/// [`write_recents`] are for.
+type Recents = Order<PathBuf>;
 
-impl Recents {
-    fn first(&self) -> Option<&Path> {
-        self.projects.first().map(PathBuf::as_path)
-    }
-
-    /// Put `path` at the front, and say whether that changed anything — which is what keeps
-    /// a startup that reopens the project already at the front from writing a file.
-    fn touch(&mut self, path: &Path) -> bool {
-        if self.first() == Some(path) {
-            return false;
-        }
-        self.projects.retain(|other| other != path);
-        self.projects.insert(0, path.to_path_buf());
-        self.projects.truncate(MAX_RECENTS);
-        true
-    }
-
-    /// Drop `path` from the order, and say whether it was there. Nothing else prunes this
-    /// file, so a project that has gone for good is taken out here.
-    fn forget(&mut self, path: &Path) -> bool {
-        let before = self.projects.len();
-        self.projects.retain(|other| other != path);
-        self.projects.len() != before
-    }
-
-    /// The stored order, with every path made absolute. A file that will not parse is
-    /// moved aside first: the next [`remember`] writes this file, so ignoring it would
-    /// lose the order without the reader ever hearing about it.
-    fn load_in(base: &Path) -> Recents {
-        let mut recents: Recents = rescue::parse(base, &recents_in(base)).unwrap_or_default();
-        for path in &mut recents.projects {
-            if path.is_relative() {
-                *path = base.join(&path);
-            }
-        }
-        recents
-    }
-
-    /// The same the other way, for the write: what is under `base` goes back to relative.
-    fn stored_in(&self, base: &Path) -> Recents {
-        Recents {
-            projects: self
-                .projects
-                .iter()
-                .map(|path| match path.strip_prefix(base) {
-                    Ok(relative) => relative.to_path_buf(),
-                    Err(_) => path.clone(),
-                })
-                .collect(),
-        }
-    }
+/// The stored order, with every path made absolute. A file that will not parse is moved
+/// aside first ([`Store::read`]): the next [`remember`] writes this file, so ignoring it
+/// would lose the order without the reader ever hearing about it.
+fn load_recents(store: &Store) -> Recents {
+    store
+        .read::<Recents>(RECENTS_FILE)
+        .unwrap_or_default()
+        .into_ids()
+        .into_iter()
+        .map(|path| match path.is_relative() {
+            true => store.path(path),
+            false => path,
+        })
+        .collect()
 }
 
 /// One row of the recent-projects view: a project that can be switched to, described by
@@ -735,19 +664,13 @@ pub struct Recent {
 }
 
 /// The projects the reader has had open, most recently first, each described by its own
-/// file — or an empty list on a system with nowhere to keep them.
-pub fn recent_projects() -> Vec<Recent> {
-    base()
-        .map(|base| recent_projects_in(&base))
-        .unwrap_or_default()
-}
-
-/// The whole of the above except finding the state directory. A path whose file has gone
-/// is dropped here rather than repaired, since [`Recents`] never prunes itself on load and
-/// this is the point of use where the repair is free.
-fn recent_projects_in(base: &Path) -> Vec<Recent> {
-    Recents::load_in(base)
-        .projects
+/// file.
+///
+/// A path whose file has gone is dropped here rather than repaired, since a [`Recents`]
+/// never prunes itself on load and this is the point of use where the repair is free.
+pub fn recent_projects(store: &Store) -> Vec<Recent> {
+    load_recents(store)
+        .into_ids()
         .into_iter()
         .filter_map(|path| {
             if !path.is_file() {
@@ -816,7 +739,7 @@ impl Rebuilt {
 /// plain object — and is needed because one path can contribute many `Object`s, so `path`
 /// alone is ambiguous. [`SavedDocument::Source`]'s `path` is a `String` rather than a
 /// `PathBuf` because it is what the debug info said and not something this filesystem was
-/// asked about; writing it as a path would invite [`write_toml`]'s non-UTF-8
+/// asked about; writing it as a path would invite [`Store::write_toml`]'s non-UTF-8
 /// refusal on a value that was UTF-8 all along.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SavedDocument {
@@ -829,7 +752,7 @@ pub enum SavedDocument {
         object_name: String,
         address: u64,
         /// Last, and after `address`: a name the file stated is written as a table of its
-        /// own, and a table cannot precede a plain value (`write_toml`).
+        /// own, and a table cannot precede a plain value ([`Store::write_toml`]).
         symbol_name: SavedName,
     },
     Source {
@@ -1075,24 +998,6 @@ impl SavedDocument {
 }
 
 impl Session {
-    /// The empty session, as a `const fn` so [`Saves`] can be a `static`.
-    pub const fn new() -> Session {
-        Session {
-            id: None,
-            active_page: None,
-            trusted: false,
-            ui: None,
-            cargo: None,
-            digests: BTreeMap::new(),
-            active: None,
-            tabs: Vec::new(),
-            // Spelt out rather than `SavedHistory::default()`, which is not a `const fn`.
-            history: SavedHistory {
-                entries: Vec::new(),
-            },
-        }
-    }
-
     /// The session described by the state the app is currently in — the one place the
     /// app's state is turned into what would be saved, [`binaries`] being the other half
     /// of it for the other file. `tabs` is each open tab in strip order: its id, its
@@ -1284,46 +1189,9 @@ impl Session {
         )
     }
 
-    fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        write_toml(path, self)
+    fn save_to(&self, store: &Store, path: &Path) -> std::io::Result<()> {
+        store.write_toml(path, self)
     }
-}
-
-/// The directory the app keeps everything in, or `None` on a system with no state or
-/// local data directory to put it in.
-/// Read on **every** call and not cached, so nothing anywhere has to be sequenced against
-/// the moment it is first asked for. It is an environment lookup, and the app asks at most
-/// once per save.
-pub fn base() -> Option<PathBuf> {
-    given_base(std::env::var_os(STATE_VARIABLE)).or_else(desktop_base)
-}
-
-/// The directory the variable names, or `None` where it names nothing.
-///
-/// **Unset and empty are one answer.** A variable set to nothing is what a script that
-/// meant to set it and did not looks like, and taking that as a path would put the reader's
-/// projects in whatever directory the app was started from.
-fn given_base(given: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    let given = given?;
-    match given.is_empty() {
-        true => None,
-        false => Some(PathBuf::from(given)),
-    }
-}
-
-/// Where the desktop says an application's state goes, which is where this app keeps it
-/// when nobody has said otherwise.
-fn desktop_base() -> Option<PathBuf> {
-    let base = dirs::state_dir().or_else(dirs::data_local_dir)?;
-    Some(base.join(APP_DIR))
-}
-
-fn projects_in(base: &Path) -> PathBuf {
-    base.join(PROJECTS_DIR)
-}
-
-fn recents_in(base: &Path) -> PathBuf {
-    base.join(RECENTS_FILE)
 }
 
 /// Where the session for the project at `path` is: beside it, under its whole name. The
@@ -1338,38 +1206,24 @@ fn session_beside(path: &Path) -> PathBuf {
 /// Whether the project at `path` is one the app is keeping for want of anywhere else: an
 /// **unsaved** project. Being under `projects/` is the whole of it, since that is the one
 /// place the app puts a project the reader has not given a place.
-fn is_unsaved(base: &Path, path: &Path) -> bool {
-    path.starts_with(projects_in(base))
+fn is_unsaved(store: &Store, path: &Path) -> bool {
+    path.starts_with(store.projects())
 }
 
 /// Claim a file for a project the reader has not given a place, and hand back its path.
-///
-/// The claim *is* the `create_new`: one atomic operation that fails with `AlreadyExists`
-/// rather than opening what is there, so the loop cannot hand out a name another copy of
-/// the app is already using. The file is left empty; the first write fills it.
-fn unsaved_project(projects: &Path) -> Option<PathBuf> {
-    fs::create_dir_all(projects).ok()?;
-    for n in 1..=MAX_UNSAVED {
-        let path = projects.join(format!("{n}.{PROJECT_EXTENSION}"));
-        match fs::File::create_new(&path) {
-            Ok(_) => return Some(path),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                log::warn!(
-                    "could not make a project file in {}: {error}",
-                    projects.display()
-                );
-                return None;
-            }
-        }
-    }
-    None
+/// The file is left empty; the first write fills it. [`Store::claim`]'s rules.
+fn unsaved_project(store: &Store) -> Option<PathBuf> {
+    store.claim(
+        store.projects(),
+        |n| format!("{n}.{PROJECT_EXTENSION}"),
+        |path| fs::File::create_new(path).map(drop),
+    )
 }
 
 /// The number an unsaved project's file is named by. `None` for a project the reader gave
 /// a place, which is called by that file instead.
-fn unsaved_number(base: &Path, path: &Path) -> Option<String> {
-    match is_unsaved(base, path) {
+fn unsaved_number(store: &Store, path: &Path) -> Option<String> {
+    match is_unsaved(store, path) {
         true => Some(path.file_stem()?.to_string_lossy().into_owned()),
         false => None,
     }
@@ -1384,65 +1238,24 @@ pub fn is_project_file(path: &Path) -> bool {
 
 /// Whether the project kept at `path` is one the app is keeping for want of anywhere else.
 /// The question a view asks before drawing a Save where a close would be.
+///
+/// One of the two here that open the store themselves rather than being handed one: both
+/// are asked of a *path* while something is being drawn, by views that have no file to
+/// write and so nothing else to want a store for. The lookup is an environment read.
 pub fn unsaved(path: &Path) -> bool {
-    base().is_some_and(|base| is_unsaved(&base, path))
+    Store::open().is_some_and(|store| is_unsaved(&store, path))
 }
 
 /// What to call the project kept at `path`: the file's name, or `Unsaved project 3` for one
 /// the app is keeping for want of anywhere else. The whole of the naming rule, and here
 /// rather than in a view because more than one draws it.
 pub fn label(path: &Path) -> String {
-    if let Some(number) = base().and_then(|base| unsaved_number(&base, path)) {
+    if let Some(number) = Store::open().and_then(|store| unsaved_number(&store, path)) {
         return format!("Unsaved project {number}");
     }
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
-}
-
-/// Write `contents` to `path` by writing `path.tmp` first and renaming it over the top,
-/// so an interrupted write cannot leave a half-written file behind and a concurrent reader
-/// sees either the old file or the new one, never a truncated one. The parent directory is
-/// made if it is not there, which is what lets a project's first write create its
-/// directory.
-///
-/// The temporary is **synced before the rename**. A rename is atomic against a crash of
-/// the process, but not against a power loss: the directory entry can reach the disk
-/// before the data does, and the file the next launch then reads is zero bytes or a
-/// truncated tail -- which will not parse, so `rescue` moves the reader's project or
-/// session aside and answers a default. The cost is one fsync per save, at most one every
-/// 30 s. The directory entry itself is left unsynced: losing the rename costs the last
-/// save, where losing the data costs the file.
-///
-/// The one atomic writer for everything the app stores: the two project files, the recent
-/// list, the settings and a scratchpad's package.
-pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    if let Some(directory) = path.parent() {
-        fs::create_dir_all(directory)?;
-    }
-
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-
-    let mut file = fs::File::create(&temporary)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    drop(file);
-
-    fs::rename(&temporary, path)
-}
-
-/// The same for a value written as TOML.
-///
-/// TOML cannot spell a path that is not UTF-8 and serde's `PathBuf` impl fails rather
-/// than mangling one, so such a project is simply not written: the error is logged and
-/// swallowed by the caller, leaving the previous good file in place. This is a *runtime*
-/// failure, not a compile-time one.
-pub fn write_toml(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
-    let data = toml::to_string_pretty(value)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    write_atomically(path, data.as_bytes())
 }
 
 /// How often [`flush`] is worth calling. Far coarser than the rate a user clicks through
@@ -1451,10 +1264,18 @@ pub fn write_toml(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
 pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// A `static` rather than UI state because two of the three things that drive it — the
-/// periodic flush and the window's close hook — sit outside the component tree.
-static SAVES: Mutex<Saves> = Mutex::new(Saves::new());
+/// periodic flush and the window's close hook — sit outside the component tree. A
+/// [`LazyLock`] because it holds a [`Store`], which is a `PathBuf` and so not something a
+/// `const fn` can spell; what that buys is one `#[derive(Default)]` in place of a
+/// constructor naming every field.
+static SAVES: LazyLock<Mutex<Saves>> = LazyLock::new(Mutex::default);
 
+#[derive(Default)]
 struct Saves {
+    /// Where the app's own files go, taken from the store the run opened when a project
+    /// was entered. Held so that [`record`] and [`flush`] — a timer and a close hook,
+    /// neither of them in the component tree — have one without being handed one.
+    store: Option<Store>,
     /// The project file everything is written into, or `None` until one has been reopened
     /// or created. Otherwise claimed on the first write that has anything to say, so a run
     /// where nothing was ever opened leaves no file behind.
@@ -1492,23 +1313,6 @@ struct Saves {
 }
 
 impl Saves {
-    const fn new() -> Saves {
-        Saves {
-            open: None,
-            id: None,
-            given: Details {
-                directory: None,
-                language_server: None,
-                cargo: None,
-            },
-            bookmarks: Vec::new(),
-            binaries: Vec::new(),
-            listed: Vec::new(),
-            session: Session::new(),
-            pending: None,
-        }
-    }
-
     /// The newest session this knows about, whether or not it reached the disk.
     fn latest(&self) -> &Session {
         self.pending.as_ref().unwrap_or(&self.session)
@@ -1518,7 +1322,8 @@ impl Saves {
     /// state the app will be in the instant afterwards. The two empty baselines are
     /// *assigned* rather than assumed because a project switched away from leaves its own
     /// binaries and pending session behind.
-    fn opened(&mut self, path: PathBuf, project: &Project, trusted: bool) {
+    fn opened(&mut self, store: &Store, path: PathBuf, project: &Project, trusted: bool) {
+        self.store = Some(store.clone());
         self.open = Some(path);
         self.id = project.id;
         self.given = Details::of(project);
@@ -1531,7 +1336,7 @@ impl Saves {
         self.session = Session {
             id: project.id,
             trusted,
-            ..Session::new()
+            ..Session::default()
         };
         self.pending = None;
     }
@@ -1661,7 +1466,10 @@ impl Saves {
     /// because the caller is about to empty the app -- one still describing the project
     /// just left would read that emptying as a change and write it back into it.
     fn closed(&mut self) {
-        *self = Saves::new();
+        *self = Saves {
+            store: self.store.take(),
+            ..Saves::default()
+        };
     }
 
     /// The other answer: the write did not happen, so the session is owed again and the
@@ -1699,46 +1507,47 @@ fn saves() -> MutexGuard<'static, Saves> {
 
 /// Take `path` out of `recents.toml`, writing the file only when it was there. What a
 /// project deleted, or moved somewhere else, leaves behind.
-fn forget(base: &Path, path: &Path) {
-    let mut recents = Recents::load_in(base);
+fn forget(store: &Store, path: &PathBuf) {
+    let mut recents = load_recents(store);
     if !recents.forget(path) {
         return;
     }
-    write_recents(base, &recents);
+    write_recents(store, recents);
 }
 
 /// Put `path` at the front of `recents.toml`, writing the file only when that moved it.
-fn remember(base: &Path, path: &Path) {
-    let mut recents = Recents::load_in(base);
+fn remember(store: &Store, path: &Path) {
+    let mut recents = load_recents(store);
     if !recents.touch(path) {
         return;
     }
-    write_recents(base, &recents);
+    write_recents(store, recents);
 }
 
-/// The one write of that file, which is where the paths under `base` go back to relative.
-fn write_recents(base: &Path, recents: &Recents) {
-    let path = recents_in(base);
-    if let Err(error) = write_toml(&path, &recents.stored_in(base)) {
-        log::warn!("could not save {}: {error}", path.display());
+/// The one write of that file, which is where the paths under the store go back to
+/// relative and where the order is cut to what the file keeps.
+fn write_recents(store: &Store, recents: Recents) {
+    let stored: Recents = recents
+        .capped()
+        .into_ids()
+        .into_iter()
+        .map(|path| match path.strip_prefix(store.base()) {
+            Ok(relative) => relative.to_path_buf(),
+            Err(_) => path,
+        })
+        .collect();
+    if let Err(error) = store.write_toml(RECENTS_FILE, &stored) {
+        log::warn!("could not save {RECENTS_FILE}: {error}");
     }
 }
 
 /// Reopen the project the app was last in: the first entry of `recents.toml`. Hands back
 /// both halves for the caller to restore, and points the save policy at it — but seeds it
 /// with nothing else (see [`Saves::binaries`]).
-pub fn reopen() -> Option<(PathBuf, Project, Session)> {
-    let (path, project, session) = reopen_in(&base()?)?;
-    saves().opened(path.clone(), &project, session.trusted);
-    Some((path, project, session))
-}
-
-/// The whole of the above except telling [`Saves`], so a test can point it at a directory
-/// of its own.
-fn reopen_in(base: &Path) -> Option<(PathBuf, Project, Session)> {
-    let recents = Recents::load_in(base);
-    let path = recents.first()?.to_path_buf();
-    let (project, session) = load_project(base, &path)?;
+pub fn reopen(store: &Store) -> Option<(PathBuf, Project, Session)> {
+    let path = load_recents(store).first()?.clone();
+    let (project, session) = load_project(store, &path)?;
+    saves().opened(store, path.clone(), &project, session.trusted);
     Some((path, project, session))
 }
 
@@ -1752,11 +1561,11 @@ fn reopen_in(base: &Path) -> Option<(PathBuf, Project, Session)> {
 /// plain read is [`Project::load_from`], which the recent list has always used for the same
 /// reason.
 ///
-/// The session beside it *is* the app's own, and goes through [`rescue`] like everything
+/// The session beside it *is* the app's own, and goes through [`Store::read`] like everything
 /// else the app stores. One written for another project is dropped rather than believed:
 /// the file is found by the project file's name, which says nothing about whether that file
 /// still holds the project it did.
-fn load_project(base: &Path, path: &Path) -> Option<(Project, Session)> {
+fn load_project(store: &Store, path: &Path) -> Option<(Project, Session)> {
     let project = match Project::load_from(path) {
         Some(project) => project,
         None => {
@@ -1765,14 +1574,14 @@ fn load_project(base: &Path, path: &Path) -> Option<(Project, Session)> {
         }
     };
 
-    let session: Session = rescue::parse(base, &session_beside(path)).unwrap_or_default();
+    let session: Session = store.read(session_beside(path)).unwrap_or_default();
     let session = match session.id == project.id && project.id.is_some() {
         true => session,
         false => {
-            if session != Session::new() {
+            if session != Session::default() {
                 log::debug!("the session beside {} is another project's", path.display());
             }
-            Session::new()
+            Session::default()
         }
     };
     Some((project, session))
@@ -1787,9 +1596,9 @@ fn load_project(base: &Path, path: &Path) -> Option<(Project, Session)> {
 /// baselines because the caller is about to empty the app — a baseline still describing
 /// the old binaries would read that emptying as a change and write it into the project
 /// just entered. Emptying the app is the caller's half, the states being the UI's.
-pub fn switch(path: &Path) -> Option<(Project, Session)> {
+pub fn switch(store: &Store, path: &Path) -> Option<(Project, Session)> {
     flush();
-    let (_, project, session) = open_at(path)?;
+    let (_, project, session) = open_at(store, path)?;
     log::debug!("switched to the project {}", path.display());
     Some((project, session))
 }
@@ -1797,26 +1606,24 @@ pub fn switch(path: &Path) -> Option<(Project, Session)> {
 /// Open the project the file at `path` holds without leaving one first: what a startup
 /// given a project file on the command line does, where there is nothing to flush.
 /// [`switch`] is this with the flush in front of it.
-pub fn open_at(path: &Path) -> Option<(PathBuf, Project, Session)> {
-    let base = base()?;
-    let (project, session) = load_project(&base, path)?;
-    remember(&base, path);
-    saves().opened(path.to_path_buf(), &project, session.trusted);
+pub fn open_at(store: &Store, path: &Path) -> Option<(PathBuf, Project, Session)> {
+    let (project, session) = load_project(store, path)?;
+    remember(store, path);
+    saves().opened(store, path.to_path_buf(), &project, session.trusted);
     Some((path.to_path_buf(), project, session))
 }
 
 /// Start a project the reader has not given a place and enter it: [`switch`] with nothing
 /// to load.
-pub fn start_new() -> Option<PathBuf> {
+pub fn start_new(store: &Store) -> Option<PathBuf> {
     flush();
-    let base = base()?;
-    let path = unsaved_project(&projects_in(&base))?;
+    let path = unsaved_project(store)?;
     let project = Project {
         id: ProjectId::new(),
         ..Project::default()
     };
-    remember(&base, &path);
-    saves().opened(path.clone(), &project, false);
+    remember(store, &path);
+    saves().opened(store, path.clone(), &project, false);
     log::debug!("started the project {}", path.display());
     Some(path)
 }
@@ -1843,14 +1650,14 @@ pub enum Put {
 ///
 /// The pending session is flushed **first**, while [`Saves`] still points at the old place,
 /// so what is carried across is what the app holds and not what the disk happened to have.
-pub fn put_in(path: &Path, put: Put) -> bool {
+pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     flush();
     let mut saves = saves();
-    let (Some(base), Some(from)) = (base(), saves.open.clone()) else {
+    let Some(from) = saves.open.clone() else {
         log::warn!("no project to save");
         return false;
     };
-    let Some((project, session)) = load_project(&base, &from) else {
+    let Some((project, session)) = load_project(store, &from) else {
         return false;
     };
 
@@ -1861,12 +1668,12 @@ pub fn put_in(path: &Path, put: Put) -> bool {
     let project = Project { id, ..project };
     let session = Session { id, ..session };
 
-    if !write_or_warn(path, |path| project.save_to(path)) {
+    if !write_or_warn(path, |path| project.save_to(store, path)) {
         return false;
     }
     // The session is the app's own and regenerable, so a failure here is worth a line in
     // the log and nothing more: the project itself is already where the reader asked.
-    write_or_warn(&session_beside(path), |path| session.save_to(path));
+    write_or_warn(&session_beside(path), |path| session.save_to(store, path));
 
     if put == Put::Move {
         for leaving in [from.clone(), session_beside(&from)] {
@@ -1876,9 +1683,9 @@ pub fn put_in(path: &Path, put: Put) -> bool {
                 log::warn!("could not remove {}: {error}", leaving.display());
             }
         }
-        forget(&base, &from);
+        forget(store, &from);
     }
-    remember(&base, path);
+    remember(store, path);
     saves.moved_to(path.to_path_buf(), id);
     log::debug!("the project is now {}", path.display());
     true
@@ -1899,10 +1706,10 @@ pub fn close() {
 /// project being about to go.
 pub fn delete() -> bool {
     let mut saves = saves();
-    let (Some(base), Some(path)) = (base(), saves.open.clone()) else {
+    let (Some(store), Some(path)) = (saves.store.clone(), saves.open.clone()) else {
         return false;
     };
-    if !is_unsaved(&base, &path) {
+    if !is_unsaved(&store, &path) {
         log::warn!("{} is not the app's to delete", path.display());
         return false;
     }
@@ -1914,7 +1721,7 @@ pub fn delete() -> bool {
             }
         }
     }
-    forget(&base, &path);
+    forget(&store, &path);
     saves.closed();
     log::debug!("deleted the project {}", path.display());
     true
@@ -1938,7 +1745,7 @@ pub fn record(
     let Some(recorded) = saves.record(details, binaries, loading, bookmarks, session) else {
         return;
     };
-    let Some(file) = writing_into(&saves) else {
+    let Some((store, file)) = writing_into(&saves) else {
         log::warn!("no state directory to save the project in");
         if let Some(session) = recorded.session {
             saves.owes_session(session);
@@ -1952,7 +1759,7 @@ pub fn record(
         ..recorded.project
     };
 
-    if write_or_warn(&file, |path| project.save_to(path)) {
+    if write_or_warn(&file, |path| project.save_to(&store, path)) {
         saves.wrote_project(&project, recorded.binaries_changed);
     }
     if let Some(session) = recorded.session {
@@ -1960,7 +1767,7 @@ pub fn record(
             id: saves.id,
             ..session
         };
-        match write_or_warn(&session_beside(&file), |path| session.save_to(path)) {
+        match write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
             true => saves.wrote_session(session),
             false => saves.owes_session(session),
         }
@@ -1974,7 +1781,7 @@ pub fn flush() {
     let Some(session) = saves.owing() else {
         return;
     };
-    let Some(file) = writing_into(&saves) else {
+    let Some((store, file)) = writing_into(&saves) else {
         log::warn!("no state directory to save the session in");
         return;
     };
@@ -1982,15 +1789,16 @@ pub fn flush() {
         id: saves.id,
         ..session
     };
-    if write_or_warn(&session_beside(&file), |path| session.save_to(path)) {
+    if write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
         saves.wrote_session(session);
     }
 }
 
-/// The project file to write, or `None` when there is no project to write into — in which
-/// case nothing is written and nothing is made. The session goes beside it.
-fn writing_into(saves: &Saves) -> Option<PathBuf> {
-    saves.open.clone()
+/// The store and the project file to write, or `None` when there is no project to write
+/// into — in which case nothing is written and nothing is made. The session goes beside
+/// the file.
+fn writing_into(saves: &Saves) -> Option<(Store, PathBuf)> {
+    Some((saves.store.clone()?, saves.open.clone()?))
 }
 
 /// Any IO failure is logged and swallowed: failing to persist is never worth interrupting

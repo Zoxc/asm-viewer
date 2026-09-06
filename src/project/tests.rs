@@ -6,7 +6,15 @@ use super::*;
 use crate::bookmarks::Bookmark;
 use crate::docs::Docs;
 use crate::history::Stop;
+use crate::store::{write_atomically, MAX_ORDER, PROJECTS_DIR};
 use crate::temporary::Temporary;
+
+/// A store to write a file through where the path is the whole of the question: these
+/// files are the reader's own and are given absolutely, so which store writes them makes
+/// no difference to what lands.
+fn anywhere() -> Store {
+    Store::at("/state")
+}
 
 /// A bare `Object` with the given text symbols — only the fields the mapping reads.
 fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
@@ -251,7 +259,7 @@ fn a_missing_symbol_falls_back_to_its_object() {
             address: 12,
         }),
         history: SavedHistory::default(),
-        ..Session::new()
+        ..Session::default()
     };
     assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
 }
@@ -279,7 +287,7 @@ fn a_missing_object_falls_back_to_nothing() {
         let session = Session {
             active: Some(saved),
             history: SavedHistory::default(),
-            ..Session::new()
+            ..Session::default()
         };
         assert!(resolve_selection(&session, &objects).is_none());
     }
@@ -309,7 +317,7 @@ fn toml_round_trips() {
             address: 0x1234,
         }),
         history: SavedHistory::default(),
-        ..Session::new()
+        ..Session::default()
     };
     let text = round_trip(&session);
     // The externally tagged enum is a table named after its variant.
@@ -320,7 +328,7 @@ fn toml_round_trips() {
 fn an_empty_session_round_trips() {
     // The `None` the `toml` crate cannot write has to be left out of the file entirely,
     // and read back as `None`.
-    let session = Session::new();
+    let session = Session::default();
     let text = round_trip(&session);
     assert!(!text.contains("active"), "{text}");
 }
@@ -349,9 +357,11 @@ fn writes_atomically_and_reads_back() {
             object_name: "a.o".into(),
         }),
         history: SavedHistory::default(),
-        ..Session::new()
+        ..Session::default()
     };
-    session.save_to(&path).expect("saving");
+    Store::at(&directory)
+        .write_toml(&path, &session)
+        .expect("saving");
 
     assert_eq!(load_session(&path), Some(session));
     // The temporary was renamed, not left behind.
@@ -411,7 +421,7 @@ fn saved_history(entries: &[SavedDocument]) -> Session {
         history: SavedHistory {
             entries: entries.to_vec(),
         },
-        ..Session::new()
+        ..Session::default()
     }
 }
 
@@ -552,7 +562,7 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
                 entries: vec![saved_entry(gone, 6), saved_entry(saved_object("c.o"), 7)],
             },
         ],
-        ..Session::new()
+        ..Session::default()
     };
 
     let restored = session.resolve_tabs(&objects);
@@ -648,7 +658,7 @@ fn a_non_utf8_path_is_not_written_rather_than_mangled() {
         };
         let session = Session {
             digests: BTreeMap::from([(path, digest_of(b"whatever"))]),
-            ..Session::new()
+            ..Session::default()
         };
         // An error, not a panic and not a lossy path silently written in its place.
         assert!(toml::to_string_pretty(&project).is_err());
@@ -659,9 +669,12 @@ fn a_non_utf8_path_is_not_written_rather_than_mangled() {
             std::process::id(),
             line!()
         )));
-        assert!(write_toml(&directory.join("one.avproj"), &project).is_err());
+        let store = Store::at(&directory);
+        assert!(store
+            .write_toml(directory.join("one.avproj"), &project)
+            .is_err());
         assert!(session
-            .save_to(&directory.join("one.avproj.session"))
+            .save_to(&store, &directory.join("one.avproj.session"))
             .is_err());
         // Nothing reached the disk, so a good earlier file would still be there.
         assert!(!directory.join("one.avproj").exists());
@@ -823,7 +836,7 @@ fn open_tabs_that_no_longer_resolve_are_dropped() {
             saved_file_tab("/no/such/file.rs", 0, 9),
             saved_tab("b.o", 6),
         ],
-        ..Session::new()
+        ..Session::default()
     };
 
     assert!(
@@ -1103,7 +1116,7 @@ fn a_page_this_build_does_not_have_is_dropped() {
             saved_page(Page::Settings),
             saved_tab("a.o", 3),
         ],
-        ..Session::new()
+        ..Session::default()
     };
 
     let restored = session.resolve_tabs(&objects);
@@ -1129,7 +1142,7 @@ fn saved_against(bytes: Option<&[u8]>, saved: SavedDocument, row: usize) -> Sess
         history: SavedHistory {
             entries: vec![saved],
         },
-        ..Session::new()
+        ..Session::default()
     }
 }
 
@@ -1327,7 +1340,7 @@ fn session_with(selection: Option<&str>) -> Session {
     Session {
         active: selection.map(saved_object),
         history: SavedHistory::default(),
-        ..Session::new()
+        ..Session::default()
     }
 }
 
@@ -1387,16 +1400,16 @@ fn mid_load(
 
 #[test]
 fn the_state_the_app_boots_into_is_never_written() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     // The save observer's first run, before anything is restored. Nothing may come of
     // it: the files on disk are the good ones, and no project directory is allocated.
-    assert_eq!(recorded(&mut saves, Vec::new(), Session::new()), None);
+    assert_eq!(recorded(&mut saves, Vec::new(), Session::default()), None);
     assert_eq!(flushed(&mut saves), None);
 }
 
 #[test]
 fn opening_a_binary_is_written_at_once() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
 
     let written = written(&mut saves, &["/tmp/lib.a"], None);
     assert_eq!(
@@ -1421,7 +1434,7 @@ fn opening_a_binary_is_written_at_once() {
 /// at, and it does not care in which direction the list changed.
 #[test]
 fn closing_a_binary_is_written_at_once() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a", "/tmp/some.dll"], Some("a.o"));
 
     // The selection is still pending from the open above; closing writes the lot, so
@@ -1442,17 +1455,20 @@ fn closing_a_binary_is_written_at_once() {
 /// what was just closed.
 #[test]
 fn closing_the_only_binary_is_written_too() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
 
-    let written = recorded(&mut saves, Vec::new(), Session::new());
-    assert_eq!(written, Some((Project::default(), Some(Session::new()))));
+    let written = recorded(&mut saves, Vec::new(), Session::default());
+    assert_eq!(
+        written,
+        Some((Project::default(), Some(Session::default())))
+    );
     assert_eq!(flushed(&mut saves), None);
 }
 
 #[test]
 fn a_selection_change_waits_for_the_flush() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], None);
 
     assert_eq!(written(&mut saves, &["/tmp/lib.a"], Some("a.o")), None);
@@ -1462,7 +1478,7 @@ fn a_selection_change_waits_for_the_flush() {
 
 #[test]
 fn recording_the_same_project_again_changes_nothing() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], None);
 
     // A pending change re-recorded unchanged, as the save observer does whenever
@@ -1480,7 +1496,7 @@ fn recording_the_same_project_again_changes_nothing() {
 
 #[test]
 fn opening_a_binary_carries_the_pending_change_with_it() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
 
     // The selection is pending; opening a second binary writes the lot.
@@ -1496,7 +1512,7 @@ fn opening_a_binary_carries_the_pending_change_with_it() {
 /// file a field lives in is what decides it, and a tab lives in the session.
 #[test]
 fn opening_a_tab_waits_for_the_flush() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], None);
 
     let mut session = session_with(Some("a.o"));
@@ -1513,7 +1529,7 @@ fn opening_a_tab_waits_for_the_flush() {
 /// the absence a derived project would have.
 #[test]
 fn a_record_keeps_the_directory_the_project_was_given() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     let named = Project {
         id: None,
         directory: Some(PathBuf::from("/src/kernel")),
@@ -1522,7 +1538,7 @@ fn a_record_keeps_the_directory_the_project_was_given() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(kept_at("kernel-1"), &named, false);
+    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &named, false);
 
     let (project, _) = written(&mut saves, &["/tmp/lib.a"], None).expect("a write");
     assert_eq!(project.directory, Some(PathBuf::from("/src/kernel")));
@@ -1536,7 +1552,7 @@ fn a_record_keeps_the_directory_the_project_was_given() {
 /// good one.
 #[test]
 fn reopening_seeds_the_details_but_not_the_baseline() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     let loaded = Project {
         id: None,
         directory: Some(PathBuf::from("/src/kernel")),
@@ -1545,13 +1561,13 @@ fn reopening_seeds_the_details_but_not_the_baseline() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(kept_at("kernel-1"), &loaded, false);
+    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &loaded, false);
 
     // The boot state equals the baseline, so nothing is written.
-    assert_eq!(recorded(&mut saves, Vec::new(), Session::new()), None);
+    assert_eq!(recorded(&mut saves, Vec::new(), Session::default()), None);
     // And the restore that follows is an ordinary change, written at once.
     let (project, _) =
-        recorded(&mut saves, paths(&["/tmp/vmlinux"]), Session::new()).expect("a write");
+        recorded(&mut saves, paths(&["/tmp/vmlinux"]), Session::default()).expect("a write");
     assert_eq!(project, loaded);
 }
 
@@ -1560,7 +1576,7 @@ fn reopening_seeds_the_details_but_not_the_baseline() {
 /// empty session the app holds until the restore has resolved its tabs.
 #[test]
 fn a_binary_landing_mid_load_is_not_written() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     let loaded = Project {
         id: None,
         directory: None,
@@ -1569,12 +1585,12 @@ fn a_binary_landing_mid_load_is_not_written() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(kept_at("kernel-1"), &loaded, false);
+    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &loaded, false);
 
     // The first of the two lands, and the app's session is still the empty one. Nothing
     // is written, and nothing is left pending for a flush to write either.
     assert_eq!(
-        mid_load(&mut saves, &["/tmp/vmlinux"], Session::new()),
+        mid_load(&mut saves, &["/tmp/vmlinux"], Session::default()),
         None
     );
     assert_eq!(flushed(&mut saves), None);
@@ -1582,7 +1598,11 @@ fn a_binary_landing_mid_load_is_not_written() {
     // The second lands while the load is still in flight, so the baseline stays behind
     // it: the record after the load has to see a change even where nothing more arrived.
     assert_eq!(
-        mid_load(&mut saves, &["/tmp/vmlinux", "/tmp/lib.a"], Session::new()),
+        mid_load(
+            &mut saves,
+            &["/tmp/vmlinux", "/tmp/lib.a"],
+            Session::default()
+        ),
         None
     );
 
@@ -1603,7 +1623,7 @@ fn a_binary_landing_mid_load_is_not_written() {
 /// change and the file would never learn the rest of it.
 #[test]
 fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], None);
 
     // A second binary is opened, and the reader points the project somewhere while it is
@@ -1617,7 +1637,7 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
         paths(&["/tmp/lib.a", "/tmp/some.dll"]),
         true,
         Vec::new(),
-        Session::new(),
+        Session::default(),
     );
     let (project, session) = landed(&mut saves, decided).expect("a write");
     assert_eq!(project.directory, Some(PathBuf::from("/src/kernel")));
@@ -1632,7 +1652,7 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
     let (project, _) = recorded(
         &mut saves,
         paths(&["/tmp/lib.a", "/tmp/some.dll"]),
-        Session::new(),
+        Session::default(),
     )
     .expect("a write");
     assert_eq!(project.binaries, paths(&["/tmp/lib.a", "/tmp/some.dll"]));
@@ -1643,7 +1663,7 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
 /// disagreeing.
 #[test]
 fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], None);
     // A selection, pending as ever.
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
@@ -1690,8 +1710,9 @@ fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
 /// Clearing a detail writes the key away rather than leaving the old one on disk.
 #[test]
 fn clearing_a_detail_is_a_change_too() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     saves.opened(
+        &Store::at("/state"),
         kept_at("kernel-1"),
         &Project {
             language_server: None,
@@ -1706,7 +1727,7 @@ fn clearing_a_detail_is_a_change_too() {
         Vec::new(),
         false,
         Vec::new(),
-        Session::new(),
+        Session::default(),
     );
     let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(written.0.directory, None);
@@ -1718,7 +1739,7 @@ fn clearing_a_detail_is_a_change_too() {
 /// forget them through a change that had nothing to do with them.
 #[test]
 fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     let loaded = Project {
         id: None,
         directory: None,
@@ -1727,14 +1748,14 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(kept_at("kernel-1"), &loaded, false);
+    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &loaded, false);
 
     let named = Details {
         directory: Some(PathBuf::from("/src/kernel")),
         language_server: None,
         cargo: None,
     };
-    let decided = saves.record(named, Vec::new(), true, Vec::new(), Session::new());
+    let decided = saves.record(named, Vec::new(), true, Vec::new(), Session::default());
     let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(written.0.directory, Some(PathBuf::from("/src/kernel")));
     assert_eq!(written.0.binaries, loaded.binaries);
@@ -1746,12 +1767,12 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
         paths(&["/tmp/vmlinux"]),
         false,
         Vec::new(),
-        Session::new(),
+        Session::default(),
     );
     let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(written.0.binaries, paths(&["/tmp/vmlinux"]));
     // Closing the last one is still a real change and still empties the file.
-    let written = recorded(&mut saves, Vec::new(), Session::new()).expect("a write");
+    let written = recorded(&mut saves, Vec::new(), Session::default()).expect("a write");
     assert_eq!(written.0.binaries, Vec::<PathBuf>::new());
 }
 
@@ -1761,7 +1782,7 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
 /// binaries change, with one warning in a log a windowed app never shows.
 #[test]
 fn a_write_that_failed_is_recorded_again() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
 
     // A binaries change, written at once -- and neither file reaches the disk, so
     // nothing is noted as written and the session is owed.
@@ -1793,7 +1814,7 @@ fn a_write_that_failed_is_recorded_again() {
 /// the close hook's flush is the one that must not then find nothing to do.
 #[test]
 fn a_session_whose_write_failed_is_still_owed() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], None);
     // A selection, pending as ever.
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
@@ -1813,7 +1834,7 @@ fn a_session_whose_write_failed_is_still_owed() {
 /// project.
 #[test]
 fn entering_a_project_empties_every_baseline() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
 
     let entered = Project {
@@ -1821,7 +1842,7 @@ fn entering_a_project_empties_every_baseline() {
         directory: Some(PathBuf::from("/src/other")),
         ..Project::default()
     };
-    saves.opened(kept_at("other-2"), &entered, false);
+    saves.opened(&Store::at("/state"), kept_at("other-2"), &entered, false);
 
     // The state a switch leaves the app in: nothing open, nothing selected, and the
     // directory of the project just entered — every one of them the baseline.
@@ -1834,7 +1855,7 @@ fn entering_a_project_empties_every_baseline() {
         Vec::new(),
         false,
         Vec::new(),
-        Session::new(),
+        Session::default(),
     );
     assert_eq!(landed(&mut saves, decided), None);
     // Nor is the old project's pending session waiting to be written into the new one.
@@ -1906,10 +1927,10 @@ fn what_was_never_said_writes_no_key() {
 
     // It is the session's, and absent there is the "no" a directory nobody has been asked
     // about has to have.
-    assert!(!round_trip(&Session::new()).contains("trusted"));
+    assert!(!round_trip(&Session::default()).contains("trusted"));
     let agreed = Session {
         trusted: true,
-        ..Session::new()
+        ..Session::default()
     };
     assert!(round_trip(&agreed).contains("trusted = true"));
 }
@@ -1941,7 +1962,9 @@ fn a_path_under_the_project_file_is_written_relative_to_it() {
             },
         }],
     };
-    project.save_to(&path).expect("saving the project");
+    project
+        .save_to(&anywhere(), &path)
+        .expect("saving the project");
 
     let text = fs::read_to_string(&path).expect("reading");
     assert!(text.contains(r#""target/debug/vmlinux""#), "{text}");
@@ -1970,7 +1993,7 @@ fn a_project_file_moved_with_its_tree_points_at_the_new_one() {
         ..Project::default()
     };
     project
-        .save_to(&here.join("kernel.avproj"))
+        .save_to(&anywhere(), &here.join("kernel.avproj"))
         .expect("saving");
     fs::copy(here.join("kernel.avproj"), there.join("kernel.avproj")).expect("copying");
 
@@ -1988,12 +2011,14 @@ fn the_two_halves_are_written_to_their_own_files() {
     let session = Session {
         active: Some(saved_object("a.o")),
         tabs: vec![saved_tab("a.o", 7)],
-        ..Session::new()
+        ..Session::default()
     };
 
-    write_toml(&directory.join("one.avproj"), &project).expect("saving the project");
+    Store::at(&directory)
+        .write_toml(directory.join("one.avproj"), &project)
+        .expect("saving the project");
     session
-        .save_to(&directory.join("one.avproj.session"))
+        .save_to(&anywhere(), &directory.join("one.avproj.session"))
         .expect("saving the session");
 
     let project_text = fs::read_to_string(directory.join("one.avproj")).expect("reading");
@@ -2019,7 +2044,9 @@ fn the_two_halves_are_written_to_their_own_files() {
 fn a_corrupt_session_leaves_the_project_readable() {
     let directory = directory(line!());
     let project = a_project();
-    write_toml(&directory.join("one.avproj"), &project).expect("saving the project");
+    Store::at(&directory)
+        .write_toml(directory.join("one.avproj"), &project)
+        .expect("saving the project");
     fs::write(directory.join("one.avproj.session"), b"{ not toml")
         .expect("writing the corrupt half");
 
@@ -2071,28 +2098,11 @@ fn a_recent_list_that_will_not_parse_is_moved_aside() {
     let path = directory.join(RECENTS_FILE);
     fs::create_dir_all(&directory).expect("creating the test directory");
     fs::write(&path, b"{ not toml").expect("writing");
-    assert_eq!(Recents::load_in(&directory), Recents::default());
+    assert_eq!(load_recents(&Store::at(&directory)), Recents::default());
     assert!(directory
-        .join(crate::rescue::INCOMPATIBLE_DIR)
+        .join(crate::store::INCOMPATIBLE_DIR)
         .join(RECENTS_FILE)
         .exists());
-}
-
-/// The variable that points this app's storage somewhere of its own, so a second copy does
-/// not write over the first's. Its parsing is what is tested here and not the reading of it:
-/// an environment is one per process and the tests run many at once, so setting one would be
-/// a test that broke whichever others happened to be looking.
-#[test]
-fn a_state_directory_can_be_given_and_an_empty_one_is_not_given() {
-    assert_eq!(
-        given_base(Some("/tmp/somewhere".into())),
-        Some(PathBuf::from("/tmp/somewhere"))
-    );
-    // Unset and empty are the same answer: a variable set to nothing is a script that
-    // meant to set it and did not, and taking it as a path would put a reader's projects
-    // in whatever directory the app was started from.
-    assert_eq!(given_base(Some("".into())), None);
-    assert_eq!(given_base(None), None);
 }
 
 /// What is asked of a path before a project is opened from it: the extension and nothing
@@ -2118,25 +2128,24 @@ fn a_project_file_is_known_by_its_extension() {
 #[test]
 fn a_project_in_app_storage_is_remembered_relative_to_it() {
     let base = directory(line!());
-    let unsaved = projects_in(&base).join(format!("1.{PROJECT_EXTENSION}"));
+    let store = Store::at(&base);
+    let unsaved = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
     let elsewhere = PathBuf::from("/src/kernel/kernel.avproj");
 
     let mut recents = Recents::default();
-    recents.touch(&elsewhere);
-    recents.touch(&unsaved);
+    recents.touch(elsewhere.as_path());
+    recents.touch(unsaved.as_path());
 
-    let stored = recents.stored_in(&base);
-    assert_eq!(
-        stored.projects,
-        vec![
-            PathBuf::from(format!("{PROJECTS_DIR}/1.{PROJECT_EXTENSION}")),
-            elsewhere.clone()
-        ]
+    write_recents(&store, recents);
+    let text = fs::read_to_string(store.path(RECENTS_FILE)).expect("the file was written");
+    assert!(
+        text.contains(&format!("{PROJECTS_DIR}/1.{PROJECT_EXTENSION}")),
+        "the unsaved project was not written relative to the store: {text}"
     );
+    assert!(text.contains("/src/kernel/kernel.avproj"), "{text}");
 
     // And back: what the file holds is read as the paths the app works in.
-    write_recents(&base, &recents);
-    assert_eq!(Recents::load_in(&base).projects, vec![unsaved, elsewhere]);
+    assert_eq!(load_recents(&store).ids(), [unsaved, elsewhere]);
 }
 
 /// A project file under a `projects/` directory the test never makes: the path is the
@@ -2150,43 +2159,46 @@ fn kept_at(name: &str) -> PathBuf {
 #[test]
 fn touching_a_project_moves_it_to_the_front_once() {
     let mut recents = Recents::default();
-    assert!(recents.touch(&kept_at("a")));
-    assert!(recents.touch(&kept_at("b")));
-    assert_eq!(recents.projects, vec![kept_at("b"), kept_at("a")]);
-    assert_eq!(recents.first(), Some(kept_at("b").as_path()));
+    assert!(recents.touch(kept_at("a")));
+    assert!(recents.touch(kept_at("b")));
+    assert_eq!(recents.ids(), [kept_at("b"), kept_at("a")]);
+    assert_eq!(recents.first(), Some(&kept_at("b")));
 
     // Already first: no change, and so no write.
-    assert!(!recents.touch(&kept_at("b")));
+    assert!(!recents.touch(kept_at("b")));
     // And one that is in the list is moved rather than repeated.
-    assert!(recents.touch(&kept_at("a")));
-    assert_eq!(recents.projects, vec![kept_at("a"), kept_at("b")]);
+    assert!(recents.touch(kept_at("a")));
+    assert_eq!(recents.ids(), [kept_at("a"), kept_at("b")]);
 }
 
 /// Bounded, because this file is appended to for as long as the app is ever used. What
-/// falls off the end is a place in the order and never a project.
+/// falls off the end is a place in the order and never a project. The bound is the
+/// **file's**, applied on the way out, which is what lets the pads share one order type
+/// with a list the panel is holding whole.
 #[test]
 fn the_recent_list_is_bounded() {
     let mut recents = Recents::default();
-    for n in 0..MAX_RECENTS + 10 {
-        recents.touch(&kept_at(&format!("{n}")));
+    for n in 0..MAX_ORDER + 10 {
+        recents.touch(kept_at(&format!("{n}")));
     }
-    assert_eq!(recents.projects.len(), MAX_RECENTS);
+    let stored = recents.capped();
+    assert_eq!(stored.ids().len(), MAX_ORDER);
     assert_eq!(
-        recents.first(),
-        Some(kept_at(&format!("{}", MAX_RECENTS + 9)).as_path())
+        stored.first(),
+        Some(&kept_at(&format!("{}", MAX_ORDER + 9)))
     );
 }
 
 #[test]
 fn the_recent_list_round_trips_through_toml() {
     let mut recents = Recents::default();
-    recents.touch(&kept_at("1"));
-    recents.touch(&kept_at("2"));
+    recents.touch(kept_at("1"));
+    recents.touch(kept_at("2"));
     let text = round_trip(&recents);
     assert!(text.contains(r#"2.avproj"#), "{text}");
 
     // A missing or unreadable file is the empty list, never an error.
-    assert_eq!(Recents::load_in(Path::new("/no/such")), Recents::default());
+    assert_eq!(load_recents(&Store::at("/no/such")), Recents::default());
 }
 
 /// The claim is the `create_new`, so two claims in the same directory cannot land on the
@@ -2195,8 +2207,9 @@ fn the_recent_list_round_trips_through_toml() {
 fn unsaved_projects_do_not_collide() {
     let directory = directory(line!());
 
-    let first = unsaved_project(&directory).expect("a file");
-    let second = unsaved_project(&directory).expect("a second file");
+    let store = Store::at(directory.join(PROJECTS_DIR));
+    let first = unsaved_project(&store).expect("a file");
+    let second = unsaved_project(&store).expect("a second file");
     assert_ne!(first, second);
     assert!(first.is_file());
     assert!(second.is_file());
@@ -2205,7 +2218,7 @@ fn unsaved_projects_do_not_collide() {
     // made it or not.
     let squatter = directory.join(format!("3.{PROJECT_EXTENSION}"));
     fs::write(&squatter, b"someone else's").expect("a squatter");
-    let third = unsaved_project(&directory).expect("a third file");
+    let third = unsaved_project(&store).expect("a third file");
     assert_ne!(third, squatter);
     assert_eq!(
         fs::read(&squatter).expect("the squatter reads"),
@@ -2220,7 +2233,8 @@ fn unsaved_projects_do_not_collide() {
 #[test]
 fn no_project_open_means_nothing_is_written_and_nothing_is_made() {
     let base = directory(line!());
-    let mut saves = Saves::new();
+    let store = Store::at(&base);
+    let mut saves = Saves::default();
 
     // A change the app would otherwise write at once, and a session that would go pending.
     let decided = saves.record(
@@ -2240,32 +2254,35 @@ fn no_project_open_means_nothing_is_written_and_nothing_is_made() {
         "but there is nowhere to write it"
     );
 
-    assert!(!projects_in(&base).exists(), "a project was made anyway");
-    assert_eq!(Recents::load_in(&base).projects, Vec::<PathBuf>::new());
+    assert!(!store.projects().exists(), "a project was made anyway");
+    assert_eq!(load_recents(&store).ids(), Vec::<PathBuf>::new());
 }
 
 /// Startup: the front of the recent list, both halves of it.
 #[test]
 fn the_last_project_is_the_one_reopened() {
     let base = directory(line!());
+    let store = Store::at(&base);
     let project = a_project();
     let session = Session {
         id: project.id,
         active: Some(saved_object("a.o")),
-        ..Session::new()
+        ..Session::default()
     };
 
-    let wanted = projects_in(&base).join(format!("wanted.{PROJECT_EXTENSION}"));
+    let wanted = store.projects().join(format!("wanted.{PROJECT_EXTENSION}"));
     for name in ["other", "wanted"] {
-        let path = projects_in(&base).join(format!("{name}.{PROJECT_EXTENSION}"));
-        write_toml(&path, &project).expect("saving the project");
+        let path = store.projects().join(format!("{name}.{PROJECT_EXTENSION}"));
+        store
+            .write_toml(&path, &project)
+            .expect("saving the project");
         session
-            .save_to(&session_beside(&path))
+            .save_to(&store, &session_beside(&path))
             .expect("saving the session");
-        remember(&base, &path);
+        remember(&store, &path);
     }
 
-    let (path, reopened, restored) = reopen_in(&base).expect("a project to reopen");
+    let (path, reopened, restored) = reopen(&store).expect("a project to reopen");
     assert_eq!(path, wanted);
     assert_eq!(reopened, project);
     assert_eq!(restored, session);
@@ -2275,15 +2292,16 @@ fn the_last_project_is_the_one_reopened() {
 #[test]
 fn nothing_to_reopen_is_not_an_error() {
     let base = directory(line!());
+    let store = Store::at(&base);
     // No recent list at all: a first run, or one whose file was deleted.
-    assert!(reopen_in(&base).is_none());
+    assert!(reopen(&store).is_none());
 
     // A recent list naming a project whose file has gone.
     remember(
-        &base,
-        &projects_in(&base).join(format!("gone.{PROJECT_EXTENSION}")),
+        &store,
+        &store.projects().join(format!("gone.{PROJECT_EXTENSION}")),
     );
-    assert!(reopen_in(&base).is_none());
+    assert!(reopen(&store).is_none());
 }
 
 /// The file *is* the project, so a run killed between claiming one and writing anything
@@ -2292,28 +2310,31 @@ fn nothing_to_reopen_is_not_an_error() {
 #[test]
 fn a_project_missing_a_half_still_reopens() {
     let base = directory(line!());
-    let path = unsaved_project(&projects_in(&base)).expect("a project");
-    remember(&base, &path);
+    let store = Store::at(&base);
+    let path = unsaved_project(&store).expect("a project");
+    remember(&store, &path);
 
     // The file claimed and nothing written into it yet.
-    let (reopened, project, session) = reopen_in(&base).expect("a project to reopen");
+    let (reopened, project, session) = reopen(&store).expect("a project to reopen");
     assert_eq!(reopened, path);
     assert_eq!(project, Project::default());
-    assert_eq!(session, Session::new());
+    assert_eq!(session, Session::default());
 
     // The user's half good, the app's half corrupt.
     let project = a_project();
-    write_toml(&path, &project).expect("saving the project");
+    store
+        .write_toml(&path, &project)
+        .expect("saving the project");
     fs::write(session_beside(&path), b"{ not toml").expect("writing the corrupt half");
 
-    let (_, reopened, session) = reopen_in(&base).expect("a project to reopen");
+    let (_, reopened, session) = reopen(&store).expect("a project to reopen");
     assert_eq!(reopened, project);
-    assert_eq!(session, Session::new());
+    assert_eq!(session, Session::default());
 
     // And the corrupt half was moved aside under the path it had, rather than left for
     // the next flush to write over.
     let moved = base
-        .join(crate::rescue::INCOMPATIBLE_DIR)
+        .join(crate::store::INCOMPATIBLE_DIR)
         .join(PROJECTS_DIR)
         .join(
             session_beside(&path)
@@ -2329,16 +2350,17 @@ fn a_project_missing_a_half_still_reopens() {
 #[test]
 fn a_project_file_that_will_not_parse_is_left_where_it_is() {
     let base = directory(line!());
-    let path = projects_in(&base).join(format!("1.{PROJECT_EXTENSION}"));
-    fs::create_dir_all(projects_in(&base)).expect("creating the test directory");
+    let store = Store::at(&base);
+    let path = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
+    fs::create_dir_all(store.projects()).expect("creating the test directory");
     fs::write(&path, b"{ not toml").expect("writing");
 
-    assert!(load_project(&base, &path).is_none());
+    assert!(load_project(&store, &path).is_none());
     assert_eq!(
         fs::read(&path).expect("the file is still there"),
         b"{ not toml"
     );
-    assert!(!base.join(crate::rescue::INCOMPATIBLE_DIR).exists());
+    assert!(!base.join(crate::store::INCOMPATIBLE_DIR).exists());
 }
 
 /// The session is found by the project file's name, which says nothing about whether that
@@ -2347,39 +2369,42 @@ fn a_project_file_that_will_not_parse_is_left_where_it_is() {
 #[test]
 fn a_session_written_for_another_project_is_ignored() {
     let base = directory(line!());
-    let path = projects_in(&base).join(format!("1.{PROJECT_EXTENSION}"));
-    fs::create_dir_all(projects_in(&base)).expect("creating the test directory");
+    let store = Store::at(&base);
+    let path = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
+    fs::create_dir_all(store.projects()).expect("creating the test directory");
 
     let mine = ProjectId::parse("00000000deadbeef").expect("an id");
     let project = Project {
         id: Some(mine),
         ..a_project()
     };
-    write_toml(&path, &project).expect("saving the project");
+    store
+        .write_toml(&path, &project)
+        .expect("saving the project");
 
     let session = Session {
         active: Some(saved_object("a.o")),
-        ..Session::new()
+        ..Session::default()
     };
     let theirs = Session {
         id: ProjectId::parse("000000000badcafe"),
         ..session.clone()
     };
     theirs
-        .save_to(&session_beside(&path))
+        .save_to(&store, &session_beside(&path))
         .expect("saving the session");
 
-    let (_, restored) = load_project(&base, &path).expect("the project opens");
-    assert_eq!(restored, Session::new());
+    let (_, restored) = load_project(&store, &path).expect("the project opens");
+    assert_eq!(restored, Session::default());
 
     // The same session under this project's own id is read.
     Session {
         id: Some(mine),
         ..session.clone()
     }
-    .save_to(&session_beside(&path))
+    .save_to(&store, &session_beside(&path))
     .expect("saving the session");
-    let (_, restored) = load_project(&base, &path).expect("the project opens");
+    let (_, restored) = load_project(&store, &path).expect("the project opens");
     assert_eq!(restored.active, session.active);
 }
 
@@ -2388,32 +2413,34 @@ fn a_session_written_for_another_project_is_ignored() {
 #[test]
 fn the_recent_view_describes_each_project_from_its_own_file() {
     let base = directory(line!());
+    let store = Store::at(&base);
     for name in ["kernel", "loader"] {
-        let path = projects_in(&base).join(format!("{name}.{PROJECT_EXTENSION}"));
-        write_toml(
-            &path,
-            &Project {
-                id: None,
-                directory: Some(PathBuf::from("/src").join(name)),
-                language_server: None,
-                binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
-                cargo: None,
-                bookmarks: Vec::new(),
-            },
-        )
-        .expect("saving the project");
-        remember(&base, &path);
+        let path = store.projects().join(format!("{name}.{PROJECT_EXTENSION}"));
+        store
+            .write_toml(
+                &path,
+                &Project {
+                    id: None,
+                    directory: Some(PathBuf::from("/src").join(name)),
+                    language_server: None,
+                    binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+                    cargo: None,
+                    bookmarks: Vec::new(),
+                },
+            )
+            .expect("saving the project");
+        remember(&store, &path);
     }
 
-    let recents = recent_projects_in(&base);
+    let recents = recent_projects(&store);
     assert_eq!(
         recents
             .iter()
             .map(|row| row.path.clone())
             .collect::<Vec<_>>(),
         [
-            projects_in(&base).join(format!("loader.{PROJECT_EXTENSION}")),
-            projects_in(&base).join(format!("kernel.{PROJECT_EXTENSION}"))
+            store.projects().join(format!("loader.{PROJECT_EXTENSION}")),
+            store.projects().join(format!("kernel.{PROJECT_EXTENSION}"))
         ]
     );
     assert_eq!(recents[0].directory, Some(PathBuf::from("/src/loader")));
@@ -2425,18 +2452,19 @@ fn the_recent_view_describes_each_project_from_its_own_file() {
 #[test]
 fn listing_a_project_does_not_move_its_file_aside() {
     let base = directory(line!());
-    let path = projects_in(&base).join(format!("broken.{PROJECT_EXTENSION}"));
-    fs::create_dir_all(projects_in(&base)).expect("creating the test directory");
+    let store = Store::at(&base);
+    let path = store.projects().join(format!("broken.{PROJECT_EXTENSION}"));
+    fs::create_dir_all(store.projects()).expect("creating the test directory");
     fs::write(&path, b"{ not toml").expect("writing the corrupt file");
-    remember(&base, &path);
+    remember(&store, &path);
 
     // The row is drawn, as the project it will behave as once opened.
-    let recents = recent_projects_in(&base);
+    let recents = recent_projects(&store);
     assert_eq!(recents.len(), 1);
     assert_eq!(recents[0].directory, None);
 
     assert!(path.exists());
-    assert!(!base.join(crate::rescue::INCOMPATIBLE_DIR).exists());
+    assert!(!base.join(crate::store::INCOMPATIBLE_DIR).exists());
 }
 
 /// A project whose file has gone is dropped here, where the repair is free; one whose file
@@ -2444,14 +2472,15 @@ fn listing_a_project_does_not_move_its_file_aside() {
 #[test]
 fn a_recent_project_that_is_gone_is_dropped_and_an_empty_one_is_not() {
     let base = directory(line!());
-    let empty = unsaved_project(&projects_in(&base)).expect("a project");
-    remember(&base, &empty);
+    let store = Store::at(&base);
+    let empty = unsaved_project(&store).expect("a project");
+    remember(&store, &empty);
     remember(
-        &base,
-        &projects_in(&base).join(format!("gone.{PROJECT_EXTENSION}")),
+        &store,
+        &store.projects().join(format!("gone.{PROJECT_EXTENSION}")),
     );
 
-    let recents = recent_projects_in(&base);
+    let recents = recent_projects(&store);
     assert_eq!(recents.len(), 1);
     assert_eq!(recents[0].path, empty);
     assert_eq!(recents[0].directory, None);
@@ -2888,7 +2917,7 @@ fn a_bookmark_on_a_made_up_name_writes_no_spelling() {
 /// the binaries the file already lists rather than the app's own.
 #[test]
 fn a_bookmarks_change_writes_the_project_file_alone() {
-    let mut saves = Saves::new();
+    let mut saves = Saves::default();
     let reopened = Project {
         language_server: None,
         bookmarks: vec![Bookmark {
@@ -2897,7 +2926,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         }],
         ..a_project()
     };
-    saves.opened(kept_at("1"), &reopened, false);
+    saves.opened(&Store::at("/state"), kept_at("1"), &reopened, false);
 
     // Seeded: the same bookmarks are no change, while the parse has yet to land.
     let unchanged = saves.record(
@@ -2905,7 +2934,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         Vec::new(),
         false,
         reopened.bookmarks.clone(),
-        Session::new(),
+        Session::default(),
     );
     assert!(unchanged.is_none());
 
@@ -2919,7 +2948,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         Vec::new(),
         false,
         added.clone(),
-        Session::new(),
+        Session::default(),
     );
     let (project, session) = landed(&mut saves, decided).expect("a write");
     assert!(session.is_none(), "the session went with it");
@@ -2935,7 +2964,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         Vec::new(),
         false,
         Vec::new(),
-        Session::new(),
+        Session::default(),
     );
     let (project, _) = landed(&mut saves, decided).expect("a write");
     assert!(project.bookmarks.is_empty());
@@ -3037,7 +3066,7 @@ fn nothing_chosen_and_nothing_built_write_no_section() {
         bookmarks: Vec::new(),
     };
     assert!(!round_trip(&project).contains("[cargo]"));
-    assert!(!round_trip(&Session::new()).contains("[cargo]"));
+    assert!(!round_trip(&Session::default()).contains("[cargo]"));
 }
 
 /// What the last build produced is the app's own record and belongs to the session, so

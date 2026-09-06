@@ -19,7 +19,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::project::write_atomically;
+use crate::store::write_atomically;
 
 /// Which of cargo's two built-in profiles to build.
 ///

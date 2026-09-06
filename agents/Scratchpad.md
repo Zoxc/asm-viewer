@@ -48,28 +48,33 @@ over what it built last rather than leaving that file on the disk under the old 
 **Which pad opens is an order, `recents.toml`'s shape again**, in `scratchpads/recents.toml`. It
 sits beside the pads rather than at the top of the state directory, so it is not a second file to
 tell apart from the projects' one, and it is a file where every sibling is a directory, so the
-listing steps over it with no special case. `PadOrder` is `Recents` over ids: the front is what to
-open, `touch` answers whether anything *moved* (which is what keeps a startup that reopens the front
-pad from writing a file), and nothing prunes itself on load. It differs in one thing:
-**`MAX_PAD_RECENTS` bounds the file and not the list**, `remember_in` capping what it writes where
-`Recents` caps in `touch`. The list here is what the panel draws, and the panel is the only way to
-open a pad, so an order that dropped its own tail would drop exactly the pads the listing below goes
-to the trouble of appending. **`pads()` is the order's ids then the pads it does not name**, in id
-order. Each row carries the name out of that pad's own package, read at the moment the list is asked
-for, which is what lets the panel draw a pad nothing has ever opened. That second half is the
+listing steps over it with no special case. `PadOrder` **is** the projects' order -- both are
+`store::Order<Id>`, one type in `src/store.rs`: the front is what to open, `touch` answers whether
+anything *moved* (which is what keeps a startup that reopens the front pad from writing a file),
+and nothing prunes itself on load. **`MAX_ORDER` bounds the file and not the list**, `capped()`
+cutting what goes out rather than what a `touch` keeps. That is the pads' rule and the projects
+inherited it: the list here is what the panel draws, and the panel is the only way to open a pad,
+so an order that dropped its own tail would drop exactly the pads the listing below goes to the
+trouble of appending. It is also loaded through `Store::read` like everything else, which is what
+it was not: it parsed its own file and answered a default, so the next `remember` wrote over a pad
+order the reader never heard was unreadable. **`pads()` is the order's ids then the pads it does
+not name**, in id order. Each row carries the name out of that pad's own package, read at the
+moment the list is asked for, which is what lets the panel draw a pad nothing has ever opened.
+That second half is the
 difference from `recent_projects`, which lists only the projects a reader has opened: this is the
-list a reader picks a pad from, so a pad that fell off the end of `MAX_PAD_RECENTS` or was made
+list a reader picks a pad from, so a pad that fell off the end of `MAX_ORDER` or was made
 outside the app has to be reachable. A pad is remembered when it is **opened**, and only if there is
 a directory for it, which keeps the "nothing is written until there is something to say" rule: the
 pad a first run holds is in memory until something is typed into it.
 
 **A new pad is `new_pad`, and the claim is a `create_dir` that fails rather than opens**: the first
-free `pad-N`, `ProjectId::anonymous`'s shape and bound, stepping over an id another copy of the app
-already took. Unlike an anonymous project it **writes the package at once**: pressing New is a
-deliberate act, and a claimed directory with no package in it is not a pad and the listing would
-repair it away. The stem is `DEFAULT_ID`'s and deliberately without its number. The pad a first run
-opens is `pad` and New makes `pad-1`, `pad-2`, so New can never hand out the id of the pad the app
-is already holding. It could if that one were `pad-1`: a pad nobody has typed in has claimed no
+free `pad-N`, through `Store::claim` -- the one bounded loop an unsaved project and a rescued file
+are claimed by too -- stepping over an id another copy of the app already took. Unlike an
+anonymous project it **writes the package at once**: pressing New is a deliberate act, and a
+claimed directory with no package in it is not a pad and the listing would repair it away. The
+stem is `DEFAULT_ID`'s and deliberately without its number. The pad a first run opens is `pad` and
+New makes `pad-1`, `pad-2`, so New can never hand out the id of the pad the app is already
+holding. It could if that one were `pad-1`: a pad nobody has typed in has claimed no
 directory for the `create_dir` to fail on.
 
 **There is no rename operation**, and that is the point of the id: renaming writes
@@ -84,7 +89,7 @@ directory holding a manifest this module wrote. `symlink_metadata` is what makes
 itself rather than whatever a link put in its place, and a pad with no directory is already deleted
 and says so. What goes is the whole directory, cargo's `target/` included: the package is the
 storage, so there is no part of a pad anywhere else. Nothing goes back to the order file --
-`PadOrder::forget` is about the list on screen, and an id whose directory has gone is one `pads_in`
+`Order::forget` is about the list on screen, and an id whose directory has gone is one `pads`
 already steps over.
 
 A dependency is a `(name, version)` row and the **version is required**. A `*` is refused with its

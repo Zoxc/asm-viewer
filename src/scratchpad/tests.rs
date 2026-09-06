@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::MAX_ORDER;
 use crate::temporary::Temporary;
 
 /// A directory of this test's own under the system temporary directory, named after the
@@ -335,13 +336,13 @@ fn row(id_text: &str, name: &str) -> PadListing {
 fn the_order_answers_whether_anything_moved() {
     let mut order = PadOrder::default();
 
-    assert!(order.touch(&id("one")));
-    assert!(order.touch(&id("two")));
+    assert!(order.touch(id("one")));
+    assert!(order.touch(id("two")));
     assert_eq!(order.first(), Some(&id("two")));
     // Already at the front: nothing moved, so nothing is written.
-    assert!(!order.touch(&id("two")));
+    assert!(!order.touch(id("two")));
     // Behind the front: it moves, and is not repeated.
-    assert!(order.touch(&id("one")));
+    assert!(order.touch(id("one")));
     assert_eq!(order.ids(), [id("one"), id("two")]);
 }
 
@@ -352,28 +353,31 @@ fn the_order_answers_whether_anything_moved() {
 #[test]
 fn the_order_keeps_every_pad_and_the_file_keeps_fifty() {
     // One past the cap, so the last of them is what a bounded order would lose.
-    let listing: Vec<PadListing> = (0..=MAX_PAD_RECENTS)
+    let listing: Vec<PadListing> = (0..=MAX_ORDER)
         .map(|n| row(&format!("pad-{n}"), ""))
         .collect();
     let mut order = PadOrder::of(&listing);
     assert_eq!(order.ids().len(), listing.len());
 
     // Showing one pad is not an occasion to drop another.
-    assert!(order.touch(&id("pad-9")));
+    assert!(order.touch(id("pad-9")));
     assert_eq!(order.ids().len(), listing.len());
-    assert!(order.ids().contains(&id(&format!("pad-{MAX_PAD_RECENTS}"))));
+    assert!(order.ids().contains(&id(&format!("pad-{MAX_ORDER}"))));
 
     let base = directory(line!());
-    let pads = base.join("scratchpads");
-    fs::create_dir_all(&pads).expect("the directory");
-    write_toml(&pads.join("recents.toml"), &order).expect("the order");
-    // An id with a directory, which is what `remember_in` asks of one before it writes.
-    fs::create_dir(pads.join("fresh")).expect("the directory");
+    let store = Store::at(&base);
+    let scratchpads = store.scratchpads();
+    fs::create_dir_all(&scratchpads).expect("the directory");
+    store
+        .write_toml(pad_recents_in(&store), &order)
+        .expect("the order");
+    // An id with a directory, which is what `remember` asks of one before it writes.
+    fs::create_dir(scratchpads.join("fresh")).expect("the directory");
 
-    remember_in(&base, &id("fresh"));
+    remember(&store, &id("fresh"));
 
-    let written = PadOrder::load_from(&pads.join("recents.toml"));
-    assert_eq!(written.ids().len(), MAX_PAD_RECENTS);
+    let written = load_order(&store);
+    assert_eq!(written.ids().len(), MAX_ORDER);
     assert_eq!(written.first(), Some(&id("fresh")));
 }
 
@@ -385,27 +389,32 @@ fn the_order_keeps_every_pad_and_the_file_keeps_fifty() {
 #[test]
 fn the_listing_drops_what_is_not_a_pad_and_keeps_what_the_order_forgot() {
     let base = directory(line!());
-    let pads = base.join("scratchpads");
-    fs::create_dir_all(&pads).expect("the directory");
+    let store = Store::at(&base);
+    let scratchpads = store.scratchpads();
+    fs::create_dir_all(&scratchpads).expect("the directory");
 
     for (pad, name) in [("kept", "Kept one"), ("stray", "")] {
         let mut scratchpad = Scratchpad::of(id(pad));
         scratchpad.name = name.to_owned();
-        scratchpad.write_to(&pads.join(pad)).expect("writing");
+        scratchpad
+            .write_to(&scratchpads.join(pad))
+            .expect("writing");
     }
     // A directory with nothing in it, which `load_from` does not answer for.
-    fs::create_dir(pads.join("empty")).expect("the directory");
+    fs::create_dir(scratchpads.join("empty")).expect("the directory");
 
     let mut order = PadOrder::default();
-    order.touch(&id("empty"));
-    order.touch(&id("gone"));
-    order.touch(&id("kept"));
-    write_toml(&pads.join("recents.toml"), &order).expect("the order");
+    order.touch(id("empty"));
+    order.touch(id("gone"));
+    order.touch(id("kept"));
+    store
+        .write_toml(pad_recents_in(&store), &order)
+        .expect("the order");
 
     // `kept` from the order, then the pad the order never named. `gone` has no directory
     // and `empty` is not a package, so neither is a row. A pad the reader never named
     // comes back with an empty name rather than with its id.
-    assert_eq!(pads_in(&base), [row("kept", "Kept one"), row("stray", "")]);
+    assert_eq!(pads(&store), [row("kept", "Kept one"), row("stray", "")]);
 }
 
 /// A new pad claims its directory with the `create_dir` that fails rather than opens, so an
@@ -415,23 +424,21 @@ fn the_listing_drops_what_is_not_a_pad_and_keeps_what_the_order_forgot() {
 #[test]
 fn a_new_pad_steps_over_what_is_already_claimed() {
     let base = directory(line!());
-    let pads = base.join("scratchpads");
-    fs::create_dir_all(pads.join("pad-1")).expect("the squatter");
+    let store = Store::at(&base);
+    let scratchpads = store.scratchpads();
+    fs::create_dir_all(scratchpads.join("pad-1")).expect("the squatter");
 
-    let made = new_pad_in(&base).expect("a pad");
+    let made = new_pad(&store).expect("a pad");
     assert_eq!(made.id().as_str(), "pad-2");
     // And no name: naming it is the reader's, and until they do the pane calls it
     // `<pad-2>` without anything having been written down.
     assert_eq!(made.name(), "");
     assert_eq!(
-        Scratchpad::load_from(&pads.join("pad-2")),
+        Scratchpad::load_from(&scratchpads.join("pad-2")),
         Some(made.clone())
     );
     // And it is at the front of the order, so it is what a restart would open.
-    assert_eq!(
-        PadOrder::load_from(&pads.join("recents.toml")).first(),
-        Some(made.id())
-    );
+    assert_eq!(load_order(&store).first(), Some(made.id()));
 }
 
 /// A delete takes the pad's whole directory, cargo's leavings included — and reaches
@@ -443,32 +450,33 @@ fn a_new_pad_steps_over_what_is_already_claimed() {
 #[test]
 fn a_delete_takes_the_package_and_only_the_package() {
     let base = directory(line!());
-    let pads = base.join("scratchpads");
-    fs::create_dir_all(&pads).expect("the directory");
+    let store = Store::at(&base);
+    let scratchpads = store.scratchpads();
+    fs::create_dir_all(&scratchpads).expect("the directory");
 
     for pad in ["going", "staying"] {
         Scratchpad::of(id(pad))
-            .write_to(&pads.join(pad))
+            .write_to(&scratchpads.join(pad))
             .expect("writing");
     }
     // What cargo leaves behind, which goes with the pad rather than being left orphaned.
-    fs::create_dir_all(pads.join("going").join("target")).expect("the directory");
+    fs::create_dir_all(scratchpads.join("going").join("target")).expect("the directory");
 
-    assert_eq!(delete_pad_in(&base, &id("going")), Ok(()));
-    assert!(!pads.join("going").exists());
-    assert!(Scratchpad::load_from(&pads.join("staying")).is_some());
+    assert_eq!(delete_pad(&store, &id("going")), Ok(()));
+    assert!(!scratchpads.join("going").exists());
+    assert!(Scratchpad::load_from(&scratchpads.join("staying")).is_some());
 
     // Gone already is not a failure: the pad a first run holds has no directory until
     // something is typed into it.
-    assert_eq!(delete_pad_in(&base, &id("going")), Ok(()));
+    assert_eq!(delete_pad(&store, &id("going")), Ok(()));
 
     // A directory that is not a package is refused rather than removed, whatever the order
     // beside it says about it.
-    let stranger = pads.join("stranger");
+    let stranger = scratchpads.join("stranger");
     fs::create_dir(&stranger).expect("the directory");
     fs::write(stranger.join("notes.txt"), "someone's own").expect("the file");
     assert!(matches!(
-        delete_pad_in(&base, &id("stranger")),
+        delete_pad(&store, &id("stranger")),
         Err(Failure::Delete(_))
     ));
     assert!(stranger.join("notes.txt").exists());
@@ -477,12 +485,13 @@ fn a_delete_takes_the_package_and_only_the_package() {
     // not follow one, so a delete reaches the directory itself or nothing.
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(pads.join("staying"), pads.join("linked")).expect("a link");
+        std::os::unix::fs::symlink(scratchpads.join("staying"), scratchpads.join("linked"))
+            .expect("a link");
         assert!(matches!(
-            delete_pad_in(&base, &id("linked")),
+            delete_pad(&store, &id("linked")),
             Err(Failure::Delete(_))
         ));
-        assert!(Scratchpad::load_from(&pads.join("staying")).is_some());
+        assert!(Scratchpad::load_from(&scratchpads.join("staying")).is_some());
     }
 }
 

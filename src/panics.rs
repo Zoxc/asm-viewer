@@ -31,7 +31,8 @@
 //! that one's place, so the app says the same thing in both builds -- and a guarded panic
 //! stops being fatal in a release build, which it was.
 
-use crate::{project, reveal, shutdown};
+use crate::store::Store;
+use crate::{reveal, shutdown};
 use std::{
     backtrace::Backtrace,
     fs::{self, OpenOptions},
@@ -44,9 +45,6 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-
-/// Where a run's panics are written, under the directory everything is stored in.
-const PANICS_DIR: &str = "panics";
 
 /// The file this run appends to, made on the first panic and kept for the rest: one file
 /// per launch, so a worker dying twenty thousand times over one bad file leaves one file
@@ -153,8 +151,10 @@ impl Panic {
 /// Install the hook. Called once the window is up, so that it takes the place of freya's
 /// rather than sitting under it: `set_hook` replaces, and the hook replaced is not called
 /// (freya's would put up a second box and exit before anything here could save).
-pub(crate) fn install() {
-    let base = project::base();
+///
+/// `store` is the run's, handed in like everywhere else: a hook lives outside the
+/// component tree and so keeps its own copy of it.
+pub(crate) fn install(store: Option<Store>) {
     panic::set_hook(Box::new(move |info| {
         let panic = Panic::of(info);
         echo(std::io::stderr(), &panic);
@@ -162,7 +162,7 @@ pub(crate) fn install() {
             &panic,
             analysis::guard::guarded(),
             &STOPPING,
-            &mut |panic| base.as_deref().and_then(|base| write_in(base, panic)),
+            &mut |panic| store.as_ref().and_then(|store| write_in(store, panic)),
             &mut tell,
             &mut shut_down,
         );
@@ -213,19 +213,19 @@ fn handle(
 ///
 /// Appended and not written atomically: the file grows a record at a time and a reader
 /// may be looking at it, where the app's other files are each replaced whole
-/// (`project::write_atomically`).
-fn write_in(base: &Path, panic: &Panic) -> Option<PathBuf> {
-    write_to(&FILE, base, panic)
+/// (`store::write_atomically`).
+fn write_in(store: &Store, panic: &Panic) -> Option<PathBuf> {
+    write_to(&FILE, store, panic)
 }
 
 /// The same against a given cell, so a test has a run of its own: [`FILE`] is one static
 /// and the tests share one process.
-fn write_to(file: &Mutex<Option<PathBuf>>, base: &Path, panic: &Panic) -> Option<PathBuf> {
+fn write_to(file: &Mutex<Option<PathBuf>>, store: &Store, panic: &Panic) -> Option<PathBuf> {
     let mut held = file.lock().unwrap_or_else(|held| held.into_inner());
     let path = match held.clone() {
         Some(path) => path,
         None => {
-            let directory = base.join(PANICS_DIR);
+            let directory = store.panics();
             fs::create_dir_all(&directory).ok()?;
             let path = directory.join(format!("{}.txt", file_stamp(panic.at)));
             held.replace(path.clone());
@@ -248,15 +248,8 @@ fn write_to(file: &Mutex<Option<PathBuf>>, base: &Path, panic: &Panic) -> Option
 /// The listing is by **name** and not by the filesystem's times: the name is the stamp of
 /// the run's first panic ([`file_stamp`]), it sorts, and a file copied about keeps it
 /// where a modification time does not.
-pub(crate) fn recorded() -> Vec<PathBuf> {
-    project::base()
-        .map(|base| recorded_in(&base))
-        .unwrap_or_default()
-}
-
-/// The same under a given directory, so a test has one of its own.
-fn recorded_in(base: &Path) -> Vec<PathBuf> {
-    let Ok(directory) = fs::read_dir(base.join(PANICS_DIR)) else {
+pub(crate) fn recorded(store: &Store) -> Vec<PathBuf> {
+    let Ok(directory) = fs::read_dir(store.panics()) else {
         return Vec::new();
     };
     let mut files: Vec<PathBuf> = directory

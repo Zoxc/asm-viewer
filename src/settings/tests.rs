@@ -31,21 +31,21 @@ fn a_missing_or_corrupt_file_is_the_default() {
     let directory = directory(line!());
     let path = directory.join(FILE_NAME);
 
-    assert_eq!(Settings::load_in(&directory), Settings::default());
+    assert_eq!(Settings::load(&Store::at(&directory)), Settings::default());
 
     fs::create_dir_all(&directory).expect("creating the test directory");
 
     // Not TOML at all.
     fs::write(&path, b"{ not toml").expect("writing the corrupt file");
-    assert_eq!(Settings::load_in(&directory), Settings::default());
+    assert_eq!(Settings::load(&Store::at(&directory)), Settings::default());
 
     // TOML, but not this schema: starting in the default beats refusing to start.
     fs::write(&path, b"theme = \"solarized\"\n").expect("writing the stale file");
-    assert_eq!(Settings::load_in(&directory), Settings::default());
+    assert_eq!(Settings::load(&Store::at(&directory)), Settings::default());
 
     // Neither was left for the next save to write over: both are under `incompatible`,
     // the second under a name of its own.
-    let moved = directory.join(crate::rescue::INCOMPATIBLE_DIR);
+    let moved = directory.join(crate::store::INCOMPATIBLE_DIR);
     assert!(moved.join(FILE_NAME).exists());
     assert!(moved.join(format!("2-{FILE_NAME}")).exists());
 }
@@ -60,7 +60,7 @@ fn a_file_that_names_one_setting_keeps_it() {
     fs::create_dir_all(&directory).expect("creating the test directory");
     fs::write(&path, b"theme = \"light\"\n").expect("writing the partial file");
 
-    let loaded = Settings::load_in(&directory);
+    let loaded = Settings::load(&Store::at(&directory));
     assert_eq!(loaded.theme, Theme::Light);
     assert_eq!(loaded.interface, FontSetting::default());
 }
@@ -73,7 +73,9 @@ fn writes_atomically_and_reads_back_with_its_tables_last() {
     let path = directory.join("nested").join(FILE_NAME);
 
     let settings = settings();
-    settings.save_to(&path).expect("saving");
+    Store::at(directory.join("nested"))
+        .write_toml(FILE_NAME, &settings)
+        .expect("saving");
 
     let text = fs::read_to_string(&path).expect("reading it back");
     let theme = text.find("theme").expect("the theme");
@@ -81,7 +83,10 @@ fn writes_atomically_and_reads_back_with_its_tables_last() {
     let fixed = text.find("[fixed]").expect("the fixed table");
     assert!(theme < interface && interface < fixed, "{text}");
 
-    assert_eq!(Settings::load_in(&directory.join("nested")), settings);
+    assert_eq!(
+        Settings::load(&Store::at(directory.join("nested"))),
+        settings
+    );
     // The temporary was renamed, not left behind.
     assert!(!path.with_extension("toml.tmp").exists());
 }

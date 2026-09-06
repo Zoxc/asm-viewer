@@ -540,7 +540,15 @@ fn collect_symbols(objects: &State<Vec<Arc<Object>>>) -> Vec<Symbol> {
         .collect()
 }
 
-/// The twelve contexts `app()` provides, in one `ProjectStates`. A macro and not a
+/// A store of this process's own, standing in for the one the app opens at startup. Under
+/// the system temporary directory and **never created**: the tests read through it and
+/// write nothing, and handing them the machine's own store would have a load move the
+/// reader's files aside.
+fn test_store() -> PathBuf {
+    std::env::temp_dir().join(format!("assembly-viewer-ui-test-{}", std::process::id()))
+}
+
+/// The thirteen contexts `app()` provides, in one `ProjectStates`. A macro and not a
 /// function: the runner's type is `freya_core::integration::Runner`, which freya's prelude
 /// does not re-export, so naming it would mean naming a crate the app does not depend on.
 macro_rules! project_states {
@@ -548,6 +556,12 @@ macro_rules! project_states {
         |runner: &mut _| project_states!(runner)
     };
     ($runner:expr) => {{
+        // Where a harness's files would go. Never the machine's own store: a load through
+        // one moves a file that will not parse aside, so a test reading the reader's
+        // `recents.toml` could take it away. Nothing here writes, so nothing is made.
+        let store = $runner
+            .provide_root_context(|| Storage(State::create(Some(Store::at(test_store())))))
+            .0;
         // The two states that are what is open, and the derivation over them, in the same
         // order `app()` uses. `Active` is provided but not returned: it is not one of the
         // project's states, it is a reading of two of them.
@@ -629,6 +643,7 @@ macro_rules! project_states {
             proj: $runner
                 .provide_root_context(|| Proj(State::create(OpenProject::default())))
                 .0,
+            store,
             objects: $runner
                 .provide_root_context(|| Objects(State::create(Vec::new())))
                 .0,
@@ -844,9 +859,9 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
 
     // One the app is keeping is called by its number, and has the two things that can
     // become of it instead.
-    let base = project::base().expect("a state directory");
+    let store = Store::open().expect("a state directory");
     proj.set(OpenProject {
-        file: Some(base.join("projects").join("1.avproj")),
+        file: Some(store.projects().join("1.avproj")),
         ..OpenProject::default()
     });
     settle(&mut test);
@@ -926,7 +941,7 @@ fn the_sidebars_arrangement_survives_a_save_and_a_restore() {
             dock: Some(saved.clone()),
             ..SavedUi::default()
         }),
-        ..Session::new()
+        ..Session::default()
     };
     let text = toml::to_string_pretty(&session).expect("writing");
     let read: Session = toml::from_str(&text).expect("reading it back");
@@ -11004,8 +11019,9 @@ fn scratchpad_wiring() {
     let text = use_consume::<PadText>().0;
     let work = use_consume::<Working>().0;
     let mut asking = use_consume::<Asking>().0;
+    let store = use_consume::<Storage>().0;
 
-    let jobs = use_scratchpad_with(pad, text, move |job| work(job));
+    let jobs = use_scratchpad_with(pad, text, store, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
 }
 
@@ -11218,7 +11234,7 @@ fn the_front_of_the_order_is_the_pad_that_opens() {
 #[test]
 fn a_listing_longer_than_the_order_file_is_drawn_whole() {
     // One past the file's cap, so the last row is the one a bounded order would lose.
-    let listing: Vec<PadListing> = (0..=crate::scratchpad::MAX_PAD_RECENTS)
+    let listing: Vec<PadListing> = (0..=crate::store::MAX_ORDER)
         .map(|n| pad_listing(&format!("pad-{n}")))
         .collect();
     let last = listing.last().expect("a row").id.clone();
@@ -12739,7 +12755,7 @@ fn a_finished_pad_build_forgets_the_pad_package() {
     let directory = Seeded::directory("pad-build");
     let stand_in = source_text(&directory.file("stand-in.rs", "fn main() {}\n")).expect("the file");
 
-    let (mut test, _states, pad, _text, asking, _marked, _asks) =
+    let (mut test, states, pad, _text, asking, _marked, _asks) =
         mount_scratchpad!(scratchpad_harness, |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -12761,12 +12777,12 @@ fn a_finished_pad_build_forgets_the_pad_package() {
         });
 
     pump(&mut test, || pad.peek().state().opened);
-    let package = pad
+    let store = states
+        .store
         .peek()
-        .state()
-        .scratchpad
-        .directory()
-        .expect("a directory to keep pads in");
+        .clone()
+        .expect("a store to keep pads in");
+    let package = pad.peek().state().scratchpad.directory(&store);
     let source = package.join("src").join("main.rs");
     highlighted().insert(source.clone(), Some(stand_in.0.clone()));
 

@@ -26,6 +26,7 @@ pub(crate) struct DebugTab;
 
 impl Component for DebugTab {
     fn render(&self) -> impl IntoElement {
+        let store = use_consume::<Storage>().0;
         rect()
             .expanded()
             .background(palette().pane_bg)
@@ -54,7 +55,7 @@ impl Component for DebugTab {
                             });
                         }))
                         .child(section_heading("Panic files", None))
-                        .children(recorded_rows()),
+                        .children(recorded_rows(store)),
                 ),
             )
     }
@@ -84,8 +85,12 @@ fn panic_row(name: &str, press: impl FnMut(Event<PressEventData>) + 'static) -> 
 /// **Read on every render and not held.** The list changes when this app panics, which is
 /// the one moment nothing here will be redrawn afterwards; and it is one `read_dir` of a
 /// directory with a handful of files in it, on a page nobody has open by accident.
-fn recorded_rows() -> Vec<Element> {
-    let files = crate::panics::recorded();
+fn recorded_rows(store: State<Option<Store>>) -> Vec<Element> {
+    let files = store
+        .peek()
+        .as_ref()
+        .map(crate::panics::recorded)
+        .unwrap_or_default();
     if files.is_empty() {
         return vec![info_line("Nothing has panicked.".to_owned()).into_element()];
     }

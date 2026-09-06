@@ -559,10 +559,12 @@ fn pad_label(id: &PadId, name: &str) -> String {
 /// Where a pad's package is, as the two places that draw it say so: the pane, under the
 /// name, and the delete question, over the buttons. The package cargo is handed **is** the
 /// storage, so this is the whole of what a pad is on disk.
-fn package_path(scratchpad: Option<&Scratchpad>) -> String {
-    match scratchpad.and_then(Scratchpad::directory) {
-        Some(directory) => directory.to_string_lossy().into_owned(),
-        None => "nowhere to keep a scratchpad".to_owned(),
+fn package_path(store: &Option<Store>, scratchpad: Option<&Scratchpad>) -> String {
+    match (store, scratchpad) {
+        (Some(store), Some(scratchpad)) => {
+            scratchpad.directory(store).to_string_lossy().into_owned()
+        }
+        _ => "nowhere to keep a scratchpad".to_owned(),
     }
 }
 
@@ -908,6 +910,7 @@ pub(crate) struct ScratchpadTab;
 impl Component for ScratchpadTab {
     fn render(&self) -> impl IntoElement {
         let mut pad = use_consume::<Pad>().0;
+        let store = use_consume::<Storage>().0;
         let jobs = use_consume::<PadJobs>();
         let new_jobs = jobs.clone();
         // The shown pad's own state and no more: the table holds every pad, and cloning
@@ -934,7 +937,7 @@ impl Component for ScratchpadTab {
                     .as_ref()
                     .map(|scratchpad| scratchpad.name.clone())
                     .unwrap_or_default(),
-                package: package_path(scratchpad.as_ref()),
+                package: package_path(&store.peek(), scratchpad.as_ref()),
                 id,
             }
         });
@@ -986,7 +989,7 @@ impl Component for ScratchpadTab {
         let refusal = state
             .refusal()
             .map(|message| text_block(message, palette().text_fg));
-        let package = package_path(Some(&state.scratchpad));
+        let package = package_path(&store.peek(), Some(&state.scratchpad));
 
         // **One button, because there is one program.** While something is running the
         // only thing to want from it is to stop it.
