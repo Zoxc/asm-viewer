@@ -23,12 +23,25 @@ parallelism `notes/Goals.md` asks for is parsing many objects at once, a differe
 this one, the build, the scratchpad and the language server, which takes the answer sender back
 with it -- and `stream` the shape of the two one-shot ones, the search and the binary loader,
 worked once for one question and stopped by the receiver going. What differs stays with each
-worker: the drain policy (`newest` here), the work, and the `match` that judges an answer as it
-lands. The work is an argument on every one of them, which is the seam the headless tests
+worker: the drain policy (`newest` here), the work, and the state each answer lands in. The work is an argument on every one of them, which is the seam the headless tests
 substitute a worker of their own through. Naming the thread belongs to the mechanism now, and that
 is what it is for: the scaffolding was written out seven times before it was written once, and by
 then two of the seven had drifted to a thread with no name, which `crate::panics` can only report
 anonymously.
+
+**A state judges an answer and says whether anything changed; the hook only writes.** Every one of
+the eleven worker states holds what was asked and what was answered, and the rules below relating
+the two are that state's own methods -- `Analyzed::take`, `Located::take`, `Coded::take`,
+`Reading::take`, `Linked::answer`, `Follow::answer`, `Searched::take`, `Finder::take`, the seven
+`Pads` answers, `Builds::finished`, and `Language`'s transitions -- each answering whether it took
+anything. `write_if` (`src/ui/worker.rs`) is what the hooks are left with: peek into a binding of
+its own, since a read guard held across a write panics; judge; set only where the judge says so,
+since a write notifies whether or not it changed anything. So "an answer already in flight when the
+file closed is not taken" is a unit test of five lines rather than an app mounted under
+`freya-testing` driving a fake worker. Two states write through the guard instead, and for one
+reason: what `Searched` and `Pads` hold *is* the answer -- ten thousand hits, every pad's source and
+output -- and `write_if`'s clone per batch would copy all of it to add the few lines that just
+arrived. The rule is still the type's; only the writing differs.
 
 Two things the shape does not swallow. A drain policy may hand a job **back** rather than drop it,
 which is the scratchpad's rule -- a save may not be stepped over by a job for another pad -- so the
@@ -125,14 +138,14 @@ listing question, and drained to one, a symbol click would silently cancel the l
 other way round. The listing is worked first, being what is on screen, then the window, then the
 locate. A window the reader scrolled past is the one question here that *should* go; the next one
 asks for whatever of it still matters. The answer is kept only while its line is the one `asked`
-now, the listing's comparison rule again. There is no `pending` field: a line is pending exactly
+now (`Located::take`), the listing's comparison rule again. There is no `pending` field: a line is pending exactly
 while `asked` and `found` disagree. The effect that sends it reads that pendency through a **memo**
 and not off the state, the shape the finder's walk and the search are asked in: a fold of the rows
 on screen and `retain_open` are writes to `Located` too, and an effect reading the state would send
 a question the worker already has again for each of them -- a second run of seconds of work, under
 the lock every listing question waits on, answering what the first was about to. And **a closed
-binary takes its locations with it** (`Found::retain_open`, in the effect reading `Objects` and
-when the answer lands). This is
+binary takes its locations with it** (`Located::retain_open` over `Found::retain_open`, asked by the
+effect reading `Objects` and by `Located::take` as the answer lands). This is
 `Shown::still_open`'s rule in a second place: a `Symbol` holds the file's bytes and this list can
 hold thousands of them. Its one stated limit is the other direction. The answer is about the objects
 that were open when it was asked, so a file opened afterwards is not searched until the line is
@@ -168,7 +181,7 @@ and the Source pane asks it by writing the file it is drawing into `Coded::wante
 section view asks for a window by writing it into `Window`: a view cannot reach the request channel,
 so a state it writes and an effect here reads is how a pane asks. Worked **last** of the four, being
 the answer whose absence costs the reader least while they wait. It is judged on landing by the
-file the pane is showing *now*, the listing's comparison rule once more. What keeps it true is
+file the pane is showing *now* (`Coded::take`), the listing's comparison rule once more. What keeps it true is
 different from the locate's, though: a set of line numbers has nothing in it to sweep for a binary
 that has closed, and a state holding the objects to notice would be the state stopping them from
 closing — so `Coded` records which objects the answer was worked out over, by pointer
@@ -198,12 +211,13 @@ is where a reader says which instance they meant.
 is a tab into one object and closes with its file. A source-driven tab survives `close_binary` by
 doctrine, so its answer would go on being drawn. A `Studied` holds a `Symbol`, which holds the
 `Arc<Object>`, which holds the whole file's bytes: `Positions::forget`'s leak in a second place.
-`Shown::still_open` is asked in the two places an answer is judged: by the effect, so a closed
-binary means the question is asked again of what is left, and by the task taking answers, so an
-answer already in flight when the file closed is not taken either. It lives in `use_analysis_with`
-rather than in `close_binary` so that a close, a rebuild and a project switch are one line instead
-of three, and because no handler can reach the answer in flight. The effect therefore **reads**
-`Objects` where it only peeks the visits: a question asked of a different set of objects is a
+`Shown::still_open` is asked in the two places an answer is judged, and both are `Analyzed`'s own:
+`Analyzed::asked`, so a closed binary means the question is asked again of what is left, and
+`Analyzed::take`, so an answer already in flight when the file closed is not taken either. Both are
+handed the open objects rather than reading them, which is what keeps them a state's rules and not
+a hook's. It lives here rather than in `close_binary` so that a close, a rebuild and a project
+switch are one line instead of three, and because no handler can reach the answer in flight. The
+effect **reads** `Objects` where it only peeks the visits: a question asked of a different set of objects is a
 different question, while the ranking is an input to an answer and a visit must not re-ask one. What
 is deliberately *not* covered: an answer is about the objects that were open when it was asked, so a
 line clicked while a file is still being read can answer with nothing where a later object would
@@ -211,7 +225,8 @@ have answered. That costs one more click, against a generation counter for a cas
 restore-time race reaches.
 
 **A superseded answer is recognised, not prevented.** Every answer carries the `Ask` it is about and
-is kept only if that is the question being asked *now*. This is a comparison and not a generation
+is kept only if that is the question being asked *now* (`Analyzed::take`, which is handed the
+question asked now beside the answer). This is a comparison and not a generation
 counter: an `Ask` already compares by identity, and the answer for the first A of an A → B → A is a
 perfectly good answer for the third. The identity is of two kinds: `Ask::Symbol` by the `Arc`
 pointers `Symbol` compares, `Ask::Source` by `LinePos`, the one `Arc` in the UI compared by its

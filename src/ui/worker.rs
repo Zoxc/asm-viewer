@@ -185,3 +185,35 @@ pub(crate) async fn next_batch<E>(events: &async_channel::Receiver<E>) -> Option
     }
     Some(batch)
 }
+
+/// What a worker's state does with an answer: **the state judges it against what is asked
+/// now and says whether anything changed; the hook only writes.**
+///
+/// The judging is the type's, so the rules `agents/Worker.md` states -- an answer is taken
+/// only if its ask is the one asked now, a listing is retagged rather than reworked, a
+/// closed binary takes its answers with it -- are methods a unit test can call rather than
+/// lines inside an answer task. The writing is what is left, and it is the same three
+/// lines every time: peek into a binding of its own, since a read guard held across a
+/// write panics (`AGENTS.md`); judge; set only where the judge says so, since a write
+/// notifies whether or not it changed anything. It answers whether it wrote, for the
+/// caller with something else to do when it did -- a stop that has to tell the worker too.
+///
+/// The judge's `bool` and not `set_if_modified`: a state that says for itself what it did
+/// needs no `PartialEq`, and several of these hold an `Arc<Object>` or a process handle
+/// that has none to give. Where a state has one and the edit is the reader's rather than a
+/// worker's, `marks::update` is this same mechanism with the comparison doing the judging.
+///
+/// Two states are written through the guard instead, [`Searched`] and [`Pads`]: what they
+/// hold *is* the answer, and a clone per batch would copy all of it to add what has just
+/// arrived. The rule is still the type's; only the writing differs.
+pub(crate) fn write_if<S: Clone + 'static>(
+    mut state: State<S>,
+    judge: impl FnOnce(&mut S) -> bool,
+) -> bool {
+    let mut next = state.peek().clone();
+    let moved = judge(&mut next);
+    if moved {
+        state.set(next);
+    }
+    moved
+}

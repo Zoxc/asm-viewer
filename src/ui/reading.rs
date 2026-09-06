@@ -208,6 +208,18 @@ impl Reading {
         true
     }
 
+    /// The window `ask` is on its way. Whether it is, so the caller writes and sends only
+    /// then ([`write_if`]): an ask about an object this reading is not of -- a tab
+    /// switched under it -- is not asked for, and neither is the ask already being worked
+    /// on.
+    pub(crate) fn asking(&mut self, ask: &CodeAsk) -> bool {
+        if !self.is_about(&ask.object) || self.pending.as_ref() == Some(ask) {
+            return false;
+        }
+        self.pending = Some(ask.clone());
+        true
+    }
+
     /// Drop every held stretch farther than [`KEEP`] from the stretches `window` asked
     /// for, which is where the reader is.
     fn let_go(&mut self, window: &[usize]) {

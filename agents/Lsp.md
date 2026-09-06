@@ -264,9 +264,11 @@ Two bounds, both because the input is a file (`AGENTS.md`): the tree is built it
 a name of ten thousand dots cannot overflow the stack, and `DEEPEST` refuses a name of more
 parts than the walk back out is written to recurse over.
 
-**An error starts nothing.** The check is in `run_server`, which is where a start actually
-happens, so neither press nor the agreement can grow a path around it -- the same reason
-the trust gate is in `start_server`. It is reported as `Lsp::Failed`, which is where a
+**An error starts nothing.** The check is in `Language::starting`, the transition a start
+goes through, so neither press nor the agreement can grow a path around it -- the same
+reason the trust gate is in `start_server`. A start that is refused is a state that
+changed, so the transition says it by answering with no settings to start under rather
+than by a flag beside them. It is reported as `Lsp::Failed`, which is where a
 failure to start is already said.
 
 The read is the LSP worker's (`LspJob::ReadSettings`, `BuildJob::Read`'s shape): reading a

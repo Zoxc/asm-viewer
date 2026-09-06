@@ -154,11 +154,7 @@ pub(crate) fn use_linking(language: State<Language>, linked: State<Linked>, jobs
             // them -- they are still the right names while it reads more of the project --
             // and so does one that is starting, which is the beat before its first answer.
             if matches!(held.state, Lsp::Off | Lsp::Failed(_)) {
-                let mut waiting = linked.peek().clone();
-                if waiting.forget() {
-                    let mut linked = linked;
-                    linked.set(waiting);
-                }
+                write_if(linked, |waiting| waiting.forget());
             }
             return;
         }
@@ -170,12 +166,8 @@ pub(crate) fn use_linking(language: State<Language>, linked: State<Linked>, jobs
             run: held.run,
             file: file.clone(),
         });
-        // Written after the send and bound before the write, as ever. This is what the
-        // next turn of the effect reads to see that the question is already on its way.
-        let mut waiting = linked.peek().clone();
-        if waiting.asking(held.run, file) {
-            let mut linked = linked;
-            linked.set(waiting);
-        }
+        // Written after the send. This is what the next turn of the effect reads to see
+        // that the question is already on its way.
+        write_if(linked, |waiting| waiting.asking(held.run, file));
     });
 }

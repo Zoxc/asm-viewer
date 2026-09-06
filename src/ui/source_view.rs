@@ -848,6 +848,27 @@ impl Coded {
         }
     }
 
+    /// Take `lines` as the answer about `file`, worked out `over` those objects. Whether
+    /// anything changed, so the caller writes only then ([`write_if`]).
+    ///
+    /// The locate's rule, against the file the pane is showing *now*: a reader who moved
+    /// on while the index built is not given the file they left. There is no per-object
+    /// sweep, the answer being lines and not symbols -- what keeps it true as binaries
+    /// come and go is `over` and the effect that reads it.
+    pub(crate) fn take(
+        &mut self,
+        file: Arc<str>,
+        lines: Arc<HashSet<u32>>,
+        over: Vec<usize>,
+    ) -> bool {
+        if self.wanted.as_ref() != Some(&file) {
+            return false;
+        }
+        self.found = Some((file, lines));
+        self.over = over;
+        true
+    }
+
     /// The lines of `file` that have code, and nothing where the answer is about another
     /// file -- which is what a pane draws in the beat between moving and being answered.
     fn lines_in(&self, file: &str) -> Option<&Arc<HashSet<u32>>> {
@@ -1123,3 +1144,6 @@ impl Component for SourcePane {
             .into()
     }
 }
+
+#[cfg(test)]
+mod tests;

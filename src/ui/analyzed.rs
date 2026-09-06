@@ -373,6 +373,136 @@ impl Analyzed {
             }),
         }
     }
+
+    /// Take the answer `studied` to `ask`, `wanted` being the question asked *now* and
+    /// `open` the binaries the project has. Whether anything changed, so the hook writes
+    /// only then ([`write_if`]).
+    ///
+    /// **The supersession rule**: an answer is kept only if its question is the one being
+    /// asked now -- a comparison and not a generation counter, since an [`Ask`] already
+    /// compares by identity, and since the answer for the first A of an A -> B -> A is a
+    /// perfectly good answer for the third. A dropped answer is what clicking twice
+    /// quickly means, so nothing logs or retries.
+    ///
+    /// And an answer out of a binary closed since it was asked for is not taken either
+    /// ([`Shown::still_open`]) -- the same rule [`Analyzed::asked`] applies to the listing
+    /// that is up, so the two cannot drift.
+    pub(crate) fn take(
+        &mut self,
+        ask: Ask,
+        studied: Option<Studied>,
+        wanted: Option<&Ask>,
+        open: &[Arc<Object>],
+    ) -> bool {
+        if wanted != Some(&ask) {
+            return false;
+        }
+        // What is held, kept to compare against: an answer the effect has already
+        // settled -- a listing retagged while this one was in flight -- leaves everything
+        // as it was, and must not cost a render for it.
+        let before = self.clone();
+
+        let landed = studied.map(|studied| Shown {
+            ask: ask.clone(),
+            studied,
+        });
+        let landed = landed.filter(|shown| shown.still_open(open));
+
+        if self.pending.as_ref() == Some(&ask) {
+            self.pending = None;
+            self.slow = false;
+        }
+        self.answered = Some(ask.clone());
+
+        match landed {
+            Some(shown) => self.shown = Some(shown),
+            // A question that named no symbol leaves the listing that is up -- the click
+            // lights no pair in it and nothing else, which is what says it landed nowhere
+            // -- but **only when that listing is this tab's own**, or a source line
+            // holding no code would leave another tab's function on screen for good.
+            None => {
+                let mine = self
+                    .shown
+                    .as_ref()
+                    .is_some_and(|shown| asked_of(&shown.ask) == asked_of(&ask));
+                if !mine {
+                    self.shown = None;
+                }
+            }
+        }
+
+        *self != before
+    }
+
+    /// Bring this up to date with the question `ask`, asked over the binaries `open`, and
+    /// answer with the question the worker is owed -- [`None`] where it is owed none.
+    ///
+    /// Three things happen here and each is a rule of its own. A listing whose binary has
+    /// been closed is not in hand whatever question it answered, so it goes and the
+    /// question is asked again out of what is left. A question already **held** is not
+    /// asked again: either the listing that is up answers it, in which case it is
+    /// *retagged* rather than worked out afresh -- a source question that resolved to a
+    /// symbol has already answered a later ask for that symbol outright, and
+    /// re-disassembling it would be most of a second for nothing -- or the question has
+    /// been asked and answered with nothing, which is an answer. What is left is asked,
+    /// and marked pending so that it is not asked twice.
+    ///
+    /// `visits` is where the reader has been, which ranks the candidates a source line
+    /// resolves among ([`compiled::pick`]). It is an input to an answer and never part of
+    /// a question, which is why a visit must not make this ask again.
+    pub(crate) fn asked(
+        &mut self,
+        ask: Option<&Ask>,
+        open: &[Arc<Object>],
+        visits: &Visits,
+    ) -> Option<Question> {
+        let Some(ask) = ask else {
+            // Not a place with a listing: nothing to work out and nothing to wait for.
+            // Anything still in flight is dropped when it lands.
+            *self = Analyzed::default();
+            return None;
+        };
+
+        // Dropped here rather than by `close_binary`, so that a close, a rebuild and a
+        // project switch are one line instead of three.
+        if self
+            .shown
+            .as_ref()
+            .is_some_and(|shown| !shown.still_open(open))
+        {
+            *self = Analyzed::default();
+        }
+
+        let held = self.shown.as_ref().is_some_and(|shown| shown.answers(ask))
+            || self.answered.as_ref() == Some(ask);
+        if held {
+            // Retagged, so the same listing is not asked for again under its new
+            // question, and so nothing goes on saying it is waiting.
+            if let Some(shown) = self.shown.as_mut().filter(|shown| shown.answers(ask)) {
+                shown.ask = ask.clone();
+            }
+            self.answered = Some(ask.clone());
+            self.pending = None;
+            self.slow = false;
+            return None;
+        }
+        if self.pending.as_ref() == Some(ask) {
+            return None;
+        }
+
+        let question = match ask {
+            Ask::Symbol(symbol) => Question::Study(symbol.clone()),
+            Ask::Source { at, chosen } => Question::Resolve {
+                at: at.clone(),
+                chosen: chosen.clone(),
+                objects: open.to_vec(),
+                recent: recent_symbols(self.shown.as_ref(), visits),
+            },
+        };
+        self.pending = Some(ask.clone());
+        self.slow = false;
+        Some(question)
+    }
 }
 
 /// Everything worked out about one symbol, in one value because it is worked out in one
@@ -600,9 +730,9 @@ pub(crate) fn use_analysis_with(
     beside: State<Option<Arc<Object>>>,
     visits: State<Visits>,
     mut analysis: State<Analyzed>,
-    mut located: State<Located>,
-    mut coded: State<Coded>,
-    mut reading: State<Reading>,
+    located: State<Located>,
+    coded: State<Coded>,
+    reading: State<Reading>,
     window: State<Option<CodeAsk>>,
     work: impl Fn(Question) -> Answer + Send + 'static,
 ) {
@@ -616,121 +746,51 @@ pub(crate) fn use_analysis_with(
         // being started rather than after the fact.
         |question, queued, _| newest(question, std::iter::from_fn(queued)),
         move |question| Some(work(question)),
-        move |answer, _| {
-            let (ask, studied) = match answer {
-                Answer::Listing { ask, studied } => (ask, studied),
-                Answer::Code { ask, code, decoded } => {
-                    // Taken whenever it is about the object on screen -- a decoded
-                    // stretch is never stale, see `Reading::take` -- and never out of a
-                    // binary closed since it was asked for, `Shown::still_open`'s rule
-                    // once more. Held by the app and not open in the project: a pad's
-                    // program is neither, and `holding` is the one rule for the two.
-                    if !holding(&objects.peek(), &beside.peek(), &ask.object) {
-                        return;
-                    }
-                    let mut next = reading.peek().clone();
-                    if next.take(&ask, code, decoded) {
-                        reading.set(next);
-                    }
+        // Each answer is judged by the state it lands in and written only where that
+        // state says it changed something: the rules are the four types' and not this
+        // closure's ([`write_if`]).
+        move |answer, _| match answer {
+            Answer::Listing { ask, studied } => {
+                // The question being asked *now*, which is what an answer is kept for.
+                let wanted = asked.peek_ask();
+                let open = objects.peek().clone();
+                write_if(analysis, |next| {
+                    next.take(ask, studied, wanted.as_ref(), &open)
+                });
+            }
+            Answer::Code { ask, code, decoded } => {
+                // Taken whenever it is about the object on screen -- a decoded stretch is
+                // never stale, see `Reading::take` -- and never out of a binary closed
+                // since it was asked for, `Shown::still_open`'s rule once more. Held by
+                // the app and not open in the project: a pad's program is neither, and
+                // `holding` is the one rule for the two.
+                if !holding(&objects.peek(), &beside.peek(), &ask.object) {
                     return;
                 }
-                Answer::Marked { file, lines, over } => {
-                    // The same rule as the locate's, against the file the pane is showing
-                    // now: a reader who moved on while the index built is not given the
-                    // file they left. No per-object sweep, the answer being lines and not
-                    // symbols -- a binary closed since is the effect that clears this and
-                    // asks again.
-                    if coded.peek().wanted.as_ref() != Some(&file) {
-                        return;
-                    }
-                    let mut next = coded.peek().clone();
-                    next.found = Some((file, lines));
-                    next.over = over;
-                    coded.set(next);
-                    return;
-                }
-                Answer::Located { query, symbols } => {
-                    // The same rule as below, against the question the panel is asking
-                    // now; and the same rule as `Shown::still_open`, applied per symbol,
-                    // so a binary closed while the worker ran is not put back by its
-                    // answer.
-                    if located.peek().asked.as_ref() != Some(&query) {
-                        return;
-                    }
-                    let mut found = Found::new(query, symbols);
-                    found.retain_open(&objects.peek());
-                    let mut next = located.peek().clone();
-                    next.found = Some(found);
-                    located.set(next);
-                    return;
-                }
-            };
-
-            // **The supersession rule**: an answer is kept only if its question is
-            // the one being asked *now* -- a comparison and not a generation counter,
-            // since an `Ask` already compares by identity, and since the answer for
-            // the first A of an A -> B -> A is a perfectly good answer for the third.
-            // A dropped answer is what clicking twice quickly means, so nothing logs
-            // or retries. Cloned out of the guard first, since everything below
-            // writes.
-            if asked.peek_ask().as_ref() != Some(&ask) {
-                return;
+                write_if(reading, |next| next.take(&ask, code, decoded));
             }
-            // And an answer out of a binary that has been closed since it was asked for
-            // is not taken either. `Shown::still_open` -- the same rule the effect
-            // applies to the listing that is up, so the two cannot drift.
-            let landed = studied.map(|studied| Shown {
-                ask: ask.clone(),
-                studied,
-            });
-            let landed = landed.filter(|shown| shown.still_open(&objects.peek()));
-
-            let mut next = analysis.peek().clone();
-            if next.pending.as_ref() == Some(&ask) {
-                next.pending = None;
-                next.slow = false;
+            Answer::Marked { file, lines, over } => {
+                write_if(coded, |next| next.take(file, lines, over));
             }
-            next.answered = Some(ask.clone());
-
-            match landed {
-                Some(shown) => next.shown = Some(shown),
-                // A question that named no symbol leaves the listing that is up -- the
-                // click lights no pair in it and nothing else, which is what says it
-                // landed nowhere -- but **only when that listing is this tab's own**, or
-                // a source line holding no code would leave another tab's function on
-                // screen for good.
-                None => {
-                    let mine = next
-                        .shown
-                        .as_ref()
-                        .is_some_and(|shown| asked_of(&shown.ask) == asked_of(&ask));
-                    if !mine {
-                        next.shown = None;
-                    }
-                }
+            Answer::Located { query, symbols } => {
+                let open = objects.peek().clone();
+                write_if(located, |next| next.take(query, symbols, &open));
             }
-
-            analysis.set_if_modified(next);
         },
     );
 
     // The window question: what the section view wants next, asked once. Reading the
     // window subscribes this to it; the reading it writes is peeked, so it cannot wake
-    // itself. An ask about an object the reading is not of -- a tab switched under it --
-    // is not sent.
+    // itself. Whether the ask is one to send is the reading's ([`Reading::asking`]).
     let requests_for_code = requests.clone();
     use_side_effect(move || {
         let wanted = window.read().clone();
         let Some(ask) = wanted else {
             return;
         };
-        let mut next = reading.peek().clone();
-        if !next.is_about(&ask.object) || next.pending.as_ref() == Some(&ask) {
-            return;
+        if write_if(reading, |next| next.asking(&ask)) {
+            requests_for_code.send(Question::Code(ask));
         }
-        next.pending = Some(ask.clone());
-        reading.set(next);
-        requests_for_code.send(Question::Code(ask));
     });
 
     let requests_for_locate = requests.clone();
@@ -739,74 +799,23 @@ pub(crate) fn use_analysis_with(
         // Reading subscribes this to the question; the state it writes is `peek`ed, so it
         // cannot wake itself.
         let current = asked.read_ask();
-        // **Read and not peek**, unlike the history below: a question asked of a
-        // different set of objects is a different question, so this effect has to run
-        // again when they change. For a symbol it costs nothing -- the run hits the
-        // already-in-hand branch below and returns.
+        // **Read and not peek**, unlike the visits below: a question asked of a different
+        // set of objects is a different question, so this effect has to run again when
+        // they change. For a symbol it costs nothing -- the run hits the already-in-hand
+        // branch of `Analyzed::asked` and answers with no question.
         let open: Vec<Arc<Object>> = objects.read().clone();
 
-        let Some(ask) = current else {
-            // Not a place with a listing: nothing to work out and nothing to wait for.
-            // Anything still in flight is dropped when it lands.
-            analysis.set_if_modified(Analyzed::default());
+        // The whole of the rule is the state's ([`Analyzed::asked`]); what is left here
+        // is the writing and the sending. The visits are **peeked**, not read: the
+        // ranking is an input to an answer and a visit must not re-ask a question that
+        // has been answered.
+        let mut next = analysis.peek().clone();
+        let question = next.asked(current.as_ref(), &open, &visits.peek());
+        analysis.set_if_modified(next);
+
+        let (Some(ask), Some(question)) = (current, question) else {
             return;
         };
-
-        let mut state = analysis.peek().clone();
-
-        // A listing whose binary has been closed is not in hand, whatever question it
-        // answered: dropped here rather than by `close_binary`, so that a rebuild and a
-        // project switch are covered by the same line, and so that the question is asked
-        // again out of the objects that are left.
-        if state
-            .shown
-            .as_ref()
-            .is_some_and(|shown| !shown.still_open(&open))
-        {
-            state = Analyzed::default();
-            analysis.set(state.clone());
-        }
-
-        // Already in hand: the listing that is up answers this question, or the question
-        // has been asked and answered with nothing.
-        let held = state
-            .shown
-            .as_ref()
-            .is_some_and(|shown| shown.answers(&ask))
-            || state.answered.as_ref() == Some(&ask);
-        if held {
-            let mut next = state;
-            // Retagged, so the same listing is not asked for again under its new
-            // question, and so nothing goes on saying it is waiting.
-            if let Some(shown) = next.shown.as_mut().filter(|shown| shown.answers(&ask)) {
-                shown.ask = ask.clone();
-            }
-            next.answered = Some(ask);
-            next.pending = None;
-            next.slow = false;
-            analysis.set_if_modified(next);
-            return;
-        }
-        if state.pending.as_ref() == Some(&ask) {
-            return;
-        }
-
-        let question = match &ask {
-            Ask::Symbol(symbol) => Question::Study(symbol.clone()),
-            Ask::Source { at, chosen } => Question::Resolve {
-                at: at.clone(),
-                chosen: chosen.clone(),
-                objects: open,
-                // Peeked, not read: the ranking is an input to an answer and a visit must
-                // not re-ask a question that has been answered.
-                recent: recent_symbols(state.shown.as_ref(), &visits.peek()),
-            },
-        };
-
-        let mut next = state;
-        next.pending = Some(ask.clone());
-        next.slow = false;
-        analysis.set(next);
         requests.send(question);
 
         // The wait, started by the request and never polled.
@@ -877,12 +886,9 @@ pub(crate) fn use_analysis_with(
     // object writes nothing.
     use_side_effect(move || {
         let open = objects.read().clone();
-        let mut next = located.peek().clone();
-        let Some(found) = next.found.as_mut() else {
-            return;
-        };
-        if found.retain_open(&open) {
-            located.set(next);
-        }
+        write_if(located, |next| next.retain_open(&open));
     });
 }
+
+#[cfg(test)]
+mod tests;

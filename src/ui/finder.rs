@@ -66,6 +66,25 @@ pub(crate) struct Finder {
 }
 
 impl Finder {
+    /// Take the worker's answer. Whether it was this walk's, so the caller writes only
+    /// then ([`write_if`]).
+    ///
+    /// The id check is here and not in the task: an answer arrives long after the
+    /// question, and a reader who has opened the finder again is not waiting for the walk
+    /// before it -- `Searched`'s own rule. An answer is taken **whole**, so the rows and
+    /// the query they were picked out for are never two different questions'.
+    fn take(&mut self, answered: Answered) -> bool {
+        if self.id != answered.id {
+            return false;
+        }
+        self.listed = Listed {
+            rows: answered.rows,
+            for_query: answered.query,
+        };
+        self.walking = answered.walking;
+        true
+    }
+
     /// Which row the keyboard is on: the row it was moved to, while the box still says
     /// what it said then, and the first row otherwise.
     fn selected(&self) -> usize {
@@ -371,22 +390,11 @@ pub(crate) fn use_finder_with(
     });
 }
 
-/// Take the worker's answers into [`Finder`], dropping the ones belonging to a walk the
-/// reader has moved on from. An answer is written whole, so the rows and the query they
-/// were picked out for are never two different questions'.
-async fn take_rows(mut finder: State<Finder>, answers: async_channel::Receiver<Answered>) {
+/// Take the worker's answers into [`Finder`], which drops the ones belonging to a walk
+/// the reader has moved on from ([`Finder::take`]).
+async fn take_rows(finder: State<Finder>, answers: async_channel::Receiver<Answered>) {
     while let Ok(answered) = answers.recv().await {
-        // Bound in a statement of its own: the read guard is gone before the write.
-        let mine = finder.peek().id == answered.id;
-        if !mine {
-            continue;
-        }
-        let mut state = finder.write();
-        state.listed = Listed {
-            rows: answered.rows,
-            for_query: answered.query,
-        };
-        state.walking = answered.walking;
+        write_if(finder, |state| state.take(answered));
     }
 }
 
@@ -894,3 +902,6 @@ fn row_spans(file: &Found, marks: &[Range<usize>]) -> Vec<Span<'static>> {
     ));
     spans
 }
+
+#[cfg(test)]
+mod tests;

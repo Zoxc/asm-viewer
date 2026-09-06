@@ -42,6 +42,28 @@ pub(crate) struct Searched {
     pub(crate) focus: bool,
 }
 
+impl Searched {
+    /// Take a batch of events from search `id`. Whether they are this search's, so the
+    /// caller goes on taking them only then.
+    ///
+    /// The id check is here and not in the task: the answer arrives long after the
+    /// question, and a reader who asked again is not waiting for the first search. It is
+    /// asked of the **batch** and not of each event, since one batch is one search's by
+    /// construction.
+    fn take(&mut self, id: u64, batch: Vec<SearchEvent>) -> bool {
+        if self.id != id {
+            return false;
+        }
+        for event in batch {
+            match event {
+                SearchEvent::Hit(hit) => self.hits.push(hit),
+                SearchEvent::Finished => self.running = false,
+            }
+        }
+        true
+    }
+}
+
 /// Ask for `query` and bring the panel that will answer it to the front. The one writer of
 /// [`Searched::asked`], and the only place a search is started from: what actually runs it
 /// is the effect in [`use_search_with`], so a press writes state and nothing else.
@@ -123,28 +145,25 @@ pub(crate) fn use_search_with(
 /// Take the hits of search `id` as they arrive, until they stop or the search is replaced.
 ///
 /// A batch per wake and not a write per hit: each write is a render, and a walk over a
-/// large tree answers in thousands. The batch is dropped whole when the search is no
-/// longer the one being asked for -- checked before the write and not only at the end of
-/// the loop, or the last batch of the old search would land in the new one's rows.
+/// large tree answers in thousands. Whether a batch is this search's is
+/// [`Searched::take`]'s to say, and it says so before taking any of it, or the last batch
+/// of the old search would land in the new one's rows.
+///
+/// **Written through the guard and not by [`write_if`]**: what is held is the answer
+/// itself, up to [`crate::search::MAX_HITS`] of it, and a clone per batch would copy every
+/// hit found so far to add the few that have just arrived. The one batch that costs a
+/// render for nothing is the first of a search the reader has replaced, and the return
+/// below is the last thing this task does.
 async fn take_hits(
     mut searched: State<Searched>,
     id: u64,
     events: async_channel::Receiver<SearchEvent>,
 ) {
     while let Some(batch) = next_batch(&events).await {
-        // Bound in a statement of its own: the read guard is gone before the write.
-        let mine = searched.peek().id == id;
-        if !mine {
+        let mut state = searched.write();
+        if !state.take(id, batch) {
             // Returning drops the receiver, which is what stops the walk behind it.
             return;
-        }
-
-        let mut state = searched.write();
-        for event in batch {
-            match event {
-                SearchEvent::Hit(hit) => state.hits.push(hit),
-                SearchEvent::Finished => state.running = false,
-            }
         }
     }
 }
@@ -450,3 +469,6 @@ fn heading(state: &Searched) -> String {
     }
     format!("{hits} {matches} in {files} {files_word}")
 }
+
+#[cfg(test)]
+mod tests;

@@ -160,6 +160,170 @@ impl Language {
         }
     }
 
+    /// A remark from run `run`'s server: whether it is reading the project rather than
+    /// answering about it. Whether anything changed, so the caller writes only then
+    /// ([`write_if`]) -- and so that a server reporting the same thing twice costs no
+    /// render.
+    ///
+    /// A remark from a server that has been stopped is about nothing the control still
+    /// says.
+    fn noted(&mut self, run: u64, working: bool) -> bool {
+        if self.run != run || self.working == working {
+            return false;
+        }
+        self.working = working;
+        true
+    }
+
+    /// Run `run`'s process exists, and `handle` is what ends it. Held from this moment
+    /// and not from the end of the handshake: a stop while it is starting has to reach it
+    /// too.
+    ///
+    /// **A handle for a server stopped while it was starting is killed here rather than
+    /// dropped.** The stop found nothing to kill, so the kill is this; and dropping it
+    /// would leave a server running that nothing could ever name again. The worker is in
+    /// the handshake, and the pipes closing is what lets it out.
+    fn spawned(&mut self, run: u64, handle: process::Handle) -> bool {
+        if self.run != run {
+            handle.stop();
+            return false;
+        }
+        self.server = Some(handle);
+        true
+    }
+
+    /// The handshake with run `run`'s server is over: it is answering, or `server` says
+    /// why there is none. [`Language::spawned`]'s rule for a run that has moved on, for
+    /// its reason -- this is the first moment anything in the app holds the handle.
+    ///
+    /// What the server has already said about itself is kept: the handshake's answer and
+    /// its first `$/progress` are two messages, and either can be taken first.
+    fn running(&mut self, run: u64, server: Result<process::Handle, lsp::Failure>) -> bool {
+        if self.run != run {
+            if let Ok(handle) = server {
+                handle.stop();
+            }
+            return false;
+        }
+        match server {
+            Ok(handle) => {
+                self.state = Lsp::Running;
+                self.server = Some(handle);
+            }
+            Err(failure) => {
+                self.state = Lsp::Failed(failure.to_string());
+                self.server = None;
+            }
+        }
+        true
+    }
+
+    /// Run `run`'s server stopped answering, `why` being what it said. The one thing the
+    /// control has to show, and the end of that server as far as the app is concerned.
+    fn failed(&mut self, run: u64, why: String) -> bool {
+        if self.run != run {
+            return false;
+        }
+        self.state = Lsp::Failed(why);
+        self.working = false;
+        self.server = None;
+        true
+    }
+
+    /// What the project's own settings file said, or why it could not be used.
+    fn read_settings(&mut self, settings: Result<lsp::Settings, lsp::Unreadable>) -> bool {
+        let read = Some(settings);
+        if self.settings == read {
+            return false;
+        }
+        self.settings = read;
+        true
+    }
+
+    /// Leaving a project takes its settings with it: they were another project's.
+    fn forget_settings(&mut self) -> bool {
+        if self.settings.is_none() {
+            return false;
+        }
+        self.settings = None;
+        true
+    }
+
+    /// Put the start `asking` describes to the reader. A second press with the same
+    /// question up asks it again, which is nothing.
+    fn ask_to_start(&mut self, asking: Asking) -> bool {
+        if self.asking.as_ref() == Some(&asking) {
+            return false;
+        }
+        self.asking = Some(asking);
+        true
+    }
+
+    /// The reader declines: the question goes and **nothing is remembered**, so the next
+    /// press asks again.
+    fn declined(&mut self) -> bool {
+        if self.asking.is_none() {
+            return false;
+        }
+        self.asking = None;
+        true
+    }
+
+    /// Start over: whatever is running is stopped, the run is counted up, and the control
+    /// says it is starting. Answers with the run to start under and the settings to start
+    /// it with.
+    ///
+    /// **A settings file that could not be read starts nothing** ([`None`]): what it would
+    /// otherwise reach the server as is a name it ignores or a path that is not there, and
+    /// a server reading the wrong project is worse than one that says why it did not
+    /// start. Not read yet is nothing to lay over the defaults: the read follows the
+    /// project, and answers long before a press can reach here.
+    fn starting(&mut self) -> Option<(u64, lsp::Settings)> {
+        let ready = match &self.settings {
+            Some(Err(why)) => Err(why.to_string()),
+            Some(Ok(settings)) => Ok(settings.clone()),
+            None => Ok(lsp::Settings::none()),
+        };
+        if let Some(handle) = &self.server {
+            handle.stop();
+        }
+        self.working = false;
+        self.asking = None;
+        self.server = None;
+        self.run += 1;
+        match ready {
+            Ok(settings) => {
+                self.state = Lsp::Starting;
+                Some((self.run, settings))
+            }
+            Err(why) => {
+                self.state = Lsp::Failed(why);
+                None
+            }
+        }
+    }
+
+    /// Stop the server, if there is one, and put the control back where it started --
+    /// which a failure still on it needs as much as a running server does. Whether there
+    /// was anything to stop, which is also whether the worker has to be told.
+    ///
+    /// An unanswered question goes with it: it was about the project being left. The
+    /// project's own settings stay, being the project's and not the server's.
+    fn stopped(&mut self) -> bool {
+        if matches!(self.state, Lsp::Off) && self.server.is_none() && self.asking.is_none() {
+            return false;
+        }
+        if let Some(handle) = &self.server {
+            handle.stop();
+        }
+        self.state = Lsp::Off;
+        self.working = false;
+        self.asking = None;
+        self.server = None;
+        self.run += 1;
+        true
+    }
+
     /// What the control says on hover: the state, in words, and the reason when there is
     /// one.
     pub(crate) fn words(&self) -> String {
@@ -481,10 +645,10 @@ pub(crate) struct Talking(pub(crate) State<Language>);
 
 /// Start the worker and keep the state in step with it. Called once, at the root.
 pub(crate) fn use_language_with(
-    mut language: State<Language>,
-    mut follow: State<Follow>,
-    mut located: State<Located>,
-    mut linked: State<Linked>,
+    language: State<Language>,
+    follow: State<Follow>,
+    located: State<Located>,
+    linked: State<Linked>,
     mut proj: State<OpenProject>,
     work: impl Fn(LspJob) -> Option<LspAnswer> + Send + 'static,
 ) -> LspJobs {
@@ -496,26 +660,14 @@ pub(crate) fn use_language_with(
         let (told, notes) = async_channel::bounded::<(u64, lsp::Note)>(64);
         spawn(async move {
             while let Ok((run, note)) = notes.recv().await {
-                let held = language.peek().clone();
-                // A remark from a server that has been stopped is about nothing the
-                // control still says.
-                if held.run != run {
-                    continue;
-                }
                 let lsp::Note::Busy(working) = note;
-                if held.working == working {
-                    continue;
-                }
-                language.set(Language { working, ..held });
+                let noted = write_if(language, |held| held.noted(run, working));
                 // A server that has gone quiet has read more of the project than it had
                 // when it refused a question about a file's names, so that question is
                 // put again. Here and not on every word it says: a server that goes on
                 // refusing would otherwise be asked in a tight loop.
-                if !working {
-                    let mut waiting = linked.peek().clone();
-                    if waiting.forget_refusal() {
-                        linked.set(waiting);
-                    }
+                if noted && !working {
+                    write_if(linked, |waiting| waiting.forget_refusal());
                 }
             }
         });
@@ -532,66 +684,28 @@ pub(crate) fn use_language_with(
         work,
         move |answer, _| match answer {
             LspAnswer::Spawned { run, handle } => {
-                // Bound before the write below, as ever.
-                let held = language.peek().clone();
-                if held.run != run {
-                    // Stopped while it was starting, which is what this answer is for:
-                    // the stop found nothing to kill, so the kill is here. The worker is
-                    // in the handshake and the pipes closing is what lets it out.
-                    handle.stop();
-                    return;
-                }
-                language.set(Language {
-                    server: Some(handle),
-                    ..held
-                });
+                write_if(language, |held| held.spawned(run, handle));
             }
             LspAnswer::Started { run, server } => {
-                let held = language.peek().clone();
-                if held.run != run {
-                    // Stopped, or restarted, while it was starting. This is the first
-                    // moment anything in the app holds the handle, so dropping it would
-                    // leave a server running that nothing could ever name again.
-                    if let Ok(handle) = server {
-                        handle.stop();
-                    }
-                    return;
-                }
-                let (state, server) = match server {
-                    Ok(handle) => (Lsp::Running, Some(handle)),
-                    Err(failure) => (Lsp::Failed(failure.to_string()), None),
-                };
-                language.set(Language {
-                    // Whatever the server has already said about itself: the handshake's
-                    // answer and its first `$/progress` are two messages, and either can
-                    // be taken first.
-                    working: held.working,
-                    asking: held.asking,
-                    settings: held.settings,
-                    state,
-                    run,
-                    server,
-                });
+                write_if(language, |held| held.running(run, server));
             }
             LspAnswer::Settings {
                 directory,
                 settings,
             } => {
                 // A file read for a project that has since been left says nothing about
-                // the one that is open now.
+                // the one that is open now. The project and not the server is what this
+                // answer is about, which is why the run says nothing about it.
                 let open = workspace(&proj.peek());
                 if open.as_deref() != Some(directory.as_path()) {
                     return;
                 }
-                let held = language.peek().clone();
-                language.set(Language {
-                    settings: Some(settings),
-                    ..held
-                });
+                write_if(language, |held| held.read_settings(settings));
             }
             LspAnswer::Linked { run, file, links } => {
-                let held = language.peek().clone();
-                if held.run != run {
+                // Bound to a `let` of its own, the writes below being of this state.
+                let mine = language.peek().run == run;
+                if !mine {
                     return;
                 }
                 // Nothing found and a server that refused both leave the pane with no
@@ -600,31 +714,17 @@ pub(crate) fn use_language_with(
                 // refusal is a question to put again, and an empty answer is the answer.
                 let why = match links {
                     Ok(links) => {
-                        let mut waiting = linked.peek().clone();
-                        if waiting.answer(run, file, links) {
-                            linked.set(waiting);
-                        }
+                        write_if(linked, |waiting| waiting.answer(run, file, links));
                         return;
                     }
                     Err(failure @ lsp::Failure::Refused { .. }) => {
                         log::warn!("the language server refused a question: {failure}");
-                        let mut waiting = linked.peek().clone();
-                        if waiting.answer_refused(run, file) {
-                            linked.set(waiting);
-                        }
+                        write_if(linked, |waiting| waiting.answer_refused(run, file));
                         return;
                     }
                     Err(failure) => failure,
                 };
-                let held = language.peek().clone();
-                language.set(Language {
-                    state: Lsp::Failed(why.to_string()),
-                    working: false,
-                    asking: held.asking,
-                    settings: held.settings,
-                    run,
-                    server: None,
-                });
+                write_if(language, |held| held.failed(run, why.to_string()));
             }
             LspAnswer::Answered {
                 run,
@@ -632,39 +732,34 @@ pub(crate) fn use_language_with(
                 want,
                 reply,
             } => {
-                let held = language.peek().clone();
-                if held.run != run {
+                // An answer from a server that has been stopped is an answer to nobody.
+                // Bound to a `let` of its own, the writes below being of this state.
+                let mine = language.peek().run == run;
+                if !mine {
                     return;
                 }
                 // Whichever question it was, whoever asked it takes the answer, and gives
-                // up on it where there is none. Bound before the write, as ever.
-                let mut take = |reply: Option<Reply>| match want {
+                // up on it where there is none.
+                let take = |reply: Option<Reply>| match want {
                     Wanted::Definition | Wanted::Declaration => {
                         let places = match &reply {
                             Some(Reply::Defined(places)) => places.as_slice(),
                             _ => &[],
                         };
-                        let mut waiting = follow.peek().clone();
-                        let moved = match reply.is_some() {
+                        write_if(follow, |waiting| match reply.is_some() {
                             true => waiting.answer(run, id, places),
                             false => waiting.give_up(run, id),
-                        };
-                        if moved {
-                            follow.set(waiting);
-                        }
+                        });
                     }
                     Wanted::Implementations | Wanted::References => {
                         let found = match reply {
                             Some(Reply::Referenced(found)) => found,
                             _ => references::References::default(),
                         };
-                        let mut waiting = located.peek().clone();
                         // Nothing found and nothing to be found both leave the panel
                         // saying so: a question that stayed pending would say it was
                         // still looking for ever.
-                        if waiting.answer_places(run, id, found) {
-                            located.set(waiting);
-                        }
+                        write_if(located, |waiting| waiting.answer_places(run, id, found));
                     }
                 };
                 let why = match reply {
@@ -687,15 +782,7 @@ pub(crate) fn use_language_with(
                 // What is left is a server that stopped answering, which is the one thing
                 // the control has to show.
                 take(None);
-                let held = language.peek().clone();
-                language.set(Language {
-                    state: Lsp::Failed(why.to_string()),
-                    working: false,
-                    asking: held.asking,
-                    settings: held.settings,
-                    run,
-                    server: None,
-                });
+                write_if(language, |held| held.failed(run, why.to_string()));
             }
         },
     );
@@ -732,12 +819,8 @@ pub(crate) fn use_language_with(
             // And the settings go with it: they were another project's. Read again here,
             // where a project arrives, so the answer is in hand before either press can
             // ask for a server and whether or not one is ever started -- the Project view
-            // lists them either way. The read is bound before the write, as ever.
-            let held = language.peek().clone();
-            language.set(Language {
-                settings: None,
-                ..held
-            });
+            // lists them either way.
+            write_if(language, |held| held.forget_settings());
             if let Some(directory) = directory.clone() {
                 jobs.send(LspJob::ReadSettings { directory });
             }
@@ -759,11 +842,7 @@ pub(crate) fn use_language_with(
 ///
 /// The project rather than a directory and a program: both presses that reach here are
 /// about the project that is open, and what is asked about has to be what would run.
-pub(crate) fn start_server(
-    mut language: State<Language>,
-    proj: State<OpenProject>,
-    jobs: &LspJobs,
-) {
+pub(crate) fn start_server(language: State<Language>, proj: State<OpenProject>, jobs: &LspJobs) {
     let open = proj.peek().clone();
     // Nothing to run one over.
     let Some(directory) = workspace(&open) else {
@@ -777,15 +856,7 @@ pub(crate) fn start_server(
         run_server(language, jobs, asking);
         return;
     }
-    let held = language.peek().clone();
-    // A second press with the same question up asks it again, which is nothing.
-    if held.asking.as_ref() == Some(&asking) {
-        return;
-    }
-    language.set(Language {
-        asking: Some(asking),
-        ..held
-    });
+    write_if(language, |held| held.ask_to_start(asking));
 }
 
 /// Start what was asked for, leaving whatever was running stopped.
@@ -796,31 +867,11 @@ pub(crate) fn start_server(
 /// is here because this is where a start happens, so neither press nor the agreement can
 /// grow a path around it -- the same reason the trust gate is in `start_server`.
 fn run_server(mut language: State<Language>, jobs: &LspJobs, asking: Asking) {
-    let held = language.peek().clone();
-    // Not read yet is nothing to lay over `wanted()`: the read follows the project, and
-    // answers long before a press can reach here.
-    let ready = match &held.settings {
-        Some(Err(why)) => Err(why.to_string()),
-        Some(Ok(settings)) => Ok(settings.clone()),
-        None => Ok(lsp::Settings::none()),
-    };
-    if let Some(handle) = &held.server {
-        handle.stop();
-    }
-    let run = held.run + 1;
-    let (state, settings) = match ready {
-        Ok(settings) => (Lsp::Starting, Some(settings)),
-        Err(why) => (Lsp::Failed(why), None),
-    };
-    language.set(Language {
-        state,
-        working: false,
-        asking: None,
-        run,
-        server: None,
-        settings: held.settings,
-    });
-    let Some(settings) = settings else {
+    // Bound before the write, as ever; the start it answers with is sent after it.
+    let mut next = language.peek().clone();
+    let starting = next.starting();
+    language.set(next);
+    let Some((run, settings)) = starting else {
         return;
     };
     jobs.send(LspJob::Start {
@@ -852,15 +903,8 @@ pub(crate) fn agree_to_start(
 
 /// The reader declines: the question goes and **nothing is remembered**, so the next
 /// press asks again.
-pub(crate) fn decline_start(mut language: State<Language>) {
-    let held = language.peek().clone();
-    if held.asking.is_none() {
-        return;
-    }
-    language.set(Language {
-        asking: None,
-        ..held
-    });
+pub(crate) fn decline_start(language: State<Language>) {
+    write_if(language, |held| held.declined());
 }
 
 /// The reader takes the agreement back: the project forgets it, and the server it was
@@ -895,25 +939,11 @@ pub(crate) fn revoke_trust(
 /// worker's the moment the process exists ([`LspAnswer::Spawned`]) and not the handshake's
 /// -- and the `Stop` behind it reaches a worker that is out of the read rather than one
 /// parked in it for good.
-pub(crate) fn stop_server(mut language: State<Language>, jobs: &LspJobs) {
-    let held = language.peek().clone();
-    if matches!(held.state, Lsp::Off) && held.server.is_none() && held.asking.is_none() {
-        return;
+pub(crate) fn stop_server(language: State<Language>, jobs: &LspJobs) {
+    // The worker is told only where there was something to stop.
+    if write_if(language, |held| held.stopped()) {
+        jobs.send(LspJob::Stop);
     }
-    if let Some(handle) = &held.server {
-        handle.stop();
-    }
-    // An unanswered question goes with it: it was about the project being left. The
-    // project's own settings stay: they are the project's and not the server's.
-    language.set(Language {
-        state: Lsp::Off,
-        working: false,
-        asking: None,
-        run: held.run + 1,
-        server: None,
-        settings: held.settings,
-    });
-    jobs.send(LspJob::Stop);
 }
 
 /// Ask `want` about the place `at`. The answer is the worker's, and arrives under the run
@@ -1144,3 +1174,6 @@ impl Component for TrustPrompt {
             .into_element()
     }
 }
+
+#[cfg(test)]
+mod tests;

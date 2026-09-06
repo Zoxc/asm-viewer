@@ -71,6 +71,58 @@ impl Builds {
         }
     }
 
+    /// What the manifest says, as the worker read it. Whether anything changed, so the
+    /// hook writes only then ([`write_if`]).
+    fn read(&mut self, manifest: Option<PathBuf>, profiles: Option<PathBuf>, lines: bool) -> bool {
+        let same =
+            self.manifest == manifest && self.profiles == profiles && self.debug_lines == lines;
+        if same {
+            return false;
+        }
+        self.manifest = manifest;
+        self.profiles = profiles;
+        self.debug_lines = lines;
+        true
+    }
+
+    /// A build is starting. Whether it is: a second build queued behind the first would
+    /// compile bytes the reader has since changed, so this is what says the press did
+    /// anything.
+    fn start(&mut self) -> bool {
+        if self.building {
+            return false;
+        }
+        self.building = true;
+        true
+    }
+
+    /// Take the finished build `run`, `open` being the binaries the project has open.
+    /// Answers with the ones this build wrote over, which the hook is to close and open
+    /// again.
+    ///
+    /// **Only the previous build's artifacts are replaced.** A binary is a path throughout
+    /// the app, so two generations of one file cannot both be in the objects list; but a
+    /// file the reader opened by hand is theirs, even where a build has just written the
+    /// same path. A build that produced nothing leaves the previous list standing: those
+    /// paths are still what is open, and still what the next build that succeeds replaces.
+    fn finished(&mut self, run: cargo::Run, open: &[PathBuf]) -> Vec<PathBuf> {
+        let produced: Vec<PathBuf> = match &run {
+            cargo::Run::Built { artifacts, .. } => artifacts
+                .iter()
+                .map(|artifact| artifact.path.clone())
+                .collect(),
+            _ => self.previous.clone(),
+        };
+        self.building = false;
+        self.built = Some(run);
+        self.previous = produced;
+        self.previous
+            .iter()
+            .filter(|path| open.contains(path))
+            .cloned()
+            .collect()
+    }
+
     /// The one line under the button saying where the last build got to, and whether that
     /// line is bad news.
     pub(crate) fn status(&self) -> Option<(String, bool)> {
@@ -179,7 +231,7 @@ pub(crate) type BuildJobs = Requests<BuildJob>;
 
 /// Start the worker and keep the state in step with it. Called once, at the root.
 pub(crate) fn use_building_with(
-    mut build: State<Builds>,
+    build: State<Builds>,
     states: ProjectStates,
     work: impl Fn(BuildJob) -> BuildAnswer + Send + 'static,
 ) -> BuildJobs {
@@ -195,11 +247,7 @@ pub(crate) fn use_building_with(
                 profiles,
                 debug_lines,
             } => {
-                let mut next = build.peek().clone();
-                next.manifest = manifest;
-                next.profiles = profiles;
-                next.debug_lines = debug_lines;
-                build.set(next);
+                write_if(build, |next| next.read(manifest, profiles, debug_lines));
             }
             BuildAnswer::Done(run) => finished(build, states, run),
         },
@@ -213,12 +261,11 @@ pub(crate) fn use_building_with(
 /// Take a finished build: hold it, and put the binaries it wrote over back in the state
 /// the reader had them in.
 ///
-/// **Only the previous build's artifacts are replaced.** A binary is a path throughout the
-/// app, so two generations of one file cannot both be in the objects list; but a file the
-/// reader opened by hand is theirs, even where a build has just written the same path. The
-/// close is unconditional for the ones that are replaced -- whether or not the new bytes
-/// parse, the objects in hand describe bytes that are gone -- and takes those files' tabs,
-/// positions and visits with it, exactly as a scratchpad's rebuild does.
+/// Which binaries those are is [`Builds::finished`]'s to say; what is left here is the
+/// reopening. The close is unconditional for the ones that are replaced -- whether or not
+/// the new bytes parse, the objects in hand describe bytes that are gone -- and takes
+/// those files' tabs, positions and visits with it, exactly as a scratchpad's rebuild
+/// does.
 fn finished(mut build: State<Builds>, states: ProjectStates, run: cargo::Run) {
     // What the panes have read of the workspace is from before the reader edited it and
     // pressed Build. Dropped whatever the build came to: a build that failed says the
@@ -228,28 +275,10 @@ fn finished(mut build: State<Builds>, states: ProjectStates, run: cargo::Run) {
         forget_source_under(&directory);
     }
 
-    let produced: Vec<PathBuf> = match &run {
-        cargo::Run::Built { artifacts, .. } => artifacts
-            .iter()
-            .map(|artifact| artifact.path.clone())
-            .collect(),
-        // A build that produced nothing leaves the previous list standing: those paths are
-        // still what is open, and still what the next build that succeeds replaces.
-        _ => build.peek().previous.clone(),
-    };
-
+    // Bound before the write, as ever.
+    let open = project::binaries(&states.objects.peek());
     let mut next = build.peek().clone();
-    next.building = false;
-    next.built = Some(run);
-    next.previous = produced.clone();
-    let reopening: Vec<PathBuf> = {
-        let open = project::binaries(&states.objects.peek());
-        next.previous
-            .iter()
-            .filter(|path| open.contains(path))
-            .cloned()
-            .collect()
-    };
+    let reopening = next.finished(run, &open);
     build.set(next);
 
     if reopening.is_empty() {
@@ -279,24 +308,22 @@ fn finished(mut build: State<Builds>, states: ProjectStates, run: cargo::Run) {
 
 /// Ask for a build of the open project, if there is one to build and none going.
 pub(crate) fn start_build(
-    mut build: State<Builds>,
+    build: State<Builds>,
     jobs: &BuildJobs,
     directory: PathBuf,
     profile: Profile,
 ) {
     // The button's own `enabled` says this too. Both, because a second build queued behind
     // the first would compile bytes that have since changed.
-    if build.peek().building {
-        return;
+    if write_if(build, |next| next.start()) {
+        jobs.send(BuildJob::Build { directory, profile });
     }
-
-    let mut next = build.peek().clone();
-    next.building = true;
-    build.set(next);
-    jobs.send(BuildJob::Build { directory, profile });
 }
 
 /// The project's directory as a path, or `None` when the reader has not named one.
 pub(crate) fn workspace(proj: &OpenProject) -> Option<PathBuf> {
     given(&proj.directory).map(PathBuf::from)
 }
+
+#[cfg(test)]
+mod tests;

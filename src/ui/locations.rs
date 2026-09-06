@@ -254,6 +254,37 @@ impl Located {
         true
     }
 
+    /// Take `symbols` as the answer to `query`, over the binaries `open`. Whether
+    /// anything changed, so the caller writes only then ([`write_if`]).
+    ///
+    /// [`Analyzed::take`]'s rule against the question the panel is asking *now*: a reader
+    /// who asked for something else while the worker ran is not given what they left. And
+    /// [`Shown::still_open`]'s rule applied per symbol, so a binary closed while the
+    /// worker ran is not put back by its answer.
+    pub(crate) fn take(
+        &mut self,
+        query: Query,
+        symbols: Vec<Symbol>,
+        open: &[Arc<Object>],
+    ) -> bool {
+        if self.asked.as_ref() != Some(&query) {
+            return false;
+        }
+        let mut found = Found::new(query, symbols);
+        found.retain_open(open);
+        self.found = Some(found);
+        true
+    }
+
+    /// **A closed binary takes its locations with it**: drop every symbol whose object is
+    /// no longer among `open`, answering whether any went -- so a load that only added an
+    /// object writes nothing.
+    pub(crate) fn retain_open(&mut self, open: &[Arc<Object>]) -> bool {
+        self.found
+            .as_mut()
+            .is_some_and(|found| found.retain_open(open))
+    }
+
     /// Fold the file at `path` in a list of places, or unfold it. Whether anything changed.
     pub(crate) fn fold(&mut self, path: &Path) -> bool {
         let Some(found) = self.found.as_mut() else {
@@ -896,3 +927,6 @@ impl Component for LocationRow {
         self.key.clone().or(self.default_key())
     }
 }
+
+#[cfg(test)]
+mod tests;

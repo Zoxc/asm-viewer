@@ -207,9 +207,11 @@ it would start a fresh search for each batch of its own answer. Hits come back t
 `take_hits`, which is `take_load`'s loop -- a batch per wake, since a write is a render -- and which
 returns the moment the search is no longer the one being asked for. Returning drops the receiver,
 the walk's next send fails, and it breaks where it stands. That one rule covers a second search, a
-project switched away from (`clear_project` empties the state), and the app closing. The check is
-made **before** the write and not at the end of the loop, or the old walk's last batch lands under
-the new question. `clear_project` **bumps** the id rather than setting it back to nothing: a walk of
+project switched away from (`clear_project` empties the state), and the app closing. Whether a batch
+is this search's is `Searched::take`'s to say, and it says so **before taking any of it** and not at
+the end of the loop, or the old walk's last batch lands under the new question. It is the one taker
+that writes through the guard rather than through `write_if`: what is held is up to `MAX_HITS`
+hits, and a clone per batch would copy every one of them to add the few that just arrived. `clear_project` **bumps** the id rather than setting it back to nothing: a walk of
 the project being left is parked in its receiver and learns nothing until its next batch, so a
 counter that restarted at zero would hand the new project the very numbers that walk still answers
 to, and its hits -- files outside the new directory -- would land under the new question. `Loads`
