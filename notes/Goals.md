@@ -344,6 +344,13 @@ leaves this list when it is. That is a move made on request, like everything els
   the row reporting its own overflow. Settling that is the goal; the rule once it is settled
   is one line per list, and the same question decides it for the tab bar, whose tabs elide
   too.
+- [ ] No delay for a tooltip that says what was cut off, the usual delay for every other one.
+  The two are different things under one name: a tooltip repeating a name the row had no room
+  for is the rest of what the reader is already looking at, and waiting for it is waiting to
+  read; a tooltip that names a button is a second thought, and one that arrives the moment the
+  pointer crosses the control is noise. Today the delay is decided once, in `row_tooltip`, and
+  the lists pass zero. The rule wanted is the delay following what the tooltip is for, which
+  the goal above settles the other half of: a row whose text fits shows none at all.
 - [ ] Refresh a chip's hover when the bar scrolls under a still pointer. The strip slides its
   row of chips by an `offset_x` and never moves the pointer, and freya's `pointer_over` and
   `pointer_out` fire on entry and exit only, so a wheel over the bar leaves the highlight on the
