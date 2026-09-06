@@ -475,7 +475,11 @@ A **references** answer goes to the Locations panel instead (`agents/Sidebar.md`
 asked for from the same place a definition is: the row's file and the pressed column, at the
 right-click rather than the press. It comes back grouped and with each line's text, both
 done on the worker: the reply is `Reply::Referenced` where a definition's is `Reply::Defined`,
-since reading those lines is a file read and belongs on the thread that already blocks. It
+since reading those lines is a file read and belongs on the thread that already blocks. The
+read handed to `References::of` is `source::read_text` and not a `read_to_string` of its
+own: a path a server answers with is file input, and a second rule for what a source file
+is would be a directory or a fifo opened on this thread, and a line the pane draws that the
+panel leaves blank. It
 follows the **name** and not the link, so the row a function is defined on offers it too --
 there is nothing to follow there, and it is where a reader asks what refers to it. What comes
 back is a place in a file and not a symbol, so a row of it opens a source-driven tab

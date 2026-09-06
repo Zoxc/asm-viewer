@@ -170,28 +170,52 @@ impl SourceFile {
     }
 
     /// Read a file, or [`None`] for anything that is not a readable text-sized regular
-    /// file.
+    /// file: [`contents`]' rule, and the digests of the bytes it read.
     ///
-    /// The size is checked *before* the bytes are read, and `is_file` before that: a
-    /// directory opens happily on Linux and a fifo blocks the reader until someone writes
-    /// to it, and neither may reach a UI thread. `max_size` is a parameter only so the
-    /// tests can set a small one.
+    /// `max_size` is a parameter only so the tests can set a small one.
     fn read(path: &Path, max_size: u64) -> Option<SourceFile> {
-        let metadata = fs::metadata(path).ok()?;
-        if !metadata.is_file() || metadata.len() > max_size {
-            return None;
-        }
-
-        // Lossy rather than strict: a file with one bad byte in a comment is still a
-        // source file.
-        let bytes = fs::read(path).ok()?;
-
+        let (bytes, text) = contents(path, max_size)?;
         Some(SourceFile {
             path: path.to_path_buf(),
             digests: SourceDigests::of(&bytes),
-            text: String::from_utf8_lossy(&bytes).into_owned(),
+            text,
         })
     }
+}
+
+/// The text of `path` by [`load`]'s rule -- a regular file within [`MAX_SIZE`], decoded
+/// lossily -- read fresh and not remembered: for a reader that wants many files once
+/// (`src/references.rs`), which the cache would otherwise hold for the life of the app.
+///
+/// It is here and not a `fs::read_to_string` at the caller so that there is one answer to
+/// what a source file is. A second rule means the same file read two ways: a line a pane
+/// draws that a list of references leaves blank, or a fifo a language server named opened
+/// on a worker that then never returns.
+pub fn read_text(path: &Path) -> Option<String> {
+    contents(path, MAX_SIZE).map(|(_, text)| text)
+}
+
+/// The bytes of `path` and those bytes decoded, or [`None`] for anything that is not a
+/// readable regular file within `max_size`. **The one rule** for reading a source file by
+/// path; both readers above are this plus what they keep.
+///
+/// The size is checked *before* the bytes are read, and `is_file` before that: a directory
+/// opens happily on Linux and a fifo blocks the reader until someone writes to it, and
+/// neither may reach a UI thread.
+///
+/// The bytes come back beside the text because the digests are of the bytes as read: the
+/// compiler hashed those, and a lossy decode is not reversible.
+fn contents(path: &Path, max_size: u64) -> Option<(Vec<u8>, String)> {
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > max_size {
+        return None;
+    }
+
+    let bytes = fs::read(path).ok()?;
+    // Lossy rather than strict: a file with one bad byte in a comment is still a source
+    // file.
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Some((bytes, text))
 }
 
 /// Every path asked about so far and what came back, `None` included. A `static` so that

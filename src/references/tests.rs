@@ -208,3 +208,20 @@ fn a_name_after_a_wide_character_is_marked_where_it_is_in_the_bytes() {
     };
     assert_eq!(&reference.text[reference.spans[0].clone()], "helper");
 }
+
+#[test]
+fn a_line_of_zero_is_the_number_alone_and_not_a_panic() {
+    // Places are 1-based by the server's answer, so a 0 is a line no file has. The
+    // subtraction that finds it must not wrap: in release it would read `usize::MAX`.
+    let references = References::of(&[place("/p/src/main.rs", 0, 0..4)], |_| {
+        Some("one\ntwo\n".to_owned())
+    });
+
+    let rows = all(&references);
+    let ReferenceRow::Reference { reference, .. } = rows.row(1) else {
+        panic!("the second row is the use");
+    };
+    assert_eq!(reference.line, 0);
+    assert!(reference.text.is_empty());
+    assert!(reference.spans.is_empty());
+}

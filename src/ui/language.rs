@@ -368,9 +368,11 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 let reply = places.map(|places| match want {
                     Wanted::Definition | Wanted::Declaration => Reply::Defined(places),
                     Wanted::Implementations | Wanted::References => {
-                        Reply::Referenced(references::References::of(&places, |path| {
-                            std::fs::read_to_string(path).ok()
-                        }))
+                        // Read by the rule the Source pane reads a file by
+                        // (`source::read_text`) and not by one of this thread's own: a
+                        // path a server answers with is file input, and two rules would
+                        // be two ideas of which files this app can show.
+                        Reply::Referenced(references::References::of(&places, source::read_text))
                     }
                 });
                 Some(LspAnswer::Answered {

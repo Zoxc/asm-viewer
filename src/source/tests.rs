@@ -52,6 +52,41 @@ fn a_directory_is_not_a_source_file() {
     assert!(SourceFile::read(&std::env::temp_dir(), MAX_SIZE).is_none());
 }
 
+/// `read_text` is the pane's rule without the cache, so what the pane refuses it refuses:
+/// a language server answering with a directory must not open it.
+#[test]
+fn read_text_refuses_a_directory() {
+    assert!(read_text(&std::env::temp_dir()).is_none());
+}
+
+/// And refuses a file past the cap, the point of the cap being that the bytes are never
+/// read. The file is made by its length alone, so nothing here writes 16 MB to say so.
+#[test]
+fn read_text_refuses_a_file_over_the_cap() {
+    let path = write("huge.rs", b"fn main() {}\n");
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|file| file.set_len(MAX_SIZE + 1))
+        .expect("the temp file can be grown");
+
+    assert!(read_text(&path).is_none());
+}
+
+/// Lossy like the pane's read, and fresh every time: nothing remembers it, so a file
+/// answers what is on the disk now.
+#[test]
+fn read_text_is_lossy_and_not_remembered() {
+    let path = write("answer.c", b"/* caf\xe9 */\n");
+    assert_eq!(read_text(&path).as_deref(), Some("/* caf\u{fffd} */\n"));
+
+    fs::write(&path, b"int main(void) { return 0; }\n").expect("the temp file is writable");
+    assert_eq!(
+        read_text(&path).as_deref(),
+        Some("int main(void) { return 0; }\n")
+    );
+}
+
 #[test]
 fn a_file_is_read_once() {
     let path = write("cached.rs", b"fn main() {}\n");
