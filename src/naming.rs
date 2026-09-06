@@ -143,31 +143,62 @@ fn reduce(segment: &str, first: bool) -> Option<Part<'_>> {
 /// `Vec::into_iter`.
 ///
 /// A type with no name of its own -- `<(A, B) as Default>`, `<[T] as Clone>` -- falls
-/// back to the trait's, which is the only word left that says anything.
+/// back to the trait's, which is the only word left that says anything. A type that is
+/// itself a qualifier -- `<<A as B> as C>` -- is opened in turn, and its trait waits
+/// behind the one it was written inside.
+///
+/// A loop over a list rather than a recursion: a name is file input, and one call per
+/// group overflowed the stack on a name of a hundred thousand `<`, which is an abort no
+/// panic hook can catch. Opening a group costs a scan of what is inside it, so the number
+/// opened is capped as well; nothing real nests anywhere near that deep.
 fn qualifier(segment: &str) -> Option<&str> {
-    let end = skip_group(segment, 0);
-    // One `<` off the front, and the `>` off the end when there is one -- a name whose
-    // brackets do not balance has the group running to its end instead.
-    let closed = end > 1 && segment.as_bytes()[end - 1] == b'>';
-    let inside = &segment[1..if closed { end - 1 } else { end }];
+    /// How many `<...>` groups one qualifier is read through.
+    const GROUPS: usize = 32;
 
-    let (subject, trait_name) = match split_as(inside) {
-        Some((subject, trait_name)) => (subject, Some(trait_name)),
-        None => (inside, None),
-    };
-    last_name(subject).or_else(|| trait_name.and_then(last_name))
+    // The types left to name, the next one to try last. Opening a group puts its subject
+    // over its trait, so a subject that names nothing falls back to that trait, and to
+    // the traits of the groups around it after that.
+    let mut pending = vec![segment];
+    let mut opened = 0;
+    while let Some(text) = pending.pop() {
+        let segments = split_path(text);
+        let Some(&last) = segments.last() else {
+            continue;
+        };
+        let last = last.trim();
+        let single = segments.len() == 1;
+
+        // A type nested in a type is reached by taking the last segment first and
+        // stripping what hangs off it after, so only a path of one segment is a
+        // qualifier of its own.
+        if single && last.starts_with('<') {
+            if opened < GROUPS {
+                opened += 1;
+                let body = inside(last);
+                match split_as(body) {
+                    Some((subject, trait_name)) => {
+                        pending.push(trait_name);
+                        pending.push(subject);
+                    }
+                    None => pending.push(body),
+                }
+            }
+            continue;
+        }
+        if let Some(Part::Name(name)) = reduce(last, single) {
+            return Some(name);
+        }
+    }
+    None
 }
 
-/// The name at the end of a type: `&mut foo::bar::Baz<T>` is `Baz`. Not recursive -- a
-/// type nested in a type is reached by taking the last segment first and stripping what
-/// hangs off it after, so depth costs nothing.
-fn last_name(text: &str) -> Option<&str> {
-    let segments = split_path(text);
-    let last = *segments.last()?;
-    match reduce(last, segments.len() == 1) {
-        Some(Part::Name(name)) => Some(name),
-        _ => None,
-    }
+/// What a `<...>` group holds: one `<` off the front, and the `>` off the end when there
+/// is one -- a name whose brackets do not balance has the group running to its end
+/// instead.
+fn inside(group: &str) -> &str {
+    let end = skip_group(group, 0);
+    let closed = end > 1 && group.as_bytes()[end - 1] == b'>';
+    &group[1..if closed { end - 1 } else { end }]
 }
 
 /// The two sides of a `<Type as Trait>`, split on the ` as ` that is not inside a group --

@@ -282,3 +282,38 @@ fn a_name_the_app_made_up_is_left_alone() {
         "Vec::into_iter"
     );
 }
+
+/// A qualifier written inside a qualifier is opened in turn, and a type with no name of
+/// its own still falls back to the trait it was written for -- the innermost one first,
+/// and the ones around it after that. The three are written by hand: the binary nests
+/// them one deep.
+#[test]
+fn a_qualifier_inside_a_qualifier_is_opened_in_turn() {
+    assert_eq!(
+        short_name("<<(A, B) as core::default::Default>::Out as core::clone::Clone>::clone"),
+        "Out::clone"
+    );
+    assert_eq!(
+        short_name("<<[T] as core::clone::Clone> as core::fmt::Debug>::fmt"),
+        "Clone::fmt"
+    );
+    // Nothing inside `<(A, B)>` has a name, so the trait of the group around it is all
+    // that is left to say.
+    assert_eq!(
+        short_name("<<(A, B)> as core::fmt::Debug>::fmt"),
+        "Debug::fmt"
+    );
+}
+
+/// A name is whatever bytes the symbol table holds, and a stack overflow is an abort no
+/// panic hook can catch. Reading a qualifier was a call one level deep per leading `<`,
+/// which overflowed the UI thread's stack somewhere past forty thousand of them, and
+/// every level scanned the whole name, which took minutes on the balanced shape.
+#[test]
+fn a_name_that_is_all_brackets_is_answered_rather_than_overflowing_the_stack() {
+    let open = "<".repeat(200_000);
+    assert_eq!(short_name(&open), open);
+
+    let nested = format!("{}Foo{}::bar", "<".repeat(100_000), ">".repeat(100_000));
+    assert!(short_name(&nested).ends_with("bar"));
+}

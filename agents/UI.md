@@ -428,6 +428,13 @@ document tab and a History row share; `entry_name` beside it is the whole name, 
 tooltip says and what the History filter matches, so a generic argument no tab draws is still
 something a reader can search for.
 
+**Nothing in that scanner recurses.** A name is file input, and reading a `<Type as Trait>`
+qualifier used to be one call per group: a symbol of a hundred thousand `<` -- which a string table
+has room for -- overflowed the UI thread's stack, and an overflow aborts where a panic would have
+been caught and shown. It is a loop over a list of the types still to name instead, a group putting
+its subject over the trait it falls back to, and it opens at most thirty-two groups, since each one
+costs a scan of what is inside it and nothing real nests near that deep.
+
 **A document's two sides live inside its tab.** `Tab::Document` renders the two panes in a
 `ResizableContainer`, not a nested `DockingArea`, which is a great deal of machinery for a two-way
 split. The cost is real and was taken deliberately: **the Source pane is no longer independently
