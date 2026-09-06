@@ -603,7 +603,7 @@ fn what_the_last_build_made_is_written_and_read_back() {
     assert_eq!(read.built, pad.built);
 
     // A pad nothing has built says nothing, rather than an empty table nobody reads.
-    let mut fresh = Scratchpad::new("pad-2").expect("a valid id");
+    let fresh = Scratchpad::new("pad-2").expect("a valid id");
     fresh.write_to(&directory).expect("the package is written");
     assert_eq!(
         Scratchpad::load_from(&directory)

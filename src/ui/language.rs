@@ -432,9 +432,7 @@ pub(crate) enum LspJob {
     /// Read the project's own `.vscode/settings.json`. A file read blocks, so it happens
     /// here rather than on the UI thread; it is this worker's and not the build worker's
     /// because what it answers is what a start has to carry.
-    ReadSettings {
-        directory: PathBuf,
-    },
+    ReadSettings { directory: PathBuf },
     /// What is at a place: which of the four questions is in `want`. `id` is the
     /// question's own, minted by [`ask_where`] and copied into the answer: a run says
     /// which server was asked and nothing about which question this is.
@@ -447,19 +445,12 @@ pub(crate) enum LspJob {
     /// What every name in one file is, which is a question about the file and not about
     /// a place in it. The file travels as the `Arc<str>` a document is named by, since
     /// that is what the answer has to be matched against.
-    Tokens {
-        run: u64,
-        file: Arc<str>,
-    },
+    Tokens { run: u64, file: Arc<str> },
     /// What the name under the pointer is. A question about a place like [`LspJob::Ask`]'s
     /// four, and **not** a fifth `Wanted`: those are bucketed by consumer, of which this
     /// is a third, and a pointer crossing a name must neither take back a definition the
     /// reader clicked for nor be taken back by one.
-    Hover {
-        run: u64,
-        id: u64,
-        at: Lookup,
-    },
+    Hover { run: u64, id: u64, at: Lookup },
     /// The app is showing this file, or has stopped showing it. Not a question: the
     /// server answers neither, and what they change is what every other question about
     /// the file is answered out of (`lsp::Talk::opened`).
@@ -472,10 +463,9 @@ pub(crate) enum LspJob {
         file: Arc<str>,
         language: String,
     },
-    Closed {
-        run: u64,
-        file: Arc<str>,
-    },
+    /// The other half, and the one job that names **no run**: a job's run is what stamps
+    /// the answer it comes back as, and a close is answered with nothing.
+    Closed { file: Arc<str> },
     /// Let go of the server: it has been stopped already, and this is what reaps it.
     Stop,
 }
@@ -664,7 +654,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 // could work out from the disk, which may have been nothing at all.
                 Some(LspAnswer::Reopened { run, file })
             }
-            LspJob::Closed { run: _, file } => {
+            LspJob::Closed { file } => {
                 let talk = talking.as_mut()?;
                 let path = PathBuf::from(&*file);
                 if matches!(talk.closed(&path), Err(lsp::Failure::Broken(_))) {

@@ -12211,7 +12211,6 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
 
     // Away and back while the first read is still on the worker: neither pad is open, so
     // each switch asks.
-    let mut pad = pad;
     show_pad(pad, &jobs, two.clone());
     show_pad(pad, &jobs, one.clone());
     assert_eq!(pad.peek().shown(), &one);

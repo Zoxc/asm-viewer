@@ -338,10 +338,7 @@ pub(crate) fn use_opened(
             .cloned()
             .collect();
         for file in &stale {
-            jobs.send(LspJob::Closed {
-                run: held.run,
-                file: file.clone(),
-            });
+            jobs.send(LspJob::Closed { file: file.clone() });
             jobs.send(LspJob::Opened {
                 run: held.run,
                 language: spoken(file),
@@ -353,10 +350,7 @@ pub(crate) fn use_opened(
             return;
         }
         for file in closing {
-            jobs.send(LspJob::Closed {
-                run: held.run,
-                file,
-            });
+            jobs.send(LspJob::Closed { file });
         }
         for file in opening {
             jobs.send(LspJob::Opened {
