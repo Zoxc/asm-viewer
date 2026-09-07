@@ -136,6 +136,8 @@ mod search_view;
 pub(crate) use search_view::*;
 mod section_view;
 pub(crate) use section_view::*;
+mod session;
+pub(crate) use session::*;
 mod settings_view;
 pub(crate) use settings_view::*;
 mod sidebar;

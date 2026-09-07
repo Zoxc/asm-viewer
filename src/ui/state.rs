@@ -462,7 +462,7 @@ pub(crate) struct ProjectStates {
 /// way to a context is `use_consume`, which is a hook -- so a restore that asked for them
 /// itself would be calling hooks from wherever it was called from. A restore runs inside
 /// `use_hook` at startup and inside a press handler on a switch, and neither may
-/// (`src/ui/project_view.rs`, `restore_ui`). Consumed by whoever is rendering and handed
+/// (`src/ui/session.rs`, `restore_ui`). Consumed by whoever is rendering and handed
 /// down instead.
 #[derive(Clone, Copy)]
 pub(crate) struct Arrangement {

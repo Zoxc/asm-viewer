@@ -397,7 +397,7 @@ instead of reaching the disk at once.
 `start_new()`. Both `flush` the project being left while the policy still points at it, `remember`
 the one being entered at the front of `recents.toml`, and re-point every baseline through
 `Saves::opened`, to empty, because the app is about to be emptied. Emptying it is the caller's half
-and stays in `ui/project_view.rs`, the states being the UI's. `recent_projects(&store)` is the
+and stays in `ui/session.rs`, the states being the UI's. `recent_projects(&store)` is the
 list a view draws: `recents.toml`'s order, each row described by reading *that project's own* file,
 with an id whose directory has gone dropped here. The list never prunes itself on load, and this is
 the point of use where the repair is free.

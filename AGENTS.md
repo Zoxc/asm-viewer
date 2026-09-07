@@ -256,8 +256,10 @@ command.
 - `src/ui/dock.rs` — the sidebar's dock: what a panel is, and the groups it can be arranged in.
 - `src/ui/strip.rs` — the app's own tab bar: the chips, the × on one, the list of every open
   tab, and the body under it all.
-- `src/ui/project_view.rs` — which project is open: the pane, the switch, the save observers,
-  and what the language server has to say for itself.
+- `src/ui/project_view.rs` — which project is open: the pane that says so, what the reader
+  can say about it, and what the language server has to say for itself.
+- `src/ui/session.rs` — the session as the UI keeps it in step with `project.rs`: what is
+  saved when, what a restore fills in, and what a switch empties.
 - `src/ui/no_project.rs` — the window with no project open: what is drawn under the top bar
   either way, and the screen that offers the ways into one.
 - `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.
