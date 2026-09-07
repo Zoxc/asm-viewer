@@ -49,7 +49,7 @@ fn pushing_records_and_moves_the_cursor() {
 
     history.push(b.clone());
     assert!(history.current() == Some(&b));
-    assert!(history.cursor() == Some(1));
+    assert!(history.cursor() == Some(0));
     assert!(history.can_back());
     assert!(!history.can_forward());
 }
@@ -91,23 +91,18 @@ fn navigating_back_does_not_re_record_where_it_landed() {
 }
 
 #[test]
-fn the_entries_are_kept_oldest_first_whatever_the_cursor_does() {
+fn the_entries_are_kept_newest_first_whatever_the_cursor_does() {
     let (a, b, c) = (selection("a"), selection("b"), selection("c"));
     let mut history = History::default();
     for entry in [&a, &b, &c] {
         history.push(entry.clone());
     }
 
-    assert!(newest_first(&history) == vec![c.clone(), b, a]);
+    assert!(history.entries() == [c.clone(), b, a]);
 
     history.back();
+    assert!(history.entries().first() == Some(&c));
     assert!(history.entries().len() == 3);
-    assert!(newest_first(&history).first() == Some(&c));
-}
-
-/// The entries newest first.
-fn newest_first(history: &History) -> Vec<Stop> {
-    history.entries().iter().rev().cloned().collect()
 }
 
 #[test]
@@ -121,9 +116,9 @@ fn revisiting_bumps_an_entry_out_of_the_middle() {
     history.push(b.clone());
 
     // One copy of `b`, now the newest, and the entries behind it closed up.
-    assert!(newest_first(&history) == vec![b.clone(), c.clone(), a.clone()]);
+    assert!(history.entries() == [b.clone(), c.clone(), a.clone()]);
     assert!(history.current() == Some(&b));
-    assert!(history.cursor() == Some(2));
+    assert!(history.cursor() == Some(0));
     assert!(!history.can_forward());
     assert!(history.back() == Some(c));
     assert!(history.back() == Some(a));
@@ -143,7 +138,7 @@ fn pushing_the_entry_under_the_cursor_is_still_a_no_op() {
     history.back();
     history.push(b.clone());
 
-    assert!(newest_first(&history) == vec![c, b.clone(), a]);
+    assert!(history.entries() == [c, b.clone(), a]);
     assert!(history.current() == Some(&b));
     assert!(history.cursor() == Some(1));
     assert!(history.can_forward());
@@ -162,9 +157,9 @@ fn a_bump_after_going_back_still_drops_the_forward_entries() {
     history.back();
     history.push(a.clone());
 
-    assert!(newest_first(&history) == vec![a.clone(), b.clone()]);
+    assert!(history.entries() == [a.clone(), b.clone()]);
     assert!(history.current() == Some(&a));
-    assert!(history.cursor() == Some(1));
+    assert!(history.cursor() == Some(0));
     assert!(!history.can_forward());
     assert!(history.back() == Some(b));
     assert!(!history.can_back());
@@ -174,15 +169,15 @@ fn a_bump_after_going_back_still_drops_the_forward_entries() {
 fn restoring_collapses_duplicates_onto_the_newest_occurrence() {
     let (a, b) = (selection("a"), selection("b"));
 
-    let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 2);
+    let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 0);
 
-    assert!(history.entries() == [b.clone(), a.clone()]);
+    assert!(history.entries() == [a.clone(), b.clone()]);
     assert!(history.current() == Some(&a));
-    assert!(history.cursor() == Some(1));
+    assert!(history.cursor() == Some(0));
     assert!(!history.can_forward());
     assert!(!history.would_push(&a));
 
-    // Every occurrence collapses, not just the last pair.
+    // Every occurrence collapses, not just the first pair.
     let history = History::restored(vec![a.clone(), b.clone(), a.clone(), b.clone()], 3);
     assert!(history.entries() == [a, b]);
     assert!(history.cursor() == Some(1));
@@ -192,20 +187,20 @@ fn restoring_collapses_duplicates_onto_the_newest_occurrence() {
 fn a_restored_cursor_follows_the_entry_it_was_on() {
     let (a, b) = (selection("a"), selection("b"));
 
-    // The cursor is on the middle entry, which the collapse leaves at index 0.
+    // The cursor is on the middle entry, which the collapse leaves at index 1.
     let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 1);
-    assert!(history.entries() == [b.clone(), a.clone()]);
+    assert!(history.entries() == [a.clone(), b.clone()]);
     assert!(history.current() == Some(&b));
-    assert!(history.cursor() == Some(0));
-    assert!(history.can_forward());
-    assert!(!history.can_back());
-
-    // And on the *first* of two equal entries, where the collapse moves the entry itself
-    // to the end: the cursor goes with it.
-    let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 0);
-    assert!(history.entries() == [b, a.clone()]);
-    assert!(history.current() == Some(&a));
     assert!(history.cursor() == Some(1));
+    assert!(!history.can_back());
+    assert!(history.can_forward());
+
+    // And on the *older* of two equal entries, which the collapse drops in favour of the
+    // newer one: the cursor goes to the entry that was kept.
+    let history = History::restored(vec![a.clone(), b.clone(), a.clone()], 2);
+    assert!(history.entries() == [a.clone(), b]);
+    assert!(history.current() == Some(&a));
+    assert!(history.cursor() == Some(0));
     assert!(!history.can_forward());
 }
 
@@ -226,11 +221,11 @@ fn pushing_past_the_cap_drops_the_oldest_entries() {
     let (history, entries) = filled(over);
 
     assert!(history.entries().len() == MAX_ENTRIES);
-    assert!(history.entries()[0] == entries[over - MAX_ENTRIES]);
-    assert!(history.entries().last() == entries.last());
+    assert!(history.entries().first() == entries.last());
+    assert!(history.entries().last() == Some(&entries[over - MAX_ENTRIES]));
 
-    // The cursor is still on the entry the last push appended, at its new index.
-    assert!(history.cursor() == Some(MAX_ENTRIES - 1));
+    // The cursor is still on the entry the last push put in front.
+    assert!(history.cursor() == Some(0));
     assert!(history.current() == entries.last());
     assert!(!history.can_forward());
 
@@ -243,7 +238,7 @@ fn pushing_past_the_cap_drops_the_oldest_entries() {
         steps += 1;
     }
     assert!(steps == MAX_ENTRIES - 1);
-    assert!(history.cursor() == Some(0));
+    assert!(history.cursor() == Some(MAX_ENTRIES - 1));
     assert!(history.current() == Some(&entries[over - MAX_ENTRIES]));
 }
 
@@ -265,13 +260,13 @@ fn pushing_past_the_cap_after_going_back_truncates_first() {
         history.push(entry.clone());
     }
     assert!(history.entries().len() == MAX_ENTRIES);
-    assert!(history.cursor() == Some(MAX_ENTRIES - 1));
+    assert!(history.cursor() == Some(0));
     assert!(history.current() == fresh.last());
     assert!(!history.can_forward());
 
     // Ten pushes onto a list the truncation left five short of the cap, so five more
-    // entries went off the front on top of the fifty the fill had already dropped.
-    assert!(history.entries()[0] == entries[over - MAX_ENTRIES + 5]);
+    // entries went off the end on top of the fifty the fill had already dropped.
+    assert!(history.entries().last() == Some(&entries[over - MAX_ENTRIES + 5]));
     for abandoned in &entries[over - 5..] {
         assert!(!history.entries().contains(abandoned));
     }
@@ -282,29 +277,29 @@ fn restoring_keeps_the_newest_entries_and_carries_the_cursor() {
     let over = MAX_ENTRIES + 50;
     let entries: Vec<Stop> = (0..over).map(|i| selection(&format!("e{i}"))).collect();
 
-    // A cursor near the newest entry: its entry survives the trim and comes down with it.
-    let cursor = over - 10;
+    // A cursor near the newest entry: its entry survives the trim and stays where it is.
+    let cursor = 10;
     let history = History::restored(entries.clone(), cursor);
     assert!(history.entries().len() == MAX_ENTRIES);
-    assert!(history.entries()[0] == entries[over - MAX_ENTRIES]);
+    assert!(history.entries().last() == Some(&entries[MAX_ENTRIES - 1]));
     assert!(history.current() == Some(&entries[cursor]));
-    assert!(history.cursor() == Some(cursor - (over - MAX_ENTRIES)));
+    assert!(history.cursor() == Some(cursor));
     assert!(history.can_forward());
     assert!(!history.would_push(&entries[cursor]));
 
     // A cursor so deep in the back stack that the trim drops its entry: it lands on the
     // oldest survivor rather than out of range.
-    let history = History::restored(entries.clone(), 10);
+    let history = History::restored(entries.clone(), over - 10);
     assert!(history.entries().len() == MAX_ENTRIES);
-    assert!(history.cursor() == Some(0));
-    assert!(history.current() == Some(&entries[over - MAX_ENTRIES]));
+    assert!(history.cursor() == Some(MAX_ENTRIES - 1));
+    assert!(history.current() == Some(&entries[MAX_ENTRIES - 1]));
     assert!(!history.can_back());
     assert!(history.can_forward());
 
     // A cursor past the end is clamped before any of that happens.
     let history = History::restored(entries.clone(), over + 100);
     assert!(history.cursor() == Some(MAX_ENTRIES - 1));
-    assert!(history.current() == entries.last());
+    assert!(history.current() == Some(&entries[MAX_ENTRIES - 1]));
 }
 
 #[test]
@@ -339,7 +334,7 @@ fn retaining_drops_what_it_rejects_and_leaves_the_cursor_where_it_was() {
     }
 
     let mut history = history.retaining(|entry| named(entry) != "b");
-    assert!(history.entries() == [a.clone(), c.clone()]);
+    assert!(history.entries() == [c.clone(), a.clone()]);
     assert!(history.current() == Some(&c));
     assert!(history.back() == Some(a));
     assert!(!history.can_back());
@@ -370,9 +365,9 @@ fn two_places_in_one_document_are_two_entries() {
     assert!(
         history.entries()
             == [
-                Stop::whole(code.clone()),
+                Stop::at(code.clone(), 0x10),
                 Stop::at(code.clone(), 0x40),
-                Stop::at(code, 0x10)
+                Stop::whole(code)
             ],
         "the place was recorded twice"
     );
@@ -423,7 +418,7 @@ fn retaining_everything_changes_nothing() {
     history.back();
 
     let history = history.retaining(|_| true);
-    assert!(history.entries() == [a.clone(), b]);
+    assert!(history.entries() == [b, a.clone()]);
     assert!(history.current() == Some(&a));
     assert!(history.can_forward());
 }

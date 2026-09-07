@@ -16,7 +16,7 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 
 /// The one directory everything this app stores lives under: the projects, the recent
 /// list, the settings, the scratchpads and the panic records.
@@ -41,16 +41,18 @@ const PANICS_DIR: &str = "panics";
 /// Where a file that will not parse goes, under the directory everything is stored in.
 pub(crate) const INCOMPATIBLE_DIR: &str = "incompatible";
 
-/// What an [`Order`] is kept in, wherever one is kept: the projects' is at the top of the
-/// store and the scratchpads' is beside the pads.
+/// What an order of ids is kept in, wherever one is kept ([`crate::order::Order`]): the
+/// projects' is at the top of the store and the scratchpads' is beside the pads.
 pub const RECENTS_FILE: &str = "recents.toml";
 
 /// How many names a claim may try before giving up, so a directory refusing every create
 /// for a reason other than collision cannot spin.
 const MAX_CLAIMS: u32 = 1000;
 
-/// How many ids an [`Order`] is written with. What is lost past this is an *order*, never
-/// a project and never a pad: both listings put back what the file did not name.
+/// How many ids one of those files is written with. The cap is the **file's** and not the
+/// list's, so a pad the panel is holding is not dropped by someone else being shown, and
+/// what is lost past it is an *order*, never a project and never a pad: both listings put
+/// back what the file did not name.
 pub const MAX_ORDER: usize = 50;
 
 /// Where each file moved aside was put, until the UI asks. A `static` because what fills
@@ -301,78 +303,6 @@ fn list() -> MutexGuard<'static, Vec<PathBuf>> {
     // Take the list back rather than propagate: a poisoned lock must not turn a rescue
     // into a crashed app.
     MOVED.lock().unwrap_or_else(|error| error.into_inner())
-}
-
-/// A most-recent-first order of ids, capped where it is written: `recents.toml`, whichever
-/// of the two it is.
-///
-/// Which one to reopen is the first entry and not a field of its own. This is an *order*
-/// and not an index of what exists — the project files and the pad directories are that —
-/// which is why nothing here prunes an id whose file has gone; each listing does that at
-/// the point of use, where the repair is free.
-///
-/// The cap is the **file's** and not this list's ([`Order::capped`]), so a pad the panel
-/// is holding is not dropped by someone else being shown.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Order<Id> {
-    /// `Vec::new` and not a plain `default`, which serde's derive would spell as a
-    /// `Default` bound on `Id` — a file's default is the empty order whatever is in it.
-    #[serde(default = "Vec::new")]
-    order: Vec<Id>,
-}
-
-impl<Id> Default for Order<Id> {
-    fn default() -> Order<Id> {
-        Order { order: Vec::new() }
-    }
-}
-
-impl<Id> FromIterator<Id> for Order<Id> {
-    fn from_iter<I: IntoIterator<Item = Id>>(ids: I) -> Order<Id> {
-        Order {
-            order: ids.into_iter().collect(),
-        }
-    }
-}
-
-impl<Id: PartialEq> Order<Id> {
-    pub fn ids(&self) -> &[Id] {
-        &self.order
-    }
-
-    pub fn into_ids(self) -> Vec<Id> {
-        self.order
-    }
-
-    pub fn first(&self) -> Option<&Id> {
-        self.order.first()
-    }
-
-    /// Put `id` at the front, and say whether that changed anything — which is what keeps
-    /// a startup that reopens what was already at the front from writing a file.
-    pub fn touch(&mut self, id: impl Into<Id>) -> bool {
-        let id = id.into();
-        if self.first() == Some(&id) {
-            return false;
-        }
-        self.order.retain(|other| *other != id);
-        self.order.insert(0, id);
-        true
-    }
-
-    /// Drop `id`, and say whether it was there. Nothing else prunes the file, so something
-    /// that has gone for good is taken out here.
-    pub fn forget(&mut self, id: &Id) -> bool {
-        let before = self.order.len();
-        self.order.retain(|other| other != id);
-        self.order.len() != before
-    }
-
-    /// The front of the order, at most [`MAX_ORDER`] of it: what is written out.
-    pub fn capped(mut self) -> Order<Id> {
-        self.order.truncate(MAX_ORDER);
-        self
-    }
 }
 
 #[cfg(test)]

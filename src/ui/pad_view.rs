@@ -939,7 +939,7 @@ impl Component for PadList {
             let shown = pads.shown().clone();
             let rows: Vec<Element> = pads
                 .order
-                .ids()
+                .entries()
                 .iter()
                 .map(|id| {
                     let name = pads

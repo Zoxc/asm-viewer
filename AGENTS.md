@@ -130,7 +130,7 @@ command.
   and which language server each is read with.
 - `src/store.rs` — everything the app stores: the directory it goes in and the variable that
   names it, the atomic write, the read that moves a file aside rather than let the next write
-  replace it, the claim of a free name, and the capped order both recent lists are.
+  replace it, the claim of a free name, and how much of a recent order a file is written with.
 - `src/reveal.rs` — showing a file or a folder in the desktop's file manager: the
   programs each platform is asked with, in the order they are tried, and the thread they
   are run on.
@@ -188,9 +188,11 @@ command.
   is kept in; `Spot`, a place in the listing of an object's whole code; and `Driven`, two of
   those maps -- which line a source-driven tab's assembly side follows and which symbol was
   chosen.
-- `src/history.rs` — one tab's back/forward trail.
+- `src/order.rs` — one list of places, newest first and no two the same: what a tab's trail,
+  the record of visits and the two recent orders on disk are all made of.
+- `src/history.rs` — one tab's back/forward trail: an `Order` of places and a cursor into it.
 - `src/visits.rs` — everywhere the reader has been, across every tab: what the History panel
-  lists.
+  lists, and an `Order` and nothing else.
 - `src/bookmarks.rs` — the reader's bookmarks: a saved place and the name it was made under,
   in the order they were added; saved in `project.toml`, live only against what is loaded.
 - `src/naming.rs` — a demangled name cut down to the `module::fn_name` a tab is called by.

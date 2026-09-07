@@ -149,7 +149,7 @@ fn retaining_entries_thins_every_trail_and_carries_the_cursors() {
     docs.retain_entries(|document| *document != file("gone.rs"));
 
     let trail = docs.trail(id).expect("open");
-    assert!(trail.entries() == [Stop::whole(file("a.rs")), Stop::whole(file("b.rs"))]);
+    assert!(trail.entries() == [Stop::whole(file("b.rs")), Stop::whole(file("a.rs"))]);
     assert!(trail.current().map(|stop| &stop.document) == Some(&file("b.rs")));
     assert!(!docs.contains(id, &Stop::whole(file("gone.rs"))));
 }

@@ -465,8 +465,8 @@ fn a_saved_history_with_duplicates_restores_without_them() {
     ]);
 
     let restored = session.resolve_history(&objects);
-    // Collapsed onto the newest occurrence.
-    assert!(restored.entries() == [tab(&objects[1]), tab(&objects[0]),]);
+    // Collapsed onto the newest occurrence, which is the first.
+    assert!(restored.entries() == [tab(&objects[0]), tab(&objects[1]),]);
 }
 
 /// A tab's whole trail goes out and comes back: every place on it, the cursor wherever
@@ -504,7 +504,8 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
             false,
             SavedUi::default(),
         );
-        assert_eq!(session.tabs[0].cursor, 2 - back);
+        // Newest first, so a cursor `back` steps from the newest is at index `back`.
+        assert_eq!(session.tabs[0].cursor, back);
         assert_eq!(session.tabs[0].entries.len(), 3);
         let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
 
@@ -519,9 +520,10 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
                 == Some(&current)
         );
         for (index, entry) in as_document(&restored[0]).2.iter().enumerate() {
-            assert!(entry.document == places(&objects)[index]);
-            assert_eq!(entry.asm_row, 10 + index);
-            assert_eq!(entry.src_row, 20 + index);
+            let place = 2 - index;
+            assert!(entry.document == places(&objects)[place]);
+            assert_eq!(entry.asm_row, 10 + place);
+            assert_eq!(entry.src_row, 20 + place);
         }
         // What the restore raises is the tab showing the restored active document.
         assert!(session.resolve(&objects).as_ref() == Some(&current));
@@ -580,7 +582,7 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
             .1
             .current()
             .map(|stop| &stop.document)
-            == Some(&tab(&objects[0]))
+            == Some(&tab(&objects[1]))
     );
     assert!(as_document(&restored[0]).1.can_forward());
     let rows: Vec<usize> = as_document(&restored[0])
@@ -2158,7 +2160,7 @@ fn a_project_in_app_storage_is_remembered_relative_to_it() {
     assert!(text.contains("/src/kernel/kernel.avproj"), "{text}");
 
     // And back: what the file holds is read as the paths the app works in.
-    assert_eq!(load_recents(&store).ids(), [unsaved, elsewhere]);
+    assert_eq!(load_recents(&store).entries(), [unsaved, elsewhere]);
 }
 
 /// A project file under a `projects/` directory the test never makes: the path is the
@@ -2167,35 +2169,24 @@ fn kept_at(name: &str) -> PathBuf {
     PathBuf::from(format!("/state/projects/{name}.{PROJECT_EXTENSION}"))
 }
 
-/// The order *is* the answer to "which project was last open", so touching the one already
-/// at the front changes nothing and writes no file.
-#[test]
-fn touching_a_project_moves_it_to_the_front_once() {
-    let mut recents = Recents::default();
-    assert!(recents.touch(kept_at("a")));
-    assert!(recents.touch(kept_at("b")));
-    assert_eq!(recents.ids(), [kept_at("b"), kept_at("a")]);
-    assert_eq!(recents.first(), Some(&kept_at("b")));
-
-    // Already first: no change, and so no write.
-    assert!(!recents.touch(kept_at("b")));
-    // And one that is in the list is moved rather than repeated.
-    assert!(recents.touch(kept_at("a")));
-    assert_eq!(recents.ids(), [kept_at("a"), kept_at("b")]);
-}
-
 /// Bounded, because this file is appended to for as long as the app is ever used. What
 /// falls off the end is a place in the order and never a project. The bound is the
 /// **file's**, applied on the way out, which is what lets the pads share one order type
 /// with a list the panel is holding whole.
 #[test]
-fn the_recent_list_is_bounded() {
+fn the_recent_list_is_bounded_where_it_is_written() {
+    let base = directory(line!());
+    let store = Store::at(&base);
+
     let mut recents = Recents::default();
     for n in 0..MAX_ORDER + 10 {
         recents.touch(kept_at(&format!("{n}")));
     }
-    let stored = recents.capped();
-    assert_eq!(stored.ids().len(), MAX_ORDER);
+    assert_eq!(recents.len(), MAX_ORDER + 10);
+
+    write_recents(&store, recents);
+    let stored = load_recents(&store);
+    assert_eq!(stored.entries().len(), MAX_ORDER);
     assert_eq!(
         stored.first(),
         Some(&kept_at(&format!("{}", MAX_ORDER + 9)))
@@ -2268,7 +2259,7 @@ fn no_project_open_means_nothing_is_written_and_nothing_is_made() {
     );
 
     assert!(!store.projects().exists(), "a project was made anyway");
-    assert_eq!(load_recents(&store).ids(), Vec::<PathBuf>::new());
+    assert_eq!(load_recents(&store).entries(), Vec::<PathBuf>::new());
 }
 
 /// Startup: the front of the recent list, both halves of it.
@@ -2642,7 +2633,7 @@ fn a_source_places_line_is_written_before_its_document_and_comes_back() {
         false,
         SavedUi::default(),
     );
-    assert_eq!(session.tabs[0].entries[1].src_line, Some(42));
+    assert_eq!(session.tabs[0].entries[0].src_line, Some(42));
 
     let text = toml::to_string(&session).expect("serialises");
     let line = text.find("src_line = 42").expect("the line is written");
@@ -2755,17 +2746,17 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
     let restored = session.resolve_tabs(&objects);
     assert!(
         as_document(&restored[0]).1.entries()
-            == [Stop::at(code.clone(), 0x10), Stop::at(code.clone(), 0x40)],
+            == [Stop::at(code.clone(), 0x40), Stop::at(code.clone(), 0x10)],
         "the trail came back as one place"
     );
-    // Each place with the row it was left at: the first where the reader had scrolled to,
-    // the second where the jump landed.
+    // Each place with the row it was left at: the newer where the jump landed, the older
+    // where the reader had scrolled to.
     let addresses: Vec<Option<u64>> = as_document(&restored[0])
         .2
         .iter()
         .map(|entry| entry.address)
         .collect();
-    assert_eq!(addresses, [Some(0x10), Some(0x40)]);
+    assert_eq!(addresses, [Some(0x40), Some(0x10)]);
 }
 
 /// An address is a claim about a layout: a rebuilt binary takes it with the rows and

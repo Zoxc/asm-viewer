@@ -232,16 +232,16 @@ already let go of.
 opened first.
 **Which project to reopen is the first entry and not a field of its own**; a `last` beside the list
 would be a second answer the order already gives. It is an *order* and not an index of what exists
-(the files are that), which is why `MAX_RECENTS` (50) is safe and why nothing prunes a path
+(the files are that), which is why `MAX_ORDER` (50) is safe and why nothing prunes a path
 whose file has gone: repairing it on load would write a file on a startup where the reader did
 nothing. A path under `base` is written **relative to it** and every other path absolutely, so
 moving the state directory does not lose every unsaved project at once; in memory they are all
 absolute, the relative spelling belonging to the file and nowhere else (`write_recents`).
 `Order::touch` answers whether anything moved, so reopening the project already at the front
-writes nothing. The order itself is `store::Order<Id>`, one capped most-recent-first list that the
-projects and the scratchpads both are. The recent-projects view reads each row's name out of that
-project's own file, never out of this file: a copy in here would be a second copy to keep in step
-with the one the user edits.
+writes nothing. The order itself is `order::Order<T>`, the newest-first list every list of places
+in the app is: the projects', the scratchpads', a tab's trail and the record of visits. The
+recent-projects view reads each row's name out of that project's own file, never out of this file:
+a copy in here would be a second copy to keep in step with the one the user edits.
 
 **Bookmarks are the project file's** (`src/bookmarks.rs`; the panel over them is
 `agents/Sidebar.md`'s). A bookmark is a place the reader chose to be able to come back to, which is
@@ -284,7 +284,7 @@ stored name changing would empty every saved bar. It is a **string** and not a s
 an unknown variant is a parse error and a session that will not parse is moved aside whole
 (`Store::read`): a page this build lacks costs that one tab, where an error would cost every tab,
 every trail and the record of visits. **A document `tabs` entry is a whole trail**: `temporal` +
-`cursor` + `entries`, every place the tab has shown oldest first with the cursor on the one it
+`cursor` + `entries`, every place the tab has shown newest first with the cursor on the one it
 showed, so that Back works across a restart. Reopening after a rebuild is this app's daily
 loop, and a trail lost on every restart would be worth little; the cost is a file a few entries
 longer per tab, capped at `history::MAX_ENTRIES` (50) per trail. Each place carries **the rows both
@@ -336,9 +336,10 @@ of it and the app must open somewhere) while **a trail's places and the visits a
 of places the reader cannot get back to is worse than a short list). A source-driven entry resolves
 against nothing, so it neither degrades nor drops: a deleted file comes back as a tab over the
 pane's own "Source file not found". `History::rebuilt` is the one walk both a restore and a
-file-close go through for each trail, carrying the cursor to the last survivor at or before it.
-`History::restored` also collapses duplicates and trims to the newest `MAX_ENTRIES` (50, per tab),
-and `Visits::restored` does the same for the record, at its own `MAX_VISITS` (200).
+file-close go through for each trail, carrying the cursor to the newest survivor at or older than
+it. `History::restored` also collapses duplicates and trims to the newest `MAX_ENTRIES` (50, per
+tab), and `Visits::restored` does the same for the record, at its own `MAX_VISITS` (200) -- both by
+collecting an `Order`, which is where collapsing duplicates onto their newest occurrence lives.
 
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
 two of the three things driving it sit outside the component tree.

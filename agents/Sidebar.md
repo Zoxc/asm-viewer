@@ -122,8 +122,8 @@ one member at a time). Three decisions inside it matter. A tab **showing** a pla
 closes with it, and the selection follows the tabs rather than degrading (a file takes its objects
 and their symbols together, so there is nothing to fall back to), while every other tab keeps its
 slot and loses the places in the file off its trail, with the cursor carried. The record of visits
-**drops** them through the same walk a restore uses, so the two cannot drift. And the unit is the
-**path**, so one file opened twice closes once.
+**drops** them the same way, both being one `Order` (`src/order.rs`), so the two cannot drift. And
+the unit is the **path**, so one file opened twice closes once.
 
 **The Bookmarks list is the reader's own** (`src/ui/bookmarks_view.rs` over `src/bookmarks.rs`;
 `agents/Persistence.md` for where it is saved), where the History is the app's record of where they

@@ -732,7 +732,12 @@ fn recent_symbols(shown: Option<&Shown>, visits: &Visits) -> Vec<Symbol> {
     shown
         .map(|shown| shown.studied.symbol.clone())
         .into_iter()
-        .chain(visits.recent().filter_map(|entry| entry.symbol().cloned()))
+        .chain(
+            visits
+                .entries()
+                .iter()
+                .filter_map(|entry| entry.symbol().cloned()),
+        )
         .collect()
 }
 

@@ -14,6 +14,7 @@ mod lanes;
 mod links;
 mod lsp;
 mod naming;
+mod order;
 mod panics;
 mod pixels;
 mod positions;

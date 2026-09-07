@@ -1123,7 +1123,7 @@ fn open_recent_is_dim_when_there_is_nothing_in_it() {
     );
 }
 
-/// The documents on the trail behind `id`, oldest first: what a test asserts a trail by,
+/// The documents on the trail behind `id`, newest first: what a test asserts a trail by,
 /// a stop's own address being the business of the tests that walk one inside a listing.
 fn stops_of(states: &ProjectStates, id: DocId) -> Vec<Stop> {
     states
@@ -1609,7 +1609,7 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
     // behind the states it is over.
     settle(&mut test);
     assert_eq!(states.open.documents().len(), 1);
-    assert_eq!(cursor_of(&states), Some(2));
+    assert_eq!(cursor_of(&states), Some(0));
 
     let side = toggle_size();
     let columns = nav_button_columns(&test);
@@ -1639,7 +1639,7 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
     );
 
     press_at(&mut test, back);
-    assert_eq!(cursor_of(&states), Some(0));
+    assert_eq!(cursor_of(&states), Some(2));
     assert!(
         !washes_under_the_pointer(&mut test, back),
         "back is on the oldest entry and still looks live"
@@ -1647,7 +1647,7 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
 
     // A press on a dimmed button is not a press at all.
     press_at(&mut test, back);
-    assert_eq!(cursor_of(&states), Some(0), "a dimmed button navigated");
+    assert_eq!(cursor_of(&states), Some(2), "a dimmed button navigated");
 
     press_at(&mut test, forward);
     assert_eq!(cursor_of(&states), Some(1));
@@ -2984,7 +2984,7 @@ fn switching_to_an_open_tab_is_not_a_visit() {
     go(&first);
     go(&second);
     test.sync_and_update();
-    assert!(states.visits.peek().entries() == [first.clone(), second.clone()]);
+    assert!(states.visits.peek().entries() == [second.clone(), first.clone()]);
 
     // Back to the first through the strip: it is already open, so the reader has gone
     // nowhere and the record stays as it was.
@@ -2992,7 +2992,7 @@ fn switching_to_an_open_tab_is_not_a_visit() {
     test.sync_and_update();
     assert!(states.open.active() == Some(first.clone()));
     assert!(
-        states.visits.peek().entries() == [first.clone(), second.clone()],
+        states.visits.peek().entries() == [second.clone(), first.clone()],
         "a strip click was recorded as a visit"
     );
 
@@ -3000,7 +3000,7 @@ fn switching_to_an_open_tab_is_not_a_visit() {
     // raises the tab that shows it rather than opening another.
     go(&first);
     test.sync_and_update();
-    assert!(states.visits.peek().entries() == [second, first.clone()]);
+    assert!(states.visits.peek().entries() == [first.clone(), second]);
     assert_eq!(states.open.documents().len(), 2);
 
     // And closing the tab lands on the neighbour without recording it.
@@ -5074,9 +5074,9 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     assert!(
         stops_of(&states, id)
             == vec![
-                Stop::whole(document.clone()),
-                Stop::on(document.clone(), 20),
                 Stop::on(document.clone(), 40),
+                Stop::on(document.clone(), 20),
+                Stop::whole(document.clone()),
             ],
         "the two lines are not two places behind the file"
     );
@@ -5281,7 +5281,8 @@ fn a_location_row_opens_its_symbol() {
     assert!(states
         .visits
         .peek()
-        .recent()
+        .entries()
+        .iter()
         .any(|entry| *entry == document));
 }
 
@@ -9577,7 +9578,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
 
     // Still not a navigation: nothing was opened or visited by either press.
     assert!(states.open.active().is_none());
-    assert_eq!(states.visits.peek().recent().count(), 0);
+    assert_eq!(states.visits.peek().entries().len(), 0);
 }
 
 /// A row a branch lands on has a separator **row of its own** above it, so the listing
@@ -12058,7 +12059,7 @@ fn the_front_of_the_order_is_the_pad_that_opens() {
     assert_eq!(
         pad.peek()
             .order
-            .ids()
+            .entries()
             .iter()
             .map(PadId::as_str)
             .collect::<Vec<_>>(),
@@ -12106,7 +12107,7 @@ fn a_listing_longer_than_the_order_file_is_drawn_whole() {
     pump(&mut test, || pad.peek().state().opened);
 
     assert_eq!(
-        pad.peek().order.ids().len(),
+        pad.peek().order.entries().len(),
         listing.len(),
         "the panel's list is shorter than the listing it was given"
     );
@@ -12377,7 +12378,7 @@ fn a_new_pad_is_written_and_shown_at_once() {
     assert_eq!(
         pad.peek()
             .order
-            .ids()
+            .entries()
             .iter()
             .map(PadId::as_str)
             .collect::<Vec<_>>(),
@@ -12468,7 +12469,7 @@ fn renaming_a_pad_is_a_save_and_moves_nothing() {
     assert_eq!(
         pad.peek()
             .order
-            .ids()
+            .entries()
             .iter()
             .map(PadId::as_str)
             .collect::<Vec<_>>(),
@@ -15125,7 +15126,8 @@ fn pressing_an_object_row_opens_its_code() {
     assert!(states
         .visits
         .peek()
-        .recent()
+        .entries()
+        .iter()
         .any(|entry| *entry == document));
     assert!(
         states.open.active() != Some(Document::Assembly(Selection::Object(object))),
@@ -15892,7 +15894,12 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     };
     let symbol = Document::Assembly(Selection::Symbol(twice));
     assert!(states.open.active() == Some(symbol.clone()));
-    assert!(states.visits.peek().recent().any(|entry| *entry == symbol));
+    assert!(states
+        .visits
+        .peek()
+        .entries()
+        .iter()
+        .any(|entry| *entry == symbol));
 }
 
 /// The Assembly pane over a symbol's listing, with a menu viewer above it so a row's
@@ -16133,7 +16140,7 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
-    let visits = states.visits.peek().recent().count();
+    let visits = states.visits.peek().entries().len();
 
     show_in_code(
         states.open,
@@ -16150,7 +16157,7 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000030 ");
     assert!(states.open.active() == Some(code));
-    assert_eq!(states.visits.peek().recent().count(), visits);
+    assert_eq!(states.visits.peek().entries().len(), visits);
 }
 
 /// An object of the kind a linker leaves -- one `.text` at a real address and no
@@ -16525,8 +16532,8 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     assert!(
         trail
             == [
-                Stop::whole(code.clone()),
-                Stop::at(code.clone(), add.address)
+                Stop::at(code.clone(), add.address),
+                Stop::whole(code.clone())
             ],
         "the place followed is not on the trail"
     );
@@ -17827,7 +17834,8 @@ fn a_bookmark_row_opens_its_place() {
     assert!(states
         .visits
         .peek()
-        .recent()
+        .entries()
+        .iter()
         .any(|entry| *entry == document));
 }
 
@@ -18213,7 +18221,8 @@ fn a_source_row_opens_a_source_driven_tab() {
     assert!(states
         .visits
         .peek()
-        .recent()
+        .entries()
+        .iter()
         .any(|entry| *entry == document));
 }
 
@@ -19844,10 +19853,12 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     }
     test.sync_and_update();
 
+    // Newest first, so the trail and the record read back the way they were walked.
+    let walked: Vec<Document> = documents.iter().rev().cloned().collect();
     assert!(states.open.documents() == [documents[2].clone()]);
-    assert!(trail_of(&states, id) == documents);
-    assert_eq!(cursor_of(&states), Some(2));
-    assert!(states.visits.peek().entries() == documents);
+    assert!(trail_of(&states, id) == walked);
+    assert_eq!(cursor_of(&states), Some(0));
+    assert!(states.visits.peek().entries() == walked);
     assert_eq!(
         states
             .asm_at
@@ -19864,7 +19875,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
         documents[2].clone(),
         Reach::InPlace,
     );
-    assert!(trail_of(&states, id) == documents);
+    assert!(trail_of(&states, id) == walked);
 
     navigate(states.open, Nav::Back);
     navigate(states.open, Nav::Back);
@@ -19881,7 +19892,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     test.sync_and_update();
     assert!(states.open.active() == Some(documents[1].clone()));
     // Nothing of that was a visit.
-    assert!(states.visits.peek().entries() == documents);
+    assert!(states.visits.peek().entries() == walked);
 }
 
 /// A click from outside the panes opens its place in one temporal tab, which the next such
@@ -19930,7 +19941,7 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
     );
     assert_eq!(again, Some(preview), "a second row opened a second tab");
     assert_eq!(states.open.documents().len(), 2);
-    assert!(trail_of(&states, preview) == documents[1..]);
+    assert!(trail_of(&states, preview) == [documents[2].clone(), documents[1].clone()]);
 
     // A place a tab already shows: that tab, the temporal one left as it is.
     let raised = open_document(
@@ -19950,7 +19961,7 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
     );
     assert_eq!(raised, Some(preview));
     assert!(
-        trail_of(&states, preview) == documents[1..],
+        trail_of(&states, preview) == [documents[2].clone(), documents[1].clone()],
         "raising the temporal tab pushed onto it"
     );
 
@@ -19966,9 +19977,9 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
     assert!(
         states.visits.peek().entries()
             == [
-                documents[1].clone(),
+                documents[2].clone(),
                 documents[0].clone(),
-                documents[2].clone()
+                documents[1].clone()
             ]
     );
 }

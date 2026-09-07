@@ -567,9 +567,10 @@ impl Component for HistoryPanel {
         // nothing visited matches -- and the two are worth different words.
         let (rows, visited): (Vec<Element>, bool) = {
             let visits = visits.read();
-            let visited = visits.recent().len() > 0;
+            let visited = !visits.entries().is_empty();
             let rows = visits
-                .recent()
+                .entries()
+                .iter()
                 // The whole name and not the shortened one the row draws: the generic
                 // arguments a tab has no room for are still worth searching for.
                 .filter(|entry| matcher.matches(&entry_name(entry)))

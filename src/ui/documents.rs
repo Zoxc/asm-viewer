@@ -101,7 +101,7 @@ pub(crate) fn open_stop(
     // Recorded whatever else happens, and only when it changes the record: `State::write`
     // notifies whether or not the value changes, and re-opening the place at the top must
     // not wake the History panel.
-    if visits.peek().would_record(&target) {
+    if visits.peek().would_touch(&target) {
         visits.write().record(target.clone());
     }
 
@@ -871,9 +871,10 @@ impl Nav {
     /// cannot disagree.
     pub(crate) fn destination(self, trail: &History) -> Option<&Stop> {
         let cursor = trail.cursor()?;
+        // The trail is newest first, so a step back is a step *up* the indices.
         let index = match self {
-            Self::Back => cursor.checked_sub(1)?,
-            Self::Forward => cursor + 1,
+            Self::Back => cursor + 1,
+            Self::Forward => cursor.checked_sub(1)?,
         };
         trail.entries().get(index)
     }

@@ -329,23 +329,6 @@ fn row(id_text: &str, name: &str) -> PadListing {
     }
 }
 
-/// The order is an *order* and not an index of what exists, so `touch` answers whether
-/// anything moved — which is the whole of why a startup that reopens the pad already at the
-/// front writes no file.
-#[test]
-fn the_order_answers_whether_anything_moved() {
-    let mut order = PadOrder::default();
-
-    assert!(order.touch(id("one")));
-    assert!(order.touch(id("two")));
-    assert_eq!(order.first(), Some(&id("two")));
-    // Already at the front: nothing moved, so nothing is written.
-    assert!(!order.touch(id("two")));
-    // Behind the front: it moves, and is not repeated.
-    assert!(order.touch(id("one")));
-    assert_eq!(order.ids(), [id("one"), id("two")]);
-}
-
 /// The cap is the **file**'s and not the list's. The panel draws this order and the listing
 /// it is built from is every pad there is, so an order that dropped its own tail would
 /// leave the pads past the fiftieth with no row to open them from. What the file keeps is
@@ -357,12 +340,12 @@ fn the_order_keeps_every_pad_and_the_file_keeps_fifty() {
         .map(|n| row(&format!("pad-{n}"), ""))
         .collect();
     let mut order = PadOrder::of(&listing);
-    assert_eq!(order.ids().len(), listing.len());
+    assert_eq!(order.entries().len(), listing.len());
 
     // Showing one pad is not an occasion to drop another.
     assert!(order.touch(id("pad-9")));
-    assert_eq!(order.ids().len(), listing.len());
-    assert!(order.ids().contains(&id(&format!("pad-{MAX_ORDER}"))));
+    assert_eq!(order.entries().len(), listing.len());
+    assert!(order.entries().contains(&id(&format!("pad-{MAX_ORDER}"))));
 
     let base = directory(line!());
     let store = Store::at(&base);
@@ -377,7 +360,7 @@ fn the_order_keeps_every_pad_and_the_file_keeps_fifty() {
     remember(&store, &id("fresh"));
 
     let written = load_order(&store);
-    assert_eq!(written.ids().len(), MAX_ORDER);
+    assert_eq!(written.entries().len(), MAX_ORDER);
     assert_eq!(written.first(), Some(&id("fresh")));
 }
 

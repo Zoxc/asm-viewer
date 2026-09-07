@@ -49,10 +49,10 @@ over what it built last rather than leaving that file on the disk under the old 
 sits beside the pads rather than at the top of the state directory, so it is not a second file to
 tell apart from the projects' one, and it is a file where every sibling is a directory, so the
 listing steps over it with no special case. `PadOrder` **is** the projects' order -- both are
-`store::Order<Id>`, one type in `src/store.rs`: the front is what to open, `touch` answers whether
+`order::Order<T>`, one type in `src/order.rs`: the front is what to open, `touch` answers whether
 anything *moved* (which is what keeps a startup that reopens the front pad from writing a file),
-and nothing prunes itself on load. **`MAX_ORDER` bounds the file and not the list**, `capped()`
-cutting what goes out rather than what a `touch` keeps. That is the pads' rule and the projects
+and nothing prunes itself on load. **`MAX_ORDER` bounds the file and not the list**, `remember`
+truncating what goes out rather than what a `touch` keeps. That is the pads' rule and the projects
 inherited it: the list here is what the panel draws, and the panel is the only way to open a pad,
 so an order that dropped its own tail would drop exactly the pads the listing below goes to the
 trouble of appending. It is also loaded through `Store::read` like everything else, which is what

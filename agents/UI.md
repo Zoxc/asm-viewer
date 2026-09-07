@@ -162,8 +162,8 @@ order.
 **`Active` is a derivation, not a state.** What is open is `Open { strip, docs }`: the `Strip`
 (`src/tabs.rs`), whose `tabs` vec *is* the list of open tabs in the reader's own order and which
 holds the tab on screen beside it, and `Docs`, the table holding the **trail** behind each document
-tab's `DocId`, every place the tab has shown, oldest first, with a cursor on the one it shows now
-(`History`, one per tab). A tab is a
+tab's `DocId`, every place the tab has shown, newest first, with a cursor on the one it shows now
+(`History`, one per tab: an `Order` of places, `src/order.rs`). A tab is a
 trail and not a document: a link followed inside it pushes onto the trail, Back and Forward move its
 cursor, and what the tab shows is `Docs::get`, the entry under the cursor. There is no second list.
 The active tab is the strip's own, read through the table, which is the whole of `active_tab`, and

@@ -492,7 +492,8 @@ fn recent(asking: &Asking, visits: &Visits) -> Listed {
         return Listed::default();
     };
     let rows: Vec<Row> = visits
-        .recent()
+        .entries()
+        .iter()
         .filter_map(|document| match document {
             Document::Source(path) => found_under(&root, Path::new(&**path)),
             _ => None,

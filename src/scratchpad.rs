@@ -22,8 +22,9 @@ use std::{
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cargo::{self, Diagnostic};
+use crate::order::Order;
 use crate::process::{self, RunEvent, Stream};
-use crate::store::{write_atomically, Order, Store, RECENTS_FILE};
+use crate::store::{write_atomically, Store, MAX_ORDER, RECENTS_FILE};
 
 const MANIFEST_NAME: &str = "Cargo.toml";
 const SOURCE_DIR: &str = "src";
@@ -608,7 +609,8 @@ pub fn remember(store: &Store, id: &PadId) {
     if !order.touch(id.clone()) {
         return;
     }
-    if let Err(error) = store.write_toml(&path, &order.capped()) {
+    order.truncate(MAX_ORDER);
+    if let Err(error) = store.write_toml(&path, &order) {
         log::warn!("could not save {}: {error}", path.display());
     }
 }
@@ -641,7 +643,7 @@ pub fn pads(store: &Store) -> Vec<PadListing> {
     };
 
     let mut listed: Vec<PadListing> = load_order(store)
-        .into_ids()
+        .into_entries()
         .into_iter()
         .filter_map(listing)
         .collect();

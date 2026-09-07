@@ -37,8 +37,9 @@ use crate::bookmarks::Bookmark;
 use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
 use crate::history::{History, Stop};
+use crate::order::Order;
 use crate::positions::{Driven, Positions, Spot};
-use crate::store::{Order, Store, RECENTS_FILE};
+use crate::store::{Store, MAX_ORDER, RECENTS_FILE};
 use crate::tabs::Page;
 use crate::visits::Visits;
 
@@ -616,7 +617,7 @@ pub enum OnScreen<'a> {
     Document(&'a Document),
 }
 
-/// One of the open tabs: a page, or a document's trail, oldest place first, with the
+/// One of the open tabs: a page, or a document's trail, newest place first, with the
 /// cursor on the place it showed and whether it was the temporal tab.
 ///
 /// The whole trail and not the current place alone, so that Back works across a
@@ -688,7 +689,8 @@ pub struct SavedEntry {
 /// [`Session::resolve_tabs`] hands back, in the order the bar was in.
 ///
 /// A document's trail is live, its cursor carried past the entries that no longer
-/// resolve; `entries` holds the rows of every place still on it, in the trail's own order.
+/// resolve; `entries` holds the rows of every place still on it, in the trail's own
+/// order, newest place first.
 #[derive(Clone, PartialEq)]
 pub enum RestoredTab {
     Page(Page),
@@ -715,7 +717,7 @@ pub struct RestoredEntry {
     pub src_line: Option<u32>,
 }
 
-/// The record of visits in saved form: every place visited, oldest first. No cursor --
+/// The record of visits in saved form: every place visited, newest first. No cursor --
 /// the cursors are the tabs' -- so nothing has to precede the array of tables.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedHistory {
@@ -737,6 +739,10 @@ impl SavedHistory {
 
 /// The projects the reader has had open, most recently first: `recents.toml`.
 ///
+/// An *order* and not an index of what exists -- the project files are that -- which is
+/// why nothing here prunes a path whose file has gone: [`recent_projects`] does it at the
+/// point of use, where the repair is free.
+///
 /// A path under the app's own storage is written **relative to it** and every other path
 /// absolutely, so that moving the state directory — a different user, a restored backup —
 /// does not lose every unsaved project. In memory they are all absolute: the relative
@@ -751,7 +757,7 @@ fn load_recents(store: &Store) -> Recents {
     store
         .read::<Recents>(RECENTS_FILE)
         .unwrap_or_default()
-        .into_ids()
+        .into_entries()
         .into_iter()
         .map(|path| match path.is_relative() {
             true => store.path(path),
@@ -781,7 +787,7 @@ pub struct Recent {
 /// never prunes itself on load and this is the point of use where the repair is free.
 pub fn recent_projects(store: &Store) -> Vec<Recent> {
     load_recents(store)
-        .into_ids()
+        .into_entries()
         .into_iter()
         .filter_map(|path| {
             if !path.is_file() {
@@ -1638,10 +1644,10 @@ fn remember(store: &Store, path: &Path) {
 
 /// The one write of that file, which is where the paths under the store go back to
 /// relative and where the order is cut to what the file keeps.
-fn write_recents(store: &Store, recents: Recents) {
+fn write_recents(store: &Store, mut recents: Recents) {
+    recents.truncate(MAX_ORDER);
     let stored: Recents = recents
-        .capped()
-        .into_ids()
+        .into_entries()
         .into_iter()
         .map(|path| match path.strip_prefix(store.base()) {
             Ok(relative) => relative.to_path_buf(),
