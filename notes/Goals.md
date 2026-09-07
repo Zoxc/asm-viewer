@@ -281,7 +281,12 @@ leaves this list when it is. That is a move made on request, like everything els
   itself (`ScrollView`/`VirtualScrollView` pass `theme: None`, the override fields are
   `pub(crate)` — the same wall the thicker-scrollbars item is deferred behind), so no
   `CursorArea` can be put on the bar. What is left is the pane above it saying the arrow and
-  the rows overriding that, which wants checking against how freya resolves two of them.
+  the rows overriding that, which wants checking against how freya resolves two of them. One
+  I-beam left behind has been found and fixed since, and it was not this one: the section
+  view's text rows chained an `on_pointer_out` onto what `code_row` had already put one on,
+  and freya keeps one handler per event name, so the row's own — the one that puts the icon
+  back — was replaced and never ran. Leaving such a row for the bar above it left the I-beam
+  on screen. The scroll bar is still to answer for itself.
 - [ ] Give the Assembly pane one background, with a listing on it or without. The pane paints
   `asm_pane_bg` — a shade off the interface white, which is what marks it out as the side the
   code is read on — and two of the four answers it can give instead of a listing paint over it:

@@ -16776,6 +16776,43 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     );
 }
 
+/// **Leaving a row puts the pointer's icon back**, whatever kind of row it is. `code_row`
+/// sets the icon and its own `on_pointer_out` is the only thing that resets it, so a row
+/// kind that chains a handler of that name onto what it is handed takes the reset away --
+/// freya keeps one handler per event name, and nothing says which one won. The text rows
+/// of an object's listing did exactly that, and the I-beam followed the reader up out of
+/// the listing and onto the bar over it.
+#[test]
+fn leaving_a_text_row_puts_the_pointers_icon_back() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code, Reach::NewTab);
+    settle(&mut test);
+
+    // A label's text: the I-beam, as over any other text.
+    let label = label_area(&test, "sum_to:").expect("sum_to is labelled");
+    test.move_cursor(inside(label));
+    settle(&mut test);
+    assert_eq!(icon_now(), CursorIcon::Text, "the text is not the I-beam");
+
+    // And up out of the rows, onto the bar naming what the pane is drawing.
+    test.move_cursor(((label.origin.x + 4.0) as f64, 2.0));
+    settle(&mut test);
+    assert_eq!(
+        icon_now(),
+        CursorIcon::Default,
+        "the I-beam followed the pointer off the rows"
+    );
+}
+
 /// One function is told from the next by a rule, the way one basic block is told from the
 /// block above it: the row over a stretch carries it, so a symbol's label is never drawn
 /// against the last row of the function before it.
