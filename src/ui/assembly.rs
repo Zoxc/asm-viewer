@@ -659,14 +659,46 @@ fn gutter(width: usize, arrows: RowArrows) -> impl IntoElement {
         })
 }
 
-/// How wide a gutter of `width` lanes is drawn, for a row that has no gutter and wants
-/// its address column to start where an instruction row's does.
-pub(crate) fn gutter_width(width: usize) -> f32 {
+/// How wide a gutter of `width` lanes is drawn, which is what a row giving the column up
+/// takes ([`gutter_column`]).
+fn gutter_width(width: usize) -> f32 {
     if width == 0 {
         return 0.0;
     }
     let grid = pixel_grid();
     grid.edge(grid.edge(width as f32 * LANE_WIDTH + ARROW_WIDTH) + GUTTER_PAD)
+}
+
+/// The gutter's column, as every row that takes one takes it: `arrows` for a row drawing
+/// its own branches, and [`None`] for a row that draws none and only gives the column up,
+/// so the address beside it starts where an instruction row's does. Nothing at all for a
+/// listing of no lanes -- a symbol branching nowhere inside itself, which most do -- since
+/// an empty column would still be a column, and that is why the gutter mark cannot sit
+/// inside it.
+pub(crate) fn gutter_column(width: usize, arrows: Option<RowArrows>) -> Option<Element> {
+    if width == 0 {
+        return None;
+    }
+    Some(match arrows {
+        Some(arrows) => gutter(width, arrows).into_element(),
+        None => rect().width(Size::px(gutter_width(width))).into_element(),
+    })
+}
+
+/// The address column, as an instruction row and an object listing's text rows both draw
+/// it: wide enough for a 64-bit address and the space after it, so every row's text starts
+/// at one x. [`None`] for a row that has no address of its own and gives the column up all
+/// the same.
+pub(crate) fn address_label(address: Option<u64>) -> Element {
+    label()
+        .text(match address {
+            Some(address) => format!("{address:016X} "),
+            None => String::new(),
+        })
+        .min_width(Size::px(ADDRESS_WIDTH))
+        .color(palette().address_fg)
+        .max_lines(1)
+        .into_element()
 }
 
 /// The hairline a [`SeparatorRow`] draws across its middle, between the gutter and the
@@ -754,7 +786,7 @@ impl Component for SeparatorRow {
                 measured: false,
             },
             std::iter::once(code_mark(false))
-                .chain((width > 0).then(|| gutter(width, self.arrows).into_element()))
+                .chain(gutter_column(width, Some(self.arrows)))
                 .collect(),
             None::<Text<NoLinks>>,
             None,
@@ -813,6 +845,223 @@ impl KeyExt for InstructionRow {
     }
 }
 
+/// The text instruction `index`'s row draws after its address, and the line that row
+/// copies.
+///
+/// The disassembler says which span the link replaced, so the text is three parts: the
+/// spans before that span, the link, and the spans after it. That keeps the link in the
+/// operand's own position, inside the brackets of a memory operand and after the `rip+`
+/// of a rip-relative one. The link is an inline child of the row's one paragraph, so to
+/// the text engine it is one unit of the row's text.
+///
+/// **A column into what is drawn is a column into what is copied.** Both halves come out
+/// of one [`split`], and the drawn spans differ from [`instruction_line`]'s text only in
+/// the padding to the operand column, which is drawn in non-breaking spaces -- one unit
+/// each, as a plain space is. The tests hold the two to each other.
+///
+/// `ctrl` and `alt` are handed in and not reached for: they are the row's, and a row
+/// drawn in a harness with no modifiers has neither.
+fn instruction_text(
+    data: &AsmData,
+    index: usize,
+    chars: RowChars,
+    ctrl: Option<State<bool>>,
+    alt: Option<State<bool>>,
+) -> Text<Option<InlineLink>> {
+    let instruction = &data.assembly.instructions[index];
+    let (head, link, tail) = split(instruction, linked(&data.assembly, index));
+    let inline: Option<InlineLink> = match link {
+        // The relocation target's name -- in the operand the relocation applies to,
+        // or appended where the formatter offered none to put it in (`None`).
+        Some(Link::Relocation) | None => instruction.relocation.as_ref().map(|target| {
+            DoorLabel {
+                text: target.display().to_owned(),
+                door: Door::Symbol {
+                    object: data.object().clone(),
+                    target: target.clone(),
+                    code_tab: data.code_tab,
+                },
+            }
+            .inline(ctrl, alt)
+        }),
+        // A branch's displacement is the other way to follow it: the row it lands on,
+        // and the run a press on that row would have made.
+        Some(Link::Branch) => {
+            let edge = data.assembly.edge_from(index);
+            let span = instruction
+                .branch_span
+                .and_then(|i| instruction.format.get(i));
+            edge.zip(span).map(|(edge, (text, _))| {
+                DoorLabel {
+                    text: text.clone(),
+                    door: Door::Row {
+                        to: data.base + data.lanes().row_of(edge.to),
+                        at: data.position(edge.to),
+                    },
+                }
+                .inline(ctrl, alt)
+            })
+        }
+        // Where the instruction goes, with no name and no row here: the door into the
+        // object's code at that address, in either listing -- the unified view's own
+        // rows included, where the target may be screens away.
+        Some(Link::Target) => {
+            let span = instruction
+                .target_span
+                .and_then(|i| instruction.format.get(i));
+            instruction.target.zip(span).map(|(target, (text, _))| {
+                DoorLabel {
+                    text: text.clone(),
+                    door: Door::Address {
+                        object: data.object().clone(),
+                        address: data.placed(target),
+                    },
+                }
+                .inline(ctrl, alt)
+            })
+        }
+    };
+    let appended = link.is_none() && inline.is_some();
+
+    // Whatever text runs up to the link ends in the formatter's padding to the operand
+    // column, and Skia trims trailing whitespace when it measures a paragraph — which
+    // would butt the name right up against the mnemonic. Make that padding non-breaking
+    // to keep the column; one unit each way, so the columns still agree with the plain
+    // text.
+    let spans = |run: &[(String, SpanKind)], pad_end: bool| {
+        let last = run.len().saturating_sub(1);
+        run.iter()
+            .enumerate()
+            .map(|(i, (text, kind))| {
+                let text = if pad_end && i == last {
+                    let kept = text.trim_end_matches(' ');
+                    format!("{kept}{}", "\u{a0}".repeat(text.len() - kept.len()))
+                } else {
+                    text.clone()
+                };
+
+                Span::new(text)
+                    .color(kind_color(*kind))
+                    .assembly_font()
+                    .font_weight(if *kind == SpanKind::Mnemonic {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut head = spans(head, link.is_some() || appended);
+    if appended {
+        // The space `asm_line` puts before an appended name, non-breaking for the reason
+        // above.
+        head.push(
+            Span::new("\u{a0}")
+                .color(kind_color(SpanKind::Other))
+                .assembly_font(),
+        );
+    }
+
+    Text {
+        line: instruction_line(&data.assembly, index),
+        head,
+        tail: spans(tail, false),
+        chars,
+        // Nothing in an instruction is a name a language server can place: a question is
+        // put by file, line and column, and an assembly row is in no file
+        // (`notes/Goals.md`).
+        names: Vec::new(),
+        on_hover: None,
+        links: inline,
+    }
+}
+
+/// What the right button offers on instruction `index`'s row: the line's locations, where
+/// the debug info gives the row a line; the row shown among its neighbours, where it is
+/// not already; and the symbol bookmarked, always. `at` is where the row points on the
+/// source side, worked out by the caller, which needs the same answer.
+///
+/// Every state is handed in, because reaching for a context is a hook and the handler
+/// runs long after the render that built it.
+#[allow(clippy::too_many_arguments)]
+fn instruction_menu(
+    doors: Doors,
+    places: Places,
+    located: State<Located>,
+    dock: State<DockArea>,
+    bookmarked: State<Bookmarks>,
+    objects: State<Vec<Arc<Object>>>,
+    data: &AsmData,
+    index: usize,
+    at: Option<LinePos>,
+) -> Rc<dyn Fn(Event<PressEventData>, Option<usize>)> {
+    let instruction = &data.assembly.instructions[index];
+    // The source-driven tab this listing is the assembly side of, if it is one: a
+    // location found from it is chosen for it.
+    let subject = data.subject.clone();
+    // The symbol this row is code of, in either listing: what the menu bookmarks.
+    let symbol_document = Document::Assembly(Selection::Symbol(Symbol {
+        object: data.object().clone(),
+        data: data.symbol().clone(),
+    }));
+    // The row's door into the object's code, unless this listing is that already -- and
+    // from there, the door back to the symbol read alone. The door takes the placed
+    // address, which in a symbol's own listing is not the one drawn.
+    let neighbours =
+        (!data.code_tab).then(|| (data.object().clone(), data.placed(instruction.address)));
+    // The door back takes the symbol's own address, the space its listing draws.
+    // Wherever this listing is not the tab itself, which is an object's code and the
+    // assembly side of a source-driven tab: in the second the symbol has no other door,
+    // the Symbols list aside, since the tab is a file. An assembly-driven tab is the
+    // symbol already and gets none.
+    let alone = (data.code_tab || data.subject.is_some()).then(|| {
+        (
+            Symbol {
+                object: data.object().clone(),
+                data: data.symbol().clone(),
+            },
+            instruction.address,
+        )
+    });
+
+    // The column is the source pane's business: nothing in an instruction row is a name a
+    // server could be asked about.
+    Rc::new(move |e: Event<PressEventData>, _| {
+        let menu = match &at {
+            Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None, Vec::new()),
+            None => Menu::new(),
+        };
+        let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {
+            let at = at.clone();
+            MenuButton::new()
+                .on_press(move |_| {
+                    show_in_code(
+                        doors,
+                        places,
+                        object.clone(),
+                        address,
+                        at.clone(),
+                        Reach::NewTab,
+                    )
+                })
+                .child("Show in unified view")
+        }));
+        let menu = menu.maybe_child(alone.clone().map(|(symbol, address)| {
+            let at = at.clone();
+            MenuButton::new()
+                .on_press(move |_| open_as_symbol(doors, symbol.clone(), address, at.clone()))
+                .child("Open as symbol")
+        }));
+        let menu = menu.child(bookmark_item(
+            bookmarked,
+            objects,
+            symbol_document.clone(),
+            "Bookmark symbol",
+        ));
+        ContextMenu::open_from_event(&e, menu);
+    })
+}
+
 impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
         // Consumed here, in the render, because the menu handler may not run a hook.
@@ -822,225 +1071,27 @@ impl Component for InstructionRow {
         let dock = use_consume::<SidebarDock>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
-        // The source-driven tab this listing is the assembly side of, if it is one: a
-        // location found from it is chosen for it.
-        let subject = self.data.subject.clone();
-        // The symbol this row is code of, in either listing: what the menu bookmarks.
-        let symbol_document = Document::Assembly(Selection::Symbol(Symbol {
-            object: self.data.object().clone(),
-            data: self.data.symbol().clone(),
-        }));
-        let row = self.row;
-        let width = self.data.width;
-        let instruction = &self.data.assembly.instructions[self.index];
-        // The address as the listing draws it: the symbol's own, plus where the listing
-        // has placed the symbol's section.
-        let address = instruction.address.wrapping_add(self.data.bias);
-        // The row's door into the object's code, unless this listing is that already --
-        // and from there, the door back to the symbol read alone. The door takes the
-        // placed address, which in a symbol's own listing is not the one drawn.
-        let neighbours = (!self.data.code_tab).then(|| {
-            (
-                self.data.object().clone(),
-                self.data.placed(instruction.address),
-            )
-        });
-        // The door back takes the symbol's own address, the space its listing draws.
-        // Wherever this listing is not the tab itself, which is an object's code and the
-        // assembly side of a source-driven tab: in the second the symbol has no other
-        // door, the Symbols list aside, since the tab is a file. An assembly-driven tab
-        // is the symbol already and gets none.
-        let alone = (self.data.code_tab || self.data.subject.is_some()).then(|| {
-            (
-                Symbol {
-                    object: self.data.object().clone(),
-                    data: self.data.symbol().clone(),
-                },
-                instruction.address,
-            )
-        });
+        // Ctrl and Alt as a link's icon asks them: peeked from a handler, where the label
+        // reads them and is drawn again as they change. Optional, a row being drawn
+        // without them in a harness that has no modifiers.
+        let ctrl = try_consume_context::<Ctrl>().map(|ctrl| ctrl.0);
+        let alt = try_consume_context::<Alt>().map(|alt| alt.0);
 
         // Where this row points on the source side. Worked out once here rather than in
         // each of the handlers, which all need the same answer.
         let at = self.data.position(self.index);
-
-        // The disassembler says which span the link replaced, so the text is three
-        // parts: the spans before that span, the link, and the spans after it. That
-        // keeps the link in the operand's own position, inside the brackets of a memory
-        // operand and after the `rip+` of a rip-relative one. The link is an inline child
-        // of the row's one paragraph, so it is one unit of the row's text to the engine
-        // and the row's columns are the clipboard's (`instruction_line`).
-        let (head, link, tail) = split(instruction, linked(&self.data.assembly, self.index));
-        // Ctrl and Alt as the row's icon asks them: peeked from a handler, where the label
-        // below reads them and is drawn again as they change. Optional, a row being drawn
-        // without them in a harness that has no modifiers.
-        let ctrl = try_consume_context::<Ctrl>().map(|ctrl| ctrl.0);
-        let alt = try_consume_context::<Alt>().map(|alt| alt.0);
-        let code_tab = self.data.code_tab;
-        let inline: Option<InlineLink> = match link {
-            // The relocation target's name -- in the operand the relocation applies to,
-            // or appended where the formatter offered none to put it in (`None`).
-            Some(Link::Relocation) | None => instruction.relocation.as_ref().map(|target| {
-                DoorLabel {
-                    text: target.display().to_owned(),
-                    door: Door::Symbol {
-                        object: self.data.object().clone(),
-                        target: target.clone(),
-                        code_tab,
-                    },
-                }
-                .inline(ctrl, alt)
-            }),
-            // A branch's displacement is the other way to follow it: the row it lands
-            // on, and the run a press on that row would have made.
-            Some(Link::Branch) => {
-                let edge = self.data.assembly.edge_from(self.index);
-                let span = instruction
-                    .branch_span
-                    .and_then(|i| instruction.format.get(i));
-                edge.zip(span).map(|(edge, (text, _))| {
-                    DoorLabel {
-                        text: text.clone(),
-                        door: Door::Row {
-                            to: self.data.base + self.data.lanes().row_of(edge.to),
-                            at: self.data.position(edge.to),
-                        },
-                    }
-                    .inline(ctrl, alt)
-                })
-            }
-            // Where the instruction goes, with no name and no row here: the door into the
-            // object's code at that address, in either listing -- the unified view's own
-            // rows included, where the target may be screens away.
-            Some(Link::Target) => {
-                let span = instruction
-                    .target_span
-                    .and_then(|i| instruction.format.get(i));
-                instruction.target.zip(span).map(|(target, (text, _))| {
-                    DoorLabel {
-                        text: text.clone(),
-                        door: Door::Address {
-                            object: self.data.object().clone(),
-                            address: self.data.placed(target),
-                        },
-                    }
-                    .inline(ctrl, alt)
-                })
-            }
-        };
-        let appended = link.is_none() && inline.is_some();
-
-        // Whatever text runs up to the link ends in the formatter's padding to the
-        // operand column, and Skia trims trailing whitespace when it measures a
-        // paragraph — which would butt the name right up against the mnemonic. Make
-        // that padding non-breaking to keep the column; one unit each way, so the
-        // columns still agree with the plain text.
-        let spans = |run: &[(String, SpanKind)], pad_end: bool| {
-            let last = run.len().saturating_sub(1);
-            run.iter()
-                .enumerate()
-                .map(|(i, (text, kind))| {
-                    let text = if pad_end && i == last {
-                        let kept = text.trim_end_matches(' ');
-                        format!("{kept}{}", "\u{a0}".repeat(text.len() - kept.len()))
-                    } else {
-                        text.clone()
-                    };
-
-                    Span::new(text)
-                        .color(kind_color(*kind))
-                        .assembly_font()
-                        .font_weight(if *kind == SpanKind::Mnemonic {
-                            FontWeight::BOLD
-                        } else {
-                            FontWeight::NORMAL
-                        })
-                })
-                .collect::<Vec<_>>()
-        };
-        let mut head = spans(head, link.is_some() || appended);
-        if appended {
-            // The space `asm_line` puts before an appended name, non-breaking for the
-            // reason above.
-            head.push(
-                Span::new("\u{a0}")
-                    .color(kind_color(SpanKind::Other))
-                    .assembly_font(),
-            );
-        }
-        let text = Text {
-            line: instruction_line(&self.data.assembly, self.index),
-            head,
-            tail: spans(tail, false),
-            chars: self.chars,
-            // Nothing in an instruction is a name a language server can place: a
-            // question is put by file, line and column, and an assembly row is in no
-            // file (`notes/Goals.md`).
-            names: Vec::new(),
-            on_hover: None,
-            links: inline,
-        };
-
-        // The menu: the line's locations, where the debug info gives the row a line; the
-        // row shown among its neighbours, where it is not already; and the symbol
-        // bookmarked, always.
-        let menu: Rc<dyn Fn(Event<PressEventData>, Option<usize>)> = Rc::new({
-            let at = at.clone();
-            // The column is the source pane's business: nothing in an instruction row is
-            // a name a server could be asked about.
-            move |e: Event<PressEventData>, _| {
-                let menu = match &at {
-                    Some(at) => {
-                        locate_menu(located, dock, at.clone(), subject.clone(), None, Vec::new())
-                    }
-                    None => Menu::new(),
-                };
-                let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {
-                    let at = at.clone();
-                    MenuButton::new()
-                        .on_press(move |_| {
-                            show_in_code(
-                                doors,
-                                places,
-                                object.clone(),
-                                address,
-                                at.clone(),
-                                Reach::NewTab,
-                            )
-                        })
-                        .child("Show in unified view")
-                }));
-                let menu = menu.maybe_child(alone.clone().map(|(symbol, address)| {
-                    let at = at.clone();
-                    MenuButton::new()
-                        .on_press(move |_| {
-                            open_as_symbol(doors, symbol.clone(), address, at.clone())
-                        })
-                        .child("Open as symbol")
-                }));
-                let menu = menu.child(bookmark_item(
-                    bookmarked,
-                    objects,
-                    symbol_document.clone(),
-                    "Bookmark symbol",
-                ));
-                ContextMenu::open_from_event(&e, menu);
-            }
-        });
+        // The address as the listing draws it: the symbol's own, plus where the listing
+        // has placed the symbol's section.
+        let address = self.data.assembly.instructions[self.index]
+            .address
+            .wrapping_add(self.data.bias);
 
         // Before the text: the mark, saying whether the debug info places this
-        // instruction anywhere at all; the gutter -- nothing at all for a symbol that
-        // branches nowhere inside itself, which most do, since an empty column would
-        // still be a column, and why the mark cannot sit inside it; and the address,
-        // which is gutter too: a press on it picks the row out and no characters.
+        // instruction anywhere at all; the arrow gutter; and the address, which is gutter
+        // too, a press on it picking the row out and no characters.
         let before = std::iter::once(code_mark(at.is_some()))
-            .chain((width > 0).then(|| gutter(width, self.arrows).into_element()))
-            .chain([label()
-                .text(format!("{address:016X} "))
-                .min_width(Size::px(200.0))
-                .color(palette().address_fg)
-                .max_lines(1)
-                .into_element()])
+            .chain(gutter_column(self.data.width, Some(self.arrows)))
+            .chain([address_label(Some(address))])
             .collect();
 
         // The run is a run of the file this row was compiled from, which is what the
@@ -1048,15 +1099,19 @@ impl Component for InstructionRow {
         code_row(
             Chrome {
                 pane: Pane::Assembly,
-                row,
+                row: self.row,
                 file: at.as_ref().map(|at| at.file.clone()),
                 paired: self.paired,
                 wash: self.wash,
                 measured: true,
             },
             before,
-            Some(text),
-            Some(menu),
+            Some(instruction_text(
+                &self.data, self.index, self.chars, ctrl, alt,
+            )),
+            Some(instruction_menu(
+                doors, places, located, dock, bookmarked, objects, &self.data, self.index, at,
+            )),
         )
     }
 
@@ -1457,3 +1512,6 @@ impl Component for AssemblyPane {
             )
     }
 }
+
+#[cfg(test)]
+mod tests;

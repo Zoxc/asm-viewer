@@ -401,24 +401,13 @@ impl Component for TextRow {
             links,
         };
 
-        // The mark's column and the gutter's width, so both the address column and the
-        // arrows start where they do on an instruction row; then the address, gutter
-        // too. A row that is nobody's line is never marked.
-        let before = vec![
-            code_mark(false),
-            rect()
-                .width(Size::px(gutter_width(lanes::MAX_LANES)))
-                .into_element(),
-            label()
-                .text(match self.address {
-                    Some(address) => format!("{address:016X} "),
-                    None => String::new(),
-                })
-                .min_width(Size::px(200.0))
-                .color(palette().address_fg)
-                .max_lines(1)
-                .into_element(),
-        ];
+        // The mark's column and the gutter's, which this row gives up rather than draws,
+        // so both the address column and the arrows start where they do on an instruction
+        // row; then the address, gutter too. A row that is nobody's line is never marked.
+        let before = std::iter::once(code_mark(false))
+            .chain(gutter_column(lanes::MAX_LANES, None))
+            .chain([address_label(self.address)])
+            .collect();
 
         // A row of no file: a label or a header is nobody's line. Nothing is chained onto
         // what comes back: freya keeps an element's handlers in a map by event name, so a

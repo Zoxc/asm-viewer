@@ -285,6 +285,10 @@ pub(crate) const ARROW_WIDTH: f32 = 7.0;
 /// The gap between an arrowhead's tip and the first digit of the address column.
 pub(crate) const GUTTER_PAD: f32 = 3.0;
 
+/// How wide the address column is drawn, room for a 64-bit address and the space after
+/// it: a floor and not a width, so a row's text starts at one x whatever the row holds.
+pub(crate) const ADDRESS_WIDTH: f32 = 200.0;
+
 /// The length of each of the two strokes an arrowhead is made of, and how far each is
 /// turned from the horizontal. Both pivot on the tip, so the pair is a `>`.
 pub(crate) const ARROW_STROKE: f32 = 5.0;
