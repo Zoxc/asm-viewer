@@ -199,12 +199,16 @@ cannot be broken from the UI, every change to what is open going through one of 
 second -- a tab and its trail are made and closed together -- is held by `open_document`, `raise`,
 `raise_tab`, `navigate`, `close_tab`, `close_others` and `close_binary`, and nothing else. **Every** site that would *open* a document calls
 `open_document` with a `Reach`, which is what the click that opened it says and nothing about the
-state can. **`InPlace`** is from inside the tab on screen (a relocation link, the companion header),
-pushed onto that tab's trail so the place left is one Back away. **`NewTab`** is beside the tab on
-screen, in a tab that stays (Ctrl+click on anything, a menu item, the unified view's Ctrl-press on a
-label). **`Preview`** is from outside the panes (a sidebar row), into the one temporal tab, pushed
-onto its trail so Back inside it walks the rows clicked, or into a new temporal tab where there is
-none. Under every reach a tab already showing the place is **raised** instead, the one on screen
+state can. **`InPlace`** is from inside the tab on screen (a link in either pane, the companion
+header), pushed onto that tab's trail so the place left is one Back away. **`NewTab`** is beside the tab on
+screen, in a tab that stays (Ctrl+click on anything, a menu item). **`Preview`** is from outside the
+panes (a sidebar row), into the one temporal tab, pushed onto its trail so Back inside it walks the
+rows clicked, or into a new temporal tab where there is none. **Ctrl says one thing everywhere**: a
+tab of its own. Which two functions beside `Reach` write down, since neither belongs to any one
+list: `reach` is what a press *outside* the panes means (`Preview`, or `NewTab` with Ctrl), and
+`reach_inside` what a press on a link *inside* one means (`InPlace`, or `NewTab` with Ctrl).
+
+Under every reach a tab already showing the place is **raised** instead, the one on screen
 preferred where two show it. `NewTab` promotes the temporal one, since what was asked for is a tab
 of this place that stays; `Preview` promotes nothing. Every opening is recorded in `Visited`. **What
 promotes** the temporal tab: `NewTab` on the place it shows, a link followed in place inside it (the

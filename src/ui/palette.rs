@@ -129,7 +129,7 @@ pub(crate) struct Palette {
     /// A name that names one thing: a relocation target in the assembly, a module or a
     /// constructor in the source. Also the source pane's plain text.
     pub(crate) name_fg: Color,
-    /// A relocation link under the pointer, and the underline drawn beneath it.
+    /// A link under the pointer, and the rule drawn under it (`link_chrome`).
     pub(crate) name_hover_fg: Color,
 
     /// What a pattern that will not compile, and the reason it will not, are written in.

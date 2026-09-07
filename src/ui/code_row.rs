@@ -14,19 +14,33 @@
 //! column's x and the row's height on the device pixel grid, where the engine's highlight
 //! is the glyphs' tight box and leaves a seam between one row's and the next's.
 //!
+//! **A link is drawn one way wherever it is** -- the wash, the rounded corner, the rule
+//! under it and the lit colour of `link_chrome` -- and is drawn as one only while a press
+//! on it would be a door. That answer is the link's own ([`Drawn`]'s `open`), asked once
+//! and used for the light, for the pointer's icon and by the press, so none of the three
+//! can offer what the others will not do. An element inside the text wears its own box; a
+//! run of the row's text is washed by a box the row places over its columns
+//! ([`lit_box`]), a span having nothing to draw one with.
+//!
 //! The pointer's icon is the row's to set, in one place: an I-beam over the text and to
 //! the right of it, the hand over a link inside it -- which says it is under the pointer
-//! through `over_link`, and whether it is a link at all through the answer it lights
-//! itself by ([`InlineLink`]) -- and the arrow over the gutter and on leaving the row.
-//! Set only when it changes, since each set is a message to the platform, and kept in one
-//! cell for the whole thread: a row's own memory of it would be wrong the moment the row
-//! beside it set something else.
+//! through `over_link` -- and the arrow over the gutter and on leaving the row. Set only
+//! when it changes, since each set is a message to the platform, and kept in one cell for
+//! the whole thread: a row's own memory of it would be wrong the moment the row beside it
+//! set something else.
 //!
 //! **Nothing inside a row may listen to `pointer_down`.** A bubbling event is measured
 //! once, against the deepest listener, and every ancestor's handler is handed the same
 //! data (`notes/upstream/freya.md`), so a child listening to the down would hand the row a
 //! location relative to the child and the column would be wrong. The links listen to the
 //! press, which is a different event, and to `over`/`out`.
+//!
+//! **A row kind may not put on a handler this already sets.** freya keeps an element's
+//! handlers in a map by event name, so `.on_pointer_out(..)` chained onto what [`row`]
+//! returns *replaces* the row's own and nothing says so -- the icon is then never put
+//! back, and the pointer leaves the listing still wearing whatever the row last set. The
+//! row sets `pointer_down`, `pointer_move`, `pointer_out` and `sized`; a kind that wants
+//! one of those has to be given it here.
 //!
 //! [`row`] is the drawing and holds nothing itself. What a row keeps is [`RowCells`], which
 //! answers both ways between a column and an x and is the one thing a handler clones; the
@@ -105,29 +119,37 @@ pub(crate) trait RowLinks: Sized {
     fn drawn(self) -> Drawn;
 }
 
-/// A row's links as the drawing reads them: **either** an element inside the paragraph,
-/// with the answer it lights itself by, **or** runs of the row's own text, with what a
-/// press on one follows. The fields are this module's and the two constructors are the
+/// A row's links as the drawing reads them: whether a press on one is a door **now**, and
+/// then **either** an element inside the paragraph **or** runs of the row's own text, with
+/// what a press on one follows. The fields are this module's and the constructors are the
 /// only way to one, so what the type parameter keeps apart stays apart here: nothing can
 /// hand the drawing both, or half of either.
 #[derive(Default)]
 pub(crate) struct Drawn {
-    inline: Option<(Element, Rc<dyn Fn() -> bool>)>,
+    open: Option<Rc<dyn Fn() -> bool>>,
+    inline: Option<Element>,
     runs: Option<(Vec<Range<usize>>, Rc<dyn Fn(Range<usize>)>)>,
 }
 
 impl Drawn {
     /// One element inside the paragraph, and whether a press on it is a door now.
-    fn element(element: Element, is_link: Rc<dyn Fn() -> bool>) -> Self {
+    fn element(element: Element, open: Rc<dyn Fn() -> bool>) -> Self {
         Drawn {
-            inline: Some((element, is_link)),
+            open: Some(open),
+            inline: Some(element),
             runs: None,
         }
     }
 
-    /// Runs of the row's own text, and what a press on one follows.
-    fn runs(columns: Vec<Range<usize>>, follow: Rc<dyn Fn(Range<usize>)>) -> Self {
+    /// Runs of the row's own text, whether a press on one is a door now, and what such a
+    /// press follows.
+    fn runs(
+        columns: Vec<Range<usize>>,
+        open: Rc<dyn Fn() -> bool>,
+        follow: Rc<dyn Fn(Range<usize>)>,
+    ) -> Self {
         Drawn {
+            open: Some(open),
             inline: None,
             runs: Some((columns, follow)),
         }
@@ -169,22 +191,29 @@ impl RowLinks for InlineLink {
 }
 
 /// The columns of the runs of a row's own text that are links, in the order they are
-/// drawn, and what a press on one follows. A door that is text and not an element: the
-/// row's columns stay the file's own, which is what lets a press on one say where it was
-/// in the terms everything else speaks (`src/chars.rs`).
+/// drawn. A door that is text and not an element: the row's columns stay the file's own,
+/// which is what lets a press on one say where it was in the terms everything else speaks
+/// (`src/chars.rs`).
+///
+/// `is_link` is the same question an [`InlineLink`] answers -- whether a press on one is a
+/// door **now** -- and the light, the hand and the press are all picked by it, so none of
+/// the three offers what the others will not do. A name in the source is always one; a
+/// label in the object's listing only while Ctrl is held, and a plain press on it is the
+/// row's own: the row picked out, and a sweep begun.
 ///
 /// [`Text::head`] is cut at their edges before it is drawn ([`cut_at`]), so lighting a
 /// link changes a span's style and never where the spans are cut -- a boundary that moved
 /// with the pointer would re-shape the row and widen the listing for good.
 pub(crate) struct TextLinks {
     pub(crate) columns: Vec<Range<usize>>,
-    /// Built per row, as the menu is.
+    pub(crate) is_link: Rc<dyn Fn() -> bool>,
+    /// What a press on one follows. Built per row, as the menu is.
     pub(crate) follow: Rc<dyn Fn(Range<usize>)>,
 }
 
 impl RowLinks for TextLinks {
     fn drawn(self) -> Drawn {
-        Drawn::runs(self.columns, self.follow)
+        Drawn::runs(self.columns, self.is_link, self.follow)
     }
 }
 
@@ -498,11 +527,10 @@ impl RowCells {
 /// is not here: it goes into the paragraph, and nothing after that wants it.
 #[derive(Clone)]
 struct Links {
-    /// Whether the element inside the text is a link *now*: the element's own answer, the
-    /// one it lights itself by, so the hand is shown over exactly what is drawn as a link.
-    /// Asked at the pointer's move and not subscribed to, the icon being set from
-    /// handlers.
-    hand: Rc<dyn Fn() -> bool>,
+    /// Whether a press on this row's link is a door *now*: the link's own answer, whether
+    /// it is the element inside the text or a run of the text itself. The light and the
+    /// hand are both picked by it, so neither can offer what a press will not do.
+    open: Rc<dyn Fn() -> bool>,
     /// The columns of the runs of the row's own text that are links.
     columns: Rc<Vec<Range<usize>>>,
     /// What a press on one of those runs follows.
@@ -513,24 +541,20 @@ impl Links {
     /// The row's links taken out of its text, before the spans are moved into the
     /// paragraph, and the element that goes inside it.
     fn taken(text: &mut Option<Text<Drawn>>) -> (Self, Option<Element>) {
-        let Drawn { inline, runs } = text
+        let Drawn { open, inline, runs } = text
             .as_mut()
             .map(|text| std::mem::take(&mut text.links))
             .unwrap_or_default();
-        let hand: Rc<dyn Fn() -> bool> = match &inline {
-            Some((_, is_link)) => is_link.clone(),
-            None => Rc::new(|| false),
-        };
         let (columns, follow) = match runs {
             Some((columns, follow)) => (columns, Some(follow)),
             None => (Vec::new(), None),
         };
         let links = Links {
-            hand,
+            open: open.unwrap_or_else(|| Rc::new(|| false)),
             columns: Rc::new(columns),
             follow,
         };
-        (links, inline.map(|(element, _)| element))
+        (links, inline)
     }
 
     /// Which of the runs column `column` is in, and `None` where it is in none.
@@ -592,14 +616,27 @@ fn row(
     let (widest, listing_key) = (listing.widest, listing.key());
     cells.lend(&listing, chrome.row);
 
-    let lit = over();
+    // The run of the row's own text under the pointer, drawn as a link where a press on
+    // it would be a door: the link's own rule, which the pointer's icon is picked by too,
+    // and Alt, which says no to every link in every pane.
+    //
+    // Both are read only while the pointer is on a run, so a row nobody is pointing at is
+    // on neither modifier's list -- and read whether or not the answer is yes, or the row
+    // would never be drawn again when the modifier came up.
+    let lit = over().filter(|_| {
+        let blocked = alt.is_some_and(|alt| *alt.read());
+        (links.open)() && !blocked
+    });
+    let columns = lit.and_then(|lit| links.columns.get(lit)).cloned();
     let drawn = text.map(|text| {
         let units = text.line.units();
         let (selected, caret) = marks(&cells, &listing, grid, text.chars, units);
+        let wash = lit_box(&cells, grid, columns.as_ref(), units);
         let inline = inline.map(|element| link_box(&cells, &links, element));
         (
+            wash,
             selected,
-            text_paragraph(&cells, text, &links, lit, inline),
+            text_paragraph(&cells, text, &links, columns.as_ref(), inline),
             caret,
         )
     });
@@ -647,13 +684,15 @@ fn row(
         })
         .children(before);
 
-    // The selection before the paragraph in the tree, so it is painted under the text --
-    // and **always there**, as is the caret's slot: freya matches siblings by position,
-    // so a rect appearing before the paragraph on the press would move the paragraph
-    // along one and remount it, link and all, between the down and the up, and the press
-    // meant for the link would never fire.
+    // The lit link's box and the selection before the paragraph in the tree, so both are
+    // painted under the text -- and **always there**, as is the caret's slot: freya
+    // matches siblings by position, so a rect appearing before the paragraph on the press
+    // would move the paragraph along one and remount it, link and all, between the down
+    // and the up, and the press meant for the link would never fire.
     match drawn {
-        Some((selected, paragraph, caret)) => el.child(selected).child(paragraph).child(caret),
+        Some((wash, selected, paragraph, caret)) => {
+            el.child(wash).child(selected).child(paragraph).child(caret)
+        }
         None => el,
     }
 }
@@ -796,15 +835,46 @@ fn bring_caret_into_view(listing: &Listing, row_left: f32, at: f32) {
     });
 }
 
+/// The box a lit run of the row's own text wears: [`link_chrome`], the one answer to what
+/// a lit link looks like, placed by the run's columns and inside the row's height
+/// (`LINK_BOX_INSET`). So a name in the source and a label in the object's listing are lit
+/// exactly as an operand of an instruction is, which wears the same chrome as an element.
+///
+/// A rect of the row's own, as the selection's is, because a span carries no box: freya's
+/// text styles have a colour, a weight and a decoration and nothing to draw one with.
+/// Nothing until the paragraph is laid out, which is when the row can say where a column
+/// is.
+fn lit_box(cells: &RowCells, grid: Grid, columns: Option<&Range<usize>>, units: usize) -> Rect {
+    let Some(columns) = columns else {
+        return nothing();
+    };
+    let (from, to) = (columns.start.min(units), columns.end.min(units));
+    let (Some(left), Some(right)) = (cells.column_x(from, units), cells.column_x(to, units)) else {
+        return nothing();
+    };
+    if right <= left {
+        return nothing();
+    }
+    let span = grid.span(left, right);
+    link_chrome(
+        rect()
+            .interactive(false)
+            .position(Position::new_absolute().left(span.near).top(LINK_BOX_INSET))
+            .width(Size::px(span.thick))
+            .height(Size::px(code_row_height() - 2.0 * LINK_BOX_INSET)),
+        Some(palette().name_hover_fg),
+    )
+}
+
 /// The link inside the text, in a box that says when the pointer is over it: the hand is
 /// the link's and the I-beam the text's, and the row sets both ([`set_icon`]).
 fn link_box(cells: &RowCells, links: &Links, element: Element) -> Rect {
     let (entered, left) = (cells.over_link.clone(), cells.over_link.clone());
-    let hand = links.hand.clone();
+    let open = links.open.clone();
     rect()
         .on_pointer_over(move |_| {
             entered.set(true);
-            set_icon(if hand() {
+            set_icon(if open() {
                 CursorIcon::Pointer
             } else {
                 CursorIcon::Text
@@ -818,13 +888,13 @@ fn link_box(cells: &RowCells, links: &Links, element: Element) -> Rect {
 }
 
 /// The row's text as one paragraph: the spans before the link, the link itself, and the
-/// spans after it. `lit` is the run of the row's own text under the pointer, which is drawn
-/// as a link.
+/// spans after it. `lit` is the columns of the run of the row's own text that is drawn as
+/// a link, the box around it being the row's ([`lit_box`]).
 fn text_paragraph(
     cells: &RowCells,
     text: Text<Drawn>,
     links: &Links,
-    lit: Option<usize>,
+    lit: Option<&Range<usize>>,
     inline: Option<Rect>,
 ) -> Paragraph {
     let (text_x, mut laid) = (cells.text_x.clone(), cells.laid);
@@ -839,13 +909,7 @@ fn text_paragraph(
             laid.set_if_modified(true);
         })
         .vertical_align(VerticalAlign::Center)
-        .spans_iter(
-            light(
-                cut_at(text.head, &links.columns),
-                lit.and_then(|lit| links.columns.get(lit)),
-            )
-            .into_iter(),
-        )
+        .spans_iter(light(cut_at(text.head, &links.columns), lit).into_iter())
         .maybe_child(inline)
         .spans_iter(text.tail.into_iter())
 }
@@ -902,11 +966,13 @@ fn on_down(
             // it was not asked about is one the next reads as a double. So it is asked
             // exactly once, whatever the press turns out to be.
             let presses = EventsCombos::pressed(e.global_location());
-            // A link is followed on a single press with nothing held: two presses on a
-            // name are what take the word, and Alt says this one is not a door.
+            // A link is followed on a single press with nothing held, and only while it
+            // is a door: two presses on a name are what take the word, Alt says this one
+            // is not a door, and a label is one only under Ctrl -- without which the
+            // press is the row's, as it is over any other text.
             let link = links
                 .at(at)
-                .filter(|_| presses == PressEventType::Single && !held(alt))
+                .filter(|_| presses == PressEventType::Single && !held(alt) && (links.open)())
                 .zip(links.follow.clone());
             if let Some((link, follow)) = link {
                 // And it picks no line out: the press is the question and not a place in
@@ -964,7 +1030,7 @@ fn on_move(
         let column = cells.column(at, false);
         mark_drag(marked, pane, row, column);
         // Neither the link under the pointer nor the name is answered while a selection
-        // is being swept out: a drag along a line would otherwise underline every name it
+        // is being swept out: a drag along a line would otherwise light every name it
         // passed under. The name is said whether it is a link or not -- a name where one
         // is defined is not a link and is still something to ask the server about -- but
         // under the same guard, for the same reason.
@@ -973,15 +1039,17 @@ fn on_move(
         over.set_if_modified(hovered);
         tell(if sweeping { None } else { column });
         let on_text = cells.has_text && at.x as f32 >= cells.text_x.get() - cells.row_x.get();
-        set_icon(
-            if (cells.over_link.get() && (links.hand)()) || hovered.is_some() {
-                CursorIcon::Pointer
-            } else if on_text {
-                CursorIcon::Text
-            } else {
-                CursorIcon::Default
-            },
-        );
+        // The hand over a link, whichever kind it is, and only while a press on it would
+        // be a door: the link's own rule, which is what lights it, so the two cannot
+        // disagree.
+        let on_link = cells.over_link.get() || hovered.is_some();
+        set_icon(if on_link && (links.open)() {
+            CursorIcon::Pointer
+        } else if on_text {
+            CursorIcon::Text
+        } else {
+            CursorIcon::Default
+        });
     }
 }
 
@@ -1076,6 +1144,9 @@ fn utf16_slice(text: &str, units: Range<usize>) -> Option<String> {
 /// `head` with the run at `columns` drawn as a link under the pointer, and unchanged
 /// where nothing is.
 ///
+/// The colour is all a span can say: the wash, the corner and the rule under it are the
+/// row's ([`lit_box`]), a text style having nothing to draw a box with.
+///
 /// Every span the link covers is drawn as one, and no span is ever cut here: [`cut_at`]
 /// has already made sure none straddles a link's edge, so each is wholly inside the run
 /// or wholly outside it. A boundary that moved with the pointer would re-shape the row,
@@ -1083,10 +1154,6 @@ fn utf16_slice(text: &str, units: Range<usize>) -> Option<String> {
 ///
 /// More than one span where a link crosses a colour boundary, which a name the server
 /// placed may do and a name taken from a colour run never could.
-///
-/// The colour is the underline's too: freya's spans carry a decoration and no colour for
-/// it, and skia draws one in the text's own. Which is what is wanted -- one colour says
-/// both -- and is what `name_hover_fg` already describes itself as.
 fn light(head: Vec<Span<'static>>, columns: Option<&Range<usize>>) -> Vec<Span<'static>> {
     let Some(columns) = columns else {
         return head;
@@ -1098,9 +1165,7 @@ fn light(head: Vec<Span<'static>>, columns: Option<&Range<usize>>) -> Vec<Span<'
             let at = column;
             column += units;
             match at >= columns.start && column <= columns.end && at < column {
-                true => span
-                    .color(palette().name_hover_fg)
-                    .text_decoration(TextDecoration::Underline),
+                true => span.color(palette().name_hover_fg),
                 false => span,
             }
         })

@@ -8197,6 +8197,42 @@ fn a_link_that_is_not_a_colour_run_is_still_a_span_of_its_own() {
     );
 }
 
+/// A name in the source is a link like any other, and wears the same box: the wash, the
+/// corner and the rule of `link_chrome`, drawn round the run of the row's own text the
+/// pointer is on. It cannot be an element -- a row's columns have to stay the file's own
+/// -- so the box is the row's to place, and this is what says the two ways of drawing a
+/// link end in one look.
+#[test]
+fn a_name_in_the_source_wears_the_links_own_box() {
+    let (file, _directory) = calling_file("lit");
+    let (mut test, states, language, _location, _driven, _asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    // `helper`, the one name in the file the server called a call.
+    let call = word_point(&test, "helper");
+    assert!(
+        lit_links(&test).is_empty(),
+        "something was lit before the pointer was on it"
+    );
+    test.move_cursor(call);
+    settle(&mut test);
+    let boxes = lit_links(&test);
+    assert_eq!(boxes.len(), 1, "the name under the pointer is not lit");
+    assert!(
+        boxes[0].min_x() <= call.0 as f32 && boxes[0].max_x() >= call.0 as f32,
+        "the box is not round the name the pointer is on"
+    );
+}
+
 /// An item in a trait `impl` is the one name that asks the **other** question: its
 /// definition is itself, and the trait is where a reader following it wants to go. The
 /// server says which by putting `declaration` and `trait` on it together.
@@ -16176,6 +16212,10 @@ fn a_source_click_beside_the_section_view_reveals_its_instruction() {
 /// Ctrl-pressing a symbol's label in an object's code opens that symbol's own tab: the
 /// door back from a function read among its neighbours to reading it alone, a visit like
 /// any opening from a list. A plain press is a plain press.
+///
+/// The two presses are on different labels because a label is followed on a **single**
+/// press, as every link in a code row is: two presses in one place take the word under
+/// them, and a second press on the same label would be one of those.
 #[test]
 fn pressing_a_label_opens_the_symbols_own_tab() {
     let (_path, objects) = fixture_objects(1);
@@ -16193,14 +16233,15 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     settle(&mut test);
 
     // A plain press is a plain press: the tab stays.
-    let label = centre_of(&test, "twice:");
-    press_at(&mut test, label);
+    let plain = centre_of(&test, "add:");
+    press_at(&mut test, plain);
     settle(&mut test);
     assert!(states.open.active() == Some(code.clone()));
 
     // With Ctrl held it is the door.
     ctrl.set(true);
     settle(&mut test);
+    let label = centre_of(&test, "twice:");
     press_at(&mut test, label);
     settle(&mut test);
     let twice = Symbol {
@@ -16421,6 +16462,7 @@ fn show_in_unified_view_keeps_the_rows_before_the_instruction() {
         object.clone(),
         address,
         None,
+        Reach::NewTab,
     );
     settle(&mut test);
     settle(&mut test);
@@ -16472,6 +16514,7 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
         object.clone(),
         0x30,
         None,
+        Reach::NewTab,
     );
     settle(&mut test);
     settle(&mut test);
@@ -16549,11 +16592,12 @@ fn call_operand(f: &Symbol) -> String {
 }
 
 /// The address a call with no symbol at its target goes to is a door into the object's
-/// code, opened with **Ctrl** as a label's door is: a plain press on the operand picks the
-/// row out and opens nothing, and with Ctrl held it opens the object's code tab with its
-/// place set on the target's address -- and no line, the target's row not being this one.
+/// code, and a link on its own: **the hand is over it with nothing held**, a plain press
+/// opens that code in place, as a press on a named target does, and Ctrl opens it in a tab
+/// of its own -- which is all Ctrl means anywhere. Either way the code tab's place is set
+/// on the target's address, with no line, the target's row not being this one.
 #[test]
-fn a_call_with_no_symbol_opens_the_code_at_its_target_with_ctrl() {
+fn a_call_with_no_symbol_opens_the_code_at_its_target() {
     let (object, target) = calling_into_the_middle();
     let f = Symbol {
         object: object.clone(),
@@ -16565,7 +16609,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target_with_ctrl() {
         ask: Ask::Symbol(f.clone()),
         studied: Studied::new(f.clone()),
     };
-    let (mut test, ((states, marked, landing), ctrl)) = TestingRunner::new(
+    let (mut test, ((states, _marked, landing), ctrl)) = TestingRunner::new(
         listing_harness,
         (600., 400.).into(),
         |runner| {
@@ -16581,21 +16625,34 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target_with_ctrl() {
     open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
     settle(&mut test);
 
-    // A plain press is a plain press: the row is picked out and nothing opens.
+    // Drawn as a link with nothing held, which is what the hand over it says.
     let door = centre_of(&test, &operand);
+    test.move_cursor(door);
+    settle(&mut test);
+    assert_eq!(
+        icon_now(),
+        CursorIcon::Pointer,
+        "the pointer over the door is not the hand"
+    );
+
+    // A plain press follows it in place: this tab shows the code now, so the function
+    // left is one Back away.
     press_at(&mut test, door);
     settle(&mut test);
-    let picked = marked
-        .peek()
-        .assembly
-        .clone()
-        .expect("the press picked the row out");
-    assert_eq!(picked.chars.rows(), 0..=0);
     let code = Document::Code(object.clone());
-    assert!(states.open.active() == Some(symbol.clone()));
-    assert!(tab_showing(&states, &code).is_none(), "the code tab opened");
+    assert!(
+        states.open.active() == Some(code.clone()),
+        "the code tab is not on top"
+    );
+    assert!(
+        tab_showing(&states, &symbol).is_none(),
+        "a plain press opened a tab of its own"
+    );
 
-    // With Ctrl held it is the door.
+    // And with Ctrl a tab of its own, the tab pressed in kept beside it. The symbol's
+    // tab is opened again to press in, this one having become the code's.
+    open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
+    settle(&mut test);
     ctrl.set(true);
     settle(&mut test);
     press_at(&mut test, door);
@@ -16896,7 +16953,8 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
 
 /// A call target no symbol names is a place in the unified view as much as a named one
 /// is: a plain press on the bare address moves the listing there, where in a symbol's own
-/// listing the same press picks the row out and it takes Ctrl to open the door.
+/// listing the same press opens the object's code in place
+/// (`a_call_with_no_symbol_opens_the_code_at_its_target`).
 #[test]
 fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     let (object, target) = calling_into_the_middle();
@@ -16944,10 +17002,9 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     );
 }
 
-/// **The hand is shown over what a press would follow.** In the unified view a bare
-/// address is a door on a plain press and is drawn as one, so the pointer over it is the
-/// hand with nothing held: the icon and the light ask the link its own answer, and cannot
-/// be told apart.
+/// **The hand is shown over what a press would follow.** A bare address is a door on a
+/// plain press, here as everywhere, so the pointer over it is the hand with nothing held:
+/// the icon and the light ask the link its own answer, and cannot be told apart.
 #[test]
 fn the_hand_is_shown_over_a_bare_target_in_the_unified_view() {
     let (object, _target) = calling_into_the_middle();
@@ -16981,6 +17038,174 @@ fn the_hand_is_shown_over_a_bare_target_in_the_unified_view() {
         icon_now(),
         CursorIcon::Pointer,
         "the pointer over the door is not the hand"
+    );
+}
+
+/// Every box a lit link is wearing on screen, and the whole of the look checked on each:
+/// the wash, the rounded corner and the rule under it in the lit colour, which is what
+/// `link_chrome` draws and the one answer to what a link looks like. A place that grew a
+/// look of its own would draw no box here.
+fn lit_links(test: &TestingRunner) -> Vec<Area> {
+    test.find_many(|node, element| {
+        let style = element.style();
+        (style.background == Fill::Color(palette().link_hover_bg)).then(|| {
+            let rule = style
+                .borders
+                .iter()
+                .find(|border| border.fill == palette().name_hover_fg)
+                .map_or(0.0, |border| border.width.bottom);
+            assert_eq!(rule, 2.0, "the lit link wears no rule in the lit colour");
+            assert_eq!(
+                style.corner_radius.top_left, 6.0,
+                "the lit link's box is not rounded"
+            );
+            node.layout().area
+        })
+    })
+}
+
+/// Whether the one lit box on screen is round the text at `area`: on its row, and inside
+/// the run of it the pointer is on.
+fn lit_over(test: &TestingRunner, area: Area) -> bool {
+    let boxes = lit_links(test);
+    boxes.len() == 1
+        && (boxes[0].origin.y - area.origin.y).abs() <= code_row_height()
+        && boxes[0].min_x() < area.max_x()
+        && boxes[0].max_x() > area.min_x()
+        && boxes[0].width() > 0.0
+}
+
+/// **A link is drawn one way wherever it is.** An operand of an instruction and a
+/// symbol's label are drawn by different rows out of different things -- an element
+/// inside the row's paragraph, and a run of the row's own text -- and the reader is shown
+/// the one box either way: the wash, the corner and the rule of `link_chrome`. Which is
+/// what `lit_links` checks of every box it finds.
+///
+/// The label's is the half that reads Ctrl: a plain press on a label is the row's own, so
+/// there is nothing to light until Ctrl says the door is open.
+#[test]
+fn an_operand_and_a_label_wear_the_same_box() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let (mut test, (states, _marked, _sections, _window, _landing, ctrl)) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| code_states!(runner, reading),
+        1.,
+    );
+    let mut ctrl = ctrl;
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code, Reach::NewTab);
+    settle(&mut test);
+
+    // The operand naming `add`, which `sum_to` calls: a link of its own inside the row.
+    let (_, operand) = labels_with_areas(&test)
+        .into_iter()
+        .find(|(text, _)| text == "add")
+        .expect("the link is drawn");
+    test.move_cursor(inside(operand));
+    settle(&mut test);
+    assert!(
+        lit_over(&test, operand),
+        "the operand under the pointer is not lit"
+    );
+
+    // The label, which is text of the row: dark with nothing held, and lit under Ctrl.
+    let label = label_area(&test, "sum_to:").expect("sum_to is labelled");
+    test.move_cursor(inside(label));
+    settle(&mut test);
+    assert!(
+        lit_links(&test).is_empty(),
+        "the label lit itself with no door open"
+    );
+    ctrl.set(true);
+    settle(&mut test);
+    assert!(
+        lit_over(&test, label),
+        "the label under the pointer is not lit with Ctrl held"
+    );
+}
+
+/// A point a little way into the text at `area`, on its middle line: inside the first
+/// characters of it, wherever the rest of the node reaches.
+fn inside(area: Area) -> (f64, f64) {
+    (
+        (area.origin.x + 4.0) as f64,
+        (area.origin.y + area.height() / 2.0) as f64,
+    )
+}
+
+/// **Alt turns the light and the hand off**, not the press alone: while it is held no
+/// link lights and the pointer over one is the I-beam, so nothing offers what it will not
+/// do. Asked of both kinds of link in the one listing -- a label, which is the row's own
+/// text, and an operand, which is an element inside it -- and with the same pointer once
+/// Alt is up as the control.
+///
+/// Alt goes down over the **resting** pointer for the label: a light that waited for the
+/// next move would be one the reader is looking at while it is already wrong.
+#[test]
+fn alt_held_darkens_every_link_and_the_hand() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let (mut test, (states, _marked, _sections, _window, _landing, ctrl, alt)) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        |runner| {
+            let (states, marked, sections, window, landing, ctrl) = code_states!(runner, reading);
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, marked, sections, window, landing, ctrl, alt)
+        },
+        1.,
+    );
+    let (mut ctrl, mut alt) = (ctrl, alt);
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code, Reach::NewTab);
+    settle(&mut test);
+
+    let (_, operand) = labels_with_areas(&test)
+        .into_iter()
+        .find(|(text, _)| text == "add")
+        .expect("the link is drawn");
+    let label = label_area(&test, "sum_to:").expect("sum_to is labelled");
+
+    // The label, lit under Ctrl, and darkened by Alt with the pointer where it was.
+    ctrl.set(true);
+    settle(&mut test);
+    test.move_cursor(inside(label));
+    settle(&mut test);
+    assert!(lit_over(&test, label), "the label is not lit to begin with");
+    alt.set(true);
+    settle(&mut test);
+    assert!(
+        lit_links(&test).is_empty(),
+        "the label stayed lit as Alt went down under it"
+    );
+
+    // And the operand, moved onto with Alt already held.
+    test.move_cursor(inside(operand));
+    settle(&mut test);
+    assert!(
+        lit_links(&test).is_empty(),
+        "the operand lit itself with Alt held"
+    );
+    assert_ne!(
+        icon_now(),
+        CursorIcon::Pointer,
+        "the operand showed the hand with Alt held"
+    );
+
+    // The control: the same pointer, on the same operand, with Alt up.
+    alt.set(false);
+    settle(&mut test);
+    test.move_cursor(inside(operand));
+    settle(&mut test);
+    assert!(lit_over(&test, operand), "the operand did not light again");
+    assert_eq!(
+        icon_now(),
+        CursorIcon::Pointer,
+        "the hand did not come back"
     );
 }
 
@@ -17481,6 +17706,7 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
         object.clone(),
         address,
         Some(at.clone()),
+        Reach::NewTab,
     );
     settle(&mut test);
     settle(&mut test);
@@ -17590,6 +17816,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         object.clone(),
         address,
         studied.position(index),
+        Reach::NewTab,
     );
     settle(&mut test);
     settle(&mut test);
@@ -19197,15 +19424,15 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
     );
 }
 
-/// And the door the unified view has of its own -- a Ctrl-press on a symbol's label row,
-/// which is a press on the row and not on anything inside it -- is shut by Alt the same
-/// way.
+/// And the door the unified view has of its own -- a Ctrl-press on a symbol's label,
+/// which is a run of the row's own text and not an element inside it -- is shut by Alt
+/// the same way: the tab stays, and the press is the row's, which picks it out.
 #[test]
 fn alt_held_shuts_the_unified_views_own_door() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
-    let (mut test, (states, _marked, _sections, _window, _landing, ctrl, alt)) = TestingRunner::new(
+    let (mut test, (states, marked, _sections, _window, _landing, ctrl, alt)) = TestingRunner::new(
         code_harness,
         (600., 900.).into(),
         |runner| {
@@ -19235,6 +19462,10 @@ fn alt_held_shuts_the_unified_views_own_door() {
     assert!(
         states.open.active() == Some(code),
         "the label opened the symbol's tab with Alt held"
+    );
+    assert!(
+        marked.peek().assembly.is_some(),
+        "the press the door did not take was not the row's either"
     );
 }
 

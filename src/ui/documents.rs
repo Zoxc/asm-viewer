@@ -44,6 +44,22 @@ pub(crate) fn reach(ctrl: State<bool>) -> Reach {
     }
 }
 
+/// How a press on a link **inside** a pane opens what it names: in place, pushed onto the
+/// tab's trail so the place left is one Back away, the way a browser follows a link, or,
+/// with Ctrl held, in a tab of its own beside it.
+///
+/// Beside [`reach`] and for the same reason: it is the rule for every link in a code row
+/// -- an operand naming a symbol, the bare address of a call, a name in the source -- and
+/// none of them owns it. Between the two, Ctrl says one thing everywhere: a tab of its
+/// own. Peeked, this being asked in a press handler.
+pub(crate) fn reach_inside(ctrl: State<bool>) -> Reach {
+    if *ctrl.peek() {
+        Reach::NewTab
+    } else {
+        Reach::InPlace
+    }
+}
+
 /// Open the file at `path` as a source tab, the way `reach` says. Whether anything opened.
 ///
 /// The one door for a path taken off a listing of the filesystem -- a Files row, a finder

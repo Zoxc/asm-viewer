@@ -53,9 +53,9 @@ have made it `function_fg` silently instead of saying so. **The assembly side ke
 colours**, a decision and not an omission: none of the three has anything to name over there.
 `SpanKind` is a mnemonic, a prefix, a register, a number, an address and glue. A listing holds no
 attribute, no type, and no call site that is not already a relocation target, which is as often data
-as it is a function, is the one name in a row of registers, and has `name_fg`/`name_hover_fg` and an
-underline to be told apart by. The split was for a *file* in two colours; a listing never had that
-problem, and repainting the mnemonic to keep the two sides from sharing would cost them the one
+as it is a function, is the one name in a row of registers, and has `name_fg`/`name_hover_fg` and
+the box every lit link wears to be told apart by. The split was for a *file* in two colours; a
+listing never had that problem, and repainting the mnemonic to keep the two sides from sharing would cost them the one
 vocabulary they are read in. So the three are source-only, and the contrast test holds them on
 `pane_bg` alone beside the strings and the comments. `attribute_fg` is additionally required to land
 *quieter* than the keyword it left, the punctuation beside it and the plain text: a relationship

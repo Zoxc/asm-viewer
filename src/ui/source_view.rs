@@ -236,10 +236,7 @@ impl Component for SourceRow {
                 let links = self.links.clone();
                 let pressed = row_text.clone();
                 let follow_link = move |columns: Range<usize>| {
-                    let reach = match *ctrl.peek() {
-                        true => Reach::NewTab,
-                        false => Reach::InPlace,
-                    };
+                    let reach = reach_inside(ctrl);
                     // Which question this name asks. An item in a trait `impl` asks for
                     // the declaration, since its definition is itself and the trait is
                     // where a reader following it wants to go (`src/links.rs`).
@@ -271,6 +268,9 @@ impl Component for SourceRow {
                         .iter()
                         .map(|columns| drawn_columns(&row_text, columns))
                         .collect(),
+                    // Always a door: nothing here is a link until the server has said
+                    // the name is one, so there is nothing to hold a modifier back for.
+                    is_link: Rc::new(|| true),
                     follow: Rc::new(follow_link),
                 }
             }),

@@ -45,9 +45,12 @@ pub(crate) fn pair_border(edges: Edges) -> Border {
     })
 }
 
-/// The box a link wears while it is lit: the wash and the rounded corner every link in
-/// the app shares, and an `underline` where one is asked for -- an inline link in a row
-/// of code, which has nothing but that and its colour to say it can be pressed.
+/// **What a lit link looks like, in one place.** The wash and the rounded corner every
+/// link in the app shares, and an `underline` -- a rule along the bottom in the lit
+/// colour -- where one is asked for. Every link in a code row wears both: an operand of
+/// an instruction, a name in the source, a label in the object's listing, each of which
+/// has nothing but this and its colour to say it can be pressed. A place a diagnostic
+/// names takes the wash alone, being a line of its own rather than a run inside one.
 pub(crate) fn link_chrome(rect: Rect, underline: Option<Color>) -> Rect {
     let rect = rect.background(palette().link_hover_bg).corner_radius(6.0);
     match underline {
@@ -60,6 +63,12 @@ pub(crate) fn link_chrome(rect: Rect, underline: Option<Color>) -> Rect {
         None => rect,
     }
 }
+
+/// How far inside a code row's top and bottom edge that box is drawn, where the link is a
+/// run of the row's own text and the row draws the box for it: a row is its font plus
+/// twelve of leading (`code_row_height`), so this keeps the wash around the text instead
+/// of around the row, and the rule under it about where an underline would be.
+pub(crate) const LINK_BOX_INSET: f32 = 4.0;
 
 pub(crate) fn right_hairline() -> Border {
     Border::new().fill(palette().hairline).width(BorderWidth {

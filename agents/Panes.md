@@ -429,47 +429,50 @@ and `land_on` raises the tab with the line left as a landing, a move and not a v
 open already. **Two doors join the two views** and both go through the same functions. A
 **Ctrl**-press on a label in an object's code opens the symbol's own tab, a `NewTab` as Ctrl opens
 one everywhere; a plain press selects the row like any other, since a label is a row of the listing
-first, though a label's row is a row of no file. Ctrl is watched at the root exactly as Shift is
-(`Ctrl` beside `Shift` and `Alt`, all three kept by `ModifierKeys`), a freya pointer event carrying
-no modifiers, and the label lights as a link only while it is held. A Caps Lock the desktop has made
+first, though a label's row is a row of no file. It is the one link Ctrl decides, and for want of
+anything else it could mean: the rows the symbol is compiled into are the rows under the label, so a
+plain press has nowhere to go. Which is why the label is drawn as a link only while Ctrl is held.
+Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift` and `Alt`, all three kept by
+`ModifierKeys`), a freya pointer event carrying no modifiers. A Caps Lock the desktop has made
 into Ctrl names itself Caps Lock in every event, so it is learnt from its first release
 (`ModifierKeys`' doc, `notes/upstream/freya.md`). **The third door is the address an instruction
 goes to when nothing names it**: a call into the middle of a function, a call to a function a
 stripped image has no symbol for, a jump out of the symbol in a listing with no row for it
 (`Instruction::target`, `agents/Analysis.md`). The number is drawn onto `Door::Address`
 (`Link::Target`, the third of `split`'s links), inline in the row's paragraph as the other two are,
-and a Ctrl-press on it is `show_in_code` with the **placed** address and no line: the object's code
-in a tab of its own, landed on the row **at or below** the address, the view and the caret both.
-That rounding is `section::Rows::row_for`'s and holds for every kind of row (the instruction holding
-the byte, the row of bytes covering it, the guessed row of a stretch nobody has decoded), and
+and a press on it is `show_in_code` with the **placed** address and no line. A link on its own, as
+every operand link is: a plain press opens that code in place, Ctrl opens it in a tab of its own.
+Either lands on the row **at or below** the address, the view and the caret both. That rounding is
+`section::Rows::row_for`'s and holds for every kind of row (the instruction holding the byte, the
+row of bytes covering it, the guessed row of a stretch nobody has decoded), and
 `use_kept_place` finishes it. A move has arrived when the view's top row is the row the place names,
 by row and not by spot, since a spot derived from the offset never spells an address inside a row.
 And when the rows are rebuilt under a view that was at the map's place as well as the old rows could
 tell, the map's place is re-applied and not the derived one, so a target in a stretch the worker had
 not reached lands on its own instruction once the stretch is decoded, not on the row its guess was
-nearest (`agents/UI.md`). A plain press on the number is a press on the row's text; the label lights
-as a link, and the row shows the hand over it, only while Ctrl is held. Both ask the one rule
-(`Door::open_now`): the label reaches the row as an `InlineLink`, whose `is_link` is what the
-pointer's icon is picked by, so the hand is over exactly what is drawn as a link. **All three doors
-are one label**, a `DoorLabel` with a `Door` saying which. The hover, the chrome (`link_chrome`,
-which a diagnostic's place wears without the underline), the Alt rule and the text are the same for
-each; the press and the two colours are all that differ, so a change to how a link looks, or to what
-Alt means over one, is one edit. Ctrl is read in the render only where the answer turns on it, so
-only a bare address's label is drawn again as Ctrl goes down and up. **In the
-unified view a link does not leave it.** The rows a target is in are rows of the listing already, so
-a plain press on a name or on a bare address is `show_in_code` at the target's placed address, which
-`documents::land` turns into a plant in the tab that is already showing that document: a scroll and
-a caret, and no tab opened. It **is** pushed onto that tab's trail, as a `Stop` naming the address,
-so Back comes back to the instruction that was followed -- the place left keeps its own rows and
+nearest (`agents/UI.md`).
+
+**`Door::open_now` is the one answer to "is this a link now"**, and the light, the pointer's icon
+and the press are all picked by it, so none of the three can offer what the others will not do. The
+label that draws itself by it, the closure the row is handed for the icon (`InlineLink`,
+`TextLinks`) and the press ask the same rule. **All three operand doors are one label**, a
+`DoorLabel` with a `Door` saying which. The hover, the chrome, the Alt rule and the text are the
+same for each; the press and the two colours are all that differ. Ctrl is read in the render only
+where the answer turns on it, so only a label is drawn again as Ctrl goes down and up.
+
+**In the unified view a link does not leave it.** The rows a target is in are rows of the listing
+already, so a plain press on a name or on a bare address is `show_in_code` at the target's placed
+address, which `documents::land` turns into a plant in the tab already showing that document: a
+scroll and a caret, and no tab opened. It **is** pushed onto that tab's trail, as a `Stop` naming
+the address, so Back comes back to the instruction that was followed -- the place left keeps its own rows and
 runs, being an entry of its own (`agents/UI.md`) -- and it is not recorded as a *visit*, the History
 panel listing documents and a move inside one being no new document to have been at. Ctrl keeps its
-own meaning over a name -- the symbol alone, in a tab of its own -- and the bare address lights as a
-link in that listing whether or not Ctrl is held, since there a plain press is the door. Following a
-link in a symbol's own listing is unchanged: there is nowhere to move to, so it replaces what the
-tab shows and the function left is one Back away. Both doors into the object's code, this one and
-the menu's, take a **placed** address: `SymbolData::placed`, the section's bias added, asked of the
-row's own symbol through `AsmData::placed` and of the target itself for a name. The bias the
-*listing* draws is nothing in a symbol's own tab, and the code tab's rows are placed. Undefined
+own meaning over a name: the symbol alone, in a tab of its own. Following a link in a symbol's own
+listing is unchanged: there is nowhere to move to, so it replaces what the tab shows and the
+function left is one Back away. Both doors into the object's code, this one and the menu's, take a
+**placed** address: `SymbolData::placed`, the section's bias added, asked of the row's own symbol
+through `AsmData::placed` and of the target itself for a name. The bias the *listing* draws is
+nothing in a symbol's own tab, and the code tab's rows are placed. Undefined
 imports and relocations against a section symbol stay plain text; the crate says why. **A relocation
 link and the companion header are clicks inside the tab**, and are followed **in place**: pushed
 onto the tab's trail so the function left is one Back away, the way a browser follows a link, and in
@@ -491,17 +494,35 @@ symbol the row is code of, which in the code listing is the stretch's own, throu
 is an instruction and not the symbol. With it the menu always has something to offer, so a row opens
 one whether or not it has a line or a door.
 
+**One look for every link, and one thing Alt means.** A lit link wears the box `link_chrome`
+draws -- the wash, the rounded corner, the rule under it in the lit colour -- wherever it is
+drawn: an operand of an instruction, a label in an object's listing, a name in the source.
+So there is one place to change how a link looks, and a reader has one thing to learn. The
+box is the element's own where the link is an element, and the row's where it is a run of the
+row's text (`lit_box`, placed by the run's columns and inside the row's height): a freya text
+style carries a colour, a weight and a decoration, and nothing to draw a box with, which is
+why a run of text used to make do with an underline. **Alt shuts every door**, and takes the
+light and the hand with it: nothing lights and nothing shows the hand while it is held, so
+nothing offers the press Alt has taken away. Alt is read in the render only by the link under
+the pointer, and the icon follows the pointer, so a hand over a link Alt has just shut is put
+right by the next move, as it is for Ctrl.
+
 **A call in the source is a door of its own, and it is text and not an element.** A row's
 paragraph takes one inline child, and an inline is one *unit* to the text engine
 (`src/chars.rs`), so a name made into an element would stop a source row's columns being the
 file's own line counted in units -- which is what lets a press on one be counted straight
-into the byte offset the language server is asked at (`chars::bytes_of`, and the links'
-own columns back the other way). So the door is decided from the pressed
-column instead: the row's `TextLinks` carries the columns of every link in it and what a press
-on one follows, `code_row` hit-tests the pointer against them for the hand and for the press,
-and lighting one changes a span's style and never where the spans are cut. A boundary that
-moved with the pointer would re-shape the row, and the widest row a listing has drawn only
-ever grows.
+into the byte offset the language server is asked at (`chars::bytes_of`, and the links' own
+columns back the other way). So the door is decided from the pressed column instead: the
+row's `TextLinks` carries the columns of every link in it, whether a press on one is a door
+now and what such a press follows, `code_row` hit-tests the pointer against them for the
+light, the hand and the press, and lighting one changes a span's style and never where the
+spans are cut. A boundary that moved with the pointer would re-shape the row, and the widest
+row a listing has drawn only ever grows. A label in an object's listing is the same kind of
+door -- a run of the row's own text, and the whole of it -- so the row that draws it hands
+its text and its link over and puts **no handler of its own on top**. One put there would
+replace `code_row`'s of that name and say nothing, freya keeping one handler per event name:
+the `on_pointer_out` that row used to chain on took away the one that puts the pointer's icon
+back, and the I-beam followed the reader out of the listing.
 
 **The spans are cut at the links before the row is drawn** (`cut_at`), which is what keeps
 that true now the columns are the language server's and not the highlighting's. A link used

@@ -223,21 +223,22 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## UI
 
-- [ ] One rule for what a link is, one look for every link, and Ctrl meaning one thing. Today a
-  link is drawn three ways: an assembly operand takes a washed, rounded box with a bottom border
-  in the lit colour, a name in the source pane takes the colour and a plain underline, and a
-  label row in the object-code listing takes the colour alone -- with the I-beam still over it,
-  since the row asks for no link. Ctrl means two things: a tab of its own on a name or a label,
-  and *whether there is a link at all* on a bare address, whose press then goes through
-  `show_in_code` and can never ask for a tab. And Alt stops only the press, so a link goes on
-  lighting itself, and showing the hand, while it cannot be followed.
+- [x] One rule for what a link is, one look for every link, and Ctrl meaning one thing. A link was
+  drawn three ways: an assembly operand took a washed, rounded box with a rule under it in the lit
+  colour, a name in the source pane took the colour and a plain underline, and a label row in the
+  object-code listing took the colour alone -- with the I-beam still over it, since the row asked
+  for no link. Ctrl meant two things: a tab of its own on a name or a label, and *whether there was
+  a link at all* on a bare address, whose press then went through `show_in_code` and could never
+  ask for a tab. And Alt stopped only the press, so a link went on lighting itself, and showing the
+  hand, while it could not be followed.
 
-  Settle all three. Every link takes the operand's look -- the wash, the corners, the border, the
-  lit colour and the hand -- wherever it is drawn. Alt turns the light and the cursor off with the
-  press, so nothing ever offers what it will not do. And a bare address becomes a link on its own,
-  opening in a tab of its own with Ctrl like every other operand link, which leaves Ctrl saying
-  one thing everywhere. The predicate behind it -- `Door::open_now` -- becomes the only answer to
-  "is this a link now", asked by the label, the row and the pointer alike.
+  All three are settled. `link_chrome` is the one answer to what a lit link looks like and every
+  link wears it -- drawn by the element where the link is one, and by the row over the run's own
+  columns where it is text, a span having nothing to draw a box with. `Door::open_now` is the one
+  answer to whether a press is a door just now, and the light, the hand and the press are all
+  picked by it. Alt shuts every door and takes the light and the hand with it. And a bare address
+  is a link on its own, opening the object's code in place and, with Ctrl, in a tab of its own,
+  which leaves Ctrl saying one thing everywhere.
 
 - [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
   sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /

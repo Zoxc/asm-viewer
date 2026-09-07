@@ -157,8 +157,8 @@ struct TextOf {
     text: String,
     color: Color,
     bold: bool,
-    /// The symbol a label names, which a **Ctrl**-press on the row opens as a tab of its
-    /// own.
+    /// The symbol a label names, which a **Ctrl**-press on the label opens as a tab of
+    /// its own.
     opens: Option<Arc<SymbolData>>,
 }
 
@@ -288,9 +288,10 @@ struct TextRow {
     color: Color,
     bold: bool,
     wash: Wash,
-    /// The symbol a label names, which a **Ctrl**-press on the row opens as a tab of its
-    /// own: the door from a function read among its neighbours back to reading it alone.
-    /// A plain press is a plain press, and picks the row out like any other.
+    /// The symbol a label names, which a **Ctrl**-press on the label opens as a tab of
+    /// its own: the door from a function read among its neighbours back to reading it
+    /// alone. A plain press is a plain press, and picks the row out like any other, which
+    /// is why the label is drawn as a link only while Ctrl is held (`Door::Label`).
     opens: Option<Symbol>,
     /// The data directive a row of bytes wears in front of its values, and none for a row
     /// of anything else: the assembler's own word for what the row is, `db` to `dq` by the
@@ -345,21 +346,8 @@ impl KeyExt for TextRow {
 impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
         let ctrl = use_consume::<Ctrl>().0;
-        let alt = use_consume::<Alt>().0;
-        let mut hovering = use_state(|| false);
         let open = use_open();
         let visits = use_consume::<Visited>().0;
-        let opens = self.opens.clone();
-        // A label lights as a link only while Ctrl is held, which is when a press is one.
-        // The cue is the label's colour, the one the relocation link takes, and the row
-        // draws nothing under the pointer: an assembly row's only wash is its pair's,
-        // and a listing of an object's code has no pair to light.
-        let link = opens.is_some() && ctrl();
-        let color = if hovering() && link {
-            palette().name_hover_fg
-        } else {
-            self.color
-        };
         let weight = if self.bold {
             FontWeight::BOLD
         } else {
@@ -381,19 +369,44 @@ impl Component for TextRow {
         }
         head.push(
             Span::new(self.text.clone())
-                .color(color)
+                .color(self.color)
                 .font_weight(weight)
                 .assembly_font(),
         );
+        // The label as the link it is: a run of the row's own text, which for a label is
+        // the whole of it -- the symbol's name and the colon after it. The row lights it,
+        // shows the hand over it and follows it exactly while `Door::open_now` says the
+        // door is open, which for a label is while Ctrl is held; without Ctrl the press
+        // is the row's, picking it out like any other.
+        let line = text_line(self.mark, &self.text);
+        let whole = 0..line.units();
+        let links = self.opens.clone().map(|symbol| {
+            let door = Door::Label {
+                symbol: symbol.clone(),
+            };
+            TextLinks {
+                columns: vec![whole],
+                is_link: Rc::new(move || door.open_now(|| ctrl())),
+                // A tab of its own, as Ctrl opens one everywhere.
+                follow: Rc::new(move |_| {
+                    open_document(
+                        open,
+                        visits,
+                        Document::Assembly(Selection::Symbol(symbol.clone())),
+                        Reach::NewTab,
+                    );
+                }),
+            }
+        });
         let text = Text {
-            line: text_line(self.mark, &self.text),
+            line,
             head,
             tail: Vec::new(),
             chars: self.chars,
             // As in the assembly pane: an instruction is in no file.
             names: Vec::new(),
             on_hover: None,
-            links: NoLinks,
+            links,
         };
 
         // The mark's column and the gutter's width, so both the address column and the
@@ -415,7 +428,10 @@ impl Component for TextRow {
                 .into_element(),
         ];
 
-        // A row of no file: a label or a header is nobody's line.
+        // A row of no file: a label or a header is nobody's line. Nothing is chained onto
+        // what comes back: freya keeps an element's handlers in a map by event name, so a
+        // handler put on here would replace the row's own of that name and say nothing
+        // (`ui/code_row.rs`).
         code_row(
             Chrome {
                 pane: Pane::Assembly,
@@ -429,26 +445,6 @@ impl Component for TextRow {
             Some(text),
             None,
         )
-        .on_pointer_over(move |_| hovering.set_if_modified(true))
-        .on_pointer_out(move |_| hovering.set_if_modified(false))
-        .maybe(opens.is_some(), move |el| {
-            el.on_press(move |_| {
-                // Alt says a press on a link is not a door this time, so the selection
-                // the row's own `pointer_down` began stands.
-                if !*ctrl.peek() || *alt.peek() {
-                    return;
-                }
-                // A tab of its own, as Ctrl opens one everywhere.
-                if let Some(symbol) = opens.clone() {
-                    open_document(
-                        open,
-                        visits,
-                        Document::Assembly(Selection::Symbol(symbol)),
-                        Reach::NewTab,
-                    );
-                }
-            })
-        })
     }
 
     fn render_key(&self) -> DiffKey {
@@ -1335,9 +1331,14 @@ fn target_of(
 }
 
 /// Show the instruction at `address` -- placed, in `object`'s code -- among its
-/// neighbours: the object's code tab, opened in a tab of its own on that address, with
+/// neighbours: the object's code tab, opened the way `reach` says on that address, with
 /// the caret on the instruction's row and the line the instruction was compiled from
 /// picked out in the source pane where it has one.
+///
+/// `reach` is the press's to say: a menu item asks for a tab of its own, a bare address
+/// pressed in a symbol's listing for the code in place and, with Ctrl, for a tab of its
+/// own (`reach_inside`). Where the listing is that code already the reach never comes up:
+/// `land` finds the document on top and moves inside it.
 ///
 /// The place is written in the same handler as the open and before any render, so the
 /// pane's first run finds it; it comes *after* the open only because the entry it is kept
@@ -1346,6 +1347,7 @@ fn target_of(
 /// exactly this. The line and the instruction go through `land`, which knows whether
 /// the tab is on top; the caret is planted by the pane once it has rows, on the row at
 /// or below the address, and moved onto the instruction itself once its stretch decodes.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn show_in_code(
     open: Open,
     visits: State<Visits>,
@@ -1356,6 +1358,7 @@ pub(crate) fn show_in_code(
     object: Arc<Object>,
     address: u64,
     at: Option<LinePos>,
+    reach: Reach,
 ) {
     let code = Document::Code(object);
     // The stop `land` makes of the landing below, kept for the place written down after
@@ -1375,7 +1378,7 @@ pub(crate) fn show_in_code(
             address: Some(address),
             columns: None,
         },
-        Reach::NewTab,
+        reach,
     );
     if let Some(id) = id {
         places
