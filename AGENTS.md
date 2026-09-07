@@ -279,6 +279,9 @@ command.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes.
 - `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one
   place found in it, and the two things the panels differ in.
+- `src/ui/place_target.rs` — the place a diagnostic names, drawn as a target: the one
+  component the Scratchpad pane and the Project view both press to get there, with the
+  press handed in.
 - `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
   it takes from that: what lets the code panes scroll sideways with their wash whole.
 - `src/ui/worker.rs` — how anything is asked of a thread: the named thread, the job sender,

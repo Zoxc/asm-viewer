@@ -129,6 +129,8 @@ mod parts;
 pub(crate) use parts::*;
 mod place_row;
 pub(crate) use place_row::*;
+mod place_target;
+pub(crate) use place_target::*;
 mod project_view;
 pub(crate) use project_view::*;
 mod reading;

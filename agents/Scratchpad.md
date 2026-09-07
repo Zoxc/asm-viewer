@@ -423,6 +423,13 @@ pressed" everywhere else in this app. A target that did nothing when pressed was
 and is worse: a hover is a promise, and one kept for `src/main.rs` and broken for everything else is
 worse than never making it.
 
+**The target itself is drawn by `PlaceTarget`** (`src/ui/place_target.rs`), which the Project view's
+own diagnostics use too -- the same hover, the same colours, the same stopped press. The two go to
+different places, so **the press is handed in** as an `EventHandler`: the contexts it needs are
+consumed by the pane while *that* renders, `use_consume` being a hook. An `EventHandler` never
+compares equal, so a target re-renders whenever its pane does; a label and a hover flag is the whole
+cost.
+
 What the jump **cannot** do is scroll the editor to the line, for the reason the paragraph on the
 editor gives: its scroll is private and there is no controller to hand in. So the jump *marks* the
 line (the cursor's row takes the editor's own current-line background and its number lights in the

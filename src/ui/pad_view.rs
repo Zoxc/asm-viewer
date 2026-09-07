@@ -31,73 +31,36 @@ const DELETE_WIDTH: f32 = 520.0;
 const NAME_FLEX: f32 = 2.0;
 const VERSION_FLEX: f32 = 1.0;
 
-/// The place a diagnostic points at, drawn as a **target**: pressing it puts the pad's
-/// cursor on that line and that column. `address_fg` at rest, which is what says "a place"
-/// everywhere else in this app, and the relocation link's own hover — the wash under it and
-/// the pointer over it — which is what says "this can be pressed".
+/// The place a diagnostic points at, as this pane can draw it: a [`PlaceTarget`] for the
+/// pad's own source, pressing which puts the pad's cursor on that line and that column,
+/// and a plain label for anywhere else.
 ///
-/// **Only a span in the pad's own source is one.** cargo names a file in a dependency as
-/// readily as it names `src/main.rs`, and there is nowhere to put a cursor in one: the
+/// **Only a span in the pad's own source is a target.** cargo names a file in a dependency
+/// as readily as it names `src/main.rs`, and there is nowhere to put a cursor in one: the
 /// editor holds the pad's source and this app opens no other file for editing. So those
 /// keep the plain label they always had, with no wash, no pointer and no press. A target
 /// that did nothing when pressed would be the worse of the two answers — the hover is a
 /// promise, and one that is kept for `src/main.rs` and broken for everything else is worse
 /// than never making it.
-#[derive(Clone, PartialEq)]
-struct SpanTarget {
-    pad: PadId,
-    span: cargo::Span,
-    text: String,
-}
-
-impl Component for SpanTarget {
-    fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
-        let text = use_consume::<PadText>().0;
-        let (pad, span) = (self.pad.clone(), self.span.clone());
-
-        CursorArea::new().child(
-            rect()
-                .maybe(hovering(), |rect| link_chrome(rect, None))
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |e: Event<PressEventData>| {
-                    // The blocks are in a `ScrollView` that drags to scroll, and a press
-                    // that reached it would be the start of one.
-                    e.stop_propagation();
-
-                    jump_to_span(text, &pad, &span);
-                })
-                .child(
-                    label()
-                        .text(self.text.clone())
-                        .max_lines(1)
-                        .color(match hovering() {
-                            true => palette().name_hover_fg,
-                            false => palette().address_fg,
-                        }),
-                ),
-        )
-    }
-}
-
-/// The place a diagnostic points at, as this pane can draw it: a [`SpanTarget`] for the
-/// pad's own source, and a plain label for anywhere else, since the editor holds that one
-/// file and this app opens no other for editing.
-fn pad_place(pad: &PadId, diagnostic: &Diagnostic) -> Option<Element> {
+///
+/// `text` is the pad's buffers, consumed by the pane and handed down: a hook may only be
+/// called while a component renders, and this is called once per diagnostic.
+fn pad_place(text: State<PadBuffers>, pad: &PadId, diagnostic: &Diagnostic) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
     let own = is_source_file(&span.file);
-    let text = diagnostic_place(span, own);
+    let place = diagnostic_place(span, own);
 
     Some(match own {
-        true => SpanTarget {
-            pad: pad.clone(),
-            span: span.clone(),
-            text,
+        true => {
+            let (pad, span) = (pad.clone(), span.clone());
+            PlaceTarget {
+                text: place,
+                press: EventHandler::new(move |_| jump_to_span(text, &pad, &span)),
+            }
+            .into_element()
         }
-        .into_element(),
         false => label()
-            .text(text)
+            .text(place)
             .color(palette().address_fg)
             .max_lines(1)
             .into_element(),
@@ -1227,6 +1190,9 @@ struct DiagnosticsPane;
 impl Component for DiagnosticsPane {
     fn render(&self) -> impl IntoElement {
         let pad = use_consume::<Pad>().0;
+        // Here rather than in the row: a press puts the cursor in the pad's buffer, and
+        // the hook that reaches for them may only be called while a component renders.
+        let text = use_consume::<PadText>().0;
 
         let blocks: Vec<Element> = {
             let pads = pad.read();
@@ -1234,7 +1200,7 @@ impl Component for DiagnosticsPane {
             pads.state()
                 .diagnostics()
                 .iter()
-                .map(|diagnostic| diagnostic_block(diagnostic, pad_place(&shown, diagnostic)))
+                .map(|diagnostic| diagnostic_block(diagnostic, pad_place(text, &shown, diagnostic)))
                 .collect()
         };
 

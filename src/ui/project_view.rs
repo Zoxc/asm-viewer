@@ -161,14 +161,27 @@ impl Component for ArtifactRow {
     }
 }
 
-/// The place a diagnostic points at, drawn as a **target** where this pane can reach it:
-/// pressing it opens that file as source, on the line and column the compiler named.
+/// The place a diagnostic points at, drawn as a [`PlaceTarget`] where this pane can reach
+/// it: pressing it opens that file as source, on the line and column the compiler named.
 ///
 /// cargo spells the file relative to where it ran, so the place is the project's directory
 /// joined with it. A file **outside** that directory -- a dependency's, out of the registry
 /// -- keeps the plain label it would have had: the app opens a source file it can read, and
 /// a target that did nothing when pressed would be worse than never offering one.
-fn source_place(directory: Option<&Path>, diagnostic: &Diagnostic) -> Option<Element> {
+///
+/// The states a press needs are the section's, consumed while it renders and handed down:
+/// a hook may only be called while a component renders, and this is called once per
+/// diagnostic.
+fn source_place(
+    open: Open,
+    visits: State<Visits>,
+    marked: State<Marks>,
+    landing: State<Option<Landing>>,
+    plant: State<Option<Planting>>,
+    ctrl: State<bool>,
+    directory: Option<&Path>,
+    diagnostic: &Diagnostic,
+) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
     let file = directory.map(|directory| directory.join(&span.file));
     let own = file.as_deref().is_some_and(|file| {
@@ -177,52 +190,15 @@ fn source_place(directory: Option<&Path>, diagnostic: &Diagnostic) -> Option<Ele
     let text = diagnostic_place(span, own);
 
     Some(match (own, file) {
-        (true, Some(file)) => SourceTarget {
-            file: Arc::from(&*file.to_string_lossy()),
-            line: span.line as u32,
-            text,
-        }
-        .into_element(),
-        _ => label()
-            .text(text)
-            .color(palette().address_fg)
-            .max_lines(1)
-            .into_element(),
-    })
-}
-
-/// A diagnostic's place, as a row of the project's own source. The relocation link's own
-/// hover, which is what says "this can be pressed" everywhere else in this app.
-#[derive(Clone, PartialEq)]
-struct SourceTarget {
-    file: Arc<str>,
-    line: u32,
-    text: String,
-}
-
-impl Component for SourceTarget {
-    fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
-        let states = use_project_states();
-        let marked = use_consume::<Marked>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
-        let ctrl = use_consume::<Ctrl>().0;
-        let (file, line) = (self.file.clone(), self.line);
-
-        CursorArea::new().child(
-            rect()
-                .maybe(hovering(), |rect| link_chrome(rect, None))
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |e: Event<PressEventData>| {
-                    // The blocks are in a `ScrollView` that drags to scroll, and a press
-                    // that reached it would be the start of one.
-                    e.stop_propagation();
-
+        (true, Some(file)) => {
+            let file: Arc<str> = Arc::from(&*file.to_string_lossy());
+            let line = span.line as u32;
+            PlaceTarget {
+                text,
+                press: EventHandler::new(move |_| {
                     land(
-                        states.open,
-                        states.visits,
+                        open,
+                        visits,
                         marked,
                         landing,
                         plant,
@@ -238,18 +214,16 @@ impl Component for SourceTarget {
                         },
                         reach(ctrl),
                     );
-                })
-                .child(
-                    label()
-                        .text(self.text.clone())
-                        .max_lines(1)
-                        .color(match hovering() {
-                            true => palette().name_hover_fg,
-                            false => palette().address_fg,
-                        }),
-                ),
-        )
-    }
+                }),
+            }
+            .into_element()
+        }
+        _ => label()
+            .text(text)
+            .color(palette().address_fg)
+            .max_lines(1)
+            .into_element(),
+    })
 }
 
 /// One project in the recent list. Pressing it opens this one in place of the one on
@@ -434,6 +408,15 @@ impl Component for CargoSection {
         let build = use_consume::<Building>().0;
         let held = build.read().clone();
         let jobs = use_consume::<BuildJobs>();
+        // What a diagnostic's place is pressed to reach. Consumed here and handed to
+        // `source_place`: a hook may only be called while a component renders, and there
+        // is one place per diagnostic.
+        let open_tabs = use_open();
+        let visits = use_consume::<Visited>().0;
+        let marked = use_consume::<Marked>().0;
+        let landing = use_consume::<Land>().0;
+        let plant = use_consume::<Plant>().0;
+        let ctrl = use_consume::<Ctrl>().0;
         let open = proj.read().clone();
         let directory = workspace(&open);
         let profile = open.profile;
@@ -472,7 +455,17 @@ impl Component for CargoSection {
             .diagnostics()
             .iter()
             .map(|diagnostic| {
-                diagnostic_block(diagnostic, source_place(directory.as_deref(), diagnostic))
+                let place = source_place(
+                    open_tabs,
+                    visits,
+                    marked,
+                    landing,
+                    plant,
+                    ctrl,
+                    directory.as_deref(),
+                    diagnostic,
+                );
+                diagnostic_block(diagnostic, place)
             })
             .collect();
 
