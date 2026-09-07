@@ -123,18 +123,19 @@ impl SectionRows {
         let stretched = rows.reading.held.get(&flat)?;
         let studied = stretched.code.as_ref()?;
         let assembly = studied.assembly.clone()?;
-        Some(AsmData {
+        // A listing of the object's code: no source-driven tab behind it, this symbol's
+        // rows starting where its stretch does, its addresses placed where the layout put
+        // its section, and one gutter width for every symbol so the addresses start at one
+        // x.
+        Some(AsmData::of(
+            studied.clone(),
             assembly,
-            object: self.object.clone(),
-            symbol: studied.symbol.data.clone(),
-            lanes: studied.lanes.clone(),
-            lines: studied.lines.clone(),
-            subject: None,
-            base: rows.body_start(flat)?,
-            bias: rows.bias(flat)?,
-            width: lanes::MAX_LANES,
-            code_tab: true,
-        })
+            None,
+            rows.body_start(flat)?,
+            rows.bias(flat)?,
+            lanes::MAX_LANES,
+            true,
+        ))
     }
 }
 
@@ -816,7 +817,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             let paired = paired_at(i).then(|| Edges::of(i, paired_at));
             InstructionRow {
                 arrows: RowArrows {
-                    lanes: asm.lanes.row(index),
+                    lanes: asm.lanes().row(index),
                     lit: lanes::lit(touching(stretch), index),
                 },
                 data: asm,
@@ -844,7 +845,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 wash,
                 width: lanes::MAX_LANES,
                 arrows: RowArrows {
-                    lanes: asm.lanes.boundary(below),
+                    lanes: asm.lanes().boundary(below),
                     lit,
                 },
                 key: DiffKey::None,
@@ -1276,15 +1277,7 @@ pub(crate) fn open_as_symbol(
 fn row_compiled_from(rows: &Rows, reading: &Reading, pair: &Picked) -> Option<usize> {
     reading.held.iter().find_map(|(&flat, stretched)| {
         let studied = stretched.code.as_ref()?;
-        let assembly = studied.assembly.as_ref()?;
-        let index = (0..assembly.instructions.len()).find(|&index| {
-            studied.position(index).is_some_and(|at| {
-                pair.file.as_ref() == Some(&at.file)
-                    && (at.line as usize)
-                        .checked_sub(1)
-                        .is_some_and(|row| pair.chars.contains_row(row))
-            })
-        })?;
+        let index = studied.first_paired(pair)?;
         Some(rows.body_start(flat)? + studied.lanes.row_of(index))
     })
 }

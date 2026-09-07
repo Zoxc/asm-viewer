@@ -300,10 +300,15 @@ instructions a selected line was compiled from, the line a selected instruction 
 of them and not the first. A run is a `CharSelection` -- a caret pair over the listing's rows and
 columns -- plus the file it is a run of, and the rows lit are the rows that pair touches
 (`CharSelection::rows`); there is no second copy of them to keep in step.
-So the assembly side pairs a row by asking the row's own `AsmData::position` against the run's file
+So the assembly side pairs a row by asking the row's own `Studied::position` against the run's file
 and lines, and the source side pairs a line by turning the run's rows into positions
 (`Studied::places` for a symbol's listing, `code_places` over the held stretches for an object's
 code, through the rows the section view shares as `CodeRows`) and keeping the lines of its own file.
+**The rule is written once**, in `Studied::paired`, with `first_paired` the instruction a pane
+owing a scroll reveals: both listings light rows with it and both scroll by it, and a second
+spelling would light one row and scroll to another. `AsmData` holds the worker's `Studied` whole
+rather than copying its fields apart, so it is the same value both listings pair against and a
+field added there reaches the rows without a builder to thread it through.
 `row_background` is four colours (the pair's green, the selection's blue-grey for a row selected
 whole, that colour faded for the caret's row, and a deeper green for a row that is both; `Wash`),
 and a run of paired rows has a rule a step deeper along its top and its bottom (`pair_border`, on
@@ -456,7 +461,8 @@ own meaning over a name -- the symbol alone, in a tab of its own -- and the bare
 link in that listing whether or not Ctrl is held, since there a plain press is the door. Following a
 link in a symbol's own listing is unchanged: there is nowhere to move to, so it replaces what the
 tab shows and the function left is one Back away. Both doors into the object's code, this one and
-the menu's, take `AsmData::placed`, the section's bias added to the row's own address: the bias the
+the menu's, take a **placed** address: `SymbolData::placed`, the section's bias added, asked of the
+row's own symbol through `AsmData::placed` and of the target itself for a name. The bias the
 *listing* draws is nothing in a symbol's own tab, and the code tab's rows are placed. Undefined
 imports and relocations against a section symbol stay plain text; the crate says why. **A relocation
 link and the companion header are clicks inside the tab**, and are followed **in place**: pushed

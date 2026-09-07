@@ -4,7 +4,9 @@
 
 mod common;
 
-use analysis::{parse_object, Architecture, CodeListing, GapKind, Listing, Object, Place, Section};
+use analysis::{
+    parse_object, Architecture, CodeListing, GapKind, Listing, Object, Place, Section, SymbolData,
+};
 use common::{
     caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
     elf_x86_64_with_dwarf, named, parse, pe_dll, text, DwarfFixture, DwarfRow, DwarfSection,
@@ -796,6 +798,27 @@ fn a_relocatable_objects_sections_are_placed_one_after_another() {
     assert_eq!(rows.rows()[0].line, Some(10));
     let rows = second.line_info(&object).expect("second has line info");
     assert_eq!(rows.rows()[0].line, Some(20));
+}
+
+/// A symbol's own address, placed: its section's bias added, and nothing added for a symbol
+/// in no section, which is in no listing to be placed in.
+#[test]
+fn a_symbols_address_is_placed_by_its_sections_bias() {
+    let object = parse(&two_sections());
+    let second = named(&object, "second");
+    let section = second.section.as_ref().expect("second is in a section");
+    assert_eq!((second.address, section.bias), (0, 16));
+    assert_eq!(second.placed(second.address), 16);
+    assert_eq!(second.placed(1), 17);
+
+    let loose = SymbolData {
+        name: "absolute".to_owned(),
+        demangled: None,
+        address: 0x10,
+        section: None,
+        size: 0,
+    };
+    assert_eq!(loose.placed(loose.address), 0x10);
 }
 
 #[test]

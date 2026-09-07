@@ -359,6 +359,21 @@ impl SymbolData {
         self.demangled.as_deref().unwrap_or(&self.name)
     }
 
+    /// `address`, one of this symbol's own, in the one address space every section of the
+    /// object shares: [`Section::bias`] added, and nothing added for a symbol in no section,
+    /// which is in no listing either. That is the space a listing of all the object's code
+    /// draws in and the space `symbol_at` answers in, so anything naming a row has to place
+    /// an address the same way.
+    ///
+    /// `wrapping_add` and not `checked_add`, as `line::relocate` adds the same bias:
+    /// agreeing with it matters more than an overflow the biases cannot produce, the layout
+    /// starting above the highest address the file states. Wrapping is also what keeps this
+    /// from panicking on an address a file made up.
+    pub fn placed(&self, address: u64) -> u64 {
+        let bias = self.section.as_ref().map_or(0, |section| section.bias);
+        address.wrapping_add(bias)
+    }
+
     /// Object files frequently report a size of 0, so derive the extent from the next symbol
     /// in the section (or the section end). An *upper* bound rather than a measurement: it
     /// includes alignment padding, and a declaration the symbol table never mentioned (an

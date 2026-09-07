@@ -76,18 +76,17 @@ pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
 /// The lowest **placed** address any of `symbols` starts at, or [`None`] for none of them
 /// that is in a section.
 ///
-/// Placed, which is the section's bias added: that is the space the listing of a whole
-/// object's code draws in and the space `symbol_at` answers in, so a place worked out here
-/// names the row a reader would land on. `wrapping_add` for the same reason, and not
-/// `checked_add`: agreeing with those two matters more than an overflow the biases cannot
-/// produce.
+/// Placed ([`SymbolData::placed`]), which is the section's bias added: that is the space
+/// the listing of a whole object's code draws in and the space `symbol_at` answers in, so a
+/// place worked out here names the row a reader would land on.
 ///
 /// The **lowest** and not the first: the crate answers in raw address order, so with two
 /// code sections its first entry need not be the one the listing draws first.
 pub fn lowest_placed(symbols: &[Arc<SymbolData>]) -> Option<u64> {
     symbols
         .iter()
-        .filter_map(|data| Some(data.address.wrapping_add(data.section.as_ref()?.bias)))
+        .filter(|data| data.section.is_some())
+        .map(|data| data.placed(data.address))
         .min()
 }
 

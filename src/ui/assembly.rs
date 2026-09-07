@@ -138,16 +138,18 @@ pub(crate) fn instruction_line(assembly: &Assembly, index: usize) -> Line {
 
 /// A disassembled symbol, where its branches are drawn and what says where its
 /// instructions came from, compared by pointer.
+///
+/// The analysis itself is the worker's own [`Studied`], held whole rather than copied
+/// apart, so a field added there reaches the rows without a builder to thread it through.
+/// The rest is what the *listing* adds: which of the two listings this is, and where in it
+/// the symbol sits.
 #[derive(Clone)]
 pub(crate) struct AsmData {
+    /// What the worker made of the symbol: the listing, its gutter layout and its lines.
+    pub(crate) studied: Studied,
+    /// `studied.assembly` for a listing that has one, which is the only kind these rows are
+    /// built for: a symbol with nothing to decode draws no rows at all.
     pub(crate) assembly: Arc<Assembly>,
-    pub(crate) object: Arc<Object>,
-    /// The symbol the listing is of, for a row to name the tab it can be opened alone in.
-    pub(crate) symbol: Arc<SymbolData>,
-    /// The gutter layout for this symbol's branches, derived from `assembly` on the worker
-    /// so it can never be a beat behind the rows it is drawn over.
-    pub(crate) lanes: Arc<Lanes>,
-    pub(crate) lines: SymbolLines,
     /// The source-driven tab this listing is the assembly side of and the file it is
     /// showing, or `None` for an assembly-driven tab's own listing. The file is compared
     /// by text, as `LinePos` is.
@@ -172,11 +174,8 @@ pub(crate) struct AsmData {
 
 impl PartialEq for AsmData {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.assembly, &other.assembly)
-            && Arc::ptr_eq(&self.object, &other.object)
-            && Arc::ptr_eq(&self.symbol, &other.symbol)
-            && Arc::ptr_eq(&self.lanes, &other.lanes)
-            && self.lines == other.lines
+        self.studied == other.studied
+            && Arc::ptr_eq(&self.assembly, &other.assembly)
             && self.subject == other.subject
             && self.base == other.base
             && self.bias == other.bias
@@ -186,48 +185,65 @@ impl PartialEq for AsmData {
 }
 
 impl AsmData {
+    /// `studied` drawn in the listing the arguments after it describe (the fields of the
+    /// same names), `assembly` being the one the caller has already taken out of it. The one
+    /// way one of these is made, so the two listings cannot differ in what they hand their
+    /// rows.
+    pub(crate) fn of(
+        studied: Studied,
+        assembly: Arc<Assembly>,
+        subject: Option<(DocId, Arc<str>)>,
+        base: usize,
+        bias: u64,
+        width: usize,
+        code_tab: bool,
+    ) -> AsmData {
+        AsmData {
+            studied,
+            assembly,
+            subject,
+            base,
+            bias,
+            width,
+            code_tab,
+        }
+    }
+
+    /// The object the listing was read out of.
+    pub(crate) fn object(&self) -> &Arc<Object> {
+        &self.studied.symbol.object
+    }
+
+    /// The symbol the listing is of, for a row to name the tab it can be opened alone in.
+    pub(crate) fn symbol(&self) -> &Arc<SymbolData> {
+        &self.studied.symbol.data
+    }
+
+    /// The gutter layout for this symbol's branches, derived from the assembly on the
+    /// worker so it can never be a beat behind the rows it is drawn over.
+    pub(crate) fn lanes(&self) -> &Arc<Lanes> {
+        &self.studied.lanes
+    }
+
     /// `address`, one of this listing's own, in the object's one address space: the
-    /// section's place in the layout added (`Section::bias`), which is what a door into
-    /// the object's code takes. Not [`bias`](Self::bias), which is what this listing
+    /// section's place in the layout added (`SymbolData::placed`), which is what a door
+    /// into the object's code takes. Not [`bias`](Self::bias), which is what this listing
     /// *draws* and is nothing in a symbol's own listing, whose addresses are the file's.
     pub(crate) fn placed(&self, address: u64) -> u64 {
-        let bias = self
-            .symbol
-            .section
-            .as_ref()
-            .map_or(0, |section| section.bias);
-        address.wrapping_add(bias)
+        self.symbol().placed(address)
     }
 
     /// The source position the instruction at `index` was compiled from, or `None` where
     /// the debug info gives it none: no line info at all, an address no row covers, or a
     /// row naming no file or sitting on DWARF's line 0.
     pub(crate) fn position(&self, index: usize) -> Option<LinePos> {
-        let lines = self.lines.info.as_ref()?;
-        // `get` and not an index: a row's neighbour below can be past the listing.
-        let row = lines.row_at(self.assembly.instructions.get(index)?.address)?;
-        Some(LinePos {
-            file: lines.files().get(row.file?)?.clone(),
-            line: row.line?,
-        })
+        self.studied.position(index)
     }
 
-    /// Whether the instruction at `index` is the same place as a line of the source
-    /// pane's picked-out run `pair`: compiled from that file, on one of those lines. One
-    /// source line is many instructions and every one of them is lit, so this asks each
-    /// row's own position rather than looking for the first match. An instruction the
-    /// debug info places nowhere is never paired.
+    /// Whether the instruction at `index` is the same place as a line of the source pane's
+    /// picked-out run `pair`, which is [`Studied::paired`]; never, where there is no run.
     pub(crate) fn paired(&self, index: usize, pair: Option<&Picked>) -> bool {
-        let Some(pair) = pair else {
-            return false;
-        };
-        let Some(at) = self.position(index) else {
-            return false;
-        };
-        pair.file.as_ref() == Some(&at.file)
-            && (at.line as usize)
-                .checked_sub(1)
-                .is_some_and(|row| pair.chars.contains_row(row))
+        pair.is_some_and(|pair| self.studied.paired(index, pair))
     }
 }
 
@@ -461,11 +477,9 @@ impl Component for DoorLabel {
                         code_tab,
                     } if *code_tab && !*ctrl.peek() => {
                         // Where the target is drawn in the object's own listing: its
-                        // address plus where the layout put its section, which is the one
-                        // address space that listing draws.
-                        let placed = target.address.wrapping_add(
-                            target.section.as_ref().map_or(0, |section| section.bias),
-                        );
+                        // address placed, which is the one address space that listing
+                        // draws.
+                        let placed = target.placed(target.address);
                         show_in_code(
                             open,
                             visits,
@@ -807,8 +821,8 @@ impl Component for InstructionRow {
         let subject = self.data.subject.clone();
         // The symbol this row is code of, in either listing: what the menu bookmarks.
         let symbol_document = Document::Assembly(Selection::Symbol(Symbol {
-            object: self.data.object.clone(),
-            data: self.data.symbol.clone(),
+            object: self.data.object().clone(),
+            data: self.data.symbol().clone(),
         }));
         let row = self.row;
         let width = self.data.width;
@@ -821,7 +835,7 @@ impl Component for InstructionRow {
         // placed address, which in a symbol's own listing is not the one drawn.
         let neighbours = (!self.data.code_tab).then(|| {
             (
-                self.data.object.clone(),
+                self.data.object().clone(),
                 self.data.placed(instruction.address),
             )
         });
@@ -833,8 +847,8 @@ impl Component for InstructionRow {
         let alone = (self.data.code_tab || self.data.subject.is_some()).then(|| {
             (
                 Symbol {
-                    object: self.data.object.clone(),
-                    data: self.data.symbol.clone(),
+                    object: self.data.object().clone(),
+                    data: self.data.symbol().clone(),
                 },
                 instruction.address,
             )
@@ -863,7 +877,7 @@ impl Component for InstructionRow {
                 DoorLabel {
                     text: target.display().to_owned(),
                     door: Door::Symbol {
-                        object: self.data.object.clone(),
+                        object: self.data.object().clone(),
                         target: target.clone(),
                         code_tab,
                     },
@@ -881,7 +895,7 @@ impl Component for InstructionRow {
                     DoorLabel {
                         text: text.clone(),
                         door: Door::Row {
-                            to: self.data.base + self.data.lanes.row_of(edge.to),
+                            to: self.data.base + self.data.lanes().row_of(edge.to),
                             at: self.data.position(edge.to),
                         },
                     }
@@ -899,7 +913,7 @@ impl Component for InstructionRow {
                     DoorLabel {
                         text: text.clone(),
                         door: Door::Address {
-                            object: self.data.object.clone(),
+                            object: self.data.object().clone(),
                             address: self.data.placed(target),
                             code_tab,
                         },
@@ -1064,10 +1078,14 @@ impl Component for InstructionRow {
 struct InstructionList {
     /// The tab these rows are in.
     tab: DocId,
+    /// What the worker made of the symbol, held whole and handed to [`AsmData::of`]. It
+    /// carries the whole symbol and not just its object, because these rows draw a
+    /// disassembly *and* answer to it -- a relocation label navigates to a symbol in the
+    /// same object.
+    studied: Studied,
+    /// `studied.assembly`, taken out by the pane: rows are built only for a listing that
+    /// has one.
     assembly: Arc<Assembly>,
-    /// The whole symbol and not just its object, because these rows draw a disassembly
-    /// *and* answer to it -- a relocation label navigates to a symbol in the same object.
-    symbol: Symbol,
     /// The question this listing answers, and **not** the one being asked: while the
     /// worker catches up the pane is still drawing the listing being left. Two things
     /// come out of it -- [`asked_of`], the place on the tab's trail whose viewing
@@ -1075,18 +1093,14 @@ struct InstructionList {
     /// which is very likely on no trail at all), and the file a source-driven tab is
     /// about, which its rows' menus choose a location for.
     asked: Ask,
-    lanes: Arc<Lanes>,
-    lines: SymbolLines,
 }
 
 impl PartialEq for InstructionList {
     fn eq(&self, other: &Self) -> bool {
         self.tab == other.tab
+            && self.studied == other.studied
             && Arc::ptr_eq(&self.assembly, &other.assembly)
-            && self.symbol == other.symbol
             && self.asked == other.asked
-            && Arc::ptr_eq(&self.lanes, &other.lanes)
-            && self.lines == other.lines
     }
 }
 
@@ -1104,28 +1118,25 @@ impl Component for InstructionList {
         let list = use_list_box(Pane::Assembly, listing);
         let (controller, viewport) = (list.controller, list.viewport);
 
-        let data = AsmData {
-            assembly: self.assembly.clone(),
-            object: self.symbol.object.clone(),
-            symbol: self.symbol.data.clone(),
-            lanes: self.lanes.clone(),
-            lines: self.lines.clone(),
-            subject: match &self.asked {
+        let data = AsmData::of(
+            self.studied.clone(),
+            self.assembly.clone(),
+            match &self.asked {
                 Ask::Source { at, .. } => Some((self.tab, at.file.clone())),
                 Ask::Symbol(_) => None,
             },
-            // A listing that is one symbol: its rows start at the top, its addresses
-            // are the file's own, and its gutter is as wide as it needs.
-            base: 0,
-            bias: 0,
-            width: self.lanes.width,
-            code_tab: false,
-        };
+            // A listing that is one symbol: its rows start at the top, its addresses are
+            // the file's own, its gutter is as wide as it needs, and it is not the code.
+            0,
+            0,
+            self.studied.lanes.width,
+            false,
+        );
         // The listing's rows, which is the instructions plus a separator above every row a
         // branch lands on. Everything below that scrolls, picks out or counts rows is in
         // this space; `AsmData::position`, the gutter and the edges are in the
         // instructions'. `Lanes` converts, and is the only thing that may.
-        let length = data.lanes.listing_rows(data.assembly.instructions.len());
+        let length = data.lanes().listing_rows(data.assembly.instructions.len());
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll this pane owes a run, which wins over it.
         let docs = use_consume::<OpenDocs>().0;
@@ -1155,12 +1166,10 @@ impl Component for InstructionList {
                         // scrolling, and **the request is left owed**, so the listing
                         // that can answer it still finds it.
                         Some(Owing::Pair(pair)) => {
-                            let Some(index) = (0..data.assembly.instructions.len())
-                                .find(|&index| data.paired(index, Some(&pair)))
-                            else {
+                            let Some(index) = data.studied.first_paired(&pair) else {
                                 return false;
                             };
-                            data.lanes.row_of(index)
+                            data.lanes().row_of(index)
                         }
                     };
                     if !reveal_row(controller, *viewport.read(), row) {
@@ -1213,7 +1222,7 @@ impl Component for InstructionList {
                 land_row(
                     marked,
                     file,
-                    data.lanes.row_of(index),
+                    data.lanes().row_of(index),
                     Owed::by(Pane::Assembly),
                 );
             }
@@ -1221,13 +1230,13 @@ impl Component for InstructionList {
         // The picked-out run is listing rows, and `touching` speaks instructions: a run
         // that is one separator lights nothing.
         let touching = chars
-            .and_then(|run| data.lanes.instructions_in(run.rows()))
-            .map(|indices| data.lanes.touching_any(indices))
+            .and_then(|run| data.lanes().instructions_in(run.rows()))
+            .map(|indices| data.lanes().touching_any(indices))
             .unwrap_or_default();
 
         let on_key_down = {
             let assembly = self.assembly.clone();
-            let lanes = self.lanes.clone();
+            let lanes = self.studied.lanes.clone();
             let (text_assembly, text_lanes) = (assembly.clone(), lanes.clone());
             // A separator copies as the blank line it is drawn as, so a run lifted out of
             // the listing keeps the blocks apart on the way to the clipboard.
@@ -1271,11 +1280,11 @@ impl Component for InstructionList {
             },
             move |i, rows: &AsmRows| {
                 let wash = wash_of(rows.chars, i);
-                let Some(index) = rows.data.lanes.instruction_at(i) else {
+                let Some(index) = rows.data.lanes().instruction_at(i) else {
                     // A separator, which belongs to the instruction below it: the lanes it
                     // carries are that row's, and it lights with them but never draws their
                     // corner.
-                    let below = rows.data.lanes.instruction_at(i + 1).unwrap_or(0);
+                    let below = rows.data.lanes().instruction_at(i + 1).unwrap_or(0);
                     let mut lit = lanes::lit(&rows.touching, below);
                     lit.corner = false;
 
@@ -1286,7 +1295,7 @@ impl Component for InstructionList {
                         wash,
                         width: rows.data.width,
                         arrows: RowArrows {
-                            lanes: rows.data.lanes.boundary(below),
+                            lanes: rows.data.lanes().boundary(below),
                             lit,
                         },
                         key: DiffKey::None,
@@ -1299,7 +1308,7 @@ impl Component for InstructionList {
                 // a separator being nobody's pair.
                 let paired_at = |row: usize| {
                     rows.data
-                        .lanes
+                        .lanes()
                         .instruction_at(row)
                         .is_some_and(|index| rows.data.paired(index, rows.pair.as_ref()))
                 };
@@ -1312,7 +1321,7 @@ impl Component for InstructionList {
                     wash,
                     chars: RowChars::of(rows.chars, i),
                     arrows: RowArrows {
-                        lanes: rows.data.lanes.row(index),
+                        lanes: rows.data.lanes().row(index),
                         lit: lanes::lit(&rows.touching, index),
                     },
                     key: DiffKey::None,
@@ -1407,12 +1416,10 @@ impl AssemblyPane {
             .padding(5.0)
             .child(InstructionList {
                 tab: self.tab,
+                studied: studied.clone(),
                 assembly,
-                symbol: studied.symbol.clone(),
                 // The question the *drawn* answer answers, never the one being asked.
                 asked: shown.ask.clone(),
-                lanes: studied.lanes.clone(),
-                lines: studied.lines.clone(),
             })
             .into()
     }

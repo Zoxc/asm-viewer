@@ -564,12 +564,38 @@ impl Studied {
     /// row naming no file or sitting on DWARF's line 0.
     pub(crate) fn position(&self, index: usize) -> Option<LinePos> {
         let lines = self.lines.info.as_ref()?;
+        // `get` and not an index: a row's neighbour below can be past the listing.
         let address = self.assembly.as_ref()?.instructions.get(index)?.address;
         let row = lines.row_at(address)?;
         Some(LinePos {
             file: lines.files().get(row.file?)?.clone(),
             line: row.line?,
         })
+    }
+
+    /// Whether the instruction at `index` is the same place as a line of the source pane's
+    /// picked-out run `pair`: compiled from that file, on one of those lines. The **one**
+    /// pairing rule -- both listings light rows with it and both scroll to a row it picks
+    /// out, and a second spelling of it would light one row and scroll to another. One
+    /// source line is many instructions and every one of them is lit, so this asks each
+    /// row's own position rather than looking for the first match. An instruction the debug
+    /// info places nowhere is never paired.
+    pub(crate) fn paired(&self, index: usize, pair: &Picked) -> bool {
+        let Some(at) = self.position(index) else {
+            return false;
+        };
+        pair.file.as_ref() == Some(&at.file)
+            && (at.line as usize)
+                .checked_sub(1)
+                .is_some_and(|row| pair.chars.contains_row(row))
+    }
+
+    /// The first instruction of this symbol paired with `pair`, or [`None`] where none is:
+    /// what a pane owing that run a scroll reveals, once `Lanes` has made a listing row of
+    /// it.
+    pub(crate) fn first_paired(&self, pair: &Picked) -> Option<usize> {
+        let assembly = self.assembly.as_ref()?;
+        (0..assembly.instructions.len()).find(|&index| self.paired(index, pair))
     }
 
     /// The positions the instructions drawn in the listing rows `rows` were compiled

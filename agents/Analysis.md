@@ -632,7 +632,9 @@ own, all at address 0, and a per-section listing of those is a listing of one fu
 `CodeListing` is every `Section::code` section with bytes, each with its own `Listing`, **placed**
 at `Section::bias` past its address and ordered by where it landed. That layout is the parse's
 (`section_biases`), the same one the line info is read at, so a placed address means one thing to
-both. A linked image's sections have real, distinct addresses and no bias, so there a placed address
+both. `SymbolData::placed` is where one is worked out -- the symbol's section bias added, nothing
+added for a symbol in no section -- so everything naming a row places an address the same way. A
+linked image's sections have real, distinct addresses and no bias, so there a placed address
 *is* the address; a relocatable object's code sections each get a place of their own. The air the
 layout leaves between two sections is nobody's bytes (`at` answers `None` there), and a section
 boundary is a label for the view to draw, not a gap. Two things are left out rather than listed: a
