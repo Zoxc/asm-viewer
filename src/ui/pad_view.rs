@@ -70,9 +70,16 @@ fn pad_place(text: State<PadBuffers>, pad: &PadId, diagnostic: &Diagnostic) -> O
 /// One `[dependencies]` row: the crate, the version required of it, and the × that drops
 /// it. The problem is a prop because it is a property of the *list* -- `Problem::Repeated`
 /// is about two rows -- and every bad row is marked rather than the first.
+///
+/// **Keyed by the row's id, which is what keeps a box with the row it was drawn for.**
+/// freya compares any two `Writable`s as equal (`notes/upstream/freya.md`), so a row
+/// holding one is never told it now points somewhere else. Keyed by position, the boxes
+/// under a deleted row would keep the positions they mounted with, and the reader's caret
+/// would be left in the row that has moved up into its place -- the reordering under an
+/// edit a list of text boxes must not do.
 #[derive(Clone, PartialEq)]
 struct DependencyRow {
-    index: usize,
+    id: RowId,
     dependency: Dependency,
     problem: Option<Problem>,
     key: DiffKey,
@@ -87,22 +94,23 @@ impl KeyExt for DependencyRow {
 impl Component for DependencyRow {
     fn render(&self) -> impl IntoElement {
         let mut pad = use_consume::<Pad>().0;
-        let index = self.index;
+        let id = self.id;
         let problem = self.problem.clone();
         // Which box is wrong is the model's answer: `Repeated` is about the name, and
         // nothing in its wording says so.
         let half = problem.as_ref().map(Problem::half);
 
-        // The two boxes write straight into the row they are drawn from. Indexing is safe
-        // because a row is mounted only for an index the list has: the × below shortens
-        // the list, and the rows are rebuilt before either box is read again.
+        // The two boxes write straight into the row they are drawn from, and find it by
+        // its id. The × below can take the row away while the boxes of the rows under it
+        // are still taking events out of that same press, so the lookup answers for a row
+        // that has gone (`Scratchpad::dependency_mut`).
         let name = pad.into_writable().map(
-            move |pads: &Pads| &pads.state().scratchpad.dependencies[index].name,
-            move |pads: &mut Pads| &mut pads.state_mut().scratchpad.dependencies[index].name,
+            move |pads: &Pads| &pads.state().scratchpad.dependency(id).name,
+            move |pads: &mut Pads| &mut pads.state_mut().scratchpad.dependency_mut(id).name,
         );
         let version = pad.into_writable().map(
-            move |pads: &Pads| &pads.state().scratchpad.dependencies[index].version,
-            move |pads: &mut Pads| &mut pads.state_mut().scratchpad.dependencies[index].version,
+            move |pads: &Pads| &pads.state().scratchpad.dependency(id).version,
+            move |pads: &mut Pads| &mut pads.state_mut().scratchpad.dependency_mut(id).version,
         );
 
         let marked = |input: Input, box_half: Half| {
@@ -141,11 +149,7 @@ impl Component for DependencyRow {
                         Button::new()
                             .compact()
                             .on_press(move |_| {
-                                pad.write()
-                                    .state_mut()
-                                    .scratchpad
-                                    .dependencies
-                                    .remove(index);
+                                pad.write().state_mut().scratchpad.remove_dependency(id);
                             })
                             .child("\u{00d7}"),
                     ),
@@ -1113,21 +1117,20 @@ impl Component for DependencyList {
             // The problems are the list's -- `Repeated` is about two rows -- so they are
             // worked out here and each row is handed its own. Every bad row is marked, not
             // the first.
-            let problems: HashMap<usize, Problem> =
+            let problems: HashMap<RowId, Problem> =
                 state.scratchpad.problems().into_iter().collect();
             let rows: Vec<Element> = state
                 .scratchpad
-                .dependencies
+                .dependencies()
                 .iter()
-                .enumerate()
-                .map(|(index, dependency)| {
+                .map(|dependency| {
                     DependencyRow {
-                        index,
+                        id: dependency.id,
                         dependency: dependency.clone(),
-                        problem: problems.get(&index).cloned(),
+                        problem: problems.get(&dependency.id).cloned(),
                         key: DiffKey::None,
                     }
-                    .key(index)
+                    .key(dependency.id)
                     .into()
                 })
                 .collect();
@@ -1149,11 +1152,7 @@ impl Component for DependencyList {
                     Button::new()
                         .compact()
                         .on_press(move |_| {
-                            pad.write()
-                                .state_mut()
-                                .scratchpad
-                                .dependencies
-                                .push(Dependency::default());
+                            pad.write().state_mut().scratchpad.add_dependency("", "");
                         })
                         .child("Add")
                         .into_element(),

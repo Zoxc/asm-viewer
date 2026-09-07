@@ -58,7 +58,7 @@ pub(crate) use crate::references::{self, ReferenceRows};
 pub(crate) use crate::reveal;
 pub(crate) use crate::scratchpad::{
     is_source_file, own_source, run_in, Build, Dependency, Failure, Half, PadId, PadListing,
-    PadOrder, Problem, Scratchpad, SOURCE_FILE,
+    PadOrder, Problem, RowId, Scratchpad, SOURCE_FILE,
 };
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};

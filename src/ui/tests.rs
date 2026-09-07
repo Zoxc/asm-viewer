@@ -13368,10 +13368,7 @@ fn a_run_does_not_stand_in_for_the_save_in_front_of_it() {
 fn a_scratchpad_is_read_before_anything_is_written_over_it() {
     let mut saved = Scratchpad::default();
     saved.source = "fn kept() {}\n".to_owned();
-    saved.dependencies = vec![Dependency {
-        name: "anyhow".to_owned(),
-        version: "1.0.86".to_owned(),
-    }];
+    saved.add_dependency("anyhow", "1.0.86");
 
     let answering = saved.clone();
     let (mut test, _states, pad, text, _asking, _marked, asks) =
@@ -13487,8 +13484,8 @@ fn a_pad_that_will_not_load_is_not_built_over_either() {
 }
 
 /// An edit is written out, and a row that cannot be written says so against itself.
-/// `Failure::Dependencies` carries the **index** of every row that is wrong, which is
-/// what lets the pane mark them in place.
+/// `Failure::Dependencies` carries the **id** of every row that is wrong, which is what
+/// lets the pane mark them in place.
 #[test]
 fn an_edit_is_written_and_a_bad_row_says_which_row() {
     let (mut test, _states, pad, text, _asking, _marked, asks) =
@@ -13528,32 +13525,30 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
     assert_eq!(pad.peek().state().scratchpad.source, typed);
     assert!(pad.peek().state().unsaved.is_none());
 
-    // A row that names no crate. It is the *second* row, so the index in the answer is the
+    // A row that names no crate. It is the *second* row, and the id in the answer is the
     // assertion.
     let mut pad = pad;
-    {
+    let blank = {
         let mut state = pad.write();
-        state.state_mut().scratchpad.dependencies = vec![
-            Dependency {
-                name: "anyhow".to_owned(),
-                version: "1.0.86".to_owned(),
-            },
-            Dependency::default(),
-        ];
-    }
+        let scratchpad = &mut state.state_mut().scratchpad;
+        scratchpad.add_dependency("anyhow", "1.0.86");
+        scratchpad.add_dependency("", "")
+    };
     pump(&mut test, || pad.peek().state().unsaved.is_some());
 
     assert_eq!(
         pad.peek().state().unsaved,
-        Some(Failure::Dependencies(vec![(1, Problem::NoName)]))
+        Some(Failure::Dependencies(vec![(blank, Problem::NoName)]))
     );
 
     // And fixing it writes again, rather than leaving the disk holding the last good
     // version for ever.
-    pad.write().state_mut().scratchpad.dependencies[1] = Dependency {
-        name: "rand".to_owned(),
-        version: "0.8".to_owned(),
-    };
+    {
+        let mut state = pad.write();
+        let row = state.state_mut().scratchpad.dependency_mut(blank);
+        row.name = "rand".to_owned();
+        row.version = "0.8".to_owned();
+    }
     pump(&mut test, || pad.peek().state().unsaved.is_none());
 }
 
@@ -14210,57 +14205,107 @@ fn a_finished_pad_build_forgets_the_pad_package() {
     forget_source_under(&directory);
 }
 
-/// Taking a dependency row away does not take the pane with it: each box writes into
-/// `dependencies[index]` through a mapped `Writable`, so a row that outlived the list
-/// being shortened would index past the end at the moment it was next read -- a panic,
-/// not a compile error.
+/// The crate each dependency row is asking for, in the order the rows are drawn.
+fn crate_names(pad: State<Pads>) -> Vec<String> {
+    pad.peek()
+        .state()
+        .scratchpad
+        .dependencies()
+        .iter()
+        .map(|row| row.name.clone())
+        .collect()
+}
+
+/// The pane over a pad of this test's own, one row per name in `rows`, with the keyboard
+/// put in the box of the row `focus` names -- which is where the keystrokes after it land.
+macro_rules! mount_rows {
+    ($rows:expr, $focus:expr) => {{
+        let (mut test, _states, pad, _text, _asking, _marked, _asks) =
+            mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+                // Nothing on this machine's disk: the pad the app booted holding is the
+                // one that is opened.
+                PadJob::List => PadAnswer::Listed(Vec::new()),
+                PadJob::New => unreachable!("this test has one pad"),
+                PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+                PadJob::Open(scratchpad) => PadAnswer::Opened {
+                    scratchpad,
+                    program: None,
+                },
+                PadJob::Save(scratchpad) => PadAnswer::Saved {
+                    pad: scratchpad.id().clone(),
+                    failure: scratchpad.manifest().err(),
+                },
+                PadJob::Build(_) => unreachable!("this test never builds"),
+                PadJob::Run { .. } => unreachable!("this test never runs"),
+            });
+        pump(&mut test, || pad.peek().state().opened);
+
+        let mut pad = pad;
+        let ids: Vec<RowId> = {
+            let mut pads = pad.write();
+            let scratchpad = &mut pads.state_mut().scratchpad;
+            $rows
+                .iter()
+                .map(|name| scratchpad.add_dependency(*name, "1"))
+                .collect()
+        };
+        settle(&mut test);
+
+        let box_of = centre_of(&test, $focus);
+        press_at(&mut test, box_of);
+        settle(&mut test);
+        (test, pad, ids)
+    }};
+}
+
+/// **A write through a row that has gone lands on the spare.** Each of a row's two boxes
+/// writes back through a `Writable` mapped by the row's id, and freya emits every event of
+/// one press against the tree it measured before any of them ran -- so a row can be taken
+/// away while its own boxes are still taking events out of that same press. Mapped by
+/// position, the box of the row that has gone writes one past the end of the list, which
+/// is a panic and not a compile error.
 #[test]
-fn removing_a_dependency_row_does_not_take_the_pane_with_it() {
-    let (mut test, _states, pad, _text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
-            // Nothing on this machine's disk: the pad the app booted holding is the one
-            // that is opened.
-            PadJob::List => PadAnswer::Listed(Vec::new()),
-            PadJob::New => unreachable!("this test has one pad"),
-            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
-            PadJob::Open(scratchpad) => PadAnswer::Opened {
-                scratchpad: scratchpad,
-                program: None,
-            },
-            PadJob::Save(scratchpad) => PadAnswer::Saved {
-                pad: scratchpad.id().clone(),
-                failure: scratchpad.manifest().err(),
-            },
-            PadJob::Build(_) => unreachable!("this test never builds"),
-            PadJob::Run { .. } => unreachable!("this test never runs"),
-        });
+fn a_write_through_a_row_that_has_gone_lands_on_the_spare() {
+    let (mut test, mut pad, ids) = mount_rows!(["alpha", "beta"], "beta");
 
-    pump(&mut test, || pad.peek().state().opened);
+    // The keyboard is in the last row's box, which is where the next keystroke goes.
+    test.write_text("!");
+    settle(&mut test);
+    assert_eq!(crate_names(pad), ["alpha", "beta!"]);
 
-    let mut pad = pad;
-    pad.write().state_mut().scratchpad.dependencies = vec![
-        Dependency {
-            name: "anyhow".to_owned(),
-            version: "1.0.86".to_owned(),
-        },
-        Dependency {
-            name: "rand".to_owned(),
-            version: "0.8".to_owned(),
-        },
-    ];
-    for _ in 0..4 {
-        test.sync_and_update();
-    }
+    // That row taken away, and the keystroke sent with nothing drawn in between: the tail
+    // of the batch a press on the row's × starts.
+    pad.write().state_mut().scratchpad.remove_dependency(ids[1]);
+    test.write_text("?");
+    settle(&mut test);
 
-    // The first row, which is what the × on it does -- so the row left behind is the
-    // one that was drawn at index 1.
-    pad.write().state_mut().scratchpad.dependencies.remove(0);
-    for _ in 0..4 {
-        test.sync_and_update();
-    }
+    assert_eq!(crate_names(pad), ["alpha"]);
+}
 
-    assert_eq!(pad.peek().state().scratchpad.dependencies.len(), 1);
-    assert_eq!(pad.peek().state().scratchpad.dependencies[0].name(), "rand");
+/// **A row's boxes stay with the row.** Take the first row away and the caret is left in
+/// the row it was in, so the next keystroke edits that one. Rows keyed by position
+/// instead, the box being typed in keeps the position it mounted with and is handed the
+/// text of the row that has moved up into its place -- the reordering under an edit a list
+/// of text boxes must not do.
+#[test]
+fn taking_a_row_away_leaves_the_caret_in_the_row_it_was_in() {
+    let (mut test, mut pad, ids) = mount_rows!(["alpha", "beta", "gamma"], "beta");
+
+    test.write_text("!");
+    settle(&mut test);
+    assert_eq!(crate_names(pad), ["alpha", "beta!", "gamma"]);
+
+    pad.write().state_mut().scratchpad.remove_dependency(ids[0]);
+    settle(&mut test);
+    test.write_text("?");
+    settle(&mut test);
+
+    let rows = crate_names(pad);
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows[0].contains('?') && rows[1] == "gamma",
+        "the keystroke went to {rows:?} and not to the row the caret was in"
+    );
 }
 
 /// Where a label with this exact text was laid out, as a point to press: the middle of it,

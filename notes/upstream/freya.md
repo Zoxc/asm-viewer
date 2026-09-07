@@ -60,7 +60,9 @@ key is read *then*, after the render-time guard that justified it. **Cost:** del
 shown scratchpad let go of its buffer, and the editor's own `on_global_pointer_press`
 (`freya-code-editor-0.4.3/src/editor_ui.rs:255-263`) then indexed the table for it and
 crashed the app; `PadBuffers`'s index is total (`ui/pad.rs`), and
-`confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from` pins it.
+`confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from` pins it. A dependency
+row's boxes write back the same way, so `Scratchpad::dependency_mut` is total too, with
+`a_write_through_a_row_that_has_gone_lands_on_the_spare` for it.
 
 **Two `Writable`s are always equal.** `PartialEq for Writable` returns `true` whatever it is
 handed (`lifecycle/writable.rs:60-64`), and props are diffed with `PartialEq`, so a component
@@ -74,9 +76,12 @@ empty buffer -- where `SyntaxBlocks::get_line`'s `self.blocks.get(&line).unwrap(
 (`freya-code-editor-0.4.3/src/syntax.rs:98`) panics for any line at all, inside freya and out
 of reach. `SourceEditor` is keyed by its pad so a change remounts the editor and its rows
 (`ui/pad_view.rs`); `coming_back_to_a_pad_already_read_draws_its_own_buffer` and
-`deleting_a_pad_that_is_not_shown_leaves_the_editor_standing` pin the two halves. Worth
-reporting twice over: props holding a `Writable` cannot be diffed, and a line the blocks do
-not have should not be an unwrap.
+`deleting_a_pad_that_is_not_shown_leaves_the_editor_standing` pin the two halves. A dependency
+row is keyed by its `RowId` for the same reason: a delete above it would otherwise leave the
+reader's caret in the row that moved up into its place
+(`taking_a_row_away_leaves_the_caret_in_the_row_it_was_in`). Worth reporting twice over: props
+holding a `Writable` cannot be diffed, and a line the blocks do not have should not be an
+unwrap.
 
 **`pointer_over` fires on entry only.** Its doc says it fires when the pointer is over the
 element; `nodes_state.rs:163` dedups it against the hovered set, so it is `pointer_enter`

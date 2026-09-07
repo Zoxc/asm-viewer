@@ -96,10 +96,10 @@ A dependency is a `(name, version)` row and the **version is required**. A `*` i
 own reason, since a requirement whose answer changes with the day is the one thing a scratchpad must
 not have. Rows are checked against two grammars (a possible crate name, a possible version
 requirement) and never against crates.io: whether a crate exists is cargo's answer. Every bad row
-comes back as `(index, Problem)` so the editor can mark all of them at once, a repeat of one crate
-included, since `[dependencies]` is a table and the second row would otherwise silently win. A
-scratchpad with a bad row **refuses to write** rather than generating a manifest that differs from
-what is on screen. **Building is blocking and belongs on a worker thread**, exactly as `open_files`
+comes back as `(RowId, Problem)` -- the row's own id, not where it is drawn -- so the editor can mark
+all of them at once, a repeat of one crate included, since `[dependencies]` is a table and the second
+row would otherwise silently win. A scratchpad with a bad row **refuses to write** rather than
+generating a manifest that differs from what is on screen. **Building is blocking and belongs on a worker thread**, exactly as `open_files`
 is. Running cargo and reading what it said is `src/cargo.rs`, shared with the project's own build
 (`agents/Sidebar.md`); `build_in` writes the package, calls it, and narrows what comes back to the
 one binary a generated package has. The artifact path is what cargo *named*, never
@@ -375,9 +375,23 @@ or, when there is no order at all, the pad the app booted holding, opened like a
 `opened_in` seeds its baseline without writing anything. `Scratchpad::write` refuses outright rather
 than generating a manifest that differs from the rows, so a bad row stops the source being written
 too, which the pane says over the rows, each of which says its own half. Every bad row is marked,
-not the first: `Scratchpad::problems` answers with `(index, Problem)` for all of them, and
+not the first: `Scratchpad::problems` answers with `(RowId, Problem)` for all of them, and
 `Problem::half` says which of the row's two boxes to redden, because `Repeated` is a *name*
 collision and nothing in its wording says so.
+
+**A dependency row is named by an id, and the two boxes it is drawn as write back through that id.**
+Mapping one by position runs into both of the things the buffers ran into above. Every event of one
+press is emitted against the tree freya measured before any of them ran, so the press on a row's × is
+followed, in that same batch, by handlers on rows the next render takes down, reading through a map
+into a list that is already shorter. And freya compares any two `Writable`s as equal, so a row
+holding one is never told it now points elsewhere: keyed by position, the boxes under a deleted row
+keep the positions they mounted with, and the caret is left in the row that has moved up into its
+place -- the reordering under an edit a list of text boxes must not do. So the rows are keyed by
+their ids, and `Scratchpad::dependency_mut` is total: an id the list no longer has gets the pad's
+spare row, `PadBuffers::gone`'s device a level up. Ids come from a counter on the pad and are never
+handed out twice, and they say nothing about what a row *asks for* -- two rows are equal when they
+name the same crate at the same version -- so neither an id nor the counter nor the spare can make a
+program out of date or the disk copy look stale.
 
 **A package that will not load is refused rather than replaced.** `load_from` answers `None` both
 for a directory with nothing in it and for one holding a package this module cannot read back -- a

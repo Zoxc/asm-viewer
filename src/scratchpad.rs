@@ -194,7 +194,7 @@ impl PadId {
 /// [`PadId`] is the identity and `name` is free text — so two pads may be called the same
 /// thing, a rename moves nothing, and a name may be empty, hold spaces or be written in any
 /// alphabet at all.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Scratchpad {
     id: PadId,
     /// What the reader calls this pad. Raw text out of a box, so it is trimmed at the
@@ -203,7 +203,22 @@ pub struct Scratchpad {
     pub source: String,
     /// In the order the reader put them in — the manifest sorts them, this list does not,
     /// since reordering under an edit is the one thing a list of text boxes must not do.
-    pub dependencies: Vec<Dependency>,
+    dependencies: Vec<Dependency>,
+    /// The next [`RowId`] to hand out.
+    next_row: RowId,
+    /// Where a write for a row that has gone lands: the same device as `PadBuffers::gone`
+    /// (`src/ui/pad.rs`), a level above.
+    ///
+    /// **A row can go while the boxes drawing it are still taking events.** freya emits
+    /// every event of one press against the tree it measured before any of them ran, so
+    /// the press on a row's × is followed, in that same batch, by handlers on rows the
+    /// next render takes down -- still mounted, still writing through a `Writable` mapped
+    /// through this by an id the list no longer has. So the lookup has to answer for a row
+    /// that has gone, and it answers here.
+    ///
+    /// Nothing draws it: the rows are keyed by their ids, so the next render takes a
+    /// deleted row's boxes away rather than leaving them mapped by an id the list has not.
+    gone: Dependency,
     /// What the last build made, so a pad opened in a later run shows its program without
     /// being built again. [`None`] for a pad nothing has built.
     ///
@@ -215,6 +230,21 @@ pub struct Scratchpad {
     /// ([`cargo::Artifact`]).
     pub built: Option<Built>,
 }
+
+/// What the pad *says*, and not the machinery under it. The counter and the spare row are
+/// written to no package and are no part of what a build is of; the spare holds whatever
+/// the tail of an event batch last put in it.
+impl PartialEq for Scratchpad {
+    fn eq(&self, other: &Scratchpad) -> bool {
+        self.id == other.id
+            && self.name == other.name
+            && self.source == other.source
+            && self.dependencies == other.dependencies
+            && self.built == other.built
+    }
+}
+
+impl Eq for Scratchpad {}
 
 /// What a build left behind: where cargo put it, and what it was a build *of*.
 ///
@@ -241,12 +271,36 @@ pub struct PadListing {
     pub name: String,
 }
 
+/// What names one `[dependencies]` row.
+///
+/// Handed out by a counter and never reused, so an id names one row for as long as the app
+/// holds the pad. A position would not: a row's two boxes write back through whatever names
+/// it, and a row above being taken away must not leave them writing into what has moved up
+/// into its place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RowId(u64);
+
+/// The id [`Scratchpad::gone`] carries. Handed to no row, so nothing reaches the spare by
+/// asking for an id.
+const NO_ROW: RowId = RowId(0);
+
 /// One `[dependencies]` row. Both halves are the raw text of a box the reader is typing
 /// in, so both are trimmed at the accessor rather than on the way in.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// **Two rows are equal when they ask for the same crate at the same version.** The id
+/// names the row's boxes and says nothing about what the row asks for, so it is no part of
+/// what a build is *of* ([`Compiled`]) or of whether the disk copy is out of date.
+#[derive(Clone, Debug, Eq)]
 pub struct Dependency {
+    pub id: RowId,
     pub name: String,
     pub version: String,
+}
+
+impl PartialEq for Dependency {
+    fn eq(&self, other: &Dependency) -> bool {
+        self.name == other.name && self.version == other.version
+    }
 }
 
 /// What is wrong with one dependency row.
@@ -276,8 +330,8 @@ pub enum Half {
 /// Why nothing was written or nothing was built.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Failure {
-    /// Rows to fix first, each an index into [`Scratchpad::dependencies`].
-    Dependencies(Vec<(usize, Problem)>),
+    /// Rows to fix first, each named by its [`RowId`].
+    Dependencies(Vec<(RowId, Problem)>),
     /// No state directory and no local data directory on this system.
     NoDirectory,
     Write(String),
@@ -367,6 +421,12 @@ impl Scratchpad {
             name: String::new(),
             source: DEFAULT_SOURCE.to_owned(),
             dependencies: Vec::new(),
+            next_row: RowId(NO_ROW.0 + 1),
+            gone: Dependency {
+                id: NO_ROW,
+                name: String::new(),
+                version: String::new(),
+            },
             built: None,
         }
     }
@@ -383,19 +443,59 @@ impl Scratchpad {
         self.name.trim()
     }
 
+    /// The crates this pad asks for, in the order the reader put them in.
+    pub fn dependencies(&self) -> &[Dependency] {
+        &self.dependencies
+    }
+
+    /// Add a row at the end, and answer the id it is named by.
+    pub fn add_dependency(&mut self, name: impl Into<String>, version: impl Into<String>) -> RowId {
+        let id = self.next_row;
+        self.next_row = RowId(id.0 + 1);
+        self.dependencies.push(Dependency {
+            id,
+            name: name.into(),
+            version: version.into(),
+        });
+        id
+    }
+
+    /// Drop the row `id` names, and nothing where it has already gone.
+    pub fn remove_dependency(&mut self, id: RowId) {
+        self.dependencies.retain(|row| row.id != id);
+    }
+
+    /// The row `id` names, or [`Scratchpad::gone`] where the list no longer has one.
+    pub fn dependency(&self, id: RowId) -> &Dependency {
+        self.dependencies
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap_or(&self.gone)
+    }
+
+    /// The same to write into. Total for [`Scratchpad::gone`]'s reason: a row's boxes go
+    /// on taking events after the press that took the row away.
+    pub fn dependency_mut(&mut self, id: RowId) -> &mut Dependency {
+        let Scratchpad {
+            dependencies, gone, ..
+        } = self;
+        dependencies
+            .iter_mut()
+            .find(|row| row.id == id)
+            .unwrap_or(gone)
+    }
+
     /// Every dependency row that cannot be written, in list order — all of them, since
-    /// the editor marks rows.
-    pub fn problems(&self) -> Vec<(usize, Problem)> {
+    /// the editor marks rows. By id, which is what names a row; where it is drawn does not.
+    pub fn problems(&self) -> Vec<(RowId, Problem)> {
         let mut seen = HashSet::new();
         let mut problems = Vec::new();
-        for (row, dependency) in self.dependencies.iter().enumerate() {
-            match dependency.check() {
-                Err(problem) => problems.push((row, problem)),
+        for row in &self.dependencies {
+            match row.check() {
+                Err(problem) => problems.push((row.id, problem)),
                 // Only a row that is otherwise good can be a duplicate: two empty rows
                 // are two empty rows.
-                Ok(()) if !seen.insert(dependency.name()) => {
-                    problems.push((row, Problem::Repeated))
-                }
+                Ok(()) if !seen.insert(row.name()) => problems.push((row.id, Problem::Repeated)),
                 Ok(()) => {}
             }
         }
@@ -476,17 +576,14 @@ impl Scratchpad {
         let manifest: Manifest = toml::from_str(&manifest).ok()?;
         let source = fs::read_to_string(directory.join(SOURCE_DIR).join(SOURCE_NAME)).ok()?;
 
-        Some(Scratchpad {
-            id: manifest.package.name,
-            name: manifest.package.metadata.scratchpad.name,
-            source,
-            dependencies: manifest
-                .dependencies
-                .into_iter()
-                .map(|(name, version)| Dependency { name, version })
-                .collect(),
-            built: manifest.package.metadata.scratchpad.built,
-        })
+        let mut scratchpad = Scratchpad::of(manifest.package.name);
+        scratchpad.name = manifest.package.metadata.scratchpad.name;
+        scratchpad.source = source;
+        scratchpad.built = manifest.package.metadata.scratchpad.built;
+        for (name, version) in manifest.dependencies {
+            scratchpad.add_dependency(name, version);
+        }
+        Some(scratchpad)
     }
 
     /// This scratchpad as `directory` has it, or this one where there is nothing there.

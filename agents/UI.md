@@ -51,8 +51,8 @@ is that mechanism pinned.
 A `Readable<T>` made from a `State` or a `Memo` is the same, and only one made out of a plain value
 compares by value (`readable.rs:92,102`). Handing one down as a prop therefore never re-renders the
 component holding it, which is what makes a *mapped* one a hazard rather than a convenience:
-`into_writable().map(..)` captures its way in (a field of a `Filter`, `dependencies[index]`) and the
-component keeps the closures it was first given. A mapping that can change is safe only where the
+`into_writable().map(..)` captures its way in (a field of a `Filter`, a dependency row by its id) and
+the component keeps the closures it was first given. A mapping that can change is safe only where the
 component holding it is unmounted when it does, which is what the scratchpad's editor and its
 dependency rows arrange (`agents/Scratchpad.md`), and never by handing it a new one.
 

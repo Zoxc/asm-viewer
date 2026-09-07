@@ -15,11 +15,24 @@ fn scratchpad() -> Scratchpad {
     Scratchpad::new("sketch").expect("an id")
 }
 
+/// A row on its own, for the checks that are about one row and not about a list.
+/// `NO_ROW` because nothing here looks it up.
 fn dependency(name: impl Into<String>, version: impl Into<String>) -> Dependency {
     Dependency {
+        id: NO_ROW,
         name: name.into(),
         version: version.into(),
     }
+}
+
+/// Rows on a scratchpad, and the ids they were handed.
+fn dependencies<N: Into<String>, V: Into<String>>(
+    scratchpad: &mut Scratchpad,
+    rows: impl IntoIterator<Item = (N, V)>,
+) -> Vec<RowId> {
+    rows.into_iter()
+        .map(|(name, version)| scratchpad.add_dependency(name, version))
+        .collect()
 }
 
 /// The whole generated manifest, asserted as text rather than as a value: the field order
@@ -32,12 +45,9 @@ fn a_package_is_a_manifest_and_a_main() {
     // tool of its own keep anything -- and it is under no obligation to be a crate name,
     // where `[package] name`, which is the id, is. Untrimmed on purpose, like the rows.
     scratchpad.name = " a name with spaces ".to_owned();
-    scratchpad.dependencies = vec![
-        dependency("rand", "0.8"),
-        // Out of order and untrimmed on purpose: the manifest sorts and trims, the list
-        // does not.
-        dependency(" anyhow ", " 1.0.86 "),
-    ];
+    // Out of order and untrimmed on purpose: the manifest sorts and trims, the list does
+    // not.
+    dependencies(&mut scratchpad, [("rand", "0.8"), (" anyhow ", " 1.0.86 ")]);
 
     assert_eq!(
         scratchpad.manifest().expect("a manifest"),
@@ -70,21 +80,24 @@ fn a_scratchpad_with_no_crates_has_no_dependencies_table() {
 #[test]
 fn a_row_that_is_not_a_crate_name_says_which_row() {
     let mut scratchpad = scratchpad();
-    scratchpad.dependencies = vec![
-        dependency("serde", "1"),
-        dependency("", "1"),
-        dependency("1password", "1"),
-        dependency("hello world", "1"),
-        dependency("a".repeat(MAX_NAME + 1), "1"),
-    ];
+    let rows = dependencies(
+        &mut scratchpad,
+        [
+            ("serde".to_owned(), "1"),
+            (String::new(), "1"),
+            ("1password".to_owned(), "1"),
+            ("hello world".to_owned(), "1"),
+            ("a".repeat(MAX_NAME + 1), "1"),
+        ],
+    );
 
     assert_eq!(
         scratchpad.problems(),
         vec![
-            (1, Problem::NoName),
-            (2, Problem::NameStart),
-            (3, Problem::NameCharacter(' ')),
-            (4, Problem::NameTooLong),
+            (rows[1], Problem::NoName),
+            (rows[2], Problem::NameStart),
+            (rows[3], Problem::NameCharacter(' ')),
+            (rows[4], Problem::NameTooLong),
         ]
     );
 }
@@ -129,20 +142,18 @@ fn a_version_that_is_not_a_version_says_so() {
 #[test]
 fn the_same_crate_twice_is_a_row_that_says_so() {
     let mut scratchpad = scratchpad();
-    scratchpad.dependencies = vec![
-        dependency("serde", "1"),
-        dependency(" serde ", "2"),
-        // A second empty row is empty, not a duplicate: it has nothing to duplicate.
-        dependency("", ""),
-        dependency("", ""),
-    ];
+    // A second empty row is empty, not a duplicate: it has nothing to duplicate.
+    let rows = dependencies(
+        &mut scratchpad,
+        [("serde", "1"), (" serde ", "2"), ("", ""), ("", "")],
+    );
 
     assert_eq!(
         scratchpad.problems(),
         vec![
-            (1, Problem::Repeated),
-            (2, Problem::NoName),
-            (3, Problem::NoName),
+            (rows[1], Problem::Repeated),
+            (rows[2], Problem::NoName),
+            (rows[3], Problem::NoName),
         ]
     );
 }
@@ -151,12 +162,12 @@ fn the_same_crate_twice_is_a_row_that_says_so() {
 fn a_scratchpad_with_a_bad_row_will_not_write() {
     let directory = directory(line!());
     let mut scratchpad = scratchpad();
-    scratchpad.dependencies = vec![dependency("rand", "")];
+    let row = scratchpad.add_dependency("rand", "");
 
     let failure = scratchpad.write_to(&directory).expect_err("a refusal");
     assert_eq!(
         failure,
-        Failure::Dependencies(vec![(0, Problem::NoVersion)])
+        Failure::Dependencies(vec![(row, Problem::NoVersion)])
     );
     // And nothing was written on the way to refusing.
     assert!(!directory.exists());
@@ -172,7 +183,7 @@ fn writes_and_reads_back() {
     let directory = directory(line!());
     let mut scratchpad = scratchpad();
     scratchpad.source = "fn main() { /* edited */ }\n".to_owned();
-    scratchpad.dependencies = vec![dependency("anyhow", "1.0.86")];
+    let anyhow = scratchpad.add_dependency("anyhow", "1.0.86");
     // A name nothing could file a pad under: it is a value in the package and not the
     // directory, so it may hold spaces, punctuation and any alphabet at all.
     scratchpad.name = "Sam's ✎ notes".to_owned();
@@ -188,7 +199,8 @@ fn writes_and_reads_back() {
     // ordinary edit now that nothing is filed under it.
     scratchpad.source = "fn main() {}\n".to_owned();
     scratchpad.name = "renamed".to_owned();
-    scratchpad.dependencies = vec![dependency("rand", "0.8")];
+    scratchpad.remove_dependency(anyhow);
+    scratchpad.add_dependency("rand", "0.8");
     scratchpad.write_to(&directory).expect("writing again");
     assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad));
 
@@ -271,14 +283,14 @@ fn a_scratchpad_opens_as_its_directory_has_it() {
 
     let mut written = scratchpad();
     written.source = "fn main() { /* saved */ }\n".to_owned();
-    written.dependencies = vec![dependency("anyhow", "1.0.86")];
+    written.add_dependency("anyhow", "1.0.86");
     written.write_to(&directory).expect("writing");
 
     let opened = Scratchpad::default()
         .opened_in(&directory)
         .expect("a package this module wrote");
     assert_eq!(opened.source, written.source);
-    assert_eq!(opened.dependencies, written.dependencies);
+    assert_eq!(opened.dependencies(), written.dependencies());
     // The manifest's crate name says `sketch` and the caller asked for `scratch`: the
     // caller wins, because the id is where the next write goes. The *name* comes off the
     // disk like everything else, being a value and not a place.
@@ -562,10 +574,7 @@ fn what_a_build_was_of_is_the_source_and_the_crates() {
     assert_ne!(edited.compiled(), built, "an edit is one");
 
     let mut crated = pad.clone();
-    crated.dependencies.push(Dependency {
-        name: "rand".to_owned(),
-        version: "0.8".to_owned(),
-    });
+    crated.add_dependency("rand", "0.8");
     assert_ne!(crated.compiled(), built, "a crate row is one too");
 }
 
@@ -624,13 +633,25 @@ fn the_digest_says_what_a_build_was_of() {
 
     // The rows are ended one by one, so two lists that would run together as one string
     // are still two.
-    let row = |name: &str, version: &str| Dependency {
-        name: name.to_owned(),
-        version: version.to_owned(),
-    };
     let mut one = pad.clone();
-    one.dependencies = vec![row("ab", "1"), row("c", "2")];
+    dependencies(&mut one, [("ab", "1"), ("c", "2")]);
     let mut other = pad.clone();
-    other.dependencies = vec![row("a", "bc"), row("1", "2")];
+    dependencies(&mut other, [("a", "bc"), ("1", "2")]);
     assert_ne!(one.compiled().digest(), other.compiled().digest());
+}
+
+/// **A row that has gone is still somewhere to write.** The boxes of a deleted row go on
+/// taking events out of the press that deleted it, so the lookup answers with the spare
+/// rather than not answering, and what lands there is out of the list's reach. Ids are
+/// never handed out twice either, so the next row added is not the one that went.
+#[test]
+fn a_write_to_a_row_that_has_gone_lands_on_the_spare() {
+    let mut scratchpad = scratchpad();
+    let rows = dependencies(&mut scratchpad, [("rand", "0.8"), ("anyhow", "1.0.86")]);
+    scratchpad.remove_dependency(rows[0]);
+
+    scratchpad.dependency_mut(rows[0]).name = "left behind".to_owned();
+    assert_eq!(scratchpad.dependencies(), [dependency("anyhow", "1.0.86")]);
+    assert_eq!(scratchpad.dependency(rows[1]).name(), "anyhow");
+    assert_ne!(scratchpad.add_dependency("serde", "1"), rows[0]);
 }
