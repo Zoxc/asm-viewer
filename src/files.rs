@@ -27,16 +27,43 @@ enum Children {
     Failed,
 }
 
+impl Children {
+    /// The same three states, with the children dropped: what a row is drawn from.
+    fn fold(&self) -> Fold {
+        match self {
+            Children::Unread => Fold::Folded,
+            Children::Read(_) => Fold::Unfolded,
+            Children::Failed => Fold::Failed,
+        }
+    }
+}
+
+/// What an entry is. Children hang off the directory arm, so a file cannot carry any.
+#[derive(Clone, Debug)]
+enum Kind {
+    File,
+    Directory(Children),
+}
+
+impl Kind {
+    /// Whether this is a directory, which rows are sorted by.
+    fn is_directory(&self) -> bool {
+        matches!(self, Kind::Directory(_))
+    }
+}
+
 /// One entry, and for a directory whatever of its contents has been read.
 #[derive(Clone, Debug)]
 struct Node {
     name: String,
     path: PathBuf,
-    directory: bool,
-    children: Children,
+    kind: Kind,
 }
 
 /// Whether a directory row's contents are on screen. A file row has none of this.
+///
+/// [`Children`] with the children dropped, which is what it is for: a row is cloned and
+/// compared once per render, so it says the state and carries none of the contents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Fold {
     Folded,
@@ -80,8 +107,7 @@ impl FileTree {
             root: Node {
                 name: source::name_of(root),
                 path: root.to_path_buf(),
-                directory: true,
-                children: Children::Read(children),
+                kind: Kind::Directory(Children::Read(children)),
             },
         })
     }
@@ -93,16 +119,17 @@ impl FileTree {
         let Some(node) = self.root.find_mut(path) else {
             return false;
         };
-        if !node.directory {
+        let Kind::Directory(children) = &node.kind else {
             return false;
-        }
-        node.children = match node.children {
+        };
+        let next = match children {
             Children::Read(_) => Children::Unread,
             Children::Unread | Children::Failed => match read_level(&node.path) {
                 Ok(children) => Children::Read(children),
                 Err(_) => Children::Failed,
             },
         };
+        node.kind = Kind::Directory(next);
         true
     }
 
@@ -113,11 +140,9 @@ impl FileTree {
         // unfolded, which is bounded, but the bound is theirs and not the file's.
         let mut stack = vec![(&self.root, 0)];
         while let Some((node, depth)) = stack.pop() {
-            let fold = match (node.directory, &node.children) {
-                (false, _) => None,
-                (true, Children::Unread) => Some(Fold::Folded),
-                (true, Children::Read(_)) => Some(Fold::Unfolded),
-                (true, Children::Failed) => Some(Fold::Failed),
+            let fold = match &node.kind {
+                Kind::File => None,
+                Kind::Directory(children) => Some(children.fold()),
             };
             rows.push(FileRow {
                 name: node.name.clone(),
@@ -125,7 +150,7 @@ impl FileTree {
                 depth,
                 fold,
             });
-            if let Children::Read(children) = &node.children {
+            if let Kind::Directory(Children::Read(children)) = &node.kind {
                 stack.extend(children.iter().rev().map(|child| (child, depth + 1)));
             }
         }
@@ -142,7 +167,7 @@ impl Node {
             if node.path == path {
                 return Some(node);
             }
-            if let Children::Read(children) = &mut node.children {
+            if let Kind::Directory(Children::Read(children)) = &mut node.kind {
                 stack.extend(children.iter_mut());
             }
         }
@@ -169,14 +194,18 @@ fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
             Some(Node {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 path: entry.path(),
-                directory: kind.is_dir(),
-                children: Children::Unread,
+                kind: if kind.is_dir() {
+                    Kind::Directory(Children::Unread)
+                } else {
+                    Kind::File
+                },
             })
         })
         .collect();
     nodes.sort_by(|a, b| {
-        b.directory
-            .cmp(&a.directory)
+        b.kind
+            .is_directory()
+            .cmp(&a.kind.is_directory())
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
             .then_with(|| a.name.cmp(&b.name))
     });
