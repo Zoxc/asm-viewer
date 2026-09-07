@@ -421,6 +421,15 @@ pub(crate) struct Prefs(pub(crate) State<EditedSettings>);
 #[derive(Clone, Copy)]
 pub(crate) struct Rescued(pub(crate) State<Vec<PathBuf>>);
 
+/// A project that would not open, and why, until the reader has been told.
+///
+/// A project file is never moved aside -- it may be their own file, beside their code -- so
+/// one that will not parse is left exactly where it is and nothing is written over it. That
+/// makes telling them the whole of what happens, and this is what carries the reason as
+/// far as [`UnopenedPopup`].
+#[derive(Clone, Copy)]
+pub(crate) struct Unopened(pub(crate) State<Option<project::Failure>>);
+
 /// Every state a project owns, in one `Copy` bundle of handles: a project switch closes
 /// all of them and reopens all of them.
 #[derive(Clone, Copy)]

@@ -204,17 +204,8 @@ impl Component for WindowBody {
     }
 }
 
-/// A project that would not open, and why, until the reader has been told.
-///
-/// A project file is never moved aside -- it may be their own file, beside their code -- so
-/// one that will not parse is left exactly where it is and nothing is written over it. That
-/// makes telling them the whole of what happens, and this is what carries the reason as
-/// far as the window below.
-#[derive(Clone, Copy)]
-pub(crate) struct Unopened(pub(crate) State<Option<project::Failure>>);
-
-/// The window that says so. Drawn as nothing at all until there is something to say, the
-/// way `RescuedPopup` is.
+/// The window that says a project would not open. Drawn as nothing at all until there is
+/// something to say, the way `RescuedPopup` is.
 #[derive(PartialEq)]
 pub(crate) struct UnopenedPopup {
     pub(crate) naming: Option<project::Failure>,
