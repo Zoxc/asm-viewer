@@ -300,6 +300,13 @@ keystroke of something typed once a project. The binaries it lists come from `Ob
 `project::binaries`, which is what the saved list is *derived from*, so what the pane draws is what
 the next write will say.
 
+**The pane is five sections and not one render.** The project's own fields, the binaries, the
+cargo build, the language server and the recent projects are each a component reading the contexts
+it draws, so a change redraws the sections that read it and no others: an answer from the language
+server leaves the artifact rows and the diagnostics standing, and a binary opening touches nothing
+but the list of them. A keystroke still redraws the four sections that read `Proj`, the boxes
+writing straight into it, but not the binaries -- and this is the pane the reader types into.
+
 **The Project view is also where the project is built** (`src/ui/building.rs` over
 `src/cargo.rs`), under a heading naming the tool rather than the act, since the pane has
 several other things a reader could mean by "build". The manifest found is **named** in the
