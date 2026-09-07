@@ -256,88 +256,250 @@ pub(crate) struct RowArrows {
     pub(crate) lit: Lit,
 }
 
-/// The clickable name of a relocation target, in place of the meaningless numeric operand.
-///
-/// Where the listing is the object's own code, the target's rows are rows of this very
-/// listing, so a plain press moves to them and the reader goes on reading where they
-/// were; Ctrl opens the symbol alone, in a tab of its own as Ctrl does everywhere. In a
-/// symbol's own listing there is nowhere to move to and a plain press follows the link
-/// in place, the way a browser follows one.
+/// Where a press on one of a row's operands goes. The three an instruction can offer are
+/// one label with three presses, and not three labels: the hover, the chrome, the Alt
+/// rule and the drawn text are the same for each, and this is what differs.
 #[derive(Clone)]
-struct RelocationLabel {
-    object: Arc<Object>,
-    target: Arc<SymbolData>,
-    /// Whether the listing this row is in is the object's code and not one symbol's.
-    code_tab: bool,
+enum Door {
+    /// The name of a relocation target, in place of the meaningless numeric operand.
+    ///
+    /// Where the listing is the object's own code, the target's rows are rows of this
+    /// very listing, so a plain press moves to them and the reader goes on reading where
+    /// they were; Ctrl opens the symbol alone, in a tab of its own as Ctrl does
+    /// everywhere. In a symbol's own listing there is nowhere to move to and a plain
+    /// press follows the link in place, the way a browser follows one.
+    Symbol {
+        object: Arc<Object>,
+        target: Arc<SymbolData>,
+        /// Whether the listing this row is in is the object's code and not one symbol's.
+        code_tab: bool,
+    },
+    /// The address an unnamed call, or a branch this listing has no row for, goes to: a
+    /// door into the object's code, in the unified view at that address, that opens with
+    /// **Ctrl** as a label's does in that view (`TextRow`) and is the plain number
+    /// without it, a press on which picks the row out like a press on any of the row's
+    /// text. Lit as a link only while Ctrl is held, which is when a press is one --
+    /// except in the unified view, where the address is a row of this listing and a plain
+    /// press moves to it, as one on a named target does.
+    ///
+    /// A tab of its own, as `show_in_code` opens one from the instruction's menu, landing
+    /// on the row at or below the address (`section::Rows::row_for`): a call into the
+    /// middle of a function lands on the instruction holding the byte, a target in a data
+    /// stretch on the row of bytes covering it. The line is left unknown, the target's
+    /// row not being this row.
+    Address {
+        object: Arc<Object>,
+        /// Where the instruction goes, placed: in the object's one address space.
+        address: u64,
+        /// Whether the listing this row is in is the object's code and not one symbol's.
+        code_tab: bool,
+    },
+    /// The row a branch that lands inside this symbol lands on: pressing the
+    /// displacement puts that row on screen and pins the line it came from.
+    ///
+    /// **Not** a navigation. The document does not change, so nothing is pushed onto the
+    /// tab's trail -- following a jump is reading further down the same listing, and a
+    /// Back button that undid it would be answering a question nobody asked. It *is* a
+    /// selection, though: arriving at the target and then having to click it to light it
+    /// up made the reader say twice where they had gone, so the press pins exactly what a
+    /// press on the target row would, source pane owed the scroll and all.
+    Row {
+        /// The listing row the branch lands on -- the instruction's row and not its
+        /// index, since the scroll and the picked-out run are both in listing space.
+        to: usize,
+        /// Where that row points on the source side, or `None` where the debug info
+        /// places it nowhere. The target's own position and not this row's: the run is
+        /// the one a click on the row being jumped to would have made, of that row's
+        /// file.
+        at: Option<LinePos>,
+    },
 }
 
-impl PartialEq for RelocationLabel {
+impl PartialEq for Door {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.object, &other.object)
-            && Arc::ptr_eq(&self.target, &other.target)
-            && self.code_tab == other.code_tab
+        match (self, other) {
+            (
+                Door::Symbol {
+                    object,
+                    target,
+                    code_tab,
+                },
+                Door::Symbol {
+                    object: other_object,
+                    target: other_target,
+                    code_tab: other_code_tab,
+                },
+            ) => {
+                Arc::ptr_eq(object, other_object)
+                    && Arc::ptr_eq(target, other_target)
+                    && code_tab == other_code_tab
+            }
+            (
+                Door::Address {
+                    object,
+                    address,
+                    code_tab,
+                },
+                Door::Address {
+                    object: other_object,
+                    address: other_address,
+                    code_tab: other_code_tab,
+                },
+            ) => {
+                Arc::ptr_eq(object, other_object)
+                    && address == other_address
+                    && code_tab == other_code_tab
+            }
+            (
+                Door::Row { to, at },
+                Door::Row {
+                    to: other_to,
+                    at: other_at,
+                },
+            ) => to == other_to && at == other_at,
+            _ => false,
+        }
     }
 }
 
-impl Component for RelocationLabel {
+impl Door {
+    /// Whether a press on the link is a door **now**: always, where what it opens does
+    /// not turn on the reader; only with **Ctrl** held for a bare address, unless that
+    /// address is a row of the listing already. Asked twice of every such row -- by the
+    /// label, which lights itself by it, and by the closure the row is handed for the
+    /// pointer's icon ([`InlineLink`]) -- and one rule, so the hand and the light cannot
+    /// disagree.
+    ///
+    /// `ctrl` is asked only where the answer turns on it, so only the labels it can
+    /// change are drawn again as it goes down and up.
+    fn open_now(&self, ctrl: impl FnOnce() -> bool) -> bool {
+        match self {
+            Door::Symbol { .. } | Door::Row { .. } => true,
+            Door::Address { code_tab, .. } => *code_tab || ctrl(),
+        }
+    }
+
+    /// The colour the label is drawn in at rest, and the one it takes while it is lit --
+    /// which is its underline's too.
+    fn colours(&self) -> (Color, Color) {
+        match self {
+            Door::Symbol { .. } => (palette().name_fg, palette().name_hover_fg),
+            Door::Address { .. } => (kind_color(SpanKind::Address), palette().name_hover_fg),
+            Door::Row { .. } => (kind_color(SpanKind::Address), palette().branch_lit_fg),
+        }
+    }
+}
+
+/// One of an instruction's operands drawn as a link: what it says, and where a press on
+/// it goes.
+#[derive(Clone, PartialEq)]
+struct DoorLabel {
+    /// The operand as the disassembler printed it, or the name that replaced it: what
+    /// the reader is pressing.
+    text: String,
+    door: Door,
+}
+
+impl DoorLabel {
+    /// This label as the row draws it, inside its paragraph: the element, and the
+    /// pointer's icon asking the label's own rule for whether a press is a door, so the
+    /// hand is over exactly what is drawn as a link. `ctrl` is optional, a row being
+    /// drawn without it in a harness that has no modifiers.
+    fn inline(self, ctrl: Option<State<bool>>) -> InlineLink {
+        let door = self.door.clone();
+        InlineLink {
+            element: self.into_element(),
+            is_link: Rc::new(move || door.open_now(|| ctrl.is_some_and(|ctrl| *ctrl.peek()))),
+        }
+    }
+}
+
+impl Component for DoorLabel {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
         let ctrl = use_consume::<Ctrl>().0;
         let alt = use_consume::<Alt>().0;
+        let open = use_open();
+        let visits = use_consume::<Visited>().0;
         let marked = use_consume::<Marked>().0;
         let landing = use_consume::<Land>().0;
         let plant = use_consume::<Plant>().0;
         let code_at = use_consume::<CodeAt>().0;
-        let symbol = Symbol {
-            object: self.object.clone(),
-            data: self.target.clone(),
-        };
-        let text = self.target.display().to_owned();
-        let code_tab = self.code_tab;
-        let object = self.object.clone();
-        // Where the target is drawn in the object's own listing: its address plus where
-        // the layout put its section, which is the one address space that listing draws.
-        let placed = self.target.address.wrapping_add(
-            self.target
-                .section
-                .as_ref()
-                .map_or(0, |section| section.bias),
-        );
+        // The list's own scroll and its box, which `reveal_row` needs at the moment of
+        // the press rather than at the render that drew this label.
+        let listing = use_consume::<Listing>();
+        let door = self.door.clone();
+        let (rest, lit_fg) = door.colours();
+        // Lit where the pointer is on it and a press would be a door, which for a bare
+        // address is only while Ctrl is held.
+        let lit = hovering() && door.open_now(|| ctrl());
 
         rect()
-            .maybe(hovering(), |rect| {
-                rect.background(palette().link_hover_bg)
-                    .corner_radius(6.0)
-                    .border(
-                        Border::new()
-                            .fill(palette().name_hover_fg)
-                            .width(BorderWidth {
-                                top: 0.0,
-                                right: 0.0,
-                                bottom: 2.0,
-                                left: 0.0,
-                            }),
-                    )
-            })
+            .maybe(lit, |rect| link_chrome(rect, Some(lit_fg)))
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
             .on_press(move |e: Event<PressEventData>| {
                 // Alt says this press is not a door: it is left to the row, whose
-                // `pointer_down` has already begun a selection over the link.
-                if *alt.peek() {
+                // `pointer_down` has already begun a selection over the link. Nor is a
+                // press the door is not open to: it goes on into the row, which is
+                // picked out, and opens nothing.
+                if *alt.peek() || !door.open_now(|| *ctrl.peek()) {
                     return;
                 }
                 // Or the press bubbles into the row, which would pin the line the
                 // instruction being left came from.
                 e.stop_propagation();
 
-                // In the unified view the target is further down this same listing:
-                // moved to, which is a scroll and a caret and neither a tab nor a visit,
-                // since `land` plants an address in the tab that is already showing it.
-                if code_tab && !*ctrl.peek() {
-                    show_in_code(
+                match &door {
+                    // In the unified view the target is further down this same listing:
+                    // moved to, which is a scroll and a caret and neither a tab nor a
+                    // visit, since `land` plants an address in the tab that is already
+                    // showing it.
+                    Door::Symbol {
+                        object,
+                        target,
+                        code_tab,
+                    } if *code_tab && !*ctrl.peek() => {
+                        // Where the target is drawn in the object's own listing: its
+                        // address plus where the layout put its section, which is the one
+                        // address space that listing draws.
+                        let placed = target.address.wrapping_add(
+                            target.section.as_ref().map_or(0, |section| section.bias),
+                        );
+                        show_in_code(
+                            open,
+                            visits,
+                            marked,
+                            landing,
+                            plant,
+                            code_at,
+                            object.clone(),
+                            placed,
+                            None,
+                        );
+                    }
+                    // A link inside the tab: followed in place, the way a browser follows
+                    // one, so the function left is one Back away -- or, with Ctrl, in a
+                    // tab of its own beside this one.
+                    Door::Symbol { object, target, .. } => {
+                        let reach = if *ctrl.peek() {
+                            Reach::NewTab
+                        } else {
+                            Reach::InPlace
+                        };
+                        open_document(
+                            open,
+                            visits,
+                            Document::Assembly(Selection::Symbol(Symbol {
+                                object: object.clone(),
+                                data: target.clone(),
+                            })),
+                            reach,
+                        );
+                    }
+                    Door::Address {
+                        object, address, ..
+                    } => show_in_code(
                         open,
                         visits,
                         marked,
@@ -345,222 +507,27 @@ impl Component for RelocationLabel {
                         plant,
                         code_at,
                         object.clone(),
-                        placed,
+                        *address,
                         None,
-                    );
-                    return;
+                    ),
+                    Door::Row { to, at } => {
+                        // The row is reached by a press, so the pane is on screen and
+                        // measured.
+                        let mut controller = listing.controller;
+                        let _ = reveal_row(&mut controller, listing.bounds.get().height(), *to);
+                        // The row landed on becomes the picked-out one, replacing the row
+                        // the press started on -- which `pointer_down` has already marked,
+                        // that being the one handler a stopped press does not undo. The
+                        // source pane owes the scroll to the target's line, where it has
+                        // one; this pane has just been given its own, above.
+                        mark_row(marked, at.as_ref().map(|at| at.file.clone()), *to);
+                    }
                 }
-
-                // A link inside the tab: followed in place, the way a browser follows
-                // one, so the function left is one Back away -- or, with Ctrl, in a tab
-                // of its own beside this one.
-                let reach = if *ctrl.peek() {
-                    Reach::NewTab
-                } else {
-                    Reach::InPlace
-                };
-                open_document(
-                    open,
-                    visits,
-                    Document::Assembly(Selection::Symbol(symbol.clone())),
-                    reach,
-                );
             })
-            .child(label().text(text).max_lines(1).color(if hovering() {
-                palette().name_hover_fg
+            .child(label().text(self.text.clone()).max_lines(1).color(if lit {
+                lit_fg
             } else {
-                palette().name_fg
-            }))
-    }
-}
-
-/// The address an unnamed call, or a branch this listing has no row for, goes to: a
-/// door into the object's code, in the unified view at that address, that opens with
-/// **Ctrl** as a label's does in that view (`TextRow`) and is the plain number without it,
-/// a press on which picks the row out like a press on any of the row's text. Lit as a
-/// link only while Ctrl is held, which is when a press is one -- except in the unified
-/// view, where the address is a row of this listing and a plain press moves to it, as
-/// one on a named target does.
-///
-/// A tab of its own, as `show_in_code` opens one from the instruction's menu, landing on
-/// the row at or below the address (`section::Rows::row_for`): a call into the middle of
-/// a function lands on the instruction holding the byte, a target in a data stretch on
-/// the row of bytes covering it. The line is left unknown, the target's row not being
-/// this row.
-#[derive(Clone)]
-struct TargetLabel {
-    /// The operand as the disassembler printed it, which is what a reader is clicking.
-    text: String,
-    object: Arc<Object>,
-    /// Where the instruction goes, placed: in the object's one address space.
-    address: u64,
-    /// Whether the listing this row is in is the object's code and not one symbol's.
-    code_tab: bool,
-}
-
-impl PartialEq for TargetLabel {
-    fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
-            && Arc::ptr_eq(&self.object, &other.object)
-            && self.address == other.address
-            && self.code_tab == other.code_tab
-    }
-}
-
-/// Whether a press on the address is a door: with **Ctrl** held, and always in the
-/// listing the address is a row of, where a plain press moves to it. Asked twice of every
-/// such row -- read by the label, which lights itself with it and is drawn again as Ctrl
-/// goes down, and peeked by the closure the row is handed for the pointer's icon
-/// ([`InlineLink`]) -- and one rule, so the hand and the light cannot disagree.
-fn target_is_door(ctrl: bool, code_tab: bool) -> bool {
-    ctrl || code_tab
-}
-
-impl Component for TargetLabel {
-    fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
-        let ctrl = use_consume::<Ctrl>().0;
-        let alt = use_consume::<Alt>().0;
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
-        let marked = use_consume::<Marked>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
-        let code_at = use_consume::<CodeAt>().0;
-        let object = self.object.clone();
-        let address = self.address;
-        let text = self.text.clone();
-        let code_tab = self.code_tab;
-        // The cue is the name's colour and the box a relocation link wears, since that
-        // is the door it is.
-        let link = hovering() && target_is_door(ctrl(), code_tab);
-
-        rect()
-            .maybe(link, |rect| {
-                rect.background(palette().link_hover_bg)
-                    .corner_radius(6.0)
-                    .border(
-                        Border::new()
-                            .fill(palette().name_hover_fg)
-                            .width(BorderWidth {
-                                top: 0.0,
-                                right: 0.0,
-                                bottom: 2.0,
-                                left: 0.0,
-                            }),
-                    )
-            })
-            .on_pointer_over(move |_| hovering.set_if_modified(true))
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
-            .on_press(move |e: Event<PressEventData>| {
-                // A plain press is a plain press: it goes on into the row, which
-                // `pointer_down` has already picked out, and opens nothing -- except in
-                // the unified view, where the row it goes to is one of this listing's
-                // and moving to it is what the press is for. Alt says the same of every
-                // press: not a door this time, so the selection begun over the link
-                // stands.
-                if (!code_tab && !*ctrl.peek()) || *alt.peek() {
-                    return;
-                }
-                // Or the press bubbles into the row, which would pin the line the
-                // instruction being left came from.
-                e.stop_propagation();
-                show_in_code(
-                    open,
-                    visits,
-                    marked,
-                    landing,
-                    plant,
-                    code_at,
-                    object.clone(),
-                    address,
-                    None,
-                );
-            })
-            .child(label().text(text).max_lines(1).color(if link {
-                palette().name_hover_fg
-            } else {
-                kind_color(SpanKind::Address)
-            }))
-    }
-}
-
-/// The clickable displacement of a branch that lands inside this symbol: pressing it puts
-/// the row it names on screen and pins the line that row came from.
-///
-/// **Not** a navigation. The document does not change, so nothing is pushed onto the
-/// tab's trail -- following a jump is reading further down the same listing, and a Back
-/// button that undid it would be answering a question nobody asked. It *is* a selection,
-/// though:
-/// arriving at the target and then having to click it to light it up made the reader say
-/// twice where they had gone, so the press pins exactly what a press on the target row
-/// would, source pane owed the scroll and all.
-#[derive(Clone, PartialEq)]
-struct BranchLabel {
-    /// The operand as the disassembler printed it, which is what a reader is clicking.
-    text: String,
-    /// The listing row the branch lands on -- the instruction's row and not its index,
-    /// since the scroll and the picked-out run are both in listing space.
-    to: usize,
-    /// Where that row points on the source side, or `None` where the debug info places it
-    /// nowhere. The target's own position and not this row's: the run is the one a click
-    /// on the row being jumped to would have made, of that row's file.
-    at: Option<LinePos>,
-}
-
-impl Component for BranchLabel {
-    fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
-        let alt = use_consume::<Alt>().0;
-        let marked = use_consume::<Marked>().0;
-        let text = self.text.clone();
-        let to = self.to;
-        let at = self.at.clone();
-        // The list's own scroll and its box, which `reveal_row` needs at the moment of
-        // the press rather than at the render that drew this label.
-        let listing = use_consume::<Listing>();
-
-        rect()
-            .maybe(hovering(), |rect| {
-                rect.background(palette().link_hover_bg)
-                    .corner_radius(6.0)
-                    .border(
-                        Border::new()
-                            .fill(palette().branch_lit_fg)
-                            .width(BorderWidth {
-                                top: 0.0,
-                                right: 0.0,
-                                bottom: 2.0,
-                                left: 0.0,
-                            }),
-                    )
-            })
-            .on_pointer_over(move |_| hovering.set_if_modified(true))
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
-            .on_press(move |e: Event<PressEventData>| {
-                // Alt says this press is not a door: left to the row, which is already
-                // sweeping a selection out over the link.
-                if *alt.peek() {
-                    return;
-                }
-                // Or the press bubbles into the row, which would keep the row *this*
-                // instruction is picked out, where the reader asked for the one it
-                // jumps to.
-                e.stop_propagation();
-                // The row is reached by a press, so the pane is on screen and measured.
-                let mut controller = listing.controller;
-                let _ = reveal_row(&mut controller, listing.bounds.get().height(), to);
-                // The row landed on becomes the picked-out one, replacing the row the
-                // press started on -- which `pointer_down` has already marked, that
-                // being the one handler a stopped press does not undo. The source
-                // pane owes the scroll to the target's line, where it has one; this
-                // pane has just been given its own, above.
-                mark_row(marked, at.as_ref().map(|at| at.file.clone()), to);
-            })
-            .child(label().text(text).max_lines(1).color(if hovering() {
-                palette().branch_lit_fg
-            } else {
-                kind_color(SpanKind::Address)
+                rest
             }))
     }
 }
@@ -884,21 +851,24 @@ impl Component for InstructionRow {
         // of the row's one paragraph, so it is one unit of the row's text to the engine
         // and the row's columns are the clipboard's (`instruction_line`).
         let (head, link, tail) = split(instruction, linked(&self.data.assembly, self.index));
-        // Ctrl as the row's icon asks it: peeked from a handler, where the labels below
-        // read it and are drawn again as it changes. Optional, a row being drawn without
+        // Ctrl as the row's icon asks it: peeked from a handler, where the label below
+        // reads it and is drawn again as it changes. Optional, a row being drawn without
         // it in a harness that has no modifiers.
         let ctrl = try_consume_context::<Ctrl>().map(|ctrl| ctrl.0);
         let code_tab = self.data.code_tab;
         let inline: Option<InlineLink> = match link {
-            Some(Link::Relocation) => instruction.relocation.as_ref().map(|target| {
-                InlineLink::always(
-                    RelocationLabel {
+            // The relocation target's name -- in the operand the relocation applies to,
+            // or appended where the formatter offered none to put it in (`None`).
+            Some(Link::Relocation) | None => instruction.relocation.as_ref().map(|target| {
+                DoorLabel {
+                    text: target.display().to_owned(),
+                    door: Door::Symbol {
                         object: self.data.object.clone(),
                         target: target.clone(),
-                        code_tab: self.data.code_tab,
-                    }
-                    .into_element(),
-                )
+                        code_tab,
+                    },
+                }
+                .inline(ctrl)
             }),
             // A branch's displacement is the other way to follow it: the row it lands
             // on, and the run a press on that row would have made.
@@ -908,14 +878,14 @@ impl Component for InstructionRow {
                     .branch_span
                     .and_then(|i| instruction.format.get(i));
                 edge.zip(span).map(|(edge, (text, _))| {
-                    InlineLink::always(
-                        BranchLabel {
-                            text: text.clone(),
+                    DoorLabel {
+                        text: text.clone(),
+                        door: Door::Row {
                             to: self.data.base + self.data.lanes.row_of(edge.to),
                             at: self.data.position(edge.to),
-                        }
-                        .into_element(),
-                    )
+                        },
+                    }
+                    .inline(ctrl)
                 })
             }
             // Where the instruction goes, with no name and no row here: the door into the
@@ -925,36 +895,18 @@ impl Component for InstructionRow {
                 let span = instruction
                     .target_span
                     .and_then(|i| instruction.format.get(i));
-                instruction
-                    .target
-                    .zip(span)
-                    .map(|(target, (text, _))| InlineLink {
-                        element: TargetLabel {
-                            text: text.clone(),
+                instruction.target.zip(span).map(|(target, (text, _))| {
+                    DoorLabel {
+                        text: text.clone(),
+                        door: Door::Address {
                             object: self.data.object.clone(),
                             address: self.data.placed(target),
-                            code_tab: self.data.code_tab,
-                        }
-                        .into_element(),
-                        // The rule the label lights itself by, so the hand is shown over
-                        // exactly what is drawn as a link -- in the unified view included,
-                        // where a plain press on the address is the door.
-                        is_link: Rc::new(move || {
-                            target_is_door(ctrl.is_some_and(|ctrl| *ctrl.peek()), code_tab)
-                        }),
-                    })
-            }
-            // The formatter offered no operand to put the name in: appended.
-            None => instruction.relocation.as_ref().map(|target| {
-                InlineLink::always(
-                    RelocationLabel {
-                        object: self.data.object.clone(),
-                        target: target.clone(),
-                        code_tab: self.data.code_tab,
+                            code_tab,
+                        },
                     }
-                    .into_element(),
-                )
-            }),
+                    .inline(ctrl)
+                })
+            }
         };
         let appended = link.is_none() && inline.is_some();
 

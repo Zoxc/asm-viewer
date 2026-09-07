@@ -212,9 +212,7 @@ impl Component for SourceTarget {
 
         CursorArea::new().child(
             rect()
-                .maybe(hovering(), |rect| {
-                    rect.background(palette().link_hover_bg).corner_radius(6.0)
-                })
+                .maybe(hovering(), |rect| link_chrome(rect, None))
                 .on_pointer_over(move |_| hovering.set_if_modified(true))
                 .on_pointer_out(move |_| hovering.set_if_modified(false))
                 .on_press(move |e: Event<PressEventData>| {

@@ -523,7 +523,7 @@ printed beside the name. A near branch has no rip-like form to fall back on eith
 target as the address the displacement works out to, so a relocated one reads as an address it does
 not go to. `Instruction::relocation_span` is the index of the span the name landed in, recorded by
 an override of `write_symbol`. That is what lets `InstructionRow` render
-the run before it as one `paragraph()`, the span as a `RelocationLabel`, and the run after it as a
+the run before it as one `paragraph()`, the span as a `DoorLabel`, and the run after it as a
 second `paragraph()`. `branch_span` is its **twin** and is recorded by an override of
 `write_number`, which is how a branch target reaches the output: it is the span an instruction's
 *own* displacement was printed into. The two are exclusive by construction, since a branch covered
@@ -535,7 +535,7 @@ their targets and left the displacement as the answer. Where no relocation cover
 it is a direct near `call`, the backend asks `Code::symbol_at` for the text symbol that **starts
 exactly** at the address the encoding names, and hands it out through the same
 `relocation`/`relocation_span` pair a relocated call uses: the resolver substitutes the name for the
-operand, `write_symbol` records the span, and the UI's `RelocationLabel` draws it with no change of
+operand, `write_symbol` records the span, and the UI's `DoorLabel` draws it with no change of
 its own. Three limits, each deliberate. *Exact start only*: a call into the middle of a function
 stays the number it is, and a target no symbol starts at (a PLT stub, a stripped static) stays plain
 text. *Same section*: the index is by placed address (`Section::bias` added), which makes a

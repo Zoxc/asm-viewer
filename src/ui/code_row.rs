@@ -156,16 +156,6 @@ pub(crate) struct InlineLink {
     pub(crate) is_link: Rc<dyn Fn() -> bool>,
 }
 
-impl InlineLink {
-    /// An element that is a link whenever the pointer is over it.
-    pub(crate) fn always(element: Element) -> Self {
-        InlineLink {
-            element,
-            is_link: Rc::new(|| true),
-        }
-    }
-}
-
 impl RowLinks for InlineLink {
     fn drawn(self) -> Drawn {
         Drawn::element(self.element, self.is_link)

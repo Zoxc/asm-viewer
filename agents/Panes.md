@@ -425,7 +425,7 @@ into Ctrl names itself Caps Lock in every event, so it is learnt from its first 
 (`ModifierKeys`' doc, `notes/upstream/freya.md`). **The third door is the address an instruction
 goes to when nothing names it**: a call into the middle of a function, a call to a function a
 stripped image has no symbol for, a jump out of the symbol in a listing with no row for it
-(`Instruction::target`, `agents/Analysis.md`). The number is drawn as a `TargetLabel`
+(`Instruction::target`, `agents/Analysis.md`). The number is drawn onto `Door::Address`
 (`Link::Target`, the third of `split`'s links), inline in the row's paragraph as the other two are,
 and a Ctrl-press on it is `show_in_code` with the **placed** address and no line: the object's code
 in a tab of its own, landed on the row **at or below** the address, the view and the caret both.
@@ -438,8 +438,13 @@ tell, the map's place is re-applied and not the derived one, so a target in a st
 not reached lands on its own instruction once the stretch is decoded, not on the row its guess was
 nearest (`agents/UI.md`). A plain press on the number is a press on the row's text; the label lights
 as a link, and the row shows the hand over it, only while Ctrl is held. Both ask the one rule
-(`target_is_door`): the label reaches the row as an `InlineLink`, whose `is_link` is what the
-pointer's icon is picked by, so the hand is over exactly what is drawn as a link. **In the
+(`Door::open_now`): the label reaches the row as an `InlineLink`, whose `is_link` is what the
+pointer's icon is picked by, so the hand is over exactly what is drawn as a link. **All three doors
+are one label**, a `DoorLabel` with a `Door` saying which. The hover, the chrome (`link_chrome`,
+which a diagnostic's place wears without the underline), the Alt rule and the text are the same for
+each; the press and the two colours are all that differ, so a change to how a link looks, or to what
+Alt means over one, is one edit. Ctrl is read in the render only where the answer turns on it, so
+only a bare address's label is drawn again as Ctrl goes down and up. **In the
 unified view a link does not leave it.** The rows a target is in are rows of the listing already, so
 a plain press on a name or on a bare address is `show_in_code` at the target's placed address, which
 `documents::land` turns into a plant in the tab that is already showing that document: a scroll and
@@ -817,9 +822,9 @@ hex dump's shape, which is how a row of data is told from a row of assembly, in 
 in a colour. Nothing for an empty row or a separator -- no address either, a row that draws nothing
 copying nothing.
 
-**A branch's displacement is the other way to follow it**, drawn as a `BranchLabel` exactly where a
-call's resolved target is drawn as a `RelocationLabel`: `Instruction::branch_span` says which span
-to lift out, and the row is the same three children either way. It is drawn only where
+**A branch's displacement is the other way to follow it**, drawn by the same label that draws a
+call's resolved target, onto `Door::Row` and not `Door::Symbol`: `Instruction::branch_span` says
+which span to lift out, and the row is the same three children either way. It is drawn only where
 `Assembly::edge_from` finds an edge, which is the set the gutter has an arrow for: a tail call keeps
 its plain operand, having no row here to be pointed at. Pressing it is `reveal_row` on the edge's
 target **and the run a press on that row would have made**: `mark_row`, the row landed on alone, of

@@ -45,6 +45,22 @@ pub(crate) fn pair_border(edges: Edges) -> Border {
     })
 }
 
+/// The box a link wears while it is lit: the wash and the rounded corner every link in
+/// the app shares, and an `underline` where one is asked for -- an inline link in a row
+/// of code, which has nothing but that and its colour to say it can be pressed.
+pub(crate) fn link_chrome(rect: Rect, underline: Option<Color>) -> Rect {
+    let rect = rect.background(palette().link_hover_bg).corner_radius(6.0);
+    match underline {
+        Some(colour) => rect.border(Border::new().fill(colour).width(BorderWidth {
+            top: 0.0,
+            right: 0.0,
+            bottom: 2.0,
+            left: 0.0,
+        })),
+        None => rect,
+    }
+}
+
 pub(crate) fn right_hairline() -> Border {
     Border::new().fill(palette().hairline).width(BorderWidth {
         top: 0.0,
