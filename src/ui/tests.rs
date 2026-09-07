@@ -8454,6 +8454,36 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
     assert_eq!((asked_of.line, asked_of.column), (1, 12));
 }
 
+/// The menu's "Go to definition" asks about the name it was opened over, and asks about
+/// the same place a click on the link asks about. One `Lookup::at` counts the line down
+/// for the protocol, so the two cannot land a line apart.
+#[test]
+fn the_menus_definition_asks_where_a_click_on_the_link_does() {
+    let (file, _directory) = calling_file("asksdef");
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let entry = centre_of(&test, "Go to definition");
+    press_at(&mut test, entry);
+
+    let (asked, want) = next_ask(&mut test, &asks).expect("the press asked the server");
+    // `helper` begins the twelfth byte into the file's second line, which the protocol
+    // counts as line one.
+    assert_eq!((asked.line, asked.column), (1, 12));
+    assert_eq!(want, lsp::Question::Followed(lsp::Followed::Definition));
+}
+
 /// The name where a function is **defined** offers its references too, though it is no
 /// link: where a name is defined is where a reader asks what refers to it.
 #[test]

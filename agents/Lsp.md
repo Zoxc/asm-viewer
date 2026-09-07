@@ -222,8 +222,10 @@ Things learned from rust-analyzer's own transport, each of which is a test:
 ## How a column is counted
 
 Lines go out as the protocol takes them, counted from zero, and a `Place` comes back with
-a **1-based** line, the unit line information is in everywhere else in the app. That
-conversion is in one place and happens once.
+a **1-based** line, the unit line information is in everywhere else in the app. On the way
+out that conversion is written once, in `Lookup::at`: every question about a name -- a
+followed link, and the three a row's menu offers -- is built there, so no two of them can
+land a line apart. On the way in it happens as the answer is decoded, in `src/lsp.rs`.
 
 The column is asked about. The protocol's own unit is a UTF-16 code unit, which is what
 skia counts a drawn row in and so what `src/chars.rs` counts in -- but it is not what
@@ -522,8 +524,8 @@ Nothing at all where a project said nothing, which is most of them.
 
 ## What the two answers open
 
-`src/ui/follow.rs`. A press on a call sends the row's file, its index and the pressed
-column, all three already in the units the protocol takes, and what its answer opens is
+`src/ui/follow.rs`. A press on a call sends the row's place and the name's column, through
+the one `Lookup::at` every question about a name is built with, and what its answer opens is
 decided **at the press** and kept -- `Asking`'s rule once more. Two workers stand between
 the press and the tab moving, so by the time the answer lands the reader may have moved on
 and Ctrl may no longer be held; what was asked for is what was asked for.
@@ -611,8 +613,12 @@ One that is *working* keeps its links: they are still the right names while it r
 of the project.
 
 A **references** answer goes to the Locations panel instead (`agents/Sidebar.md`), and is
-asked for from the same place a definition is: the row's file and the pressed column, at the
-right-click rather than the press. It comes back grouped and with each line's text, both
+asked about the same place a definition is: the row's file and the name's own first column,
+at the right-click rather than the press. All three questions a click cannot ask -- go to
+definition, find references, find implementations -- are one `name_menu`
+(`src/ui/locations.rs`), beside the menu of what the *line* was compiled into. The row finds
+the name under the pointer, hands over a `NameAt`, and knows nothing else about them: which
+questions a name can be asked is written where they are asked. It comes back grouped and with each line's text, both
 done on the worker: the reply is `Reply::Listed` where a definition's is `Reply::Followed`,
 and both carry what their lines said, reading a line being a file read and belonging on the
 thread that already blocks. The

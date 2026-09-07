@@ -402,22 +402,19 @@ pub(crate) struct NameAt {
 /// with no server -- a question is not what starts one, that being the control the reader
 /// presses (`follow_name`'s rule).
 pub(crate) fn find_listed(
+    server: &Server,
     located: State<Located>,
     dock: State<DockArea>,
-    language: State<Language>,
-    jobs: &LspJobs,
     named: NameAt,
     of: lsp::Listed,
 ) {
     let NameAt { at, name, column } = named;
-    let lookup = Lookup {
-        file: PathBuf::from(&*at.file),
-        // The protocol counts lines from zero, where a `LinePos` is 1-based; the column
-        // is already what it takes.
-        line: at.line.saturating_sub(1),
-        column,
-    };
-    let asked = ask_where(language, jobs, lookup, lsp::Question::Listed(of));
+    let asked = ask_where(
+        server.language,
+        &server.jobs,
+        Lookup::at(&at, column),
+        lsp::Question::Listed(of),
+    );
     let Some((run, id)) = asked else {
         return;
     };
@@ -428,6 +425,48 @@ pub(crate) fn find_listed(
         Query::listed(of, at, name, column, run, id),
         None,
     );
+}
+
+/// The three questions a server can be asked about `named`, as the rows a name's menu
+/// begins with: where it is defined, where it is used, and what implements it.
+///
+/// "Go to definition" is a link's own door and lands in place. It is offered all the same,
+/// because the menu is offered over a name where one is **defined** too -- no link there,
+/// and where a reader asks what refers to it. The other two a click cannot ask at all.
+///
+/// Built per press, as [`locate_menu`] is: the states come in as arguments because a menu
+/// handler may run no hook.
+pub(crate) fn name_menu(
+    server: &Server,
+    located: State<Located>,
+    dock: State<DockArea>,
+    open: Open,
+    named: NameAt,
+) -> Vec<MenuButton> {
+    let definition = {
+        let (server, at, column) = (server.clone(), named.at.clone(), named.column);
+        MenuButton::new()
+            .on_press(move |_| {
+                follow_name(
+                    &server,
+                    open,
+                    Lookup::at(&at, column),
+                    lsp::Followed::Definition,
+                    Reach::InPlace,
+                )
+            })
+            .child("Go to definition")
+    };
+    // The two list questions are one shape; only which one differs.
+    let listed = |of| {
+        let (server, named) = (server.clone(), named.clone());
+        MenuButton::new().on_press(move |_| find_listed(&server, located, dock, named.clone(), of))
+    };
+    vec![
+        definition,
+        listed(lsp::Listed::References).child(format!("Find references to {}", named.name)),
+        listed(lsp::Listed::Implementations).child("Find implementations"),
+    ]
 }
 
 /// The menu a source row or an instruction row opens on a right-click: the line's

@@ -226,8 +226,8 @@ command.
 - `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes,
   `Doors` (what every door out of one place into another is given), what each tab keeps of
   where it was left and of its runs, and the effects that spend a landing.
-- `src/ui/follow.rs` — following a name in the source to what it names: the question put to
-  the language server, and the place its answer opens, with the caret it lands on.
+- `src/ui/follow.rs` — following a name in the source to what it names: whom the question is
+  put to, the question itself, and the place its answer opens, with the caret it lands on.
 - `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what
   it has asked the server, what came back, and why the asking waits until the server is
   ready; and which files the server has been told the reader has open, which is what makes
@@ -242,7 +242,7 @@ command.
   put about it, and what came back.
 - `src/ui/hover_view.rs` — the box that draws the answer: where it goes, and when it goes.
 - `src/ui/locations.rs` — every symbol a line, or the function around it, was compiled into: the
-  question, the answer, the panel.
+  question, the answer, the panel; and the three questions a name's menu offers.
 - `src/ui/reading.rs` — what the worker has decoded of an object's code for the section view,
   and the window of it the view asks for next.
 - `src/ui/rescued_view.rs` — the window naming the stored files that would not parse and where

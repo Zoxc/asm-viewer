@@ -177,20 +177,17 @@ impl Component for SourceRow {
         let doors = use_doors();
         let open = doors.open;
         let docs = open.docs;
-        // What a press on a link needs, all three or none: a pane mounted without them
-        // draws its text and no links (`links_in`).
         let ctrl = use_consume::<Ctrl>().0;
-        let following = try_consume_context::<Talking>()
-            .zip(try_consume_context::<Following>())
-            .zip(try_consume_context::<LspJobs>())
-            .map(|((talking, follow), jobs)| (talking.0, follow.0, jobs));
+        // Whom a press on a link or a name asks, and `None` where there is nobody: a pane
+        // mounted without a server draws its text and no links (`links_in`).
+        let server = try_use_server();
         // Where the name under the pointer is written, for the same reason: a pane
         // mounted without it draws its text and says nothing about a name.
         let hover = try_consume_context::<Hovering>().map(|hovering| hovering.0);
         let dock = use_consume::<SidebarDock>().0;
         let index = self.index;
 
-        // The position this row is, and so the one its menu asks about. Lines are
+        // The position this row is, and so the one its questions are about. Lines are
         // 1-based, as DWARF's are.
         let at = LinePos {
             file: self.file.clone(),
@@ -227,47 +224,22 @@ impl Component for SourceRow {
             // the server has said so -- and none at all with nobody to ask, so no link is
             // ever drawn that could not be followed. A press with Ctrl held opens what it
             // names in a tab of its own, the rule every door inside a pane follows.
-            links: following.clone().map(|(language, follow, jobs)| {
-                let file = self.file.clone();
-                let row = self.index as u32;
-                let links = self.links.clone();
+            links: server.clone().map(|server| {
+                let (at, links) = (at.clone(), self.links.clone());
                 let pressed = row_text.clone();
-                let follow_link = move |columns: Range<usize>| {
-                    let reach = reach_inside(ctrl);
-                    // Which question this name asks. An item in a trait `impl` asks for
-                    // the declaration, since its definition is itself and the trait is
-                    // where a reader following it wants to go (`src/links.rs`).
-                    let column = byte_column(&pressed, columns.start);
-                    let want = links
-                        .at(row + 1, column)
-                        .and_then(|link| link.asks)
-                        .unwrap_or(lsp::Followed::Definition);
-                    follow_name(
-                        language,
-                        follow,
-                        &jobs,
-                        open,
-                        Lookup {
-                            file: PathBuf::from(&*file),
-                            // The protocol counts lines from zero, where a row's line is
-                            // 1-based; the column is a byte offset either way.
-                            line: row,
-                            column,
-                        },
-                        want,
-                        reach,
-                    );
-                };
                 TextLinks {
                     columns: self
                         .links
-                        .followed_on(self.index as u32 + 1)
+                        .followed_on(at.line)
                         .map(|columns| drawn_columns(&row_text, columns))
                         .collect(),
                     // Always a door: nothing here is a link until the server has said
                     // the name is one, so there is nothing to hold a modifier back for.
                     is_link: Rc::new(|| true),
-                    follow: Rc::new(follow_link),
+                    follow: Rc::new(move |columns: Range<usize>| {
+                        let column = byte_column(&pressed, columns.start);
+                        follow_link(&server, &links, open, &at, column, reach_inside(ctrl));
+                    }),
                 }
             }),
             // Every name the server placed on this row, links and the places where one is
@@ -276,28 +248,20 @@ impl Component for SourceRow {
             // doc comment are.
             names: self
                 .links
-                .on_line(self.index as u32 + 1)
+                .on_line(at.line)
                 .iter()
                 .map(|link| drawn_columns(&row_text, &link.columns))
                 .collect(),
             // What the pointer on one of them says. Consumed in the render, as everything
             // a handler here reaches for is: a handler may not run a hook.
             on_hover: hover.map(|hover| {
-                let file = self.file.clone();
-                let row = self.index as u32;
-                let row_text = row_text.clone();
+                let (at, row_text) = (at.clone(), row_text.clone());
                 Rc::new(move |under: Under| {
                     let mut hover = hover;
                     let mut waiting = hover.peek().clone();
                     let moved = match under {
                         Under::Name(columns, drawn) => waiting.enter(Pointed {
-                            at: Lookup {
-                                file: PathBuf::from(&*file),
-                                // The protocol counts lines from zero, where a row's line
-                                // is 1-based; the column is a byte offset either way.
-                                line: row,
-                                column: byte_column(&row_text, columns.start),
-                            },
+                            at: Lookup::at(&at, byte_column(&row_text, columns.start)),
                             drawn,
                         }),
                         Under::Off => waiting.left_name(),
@@ -310,12 +274,13 @@ impl Component for SourceRow {
             }),
         };
 
-        // The menu: the line's locations and, inside a function as the file's parse
-        // says, the function's instances. A location found from the file a
-        // source-driven tab is about is chosen for that tab; from a companion it opens
-        // the symbol. The function this row is a line of is looked for on the press and
-        // not per render: it is a walk of the file's functions, and a row is rendered
-        // far more often than it is right-clicked.
+        // The menu: the three questions for the server where the press was on a name,
+        // then the line's locations and, inside a function as the file's parse says, the
+        // function's instances. A location found from the file a source-driven tab is
+        // about is chosen for that tab; from a companion it opens the symbol. Both the
+        // name under the pointer and the function this row is a line of are looked for on
+        // the press and not per render -- the function being a walk of the file's own --
+        // since a row is rendered far more often than it is right-clicked.
         let menu: Rc<dyn Fn(Event<PressEventData>, Option<usize>)> = Rc::new({
             let at = at.clone();
             let subject = self.drives.map(|tab| (tab, self.file.clone()));
@@ -327,83 +292,22 @@ impl Component for SourceRow {
             // Whom to ask about a name, where this row's names are links at all. A row
             // drawing none is a row over no server, and a question nobody could answer is
             // not offered.
-            let asking = (!self.links.is_empty())
-                .then(|| following.clone())
-                .flatten();
+            let asking = (!self.links.is_empty()).then_some(server).flatten();
             let row_text = row_text.clone();
             move |e: Event<PressEventData>, column| {
                 let function = functions::enclosing(&source.0.functions, at.line).cloned();
-                // The name the press was on, which the three questions are about. Looked
-                // for on the press and not per render, as the function is.
+                // The name the press was on, which the three questions are about.
                 let named = column
-                    .and_then(|column| links.at(index as u32 + 1, byte_column(&row_text, column)))
+                    .and_then(|column| links.at(at.line, byte_column(&row_text, column)))
                     .and_then(|link| {
-                        let name = name_at(&source, index, &link.columns)?;
-                        Some((link.columns.clone(), name))
+                        Some(NameAt {
+                            at: at.clone(),
+                            name: name_at(&source, index, &link.columns)?,
+                            column: link.columns.start,
+                        })
                     })
                     .zip(asking.clone())
-                    .map(|((columns, name), (language, follow, jobs))| {
-                        let column = columns.start;
-                        fn asked_at(at: &LinePos, column: u32) -> Lookup {
-                            Lookup {
-                                file: PathBuf::from(&*at.file),
-                                // The protocol counts lines from zero, where a `LinePos`
-                                // is 1-based; the column is a byte offset either way.
-                                line: at.line.saturating_sub(1),
-                                column,
-                            }
-                        }
-                        let definition = {
-                            let (at, jobs) = (at.clone(), jobs.clone());
-                            MenuButton::new()
-                                .on_press(move |_| {
-                                    follow_name(
-                                        language,
-                                        follow,
-                                        &jobs,
-                                        open,
-                                        asked_at(&at, column),
-                                        lsp::Followed::Definition,
-                                        Reach::InPlace,
-                                    )
-                                })
-                                .child("Go to definition")
-                        };
-                        // The two list questions are one shape; only which one differs.
-                        let named = NameAt {
-                            at: at.clone(),
-                            name: name.clone(),
-                            column,
-                        };
-                        let references = {
-                            let (named, jobs) = (named.clone(), jobs.clone());
-                            MenuButton::new()
-                                .on_press(move |_| {
-                                    find_listed(
-                                        located,
-                                        dock,
-                                        language,
-                                        &jobs,
-                                        named.clone(),
-                                        lsp::Listed::References,
-                                    )
-                                })
-                                .child(format!("Find references to {name}"))
-                        };
-                        let implementations = MenuButton::new()
-                            .on_press(move |_| {
-                                find_listed(
-                                    located,
-                                    dock,
-                                    language,
-                                    &jobs,
-                                    named.clone(),
-                                    lsp::Listed::Implementations,
-                                )
-                            })
-                            .child("Find implementations");
-                        vec![definition, references, implementations]
-                    })
+                    .map(|(named, server)| name_menu(&server, located, dock, open, named))
                     .unwrap_or_default();
                 let menu = locate_menu(located, dock, at.clone(), subject.clone(), function, named);
                 // The door into the file itself, which the tab has only beside it: the

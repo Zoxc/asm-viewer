@@ -213,7 +213,9 @@ being what the reader is reading now rather than where they came in. It is a `u3
 `Arc<Object>`, so it survives its binary being closed and the next ask simply answers out of what is
 left. A right-click on a source row is neither a selection nor a drive: it opens `locate_menu`, the
 line's locations and, inside a function as the file's parse says, the function's instances, both
-answered in the Locations view (`agents/Worker.md`), whose rows are what choose.
+answered in the Locations view (`agents/Worker.md`), whose rows are what choose. Over a name it
+opens `name_menu` above those, the three questions only a language server can answer
+(`agents/Lsp.md`).
 
 The rows are the app's own (`SourceRow`, a `VirtualScrollView`), **not** freya's `CodeEditor`, which
 paints a line background only for the cursor's row and keeps its scroll state private. So it cannot

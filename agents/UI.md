@@ -90,8 +90,8 @@ project, the window -- and each of the others sits beside the code it is about: 
 `pad.rs`.
 
 **A group the code passes around is a context of its own**, so a state added to it is a field
-and not a parameter threaded through every function of the group. Beside `Open` there are three,
-all `Copy` bundles of handles. `Places` (`state.rs`) is everything kept per place --
+and not a parameter threaded through every function of the group. Beside `Open` there are four,
+`Copy` bundles of handles but for the last. `Places` (`state.rs`) is everything kept per place --
 `asm_at`/`src_at` (where each *side* of each place on each trail was left), `code_at` (where
 each code tab's places were left, as addresses), `marks_at` (what each place had selected in
 each pane when it was last shown, put back with the place and never saved) and `driven` -- and
@@ -102,7 +102,11 @@ place into another is given: `open`, `visits` (everywhere the reader has been), 
 half of that, left for the listing that draws the document, its rows coming after it).
 `ProjectStates` (`state.rs`) is what a project owns, since a project switch closes all of it and
 reopens all of it -- `marks_at` for the closing and not the reopening, being the one part
-`session.toml` never sees. A handle may sit in more than one bundle: `Doors` and `ProjectStates`
+`session.toml` never sees. `Server` (`follow.rs`) is whom a question about a name is put to --
+the control's state, where a followed name's answer lands, and the way to the worker -- and is
+the one bundle taken with a `try_use_`: a pane may be mounted with no server, and one with any
+part of it missing draws no links at all. It is `Clone` and not `Copy`, `LspJobs` carrying
+channels. A handle may sit in more than one bundle: `Doors` and `ProjectStates`
 both carry `Open`, and `Doors` carries the runs `Marked` hands the panes.
 
 **The bar says which project is open, and the controls beside the name are not one control**

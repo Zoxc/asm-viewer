@@ -383,6 +383,22 @@ pub(crate) struct Lookup {
     pub(crate) column: u32,
 }
 
+impl Lookup {
+    /// The place `column` of row `at` is, as the server is asked about one.
+    ///
+    /// **The one place a line is counted down for the protocol.** Every line in the app
+    /// is 1-based and the protocol's is not, and two spellings of that rule drift a line
+    /// apart. `column` is already a byte offset into the row, which is what a column is
+    /// everywhere but the drawing (`src/lsp.rs`).
+    pub(crate) fn at(at: &LinePos, column: u32) -> Lookup {
+        Lookup {
+            file: PathBuf::from(&*at.file),
+            line: at.line.saturating_sub(1),
+            column,
+        }
+    }
+}
+
 /// What the worker is asked to do.
 pub(crate) enum LspJob {
     /// Start a server over `directory` and shake hands with it. The channel is what the
