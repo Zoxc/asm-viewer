@@ -113,7 +113,8 @@ impl Marks {
     }
 }
 
-/// The picked-out rows of both panes, shared through context.
+/// The picked-out rows of both panes, shared through context. The runs each place kept
+/// while its tab showed something else are [`Places::marks_at`], forgotten with the place.
 #[derive(Clone, Copy)]
 pub(crate) struct Marked(pub(crate) State<Marks>);
 
@@ -189,13 +190,6 @@ impl Kept {
         carried(picked, |row| row_of(self.spot_of(row)?))
     }
 }
-
-/// The runs each place on each open tab's trail had picked out when it was last shown,
-/// shared through context. Keyed by [`Entry`] as [`AsmAt`] is, and forgotten with the
-/// entry in the three closers for the same reason: a key holds the `Arc<Object>` its
-/// document points into. Never saved: a run is a view of a tab.
-#[derive(Clone, Copy)]
-pub(crate) struct MarksAt(pub(crate) State<Positions<Entry, Kept>>);
 
 /// Whether Shift is held, which is what turns a click into "reach to here". Its own state,
 /// written from the root's *global* key handlers, because a freya pointer event carries no
@@ -503,7 +497,7 @@ pub(crate) fn mark_row(marked: State<Marks>, file: Option<Arc<str>>, row: usize)
 /// Put the assembly pane's caret on `row`, at its start, as a [`Planting`] lands: the
 /// door that opened the listing named an instruction, and this is the one run in the
 /// pane, over whatever was there. `owed` is what the pane still owes it, which is its
-/// own reveal in both listings: the tab's place (`CodeAt`) can say where an object's
+/// own reveal in both listings: the tab's place (`Places::code_at`) can say where an object's
 /// code sits but not that the rows before an instruction are part of showing it, and a
 /// place given that margin would carry it into every restore and every switch.
 ///
@@ -959,7 +953,7 @@ pub(crate) fn use_clear_marks(
 }
 
 /// Give each place its own runs: whenever the active entry changes, keep the runs of the
-/// place being left under its entry ([`MarksAt`]) and put the arriving place's own back
+/// place being left under its entry ([`Places::marks_at`]) and put the arriving place's own back
 /// in both panes, the way its scroll rows come back -- the caret and the selection the
 /// reader left in each. A place that has never been shown has nothing kept, and gets
 /// what an arrival always got: a [`Landing`] naming this document, picked out in the
@@ -1005,15 +999,18 @@ pub(crate) fn use_clear_marks(
 /// builds rows again, which is after this has run; until then the pane's run is none,
 /// never a run of rows that are gone.
 pub(crate) fn use_land(
+    doors: Doors,
+    places: Places,
     active: Memo<Option<Entry>>,
-    open: Open,
-    marked: State<Marks>,
-    landing: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
-    driven: State<Driven>,
-    marks_at: State<Positions<Entry, Kept>>,
     code_rows: State<Option<Arc<Built>>>,
 ) {
+    let Doors {
+        open,
+        marked,
+        land: landing,
+        ..
+    } = doors;
+    let (driven, marks_at) = (places.driven, places.marks_at);
     // The entry the runs on screen belong to. An `Rc<RefCell>` and not a `State`:
     // nothing renders from it.
     let showing = use_hook(|| Rc::new(RefCell::new(None::<Entry>)));
@@ -1022,7 +1019,8 @@ pub(crate) fn use_land(
         // Subscribes the effect to the active document, which is all it wants from it;
         // the landing is peeked, so setting one wakes nothing until the document does.
         let active = active.read().clone();
-        let (mut marked, mut landing, mut plant, mut marks_at) = (marked, landing, plant, marks_at);
+        let (mut marked, mut landing) = (marked, landing);
+        let (mut plant, mut marks_at) = (doors.plant, marks_at);
 
         // Cloned out of the borrow before the `borrow_mut`.
         let leaving = showing.borrow().clone();

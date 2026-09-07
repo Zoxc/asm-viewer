@@ -452,12 +452,9 @@ impl Component for DoorLabel {
         let mut hovering = use_state(|| false);
         let ctrl = use_consume::<Ctrl>().0;
         let alt = use_consume::<Alt>().0;
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
-        let marked = use_consume::<Marked>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
-        let code_at = use_consume::<CodeAt>().0;
+        let doors = use_doors();
+        let places = use_places();
+        let marked = doors.marked;
         // The list's own scroll and its box, which `reveal_row` needs at the moment of
         // the press rather than at the render that drew this label.
         let listing = use_consume::<Listing>();
@@ -501,26 +498,15 @@ impl Component for DoorLabel {
                         // address placed, which is the one address space that listing
                         // draws.
                         let placed = target.placed(target.address);
-                        show_in_code(
-                            open,
-                            visits,
-                            marked,
-                            landing,
-                            plant,
-                            code_at,
-                            object.clone(),
-                            placed,
-                            None,
-                            Reach::InPlace,
-                        );
+                        show_in_code(doors, places, object.clone(), placed, None, Reach::InPlace);
                     }
                     // A link inside the tab: followed in place, the way a browser follows
                     // one, so the function left is one Back away -- or, with Ctrl, in a
                     // tab of its own beside this one.
                     Door::Symbol { object, target, .. } => {
                         open_document(
-                            open,
-                            visits,
+                            doors.open,
+                            doors.visits,
                             Document::Assembly(Selection::Symbol(Symbol {
                                 object: object.clone(),
                                 data: target.clone(),
@@ -533,12 +519,8 @@ impl Component for DoorLabel {
                     // place from a symbol's own listing, as a name is, and in a tab of
                     // its own with Ctrl, as everything is.
                     Door::Address { object, address } => show_in_code(
-                        open,
-                        visits,
-                        marked,
-                        landing,
-                        plant,
-                        code_at,
+                        doors,
+                        places,
                         object.clone(),
                         *address,
                         None,
@@ -834,14 +816,10 @@ impl KeyExt for InstructionRow {
 impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
         // Consumed here, in the render, because the menu handler may not run a hook.
-        let marked = use_consume::<Marked>().0;
+        let doors = use_doors();
+        let places = use_places();
         let located = use_consume::<Locations>().0;
         let dock = use_consume::<SidebarDock>().0;
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
-        let code_at = use_consume::<CodeAt>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
         // The source-driven tab this listing is the assembly side of, if it is one: a
@@ -1022,12 +1000,8 @@ impl Component for InstructionRow {
                     MenuButton::new()
                         .on_press(move |_| {
                             show_in_code(
-                                open,
-                                visits,
-                                marked,
-                                landing,
-                                plant,
-                                code_at,
+                                doors,
+                                places,
                                 object.clone(),
                                 address,
                                 at.clone(),
@@ -1040,16 +1014,7 @@ impl Component for InstructionRow {
                     let at = at.clone();
                     MenuButton::new()
                         .on_press(move |_| {
-                            open_as_symbol(
-                                open,
-                                visits,
-                                marked,
-                                landing,
-                                plant,
-                                symbol.clone(),
-                                address,
-                                at.clone(),
-                            )
+                            open_as_symbol(doors, symbol.clone(), address, at.clone())
                         })
                         .child("Open as symbol")
                 }));
@@ -1135,7 +1100,8 @@ impl PartialEq for InstructionList {
 
 impl Component for InstructionList {
     fn render(&self) -> impl IntoElement {
-        let marked = use_consume::<Marked>().0;
+        let doors = use_doors();
+        let marked = doors.marked;
         let chars = chars_of(marked, Pane::Assembly);
         // The source pane's run, whose pair these rows light.
         let pair = pair_of(marked, Pane::Assembly);
@@ -1168,7 +1134,7 @@ impl Component for InstructionList {
         let length = data.lanes().listing_rows(data.assembly.instructions.len());
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll this pane owes a run, which wins over it.
-        let docs = use_consume::<OpenDocs>().0;
+        let docs = doors.open.docs;
         // The place the tab is at, which for a source-driven tab is a line of the file
         // and not the file: two lines of one file reached along one trail are two
         // entries, each with its own scroll. Read and not peeked, so a step between them
@@ -1178,7 +1144,7 @@ impl Component for InstructionList {
             place_at(&docs.read(), self.tab, &asked_of(&self.asked)),
         );
         use_kept_position(
-            use_consume::<AsmAt>().0,
+            use_places().asm_at,
             move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),
             {
                 let data = data.clone();
@@ -1230,7 +1196,7 @@ impl Component for InstructionList {
         // it as the document arrives, and `land` leaves it for a tab already on top. The
         // pane owes the caret its reveal, as it owes a click from outside, and the reveal
         // wins over the kept row in `use_kept_position`, as a reveal does.
-        let plant = use_consume::<Plant>().0;
+        let plant = doors.plant;
         use_side_effect_with_deps(&entry, {
             let data = data.clone();
             let mut plant = plant;

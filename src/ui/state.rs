@@ -1,5 +1,17 @@
-//! The app's root state: every context provided once at the root of `app()` and read with
-//! `use_consume` wherever it is wanted.
+//! The app's root state: the contexts that belong to no one mechanism, and the bundles the
+//! app is passed around in.
+//!
+//! **A context lives with the mechanism that owns it**, and so does the bundle that groups
+//! it: [`Doors`] in `focus.rs`, [`Marked`] in `marks.rs`, the `Pad*` family in `pad.rs`.
+//! What is left is here -- the objects, the store, the project, the window's arrangement --
+//! with [`Open`], [`Places`] and [`ProjectStates`], each of which spans three modules or
+//! more and is owned by none.
+//!
+//! **A bundle is a context of its own**, provided once by `app()` and taken in one
+//! `use_consume`, so a state added to a group is a field and not a parameter threaded
+//! through every function of the group. A handle may sit in more than one bundle:
+//! [`Doors`] and [`ProjectStates`] both carry [`Open`], and [`Doors`] carries the runs
+//! [`Marked`] hands the panes.
 //!
 //! Two of the names are **derivations and not states**: `Active` is a `Memo` over the strip
 //! and the document table, and `Symbols` a `Memo` over `Objects`.
@@ -134,6 +146,70 @@ impl Open {
     }
 }
 
+/// Everything kept per **place** -- a tab and one of the stops on its trail, an [`Entry`]
+/// -- and so everything a closer has to let go of together.
+///
+/// One type because an `Entry` key holds the `Arc<Object>` its document points into: a map
+/// that keeps an entry a closed tab left behind holds that binary's bytes for as long as
+/// the app runs. A closer that forgot four of the five compiled and leaked, so the forget
+/// is one call ([`Places::forgetting`]) and not five lines to copy.
+///
+/// A place and not a document: two addresses in one object's code are two entries, which
+/// is what makes a step inside that listing come back to the row it was left at as any
+/// other step does. Kept at the root and never in a pane, which reuses one scroll
+/// controller for every symbol and so would leave a newly opened function at the offset
+/// the old one was at.
+#[derive(Clone, Copy)]
+pub(crate) struct Places {
+    /// Which row each place had its **assembly** side left on.
+    pub(crate) asm_at: State<Positions<Entry>>,
+    /// The other half: which row its **source** side was left on, keyed by the same entry
+    /// rather than by the file the pane happens to be showing.
+    pub(crate) src_at: State<Positions<Entry>>,
+    /// Where a listing of an object's whole code was left, as an address: its rows are
+    /// counted afresh with every answer, so a row number would mean nothing for long.
+    pub(crate) code_at: State<Positions<Entry, Spot>>,
+    /// What each place had picked out in each pane when it was last shown. Never saved: a
+    /// run is a view of a tab.
+    pub(crate) marks_at: State<Positions<Entry, Kept>>,
+    /// Which line each source-driven tab's assembly side is driven from, and which of the
+    /// symbols that line compiles into it follows. The same kind of thing as the four
+    /// above: a fact about a place, made by a click in it and forgotten with it.
+    pub(crate) driven: State<Driven>,
+}
+
+impl Places {
+    /// The five maps, empty: what `app()` provides and what a test harness makes.
+    pub(crate) fn create() -> Places {
+        Places {
+            asm_at: State::create(Positions::default()),
+            src_at: State::create(Positions::default()),
+            code_at: State::create(Positions::default()),
+            marks_at: State::create(Positions::default()),
+            driven: State::create(Driven::default()),
+        }
+    }
+
+    /// Let go of every entry `keep` answers false for, in all five maps and under one
+    /// write each. What every closer ends with, and the whole of what it owes.
+    pub(crate) fn forgetting(self, keep: impl Fn(&Entry) -> bool) {
+        let Places {
+            mut asm_at,
+            mut src_at,
+            mut code_at,
+            mut marks_at,
+            mut driven,
+        } = self;
+        asm_at.write().forgetting(&keep);
+        src_at.write().forgetting(&keep);
+        code_at.write().forgetting(&keep);
+        marks_at.write().forgetting(&keep);
+        // One guard rather than one write per tab: a write notifies whether or not it
+        // changed anything, and a dozen tabs closing is one change.
+        driven.write().forgetting(&keep);
+    }
+}
+
 /// Every box inside the tab on screen the keyboard can be in -- the two code panes, the
 /// listing of an object's code, the scratchpad's editor -- and whether a press on a chip
 /// has asked for it to go there.
@@ -143,10 +219,6 @@ impl Open {
 /// sidebar" -- which is what the mark over the tab on screen says.
 #[derive(Clone, Copy)]
 pub(crate) struct Keyboard(pub(crate) State<Keys>);
-
-/// The strip of open tabs.
-#[derive(Clone, Copy)]
-pub(crate) struct OpenTabs(pub(crate) State<Strip>);
 
 /// The sidebar's dock, so a panel can be brought to the front from anywhere -- the
 /// Search box's chord, a Locations question asked in a code pane.
@@ -184,36 +256,14 @@ pub(crate) struct SidebarWidth(pub(crate) State<f32>);
 #[derive(Clone, Copy)]
 pub(crate) struct SidebarSplits(pub(crate) State<ResizableContext>);
 
-/// Which row each place on each open tab's trail had its **assembly** side left on. At
-/// the root rather than in the pane, which reuses one scroll controller for every symbol
-/// and so would leave a newly opened function at the offset the old one was at. Keyed by
-/// [`Entry`] -- the tab and the place -- so going back along a trail comes back to the row
-/// that was left, and an entry means "this place on this tab" for exactly as long as the
-/// tab is open and the place is on its trail. A place and not a document: two addresses
-/// in one object's code are two of them, which is what makes a step inside that listing
-/// come back to the row it was left at as any other step does.
-#[derive(Clone, Copy)]
-pub(crate) struct AsmAt(pub(crate) State<Positions<Entry>>);
-
-/// The documents the strip's tabs are handles into, and nothing about their order. See
-/// [`Docs`]: it exists because a tab must be `Copy` -- a list's key, a menu row's capture
-/// -- and a [`Document`] is not.
-#[derive(Clone, Copy)]
-pub(crate) struct OpenDocs(pub(crate) State<Docs>);
-
-/// Which row each place's **source** side was left on. [`AsmAt`]'s other half, keyed by
-/// the same entry rather than by the file the pane happens to be showing.
-#[derive(Clone, Copy)]
-pub(crate) struct SrcAt(pub(crate) State<Positions<Entry>>);
-
 /// Which tabs have the section under their Assembly pane's symbol bar open.
 ///
 /// **Per tab and never in the pane**, which is mounted afresh for every document: a
 /// `use_state` there would collapse the section at every switch of tab, and a reader who
 /// opened it once would find it shut every time they came back.
 ///
-/// **Keyed by [`DocId`] alone and not by [`Entry`]**, unlike [`AsmAt`] and [`Drives`]
-/// beside it, and that is what makes it cost nothing: a `DocId` is `Copy + Hash` and
+/// **Keyed by [`DocId`] alone and not by [`Entry`]**, unlike everything in [`Places`],
+/// and that is what makes it cost nothing: a `DocId` is `Copy + Hash` and
 /// holds no `Arc<Object>`, where a document does and would have to be forgotten in all
 /// three of `close_tab`, `close_others` and `close_binary` or a closed binary's bytes
 /// would be held for as long as the app ran. Ids are never handed out twice
@@ -240,16 +290,6 @@ pub(crate) struct Expanded(pub(crate) State<HashSet<DocId>>);
 /// leaves a byte behind that no other tab can be given, and this is a view of a tab.
 #[derive(Clone, Copy)]
 pub(crate) struct Follows(pub(crate) State<HashMap<DocId, bool>>);
-
-/// Which source line each source-driven tab's assembly side is driven from, shared
-/// through context. Beside [`AsmAt`]/[`SrcAt`] because it is the same kind of thing: a
-/// fact about a tab, made by a click in it and forgotten with it.
-#[derive(Clone, Copy)]
-pub(crate) struct Drives(pub(crate) State<Driven>);
-
-/// Everywhere the reader has been, across every tab: what the History panel lists.
-#[derive(Clone, Copy)]
-pub(crate) struct Visited(pub(crate) State<Visits>);
 
 /// Where the reader chose to be able to come back to: the project's bookmarks, in their
 /// saved shape and nothing more. Whether one is live is asked of [`Objects`] where it is
@@ -441,7 +481,9 @@ pub(crate) struct Rescued(pub(crate) State<Vec<PathBuf>>);
 pub(crate) struct Unopened(pub(crate) State<Option<project::Failure>>);
 
 /// Every state a project owns, in one `Copy` bundle of handles: a project switch closes
-/// all of them and reopens all of them.
+/// all of them and reopens all of them. Provided by `app()` and taken whole
+/// ([`use_project_states`]), so this list exists in the struct and in the one place that
+/// builds it.
 #[derive(Clone, Copy)]
 pub(crate) struct ProjectStates {
     pub(crate) proj: State<OpenProject>,
@@ -455,14 +497,9 @@ pub(crate) struct ProjectStates {
     pub(crate) loading: State<Loads>,
     /// The strip and the id table: what is open, and in what order.
     pub(crate) open: Open,
-    pub(crate) asm_at: State<Positions<Entry>>,
-    pub(crate) src_at: State<Positions<Entry>>,
-    /// Where each code tab was left, as an address.
-    pub(crate) code_at: State<Positions<Entry, Spot>>,
-    /// Which line each source-driven tab's assembly side is driven from.
-    pub(crate) driven: State<Driven>,
-    /// What each place had picked out in each pane when it was last shown. Never saved.
-    pub(crate) marks_at: State<Positions<Entry, Kept>>,
+    /// Everything kept per place, which a close forgets together.
+    pub(crate) places: Places,
+    /// Everywhere the reader has been, across every tab: what the History panel lists.
     pub(crate) visits: State<Visits>,
     pub(crate) bookmarks: State<Bookmarks>,
     /// What the project's directory was last searched for, and what was found in it.
@@ -492,32 +529,18 @@ pub(crate) struct Arrangement {
 
 /// What is open, as a component sees it: the strip and the id table together.
 pub(crate) fn use_open() -> Open {
-    Open {
-        strip: use_consume::<OpenTabs>().0,
-        docs: use_consume::<OpenDocs>().0,
-    }
+    use_consume::<Open>()
 }
 
-/// The project's states as a component sees them: through the contexts the root provides,
+/// Everything kept per place, as a component sees it.
+pub(crate) fn use_places() -> Places {
+    use_consume::<Places>()
+}
+
+/// The project's states as a component sees them: through the context the root provides,
 /// so a view that switches projects needs none of them handed down to it.
 pub(crate) fn use_project_states() -> ProjectStates {
-    ProjectStates {
-        proj: use_consume::<Proj>().0,
-        store: use_consume::<Storage>().0,
-        objects: use_consume::<Objects>().0,
-        loading: use_consume::<Loading>().0,
-        open: use_open(),
-        asm_at: use_consume::<AsmAt>().0,
-        code_at: use_consume::<CodeAt>().0,
-        src_at: use_consume::<SrcAt>().0,
-        driven: use_consume::<Drives>().0,
-        marks_at: use_consume::<MarksAt>().0,
-        visits: use_consume::<Visited>().0,
-        bookmarks: use_consume::<Bookmarked>().0,
-        searched: use_consume::<Searching>().0,
-        build: use_consume::<Building>().0,
-        arranged: use_arrangement(),
-    }
+    use_consume::<ProjectStates>()
 }
 
 /// The window's arrangement, out of the three contexts it is kept in.

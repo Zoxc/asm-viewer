@@ -189,7 +189,7 @@ listing.
 **Open or shut is the tab's and not the pane's**, which is `Expanded` at the root: both panes are
 mounted afresh for every document, so a `use_state` here would shut the section every time the
 reader looked at another tab, and a setting that undoes itself looks like a bug. It is keyed by
-**`DocId` alone and not by `Entry`**, unlike `AsmAt`, `SrcAt` and `Drives` beside it, and that is
+**`DocId` alone and not by `Entry`**, unlike everything in `Places`, and that is
 what makes it free: a `DocId` is `Copy + Hash` and holds no `Arc<Object>`, where an entry's document
 does and would have to be forgotten in all three of `close_tab`, `close_others` and `close_binary`
 or a closed binary's bytes would be held for as long as the app ran. Ids are never handed out twice,
@@ -407,7 +407,7 @@ in neither asks both, and each pane pays its own half, the source pane to its ow
 assembly pane to the pair. Opening is an `open_document`, a `Preview` from a row, as every sidebar
 row's is, or a `NewTab` with Ctrl held (`agents/UI.md` for the three reaches). The change of
 document that makes is exactly what `use_land` answers by giving the arriving place its own runs, so
-the row does not select anything itself. It leaves a `Landing` (`Land`, at the root) naming the
+the row does not select anything itself. It leaves a `Landing` (`Doors::land`) naming the
 document, the line, and, where the click was a door out of a listing, the instruction's address.
 That effect turns the line into the source pane's run when the document it names arrives, **over
 whatever the place had kept** (below): a click from outside named a place, and the run it makes is
@@ -480,7 +480,7 @@ onto the tab's trail so the function left is one Back away, the way a browser fo
 a tab of their own beside it with Ctrl. An instruction's menu offers to show it among its
 neighbours, "Show in unified view", offered in a symbol's listing and not in the code listing it
 would open. That is `show_in_code`, a tab of its own: `land` with the instruction's placed address
-and its line where it has one, and then the code tab's place written to `CodeAt` under the entry the
+and its line where it has one, and then the code tab's place written to `Places::code_at` under the entry the
 open handed back. That write is in the same handler and before any render, so the pane's first run
 finds it, and after the open only because the entry names the tab and a new tab has no id until it
 is opened; when the code tab is already on top that write is what moves the view, the place-keeping
@@ -607,7 +607,7 @@ not when the document arrives.** A line is a row of a file, which has the same r
 `use_land` plants it as the document arrives. An instruction is a row of a listing that comes
 *after* the document (a symbol's from the worker, an object's code's as the skeleton comes and again
 as the stretch decodes), and a caret planted before the rows exist would be planted in nothing. So
-the address half of a `Landing` goes on as a `Planting` (`Plant`, at the root) naming the document.
+the address half of a `Landing` goes on as a `Planting` (`Doors::plant`) naming the document.
 It is left by `use_land` in the same run that plants the line, never before it, which is what makes
 the order safe: `use_land` resets both panes' runs as a place arrives, and a caret planted ahead of
 that would be reset with them. Or it is left by `land` itself where the door moves the tab nowhere
@@ -641,8 +641,8 @@ came leaves no caret for a document opened later.
 of tab and a place a tab has been at before put back, in **both** panes, what the reader had
 selected there when the place was last shown (the companion's run in an assembly-driven tab, the
 listing's in a source-driven one), the way `use_kept_position` puts the scroll rows back. The runs
-are kept per tab and place, `MarksAt` at the root: a `Positions<Entry, Kept>` beside
-`AsmAt`/`SrcAt`, `Positions` generalised to a `Clone` value for it, forgotten in the same three
+are kept per tab and place, `Places::marks_at`: a `Positions<Entry, Kept>` beside `asm_at`/`src_at`,
+`Positions` generalised to a `Clone` value for it, forgotten with them in the same three
 closers for the same reason (an `Entry` holds the `Arc<Object>` its document points into), and never
 saved, since a run is a view of a tab. `use_land` is the whole of it, and is the one effect that
 touches the marks on a change of the active entry. It holds the entry the runs on screen belong to
@@ -825,7 +825,7 @@ rows are `InstructionRow` told its `base`, `bias` and a gutter `MAX_LANES` wide,
 `SeparatorRow`, and the header, label, empty and gap rows four small rows of the view's own. All of
 them are keyed in a key space per kind over the placed address they stand for, the separators'
 lesson in six places. Two effects do the rest. `use_kept_place` keeps the reader's place
-(`agents/UI.md`, `CodeAt`), plants a door's caret once there are rows to plant it in (the planting
+(`agents/UI.md`, `Places::code_at`), plants a door's caret once there are rows to plant it in (the planting
 paragraph above), and rebuilds the rows whenever the reading's generation changes, in the one run
 that also moves the controller to where the place now is. **Which place, and whether it is kept at
 all, is the listing's `Placing`**: a tab's is an entry on its trail, and the Scratchpad's is an

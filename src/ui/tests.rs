@@ -557,25 +557,17 @@ fn test_store() -> PathBuf {
     std::env::temp_dir().join(format!("assembly-viewer-ui-test-{}", std::process::id()))
 }
 
-/// The thirteen contexts `app()` provides, in one `ProjectStates`. A macro and not a
-/// function: the runner's type is `freya_core::integration::Runner`, which freya's prelude
-/// does not re-export, so naming it would mean naming a crate the app does not depend on.
-macro_rules! project_states {
-    () => {
-        |runner: &mut _| project_states!(runner)
-    };
+/// What `app()` provides, in the bundles it provides them in: the project's own states and
+/// the doors. A macro and not a function: the runner's type is
+/// `freya_core::integration::Runner`, which freya's prelude does not re-export, so naming
+/// it would mean naming a crate the app does not depend on.
+macro_rules! project_wiring {
     ($runner:expr) => {{
         // Where a harness's files would go. Never the machine's own store: a load through
         // one moves a file that will not parse aside, so a test reading the reader's
         // `recents.toml` could take it away. Nothing here writes, so nothing is made.
         let store = $runner
             .provide_root_context(|| Storage(State::create(Some(Store::at(test_store())))))
-            .0;
-        // The two states that are what is open, and the derivation over them, in the same
-        // order `app()` uses. `Active` is provided but not returned: it is not one of the
-        // project's states, it is a reading of two of them.
-        let strip = $runner
-            .provide_root_context(|| OpenTabs(State::create(Strip::default())))
             .0;
         // The sidebar as `app()` builds it: a panel that brings another to the front
         // reaches for this, so a harness mounting one needs it provided.
@@ -592,9 +584,13 @@ macro_rules! project_states {
                 ])))
             })
             .0;
-        let docs = $runner
-            .provide_root_context(|| OpenDocs(State::create(Docs::default())))
-            .0;
+        // What is open, and the derivation over it. `Active` is provided but not
+        // returned: it is not one of the project's states, it is a reading of two of them.
+        let open = $runner.provide_root_context(|| Open {
+            strip: State::create(Strip::default()),
+            docs: State::create(Docs::default()),
+        });
+        let (strip, docs) = (open.strip, open.docs);
         $runner.provide_root_context(move || {
             Active(Memo::create(move || {
                 active_tab(&strip.read(), &docs.read())
@@ -651,7 +647,21 @@ macro_rules! project_states {
         $runner.provide_root_context(|| Unopened(State::create(None)));
         $runner.provide_root_context(|| Deleting(State::create(None)));
 
-        ProjectStates {
+        // Everything kept per place, the runs, and what a door is given, in `app()`'s own
+        // order: the doors carry the same runs `Marked` hands the panes.
+        let places = $runner.provide_root_context(Places::create);
+        let marked = $runner
+            .provide_root_context(|| Marked(State::create(Marks::default())))
+            .0;
+        let doors = $runner.provide_root_context(move || Doors {
+            open,
+            visits: State::create(Visits::default()),
+            marked,
+            land: State::create(None),
+            plant: State::create(None),
+        });
+
+        let states = ProjectStates {
             proj: $runner
                 .provide_root_context(|| Proj(State::create(OpenProject::default())))
                 .0,
@@ -662,25 +672,9 @@ macro_rules! project_states {
             loading: $runner
                 .provide_root_context(|| Loading(State::create(Loads::default())))
                 .0,
-            open: Open { strip, docs },
-            asm_at: $runner
-                .provide_root_context(|| AsmAt(State::create(Positions::default())))
-                .0,
-            driven: $runner
-                .provide_root_context(|| Drives(State::create(Driven::default())))
-                .0,
-            src_at: $runner
-                .provide_root_context(|| SrcAt(State::create(Positions::default())))
-                .0,
-            code_at: $runner
-                .provide_root_context(|| CodeAt(State::create(Positions::default())))
-                .0,
-            marks_at: $runner
-                .provide_root_context(|| MarksAt(State::create(Positions::default())))
-                .0,
-            visits: $runner
-                .provide_root_context(|| Visited(State::create(Visits::default())))
-                .0,
+            open,
+            places,
+            visits: doors.visits,
             bookmarks: $runner
                 .provide_root_context(|| Bookmarked(State::create(Bookmarks::default())))
                 .0,
@@ -695,7 +689,21 @@ macro_rules! project_states {
                 sidebar,
                 split,
             },
-        }
+        };
+        $runner.provide_root_context(move || states);
+        (states, doors)
+    }};
+}
+
+/// The project's states alone, which is what most harnesses want. Take the doors above
+/// instead when a test writes or reads one of the states a door is given: the runs, or
+/// either half of a landing.
+macro_rules! project_states {
+    () => {
+        |runner: &mut _| project_states!(runner)
+    };
+    ($runner:expr) => {{
+        project_wiring!($runner).0
     }};
 }
 
@@ -726,9 +734,6 @@ fn a_window_with_no_project_is_one_screen() {
             runner.provide_root_context(|| Window(State::create(None)));
             runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
             runner.provide_root_context(|| Keyboard(State::create(Keys::default())));
-            runner.provide_root_context(|| Marked(State::create(Marks::default())));
-            runner.provide_root_context(|| Land(State::create(None)));
-            runner.provide_root_context(|| Plant(State::create(None)));
             runner.provide_root_context(|| Follows(State::create(HashMap::new())));
             runner.provide_root_context(|| PadFollows(State::create(true)));
             runner.provide_root_context(|| Talking(State::create(Language::default())));
@@ -1188,15 +1193,7 @@ fn code_entry_of(states: &ProjectStates, document: &Document, address: u64) -> E
 /// `close_tab` on the tab showing `document`.
 fn close_document(states: &ProjectStates, document: &Document) {
     if let Some(id) = tab_showing(states, document) {
-        close_tab(
-            states.open,
-            states.asm_at,
-            states.src_at,
-            states.code_at,
-            states.driven,
-            states.marks_at,
-            id,
-        );
+        close_tab(states.open, states.places, id);
     }
 }
 
@@ -1216,8 +1213,8 @@ fn cursor_of(states: &ProjectStates) -> Option<usize> {
 /// The tab a harness mounts a pane in: the one showing `document`, or an unfiled id for a
 /// pane mounted with no tab behind it, whose positions then go nowhere.
 fn pane_tab(document: &Document) -> DocId {
-    use_consume::<OpenDocs>()
-        .0
+    use_open()
+        .docs
         .read()
         .showing(document)
         .unwrap_or(DocId::unfiled())
@@ -1243,7 +1240,8 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
 
     // The app as a session leaves it: a binary open, two of its functions in the strip with
     // a row remembered for one of them, a source file open beside them, somewhere to go.
-    let (mut objects, mut asm_at, mut src_at) = (states.objects, states.asm_at, states.src_at);
+    let (mut objects, mut asm_at, mut src_at) =
+        (states.objects, states.places.asm_at, states.places.src_at);
     objects.write().push(object.clone());
     let tab = |symbol: &Symbol| Document::Assembly(Selection::Symbol(symbol.clone()));
     let went = |target: Document| open_document(states.open, states.visits, target, Reach::NewTab);
@@ -1273,12 +1271,12 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     );
     // Not tidiness: a `Document::Assembly` key holds the `Arc<Object>` it points into.
     assert_eq!(
-        states.asm_at.peek().at(&first_entry),
+        states.places.asm_at.peek().at(&first_entry),
         None,
         "a viewing position was left behind"
     );
     assert_eq!(
-        states.src_at.peek().at(&source_entry),
+        states.places.src_at.peek().at(&source_entry),
         None,
         "a source position was left behind"
     );
@@ -3256,7 +3254,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     }
-    let mut asm_at = states.asm_at;
+    let mut asm_at = states.places.asm_at;
     let entries: Vec<Entry> = documents
         .iter()
         .map(|document| entry_of(&states, document))
@@ -3274,15 +3272,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         .peek()
         .showing(&documents[1])
         .expect("the kept tab is open");
-    close_others(
-        states.open,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        states.marks_at,
-        Tab::Document(keep),
-    );
+    close_others(states.open, states.places, Tab::Document(keep));
     test.sync_and_update();
 
     assert!(states.open.documents() == documents[1..2]);
@@ -3291,13 +3281,13 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         "the tab on screen closed without landing on the one that was kept"
     );
     assert_eq!(
-        states.asm_at.peek().at(&entries[1]),
+        states.places.asm_at.peek().at(&entries[1]),
         Some(2),
         "the kept tab lost the row it was left at"
     );
     assert!(
-        states.asm_at.peek().at(&entries[0]).is_none()
-            && states.asm_at.peek().at(&entries[2]).is_none(),
+        states.places.asm_at.peek().at(&entries[0]).is_none()
+            && states.places.asm_at.peek().at(&entries[2]).is_none(),
         "a closed tab's position was kept, and with it the binary it points into"
     );
     assert!(
@@ -3385,18 +3375,7 @@ fn closing_a_binary_keeps_the_source_tabs() {
     test.sync_and_update();
     assert_eq!(states.open.documents().len(), 2);
 
-    close_binary(
-        states.objects,
-        states.loading,
-        states.open,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        states.marks_at,
-        states.visits,
-        &path,
-    );
+    close_binary(states, &path);
     test.sync_and_update();
 
     assert!(
@@ -3631,18 +3610,7 @@ fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
         .expect("the app is still listening");
     pump(&mut test, || states.objects.peek().len() == 1);
 
-    close_binary(
-        states.objects,
-        states.loading,
-        states.open,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        states.marks_at,
-        states.visits,
-        &path,
-    );
+    close_binary(states, &path);
     test.sync_and_update();
     assert!(states.objects.peek().is_empty());
     assert!(reading(&states).is_empty(), "a closed file is still a row");
@@ -3776,7 +3744,7 @@ fn analysis_harness() -> impl IntoElement {
     let asking = use_consume::<Driving>().0;
     let analysis = use_consume::<Analysis>().0;
     let objects = use_consume::<Objects>().0;
-    let history = use_consume::<Visited>().0;
+    let history = use_doors().visits;
     let work = use_consume::<Work>().0;
     let mut seen = use_consume::<Seen>().0;
     let located = use_consume::<Locations>().0;
@@ -3833,9 +3801,20 @@ macro_rules! analysis_states {
             $runner
                 .provide_root_context(|| Objects(State::create(Vec::new())))
                 .0,
+            // The record a finished analysis writes into, which lives in the doors: the
+            // one state of theirs this harness has any use for.
             $runner
-                .provide_root_context(|| Visited(State::create(Visits::default())))
-                .0,
+                .provide_root_context(|| Doors {
+                    open: Open {
+                        strip: State::create(Strip::default()),
+                        docs: State::create(Docs::default()),
+                    },
+                    visits: State::create(Visits::default()),
+                    marked: State::create(Marks::default()),
+                    land: State::create(None),
+                    plant: State::create(None),
+                })
+                .visits,
             {
                 $runner.provide_root_context(|| Coding(State::create(Coded::default())));
                 $runner
@@ -4895,16 +4874,8 @@ fn closing_a_binary_takes_its_locations_with_it() {
 /// row's press is answered by it.
 fn locations_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let open = use_open();
-    let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(use_doors(), use_places(), active, code_rows);
 
     rect().expanded().child(LocationsPanel)
 }
@@ -4913,22 +4884,14 @@ fn locations_harness() -> impl IntoElement {
 #[derive(Clone, Copy)]
 struct LocationStates {
     located: State<Located>,
-    marked: State<Marks>,
-    landing: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
+    /// The bundle a row lands through, as the root provided it.
+    doors: Doors,
     analysis: State<Analyzed>,
 }
 
 macro_rules! location_states {
     ($runner:expr) => {{
-        let states = project_states!($runner);
-        let marked = $runner
-            .provide_root_context(|| Marked(State::create(Marks::default())))
-            .0;
-        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
-        let plant = $runner
-            .provide_root_context(|| Plant(State::create(None)))
-            .0;
+        let (states, doors) = project_wiring!($runner);
         $runner.provide_root_context(|| Coding(State::create(Coded::default())));
         let located = $runner
             .provide_root_context(|| Locations(State::create(Located::default())))
@@ -4941,9 +4904,7 @@ macro_rules! location_states {
             states,
             LocationStates {
                 located,
-                marked,
-                landing,
-                plant,
+                doors,
                 analysis,
             },
         )
@@ -5006,7 +4967,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
         "the row opened nothing"
     );
     assert!(
-        source_line(location.marked)
+        source_line(location.doors.marked)
             == Some(LinePos {
                 file: opened,
                 line: 2,
@@ -5015,6 +4976,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
     );
     // The name is selected there, which is what the answer's columns are for.
     let picked = location
+        .doors
         .marked
         .peek()
         .source
@@ -5027,7 +4989,11 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
     );
     let id = states.open.active_id().expect("a tab");
     assert_eq!(
-        states.driven.peek().line(&(id, Stop::on(document, 2))),
+        states
+            .places
+            .driven
+            .peek()
+            .line(&(id, Stop::on(document, 2))),
         Some(2),
         "the assembly side follows no line"
     );
@@ -5434,15 +5400,7 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
         columns: Some(3..7),
     };
     let land_on_line = |test: &mut TestingRunner, line: u32| {
-        land(
-            states.open,
-            states.visits,
-            location.marked,
-            location.landing,
-            location.plant,
-            at(line),
-            Reach::InPlace,
-        );
+        land(location.doors, at(line), Reach::InPlace);
         settle(test);
     };
 
@@ -5466,10 +5424,10 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     // And the landing is picked out at the place landed on, columns and all: moving to a
     // new place inside the file must leave the same run behind it as arriving at one in
     // another file does.
-    let (_, source) = runs_of(location.marked);
+    let (_, source) = runs_of(location.doors.marked);
     let source = source.expect("the landing picked nothing out");
     assert!(
-        source_line(location.marked)
+        source_line(location.doors.marked)
             == Some(LinePos {
                 file: file.clone(),
                 line: 40,
@@ -5517,11 +5475,7 @@ fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
     // The columns are a search hit's: what the landing carries beyond the line.
     let land_on_line = |test: &mut TestingRunner, line: u32| {
         land(
-            states.open,
-            states.visits,
-            location.marked,
-            location.landing,
-            location.plant,
+            location.doors,
             Landing {
                 tab: document.clone(),
                 at: Some(LinePos {
@@ -5538,7 +5492,7 @@ fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
 
     land_on_line(&mut test, 20);
     land_on_line(&mut test, 40);
-    let (_, source) = runs_of(location.marked);
+    let (_, source) = runs_of(location.doors.marked);
     let source = source.expect("the landing picked nothing out");
     assert!(
         source.chars.ends() == (Caret { row: 39, col: 3 }, Caret { row: 39, col: 7 }),
@@ -5550,7 +5504,7 @@ fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
     // what is on screen when the place changes belongs to the place being left.
     navigate(states.open, Nav::Back);
     settle(&mut test);
-    let (_, source) = runs_of(location.marked);
+    let (_, source) = runs_of(location.doors.marked);
     let source = source.expect("the place came back with no run");
     assert_eq!(
         source.chars.anchor().row,
@@ -5702,7 +5656,7 @@ fn a_location_row_lands_on_its_line() {
     located.write().asked = Some(Query::line(at.clone()));
     located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
-    assert!(location.marked.peek().source.is_none());
+    assert!(location.doors.marked.peek().source.is_none());
 
     let row = label_area(&test, "sum_to").expect("the row is drawn");
     let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
@@ -5714,10 +5668,11 @@ fn a_location_row_lands_on_its_line() {
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
     assert!(states.open.active() == Some(document));
     assert!(
-        source_line(location.marked) == Some(at.clone()),
+        source_line(location.doors.marked) == Some(at.clone()),
         "the line was not picked out"
     );
     let picked = location
+        .doors
         .marked
         .peek()
         .source
@@ -5725,19 +5680,19 @@ fn a_location_row_lands_on_its_line() {
         .expect("checked above");
     assert!(picked.owed == Owed::BOTH);
     assert!(
-        location.landing.peek().is_none(),
+        location.doors.land.peek().is_none(),
         "the landing was not spent by the document it named"
     );
     // Both panes are owed the scroll -- the source pane to its own run, the assembly
     // pane to the pair -- and each pays its own.
-    assert!(owes_pair(location.marked, Pane::Assembly));
+    assert!(owes_pair(location.doors.marked, Pane::Assembly));
     assert!(matches!(
-        owed_reveal(location.marked, Pane::Source),
+        owed_reveal(location.doors.marked, Pane::Source),
         Some(Owing::Own(_))
     ));
-    reveal_made(location.marked, Pane::Source);
-    assert!(owes_pair(location.marked, Pane::Assembly));
-    assert!(owed_reveal(location.marked, Pane::Source).is_none());
+    reveal_made(location.doors.marked, Pane::Source);
+    assert!(owes_pair(location.doors.marked, Pane::Assembly));
+    assert!(owed_reveal(location.doors.marked, Pane::Source).is_none());
 }
 
 /// Landing on the document already on top picks the line out at once: `activate` then
@@ -5763,11 +5718,7 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
     settle(&mut test);
 
     land(
-        states.open,
-        states.visits,
-        location.marked,
-        location.landing,
-        location.plant,
+        location.doors,
         Landing {
             tab: document.clone(),
             at: Some(at.clone()),
@@ -5777,13 +5728,13 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
         Reach::NewTab,
     );
     assert!(
-        location.landing.peek().is_none(),
+        location.doors.land.peek().is_none(),
         "a landing was left to an effect that cannot run"
     );
-    assert!(source_line(location.marked) == Some(at.clone()));
+    assert!(source_line(location.doors.marked) == Some(at.clone()));
     settle(&mut test);
     assert!(
-        source_line(location.marked) == Some(at.clone()),
+        source_line(location.doors.marked) == Some(at.clone()),
         "the run was dropped though no document changed"
     );
     assert!(states.open.active() == Some(document));
@@ -5983,12 +5934,12 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
         1,
         "a tab was opened for the symbol"
     );
-    assert!(states.driven.peek().choice(&entry) == Some(wanted.clone()));
-    assert_eq!(states.driven.peek().line(&entry), Some(at.line));
-    assert!(source_line(location.marked) == Some(at.clone()));
+    assert!(states.places.driven.peek().choice(&entry) == Some(wanted.clone()));
+    assert_eq!(states.places.driven.peek().line(&entry), Some(at.line));
+    assert!(source_line(location.doors.marked) == Some(at.clone()));
     // Which is the question the tab now asks.
     assert!(
-        ask(Some(&entry), &states.driven.peek())
+        ask(Some(&entry), &states.places.driven.peek())
             == Some(Ask::Source {
                 at: at.clone(),
                 chosen: Some(wanted.clone()),
@@ -6022,7 +5973,7 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
     );
     settle(&mut test);
 
-    let mut landing = location.landing;
+    let mut landing = location.doors.land;
     landing.set(Some(Landing {
         tab: Document::Assembly(Selection::Symbol(symbols[0].clone())),
         at: Some(at.clone()),
@@ -6038,11 +5989,11 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
     settle(&mut test);
 
     assert!(
-        location.marked.peek().source.is_none(),
+        location.doors.marked.peek().source.is_none(),
         "a landing picked a line out in another document"
     );
     assert!(
-        location.landing.peek().is_none(),
+        location.doors.land.peek().is_none(),
         "a spent landing was left lying"
     );
 }
@@ -6332,18 +6283,12 @@ fn linking_harness() -> impl IntoElement {
     let mut asking = use_consume::<ServerAsking>().0;
     use_hook(move || asking.set(Some(jobs)));
 
-    let open = use_open();
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let marks_at = use_consume::<MarksAt>().0;
+    let doors = use_doors();
+    let places = use_places();
     let code_rows = use_consume::<CodeRows>().0;
     let active = use_consume::<Active>().0;
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
-    use_follow(follow, open, states.visits, marked, landing, plant, driven);
+    use_land(doors, places, active, code_rows);
+    use_follow(follow, doors, places);
 
     let file = use_consume::<Subject>().0;
     let document = Document::Source(file);
@@ -6450,9 +6395,7 @@ macro_rules! mount_linking {
                     .provide_root_context(|| ServerAsking(State::create(None)))
                     .0;
                 // Which line each tab's assembly side follows: what the answer writes.
-                let driven = runner
-                    .provide_root_context(|| Drives(State::create(Driven::default())))
-                    .0;
+                let driven = states.places.driven;
                 (states, language, location, driven, asking, opened)
             },
             1.,
@@ -6552,6 +6495,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     let entry = (id, Stop::on(document, 1));
     assert_eq!(
         location
+            .doors
             .marked
             .peek()
             .source
@@ -6612,9 +6556,10 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || location.marked.peek().source.is_some());
+    pump(&mut test, || location.doors.marked.peek().source.is_some());
 
     let picked = location
+        .doors
         .marked
         .peek()
         .source
@@ -6669,9 +6614,10 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || location.marked.peek().source.is_some());
+    pump(&mut test, || location.doors.marked.peek().source.is_some());
 
     let picked = location
+        .doors
         .marked
         .peek()
         .source
@@ -7440,7 +7386,7 @@ fn a_name_where_one_is_defined_is_not_a_link() {
         "a definition's own name asked the server where it is"
     );
     assert!(
-        location.marked.peek().source.is_some(),
+        location.doors.marked.peek().source.is_some(),
         "a press on it did not pick its line out, as a press on text does"
     );
 }
@@ -7870,15 +7816,7 @@ fn the_server_is_told_which_files_the_reader_has_open() {
 
     // And the tab goes.
     let id = states.open.active_id().expect("a tab");
-    close_tab(
-        states.open,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        states.marks_at,
-        id,
-    );
+    close_tab(states.open, states.places, id);
     for _ in 0..20 {
         settle(&mut test);
         std::thread::sleep(Duration::from_millis(1));
@@ -8219,7 +8157,7 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
     settle(&mut test);
 
     assert!(
-        location.marked.peek().source.is_none(),
+        location.doors.marked.peek().source.is_none(),
         "an answer naming the line it was asked about picked a line out"
     );
     assert_eq!(
@@ -8587,7 +8525,7 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
     // trait `impl`, whose definition is itself.
     assert_eq!(want, lsp::Question::Followed(lsp::Followed::Definition));
     assert!(
-        location.marked.peek().source.is_none(),
+        location.doors.marked.peek().source.is_none(),
         "the press picked a line out"
     );
 }
@@ -8655,7 +8593,7 @@ fn a_press_on_a_call_with_no_server_picks_the_line_out() {
         "a question was asked with no server"
     );
     assert!(
-        location.marked.peek().source.is_some(),
+        location.doors.marked.peek().source.is_some(),
         "the press picked no line out"
     );
 }
@@ -8694,8 +8632,7 @@ fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
 /// its file from, and the two states a door lands through.
 macro_rules! companion_states {
     ($runner:expr, $shown:expr) => {{
-        let states = project_states!($runner);
-        $runner.provide_root_context(|| Marked(State::create(Marks::default())));
+        let (states, doors) = project_wiring!($runner);
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| CodeRows(State::create(None)));
         $runner.provide_root_context(|| Coding(State::create(Coded::default())));
@@ -8706,9 +8643,7 @@ macro_rules! companion_states {
                 ..Analyzed::default()
             }))
         });
-        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
-        $runner.provide_root_context(|| Plant(State::create(None)));
-        (states, landing)
+        (states, doors.land)
     }};
 }
 
@@ -8847,14 +8782,11 @@ fn a_source_row_inside_a_function_offers_its_instances() {
             let file = file.clone();
             move |runner| {
                 let states = project_states!(runner);
-                runner.provide_root_context(|| Marked(State::create(Marks::default())));
                 runner.provide_root_context(|| Shift(State::create(false)));
                 runner.provide_root_context(|| CodeRows(State::create(None)));
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Subject(file.clone()));
                 runner.provide_root_context(|| Coding(State::create(Coded::default())));
-                runner.provide_root_context(|| Land(State::create(None)));
-                runner.provide_root_context(|| Plant(State::create(None)));
                 let located = runner
                     .provide_root_context(|| Locations(State::create(Located::default())))
                     .0;
@@ -9293,10 +9225,8 @@ fn listing_harness() -> impl IntoElement {
 /// The contexts a listing's rows read, beside the project's.
 macro_rules! listing_states {
     ($runner:expr, $shown:expr) => {{
-        let states = project_states!($runner);
-        let marked = $runner
-            .provide_root_context(|| Marked(State::create(Marks::default())))
-            .0;
+        let (states, doors) = project_wiring!($runner);
+        let marked = doors.marked;
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
         $runner.provide_root_context(|| Coding(State::create(Coded::default())));
@@ -9307,14 +9237,12 @@ macro_rules! listing_states {
                 ..Analyzed::default()
             }))
         });
-        // The row's door into the object's code reads these four, and lands through
-        // the last two.
+        // The row's door into the object's code reads these three, and lands through the
+        // doors above.
         $runner.provide_root_context(|| Sections(State::create(Reading::default())));
         $runner.provide_root_context(|| Beside(State::create(None)));
         $runner.provide_root_context(|| Window(State::create(None)));
-        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
-        $runner.provide_root_context(|| Plant(State::create(None)));
-        (states, marked, landing)
+        (states, marked, doors.land, doors)
     }};
 }
 
@@ -9344,7 +9272,7 @@ fn scrolling_past_a_separator_keeps_every_row_its_own() {
         studied,
     };
 
-    let (mut test, (_states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (500., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -9549,7 +9477,7 @@ fn a_wide_source_line_is_reached_by_scrolling_sideways() {
 fn a_picked_rows_wash_runs_as_wide_as_the_widest_row() {
     let wash_at = |width: f32| {
         let shown = shown_sum_to();
-        let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+        let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
             listing_harness,
             (width, 300.).into(),
             |runner| listing_states!(runner, shown),
@@ -9636,19 +9564,13 @@ fn source_file_harness(
         {
             let file = file.clone();
             move |runner| {
-                let states = project_states!(runner);
-                let marked = runner
-                    .provide_root_context(|| Marked(State::create(Marks::default())))
-                    .0;
+                let (states, doors) = project_wiring!(runner);
+                let marked = doors.marked;
                 runner.provide_root_context(|| Shift(State::create(false)));
                 runner.provide_root_context(|| CodeRows(State::create(None)));
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Locations(State::create(Located::default())));
                 runner.provide_root_context(|| Coding(State::create(Coded::default())));
-                // The door out of a companion lands through these, and every source row
-                // carries it.
-                runner.provide_root_context(|| Land(State::create(None)));
-                runner.provide_root_context(|| Plant(State::create(None)));
                 let showing = runner
                     .provide_root_context(|| Showing(State::create(file.clone())))
                     .0;
@@ -9713,14 +9635,11 @@ fn reading_file_harness(file: &Arc<str>) -> (TestingRunner, async_channel::Sende
                     }))
                 });
                 let states = project_states!(runner);
-                runner.provide_root_context(|| Marked(State::create(Marks::default())));
                 runner.provide_root_context(|| Shift(State::create(false)));
                 runner.provide_root_context(|| CodeRows(State::create(None)));
                 runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
                 runner.provide_root_context(|| Locations(State::create(Located::default())));
                 runner.provide_root_context(|| Coding(State::create(Coded::default())));
-                runner.provide_root_context(|| Land(State::create(None)));
-                runner.provide_root_context(|| Plant(State::create(None)));
                 runner.provide_root_context(|| Showing(State::create(file.clone())));
                 states
             }
@@ -9946,7 +9865,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // Tall enough that the `jmp`'s row is drawn whole -- a row the pane clips is a row a
     // press at its middle misses -- and short enough that the row it lands on is not
     // already on screen, which the next assertion states.
-    let (mut test, (states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (500., 220.).into(),
         |runner| listing_states!(runner, shown),
@@ -10305,7 +10224,7 @@ fn the_assembly_pane_names_the_symbol_in_both_spellings() {
         studied: Studied::new(symbol.clone()),
     };
 
-    let (mut test, (_states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -10337,7 +10256,7 @@ fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
     };
     let tab = Document::Assembly(Selection::Symbol(elsewhere.clone()));
 
-    let (mut test, (_states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
         tab_pane_harness,
         (600., 300.).into(),
         move |runner| {
@@ -10419,7 +10338,7 @@ fn the_expanded_section_says_what_the_info_pane_said() {
         studied: Studied::new(sum_to.clone()),
     };
 
-    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),
@@ -10606,7 +10525,7 @@ fn a_landing_is_gone_to_once_and_does_not_drag_the_pane_back() {
         (500., 400.).into(),
         |runner| {
             runner.provide_root_context(|| Mounted(State::create(true)));
-            let (states, _marked, landing) = listing_states!(runner, shown);
+            let (states, _marked, landing, _doors) = listing_states!(runner, shown);
             (states, landing)
         },
         1.,
@@ -10686,7 +10605,7 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
             let mounted = runner
                 .provide_root_context(|| Mounted(State::create(true)))
                 .0;
-            let (states, _marked, _landing) = listing_states!(runner, shown);
+            let (states, _marked, _landing, _doors) = listing_states!(runner, shown);
             (states, mounted)
         },
         1.,
@@ -10724,7 +10643,7 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
 
     // And a tab that has been somewhere comes back to where it was, over the symbol's
     // own lines: the first open is the only one this answers.
-    let mut src_at = states.src_at;
+    let mut src_at = states.places.src_at;
     src_at.write().remember(entry_of(&states, &document), 120);
     let mut mounted = mounted;
     mounted.set(false);
@@ -10936,7 +10855,7 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
         studied,
     };
 
-    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
         |runner| {
@@ -11022,7 +10941,7 @@ fn a_file_in_no_compiled_language_opens_without_an_assembly_side() {
         studied: Studied::new(sum_to.clone()),
     };
 
-    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
         |runner| {
@@ -11097,7 +11016,7 @@ fn the_leading_bar_puts_the_following_pane_away() {
         studied: Studied::new(sum_to.clone()),
     };
 
-    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
         |runner| {
@@ -11272,7 +11191,7 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
             studied,
         };
 
-        let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+        let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
             panes_harness,
             (600., 300.).into(),
             |runner| {
@@ -12342,7 +12261,7 @@ fn scratchpad_listing_harness() -> impl IntoElement {
         asking,
         objects,
         beside,
-        use_consume::<Visited>().0,
+        use_doors().visits,
         use_consume::<Analysis>().0,
         use_consume::<Locations>().0,
         use_consume::<Coding>().0,
@@ -12425,7 +12344,7 @@ macro_rules! mount_scratchpad {
             // one is about 125px and a diagnostic's own place is clipped out of it.
             (700., 400.).into(),
             move |runner: &mut _| {
-                let states = project_states!(runner);
+                let (states, doors) = project_wiring!(runner);
                 runner.provide_root_context(move || Working(Arc::new(work)));
                 // The pane's own split, and everything its listing consumes: a pad with a
                 // program draws an object's code exactly as a code tab does.
@@ -12436,12 +12355,8 @@ macro_rules! mount_scratchpad {
                         ..Default::default()
                     }))
                 });
-                let marked = runner
-                    .provide_root_context(|| Marked(State::create(Marks::default())))
-                    .0;
+                let marked = doors.marked;
                 runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(|| Land(State::create(None)));
-                runner.provide_root_context(|| Plant(State::create(None)));
                 runner.provide_root_context(|| CodeRows(State::create(None)));
                 runner.provide_root_context(|| Sections(State::create(Reading::default())));
                 runner.provide_root_context(|| Window(State::create(None)));
@@ -15091,7 +15006,7 @@ fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (500., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -15213,7 +15128,7 @@ fn a_picked_out_instruction_lights_its_line() {
         (500., 600.).into(),
         |runner| {
             runner.provide_root_context(|| Mounted(State::create(true)));
-            let (states, marked, _landing) = listing_states!(runner, shown);
+            let (states, marked, _landing, _doors) = listing_states!(runner, shown);
             (states, marked)
         },
         1.,
@@ -15297,7 +15212,7 @@ fn the_gutter_marks_the_lines_that_have_code() {
         (500., 600.).into(),
         |runner| {
             runner.provide_root_context(|| Mounted(State::create(true)));
-            let (states, _marked, _landing) = listing_states!(runner, shown);
+            let (states, _marked, _landing, _doors) = listing_states!(runner, shown);
             // After the macro, which provides one of its own: a root context is
             // overwritten by whoever writes it last, so this is the one the pane reads.
             let coded = runner
@@ -15374,7 +15289,7 @@ fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
         panes_harness,
         (600., 400.).into(),
         |runner| {
-            let (states, _marked, _landing) = listing_states!(runner, shown);
+            let (states, _marked, _landing, _doors) = listing_states!(runner, shown);
             // No listing at all, which is what a source-driven tab has before a line in
             // it has been clicked. Provided after the macro, which fills one in.
             runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
@@ -15569,7 +15484,7 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
         |runner| location_states!(runner),
         1.,
     );
-    let mut driven = states.driven;
+    let mut driven = states.places.driven;
     open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
     driven.write().remember(entry_of(&states, &tab), 7);
     settle(&mut test);
@@ -15579,10 +15494,11 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
         line: 7,
     };
     assert!(
-        source_line(location.marked) == Some(expected.clone()),
+        source_line(location.doors.marked) == Some(expected.clone()),
         "the driven line was not picked out"
     );
     let picked = location
+        .doors
         .marked
         .peek()
         .source
@@ -15601,13 +15517,13 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
     );
     settle(&mut test);
     assert!(
-        location.marked.peek().source.is_none(),
+        location.doors.marked.peek().source.is_none(),
         "the run outlived its tab"
     );
 
     open_document(states.open, states.visits, tab, Reach::NewTab);
     settle(&mut test);
-    assert!(source_line(location.marked) == Some(expected));
+    assert!(source_line(location.doors.marked) == Some(expected));
 }
 
 /// The address a copied line spells is the listing's, which is the instruction's own plus
@@ -15679,16 +15595,8 @@ fn bare_harness() -> impl IntoElement {
 /// the caret it plants is what these tests ask about.
 fn code_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let open = use_open();
-    let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(use_doors(), use_places(), active, code_rows);
 
     let reading = use_consume::<Sections>().0;
     let object = reading.read().object.clone();
@@ -15708,10 +15616,8 @@ fn code_harness() -> impl IntoElement {
 /// and a reading of `object` with `held` decoded.
 macro_rules! code_states {
     ($runner:expr, $reading:expr) => {{
-        let states = project_states!($runner);
-        let marked = $runner
-            .provide_root_context(|| Marked(State::create(Marks::default())))
-            .0;
+        let (states, doors) = project_wiring!($runner);
+        let marked = doors.marked;
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
         $runner.provide_root_context(|| Coding(State::create(Coded::default())));
@@ -15724,12 +15630,11 @@ macro_rules! code_states {
             .provide_root_context(|| Window(State::create(None)))
             .0;
         $runner.provide_root_context(|| Beside(State::create(None)));
-        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
-        $runner.provide_root_context(|| Plant(State::create(None)));
+        let landing = doors.land;
         let ctrl = $runner
             .provide_root_context(|| Ctrl(State::create(false)))
             .0;
-        (states, marked, reading, window, landing, ctrl)
+        (states, marked, reading, window, landing, ctrl, doors)
     }};
 }
 
@@ -15839,12 +15744,13 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
     let rows = rows_of(&reading);
-    let (mut test, (states, _marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 300.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, _marked, sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 300.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let mut sections = sections;
     let document = Document::Code(object.clone());
     // Open, as a tab is in the app: a place is written down only for an open tab.
@@ -15864,7 +15770,11 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000030 ");
     assert_eq!(
-        states.code_at.peek().at(&entry_of(&states, &document)),
+        states
+            .places
+            .code_at
+            .peek()
+            .at(&entry_of(&states, &document)),
         Some(Spot {
             address: 0x30,
             rows: 2
@@ -15909,7 +15819,7 @@ fn a_code_tab_comes_back_to_the_address_it_was_left_at() {
     );
     let document = Document::Code(object.clone());
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
-    states.code_at.write().remember(
+    states.places.code_at.write().remember(
         entry_of(&states, &document),
         Spot {
             address: 0x14,
@@ -15932,12 +15842,13 @@ fn scrolling_asks_for_a_buffer_of_screens_nearest_the_reader_first() {
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
     let rows = rows_of(&reading);
-    let (mut test, (_states, _marked, _sections, window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 300.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (_states, _marked, _sections, window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 300.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     settle(&mut test);
     settle(&mut test);
 
@@ -15972,7 +15883,7 @@ fn closing_a_code_tab_forgets_its_address() {
     );
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     let entry = entry_of(&states, &document);
-    states.code_at.write().remember(
+    states.places.code_at.write().remember(
         entry.clone(),
         Spot {
             address: 0x30,
@@ -15980,11 +15891,11 @@ fn closing_a_code_tab_forgets_its_address() {
         },
     );
     test.sync_and_update();
-    assert!(states.code_at.peek().at(&entry).is_some());
+    assert!(states.places.code_at.peek().at(&entry).is_some());
 
     close_document(&states, &document);
     test.sync_and_update();
-    assert!(states.code_at.peek().at(&entry).is_none());
+    assert!(states.places.code_at.peek().at(&entry).is_none());
     assert!(states.open.active().is_none());
 }
 
@@ -16060,12 +15971,13 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 900.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, marked, sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let mut sections = sections;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -16191,7 +16103,7 @@ fn a_carried_run_keeps_the_caret_at_the_end_it_was_swept_to() {
 #[test]
 fn a_key_moves_the_view_only_when_the_caret_leaves_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -16251,7 +16163,7 @@ fn a_key_moves_the_view_only_when_the_caret_leaves_it() {
 #[test]
 fn a_caret_walked_past_the_panes_edge_brings_the_pane_sideways_to_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (300., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -16338,12 +16250,13 @@ fn a_source_click_beside_the_section_view_reveals_its_instruction() {
     };
     let at = a_line_of(&sum_to);
     let reading = reading_of(&object, &[]);
-    let (mut test, (_states, marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 300.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (_states, marked, sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 300.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let (mut marked, mut sections) = (marked, sections);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
@@ -16395,12 +16308,13 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, _marked, _sections, _window, _landing, ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 900.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, _marked, _sections, _window, _landing, ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -16481,7 +16395,7 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
         },
         studied: studied.clone(),
     };
-    let (mut test, (states, _marked, landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, landing, _doors)) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),
@@ -16516,7 +16430,7 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),
@@ -16551,7 +16465,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _marked, landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, landing, _doors)) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),
@@ -16573,6 +16487,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
     assert!(states.open.active() == Some(code.clone()));
     assert_eq!(
         states
+            .places
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, first)),
@@ -16600,15 +16515,11 @@ fn show_in_unified_view_keeps_the_rows_before_the_instruction() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0]);
-    let (mut test, ((states, marked, sections, _window, landing, _ctrl), plant)) =
+    let (mut test, (states, _marked, sections, _window, _landing, _ctrl, doors)) =
         TestingRunner::new(
             code_harness,
             (600., 30.0 * code_row_height()).into(),
-            |runner| {
-                let states = code_states!(runner, reading);
-                let plant = runner.provide_root_context(|| Plant(State::create(None))).0;
-                (states, plant)
-            },
+            |runner| code_states!(runner, reading),
             1.,
         );
     let code = Document::Code(object.clone());
@@ -16627,12 +16538,8 @@ fn show_in_unified_view_keeps_the_rows_before_the_instruction() {
     let at = rows.row_for(address).expect("the address has a row");
 
     show_in_code(
-        states.open,
-        states.visits,
-        marked,
-        landing,
-        plant,
-        states.code_at,
+        doors,
+        states.places,
         object.clone(),
         address,
         None,
@@ -16643,6 +16550,7 @@ fn show_in_unified_view_keeps_the_rows_before_the_instruction() {
 
     assert_eq!(
         states
+            .places
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, address))
@@ -16660,16 +16568,11 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, ((states, marked, _sections, _window, landing, _ctrl), plant)) =
+    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl, doors)) =
         TestingRunner::new(
             code_harness,
             (600., 300.).into(),
-            |runner| {
-                let states = code_states!(runner, reading);
-                // Re-provided, as `Ctrl` is, to be handed to the door.
-                let plant = runner.provide_root_context(|| Plant(State::create(None))).0;
-                (states, plant)
-            },
+            |runner| code_states!(runner, reading),
             1.,
         );
     let code = Document::Code(object.clone());
@@ -16679,12 +16582,8 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     let visits = states.visits.peek().entries().len();
 
     show_in_code(
-        states.open,
-        states.visits,
-        marked,
-        landing,
-        plant,
-        states.code_at,
+        doors,
+        states.places,
         object.clone(),
         0x30,
         None,
@@ -16783,7 +16682,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
         ask: Ask::Symbol(f.clone()),
         studied: Studied::new(f.clone()),
     };
-    let (mut test, ((states, _marked, landing), ctrl)) = TestingRunner::new(
+    let (mut test, ((states, _marked, landing, _doors), ctrl)) = TestingRunner::new(
         listing_harness,
         (600., 400.).into(),
         |runner| {
@@ -16841,6 +16740,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
     );
     assert_eq!(
         states
+            .places
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, target)),
@@ -16865,12 +16765,13 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
     let rows = rows_of(&reading);
-    let (mut test, (states, marked, _sections, _window, _landing, ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 900.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, marked, _sections, _window, _landing, ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -16926,6 +16827,7 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     assert_eq!(picked.chars.rows(), landed..=landed);
     assert_eq!(
         states
+            .places
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, add.address)),
@@ -16961,12 +16863,13 @@ fn leaving_a_text_row_puts_the_pointers_icon_back() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
-    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 900.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code, Reach::NewTab);
     settle(&mut test);
@@ -17057,12 +16960,13 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     let reading = reading_of(&object, &[0, 1, 2]);
     let rows = rows_of(&reading);
     let decoded = reading_of(&object, &[0, 1, 2]);
-    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 10.0 * code_row_height()).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 10.0 * code_row_height()).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let code = Document::Code(object.clone());
     let id = open_document(states.open, states.visits, code.clone(), Reach::NewTab)
         .expect("a document panel");
@@ -17088,6 +16992,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     );
     settle(&mut test);
     let left = states
+        .places
         .code_at
         .peek()
         .at(&entry_of(&states, &code))
@@ -17140,7 +17045,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
         "the step did not go back"
     );
     assert_eq!(
-        states.code_at.peek().at(&entry_of(&states, &code)),
+        states.places.code_at.peek().at(&entry_of(&states, &code)),
         Some(left),
         "the place left was not kept under its own entry"
     );
@@ -17152,6 +17057,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     // And the place jumped to keeps its own row, for Forward to come back to.
     assert_eq!(
         states
+            .places
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, add.address)),
@@ -17175,12 +17081,13 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     };
     let operand = call_operand(&f);
     let reading = reading_of(&object, &[0]);
-    let (mut test, (states, marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 6.0 * code_row_height()).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, marked, sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 6.0 * code_row_height()).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -17200,6 +17107,7 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     let at = rows.row_for(target).expect("the target has a row");
     assert_eq!(
         states
+            .places
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, target))
@@ -17225,12 +17133,13 @@ fn the_hand_is_shown_over_a_bare_target_in_the_unified_view() {
     };
     let operand = call_operand(&f);
     let reading = reading_of(&object, &[0]);
-    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 6.0 * code_row_height()).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 6.0 * code_row_height()).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -17299,12 +17208,13 @@ fn an_operand_and_a_label_wear_the_same_box() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
-    let (mut test, (states, _marked, _sections, _window, _landing, ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 900.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, _marked, _sections, _window, _landing, ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code, Reach::NewTab);
@@ -17364,7 +17274,8 @@ fn alt_held_darkens_every_link_and_the_hand() {
         code_harness,
         (600., 900.).into(),
         |runner| {
-            let (states, marked, sections, window, landing, ctrl) = code_states!(runner, reading);
+            let (states, marked, sections, window, landing, ctrl, _doors) =
+                code_states!(runner, reading);
             let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
             (states, marked, sections, window, landing, ctrl, alt)
         },
@@ -17448,12 +17359,13 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     // `f` decoded and `g` not, so the target's row is a guess.
     let reading = reading_of(&object, &[0]);
     let guessed = rows_of(&reading);
-    let (mut test, (states, marked, sections, _window, _landing, ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 6.0 * code_row_height()).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, marked, sections, _window, _landing, ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 6.0 * code_row_height()).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let (mut ctrl, mut sections) = (ctrl, sections);
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -17474,6 +17386,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     let at = rows.row_for(target).expect("the target has a row");
     assert_eq!(
         states
+            .places
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, target))
@@ -17703,12 +17616,13 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
             .clone(),
     };
     let reading = reading_of(&object, &[1]);
-    let (mut test, (states, _marked, _sections, _window, landing, _ctrl)) = TestingRunner::new(
-        menu_code_harness,
-        (600., 900.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, _marked, _sections, _window, landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            menu_code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code, Reach::NewTab);
     settle(&mut test);
@@ -17749,18 +17663,11 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
 fn doors_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
     let open = use_open();
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
     let objects = use_consume::<Objects>().0;
     let reading = use_consume::<Sections>().0;
     let window = use_consume::<Window>().0;
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(use_doors(), use_places(), active, code_rows);
     let beside = use_consume::<Beside>().0;
     use_reading_of(active, objects, beside, reading, window);
 
@@ -17778,19 +17685,13 @@ fn doors_harness() -> impl IntoElement {
 /// The contexts [`doors_harness`] reads beside the project's.
 #[derive(Clone, Copy)]
 struct DoorStates {
-    marked: State<Marks>,
-    landing: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
     analysis: State<Analyzed>,
     sections: State<Reading>,
 }
 
 macro_rules! door_states {
     ($runner:expr) => {{
-        let states = project_states!($runner);
-        let marked = $runner
-            .provide_root_context(|| Marked(State::create(Marks::default())))
-            .0;
+        let (states, doors) = project_wiring!($runner);
         $runner.provide_root_context(|| Shift(State::create(false)));
         $runner.provide_root_context(|| Locations(State::create(Located::default())));
         $runner.provide_root_context(|| Coding(State::create(Coded::default())));
@@ -17803,20 +17704,7 @@ macro_rules! door_states {
             .0;
         $runner.provide_root_context(|| Beside(State::create(None)));
         $runner.provide_root_context(|| Window(State::create(None)));
-        let landing = $runner.provide_root_context(|| Land(State::create(None))).0;
-        let plant = $runner
-            .provide_root_context(|| Plant(State::create(None)))
-            .0;
-        (
-            states,
-            DoorStates {
-                marked,
-                landing,
-                plant,
-                analysis,
-                sections,
-            },
-        )
+        (states, doors, DoorStates { analysis, sections })
     }};
 }
 /// Both panes of the active document, as `DocumentBody` mounts them, under what the app
@@ -17825,18 +17713,11 @@ macro_rules! door_states {
 fn door_panes_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
     let open = use_open();
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
     let objects = use_consume::<Objects>().0;
     let reading = use_consume::<Sections>().0;
     let window = use_consume::<Window>().0;
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(use_doors(), use_places(), active, code_rows);
     let beside = use_consume::<Beside>().0;
     use_reading_of(active, objects, beside, reading, window);
 
@@ -17887,7 +17768,7 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
         .expect("sum_to's instructions name a place");
     let address = assembly.instructions[index].address.wrapping_add(bias);
 
-    let (mut test, (states, doors)) = TestingRunner::new(
+    let (mut test, (states, doors, held)) = TestingRunner::new(
         door_panes_harness,
         (900., 20.0 * code_row_height()).into(),
         |runner| {
@@ -17908,12 +17789,8 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
     settle(&mut test);
 
     show_in_code(
-        states.open,
-        states.visits,
-        doors.marked,
-        doors.landing,
-        doors.plant,
-        states.code_at,
+        doors,
+        states.places,
         object.clone(),
         address,
         Some(at.clone()),
@@ -17924,7 +17801,7 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
     assert!(states.open.active() == Some(Document::Code(object.clone())));
 
     // The skeleton, as the worker answers first: every body row is still a guess.
-    let mut sections = doors.sections;
+    let mut sections = held.sections;
     sections.set(reading_of(&object, &[]));
     settle(&mut test);
     settle(&mut test);
@@ -18007,7 +17884,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
     assert!(matches!(guessed.row(guess), Some(Row::Empty { .. })));
     assert!(matches!(exact.row(row), Some(Row::Instruction { index: at, .. }) if at == index));
 
-    let (mut test, (states, doors)) = TestingRunner::new(
+    let (mut test, (states, doors, held)) = TestingRunner::new(
         doors_harness,
         (600., 5.0 * code_row_height()).into(),
         |runner| door_states!(runner),
@@ -18018,12 +17895,8 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
     settle(&mut test);
 
     show_in_code(
-        states.open,
-        states.visits,
-        doors.marked,
-        doors.landing,
-        doors.plant,
-        states.code_at,
+        doors,
+        states.places,
         object.clone(),
         address,
         studied.position(index),
@@ -18034,7 +17907,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
     let code = Document::Code(object.clone());
     assert!(states.open.active() == Some(code.clone()));
     assert!(
-        doors.sections.peek().is_about(&object),
+        held.sections.peek().is_about(&object),
         "the reading did not follow the tab"
     );
     // No rows yet: the instruction waits for them, and no caret is planted in nothing.
@@ -18048,7 +17921,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
 
     // The worker's first answer, `sum_to` still a guess: the caret on the guessed row,
     // the planting spent.
-    let mut sections = doors.sections;
+    let mut sections = held.sections;
     sections.set(before);
     settle(&mut test);
     settle(&mut test);
@@ -18138,7 +18011,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     let address = assembly.instructions[index].address;
     let row = studied.lanes.row_of(index);
 
-    let (mut test, (states, doors)) = TestingRunner::new(
+    let (mut test, (states, doors, held)) = TestingRunner::new(
         doors_harness,
         (600., 900.).into(),
         |runner| door_states!(runner),
@@ -18151,8 +18024,8 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
     settle(&mut test);
-    assert!(doors.sections.peek().is_about(&object));
-    let mut sections = doors.sections;
+    assert!(held.sections.peek().is_about(&object));
+    let mut sections = held.sections;
     sections.set(reading_of(&object, &[1]));
     settle(&mut test);
     settle(&mut test);
@@ -18179,7 +18052,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     assert!(planting.tab == symbol && planting.address == address);
 
     // The worker's answer: the listing is drawn, and the caret is on the row.
-    let mut analysis = doors.analysis;
+    let mut analysis = held.analysis;
     analysis.set(Analyzed {
         shown: Some(Shown {
             ask: Ask::Symbol(twice.clone()),
@@ -18219,7 +18092,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     let symbols = fixture_symbols();
     let (first, second) = (symbols[0].clone(), symbols[1].clone());
     let studied = Studied::new(first.clone());
-    let (mut test, (states, doors)) = TestingRunner::new(
+    let (mut test, (states, doors, held)) = TestingRunner::new(
         doors_harness,
         (600., 400.).into(),
         |runner| door_states!(runner),
@@ -18228,7 +18101,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     settle(&mut test);
 
     let first_tab = Document::Assembly(Selection::Symbol(first.clone()));
-    let mut landing = doors.landing;
+    let mut landing = doors.land;
     landing.set(Some(Landing {
         tab: first_tab.clone(),
         at: None,
@@ -18239,7 +18112,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     settle(&mut test);
     settle(&mut test);
     // Arrived, with no listing to plant it in: left for the listing.
-    assert!(doors.landing.peek().is_none(), "the landing was not spent");
+    assert!(doors.land.peek().is_none(), "the landing was not spent");
     let planting = doors
         .plant
         .peek()
@@ -18255,7 +18128,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     assert!(doors.plant.peek().is_none(), "a landing was left lying");
 
     // The first symbol's listing comes, and its tab is raised: nothing is planted.
-    let mut analysis = doors.analysis;
+    let mut analysis = held.analysis;
     analysis.set(Analyzed {
         shown: Some(Shown {
             ask: Ask::Symbol(first),
@@ -18305,18 +18178,19 @@ struct PaneObject(Arc<Object>);
 fn a_unified_view_asks_for_its_skeleton_once_the_reading_is_its_own() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
-    let (mut test, (states, _marked, sections, window, _landing, _ctrl)) = TestingRunner::new(
-        app_like_code_harness,
-        (600., 300.).into(),
-        {
-            let object = object.clone();
-            move |runner| {
-                runner.provide_root_context(|| PaneObject(object.clone()));
-                code_states!(runner, Reading::default())
-            }
-        },
-        1.,
-    );
+    let (mut test, (states, _marked, sections, window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            app_like_code_harness,
+            (600., 300.).into(),
+            {
+                let object = object.clone();
+                move |runner| {
+                    runner.provide_root_context(|| PaneObject(object.clone()));
+                    code_states!(runner, Reading::default())
+                }
+            },
+            1.,
+        );
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -18375,12 +18249,13 @@ fn switched_code_harness() -> impl IntoElement {
 fn switching_between_two_objects_code_tabs_asks_for_the_second() {
     let (_path, objects) = fixture_objects(2);
     let (first, second) = (objects[0].clone(), objects[1].clone());
-    let (mut test, (states, _marked, sections, window, _landing, _ctrl)) = TestingRunner::new(
-        switched_code_harness,
-        (600., 300.).into(),
-        |runner| code_states!(runner, Reading::default()),
-        1.,
-    );
+    let (mut test, (states, _marked, sections, window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            switched_code_harness,
+            (600., 300.).into(),
+            |runner| code_states!(runner, Reading::default()),
+            1.,
+        );
     let mut open = states.objects;
     open.write().extend([first.clone(), second.clone()]);
     settle(&mut test);
@@ -18453,12 +18328,13 @@ fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
             }
         )]
     ));
-    let (mut test, (_states, _marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 900.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (_states, _marked, sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let mut sections = sections;
     settle(&mut test);
     assert!(labels(&test).contains(&"dq\u{a0}".to_string()));
@@ -18883,7 +18759,7 @@ fn an_instruction_rows_menu_bookmarks_its_symbol() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
         |runner| listing_states!(runner, shown),
@@ -19226,7 +19102,7 @@ fn right_of(area: &Area) -> (f64, f64) {
 #[test]
 fn a_sweep_along_the_text_picks_characters_out() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -19332,7 +19208,7 @@ fn a_sweep_along_the_text_picks_characters_out() {
 #[test]
 fn a_press_in_the_gutter_places_the_caret_and_a_sweep_takes_whole_rows() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -19446,7 +19322,7 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
     // Escape, through the pane's own key handler: the box has to have the keyboard,
     // which a press in it asks for.
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -19517,7 +19393,7 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
     .units();
     assert!(before > 0 && before < line.units(), "{line:?}");
 
-    let (mut test, (states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -19599,7 +19475,7 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
         listing_harness,
         (600., 900.).into(),
         |runner| {
-            let (states, marked, landing) = listing_states!(runner, shown);
+            let (states, marked, landing, _doors) = listing_states!(runner, shown);
             let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
             (states, marked, landing, alt)
         },
@@ -19647,7 +19523,8 @@ fn alt_held_shuts_the_unified_views_own_door() {
         code_harness,
         (600., 900.).into(),
         |runner| {
-            let (states, marked, sections, window, landing, ctrl) = code_states!(runner, reading);
+            let (states, marked, sections, window, landing, ctrl, _doors) =
+                code_states!(runner, reading);
             let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
             (states, marked, sections, window, landing, ctrl, alt)
         },
@@ -19684,7 +19561,7 @@ fn alt_held_shuts_the_unified_views_own_door() {
 #[test]
 fn a_double_press_takes_the_word_under_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -19781,7 +19658,7 @@ fn offset_listing_harness() -> impl IntoElement {
 #[test]
 fn a_listings_rows_sit_on_whole_device_pixels_wherever_it_is_laid_out() {
     let shown = shown_sum_to();
-    let (mut test, (_states, _marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
         offset_listing_harness,
         (600., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -19829,7 +19706,7 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
         let assembly = studied.assembly.as_ref().expect("sum_to has bytes");
         studied.lanes.listing_rows(assembly.instructions.len())
     };
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -20245,7 +20122,7 @@ fn key_with(test: &mut TestingRunner, key: Key, modifiers: Modifiers) {
 #[test]
 fn the_arrow_keys_move_the_caret_and_the_run_of_rows_with_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -20326,7 +20203,7 @@ fn the_arrow_keys_move_the_caret_and_the_run_of_rows_with_it() {
 #[test]
 fn shift_and_a_key_reach_the_run_out_and_a_key_alone_collapses_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
         |runner| listing_states!(runner, shown),
@@ -20406,7 +20283,7 @@ fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
     let length = shown.studied.lanes.listing_rows(instructions.len());
     let first_address = format!("{:016X} ", instructions[0].address);
     let last_address = format!("{:016X} ", instructions.last().unwrap().address);
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -20514,12 +20391,13 @@ fn the_keys_move_the_caret_along_a_row_the_worker_decoded() {
         panic!("a window is answered with a window");
     };
     assert!(reading.take(&ask, code, decoded));
-    let (mut test, (states, marked, _sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_harness,
-        (600., 900.).into(),
-        |runner| code_states!(runner, reading),
-        1.,
-    );
+    let (mut test, (states, marked, _sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_harness,
+            (600., 900.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -20577,7 +20455,7 @@ fn the_keys_move_the_caret_along_a_row_the_worker_decoded() {
 #[test]
 fn a_sweep_held_past_the_panes_edge_scrolls_the_view() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -20634,7 +20512,7 @@ fn a_sweep_held_past_the_panes_edge_scrolls_the_view() {
 #[test]
 fn a_sweep_held_past_the_panes_side_scrolls_the_view_sideways() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing)) = TestingRunner::new(
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
         listing_harness,
         (300., 300.).into(),
         |runner| listing_states!(runner, shown),
@@ -20708,7 +20586,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
         Reach::NewTab,
     )
     .expect("a document panel");
-    let mut asm_at = states.asm_at;
+    let mut asm_at = states.places.asm_at;
     asm_at
         .write()
         .remember((id, Stop::whole(documents[0].clone())), 12);
@@ -20726,6 +20604,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     assert!(states.visits.peek().entries() == walked);
     assert_eq!(
         states
+            .places
             .asm_at
             .peek()
             .at(&(id, Stop::whole(documents[0].clone()))),
@@ -20748,6 +20627,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     assert!(states.open.active() == Some(documents[0].clone()));
     assert_eq!(
         states
+            .places
             .asm_at
             .peek()
             .at(&(id, Stop::whole(documents[0].clone()))),
@@ -21012,7 +20892,7 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
         .expect("a document panel");
     open_document(states.open, states.visits, source.clone(), Reach::InPlace);
     open_document(states.open, states.visits, other.clone(), Reach::NewTab);
-    let mut asm_at = states.asm_at;
+    let mut asm_at = states.places.asm_at;
     asm_at
         .write()
         .remember((survivor, Stop::whole(symbol.clone())), 12);
@@ -21022,18 +20902,7 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
     test.sync_and_update();
     assert_eq!(states.open.documents().len(), 2);
 
-    close_binary(
-        states.objects,
-        states.loading,
-        states.open,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        states.marks_at,
-        states.visits,
-        &path,
-    );
+    close_binary(states, &path);
     test.sync_and_update();
 
     assert!(states.open.documents() == [source.clone()]);
@@ -21041,6 +20910,7 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
     assert!(trail_of(&states, survivor) == [source.clone()]);
     assert_eq!(
         states
+            .places
             .asm_at
             .peek()
             .at(&(survivor, Stop::whole(symbol.clone()))),
@@ -21049,6 +20919,7 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
     );
     assert_eq!(
         states
+            .places
             .asm_at
             .peek()
             .at(&(survivor, Stop::whole(source.clone()))),
@@ -21062,23 +20933,20 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
 /// left and puts it back as it arrives, and `use_clear_marks`, which drops a run whose
 /// listing is replaced within one place -- and must not drop one for the switch.
 fn navigating_harness() -> impl IntoElement {
+    let doors = use_doors();
+    let places = use_places();
     let active = use_consume::<Active>().0;
-    let open = use_open();
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(doors, places, active, code_rows);
     use_clear_marks(
         active,
-        super::analyzed::Asked { active, driven },
+        super::analyzed::Asked {
+            active,
+            driven: places.driven,
+        },
         analysis,
-        marked,
+        doors.marked,
     );
     panes_harness()
 }
@@ -21091,7 +20959,7 @@ fn navigating_panes() -> (
     ProjectStates,
     State<Marks>,
     State<Option<Landing>>,
-    State<Option<Planting>>,
+    Doors,
     Document,
     Arc<str>,
     Seeded,
@@ -21113,26 +20981,24 @@ fn navigating_panes() -> (
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (test, ((states, marked, landing), plant)) = TestingRunner::new(
+    let (test, (states, marked, landing, doors)) = TestingRunner::new(
         navigating_harness,
         (700., 400.).into(),
         |runner| {
             let states = listing_states!(runner, shown);
-            // Re-provided, as `Ctrl` is elsewhere, to be handed to `land`.
-            let plant = runner.provide_root_context(|| Plant(State::create(None))).0;
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
                     ..Default::default()
                 }))
             });
-            (states, plant)
+            states
         },
         1.,
     );
     let document = Document::Assembly(Selection::Symbol(sum_to));
     (
-        test, states, marked, landing, plant, document, file, directory,
+        test, states, marked, landing, doors, document, file, directory,
     )
 }
 
@@ -21180,7 +21046,7 @@ fn runs_of(marked: State<Marks>) -> (Option<Picked>, Option<Picked>) {
 #[test]
 fn navigating_brings_back_each_panes_caret_and_selection() {
     let symbols = fixture_symbols();
-    let (mut test, states, marked, _landing, _plant, sum_to, file, _directory) = navigating_panes();
+    let (mut test, states, marked, _landing, _doors, sum_to, file, _directory) = navigating_panes();
     let add = Document::Assembly(Selection::Symbol(symbols[0].clone()));
     let id = open_document(states.open, states.visits, sum_to.clone(), Reach::NewTab)
         .expect("a document panel");
@@ -21206,6 +21072,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
     settle(&mut test);
     assert!(states.open.active() == Some(add.clone()));
     let kept = states
+        .places
         .marks_at
         .peek()
         .at(&(id, Stop::whole(sum_to.clone())))
@@ -21265,7 +21132,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
 #[test]
 fn a_landing_on_arrival_wins_over_the_kept_runs() {
     let symbols = fixture_symbols();
-    let (mut test, states, marked, landing, plant, sum_to, file, _directory) = navigating_panes();
+    let (mut test, states, marked, _landing, doors, sum_to, file, _directory) = navigating_panes();
     let add = Document::Assembly(Selection::Symbol(symbols[0].clone()));
     let id = open_document(states.open, states.visits, sum_to.clone(), Reach::NewTab)
         .expect("a document panel");
@@ -21277,6 +21144,7 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
     settle(&mut test);
     settle(&mut test);
     assert!(states
+        .places
         .marks_at
         .peek()
         .at(&(id, Stop::whole(sum_to.clone())))
@@ -21288,11 +21156,7 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
         line: 9,
     };
     land(
-        states.open,
-        states.visits,
-        marked,
-        landing,
-        plant,
+        doors,
         Landing {
             tab: sum_to.clone(),
             at: Some(at.clone()),
@@ -21351,7 +21215,7 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
         },
         ..Kept::default()
     };
-    let mut marks_at = states.marks_at;
+    let mut marks_at = states.places.marks_at;
     marks_at
         .write()
         .remember((survivor, Stop::whole(symbol.clone())), kept(1));
@@ -21363,18 +21227,11 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
         .remember((closing, Stop::whole(other.clone())), kept(3));
     test.sync_and_update();
 
-    close_tab(
-        states.open,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        states.marks_at,
-        closing,
-    );
+    close_tab(states.open, states.places, closing);
     test.sync_and_update();
     assert!(
         states
+            .places
             .marks_at
             .peek()
             .at(&(closing, Stop::whole(other)))
@@ -21383,57 +21240,52 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
     );
     assert!(
         states
+            .places
             .marks_at
             .peek()
             .at(&(survivor, Stop::whole(symbol.clone())))
             == Some(kept(1))
     );
 
-    close_binary(
-        states.objects,
-        states.loading,
-        states.open,
-        states.asm_at,
-        states.src_at,
-        states.code_at,
-        states.driven,
-        states.marks_at,
-        states.visits,
-        &path,
-    );
+    close_binary(states, &path);
     test.sync_and_update();
     assert!(states.open.documents() == [source.clone()]);
     assert!(
         states
+            .places
             .marks_at
             .peek()
             .at(&(survivor, Stop::whole(symbol)))
             .is_none(),
         "the runs of an entry the closing binary took off the trail were kept"
     );
-    assert!(states.marks_at.peek().at(&(survivor, Stop::whole(source))) == Some(kept(2)));
+    assert!(
+        states
+            .places
+            .marks_at
+            .peek()
+            .at(&(survivor, Stop::whole(source)))
+            == Some(kept(2))
+    );
 }
 
 /// The unified view's pane as the app mounts it, under the root effects a switch goes
 /// through, as [`navigating_harness`] is for a document's two panes.
 fn code_navigating_harness() -> impl IntoElement {
+    let doors = use_doors();
+    let places = use_places();
     let active = use_consume::<Active>().0;
-    let open = use_open();
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(doors, places, active, code_rows);
     use_clear_marks(
         active,
-        super::analyzed::Asked { active, driven },
+        super::analyzed::Asked {
+            active,
+            driven: places.driven,
+        },
         analysis,
-        marked,
+        doors.marked,
     );
     app_like_code_harness()
 }
@@ -21449,18 +21301,19 @@ fn code_navigating_harness() -> impl IntoElement {
 fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
-    let (mut test, (states, marked, sections, _window, _landing, _ctrl)) = TestingRunner::new(
-        code_navigating_harness,
-        (600., 900.).into(),
-        {
-            let object = object.clone();
-            move |runner| {
-                runner.provide_root_context(|| PaneObject(object.clone()));
-                code_states!(runner, Reading::default())
-            }
-        },
-        1.,
-    );
+    let (mut test, (states, marked, sections, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_navigating_harness,
+            (600., 900.).into(),
+            {
+                let object = object.clone();
+                move |runner| {
+                    runner.provide_root_context(|| PaneObject(object.clone()));
+                    code_states!(runner, Reading::default())
+                }
+            },
+            1.,
+        );
     let mut sections = sections;
     let mut open = states.objects;
     open.write().push(object.clone());
@@ -21492,6 +21345,7 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
         .row;
     let entry = entry_of(&states, &code);
     let kept = states
+        .places
         .marks_at
         .peek()
         .at(&entry)
@@ -21732,16 +21586,8 @@ fn search_harness() -> impl IntoElement {
     // What spends the landing a hit's press leaves, as `app()` does: without it a row
     // opens its tab and picks nothing out.
     let active = use_consume::<Active>().0;
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let open = use_open();
-    let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(use_doors(), use_places(), active, code_rows);
 
     rect().expanded().child(SearchPanel)
 }
@@ -21783,8 +21629,6 @@ fn search_and_modifiers(
             });
             // What a row's press reaches through: the landing a hit makes, and the runs
             // it picks out on the other side of it.
-            runner.provide_root_context(|| Land(State::create(None)));
-            runner.provide_root_context(|| Plant(State::create(None)));
             runner.provide_root_context(|| CodeRows(State::create(None)));
             let held = runner.provide_root_context(|| {
                 Modifiers5(
@@ -21795,15 +21639,13 @@ fn search_and_modifiers(
                     State::create(false),
                 )
             });
-            let marked = runner
-                .provide_root_context(|| Marked(State::create(Marks::default())))
-                .0;
             // The root's key handler answers the finder's chord beside the Search
             // panel's, so it needs the state the finder is opened through.
             let finder = runner
                 .provide_root_context(|| Finding(State::create(Finder::default())))
                 .0;
-            let states = project_states!(runner);
+            let (states, doors) = project_wiring!(runner);
+            let marked = doors.marked;
             // The same context again, so this test holds the handle the panel reads.
             let dock = runner
                 .provide_root_context(|| {
@@ -22114,7 +21956,11 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
     let document = Document::Source(Arc::from(&*path.to_string_lossy()));
     let id = states.open.active_id().expect("the hit opened a tab");
     assert_eq!(
-        states.driven.peek().line(&(id, Stop::on(document, 2))),
+        states
+            .places
+            .driven
+            .peek()
+            .line(&(id, Stop::on(document, 2))),
         Some(2),
         "the assembly side follows no line"
     );
@@ -22342,11 +22188,6 @@ macro_rules! mount_project {
                 let language = runner
                     .provide_root_context(|| Talking(State::create(Language::default())))
                     .0;
-                // A diagnostic's place is a link, and a link lands: the three states a
-                // landing is left in.
-                runner.provide_root_context(|| Marked(State::create(Marks::default())));
-                runner.provide_root_context(|| Land(State::create(None)));
-                runner.provide_root_context(|| Plant(State::create(None)));
                 let asking = runner
                     .provide_root_context(|| BuildAsking(State::create(None)))
                     .0;
@@ -24254,16 +24095,8 @@ fn the_project_views_button_asks_before_it_starts_too() {
 /// door from outside a document reaches, and what answers it.
 fn landing_panes_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let marked = use_consume::<Marked>().0;
-    let landing = use_consume::<Land>().0;
-    let plant = use_consume::<Plant>().0;
-    let driven = use_consume::<Drives>().0;
-    let marks_at = use_consume::<MarksAt>().0;
     let code_rows = use_consume::<CodeRows>().0;
-    let open = use_open();
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(use_doors(), use_places(), active, code_rows);
     panes_harness()
 }
 
@@ -24324,11 +24157,7 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
     // The door: the same `land` a followed name and a search hit both make, in place, so
     // the tab on screen is handed the second file rather than mounting a new one.
     land(
-        states.open,
-        states.visits,
-        location.marked,
-        location.landing,
-        location.plant,
+        location.doors,
         Landing {
             tab: Document::Source(landed.clone()),
             at: Some(LinePos {
@@ -24442,11 +24271,7 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
     // screen is handed the document rather than mounting a pane for it.
     let door = |test: &mut TestingRunner, file: &Arc<str>, line: u32| {
         land(
-            states.open,
-            states.visits,
-            location.marked,
-            location.landing,
-            location.plant,
+            location.doors,
             Landing {
                 tab: Document::Source(file.clone()),
                 at: Some(LinePos {
@@ -24539,11 +24364,7 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
     // A door, and the pass on which the row it landed on first shows.
     let door = |test: &mut TestingRunner, file: &Arc<str>, line: u32| -> Option<usize> {
         land(
-            states.open,
-            states.visits,
-            location.marked,
-            location.landing,
-            location.plant,
+            location.doors,
             Landing {
                 tab: Document::Source(file.clone()),
                 at: Some(LinePos {

@@ -48,7 +48,7 @@ pub(crate) enum Toggling {
 /// drawn on, put the same button on screen twice for the sake of a press that takes its
 /// own door away.
 ///
-/// It takes the tab and reads the document out of [`OpenDocs`] rather than being handed
+/// It takes the tab and reads the document out of [`Open`] rather than being handed
 /// one: what it writes is filed under the tab anyway, and a [`Document`] prop would hold
 /// an `Arc<Object>` in a control that every open tab draws.
 #[derive(Clone, Copy, PartialEq)]
@@ -58,7 +58,7 @@ pub(crate) struct PaneToggle {
 
 impl Component for PaneToggle {
     fn render(&self) -> impl IntoElement {
-        let docs = use_consume::<OpenDocs>().0;
+        let docs = use_open().docs;
         let mut said = use_consume::<Follows>().0;
         let mut pad_said = use_consume::<PadFollows>().0;
         let mut hovering = use_state(|| false);
@@ -174,7 +174,7 @@ pub(crate) struct DocumentBody {
 
 impl Component for DocumentBody {
     fn render(&self) -> impl IntoElement {
-        let docs = use_consume::<OpenDocs>().0;
+        let docs = use_open().docs;
         let mut ratio = use_consume::<SplitRatio>().0;
         let splits = use_consume::<Splits>().0;
         let said = use_consume::<Follows>().0;

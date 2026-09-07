@@ -230,15 +230,7 @@ pub(crate) fn raise_tab(open: Open, tab: Tab) {
 /// the life of the app. The lines its entries were driven from go with it too, for
 /// consistency and **not** for that reason: a [`Document::Source`] key holds no object,
 /// so it holds nothing up.
-pub(crate) fn close_tab(
-    open: Open,
-    mut asm_at: State<Positions<Entry>>,
-    mut src_at: State<Positions<Entry>>,
-    mut code_at: State<Positions<Entry, Spot>>,
-    mut driven: State<Driven>,
-    mut marks_at: State<Positions<Entry, Kept>>,
-    id: DocId,
-) {
+pub(crate) fn close_tab(open: Open, places: Places, id: DocId) {
     let Open {
         mut strip,
         mut docs,
@@ -254,12 +246,7 @@ pub(crate) fn close_tab(
         return;
     }
     docs.write().close(id);
-    let kept = |(tab, _): &Entry| *tab != id;
-    asm_at.write().forgetting(kept);
-    src_at.write().forgetting(kept);
-    code_at.write().forgetting(kept);
-    marks_at.write().forgetting(kept);
-    driven.write().forget_tab(id);
+    places.forgetting(|(tab, _): &Entry| *tab != id);
 }
 
 /// Close the page `page`, which is a tab leaving the bar and nothing else: what it was
@@ -278,15 +265,7 @@ pub(crate) fn close_page(open: Open, page: Page) {
 /// an [`Entry`] key holding the `Arc<Object>` it points into. Done in one pass rather
 /// than by calling [`close_tab`] in a loop: each of those would work out a landing of its
 /// own and walk the bar through every intermediate state.
-pub(crate) fn close_others(
-    open: Open,
-    mut asm_at: State<Positions<Entry>>,
-    mut src_at: State<Positions<Entry>>,
-    mut code_at: State<Positions<Entry, Spot>>,
-    mut driven: State<Driven>,
-    mut marks_at: State<Positions<Entry, Kept>>,
-    keep: Tab,
-) {
+pub(crate) fn close_others(open: Open, places: Places, keep: Tab) {
     let Open {
         mut strip,
         mut docs,
@@ -320,14 +299,7 @@ pub(crate) fn close_others(
         }
     }
 
-    let held = |(tab, _): &Entry| !closing.contains(tab);
-    asm_at.write().forgetting(held);
-    src_at.write().forgetting(held);
-    code_at.write().forgetting(held);
-    marks_at.write().forgetting(held);
-    // One guard rather than one write per tab: a write notifies whether or not it
-    // changed anything, and a dozen tabs closing is one change.
-    driven.write().forgetting(held);
+    places.forgetting(|(tab, _): &Entry| !closing.contains(tab));
 }
 
 /// Let go of the binary at `path`: drop every [`Object`] it contributed and answer for
@@ -343,18 +315,15 @@ pub(crate) fn close_others(
 ///
 /// All the writes happen in this one handler, so the save observer wakes once on a settled
 /// state and never writes a binary the app has already let go of.
-pub(crate) fn close_binary(
-    mut objects: State<Vec<Arc<Object>>>,
-    mut loading: State<Loads>,
-    open: Open,
-    mut asm_at: State<Positions<Entry>>,
-    mut src_at: State<Positions<Entry>>,
-    mut code_at: State<Positions<Entry, Spot>>,
-    mut driven: State<Driven>,
-    mut marks_at: State<Positions<Entry, Kept>>,
-    mut visits: State<Visits>,
-    path: &Path,
-) {
+pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
+    let ProjectStates {
+        mut objects,
+        mut loading,
+        open,
+        places,
+        mut visits,
+        ..
+    } = states;
     let Open {
         mut strip,
         mut docs,
@@ -394,19 +363,12 @@ pub(crate) fn close_binary(
 
     // Nothing kept by an entry can outlive the entry: not the closed tabs', and not the
     // ones a surviving trail just lost, which hold the file's bytes just the same.
-    let kept = |(tab, stop): &Entry| !closing.contains(tab) && !stop.document.in_file(path);
-    asm_at.write().forgetting(kept);
-    src_at.write().forgetting(kept);
-    code_at.write().forgetting(kept);
-    marks_at.write().forgetting(kept);
-    {
-        // A source-driven tab stands, but a symbol it chose out of this file is let go:
-        // the line beside the choice is what survives a close, and the next ask answers
-        // out of what is left.
-        let mut driven = driven.write();
-        driven.release(path);
-        driven.forgetting(kept);
-    }
+    places.forgetting(|(tab, stop): &Entry| !closing.contains(tab) && !stop.document.in_file(path));
+    // A source-driven tab stands, but a symbol it chose out of this file is let go: the
+    // line beside the choice is what survives a close, and the next ask answers out of
+    // what is left. The one thing here that is not a forget.
+    let mut driven = places.driven;
+    driven.write().release(path);
 
     let remaining = visits.peek().retaining(|entry| !entry.in_file(path));
     visits.set(remaining);
@@ -424,15 +386,14 @@ pub(crate) fn close_binary(
 /// already on top -- and picked out here only where the door moves nothing at all; the
 /// instruction is always a [`Planting`], the listing it is a row of coming after the
 /// document, left here in that one case and by `use_land` otherwise.
-pub(crate) fn land(
-    open: Open,
-    visits: State<Visits>,
-    marked: State<Marks>,
-    mut land: State<Option<Landing>>,
-    mut plant: State<Option<Planting>>,
-    landing: Landing,
-    reach: Reach,
-) -> Option<DocId> {
+pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId> {
+    let Doors {
+        open,
+        visits,
+        marked,
+        land: mut land_at,
+        mut plant,
+    } = doors;
     let stop = stop_of(&landing);
     if open.active().as_ref() == Some(&landing.tab) {
         // The document is already on top, so nothing is opened and `open_stop` never
@@ -448,7 +409,7 @@ pub(crate) fn land(
         // arrival, which finds no landing and falls back to the place's own line, without
         // the columns the door named or the scroll it owed.
         if moved {
-            land.set(Some(landing));
+            land_at.set(Some(landing));
             return id;
         }
         // The same place again, or a stop naming the document alone: nothing changes, so
@@ -471,7 +432,7 @@ pub(crate) fn land(
         return id;
     }
 
-    land.set(Some(landing));
+    land_at.set(Some(landing));
     open_stop(open, visits, stop, reach)
 }
 
@@ -537,13 +498,13 @@ fn moved_to(open: Open, id: DocId, stop: &Stop) -> bool {
 /// its question was asked from, whose assembly side it has just chosen for. The tab is
 /// already open and shows the file, so this is a [`raise`] and not an opening -- nothing
 /// is recorded -- with the line picked out the way [`land`] picks it.
-pub(crate) fn land_on(
-    open: Open,
-    marked: State<Marks>,
-    mut landing: State<Option<Landing>>,
-    id: DocId,
-    at: LinePos,
-) {
+pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos) {
+    let Doors {
+        open,
+        marked,
+        land: mut landing,
+        ..
+    } = doors;
     if open.active_id() == Some(id) {
         mark_line(marked, at.file, at.line, None, Owed::BOTH);
         return;
@@ -578,11 +539,7 @@ pub(crate) fn tab_menu(
 ) -> Menu {
     let ProjectStates {
         open,
-        asm_at,
-        src_at,
-        code_at,
-        driven,
-        marks_at,
+        places,
         bookmarks,
         objects,
         ..
@@ -592,18 +549,14 @@ pub(crate) fn tab_menu(
         .child(
             MenuButton::new()
                 .on_press(move |_| match keep {
-                    Tab::Document(id) => {
-                        close_tab(open, asm_at, src_at, code_at, driven, marks_at, id)
-                    }
+                    Tab::Document(id) => close_tab(open, places, id),
                     Tab::Page(page) => close_page(open, page),
                 })
                 .child("Close"),
         )
         .maybe_child(others.then(|| {
             MenuButton::new()
-                .on_press(move |_| {
-                    close_others(open, asm_at, src_at, code_at, driven, marks_at, keep)
-                })
+                .on_press(move |_| close_others(open, places, keep))
                 // "tabs" and not "documents": the bar is what the reader is pointing at,
                 // and a page in it goes the way a document does.
                 .child("Close other tabs")
@@ -647,27 +600,9 @@ pub(crate) fn open_menu(
 /// Built per press, since it closes over the row's path. The states come in as an argument
 /// because this is called from an event handler, where no hook may run.
 pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
-    let ProjectStates {
-        objects,
-        loading,
-        open,
-        asm_at,
-        src_at,
-        code_at,
-        driven,
-        marks_at,
-        visits,
-        ..
-    } = states;
-
     Menu::new().child(
         MenuButton::new()
-            .on_press(move |_| {
-                close_binary(
-                    objects, loading, open, asm_at, src_at, code_at, driven, marks_at, visits,
-                    &path,
-                )
-            })
+            .on_press(move |_| close_binary(states, &path))
             // "file" and not "object": the row may be one object of a file or the archive
             // above 196 of them, and the word has to be true of both.
             .child("Close file"),

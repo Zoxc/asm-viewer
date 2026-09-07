@@ -365,8 +365,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;
-    let docs = use_provide_context(|| OpenDocs(State::create(Docs::default()))).0;
-    let dock = use_provide_context(|| {
+    use_provide_context(|| {
         SidebarDock(State::create(DockArea::column(vec![
             vec![
                 Panel::Objects,
@@ -376,12 +375,15 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
             ],
             vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
         ])))
-    })
-    .0;
-    // Empty: what a restored session puts in it is the bar the reader left, and a session
-    // that saved nothing opens on the placeholder, the pages being one menu away.
-    let strip = use_provide_context(|| OpenTabs(State::create(Strip::default()))).0;
-    let open = Open { strip, docs };
+    });
+    // What is open, the strip and the id table together. Empty: what a restored session
+    // puts in the bar is what the reader left, and a session that saved nothing opens on
+    // the placeholder, the pages being one menu away.
+    let open = use_provide_context(|| Open {
+        strip: State::create(Strip::default()),
+        docs: State::create(Docs::default()),
+    });
+    let (strip, docs) = (open.strip, open.docs);
     let active = use_provide_context(move || {
         Active(Memo::create(move || {
             active_tab(&strip.read(), &docs.read())
@@ -389,7 +391,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     })
     .0;
     // 50.0: what the leading side starts at, before anything is dragged.
-    let split = use_provide_context(|| SplitRatio(State::create(50.0))).0;
+    use_provide_context(|| SplitRatio(State::create(50.0)));
     use_provide_context(|| {
         Splits(State::create(ResizableContext {
             direction: Direction::Horizontal,
@@ -402,30 +404,35 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // 380: what the widest group of the default arrangement needs to name every panel in
     // it, the four across the top being the widest. A group's bar neither elides nor
     // scrolls, so a narrower sidebar would open with the last name clipped.
-    let sidebar = use_provide_context(|| SidebarWidth(State::create(380.0))).0;
+    use_provide_context(|| SidebarWidth(State::create(380.0)));
     use_provide_context(|| {
         SidebarSplits(State::create(ResizableContext {
             direction: Direction::Horizontal,
             ..Default::default()
         }))
     });
-    let asm_at = use_provide_context(|| AsmAt(State::create(Positions::default()))).0;
-    let src_at = use_provide_context(|| SrcAt(State::create(Positions::default()))).0;
-    let code_at = use_provide_context(|| CodeAt(State::create(Positions::default()))).0;
-    let driven = use_provide_context(|| Drives(State::create(Driven::default()))).0;
+    // The window's arrangement, out of the three just provided rather than assembled here.
+    let arranged = use_arrangement();
+    // Everything kept per place, which every closer forgets together.
+    let places = use_provide_context(Places::create);
     use_provide_context(|| Expanded(State::create(HashSet::new())));
     let keyboard = use_provide_context(|| Keyboard(State::create(Keys::default()))).0;
     use_keyboard_asked(keyboard);
     use_provide_context(|| Follows(State::create(HashMap::new())));
-    let visits = use_provide_context(|| Visited(State::create(Visits::default()))).0;
     // The Shortcuts page's box. Provided here for the reason the type gives: the page is
     // unmounted whenever another tab is on screen.
     use_provide_context(|| Shortcuts(State::create(Filter::default())));
     let bookmarks = use_provide_context(|| Bookmarked(State::create(Bookmarks::default()))).0;
-    let landing = use_provide_context(|| Land(State::create(None))).0;
-    let plant = use_provide_context(|| Plant(State::create(None))).0;
     let marked = use_provide_context(|| Marked(State::create(Marks::default()))).0;
-    let marks_at = use_provide_context(|| MarksAt(State::create(Positions::default()))).0;
+    // What a door is given, after the two states it shares with the rest of the app: it
+    // owns only the two halves of a landing.
+    let doors = use_provide_context(move || Doors {
+        open,
+        visits: State::create(Visits::default()),
+        marked,
+        land: State::create(None),
+        plant: State::create(None),
+    });
     let code_rows = use_provide_context(|| CodeRows(State::create(None))).0;
     let shift = use_provide_context(|| Shift(State::create(false))).0;
     let ctrl = use_provide_context(|| Ctrl(State::create(false))).0;
@@ -446,31 +453,23 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // At the root, not in the Project tab: a tab that is not on screen is unmounted, and a build
     // that survives the reader looking away cannot live there.
     let build = use_provide_context(|| Building(State::create(Builds::default()))).0;
-    let states = ProjectStates {
+    // The one place this list is written besides the struct itself: every reader of it
+    // takes the bundle whole (`use_project_states`).
+    let states = use_provide_context(move || ProjectStates {
         proj,
         store,
         objects,
         loading,
         open,
-        asm_at,
-        src_at,
-        code_at,
-        driven,
-        marks_at,
-        visits,
+        places,
+        visits: doors.visits,
         bookmarks,
         searched,
         build,
-        arranged: Arrangement {
-            dock,
-            sidebar,
-            split,
-        },
-    };
+        arranged,
+    });
     use_save_on_change(states);
-    use_land(
-        active, open, marked, landing, plant, driven, marks_at, code_rows,
-    );
+    use_land(doors, places, active, code_rows);
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.
@@ -505,9 +504,21 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     use_reading_of(active, objects, beside, reading, window);
     // The question and not the active document: a source-driven tab's assembly side
     // changes when a line in it is clicked, which changes no document.
-    let asked = Asked { active, driven };
+    let asked = Asked {
+        active,
+        driven: places.driven,
+    };
     use_analysis_with(
-        asked, objects, beside, visits, analysis, located, coded, reading, window, answer,
+        asked,
+        objects,
+        beside,
+        doors.visits,
+        analysis,
+        located,
+        coded,
+        reading,
+        window,
+        answer,
     );
     // After the analysis: the file the Source pane draws is what the analysis says it is.
     use_clear_marks(active, asked, analysis, marked);
@@ -569,7 +580,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         language_work(),
     );
     // What a name followed in the source opens, which the answer above fills in.
-    use_follow(follow, open, visits, marked, landing, plant, driven);
+    use_follow(follow, doors, places);
     use_opened(language, opened, open, proj, jobs.clone());
     use_linking(language, linked, opened, jobs.clone());
     use_hovering(language, hover, jobs);
@@ -606,7 +617,15 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         // before the click that asks about them: `ModifierKeys`.
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
             hover_struck(hover, &e.key);
-            root_key_down(keys, searched, finder, proj, dock, &e.key, e.modifiers)
+            root_key_down(
+                keys,
+                searched,
+                finder,
+                proj,
+                arranged.dock,
+                &e.key,
+                e.modifiers,
+            )
         })
         .on_global_key_up(move |e: Event<KeyboardEventData>| keys.up(&e.key, e.modifiers))
         // Provides the root state `ContextMenu::open_from_event` looks up: opening a menu

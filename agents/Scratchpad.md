@@ -209,7 +209,7 @@ having no bar. There is no `SymbolBar` over it, whose section and toggle are bot
 and two code sections would put the wrong one first. Without it the pane would open at the top of a
 linked Rust program, which is the runtime's code and not the reader's, and the pair the cursor
 lights only reaches stretches that have decoded. It is written as a `Planting` and not as a place
-in `CodeAt`: the listing keeps no place of its own, and an entry there would hold that program's
+in `Places::code_at`: the listing keeps no place of its own, and an entry there would hold that program's
 bytes with nothing that would ever forget them, where a planting is taken once by the pane and put
 back to `None`. `PadAssembly` is keyed by the program, so a rebuild takes it and its listing down
 and builds them against the new one.

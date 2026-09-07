@@ -129,13 +129,9 @@ impl<T: Place> Component for PlaceRow<T> {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         // Consumed in the render and peeked in the handler, where no hook may run.
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
+        let doors = use_doors();
+        let places = use_places();
         let ctrl = use_consume::<Ctrl>().0;
-        let marked = use_consume::<Marked>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
-        let driven = use_consume::<Drives>().0;
 
         let folding = self.folding;
         let row = self.row.clone();
@@ -160,12 +156,8 @@ impl<T: Place> Component for PlaceRow<T> {
                             return;
                         }
                         open_source_place(
-                            open,
-                            visits,
-                            marked,
-                            landing,
-                            plant,
-                            driven,
+                            doors,
+                            places,
                             path,
                             item.line(),
                             item.columns(),

@@ -55,11 +55,6 @@ pub(crate) struct Landing {
     pub(crate) columns: Option<Range<usize>>,
 }
 
-/// The landing asked for, shared through context. `None` almost always: it is set in the
-/// handler that opens a document and spent by the change of document that follows.
-#[derive(Clone, Copy)]
-pub(crate) struct Land(pub(crate) State<Option<Landing>>);
-
 /// An instruction the assembly pane's caret is to be put on once the listing of `tab` is
 /// drawn: the half of a [`Landing`] the change of document cannot answer, since the rows
 /// arrive after the document does -- a symbol's from the worker, an object's code's as
@@ -76,9 +71,33 @@ pub(crate) struct Planting {
     pub(crate) address: u64,
 }
 
-/// The caret still to be planted, shared through context, `None` almost always.
+/// What a door out of one place into another is given, in one `Copy` bundle: where things
+/// are open, the record of visits, the runs the two panes have picked out, and the two
+/// halves of a landing left for the arrival.
+///
+/// Not an incidental grouping. [`documents::land`] is the one path a door takes, and every
+/// door passes it these five -- so a sixth thing a landing needs is a field here and
+/// nothing at a call site. Provided once by `app()` and taken in one [`use_doors`], which
+/// is why a door's handler is the landing it is about and not six lines of preamble.
+///
+/// A bundle does not own its handles: `marked` is the state [`Marked`] hands the panes,
+/// and `open` the [`Open`] [`ProjectStates`] carries.
 #[derive(Clone, Copy)]
-pub(crate) struct Plant(pub(crate) State<Option<Planting>>);
+pub(crate) struct Doors {
+    pub(crate) open: Open,
+    pub(crate) visits: State<Visits>,
+    pub(crate) marked: State<Marks>,
+    /// The landing asked for. `None` almost always: it is set in the handler that opens a
+    /// document and spent by the change of document that follows.
+    pub(crate) land: State<Option<Landing>>,
+    /// The caret still to be planted, `None` almost always.
+    pub(crate) plant: State<Option<Planting>>,
+}
+
+/// What a door needs, as a component sees it.
+pub(crate) fn use_doors() -> Doors {
+    use_consume::<Doors>()
+}
 
 /// Bring the row at `index` of a listing of `length` rows into view, and leave the scroll
 /// alone when it already is.
@@ -309,7 +328,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     // A landing on its way, whichever document it names. Asked through
     // `try_consume_context`, a pane mounted without the landing machinery having none on
     // its way.
-    let landing = try_consume_context::<Land>().map(|land| land.0);
+    let landing = try_consume_context::<Doors>().map(|doors| doors.land);
     // The landing this pane has already gone to, held exactly as long as that landing is
     // on its way. **The pane does not spend the landing** -- `use_land` does, a pass or
     // more later -- so without this the reveal below is made again on every wake, and the

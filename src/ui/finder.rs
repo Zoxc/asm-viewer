@@ -517,8 +517,8 @@ pub(crate) struct FinderOverlay;
 impl Component for FinderOverlay {
     fn render(&self) -> impl IntoElement {
         let finder = use_consume::<Finding>().0;
-        let visits = use_consume::<Visited>().0;
         let states = use_project_states();
+        let visits = states.visits;
         let box_id = use_hook(AccessibilityId::new_unique);
         // The list's own scroll. The arrows move a row the view knows nothing about, so
         // without a controller to follow it the row goes under the panel's edge at the

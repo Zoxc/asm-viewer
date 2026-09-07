@@ -8,7 +8,7 @@ use std::path::Path;
 
 use analysis::Symbol;
 
-use crate::docs::{DocId, Entry};
+use crate::docs::Entry;
 
 /// Where each tab was left: the row that was at the top of its pane.
 ///
@@ -138,16 +138,11 @@ impl Driven {
         self.chosen.remember(tab, symbol);
     }
 
-    /// Forget what every entry of the tab `id` was driven from and what it chose, because
-    /// the tab is no longer open. For the line, consistency and not
-    /// [`Positions::forgetting`]'s reason -- a [`crate::project::Document::Source`] key
-    /// holds no `Arc<Object>`; for the choice, that reason.
-    pub fn forget_tab(&mut self, id: DocId) {
-        self.forgetting(|(open, _)| *open != id);
-    }
-
-    /// Forget every line and choice `keep` answers false for: what a closing binary does
-    /// with the entries it takes off the surviving tabs' trails.
+    /// Forget every line and choice `keep` answers false for: what a closing tab does with
+    /// its own entries and a closing binary with the entries it takes off the surviving
+    /// tabs' trails. For the line, consistency and not [`Positions::forgetting`]'s reason
+    /// -- a [`crate::project::Document::Source`] key holds no `Arc<Object>`; for the
+    /// choice, that reason.
     pub fn forgetting(&mut self, keep: impl Fn(&Entry) -> bool) {
         self.from.forgetting(&keep);
         self.chosen.forgetting(&keep);

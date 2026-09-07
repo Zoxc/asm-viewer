@@ -72,24 +72,37 @@ never runs (`notes/upstream/freya.md`, and the filter panes' Ctrl+F in `agents/S
 
 **State** is a handful of `State`s provided at the root with `use_provide_context` and read with
 `use_consume`: `Objects`; `Active` (the active tab and the `Document` it shows); `Open` (the open
-tabs and the trail behind each); `AsmAt`/`SrcAt` (where each *side* of each place on each of those
-trails was left); `CodeAt` (where each code tab's places were left, as addresses); `Visited`
-(everywhere the reader has been); `Bookmarked` (the project's bookmarks, in their saved shape);
+tabs and the trail behind each); `Bookmarked` (the project's bookmarks, in their saved shape);
 `Proj` (which project all of that belongs to); `Loading` (the files on their way into `Objects`);
-`Marked` (each pane's selected run, and what it owes the other) with `Shift` and `Ctrl`; `MarksAt`
-(what each place on each trail had selected in each pane when it was last shown, put back with the
-place and never saved); `Land` (a line and an instruction to select the moment a document arrives);
-`Plant` (the instruction half of that, left for the listing that draws the document, its rows coming
-after it); `CodeRows` (the section view's rows, which the Source pane beside it reads too);
+`Marked` (each pane's selected run, and what it owes the other) with `Shift` and `Ctrl`;
+`CodeRows` (the section view's rows, which the Source pane beside it reads too);
 `Analysis` (what the worker has to say about the selected symbol); `Sections`/`Window` (what it has
 decoded of the object whose code is on screen, and the stretches the view wants next); `Locations`
 (every symbol the line, or the function around it, last asked about was compiled into);
 `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad); `Talking` (whether a
 language server is running, and what would stop it -- `agents/Lsp.md`); `SplitRatio`/`Splits`
-(how wide a document's leading side is); plus the memos `Symbols` and `Active`. The eleven that a
-project *owns* travel together as a `ProjectStates`, since a project switch closes all of them and
-reopens all of them. `MarksAt` is among them for the closing and not the reopening, being the one
-that is never saved.
+(how wide a document's leading side is); plus the memos `Symbols` and `Active`.
+
+**A context lives with the mechanism that owns it, and so does the bundle that groups it.**
+`src/ui/state.rs` holds only what belongs to no one mechanism -- the objects, the store, the
+project, the window -- and each of the others sits beside the code it is about: `Marked` in
+`marks.rs`, `Doors` in `focus.rs`, the `Pad*` family in `pad.rs`.
+
+**A group the code passes around is a context of its own**, so a state added to it is a field
+and not a parameter threaded through every function of the group. Beside `Open` there are three,
+all `Copy` bundles of handles. `Places` (`state.rs`) is everything kept per place --
+`asm_at`/`src_at` (where each *side* of each place on each trail was left), `code_at` (where
+each code tab's places were left, as addresses), `marks_at` (what each place had selected in
+each pane when it was last shown, put back with the place and never saved) and `driven` -- and
+`Places::forgetting` is the one write every closer ends with, so no closer can forget four of
+the five and leak the `Arc<Object>` a key holds. `Doors` (`focus.rs`) is what a door out of one
+place into another is given: `open`, `visits` (everywhere the reader has been), `marked`, `land`
+(a line and an instruction to select the moment a document arrives) and `plant` (the instruction
+half of that, left for the listing that draws the document, its rows coming after it).
+`ProjectStates` (`state.rs`) is what a project owns, since a project switch closes all of it and
+reopens all of it -- `marks_at` for the closing and not the reopening, being the one part
+`session.toml` never sees. A handle may sit in more than one bundle: `Doors` and `ProjectStates`
+both carry `Open`, and `Doors` carries the runs `Marked` hands the panes.
 
 **The bar says which project is open, and the controls beside the name are not one control**
 (`ProjectChip`, `src/ui/no_project.rs`). A project the reader gave a place needs only to be
@@ -227,7 +240,7 @@ list: `reach` is what a press *outside* the panes means (`Preview`, or `NewTab` 
 
 Under every reach a tab already showing the place is **raised** instead, the one on screen
 preferred where two show it. `NewTab` promotes the temporal one, since what was asked for is a tab
-of this place that stays; `Preview` promotes nothing. Every opening is recorded in `Visited`. **What
+of this place that stays; `Preview` promotes nothing. Every opening is recorded in `Doors::visits`. **What
 promotes** the temporal tab: `NewTab` on the place it shows, a link followed in place inside it (the
 reader is reading in it), or a double press on its header. `navigate` never does, walking a trail
 not being going somewhere new in it. `raise` is the move between places already open (the strip's
@@ -515,7 +528,7 @@ handle (`following`, `agents/Panes.md`). `DocumentBody` is the only thing that k
 panes themselves are handed no side and read none, so the swap is the order of two `.panel(..)`
 calls and nothing else.
 Everything the two panes share is keyed by pane *identity* and not by position (`Pane`, `Owed`,
-`Marks`, `AsmAt`/`SrcAt`), which is why swapping them moves no selected run, no pair, no owed scroll
+`Marks`, `Places`), which is why swapping them moves no selected run, no pair, no owed scroll
 and no kept row. The panes are two different component types, so a swap unmounts and remounts both;
 their rows come back where `use_kept_position` puts them.
 
@@ -554,7 +567,7 @@ saved documents and `SavedDocument` needs no answer for it. What a scratchpad *b
 
 **Each place on each tab's trail remembers where each of its sides was left.** A pane has one
 `ScrollController` and shows one tab at a time, so left alone it hands the tab arriving whatever
-offset the one leaving had. `AsmAt`/`SrcAt` are two root `Positions` maps beside `Open`, **both
+offset the one leaving had. `Places::asm_at`/`src_at` are two `Positions` maps, **both
 keyed by an `Entry`**, the tab's `DocId` and a `Stop` on its trail -- a document, plus where in it
 the tab was: the address for an object's code, the line for a source file, and neither for a
 document opened at no place in particular. So an entry means "this side of this place on this tab"
@@ -613,26 +626,27 @@ meant for the other pane -- leaves the move held rather than made, since that pa
 this pane a run. Nothing strands the pane on the offset of the tab it left: a landing is only ever
 left by a move that changes the place, and that arrival is what spends it.
 `close_tab`/`close_others`/`close_binary` forget every position of a tab's entries with the tab, by
-id, and `close_binary` forgets those of the entries it takes off the surviving trails too. That is
-not tidiness: an `Assembly` entry holds the `Arc<Object>` it points into, and the hook is handed
+id, and `close_binary` forgets those of the entries it takes off the surviving trails too. Each ends
+in one `Places::forgetting`, which is why none of them can forget four of the five maps: that is not
+tidiness, since an `Assembly` entry holds the `Arc<Object>` it points into, and the hook is handed
 `Docs::contains` precisely so that the run *after* a close, still holding the place that has gone,
-cannot put it straight back. The closers forget the driven lines with them, which *is* tidiness: a
+cannot put it straight back. The driven lines go with them, which *is* tidiness: a
 `Source` key holds no object, so nothing is being held up. **Each place remembers what was selected
-in each of its panes** the same way: `MarksAt` is a fourth map keyed by the same `Entry`, holding
+in each of its panes** the same way: `Places::marks_at` is a map keyed by the same `Entry`, holding
 both panes' runs as they were left (the caret and the selection, no gesture, nothing owed) and, for
 an object's code, the place each row of the assembly run stood for. `use_land` (`agents/Panes.md`)
 saves under the entry being left and restores for the one arriving, a landing winning over what was
-kept and a kept run over a source-driven tab's driven line. It is forgotten in the three closers
-with the other three and by `Docs::contains` for the same reason, and it is the one of the four that
-`session.toml` never sees.
+kept and a kept run over a source-driven tab's driven line. It is forgotten with the rest of
+`Places` and by `Docs::contains` for the same reason, and it is the one of them that `session.toml`
+never sees.
 
 **A code tab's place is an address, in the same map type.** The listing of an object's whole code is
 counted afresh with every answer that lands (`agents/Panes.md`), so a row there means nothing for
-long. `CodeAt` is a `Positions<Entry, Spot>`, the map generalised over its value, `row`'s clamp
-being the one rows-only answer. It holds the placed address at the top of the pane and how many rows
-past that address's own row it was, since the rule over a stretch, the blank under it, its header,
-its labels and its first instruction all sit at one address. It is forgotten in the three closers with the other two and travels in
-`ProjectStates` as they do. `use_kept_place` in `src/ui/section_view.rs` is its `use_kept_position`,
+long. `Places::code_at` is a `Positions<Entry, Spot>`, the map generalised over its value, `row`'s
+clamp being the one rows-only answer. It holds the placed address at the top of the pane and how
+many rows past that address's own row it was, since the rule over a stretch, the blank under it, its
+header, its labels and its first instruction all sit at one address. It is forgotten with the rest
+of `Places`. `use_kept_place` in `src/ui/section_view.rs` is its `use_kept_position`,
 and the differences are the point. The map is **read** and not peeked, so a place written from
 outside while the tab is on top is answered (the run that wakes on its own write finds nothing moved
 and writes nothing). The rows the place is re-applied against are produced in the same run, so a

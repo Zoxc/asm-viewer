@@ -215,13 +215,17 @@ command.
   history buttons, and `app`.
 - `src/ui/metrics.rs` — every measurement no component owns, and the fonts they follow.
 - `src/ui/palette.rs` — every colour, the theme it is resolved from, and the compositing rules.
-- `src/ui/state.rs` — the contexts provided once at the root and read with `use_consume`.
+- `src/ui/state.rs` — what the root provides and no one mechanism owns, and the bundles the
+  whole app is passed around in. A context lives with the mechanism it belongs to (`Marked` in
+  `marks.rs`, `Doors` in `focus.rs`, the `Pad*` family in `pad.rs`), and so does the bundle that
+  groups it; the rest is here.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
 - `src/ui/finder.rs` — the file finder: the box Ctrl+P opens over the app, the files of the
   project's directory under it, and the one worker that walks them and picks them out. The
   walked files never reach the UI thread; the rows a query picked out are what cross.
-- `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes, and
-  where each side of a tab was left.
+- `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes,
+  `Doors` (what every door out of one place into another is given), and where each side of a
+  tab was left.
 - `src/ui/follow.rs` — following a name in the source to what it names: the question put to
   the language server, and the place its answer opens.
 - `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what

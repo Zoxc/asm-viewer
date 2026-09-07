@@ -148,15 +148,8 @@ pub(crate) fn follow_name(
 /// Open what the answer named. Called once, at the root, beside `use_land`.
 ///
 /// The arrival itself is [`open_source_place`], which a row of the references panel makes too.
-pub(crate) fn use_follow(
-    mut follow: State<Follow>,
-    open: Open,
-    visits: State<Visits>,
-    marked: State<Marks>,
-    landing: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
-    driven: State<Driven>,
-) {
+pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors, places: Places) {
+    let open = doors.open;
     use_side_effect(move || {
         // Reading is what wakes this; the write below clears what it read, so the run
         // it wakes finds nothing and stops.
@@ -186,18 +179,7 @@ pub(crate) fn use_follow(
         // definition and not at the head of its line, the reader being taken there to
         // read it and not to copy it.
         let caret = caret_at(&place.file, place.line, place.columns.start);
-        open_source_place(
-            open,
-            visits,
-            marked,
-            landing,
-            plant,
-            driven,
-            &place.file,
-            place.line,
-            Some(caret),
-            reach,
-        );
+        open_source_place(doors, places, &place.file, place.line, Some(caret), reach);
     });
 }
 
@@ -236,25 +218,18 @@ fn caret_at(file: &Path, line: u32, column: u32) -> Range<usize> {
 /// and the companion a source row's menu offers. A path with no line to land on -- a Files
 /// row, a finder row -- is [`open_source_file`]'s instead.
 pub(crate) fn open_source_place(
-    open: Open,
-    visits: State<Visits>,
-    marked: State<Marks>,
-    landing: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
-    mut driven: State<Driven>,
+    doors: Doors,
+    places: Places,
     path: &Path,
     line: u32,
     columns: Option<Range<usize>>,
     reach: Reach,
 ) {
+    let open = doors.open;
     let file = spelling(open, path);
     let document = Document::Source(file.clone());
     let id = land(
-        open,
-        visits,
-        marked,
-        landing,
-        plant,
+        doors,
         Landing {
             tab: document.clone(),
             at: Some(LinePos {
@@ -273,6 +248,7 @@ pub(crate) fn open_source_place(
     };
     // Bound to a `let` of its own, so the table's guard is gone before the write.
     let entry = place_at(&open.docs.peek(), id, &document);
+    let mut driven = places.driven;
     driven.write().remember((id, entry), line);
 }
 

@@ -140,12 +140,14 @@ fn closing_a_tab_forgets_what_its_entries_were_driven_from() {
     assert_eq!(driven.line(&source("main.rs")), Some(42));
     assert_eq!(driven.line(&source_on(1, "main.rs")), Some(43));
 
-    driven.forget_tab(source("main.rs").0);
+    let id = source("main.rs").0;
+    driven.forgetting(|(open, _)| *open != id);
     assert_eq!(driven.line(&source("main.rs")), None);
     assert_eq!(driven.line(&source("lib.rs")), None);
     assert_eq!(driven.line(&source_on(1, "main.rs")), Some(43));
     // And forgetting a tab that was never driven is not an error.
-    driven.forget_tab(source_on(2, "other.rs").0);
+    let other = source_on(2, "other.rs").0;
+    driven.forgetting(|(open, _)| *open != other);
     assert_eq!(driven.line(&source_on(1, "main.rs")), Some(43));
 }
 
@@ -213,7 +215,8 @@ fn closing_a_tab_forgets_its_choice_and_a_closing_binary_releases_the_choices_in
     driven.remember(other.clone(), 7);
     driven.choose(other.clone(), symbol("other.o", "g"));
 
-    driven.forget_tab(source("main.rs").0);
+    let id = source("main.rs").0;
+    driven.forgetting(|(open, _)| *open != id);
     assert!(driven.choice(&source("main.rs")).is_none());
     assert!(driven.choice(&other).is_some());
 

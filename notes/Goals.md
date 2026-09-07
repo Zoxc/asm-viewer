@@ -200,7 +200,7 @@ leaves this list when it is. That is a move made on request, like everything els
   at that address, in the object whose code is on screen. Today the only way to a place in the
   section view is a label, a symbol's "Show in unified view" or the kept place a tab came back
   to, so an address read off a crash, a linker map or a debugger has no door. The place the
-  view keeps is already an address (`CodeAt`, `Spot`), so landing is the write that hook
+  view keeps is already an address (`Places::code_at`, `Spot`), so landing is the write that hook
   answers; what is undecided is where the address is typed -- a box in the bar over the pane,
   or a Ctrl+G dialog -- whether it is the placed address the listing draws or the object's
   own, and what happens to one that falls between rows or outside every section.

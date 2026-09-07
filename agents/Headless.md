@@ -391,11 +391,12 @@ The shape every test in `ui.rs` follows:
    test is whether its rows survive the list being shortened. Mount the pane only when the pane is
    the question.
 2. **Contexts through the setup closure**, returned as a tuple the body keeps. When the set is the
-   app's own, use the `project_states!` macro: it provides all ten of `ProjectStates` in `app()`'s
-   order, including the `Active` memo derived from the dock and the docs, so a test drives what the
-   app drives. It is a macro and not a function because the runner's type is
-   `freya_core::integration::Runner`, which freya's prelude does not re-export and this crate does
-   not depend on by name.
+   app's own, use the `project_states!` macro: it provides everything `ProjectStates` holds in
+   `app()`'s order, including the `Active` memo derived from the strip and the docs, so a test
+   drives what the app drives. Its sibling `project_wiring!` hands back the `Doors` beside them,
+   for a test that writes or reads the runs or either half of a landing. They are macros and not
+   functions because the runner's type is `freya_core::integration::Runner`, which freya's prelude
+   does not re-export and this crate does not depend on by name.
 3. **Substitute the worker, not the work.** `Study`, `Working` and `Feed` are `Arc<dyn Fn>` or a
    channel handed in through a context, so the real `use_analysis_with` / `use_scratchpad_with` /
    `take_load` machinery runs against an answer the test controls. That is what turns "the stale

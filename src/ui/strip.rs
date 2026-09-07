@@ -165,11 +165,7 @@ impl Component for TabClose {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let open = use_open();
-        let asm_at = use_consume::<AsmAt>().0;
-        let src_at = use_consume::<SrcAt>().0;
-        let code_at = use_consume::<CodeAt>().0;
-        let driven = use_consume::<Drives>().0;
-        let marks_at = use_consume::<MarksAt>().0;
+        let places = use_places();
         let tab = self.tab;
 
         rect()
@@ -194,9 +190,7 @@ impl Component for TabClose {
             .on_press(move |e: Event<PressEventData>| {
                 e.stop_propagation();
                 match tab {
-                    Tab::Document(id) => {
-                        close_tab(open, asm_at, src_at, code_at, driven, marks_at, id)
-                    }
+                    Tab::Document(id) => close_tab(open, places, id),
                     Tab::Page(page) => close_page(open, page),
                 }
             })
@@ -860,7 +854,7 @@ pub(crate) struct TabBar;
 
 impl Component for TabBar {
     fn render(&self) -> impl IntoElement {
-        let strip = use_consume::<OpenTabs>().0;
+        let strip = use_open().strip;
         // Where a drop would land, and whether anything is being dragged at all: the
         // second is what makes the first mean something, a zone the pointer left last time
         // never having been told the drag ended (`DragZone` clears the payload itself).
@@ -888,7 +882,7 @@ impl Component for TabBar {
 
         // The table read once, here, for the copies that follow the cursor: a hook may not
         // run in the loop that builds the chips.
-        let docs = use_consume::<OpenDocs>().0;
+        let docs = use_open().docs;
         let chips: Vec<Element> = tabs
             .iter()
             .enumerate()
@@ -1231,7 +1225,7 @@ pub(crate) struct ContentArea;
 
 impl Component for ContentArea {
     fn render(&self) -> impl IntoElement {
-        let strip = use_consume::<OpenTabs>().0;
+        let strip = use_open().strip;
         // Only what is on screen, which is what this draws: the bar reads the rest of the
         // strip for itself, so a tab opening or moving does not rebuild the body.
         let active = strip.read().active();

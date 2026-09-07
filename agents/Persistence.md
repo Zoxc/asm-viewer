@@ -293,7 +293,7 @@ of its sides were left at**: an entry is a `SavedEntry` (`asm_row` + `src_row` +
 trail.
 `asm_address` is where an object's **code** tab was left, as a placed address, and is absent for
 every other kind: that listing's rows are counted afresh as it is decoded, so a row there is no
-place to come back to and an address is (`agents/UI.md`, `CodeAt`). It is a claim about a layout, so
+place to come back to and an address is (`agents/UI.md`, `Places::code_at`). It is a claim about a layout, so
 a rebuilt binary takes it with the rows. How many rows past the address the tab was is not saved, a
 label being a fine place to come back to. The rows travel with their place because `resolve_tabs`
 drops the places that no longer resolve, which would shift every later row of a parallel array onto

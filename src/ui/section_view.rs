@@ -25,13 +25,6 @@ pub(crate) const BUFFER: f32 = 3.0;
 /// view asks again, so this bounds a message and not the work.
 pub(crate) const WINDOW: usize = 64;
 
-/// Where each open code tab was left: the placed address at the top of its pane, and how
-/// many rows past that address's row. At the root for the reason [`AsmAt`] is, and an
-/// address rather than a row because the rows of a listing being decoded are counted
-/// afresh with every answer.
-#[derive(Clone, Copy)]
-pub(crate) struct CodeAt(pub(crate) State<Positions<Entry, Spot>>);
-
 /// The rows and the reading they were counted from, **together**: the rows are rebuilt by
 /// an effect a pass after an answer lands, so for that one pass the reading the pane can
 /// read is newer than the rows on screen -- and a stretch the answer let go of, still
@@ -346,8 +339,7 @@ impl KeyExt for TextRow {
 impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
         let ctrl = use_consume::<Ctrl>().0;
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
+        let doors = use_doors();
         let weight = if self.bold {
             FontWeight::BOLD
         } else {
@@ -390,8 +382,8 @@ impl Component for TextRow {
                 // A tab of its own, as Ctrl opens one everywhere.
                 follow: Rc::new(move |_| {
                     open_document(
-                        open,
-                        visits,
+                        doors.open,
+                        doors.visits,
                         Document::Assembly(Selection::Symbol(symbol.clone())),
                         Reach::NewTab,
                     );
@@ -523,8 +515,8 @@ enum RowKey {
 /// Where a listing of an object's code keeps its place, its runs and its caret -- and
 /// whether that place is one anything is filed under at all.
 ///
-/// **A tab's is an entry on its trail**, and `CodeAt` and `MarksAt` are forgotten with the
-/// tab by the three closers. A listing that is **no tab** has no `DocId` to be filed under,
+/// **A tab's is an entry on its trail**, and [`Places`] is forgotten with the tab by the
+/// three closers. A listing that is **no tab** has no `DocId` to be filed under,
 /// and an entry under a made-up one would hold the `Arc<Object>` its document points into
 /// with nothing that would ever forget it -- so it names an entry nothing is ever written
 /// under, and what keeps the reader's place across a recount is the place derived from the
@@ -559,10 +551,11 @@ impl Component for SectionList {
         let marked = use_consume::<Marked>().0;
         let chars = chars_of(marked, Pane::Assembly);
         let pair = pair_of(marked, Pane::Assembly);
-        let docs = use_consume::<OpenDocs>().0;
-        let code_at = use_consume::<CodeAt>().0;
-        let marks_at = use_consume::<MarksAt>().0;
-        let plant = use_consume::<Plant>().0;
+        // The two bundles the place-keeping hook below is given, and the id table this
+        // listing's entry is read out of.
+        let doors = use_doors();
+        let places = use_places();
+        let docs = doors.open.docs;
         // The listing these rows are of, held under the object's identity and not the
         // rows': `Built` is made afresh as every stretch lands, and the listing is the
         // same one.
@@ -613,7 +606,8 @@ impl Component for SectionList {
             Placing::Pad => (DocId::unfiled(), Stop::whole(document.clone())),
         };
         use_kept_place(
-            code_at,
+            doors,
+            places,
             move |(tab, stop): &Entry| match place {
                 Placing::Tab(_) => docs.peek().contains(*tab, stop),
                 Placing::Pad => false,
@@ -640,9 +634,6 @@ impl Component for SectionList {
                 true
             },
             reading_state,
-            marked,
-            marks_at,
-            plant,
             rows,
             controller,
             &entry,
@@ -982,8 +973,8 @@ impl At {
     }
 }
 
-/// Keep `controller` pointed at the place `tab` was left at, and keep [`CodeAt`] told
-/// where it is now -- and produce the rows the place is kept against.
+/// Keep `controller` pointed at the place `tab` was left at, and keep [`Places::code_at`]
+/// told where it is now -- and produce the rows the place is kept against.
 ///
 /// `use_kept_position`'s shape with an address for a row, since the rows here are counted
 /// afresh with every answer: what is written down is the placed address at the top of the
@@ -1001,18 +992,18 @@ impl At {
 /// stage is a function over the [`Step`] they share -- what one stage tells the next is a
 /// field of it -- and the rule a stage keeps is written on the stage.
 fn use_kept_place(
-    places: State<Positions<Entry, Spot>>,
+    doors: Doors,
+    places: Places,
     is_open: impl Fn(&Entry) -> bool + 'static,
     mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
     reading: State<Reading>,
-    marked: State<Marks>,
-    marks_at: State<Positions<Entry, Kept>>,
-    plant: State<Option<Planting>>,
     mut rows: State<Option<Arc<Built>>>,
     mut controller: ScrollController,
     tab: &Entry,
     generation: Option<u64>,
 ) {
+    let (marked, plant) = (doors.marked, doors.plant);
+    let (code_at, marks_at) = (places.code_at, places.marks_at);
     let held = use_hook(|| Rc::new(RefCell::new(Held::default())));
 
     use_side_effect_with_deps(
@@ -1054,7 +1045,7 @@ fn use_kept_place(
             name_run(&built, marked);
             keep_spots(&step, &built, planted, marked, marks_at, &is_open);
 
-            let at = At::of(&step, &built, places, state.known, top, height);
+            let at = At::of(&step, &built, code_at, state.known, top, height);
             state.known = at.known;
 
             // A move made and not seen arrive: issued again until a run finds the view
@@ -1073,7 +1064,7 @@ fn use_kept_place(
                 }
             }
 
-            let target = target_of(&state, &step, &at, places, &is_open);
+            let target = target_of(&state, &step, &at, code_at, &is_open);
 
             if step.switching {
                 state.tab = Some(tab.clone());
@@ -1347,14 +1338,9 @@ fn target_of(
 /// exactly this. The line and the instruction go through `land`, which knows whether
 /// the tab is on top; the caret is planted by the pane once it has rows, on the row at
 /// or below the address, and moved onto the instruction itself once its stretch decodes.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn show_in_code(
-    open: Open,
-    visits: State<Visits>,
-    marked: State<Marks>,
-    landing: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
-    mut places: State<Positions<Entry, Spot>>,
+    doors: Doors,
+    places: Places,
     object: Arc<Object>,
     address: u64,
     at: Option<LinePos>,
@@ -1367,11 +1353,7 @@ pub(crate) fn show_in_code(
     // landed, and the place left keeps its own rows and runs, being an entry of its own.
     let stop = Stop::at(code.clone(), address);
     let id = land(
-        open,
-        visits,
-        marked,
-        landing,
-        plant,
+        doors,
         Landing {
             tab: code.clone(),
             at,
@@ -1381,7 +1363,8 @@ pub(crate) fn show_in_code(
         reach,
     );
     if let Some(id) = id {
-        places
+        let mut code_at = places.code_at;
+        code_at
             .write()
             .remember((id, stop), Spot { address, rows: 0 });
     }
@@ -1391,23 +1374,10 @@ pub(crate) fn show_in_code(
 /// row's instruction -- `address` is the symbol's own, the space its listing draws -- and
 /// landing on the line the row was compiled from where it has one: `show_in_code`'s door
 /// the other way, and a tab of its own likewise.
-pub(crate) fn open_as_symbol(
-    open: Open,
-    visits: State<Visits>,
-    marked: State<Marks>,
-    landing: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
-    symbol: Symbol,
-    address: u64,
-    at: Option<LinePos>,
-) {
+pub(crate) fn open_as_symbol(doors: Doors, symbol: Symbol, address: u64, at: Option<LinePos>) {
     let tab = Document::Assembly(Selection::Symbol(symbol));
     land(
-        open,
-        visits,
-        marked,
-        landing,
-        plant,
+        doors,
         Landing {
             tab,
             at,

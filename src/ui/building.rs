@@ -296,18 +296,7 @@ fn finished(
     }
 
     for path in &reopening {
-        close_binary(
-            states.objects,
-            states.loading,
-            states.open,
-            states.asm_at,
-            states.src_at,
-            states.code_at,
-            states.driven,
-            states.marks_at,
-            states.visits,
-            path,
-        );
+        close_binary(states, path);
     }
 
     // One load for all of them, rather than one spawn and one load each.

@@ -168,12 +168,15 @@ pub(crate) fn source_line(source: &SourceText, index: usize) -> Line {
 
 impl Component for SourceRow {
     fn render(&self) -> impl IntoElement {
-        let mut driven = use_consume::<Drives>().0;
+        let places = use_places();
+        let mut driven = places.driven;
         // Consumed here, in the render, because the menu handler may not run a hook.
         let located = use_consume::<Locations>().0;
-        let docs = use_consume::<OpenDocs>().0;
-        // Which tab a press on a link is made in: where its answer opens.
-        let open = use_open();
+        // Which tab a press on a link is made in: where its answer opens, and the two
+        // halves of the landing a companion's door leaves.
+        let doors = use_doors();
+        let open = doors.open;
+        let docs = open.docs;
         // What a press on a link needs, all three or none: a pane mounted without them
         // draws its text and no links (`links_in`).
         let ctrl = use_consume::<Ctrl>().0;
@@ -185,12 +188,6 @@ impl Component for SourceRow {
         // mounted without it draws its text and says nothing about a name.
         let hover = try_consume_context::<Hovering>().map(|hovering| hovering.0);
         let dock = use_consume::<SidebarDock>().0;
-        // What the door out of a companion lands through, consumed here for the same
-        // reason the rest are.
-        let visits = use_consume::<Visited>().0;
-        let marked = use_consume::<Marked>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
         let index = self.index;
 
         // The position this row is, and so the one its menu asks about. Lines are
@@ -418,12 +415,8 @@ impl Component for SourceRow {
                     MenuButton::new()
                         .on_press(move |_| {
                             open_source_place(
-                                open,
-                                visits,
-                                marked,
-                                landing,
-                                plant,
-                                driven,
+                                doors,
+                                places,
                                 Path::new(&*file),
                                 line,
                                 None,
@@ -568,13 +561,13 @@ impl Component for SourceList {
 
         let length = self.source.0.lines;
         // The tab's entry and not the file: see `SourceList::document`.
-        let docs = use_consume::<OpenDocs>().0;
+        let docs = use_open().docs;
         // The place the tab is at: two lines of one file reached along one trail are two
         // entries, each with its own scroll. Read and not peeked, so a step between them
         // re-renders this pane and the hook sees the switch.
         let entry = (self.tab, place_at(&docs.read(), self.tab, &self.document));
         use_kept_position(
-            use_consume::<SrcAt>().0,
+            use_places().src_at,
             move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),
             {
                 let file = self.file.clone();
@@ -1067,8 +1060,8 @@ impl Component for SourcePane {
     fn render(&self) -> impl IntoElement {
         // Whether a sweep is under way, for the header not to answer the pointer during one.
         let sweeping = sweeping(use_consume::<Marked>().0);
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
+        let doors = use_doors();
+        let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         // Reading it is what subscribes this tab to the analysis, so the pane fills in when
         // a newly selected symbol's line info is worked out.

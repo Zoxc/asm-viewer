@@ -173,11 +173,7 @@ impl Component for ArtifactRow {
 /// a hook may only be called while a component renders, and this is called once per
 /// diagnostic.
 fn source_place(
-    open: Open,
-    visits: State<Visits>,
-    marked: State<Marks>,
-    landing: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
+    doors: Doors,
     ctrl: State<bool>,
     directory: Option<&Path>,
     diagnostic: &Diagnostic,
@@ -197,11 +193,7 @@ fn source_place(
                 text,
                 press: EventHandler::new(move |_| {
                     land(
-                        open,
-                        visits,
-                        marked,
-                        landing,
-                        plant,
+                        doors,
                         Landing {
                             tab: Document::Source(file.clone()),
                             at: Some(LinePos {
@@ -411,11 +403,7 @@ impl Component for CargoSection {
         // What a diagnostic's place is pressed to reach. Consumed here and handed to
         // `source_place`: a hook may only be called while a component renders, and there
         // is one place per diagnostic.
-        let open_tabs = use_open();
-        let visits = use_consume::<Visited>().0;
-        let marked = use_consume::<Marked>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
+        let doors = use_doors();
         let ctrl = use_consume::<Ctrl>().0;
         let open = proj.read().clone();
         let directory = workspace(&open);
@@ -455,16 +443,7 @@ impl Component for CargoSection {
             .diagnostics()
             .iter()
             .map(|diagnostic| {
-                let place = source_place(
-                    open_tabs,
-                    visits,
-                    marked,
-                    landing,
-                    plant,
-                    ctrl,
-                    directory.as_deref(),
-                    diagnostic,
-                );
+                let place = source_place(doors, ctrl, directory.as_deref(), diagnostic);
                 diagnostic_block(diagnostic, place)
             })
             .collect();

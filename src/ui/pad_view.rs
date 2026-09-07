@@ -839,7 +839,7 @@ impl Component for PadAssembly {
         use_code_beside(beside, &self.object);
 
         // Open on the pad's own code rather than at the top, which for a linked Rust
-        // program is the runtime's. A `Planting` and not a place in `CodeAt`: the listing
+        // program is the runtime's. A `Planting` and not a place in `Places::code_at`: the listing
         // keeps no place of its own, and an entry there would hold this program's bytes
         // with nothing that would ever forget them -- where a planting is taken once by
         // the pane below and put back to `None`. Written from the render, which is the
@@ -851,7 +851,7 @@ impl Component for PadAssembly {
         let marked = use_consume::<Marked>().0;
         use_driving_cursor(text, marked, self.pad.clone(), self.file.clone());
 
-        let mut plant = use_consume::<Plant>().0;
+        let mut plant = use_doors().plant;
         let opening = self.opening.map(|address| Planting {
             tab: Document::Code(self.object.clone()),
             address,

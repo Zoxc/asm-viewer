@@ -65,12 +65,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         // is the record that writes.
         loading,
         open,
-        asm_at,
-        src_at,
-        code_at,
-        driven,
-        // What each place had picked out is a view of its tab, and not saved.
-        marks_at: _,
+        places,
         visits,
         bookmarks,
         // A search is a view of the project's files, not part of the session.
@@ -120,10 +115,12 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                 Session::from_state(
                     &objects,
                     &tabs,
-                    &asm_at.read(),
-                    &src_at.read(),
-                    &code_at.read(),
-                    &driven.read(),
+                    // What each place had picked out (`places.marks_at`) is a view of its
+                    // tab, and not saved.
+                    &places.asm_at.read(),
+                    &places.src_at.read(),
+                    &places.code_at.read(),
+                    &places.driven.read(),
                     shown,
                     &visits.read(),
                     &build.read().previous,
@@ -236,13 +233,12 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         objects,
         loading,
         open,
-        mut asm_at,
-        mut src_at,
-        mut code_at,
-        mut driven,
+        places,
         visits,
         ..
     } = states;
+    let (mut asm_at, mut src_at) = (places.asm_at, places.src_at);
+    let (mut code_at, mut driven) = (places.code_at, places.driven);
 
     // The pages, at the places they had in the bar, and the one that was on screen.
     // Before the two returns below, both of which are about binaries.
@@ -369,11 +365,7 @@ pub(crate) fn clear_project(states: ProjectStates) {
         objects,
         mut loading,
         open,
-        asm_at,
-        src_at,
-        code_at,
-        driven,
-        marks_at,
+        places,
         visits,
         mut searched,
         ..
@@ -387,14 +379,12 @@ pub(crate) fn clear_project(states: ProjectStates) {
     // `close_binary` writes the very list being walked.
     let binaries = project::binaries(&objects.peek());
     for path in binaries {
-        close_binary(
-            objects, loading, open, asm_at, src_at, code_at, driven, marks_at, visits, &path,
-        );
+        close_binary(states, &path);
     }
 
     let remaining = open.ids();
     for id in remaining {
-        close_tab(open, asm_at, src_at, code_at, driven, marks_at, id);
+        close_tab(open, places, id);
     }
 
     // The pages go with the documents: which of them is open is this project's session,

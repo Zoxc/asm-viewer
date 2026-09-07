@@ -237,8 +237,8 @@ impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
+        let doors = use_doors();
+        let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         // Consumed, never read: 115k rows subscribed to the bookmarks would re-render the
         // whole list on every bookmark made.
@@ -307,10 +307,10 @@ impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        let open = use_open();
+        let doors = use_doors();
         // Consuming does not subscribe -- only reading would, and this row only records
         // into it.
-        let visits = use_consume::<Visited>().0;
+        let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
@@ -549,7 +549,7 @@ pub(crate) struct HistoryPanel;
 
 impl Component for HistoryPanel {
     fn render(&self) -> impl IntoElement {
-        let visits = use_consume::<Visited>().0;
+        let visits = use_project_states().visits;
         // The place the tab on screen shows is the row marked, the way the Symbols list
         // marks its symbol: the record itself has no cursor, the tabs having theirs.
         let current = use_consume::<Active>()

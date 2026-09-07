@@ -649,13 +649,10 @@ impl Component for LocationRow {
         // The two texts a row draws, each measured: the symbol's name and the object it
         // is in.
         let (named, about) = (use_fitted(), use_fitted());
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
+        let doors = use_doors();
+        let open = doors.open;
         let ctrl = use_consume::<Ctrl>().0;
-        let marked = use_consume::<Marked>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
-        let driven = use_consume::<Drives>().0;
+        let driven = use_places().driven;
         let located = use_consume::<Locations>().0.peek().clone();
         let at = located.found.as_ref().map(|found| found.of.at.clone());
         let subject = located.subject.clone();
@@ -673,7 +670,7 @@ impl Component for LocationRow {
                     // The line is the answer's own, peeked when the row was built: a row
                     // is a row of one answer and cannot outlive it.
                     let Some(at) = at.clone() else {
-                        open_document(open, visits, symbol_tab, reach(ctrl));
+                        open_document(open, doors.visits, symbol_tab, reach(ctrl));
                         return;
                     };
                     // Asked from a source-driven tab that is still open and still on the
@@ -699,17 +696,13 @@ impl Component for LocationRow {
                                 driven.remember(entry.clone(), at.line);
                                 driven.choose(entry, symbol.clone());
                             }
-                            land_on(open, marked, landing, id, at);
+                            land_on(doors, id, at);
                         }
                         None => {
                             // A line and no instruction: the row names a place in a
                             // file, and the assembly pane's caret is the pair's.
                             land(
-                                open,
-                                visits,
-                                marked,
-                                landing,
-                                plant,
+                                doors,
                                 Landing {
                                     tab: symbol_tab,
                                     at: Some(at),

@@ -31,10 +31,10 @@ impl Component for BookmarkRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        let open = use_open();
+        let doors = use_doors();
         // Consumed and not read: a row hands the list an index back and draws nothing of
         // it that the tab has not already handed it.
-        let visits = use_consume::<Visited>().0;
+        let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let index = self.index;
