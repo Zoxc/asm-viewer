@@ -157,7 +157,16 @@ fn nothing_typed_and_a_broken_pattern_are_not_questions() {
     assert!(!query("", false).is_askable());
     assert!(!query("(", true).is_askable());
     assert!(query("needle", false).is_askable());
+
+    // Asked anyway, each ends having found nothing: an empty pattern is not one that
+    // matches every line, and a pattern that will not build is not searched for.
     assert!(found(&root, "").is_empty());
+    let broken = Filter {
+        pattern: "(".to_owned(),
+        regex: true,
+        ..Filter::default()
+    };
+    assert!(hits(&root, broken).is_empty());
 }
 
 /// The three toggles mean what they mean in a filter bar, the expression being the same

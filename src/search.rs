@@ -129,8 +129,12 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
     }
 }
 
-/// The matcher a filter compiles to, or [`None`] where there is nothing to search for:
-/// nothing typed, or a pattern that will not compile, which the box has already said.
+/// The matcher a filter compiles to, or [`None`] where there is nothing to search for.
+///
+/// Nothing typed is no search and not an empty one, [`Matcher::Everything`]'s own rule:
+/// an empty pattern handed to `grep-regex` matches every line of every file. A pattern the
+/// builder refuses is no search either; what is wrong with it has already been said under
+/// the box ([`SearchQuery::is_askable`]).
 ///
 /// `word` and `fixed_strings` are deliberately left off the builder: the expression comes
 /// from [`Filter::expression`] with the escaping and the `\b(?:…)\b` already in it, so that
@@ -138,7 +142,7 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
 /// than `\b` on purpose -- its docs have `-2` matching inside `foo -2 bar` -- and one
 /// toggle must not mean two things in two boxes.
 fn compile(filter: &Filter) -> Option<RegexMatcher> {
-    if !matches!(filter.matcher(), Matcher::Pattern(_)) {
+    if filter.pattern.is_empty() {
         return None;
     }
     RegexMatcherBuilder::new()
