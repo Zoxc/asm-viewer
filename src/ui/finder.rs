@@ -231,19 +231,19 @@ impl Held {
 
     /// The rows the box picked out, best first.
     ///
-    /// A query is asked of every walked path, which is one pass over a string per file
-    /// and no allocation for the paths that do not match. An empty box picks out nothing
-    /// here: what it lists is the files visited most recently, which is the UI's own to
-    /// work out and cheap enough to be.
+    /// The box is prepared once, as a [`fuzzy::Query`], and asked of every walked path:
+    /// a pass over the path and one small vector for where its characters fell, per file.
+    /// An empty box picks out nothing here: what it lists is the files visited most
+    /// recently, which is the UI's own to work out and cheap enough to be.
     fn answer(&self) -> Answered {
         let typed = self.query.trim();
         let mut hits: Vec<(fuzzy::Score, Row)> = Vec::new();
-        if !typed.is_empty() {
+        if let Some(query) = fuzzy::Query::new(typed) {
             hits = self
                 .files
                 .iter()
                 .filter_map(|file| {
-                    let hit = fuzzy::find(typed, &file.shown, file.name_at)?;
+                    let hit = query.find(&file.shown, file.name_at)?;
                     Some((
                         hit.score,
                         Row {

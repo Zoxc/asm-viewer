@@ -3,7 +3,7 @@ use super::*;
 /// A path as the walk holds one: the name starts after the last separator.
 fn hit(query: &str, shown: &str) -> Option<Hit> {
     let name_at = shown.rfind('/').map(|at| at + 1).unwrap_or(0);
-    find(query, shown, name_at)
+    Query::new(query)?.find(shown, name_at)
 }
 
 /// The marked runs as the text in them, which is what a row draws in the match colour.
@@ -107,4 +107,41 @@ fn the_shorter_path_wins_a_tie() {
 #[test]
 fn the_comparisons_are_made_in_the_order_they_are_written() {
     assert!(better("ab", "zzzz/aXXXb.rs", "ab/z.rs"));
+}
+
+/// A character that folds to more than one is not the character its fold starts with:
+/// `İ` folds to an `i` and a combining dot, which `i` does not, so the query keeps the
+/// whole fold. Fails on a query that folded each character to the first of its fold.
+#[test]
+fn a_character_folding_to_several_asks_for_all_of_them() {
+    assert!(hit("İ", "İstanbul.rs").is_some());
+    assert!(hit("İ", "istanbul.rs").is_none());
+    assert!(hit("i", "İstanbul.rs").is_none());
+}
+
+/// The pass back is skipped only where reading forward scored the best a path can, and
+/// fewer runs is part of that: here it starts on the name's own first character, at a
+/// word's start, but two runs, and the pass back pulls the two together.
+#[test]
+fn a_placement_with_a_gap_in_it_is_not_the_best_there_is() {
+    assert_eq!(marked("ab", "aaxab.rs"), ["ab"]);
+}
+
+/// Folding the query once has to answer what folding both sides answered. Every
+/// character there is, against its own case variants, which is where a fold done once
+/// would differ.
+#[test]
+fn folding_the_query_once_answers_what_folding_both_sides_did() {
+    /// The rule as it was: both characters folded, per comparison.
+    fn same(a: char, b: char) -> bool {
+        a == b || a.to_lowercase().eq(b.to_lowercase())
+    }
+
+    for a in (0..=0x10FFFF).filter_map(char::from_u32) {
+        let wanted = Wanted::new(a);
+        let others = a.to_lowercase().chain(a.to_uppercase());
+        for b in others {
+            assert_eq!(wanted.matches(b), same(a, b), "{a:?} against {b:?}");
+        }
+    }
 }

@@ -34,7 +34,17 @@ Walking back from the end of the *path* rather than from the first whole match i
 that looks clever and is wrong: it takes `ui`'s `i` from `files_view`, four words past the
 directory the reader was typing. `Score` compares in the order the spec ranks them — the file's
 own name, then runs, then a word's start, then the shorter path — and is a plain `Ord` struct,
-`filter::Rank`'s shape, so the order is in the field order and nowhere else.
+`filter::Rank`'s shape, so the order is in the field order and nowhere else. The pass back is
+skipped where reading forward already scored the best a path can — in the name, one run, at a
+word's start — because nothing can beat that and a tie keeps the first placement anyway.
+
+**The box is prepared once, not once per path.** What was typed is a `Query`, its characters
+lower-cased on the way in, so a keystroke folds them once rather than once per walked file; a
+comparison then folds only the path's side. That answers what folding both sides answered
+because a character a fold produced folds to itself — a fact about Unicode's tables, pinned in
+`fuzzy/tests.rs` over every character there is. A character that folds to more than one (`İ`
+folds to an `i` and a combining dot) is kept as the whole fold, so it asks for what it asked
+for before.
 
 **The walked files never reach the UI thread.** They are the worker's, and what crosses is the
 rows it picked out for a query. Both of the things that used to be done with the list here were

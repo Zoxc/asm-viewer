@@ -9,7 +9,24 @@
 //!
 //! Every path a query lets through gets a [`Score`], whose `Ord` puts the best first.
 
+use std::iter::once;
 use std::ops::Range;
+
+/// What was typed, as the characters it asks of a path, folded on the way in: the finder
+/// asks the same query of every walked file on every keystroke, so the fold is paid once
+/// per box and not once per path.
+pub struct Query {
+    wanted: Vec<Wanted>,
+}
+
+/// One character a query asks for, lower-cased.
+enum Wanted {
+    /// What it folds to, for a character that folds to one.
+    Folded(char),
+    /// What it folds to, for the few that fold to more than one: `İ` folds to an `i` and a
+    /// combining dot.
+    Several(Box<[char]>),
+}
 
 /// Where a query hit a path.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -55,29 +72,100 @@ enum Start {
     Inside,
 }
 
-/// Whether `query`'s characters appear in `shown` in order, and how well, with `name_at`
-/// the byte the file's own name starts at ([`crate::walk::Found`]).
-///
-/// Nothing typed is not a query that matches everything but no query at all, which is the
-/// caller's own case to draw: `filter.rs` draws the same line.
-pub fn find(query: &str, shown: &str, name_at: usize) -> Option<Hit> {
-    let wanted: Vec<char> = query.chars().collect();
-    if wanted.is_empty() {
-        return None;
+impl Query {
+    /// What was typed, or [`None`] where nothing was.
+    ///
+    /// Nothing typed is not a query that matches everything but no query at all, which is
+    /// the caller's own case to draw: `filter.rs` draws the same line.
+    pub fn new(typed: &str) -> Option<Query> {
+        let wanted: Vec<Wanted> = typed.chars().map(Wanted::new).collect();
+        (!wanted.is_empty()).then_some(Query { wanted })
     }
 
-    let forward = forward(&wanted, shown)?;
-    let end = forward.last().map(|&at| at + width(shown, at))?;
-    let tightened = tightened(&wanted, &shown[..end]);
+    /// Whether the query's characters appear in `shown` in order, and how well, with
+    /// `name_at` the byte the file's own name starts at ([`crate::walk::Found`]).
+    pub fn find(&self, shown: &str, name_at: usize) -> Option<Hit> {
+        let forward = self.forward(shown)?;
+        let end = forward.last().map(|&at| at + width(shown, at))?;
+        let forward = scored(shown, name_at, forward);
+        // The pass back cannot score better, and a tie would keep this one anyway.
+        if forward.score.unbeatable() {
+            return Some(forward);
+        }
+        let tightened = scored(shown, name_at, self.tightened(&shown[..end]));
 
-    // Both, and the better of the two. Reading the path once takes each character as
-    // early as it can go, which is what puts `sv`'s `s` on `src`; walking back from
-    // there takes each as late as it can, which is what pulls `ui` together into the
-    // directory it names. Neither wins everywhere, and scoring is what says which.
-    [forward, tightened]
-        .into_iter()
-        .map(|places| scored(shown, name_at, places))
-        .min_by(|a, b| a.score.cmp(&b.score))
+        // Both, and the better of the two. Reading the path once takes each character as
+        // early as it can go, which is what puts `sv`'s `s` on `src`; walking back from
+        // there takes each as late as it can, which is what pulls `ui` together into the
+        // directory it names. Neither wins everywhere, and scoring is what says which.
+        [forward, tightened]
+            .into_iter()
+            .min_by(|a, b| a.score.cmp(&b.score))
+    }
+
+    /// Where each of the query's characters matched reading the path once, each as early
+    /// as it can go, or [`None`] where the query does not fit at all.
+    fn forward(&self, shown: &str) -> Option<Vec<usize>> {
+        let mut places = Vec::with_capacity(self.wanted.len());
+        for (index, character) in shown.char_indices() {
+            if self.wanted[places.len()].matches(character) {
+                places.push(index);
+                if places.len() == self.wanted.len() {
+                    return Some(places);
+                }
+            }
+        }
+        None
+    }
+
+    /// Where each of the query's characters matched, walking back from the end of the
+    /// earliest whole match so that each sits as late as it can: what pulls them together
+    /// into runs. Walking back from the end of the *path* instead would take `ui`'s `i`
+    /// from `files_view` four words past the directory the reader was typing.
+    fn tightened(&self, upto: &str) -> Vec<usize> {
+        let mut places = vec![0; self.wanted.len()];
+        let mut at = self.wanted.len();
+        for (index, character) in upto.char_indices().rev() {
+            if at > 0 && self.wanted[at - 1].matches(character) {
+                at -= 1;
+                places[at] = index;
+            }
+        }
+        places
+    }
+}
+
+impl Wanted {
+    /// A typed character, folded here so that no path pays for it.
+    fn new(character: char) -> Wanted {
+        let mut folded = character.to_lowercase();
+        match (folded.next(), folded.next()) {
+            (Some(one), None) => Wanted::Folded(one),
+            _ => Wanted::Several(character.to_lowercase().collect()),
+        }
+    }
+
+    /// Whether a path's character is the one asked for, to a reader who did not hold
+    /// Shift. Only the path's side is folded, and not even that where the character is
+    /// already what was asked for: a character a fold produced folds to itself.
+    fn matches(&self, character: char) -> bool {
+        match self {
+            Wanted::Folded(wanted) => {
+                *wanted == character || character.to_lowercase().eq(once(*wanted))
+            }
+            Wanted::Several(wanted) => character.to_lowercase().eq(wanted.iter().copied()),
+        }
+    }
+}
+
+impl Score {
+    /// Whether no other placement of the query in the path can score better: the best
+    /// value of each of the three fields a placement decides, one run being the fewest a
+    /// match can fall into. The fourth is the path's own length, the same whichever
+    /// placement is scored.
+    fn unbeatable(&self) -> bool {
+        self.place == Place::Name && self.runs == 1 && self.start == Start::Word
+    }
 }
 
 /// A path, its matched runs and how well they scored.
@@ -97,37 +185,6 @@ fn scored(shown: &str, name_at: usize, places: Vec<usize>) -> Hit {
         },
         marks,
     }
-}
-
-/// Where each of the query's characters matched reading the path once, each as early as
-/// it can go, or [`None`] where the query does not fit at all.
-fn forward(wanted: &[char], shown: &str) -> Option<Vec<usize>> {
-    let mut places = Vec::with_capacity(wanted.len());
-    for (index, character) in shown.char_indices() {
-        if same(wanted[places.len()], character) {
-            places.push(index);
-            if places.len() == wanted.len() {
-                return Some(places);
-            }
-        }
-    }
-    None
-}
-
-/// Where each of the query's characters matched, walking back from the end of the
-/// earliest whole match so that each sits as late as it can: what pulls them together
-/// into runs. Walking back from the end of the *path* instead would take `ui`'s `i` from
-/// `files_view` four words past the directory the reader was typing.
-fn tightened(wanted: &[char], upto: &str) -> Vec<usize> {
-    let mut places = vec![0; wanted.len()];
-    let mut at = wanted.len();
-    for (index, character) in upto.char_indices().rev() {
-        if at > 0 && same(wanted[at - 1], character) {
-            at -= 1;
-            places[at] = index;
-        }
-    }
-    places
 }
 
 /// The matched characters gathered into the runs they form, as byte ranges into `shown`.
@@ -168,11 +225,6 @@ fn start_at(shown: &str, start: usize) -> Start {
 /// What ends a word in a path: the separator, and the punctuation a file name is built of.
 fn separates(character: char) -> bool {
     matches!(character, '/' | '\\' | '_' | '-' | '.' | ' ')
-}
-
-/// Whether two characters are the same to a reader who did not hold Shift.
-fn same(a: char, b: char) -> bool {
-    a == b || a.to_lowercase().eq(b.to_lowercase())
 }
 
 #[cfg(test)]
